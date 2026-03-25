@@ -16,6 +16,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 
 const previousDev = (globalThis as { __DEV__?: boolean }).__DEV__;
 const enqueuePendingMessageSpy = vi.hoisted(() => vi.fn(async (..._args: any[]) => {}));
+const submitMessageSpy = vi.hoisted(() => vi.fn(async (..._args: any[]) => {}));
 const resumeSessionSpy = vi.hoisted(() =>
     vi.fn<(..._args: any[]) => Promise<ResumeSessionResult>>(async (..._args: any[]) => ({
         type: 'error' as const,
@@ -80,6 +81,9 @@ const themeColors = vi.hoisted(() => ({
 }));
 
 let authCredentials: any = { token: 't', secret: 's' };
+const sessionState = vi.hoisted(() => ({
+    current: null as any,
+}));
 const pendingFireAndForget: Promise<unknown>[] = [];
 
 vi.mock('react-native-reanimated', () => ({}));
@@ -175,7 +179,7 @@ installSessionShellCommonModuleMocks({
     },
     storage: async (importOriginal) => {
         const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        const session: any = {
+        sessionState.current = {
             id: 's1',
             seq: 0,
             presence: Date.now() - 60_000,
@@ -198,7 +202,7 @@ installSessionShellCommonModuleMocks({
             overrides: {
                 storage: {
                     getState: () => ({
-                        sessions: { s1: session },
+                        sessions: { s1: sessionState.current },
                         machines: {
                             'm-target': {
                                 id: 'm-target',
@@ -224,7 +228,7 @@ installSessionShellCommonModuleMocks({
                         sessionListViewDataByServerId: {},
                     }),
                 } as any,
-                useSession: () => session,
+                useSession: () => sessionState.current,
                 useIsDataReady: () => true,
                 useRealtimeStatus: () => 'connected',
                 useSessionMessages: () => ({ messages: [], isLoaded: true }),
@@ -335,7 +339,7 @@ vi.mock('@/sync/sync', () => ({
         onSessionVisible: () => {},
         sendMessage: async () => {},
         enqueuePendingMessage: (...args: any[]) => enqueuePendingMessageSpy(...args),
-        submitMessage: async () => {},
+        submitMessage: (...args: any[]) => submitMessageSpy(...args),
         encryption: {
             getMachineEncryption: () => null,
         },
@@ -431,7 +435,25 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     beforeEach(() => {
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
         authCredentials = { token: 't', secret: 's' };
+        sessionState.current = {
+            id: 's1',
+            seq: 0,
+            presence: Date.now() - 60_000,
+            active: false,
+            accessLevel: 'edit',
+            pendingVersion: 2,
+            metadata: {
+                machineId: 'm-stale',
+                flavor: 'codex',
+                version: '0.0.0',
+                path: '/tmp/target',
+                homeDir: '/tmp',
+                codexSessionId: 'codex-session-1',
+            },
+            agentState: {},
+        };
         enqueuePendingMessageSpy.mockClear();
+        submitMessageSpy.mockClear();
         resumeCapabilityMachineIds.length = 0;
         settingsState.current = { experiments: true, featureToggles: {}, codexBackendMode: 'acp' };
         canResumeSessionWithOptionsSpy.mockReset();
@@ -496,6 +518,54 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         expect(modalMockState.current?.spies.alert).not.toHaveBeenCalled();
         expect(findAgentInput(screen).props.value).toBe('');
         expect(screen.findByTestId('session-pendingQueue-resumeFailed')).toBeTruthy();
+
+        await screen.unmount();
+    });
+
+    it('wakes the daemon after submitting a message in an active session', async () => {
+        sessionState.current = {
+            ...sessionState.current,
+            presence: 'online',
+            active: true,
+        };
+
+        const screen = await renderSessionView();
+
+        pendingFireAndForget.length = 0;
+
+        const agentInput = findAgentInput(screen);
+
+        await act(async () => {
+            agentInput.props.onChangeText('please continue');
+        });
+        await act(async () => {
+            agentInput.props.onSend();
+        });
+
+        expect(pendingFireAndForget.length).toBeGreaterThan(0);
+        await act(async () => {
+            await pendingFireAndForget[0];
+        });
+
+        // Submit happens immediately; wake runs best-effort after submit.
+        expect(submitMessageSpy).toHaveBeenCalledTimes(1);
+        expect(submitMessageSpy.mock.calls[0]?.[0]).toBe('s1');
+        expect(submitMessageSpy.mock.calls[0]?.[1]).toBe('please continue');
+
+        // Wake is fire-and-forget, so it can arrive as a second promise.
+        expect(pendingFireAndForget.length).toBeGreaterThanOrEqual(2);
+        await act(async () => {
+            await pendingFireAndForget[1];
+        });
+
+        expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
+        expect(resumeSessionSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                machineId: 'm-target',
+                directory: '/tmp/target',
+            }),
+        );
+        expect(modalMockState.current?.spies.alert).not.toHaveBeenCalled();
 
         await screen.unmount();
     });

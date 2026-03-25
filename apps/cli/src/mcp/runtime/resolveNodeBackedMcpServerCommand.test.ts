@@ -180,4 +180,15 @@ describe('resolveNodeBackedMcpServerCommand', () => {
       }),
     ).rejects.toThrow(/HAPPIER_JS_RUNTIME_PATH/);
   });
+
+  it('throws a clear error when no usable entrypoint exists', async () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+
+    await expect(
+      resolveNodeBackedMcpServerCommand({
+        distEntrypointSegments: ['mcp', 'bridges', 'remoteMcpStdioBridge.mjs'],
+        sourceEntrypointSegments: ['mcp', 'bridges', 'remoteMcpStdioBridge.ts'],
+      }),
+    ).rejects.toThrow(/usable entrypoint/i);
+  });
 });

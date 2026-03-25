@@ -55,8 +55,9 @@ export async function resolveNodeBackedMcpServerCommand(params: Readonly<{
     };
   }
 
-  return {
-    command,
-    args: ['--no-warnings', '--no-deprecation', packagedEntrypoint, ...(params.args ?? [])],
-  };
+  throw new Error(
+    `[resolveNodeBackedMcpServerCommand] No usable entrypoint found. Checked packaged entrypoint: ${packagedEntrypoint}; checked source entrypoint: ${sourceEntrypoint} (tsx hook ${
+      typeof tsxHookPath === 'string' && tsxHookPath.length > 0 ? 'available' : 'missing'
+    }).`,
+  );
 }

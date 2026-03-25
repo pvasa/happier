@@ -1743,16 +1743,44 @@ function SessionViewLoaded({
                                 return;
                             }
 
-                            try {
-                                await sync.submitMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
-                                if (shouldSendReviewComments) {
-                                    storage.getState().clearSessionReviewCommentDrafts(sessionId);
-                                }
-                            } catch (e) {
-                                setMessage(previousMessage);
-                                Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
-                            }
-                        })(), { tag: 'SessionView.sendMessage.submitMessage' });
+	                            try {
+	                                await sync.submitMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
+	                                if (shouldSendReviewComments) {
+	                                    storage.getState().clearSessionReviewCommentDrafts(sessionId);
+	                                }
+
+	                                const wakeOpts = getPendingQueueWakeResumeOptions({
+	                                    sessionId,
+	                                    session,
+	                                    resumeCapabilityOptions,
+	                                    resumeTargetOverride: reachableMachineTarget
+	                                        ? {
+	                                            machineId: reachableMachineTarget.machineId,
+	                                            directory: reachableMachineTarget.basePath,
+	                                        }
+	                                        : null,
+	                                    permissionOverride: getPermissionModeOverrideForSpawn(session),
+	                                });
+	                                if (wakeOpts) {
+	                                    fireAndForget((async () => {
+	                                        try {
+	                                            const result = await resumeSession({
+	                                                ...wakeOpts,
+	                                                serverId: capabilityServerId,
+	                                            });
+	                                            if (result.type === 'error') {
+	                                                // Non-fatal: message is already persisted in the transcript.
+	                                            }
+	                                        } catch {
+	                                            // Non-fatal: message is already persisted in the transcript.
+	                                        }
+	                                    })(), { tag: 'SessionView.sendMessage.wakeActive' });
+	                                }
+	                            } catch (e) {
+	                                setMessage(previousMessage);
+	                                Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+	                            }
+	                        })(), { tag: 'SessionView.sendMessage.submitMessage' });
                     };
 
                     const promptInvocationsV1 = storage.getState().settings.promptInvocationsV1;
