@@ -28,6 +28,86 @@ installPopoverCommonModuleMocks({
 });
 
 describe('Popover (native keyboard)', () => {
+    it('does not re-render when a native recompute resolves to the same geometry', async () => {
+        vi.useFakeTimers();
+
+        const rn = await import('react-native');
+        expect((rn as any).Platform?.OS).toBe('ios');
+
+        const listeners = new Map<string, Set<(...args: any[]) => void>>();
+        const addListener = (event: string, cb: (...args: any[]) => void) => {
+            const set = listeners.get(event) ?? new Set<(...args: any[]) => void>();
+            set.add(cb);
+            listeners.set(event, set);
+            return {
+                remove: () => {
+                    set.delete(cb);
+                },
+            };
+        };
+        (rn as any).Keyboard = (rn as any).Keyboard ?? {};
+        (rn as any).Keyboard.addListener = addListener;
+        const emit = (event: string, payload?: unknown) => {
+            for (const cb of listeners.get(event) ?? []) {
+                cb(payload);
+            }
+        };
+
+        const { Popover } = await import('./Popover');
+        const { OverlayPortalProvider, OverlayPortalHost } = await import('./OverlayPortal');
+        const { PopoverPortalTargetContextProvider } = await import('./PopoverPortalTarget');
+
+        const portalRootNode = {
+            measureInWindow: (cb: any) => cb(0, 200, 1000, 600),
+        } as any;
+
+        const anchorNode = {
+            measureInWindow: (cb: any) => cb(0, 600, 100, 40),
+            measureLayout: (_relativeTo: any, onSuccess: any) => onSuccess(0, 400, 100, 40),
+        } as any;
+
+        const anchorRef = { current: anchorNode } as any;
+        const portalTarget = {
+            rootRef: { current: portalRootNode },
+            layout: { width: 1000, height: 600 },
+        } as const;
+
+        let renderCount = 0;
+
+        await renderScreen(
+            <PopoverPortalTargetContextProvider value={portalTarget}>
+                <OverlayPortalProvider>
+                    <Popover
+                        open
+                        anchorRef={anchorRef}
+                        portal={{ native: true }}
+                        placement="bottom"
+                        gap={0}
+                        maxHeightCap={320}
+                        onRequestClose={() => {}}
+                    >
+                        {(renderProps) => {
+                            renderCount += 1;
+                            return React.createElement('PopoverChild', renderProps);
+                        }}
+                    </Popover>
+                    <OverlayPortalHost />
+                </OverlayPortalProvider>
+            </PopoverPortalTargetContextProvider>,
+        );
+
+        await flushHookEffects({ cycles: 4, turns: 10, frames: 6, advanceTimersMs: 120 });
+
+        const renderCountAfterInitialPositioning = renderCount;
+
+        emit('keyboardDidShow');
+        await flushHookEffects({ cycles: 4, turns: 10, frames: 6, advanceTimersMs: 120 });
+
+        expect(renderCount).toBe(renderCountAfterInitialPositioning);
+
+        vi.useRealTimers();
+    });
+
     it('treats measureInWindow coordinates as portal-relative when measureLayout is unavailable (prevents double offset in iOS drawers)', async () => {
         vi.useFakeTimers();
 
