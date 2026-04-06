@@ -207,3 +207,68 @@ test('expo native-build allows interactive local builds when PIPELINE_INTERACTIV
   assert.match(stdout, /\s--local\b/);
   assert.doesNotMatch(stdout, /\s--non-interactive\b/);
 });
+
+test('expo native-build treats local builds as successful when EAS cleanup fails after writing the artifact', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'happier-pipeline-eas-local-cleanup-noise-'));
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+
+  const outJson = path.join(dir, 'out.json');
+  const artifactOut = path.join(dir, 'app.apk');
+
+  const npxPath = path.join(binDir, 'npx');
+  writeExecutable(
+    npxPath,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'echo "NPX $*"',
+      'out=""',
+      'for ((i=1;i<=$#;i++)); do',
+      '  if [ "${!i}" = "--output" ]; then',
+      '    j=$((i+1))',
+      '    out="${!j}"',
+      '  fi',
+      'done',
+      'if [ -z "${out}" ]; then echo "missing --output" >&2; exit 1; fi',
+      'mkdir -p "$(dirname "${out}")"',
+      'head -c 1000001 /dev/zero > "${out}"',
+      "echo \"ENOTEMPTY: directory not empty, rmdir '/tmp/eas-local-build/.git'\" >&2",
+      'echo "Error: ENOTEMPTY: directory not empty, rmdir \'/tmp/eas-local-build/.git\'" >&2',
+      'exit 1',
+      '',
+    ].join('\n'),
+  );
+
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH ?? ''}`,
+    EXPO_TOKEN: 'test-token',
+  };
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'scripts', 'pipeline', 'expo', 'native-build.mjs'),
+      '--platform',
+      'android',
+      '--profile',
+      'preview-apk',
+      '--out',
+      outJson,
+      '--build-mode',
+      'local',
+      '--artifact-out',
+      artifactOut,
+    ],
+    { cwd: repoRoot, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: PIPELINE_TEST_TIMEOUT_MS },
+  );
+
+  assert.match(stdout, /NPX --yes eas-cli@/);
+  assert.ok(fs.existsSync(artifactOut), 'expected local build artifact to be preserved');
+
+  const parsed = JSON.parse(fs.readFileSync(outJson, 'utf8'));
+  assert.equal(parsed.mode, 'local');
+  assert.equal(parsed.platform, 'android');
+  assert.equal(parsed.profile, 'preview-apk');
+});
