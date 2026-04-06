@@ -24,7 +24,6 @@ import type {
     NewSessionWizardMachineProps,
     NewSessionWizardProfilesProps,
 } from '../components/NewSessionWizard';
-import type { CliNotDetectedBannerDismissScope } from '../components/CliNotDetectedBanner';
 
 function tNoParams(key: string): string {
     return (t as any)(key);
@@ -75,8 +74,6 @@ export function useNewSessionWizardProps(params: Readonly<{
     tmuxRequested: boolean;
     enabledAgentIds: AgentId[];
     isAgentSelectable: (agentId: AgentId) => boolean;
-    isCliBannerDismissed: (agentId: AgentId) => boolean;
-    dismissCliBanner: (agentId: AgentId, scope: CliNotDetectedBannerDismissScope) => void;
     agentType: AgentId;
     agentLabel?: string;
     setAgentType: (agent: AgentId) => void;
@@ -317,8 +314,6 @@ export function useNewSessionWizardProps(params: Readonly<{
             tmuxRequested: params.tmuxRequested,
             enabledAgentIds: params.enabledAgentIds,
             isAgentSelectable: params.isAgentSelectable,
-            isCliBannerDismissed: params.isCliBannerDismissed,
-            dismissCliBanner: params.dismissCliBanner,
             agentType: params.agentType,
             agentLabel: params.agentLabel,
             setAgentType: params.setAgentType,
@@ -353,10 +348,8 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.agentPickerTitle,
         params.cliAvailability,
         params.selectedMachineId,
-        params.dismissCliBanner,
         params.enabledAgentIds,
         params.isAgentSelectable,
-        params.isCliBannerDismissed,
         params.modelMode,
         params.modelOptions,
         params.modelOptionsProbe,

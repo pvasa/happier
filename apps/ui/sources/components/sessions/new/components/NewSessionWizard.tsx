@@ -27,7 +27,6 @@ import type { CLIAvailability } from '@/hooks/auth/useCLIDetection';
 import type { AgentId } from '@/agents/catalog/catalog';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import { getAgentPickerOptions } from '@/agents/catalog/agentPickerOptions';
-import { CliNotDetectedBanner, type CliNotDetectedBannerDismissScope } from '@/components/sessions/new/components/CliNotDetectedBanner';
 import { InstallableDepInstaller, type InstallableDepInstallerProps } from '@/components/machines/InstallableDepInstaller';
 import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
@@ -80,8 +79,6 @@ export interface NewSessionWizardAgentProps {
     tmuxRequested: boolean;
     enabledAgentIds: AgentId[];
     isAgentSelectable: (agentId: AgentId) => boolean;
-    isCliBannerDismissed: (agentId: AgentId) => boolean;
-    dismissCliBanner: (agentId: AgentId, scope: CliNotDetectedBannerDismissScope) => void;
     agentType: AgentId;
     agentLabel?: string;
     setAgentType: (agent: AgentId) => void;
@@ -270,8 +267,6 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         tmuxRequested,
         enabledAgentIds,
         isAgentSelectable,
-        isCliBannerDismissed,
-        dismissCliBanner,
         agentType,
         setAgentType,
         modelOptions,
@@ -437,20 +432,6 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             <InstallableDepInstaller key={installer.depId} {...installer} />
                                         ))}
                                     </>
-                                ) : null}
-
-                                {selectedMachineId ? (
-                                    enabledAgentIds
-                                        .filter((agentId) => cliAvailability.available[agentId] === false)
-                                        .filter((agentId) => !isCliBannerDismissed(agentId))
-                                        .map((agentId) => (
-                                            <CliNotDetectedBanner
-                                                key={agentId}
-                                                agentId={agentId}
-                                                theme={theme}
-                                                onDismiss={(scope) => dismissCliBanner(agentId, scope)}
-                                            />
-                                        ))
                                 ) : null}
 
                                 <ItemGroup title={<View />} headerStyle={{ paddingTop: 0, paddingBottom: 0 }}>

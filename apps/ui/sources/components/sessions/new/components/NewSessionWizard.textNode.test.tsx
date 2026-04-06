@@ -12,6 +12,7 @@ const mockEnv = vi.hoisted(() => ({
 }));
 
 const pathSelectorPropsRef: { current: Record<string, unknown> | null } = { current: null };
+const CliNotDetectedBannerMock = vi.fn((_props: Record<string, unknown>) => null);
 installNewSessionComponentsCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -59,6 +60,9 @@ vi.mock('@/components/sessions/agentInput', () => ({
 vi.mock('@/components/machines/InstallableDepInstaller', () => ({
     InstallableDepInstaller: () => null,
 }));
+vi.mock('@/components/sessions/new/components/CliNotDetectedBanner', () => ({
+    CliNotDetectedBanner: (props: Record<string, unknown>) => CliNotDetectedBannerMock(props),
+}));
 vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
     MachineSelector: () => null,
 }));
@@ -104,6 +108,7 @@ describe('NewSessionWizard', () => {
     beforeEach(() => {
         vi.useRealTimers();
         vi.resetModules();
+        CliNotDetectedBannerMock.mockClear();
         // Other suites in the same shard can update the shared mock override state in
         // `newSessionComponentsTestHelpers`. Re-apply the overrides here so this suite
         // stays deterministic regardless of file execution order.
@@ -261,6 +266,235 @@ describe('NewSessionWizard', () => {
         } finally {
             mockEnv.windowWidth = 800;
         }
+    });
+
+    it('does not render CLI not detected banners in the AI backend section', async () => {
+        const { NewSessionWizard } = await import('./NewSessionWizard');
+
+        await renderScreen(<NewSessionWizard
+            popoverBoundaryRef={{ current: null } as any}
+            layout={{
+                theme: {
+                    colors: {
+                        divider: '#ddd',
+                        shadow: { color: '#000' },
+                        groupped: { background: '#fff' },
+                        text: '#000',
+                        textSecondary: '#666',
+                        input: { background: '#fff' },
+                        button: { secondary: { tint: '#000' } },
+                        warning: '#d97706',
+                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    },
+                } as any,
+                styles: {} as any,
+                safeAreaBottom: 0,
+                headerHeight: 44,
+                newSessionSidePadding: 0,
+                newSessionBottomPadding: 0,
+            }}
+            profiles={{
+                useProfiles: false,
+                profiles: [],
+                favoriteProfileIds: [],
+                setFavoriteProfileIds: () => {},
+                selectedProfileId: null,
+                onPressDefaultEnvironment: () => {},
+                onPressProfile: () => {},
+                selectedMachineId: 'machine-1',
+                getProfileDisabled: () => false,
+                getProfileSubtitleExtra: () => null,
+                handleAddProfile: () => {},
+                openProfileEdit: () => {},
+                handleDuplicateProfile: () => {},
+                handleDeleteProfile: () => {},
+                openProfileEnvVarsPreview: () => {},
+                suppressNextSecretAutoPromptKeyRef: { current: null },
+                openSecretRequirementModal: () => {},
+                profilesGroupTitles: { favorites: 'Favorites', custom: 'Custom', builtIn: 'Built in' },
+                getSecretOverrideReady: () => true,
+                getSecretSatisfactionForProfile: () => ({ isSatisfied: true }),
+            } as any}
+            agent={{
+                cliAvailability: { available: { codex: false }, isLoaded: true } as any,
+                tmuxRequested: false,
+                enabledAgentIds: ['codex'] as any,
+                isAgentSelectable: () => true,
+                isCliBannerDismissed: () => false,
+                dismissCliBanner: () => {},
+                agentType: 'codex' as any,
+                setAgentType: () => {},
+                modelOptions: [{ value: 'default', label: 'Default', description: '' }] as any,
+                setModelMode: () => {},
+                selectedIndicatorColor: '#000',
+                profileMap: new Map(),
+                permissionMode: 'default',
+                handlePermissionModeChange: () => {},
+            } as any}
+            machine={{
+                machines: [{
+                    id: 'machine-1',
+                    active: true,
+                    activeAt: Date.now(),
+                    revokedAt: null,
+                    metadata: {
+                        host: 'box.local',
+                        platform: 'test',
+                        happyCliVersion: '0.0.0-test',
+                        happyHomeDir: '/tmp/happy-home',
+                        homeDir: '/tmp',
+                        displayName: 'Box',
+                    },
+                    metadataVersion: 1,
+                    daemonState: null,
+                    daemonStateVersion: 0,
+                }],
+                serverId: 'server-1',
+                selectedMachine: null,
+                recentMachines: [],
+                favoriteMachineItems: [],
+                useMachinePickerSearch: false,
+                onRefreshMachines: () => {},
+                setSelectedMachineId: () => {},
+                getBestPathForMachine: () => '/tmp',
+                setSelectedPath: () => {},
+                favoriteMachines: [],
+                setFavoriteMachines: () => {},
+                selectedPath: '/tmp',
+                recentPaths: [],
+                usePathPickerSearch: false,
+                favoriteDirectories: [],
+                setFavoriteDirectories: () => {},
+            } as any}
+            footer={{
+                sessionPrompt: '',
+                setSessionPrompt: () => {},
+                handleCreateSession: () => {},
+                canCreate: false,
+                isCreating: false,
+                emptyAutocompletePrefixes: [],
+                emptyAutocompleteSuggestions: async () => [],
+                agentInputExtraActionChips: [],
+            }}
+        />);
+
+        expect(CliNotDetectedBannerMock).not.toHaveBeenCalled();
+    });
+
+    it('renders AI backend providers as a full list', async () => {
+        const { NewSessionWizard } = await import('./NewSessionWizard');
+
+        const screen = await renderScreen(<NewSessionWizard
+            popoverBoundaryRef={{ current: null } as any}
+            layout={{
+                theme: {
+                    colors: {
+                        divider: '#ddd',
+                        shadow: { color: '#000' },
+                        groupped: { background: '#fff' },
+                        text: '#000',
+                        textSecondary: '#666',
+                        input: { background: '#fff' },
+                        button: { secondary: { tint: '#000' } },
+                        warning: '#d97706',
+                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    },
+                } as any,
+                styles: {} as any,
+                safeAreaBottom: 0,
+                headerHeight: 44,
+                newSessionSidePadding: 0,
+                newSessionBottomPadding: 0,
+            }}
+            profiles={{
+                useProfiles: false,
+                profiles: [],
+                favoriteProfileIds: [],
+                setFavoriteProfileIds: () => {},
+                selectedProfileId: null,
+                onPressDefaultEnvironment: () => {},
+                onPressProfile: () => {},
+                selectedMachineId: 'machine-1',
+                getProfileDisabled: () => false,
+                getProfileSubtitleExtra: () => null,
+                handleAddProfile: () => {},
+                openProfileEdit: () => {},
+                handleDuplicateProfile: () => {},
+                handleDeleteProfile: () => {},
+                openProfileEnvVarsPreview: () => {},
+                suppressNextSecretAutoPromptKeyRef: { current: null },
+                openSecretRequirementModal: () => {},
+                profilesGroupTitles: { favorites: 'Favorites', custom: 'Custom', builtIn: 'Built in' },
+                getSecretOverrideReady: () => true,
+                getSecretSatisfactionForProfile: () => ({ isSatisfied: true }),
+            } as any}
+            agent={{
+                cliAvailability: { available: { codex: true, claude: true }, isLoaded: true } as any,
+                tmuxRequested: false,
+                enabledAgentIds: ['codex', 'claude'] as any,
+                isAgentSelectable: () => true,
+                agentType: 'codex' as any,
+                setAgentType: () => {},
+                modelOptions: [] as any,
+                setModelMode: () => {},
+                selectedIndicatorColor: '#000',
+                profileMap: new Map(),
+                permissionMode: 'default',
+                handlePermissionModeChange: () => {},
+            } as any}
+            machine={{
+                machines: [{
+                    id: 'machine-1',
+                    active: true,
+                    activeAt: Date.now(),
+                    revokedAt: null,
+                    metadata: {
+                        host: 'box.local',
+                        platform: 'test',
+                        happyCliVersion: '0.0.0-test',
+                        happyHomeDir: '/tmp/happy-home',
+                        homeDir: '/tmp',
+                        displayName: 'Box',
+                    },
+                    metadataVersion: 1,
+                    daemonState: null,
+                    daemonStateVersion: 0,
+                }],
+                serverId: 'server-1',
+                selectedMachine: null,
+                recentMachines: [],
+                favoriteMachineItems: [],
+                useMachinePickerSearch: false,
+                onRefreshMachines: () => {},
+                setSelectedMachineId: () => {},
+                getBestPathForMachine: () => '/tmp',
+                setSelectedPath: () => {},
+                favoriteMachines: [],
+                setFavoriteMachines: () => {},
+                selectedPath: '/tmp',
+                recentPaths: [],
+                usePathPickerSearch: false,
+                favoriteDirectories: [],
+                setFavoriteDirectories: () => {},
+            } as any}
+            footer={{
+                sessionPrompt: '',
+                setSessionPrompt: () => {},
+                handleCreateSession: () => {},
+                canCreate: false,
+                isCreating: false,
+                emptyAutocompletePrefixes: [],
+                emptyAutocompleteSuggestions: async () => [],
+                agentInputExtraActionChips: [],
+            }}
+        />);
+
+        expect(screen.findAllByType('Item' as any).filter((node: any) => String(node.props?.testID ?? '').startsWith('new-session-agent:'))).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ props: expect.objectContaining({ testID: 'new-session-agent:codex' }) }),
+                expect.objectContaining({ props: expect.objectContaining({ testID: 'new-session-agent:claude' }) }),
+            ]),
+        );
     });
 
     it('stretches the footer padding wrapper to full width on web (avoids shrink-to-fit collapse)', async () => {
