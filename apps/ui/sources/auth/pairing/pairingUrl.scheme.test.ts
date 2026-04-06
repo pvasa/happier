@@ -37,6 +37,12 @@ describe('pairingUrl scheme override', () => {
             serverUrl: null,
         });
 
+        expect(parsePairingDeepLink('happier:pair?v=1&pairId=pid123&secret=sec_abc')).toEqual({
+            pairId: 'pid123',
+            secret: 'sec_abc',
+            serverUrl: null,
+        });
+
         expect(parsePairingDeepLink('happier-internaldev:///pair?v=1&pairId=pid123&secret=sec_abc')).toEqual({
             pairId: 'pid123',
             secret: 'sec_abc',

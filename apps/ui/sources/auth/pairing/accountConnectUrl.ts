@@ -1,32 +1,25 @@
-import { isAcceptedHappierUrlProtocol, resolveAppUrlScheme } from '@/utils/url/appScheme';
+import { resolveAppUrlScheme } from '@/utils/url/appScheme';
+import { parseHappierCustomSchemeUrl } from '@/utils/url/parseHappierCustomSchemeUrl';
 
 export type ParsedAccountConnectDeepLink = Readonly<{
     publicKeyB64Url: string;
 }>;
 
-function isValidAccountLinkTarget(url: URL): boolean {
-    if (!isAcceptedHappierUrlProtocol(url.protocol)) return false;
+function isValidAccountLinkTarget(hostname: string, pathname: string): boolean {
+    const normalizedPathname = pathname === 'account' ? '/account' : pathname;
 
-    const pathname = url.pathname ?? '';
-    const hostname = url.hostname ?? '';
-
-    if (pathname === '/account') return true;
-    if (hostname === 'account' && (pathname === '' || pathname === '/')) return true;
+    if (normalizedPathname === '/account') return true;
+    if (hostname === 'account' && (normalizedPathname === '' || normalizedPathname === '/')) return true;
 
     return false;
 }
 
 export function parseAccountConnectDeepLink(rawLink: string): ParsedAccountConnectDeepLink | null {
-    let url: URL;
-    try {
-        url = new URL(rawLink);
-    } catch {
-        return null;
-    }
+    const parsed = parseHappierCustomSchemeUrl(rawLink);
+    if (!parsed) return null;
+    if (!isValidAccountLinkTarget(parsed.hostname, parsed.pathname)) return null;
 
-    if (!isValidAccountLinkTarget(url)) return null;
-
-    const tail = String(url.search ?? '').replace(/^\?/, '').trim();
+    const tail = String(parsed.search ?? '').replace(/^\?/, '').trim();
     if (!tail) return null;
 
     return { publicKeyB64Url: tail };

@@ -3,6 +3,7 @@ import { ActivityIndicator, AppState, Linking, Platform, Pressable, useWindowDim
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
@@ -108,6 +109,7 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const { width, height } = useWindowDimensions();
+    const safeAreaInsets = useSafeAreaInsets();
 
     const [permission, requestPermission] = useCameraPermissions();
     const isProcessingRef = React.useRef(false);
@@ -233,7 +235,16 @@ export const QrCodeScannerView = React.memo(function QrCodeScannerView(props: Qr
                 onBarcodeScanned={onBarcodeScanned}
                 testID={`${props.testIDPrefix}-camera`}
             />
-            <View style={styles.overlay} pointerEvents="box-none">
+            <View
+                style={[
+                    styles.overlay,
+                    {
+                        paddingTop: 18 + safeAreaInsets.top,
+                        paddingBottom: 18 + safeAreaInsets.bottom,
+                    },
+                ]}
+                pointerEvents="box-none"
+            >
                 <View style={styles.topRow} pointerEvents="box-none">
                     <Pressable
                         accessibilityRole="button"

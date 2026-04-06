@@ -16,6 +16,7 @@ describe('accountConnectUrl scheme override', () => {
         expect(buildAccountConnectDeepLink({ publicKeyB64Url: 'abc123' })).toBe('happier-dev:///account?abc123');
         expect(parseAccountConnectDeepLink('happier-dev:///account?abc123')).toEqual({ publicKeyB64Url: 'abc123' });
         expect(parseAccountConnectDeepLink('happier:///account?abc123')).toEqual({ publicKeyB64Url: 'abc123' });
+        expect(parseAccountConnectDeepLink('happier:account?abc123')).toEqual({ publicKeyB64Url: 'abc123' });
         expect(parseAccountConnectDeepLink('happier-internaldev:///account?abc123')).toEqual({ publicKeyB64Url: 'abc123' });
         expect(parseAccountConnectDeepLink('happier-custom:///account?abc123')).toEqual({ publicKeyB64Url: 'abc123' });
         expect(parseAccountConnectDeepLink('otherapp:///account?abc123')).toBeNull();

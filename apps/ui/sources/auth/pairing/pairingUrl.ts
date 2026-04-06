@@ -1,4 +1,5 @@
-import { isAcceptedHappierUrlProtocol, resolveAppUrlScheme } from '@/utils/url/appScheme';
+import { resolveAppUrlScheme } from '@/utils/url/appScheme';
+import { parseHappierCustomSchemeUrl } from '@/utils/url/parseHappierCustomSchemeUrl';
 
 type PairingDeepLinkPayload = {
     pairId: string;
@@ -6,14 +7,11 @@ type PairingDeepLinkPayload = {
     serverUrl: string | null;
 };
 
-function isValidPairingLinkTarget(url: URL): boolean {
-    if (!isAcceptedHappierUrlProtocol(url.protocol)) return false;
+function isValidPairingLinkTarget(hostname: string, pathname: string): boolean {
+    const normalizedPathname = pathname === 'pair' ? '/pair' : pathname;
 
-    const pathname = url.pathname ?? '';
-    const hostname = url.hostname ?? '';
-
-    if (pathname === '/pair') return true;
-    if (hostname === 'pair' && (pathname === '' || pathname === '/')) return true;
+    if (normalizedPathname === '/pair') return true;
+    if (hostname === 'pair' && (normalizedPathname === '' || normalizedPathname === '/')) return true;
 
     return false;
 }
@@ -35,23 +33,18 @@ function normalizeServerUrl(raw: string): string | null {
 }
 
 export function parsePairingDeepLink(rawLink: string): PairingDeepLinkPayload | null {
-    let url: URL;
-    try {
-        url = new URL(rawLink);
-    } catch {
-        return null;
-    }
+    const parsed = parseHappierCustomSchemeUrl(rawLink);
+    if (!parsed) return null;
+    if (!isValidPairingLinkTarget(parsed.hostname, parsed.pathname)) return null;
 
-    if (!isValidPairingLinkTarget(url)) return null;
-
-    const version = url.searchParams.get('v');
+    const version = parsed.searchParams.get('v');
     if (version != null && version !== '1') return null;
 
-    const pairId = url.searchParams.get('pairId');
-    const secret = url.searchParams.get('secret');
+    const pairId = parsed.searchParams.get('pairId');
+    const secret = parsed.searchParams.get('secret');
     if (!pairId || !secret) return null;
 
-    const server = url.searchParams.get('server');
+    const server = parsed.searchParams.get('server');
     const serverUrl = server ? normalizeServerUrl(server) : null;
 
     return { pairId, secret, serverUrl };

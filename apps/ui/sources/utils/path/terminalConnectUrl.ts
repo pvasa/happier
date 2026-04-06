@@ -1,4 +1,5 @@
 import { isAcceptedHappierUrlProtocol, resolveAppUrlScheme } from '@/utils/url/appScheme';
+import { parseHappierCustomSchemeUrl } from '@/utils/url/parseHappierCustomSchemeUrl';
 
 export type ParsedTerminalConnectUrl = Readonly<{
     publicKeyB64Url: string;
@@ -74,18 +75,22 @@ export function buildTerminalConnectWebHref(params: Readonly<{
 
 export function parseTerminalConnectUrl(url: string): ParsedTerminalConnectUrl | null {
     const raw = String(url ?? '');
-    let parsed: URL | null = null;
-    try {
-        parsed = new URL(raw);
-    } catch {
-        parsed = null;
-    }
+    const parsed = parseHappierCustomSchemeUrl(raw);
+    const matchesTerminalTarget =
+        parsed != null &&
+        parsed.protocol != null &&
+        isAcceptedHappierUrlProtocol(parsed.protocol) &&
+        (
+            parsed.hostname === 'terminal' ||
+            parsed.pathname === 'terminal' ||
+            parsed.pathname === '/terminal'
+        );
 
-    if (!parsed || !isAcceptedHappierUrlProtocol(parsed.protocol) || parsed.hostname !== 'terminal') {
+    if (!matchesTerminalTarget || !parsed) {
         return parseTerminalConnectWebUrl(raw);
     }
 
-    const tail = raw.slice(`${parsed.protocol}//terminal?`.length);
+    const tail = parsed.search.replace(/^\?/, '');
     if (!tail) return null;
 
     // Legacy format: happier://terminal?<publicKeyB64Url>

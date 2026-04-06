@@ -8,11 +8,16 @@ import {
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const processAuthUrlSpy = vi.fn(async (_url: string) => true);
+const processAccountAuthUrlSpy = vi.fn(async (_url: string) => true);
+const processTerminalAuthUrlSpy = vi.fn(async (_url: string) => true);
 const promptSpy = vi.fn(async (..._args: unknown[]) => null as string | null);
 
 vi.mock('@/hooks/auth/useConnectAccount', () => ({
-    useConnectAccount: (_opts?: any) => ({ processAuthUrl: processAuthUrlSpy, isLoading: false }),
+    useConnectAccount: (_opts?: any) => ({ processAuthUrl: processAccountAuthUrlSpy, isLoading: false }),
+}));
+
+vi.mock('@/hooks/session/useConnectTerminal', () => ({
+    useConnectTerminal: (_opts?: any) => ({ processAuthUrl: processTerminalAuthUrlSpy, isLoading: false }),
 }));
 
 let lastScannerProps: any = null;
@@ -37,7 +42,8 @@ installScanRouteCommonModuleMocks({
 describe('/scan/account', () => {
     beforeEach(() => {
         promptSpy.mockClear();
-        processAuthUrlSpy.mockClear();
+        processAccountAuthUrlSpy.mockClear();
+        processTerminalAuthUrlSpy.mockClear();
         lastScannerProps = null;
     });
 
@@ -52,8 +58,25 @@ describe('/scan/account', () => {
             await lastScannerProps.onScan('happier:///account?abc123');
         });
 
-        expect(processAuthUrlSpy).toHaveBeenCalledTimes(1);
-        expect(processAuthUrlSpy).toHaveBeenCalledWith('happier:///account?abc123');
+        expect(processAccountAuthUrlSpy).toHaveBeenCalledTimes(1);
+        expect(processAccountAuthUrlSpy).toHaveBeenCalledWith('happier:///account?abc123');
+        expect(processTerminalAuthUrlSpy).not.toHaveBeenCalled();
+    });
+
+    it('routes scanned terminal URLs to terminal auth even from the account scanner', async () => {
+        const { default: Screen } = await import('@/app/(app)/scan/account');
+
+        await renderScreen(<Screen />);
+
+        expect(typeof lastScannerProps?.onScan).toBe('function');
+
+        await act(async () => {
+            await lastScannerProps.onScan('happier://terminal?key=abc&server=https%3A%2F%2Fapi.happier.dev');
+        });
+
+        expect(processTerminalAuthUrlSpy).toHaveBeenCalledTimes(1);
+        expect(processTerminalAuthUrlSpy).toHaveBeenCalledWith('happier://terminal?key=abc&server=https%3A%2F%2Fapi.happier.dev');
+        expect(processAccountAuthUrlSpy).not.toHaveBeenCalled();
     });
 
     it('supports manually entering an account link URL when the scanner is unavailable', async () => {
@@ -86,7 +109,8 @@ describe('/scan/account', () => {
         });
 
         expect(promptSpy).toHaveBeenCalledTimes(1);
-        expect(processAuthUrlSpy).toHaveBeenCalledTimes(1);
-        expect(processAuthUrlSpy).toHaveBeenCalledWith('happier:///account?manual');
+        expect(processAccountAuthUrlSpy).toHaveBeenCalledTimes(1);
+        expect(processAccountAuthUrlSpy).toHaveBeenCalledWith('happier:///account?manual');
+        expect(processTerminalAuthUrlSpy).not.toHaveBeenCalled();
     });
 });

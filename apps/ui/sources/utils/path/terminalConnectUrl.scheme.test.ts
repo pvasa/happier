@@ -32,6 +32,11 @@ describe('terminalConnectUrl scheme override', () => {
             serverUrl: null,
         });
 
+        expect(parseTerminalConnectUrl('happier:terminal?abcDEF_123-zzz')).toEqual({
+            publicKeyB64Url: 'abcDEF_123-zzz',
+            serverUrl: null,
+        });
+
         expect(parseTerminalConnectUrl('happier-internaldev://terminal?abcDEF_123-zzz')).toEqual({
             publicKeyB64Url: 'abcDEF_123-zzz',
             serverUrl: null,

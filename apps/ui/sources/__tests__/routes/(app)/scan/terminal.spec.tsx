@@ -32,9 +32,14 @@ installScanRouteCommonModuleMocks({
     },
 });
 
-const processAuthUrlSpy = vi.fn(async (_url: string) => true);
+const processTerminalAuthUrlSpy = vi.fn(async (_url: string) => true);
+const processAccountAuthUrlSpy = vi.fn(async (_url: string) => true);
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
-    useConnectTerminal: (_opts?: any) => ({ processAuthUrl: processAuthUrlSpy, isLoading: false }),
+    useConnectTerminal: (_opts?: any) => ({ processAuthUrl: processTerminalAuthUrlSpy, isLoading: false }),
+}));
+
+vi.mock('@/hooks/auth/useConnectAccount', () => ({
+    useConnectAccount: (_opts?: any) => ({ processAuthUrl: processAccountAuthUrlSpy, isLoading: false }),
 }));
 
 let lastScannerProps: any = null;
@@ -48,7 +53,8 @@ vi.mock('@/components/qr/QrCodeScannerView', () => ({
 describe('/scan/terminal', () => {
     beforeEach(() => {
         routerBackSpy.mockClear();
-        processAuthUrlSpy.mockClear();
+        processTerminalAuthUrlSpy.mockClear();
+        processAccountAuthUrlSpy.mockClear();
         lastScannerProps = null;
     });
 
@@ -63,7 +69,24 @@ describe('/scan/terminal', () => {
             await lastScannerProps.onScan('happier://terminal?key=abc&server=https%3A%2F%2Fapi.happier.dev');
         });
 
-        expect(processAuthUrlSpy).toHaveBeenCalledTimes(1);
-        expect(processAuthUrlSpy).toHaveBeenCalledWith('happier://terminal?key=abc&server=https%3A%2F%2Fapi.happier.dev');
+        expect(processTerminalAuthUrlSpy).toHaveBeenCalledTimes(1);
+        expect(processTerminalAuthUrlSpy).toHaveBeenCalledWith('happier://terminal?key=abc&server=https%3A%2F%2Fapi.happier.dev');
+        expect(processAccountAuthUrlSpy).not.toHaveBeenCalled();
+    });
+
+    it('routes scanned account URLs to account auth even from the terminal scanner', async () => {
+        const { default: Screen } = await import('@/app/(app)/scan/terminal');
+
+        await renderScreen(<Screen />);
+
+        expect(typeof lastScannerProps?.onScan).toBe('function');
+
+        await act(async () => {
+            await lastScannerProps.onScan('happier:///account?abc123');
+        });
+
+        expect(processAccountAuthUrlSpy).toHaveBeenCalledTimes(1);
+        expect(processAccountAuthUrlSpy).toHaveBeenCalledWith('happier:///account?abc123');
+        expect(processTerminalAuthUrlSpy).not.toHaveBeenCalled();
     });
 });

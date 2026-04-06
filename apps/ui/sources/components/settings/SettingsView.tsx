@@ -33,6 +33,7 @@ import { recordBugReportUserAction } from '@/utils/system/bugReportActionTrail';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useScannedAuthUrlProcessor } from '@/hooks/auth/useScannedAuthUrlProcessor';
 import type { FeatureId } from '@happier-dev/protocol';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
 import { isRunningOnMac } from '@/utils/platform/platform';
@@ -86,7 +87,8 @@ export const SettingsView = React.memo(function SettingsView() {
     const showHiddenSettingsButtons = devModeEnabled;
     const showDesktopSettings = isTauriDesktop();
 
-    const { connectTerminal, connectWithUrl, isLoading } = useConnectTerminal();
+    const { connectTerminal, isLoading } = useConnectTerminal();
+    const { processAuthUrl: processScannedAuthUrl } = useScannedAuthUrlProcessor();
 
     useFocusEffect(
         React.useCallback(() => {
@@ -256,7 +258,7 @@ export const SettingsView = React.memo(function SettingsView() {
                 <ItemGroup>
                     <Item
                         testID="settings-connect-terminal-scan"
-                        title={t('settings.scanQrCodeToAuthenticate')}
+                        title={t('settingsAccount.linkNewDevice')}
                         icon={<Ionicons name="qr-code-outline" size={29} color={theme.colors.accent.blue} />}
                         onPress={connectTerminal}
                         loading={isLoading}
@@ -268,15 +270,15 @@ export const SettingsView = React.memo(function SettingsView() {
                         icon={<Ionicons name="link-outline" size={29} color={theme.colors.accent.blue} />}
                         onPress={async () => {
                             const url = await Modal.prompt(
-                                t('modals.authenticateTerminal'),
-                                t('modals.pasteUrlFromTerminal'),
+                                t('connect.linkNewDeviceTitle'),
+                                undefined,
                                 {
-                                    placeholder: t('connect.terminalUrlPlaceholder'),
-                                    confirmText: t('common.authenticate')
+                                    confirmText: t('common.continue'),
+                                    cancelText: t('common.cancel'),
                                 }
                             );
                             if (url?.trim()) {
-                                connectWithUrl(url.trim());
+                                processScannedAuthUrl(url.trim());
                             }
                         }}
                         showChevron={false}

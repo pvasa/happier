@@ -8,7 +8,18 @@ const deviceState = vi.hoisted(() => ({
     platformOs: 'ios' as 'ios' | 'web',
     windowWidth: 360,
     windowHeight: 800,
+    safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
 }));
+
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return style.reduce<Record<string, unknown>>((acc, entry) => ({
+            ...acc,
+            ...flattenStyle(entry),
+        }), {});
+    }
+    return style && typeof style === 'object' ? (style as Record<string, unknown>) : {};
+}
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -74,6 +85,10 @@ vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+    useSafeAreaInsets: () => deviceState.safeAreaInsets,
+}));
+
 let lastCameraProps: any = null;
 vi.mock('expo-camera', () => ({
     CameraView: (props: any) => {
@@ -89,6 +104,7 @@ describe('QrCodeScannerView', () => {
         deviceState.platformOs = 'ios';
         deviceState.windowWidth = 360;
         deviceState.windowHeight = 800;
+        deviceState.safeAreaInsets = { top: 0, bottom: 0, left: 0, right: 0 };
         vi.unstubAllGlobals();
     });
 
@@ -155,5 +171,27 @@ describe('QrCodeScannerView', () => {
                     testIDPrefix="test"
                 />);
         expect(lastCameraProps).toBeNull();
+    });
+
+    it('offsets overlay controls by the safe area while keeping the camera full-bleed', async () => {
+        deviceState.safeAreaInsets = { top: 44, bottom: 34, left: 0, right: 0 };
+
+        const { QrCodeScannerView } = await import('./QrCodeScannerView');
+
+        const screen = await renderScreen(<QrCodeScannerView
+                    title="t"
+                    subtitle="s"
+                    permissionRequiredMessage="perm"
+                    onCancel={vi.fn()}
+                    onScan={vi.fn()}
+                    testIDPrefix="test"
+                />);
+
+        const closeButton = screen.root.findByProps({ testID: 'test-close' });
+        const overlay = closeButton.parent?.parent;
+        expect(overlay).toBeTruthy();
+        const overlayStyle = flattenStyle(overlay!.props.style);
+        expect(overlayStyle.paddingTop).toBe(62);
+        expect(overlayStyle.paddingBottom).toBe(52);
     });
 });

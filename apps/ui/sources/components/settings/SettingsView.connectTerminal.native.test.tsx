@@ -8,6 +8,8 @@ import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const connectTerminalSpy = vi.fn();
+const processAuthUrlSpy = vi.fn(async (_url: string) => true);
+const promptSpy = vi.fn(async (..._args: unknown[]) => null as string | null);
 
 installSettingsViewCommonModuleMocks({
     reactNative: async () => {
@@ -44,7 +46,7 @@ installSettingsViewCommonModuleMocks({
             spies: {
                 alert: vi.fn(),
                 confirm: vi.fn(async () => false),
-                prompt: vi.fn(async () => null),
+                prompt: (...args: unknown[]) => promptSpy(...args),
             },
         }).module;
     },
@@ -104,6 +106,10 @@ vi.mock('@/components/ui/lists/Item', () => ({
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
     useConnectTerminal: () => ({ connectTerminal: connectTerminalSpy, connectWithUrl: vi.fn(), isLoading: false }),
+}));
+
+vi.mock('@/hooks/auth/useScannedAuthUrlProcessor', () => ({
+    useScannedAuthUrlProcessor: () => ({ processAuthUrl: processAuthUrlSpy, isLoading: false }),
 }));
 
 vi.mock('@/auth/context/AuthContext', () => ({
@@ -201,6 +207,8 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
 
 describe('SettingsView (native connect terminal)', () => {
     it('shows terminal connect actions on native platforms', async () => {
+        promptSpy.mockReset();
+        processAuthUrlSpy.mockReset();
         vi.resetModules();
         const { SettingsView } = await import('./SettingsView');
 
@@ -219,5 +227,30 @@ describe('SettingsView (native connect terminal)', () => {
         });
 
         expect(connectTerminalSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('routes manually entered account URLs through the shared auth processor', async () => {
+        promptSpy.mockReset();
+        processAuthUrlSpy.mockReset();
+        promptSpy.mockResolvedValueOnce(' happier:///account?manual ');
+
+        vi.resetModules();
+        const { SettingsView } = await import('./SettingsView');
+
+        let tree!: ReactTestRenderer;
+        tree = (await renderScreen(<SettingsView />)).tree;
+
+        const items = tree.findAllByType('Item' as any);
+        const manualItem = items.find((item: any) => item?.props?.testID === 'settings-connect-terminal-enter-url');
+
+        expect(manualItem).toBeTruthy();
+
+        await act(async () => {
+            await pressTestInstanceAsync(manualItem!);
+        });
+
+        expect(promptSpy).toHaveBeenCalledTimes(1);
+        expect(processAuthUrlSpy).toHaveBeenCalledTimes(1);
+        expect(processAuthUrlSpy).toHaveBeenCalledWith('happier:///account?manual');
     });
 });
