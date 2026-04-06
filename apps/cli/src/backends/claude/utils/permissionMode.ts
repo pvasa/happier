@@ -5,6 +5,24 @@ import type { PermissionMode } from '@/api/types';
 export type ClaudeSdkPermissionMode = NonNullable<QueryOptions['permissionMode']>;
 
 /**
+ * Normalize the session-control flag we pass through Happier CLI when spawning Claude.
+ *
+ * This boundary is earlier than the actual Claude SDK/CLI launch boundary: the value still has to
+ * round-trip through Happier's own CLI parser and metadata model first. That means we can only
+ * rewrite tokens that Happier already accepts and canonicalizes back to the same intent.
+ *
+ * In practice:
+ * - yolo → bypassPermissions
+ * - safe-yolo → acceptEdits
+ * - read-only must remain read-only here (do not rewrite to dontAsk at this boundary)
+ */
+export function normalizeClaudeHappyCliSessionControlPermissionMode(mode: string): string {
+    if (mode === 'yolo') return 'bypassPermissions';
+    if (mode === 'safe-yolo') return 'acceptEdits';
+    return mode;
+}
+
+/**
  * Map any PermissionMode (7 modes) to a Claude-compatible mode (5 modes)
  * This is the ONLY place where Codex modes are mapped to Claude equivalents.
  *
