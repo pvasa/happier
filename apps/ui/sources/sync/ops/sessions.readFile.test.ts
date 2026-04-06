@@ -135,6 +135,60 @@ describe('sessionReadFile', () => {
         expect(getReadyServerFeaturesSpy).toHaveBeenCalled();
     });
 
+    it('allows image-sized inline reads when the caller provides a larger maxBytes override', async () => {
+        const { sessionReadFile } = await import('./sessionFileSystem');
+
+        const previewSizedBytes = 300 * 1024;
+        const previewContentBase64 = Buffer.alloc(previewSizedBytes, 7).toString('base64');
+        readMachineTargetForSessionSpy.mockReturnValue({ machineId: 'm1', basePath: '/repo' });
+
+        machineRPCSpy.mockImplementation(async (_machineId: string, method: string) => {
+            expect(policyConsulted).toBe(true);
+
+            if (method === RPC_METHODS.STAT_FILE) {
+                return {
+                    success: true,
+                    exists: true,
+                    kind: 'file',
+                    sizeBytes: previewSizedBytes,
+                    modifiedMs: 0,
+                };
+            }
+            if (method === RPC_METHODS.DAEMON_BULK_TRANSFER_DOWNLOAD_INIT) {
+                return {
+                    success: true,
+                    downloadId: 'download-1',
+                    chunkSizeBytes: previewSizedBytes,
+                    sizeBytes: previewSizedBytes,
+                    name: 'preview.png',
+                };
+            }
+            if (method === RPC_METHODS.DAEMON_BULK_TRANSFER_DOWNLOAD_CHUNK) {
+                return {
+                    success: true,
+                    contentBase64: previewContentBase64,
+                    isLast: true,
+                };
+            }
+            if (method === RPC_METHODS.DAEMON_BULK_TRANSFER_DOWNLOAD_FINALIZE) {
+                return { success: true };
+            }
+            if (method === RPC_METHODS.DAEMON_BULK_TRANSFER_DOWNLOAD_ABORT) {
+                return { success: true };
+            }
+
+            return { success: false, error: `unexpected method ${method}` };
+        });
+
+        const res = await sessionReadFile('s1', 'images/preview.png', {
+            maxBytes: 3 * 1024 * 1024,
+        });
+        expect(res).toEqual({ success: true, content: previewContentBase64 });
+        expect(machineRPCSpy).not.toHaveBeenCalledWith('m1', RPC_METHODS.READ_FILE, expect.anything());
+        expect(sessionRpcWithServerScopeSpy).not.toHaveBeenCalled();
+        expect(getReadyServerFeaturesSpy).toHaveBeenCalled();
+    });
+
     it('fails closed when the inline max-bytes guard rejects the download', async () => {
         const { sessionReadFile } = await import('./sessionFileSystem');
 

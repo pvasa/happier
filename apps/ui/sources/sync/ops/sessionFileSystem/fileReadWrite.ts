@@ -21,15 +21,15 @@ const SESSION_FILE_INLINE_HARD_MAX_BYTES = 10_000_000;
 const SESSION_READ_FILE_TOO_LARGE_ERROR = 'File exceeds the inline file read size limit';
 const SESSION_WRITE_FILE_TOO_LARGE_ERROR = 'File exceeds the inline file write size limit';
 
-function resolveSessionFileInlineMaxBytes(): number {
+function resolveSessionFileInlineMaxBytes(defaultMaxBytes: number): number {
     const raw = String(process.env[SESSION_FILE_INLINE_MAX_BYTES_ENV_KEY] ?? '').trim();
     if (!raw) {
-        return DEFAULT_SESSION_FILE_INLINE_MAX_BYTES;
+        return defaultMaxBytes;
     }
 
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isFinite(parsed) || parsed <= 0) {
-        return DEFAULT_SESSION_FILE_INLINE_MAX_BYTES;
+        return defaultMaxBytes;
     }
 
     return Math.min(parsed, SESSION_FILE_INLINE_HARD_MAX_BYTES);
@@ -45,7 +45,11 @@ export type SessionReadFileResponse =
   | Readonly<{ success: true; content: string }>
   | Readonly<{ success: false; error: string }>;
 
-export async function sessionReadFile(sessionId: string, path: string): Promise<SessionReadFileResponse> {
+export async function sessionReadFile(
+    sessionId: string,
+    path: string,
+    options?: Readonly<{ maxBytes?: number | null }>,
+): Promise<SessionReadFileResponse> {
     if (!readMachineTargetForSession(sessionId) && !canUseSessionRpc(sessionId)) {
         return {
             success: false,
@@ -53,7 +57,11 @@ export async function sessionReadFile(sessionId: string, path: string): Promise<
         };
     }
 
-    const inlineMaxBytes = resolveSessionFileInlineMaxBytes();
+    const inlineMaxBytes = resolveSessionFileInlineMaxBytes(
+        typeof options?.maxBytes === 'number' && Number.isFinite(options.maxBytes) && options.maxBytes > 0
+            ? Math.floor(options.maxBytes)
+            : DEFAULT_SESSION_FILE_INLINE_MAX_BYTES,
+    );
     const download = await downloadDaemonSessionFileToBase64({
         sessionId,
         path,
@@ -91,7 +99,7 @@ export async function sessionWriteFile(
   expectedHash?: string | null,
 ): Promise<SessionWriteFileResponse> {
     const contentBytes = new TextEncoder().encode(content);
-    const inlineMaxBytes = resolveSessionFileInlineMaxBytes();
+    const inlineMaxBytes = resolveSessionFileInlineMaxBytes(DEFAULT_SESSION_FILE_INLINE_MAX_BYTES);
     const guardedWrite = typeof expectedHash === 'string' && expectedHash.trim().length > 0;
 
     if (guardedWrite && contentBytes.byteLength > inlineMaxBytes) {

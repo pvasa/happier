@@ -138,7 +138,9 @@ export function useSessionImagePreview(input: Readonly<{
 
         void (async () => {
             try {
-                const res = await sessionReadFile(sessionId, filePath);
+                const res = await sessionReadFile(sessionId, filePath, {
+                    maxBytes: maxPreviewBytes > 0 ? maxPreviewBytes : undefined,
+                });
                 if (cancelled) return;
                 if (!res.success || typeof res.content !== 'string' || res.content.trim().length === 0) {
                     const err = (res as any)?.error;
