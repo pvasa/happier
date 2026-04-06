@@ -2231,6 +2231,7 @@ export const es: TranslationStructure = {
       fileTooLargeTitle: "Archivo demasiado grande",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `Se omitieron ${count} ${plural({ count, singular: "archivo", plural: "archivos" })} que superan el tamaño máximo de adjunto.`,
+      pickerUnavailableBody: "No se pudo abrir el selector de adjuntos. Inténtalo de nuevo.",
     },
   },
 

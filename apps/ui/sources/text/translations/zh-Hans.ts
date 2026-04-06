@@ -2158,6 +2158,7 @@ export const zhHans: TranslationStructure = {
       fileTooLargeTitle: "文件过大",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `已跳过 ${count} 个超过最大附件大小的文件。`,
+      pickerUnavailableBody: "无法打开附件选择器。请重试。",
     },
   },
 

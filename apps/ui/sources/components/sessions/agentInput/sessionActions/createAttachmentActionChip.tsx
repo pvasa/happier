@@ -5,7 +5,6 @@ import { Pressable, View, Platform } from 'react-native';
 import type { AgentInputExtraActionChip, AgentInputExtraActionChipRenderContext } from '@/components/sessions/agentInput/agentInputContracts';
 import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 import { t } from '@/text';
 import { blurActiveElementOnWeb } from '@/utils/platform/deferOnWeb';
 
@@ -16,7 +15,7 @@ export function createAttachmentActionChip(params: Readonly<{
     onPickImage: () => void;
     disabled?: boolean;
 }>): AgentInputExtraActionChip {
-    const showChooser = Platform.OS === 'ios' || Platform.OS === 'android';
+    const showNativeChooser = Platform.OS === 'ios' || Platform.OS === 'android';
     // Per-chip instance guard (avoid cross-screen/test interference from module-level state).
     let lastWebPickerOpenAtMs = 0;
     const runPickerOpenWithWebCooldown = (action: () => void) => {
@@ -40,44 +39,46 @@ export function createAttachmentActionChip(params: Readonly<{
         blurActiveElementOnWeb();
         action();
     };
+    const deferNativePickerOpen = (action: () => void) => {
+        // Opening native pickers via InteractionManager is surprisingly flaky when the keyboard
+        // controller is mid-animation. Prefer calling immediately and let the picker layer handle
+        // any required retry/deferral.
+        action();
+    };
 
     return {
         key: 'attachments-add',
         controlId: 'attachments',
         labelPolicy: 'auto-hide',
-        ...(showChooser ? {
-            collapsedContentPopover: {
-                title: t('common.attach'),
+        ...(showNativeChooser ? {
+            collapsedOptionsPopover: {
+                presentation: 'simple',
+                title: null,
+                closeOnSelect: false,
                 label: t('common.attach'),
                 icon: (tint: string) =>
                     normalizeNodeForView(<Ionicons name="attach-outline" size={16} color={tint} />),
-                renderContent: ({ requestClose }) => (
-                    <ActionListSection
-                        actions={[
-                            {
-                                id: 'add-image',
-                                testID: 'attachments-action-add-image',
-                                label: t('common.addImage'),
-                                onPress: () => {
-                                    requestClose();
-                                    params.onPickImage();
-                                },
-                            },
-                            {
-                                id: 'add-file',
-                                testID: 'attachments-action-add-file',
-                                label: t('common.addFile'),
-                                onPress: () => {
-                                    requestClose();
-                                    params.onPickFile();
-                                },
-                            },
-                        ]}
-                    />
-                ),
-                maxWidthCap: 360,
+                options: [
+                    {
+                        id: 'add-image',
+                        label: t('common.addImage'),
+                    },
+                    {
+                        id: 'add-file',
+                        label: t('common.addFile'),
+                    },
+                ],
+                onSelect: (selectedId) => {
+                    if (selectedId === 'add-image') {
+                        deferNativePickerOpen(params.onPickImage);
+                        return;
+                    }
+                    if (selectedId === 'add-file') {
+                        deferNativePickerOpen(params.onPickFile);
+                    }
+                },
+                maxWidthCap: 320,
                 maxHeightCap: 260,
-                scrollEnabled: false,
             },
         } : {
             collapsedAction: ({ tint, dismiss, blurInput }) => ({
@@ -96,7 +97,7 @@ export function createAttachmentActionChip(params: Readonly<{
                 ref={ctx.chipAnchorRef}
                 testID="agent-input-attachments-chip"
                 onPress={() => {
-                    if (showChooser) {
+                    if (showNativeChooser) {
                         ctx.toggleCollapsedPopover?.('attachments-add');
                     } else {
                         runPickerOpenWithWebCooldown(params.onPickFile);

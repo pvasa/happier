@@ -370,9 +370,9 @@ export function AgentInputOverlayLayer(props: Readonly<{
                             title={popover.title}
                             options={popover.options}
                             selectedOptionId={popover.selectedOptionId ?? null}
+                            closeOnSelect={popover.closeOnSelect}
                             onSelect={(selectedId) => {
                                 props.activeExtraCollapsedPopoverChip?.collapsedOptionsPopover?.onSelect(selectedId);
-                                props.onActiveExtraCollapsedPopoverChipClose();
                             }}
                             onRequestClose={props.onActiveExtraCollapsedPopoverChipClose}
                             maxHeightCap={popover.maxHeightCap ?? 360}
@@ -385,7 +385,7 @@ export function AgentInputOverlayLayer(props: Readonly<{
                     <AgentInputChipPickerPopover
                         open
                         anchorRef={anchorRef}
-                        title={popover.title}
+                        title={popover.title ?? ''}
                         options={popover.options}
                         selectedOptionId={popover.selectedOptionId ?? null}
                         applyLabel={popover.applyLabel}

@@ -1,4 +1,5 @@
 import { isBrowserFile, sanitizePickedName } from './pickedFileNormalization';
+import { runNativePickerWithRapidCancelRetry } from './runNativePickerWithRapidCancelRetry';
 
 export type NativePickedFile =
     | Readonly<{ kind: 'web'; file: File }>
@@ -13,10 +14,17 @@ export type NativePickedFile =
 export async function nativePickFiles(params?: Readonly<{ multiple?: boolean }>): Promise<NativePickedFile[]> {
     const multiple = params?.multiple !== false;
     const DocumentPicker: any = await import('expo-document-picker');
-    const result = await DocumentPicker.getDocumentAsync({
-        multiple,
-        type: '*/*',
-    });
+    type ExpoDocumentPickerResult = Readonly<{
+        canceled?: boolean;
+        assets?: unknown;
+    }>;
+    const result = await runNativePickerWithRapidCancelRetry<ExpoDocumentPickerResult>(
+        () => DocumentPicker.getDocumentAsync({
+            multiple,
+            type: '*/*',
+        }),
+        { pickerLabelForError: 'File picker' },
+    );
     if (!result || result.canceled) return [];
 
     const assets = Array.isArray(result.assets) ? result.assets : [];

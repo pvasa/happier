@@ -8,7 +8,7 @@ import { Text } from '@/components/ui/text/Text';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 
 export type AgentInputSelectionSimpleListProps = Readonly<{
-    title: string;
+    title?: string | null;
     options: ReadonlyArray<AgentInputChipPickerOption>;
     selectedOptionId?: string | null;
     onSelect: (id: string) => void;
@@ -17,7 +17,7 @@ export type AgentInputSelectionSimpleListProps = Readonly<{
 export function AgentInputSelectionSimpleList(props: AgentInputSelectionSimpleListProps) {
     return (
         <View style={styles.content}>
-            <Text style={styles.title}>{props.title}</Text>
+            {props.title ? <Text style={styles.title}>{props.title}</Text> : null}
 
             {props.options.map((option) => {
                 const isSelected = option.id === props.selectedOptionId;

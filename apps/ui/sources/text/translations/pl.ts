@@ -2260,6 +2260,7 @@ export const pl: TranslationStructure = {
       fileTooLargeTitle: "Plik zbyt duży",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `Pominięto ${count} ${plural({ count, one: "plik", few: "pliki", many: "plików" })}, które przekraczają maksymalny rozmiar załącznika.`,
+      pickerUnavailableBody: "Nie udało się otworzyć selektora załączników. Spróbuj ponownie.",
     },
   },
 

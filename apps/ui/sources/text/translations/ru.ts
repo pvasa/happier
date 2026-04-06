@@ -2214,6 +2214,7 @@ export const ru: TranslationStructure = {
       fileTooLargeTitle: "Файл слишком большой",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `Пропущено ${count} ${plural({ count, one: "файл", few: "файла", many: "файлов" })}, превышающих максимальный размер вложений.`,
+      pickerUnavailableBody: "Не удалось открыть средство выбора вложений. Попробуйте ещё раз.",
     },
   },
 

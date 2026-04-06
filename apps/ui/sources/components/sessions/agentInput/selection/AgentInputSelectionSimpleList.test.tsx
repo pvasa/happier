@@ -67,4 +67,25 @@ describe('AgentInputSelectionSimpleList', () => {
 
         expect(onSelect).toHaveBeenCalledWith('plan');
     });
+
+    it('omits the header row when no title is provided', async () => {
+        const { AgentInputSelectionSimpleList } = await import('./AgentInputSelectionSimpleList');
+
+        const screen = await renderScreen(
+            <AgentInputSelectionSimpleList
+                title={null}
+                options={[
+                    { id: 'image', label: 'Add image' },
+                    { id: 'file', label: 'Add file' },
+                ]}
+                selectedOptionId={null}
+                onSelect={() => {}}
+            />,
+        );
+
+        expect(screen.tree.toJSON()).not.toBeNull();
+        expect(screen.findByProps({ children: 'Add image' })).toBeTruthy();
+        expect(screen.findByProps({ children: 'Add file' })).toBeTruthy();
+        expect(screen.findAllByProps({ children: 'Mode' })).toHaveLength(0);
+    });
 });
