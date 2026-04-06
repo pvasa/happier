@@ -73,7 +73,7 @@ function hasTarget(deployTargets, target) {
  *
  * Notes:
  * - This function is intentionally side-effect free; it only decides what to run.
- * - UI web deploy is production-only in the current policy (preview UI web deploys are treated as production).
+ * - UI deploy branch promotion is production-only; self-host/runtime publishers can still run for preview and production.
  *
  * @param {{
  *   environment: DeployEnvironment;
@@ -131,12 +131,11 @@ export function computeReleaseExecutionPlan(input) {
   const runDeployWebsite = hasWebsite && !dryRun && (deployWebsiteNeeded || bumpPlan.bump_website !== 'none' || forceDeploy);
   const runDeployDocs = hasDocs && !dryRun && (deployDocsNeeded || forceDeploy);
 
-  const runPublishServerRuntime = !dryRun && env === 'preview' && hasServerRunner;
-  const runPublishUiWeb = !dryRun && env === 'preview' && hasUi;
+  const runPublishServerRuntime = !dryRun && hasServerRunner;
+  const runPublishUiWeb = !dryRun && hasUi;
 
   const runPublishDocker =
     !dryRun &&
-    env === 'preview' &&
     (forceDeploy ||
       changed.changed_ui ||
       changed.changed_server ||
@@ -172,4 +171,3 @@ export function computeReleaseExecutionPlan(input) {
     dockerBuildDevBox,
   };
 }
-

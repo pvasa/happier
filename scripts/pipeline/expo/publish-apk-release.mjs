@@ -8,6 +8,7 @@ import {
   MOBILE_STORE_SUBMIT_ENVIRONMENT_CHOICES,
   formatMobileReleaseEnvironment,
   normalizeMobileReleaseEnvironment,
+  resolveMobileImmutableReleaseMetadata,
   resolveMobileReleaseMetadata,
   supportsMobileApkReleasePublishing,
 } from './mobile-release-environments.mjs';
@@ -50,6 +51,62 @@ function run(opts, cmd, args, extra) {
   });
 }
 
+/**
+ * @param {{
+ *   opts: { dryRun: boolean };
+ *   repoRoot: string;
+ *   releaseMeta: {
+ *     tag: string;
+ *     title: string;
+ *     prerelease: boolean;
+ *     rollingTag: boolean;
+ *     generateNotes: boolean;
+ *     notes: string;
+ *   };
+ *   targetSha: string;
+ *   apkAbs: string;
+ *   releaseMessage: string;
+ * }} input
+ */
+function publishGitHubRelease(input) {
+  const prerelease = input.releaseMeta.prerelease ? 'true' : 'false';
+  const rollingTag = input.releaseMeta.rollingTag ? 'true' : 'false';
+  const pruneAssets = input.releaseMeta.rollingTag ? 'true' : 'false';
+  const generateNotes = input.releaseMeta.generateNotes ? 'true' : 'false';
+
+  run(
+    input.opts,
+    process.execPath,
+    [
+      'scripts/pipeline/github/publish-release.mjs',
+      '--tag',
+      input.releaseMeta.tag,
+      '--title',
+      input.releaseMeta.title,
+      '--target-sha',
+      input.targetSha,
+      '--prerelease',
+      prerelease,
+      '--rolling-tag',
+      rollingTag,
+      '--generate-notes',
+      generateNotes,
+      '--notes',
+      input.releaseMeta.notes,
+      '--assets',
+      input.apkAbs,
+      '--clobber',
+      'true',
+      '--prune-assets',
+      pruneAssets,
+      '--release-message',
+      input.releaseMessage,
+      ...(input.opts.dryRun ? ['--dry-run'] : []),
+    ],
+    { cwd: input.repoRoot },
+  );
+}
+
 function main() {
   const repoRoot = path.resolve(process.cwd());
   const { values } = parseArgs({
@@ -88,48 +145,32 @@ function main() {
   if (!appVersion) fail('Unable to resolve apps/ui version');
 
   const releaseMeta = resolveMobileReleaseMetadata({ environment, appVersion });
-  const tag = releaseMeta.tag;
-  const title = releaseMeta.title;
-  const prerelease = releaseMeta.prerelease ? 'true' : 'false';
-  const rollingTag = releaseMeta.rollingTag ? 'true' : 'false';
-  const pruneAssets = releaseMeta.rollingTag ? 'true' : 'false';
-  const generateNotes = releaseMeta.generateNotes ? 'true' : 'false';
-  const notes = releaseMeta.notes;
+  const immutableReleaseMeta = resolveMobileImmutableReleaseMetadata({ environment, appVersion });
   const releaseMessage = String(values['release-message'] ?? '').trim();
 
-  console.log(`[pipeline] ui-mobile apk release: environment=${formatMobileReleaseEnvironment(environment)} tag=${tag} version=${appVersion}`);
-
-  run(
+  console.log(`[pipeline] ui-mobile apk release: environment=${formatMobileReleaseEnvironment(environment)} tag=${releaseMeta.tag} version=${appVersion}`);
+  publishGitHubRelease({
     opts,
-    process.execPath,
-    [
-      'scripts/pipeline/github/publish-release.mjs',
-      '--tag',
-      tag,
-      '--title',
-      title,
-      '--target-sha',
+    repoRoot,
+    releaseMeta,
+    targetSha,
+    apkAbs,
+    releaseMessage,
+  });
+
+  if (immutableReleaseMeta) {
+    console.log(
+      `[pipeline] ui-mobile apk release: immutable_tag=${immutableReleaseMeta.tag} version=${appVersion}`,
+    );
+    publishGitHubRelease({
+      opts,
+      repoRoot,
+      releaseMeta: immutableReleaseMeta,
       targetSha,
-      '--prerelease',
-      prerelease,
-      '--rolling-tag',
-      rollingTag,
-      '--generate-notes',
-      generateNotes,
-      '--notes',
-      notes,
-      '--assets',
       apkAbs,
-      '--clobber',
-      'true',
-      '--prune-assets',
-      pruneAssets,
-      '--release-message',
       releaseMessage,
-      ...(dryRun ? ['--dry-run'] : []),
-    ],
-    { cwd: repoRoot },
-  );
+    });
+  }
 }
 
 main();

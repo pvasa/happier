@@ -112,7 +112,7 @@ test('production: ui deploy runs when deploy plan says needed', () => {
 
   assert.equal(plan.runPromoteMain, true);
   assert.equal(plan.runDeployUi, true);
-  assert.equal(plan.runPublishUiWeb, false);
+  assert.equal(plan.runPublishUiWeb, true);
 });
 
 test('preview: server_runner triggers publish_server_runtime', () => {
@@ -147,6 +147,76 @@ test('preview: server_runner triggers publish_server_runtime', () => {
   });
 
   assert.equal(plan.runPublishServerRuntime, true);
+});
+
+test('production: server_runner triggers publish_server_runtime stable publish path', () => {
+  const plan = computeReleaseExecutionPlan({
+    environment: 'production',
+    dryRun: false,
+    forceDeploy: false,
+    deployTargets: ['server_runner'],
+    uiExpoAction: 'none',
+    desktopMode: 'none',
+    changed: {
+      changed_ui: false,
+      changed_cli: false,
+      changed_server: false,
+      changed_website: false,
+      changed_docs: false,
+      changed_shared: false,
+      changed_stack: false,
+    },
+    bumpPlan: {
+      bump_app: 'none',
+      bump_cli: 'none',
+      bump_stack: 'none',
+      bump_server: 'none',
+      bump_website: 'none',
+      should_bump: false,
+      publish_cli: false,
+      publish_stack: false,
+      publish_server: true,
+    },
+    deployPlan: null,
+  });
+
+  assert.equal(plan.runPublishServerRuntime, true);
+});
+
+test('production: changed shared code can publish stable docker images', () => {
+  const plan = computeReleaseExecutionPlan({
+    environment: 'production',
+    dryRun: false,
+    forceDeploy: false,
+    deployTargets: ['ui', 'cli', 'stack', 'server'],
+    uiExpoAction: 'none',
+    desktopMode: 'none',
+    changed: {
+      changed_ui: false,
+      changed_cli: false,
+      changed_server: false,
+      changed_website: false,
+      changed_docs: false,
+      changed_shared: true,
+      changed_stack: false,
+    },
+    bumpPlan: {
+      bump_app: 'none',
+      bump_cli: 'none',
+      bump_stack: 'none',
+      bump_server: 'none',
+      bump_website: 'none',
+      should_bump: false,
+      publish_cli: false,
+      publish_stack: false,
+      publish_server: false,
+    },
+    deployPlan: null,
+  });
+
+  assert.equal(plan.runPublishDocker, true);
+  assert.equal(plan.dockerBuildRelay, true);
+  assert.equal(plan.dockerBuildDevBox, true);
 });
 
 test('dry-run: no mutating jobs run', () => {
@@ -190,4 +260,3 @@ test('dry-run: no mutating jobs run', () => {
     assert.equal(v, false, `expected ${k} to be false in dry-run mode`);
   }
 });
-

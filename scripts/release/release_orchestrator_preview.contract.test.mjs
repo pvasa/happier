@@ -53,6 +53,21 @@ test('release workflow publishes server runner only when explicitly requested', 
     /publish_server_runtime:[\s\S]*?uses:\s*\.\/\.github\/workflows\/publish-server-runtime\.yml/,
     'server runtime publishing should be handled by a dedicated workflow (decoupled from SaaS deploy)',
   );
+  assert.match(
+    raw,
+    /publish_server_runtime:[\s\S]*?channel:\s*\$\{\{\s*inputs\.environment == 'production' && 'stable' \|\| 'preview'\s*\}\}/,
+    'server runtime publishing should select stable vs preview through the shared channel mapping',
+  );
+  assert.match(
+    raw,
+    /publish_server_runtime:[\s\S]*?source_ref:\s*\$\{\{\s*inputs\.environment == 'production' && 'main' \|\| 'preview'\s*\}\}/,
+    'server runtime publishing should build from main for production and preview for preview releases',
+  );
+  assert.match(
+    raw,
+    /publish_server_runtime:[\s\S]*?allow_stable:\s*\$\{\{\s*inputs\.environment == 'production'\s*\}\}/,
+    'server runtime publishing should explicitly unlock stable publishing only for production releases',
+  );
 
   assert.match(
     raw,
@@ -67,6 +82,35 @@ test('release workflow can publish self-host UI web bundle via a dedicated workf
     raw,
     /publish_ui_web:[\s\S]*?uses:\s*\.\/\.github\/workflows\/publish-ui-web\.yml/,
     'self-host UI web bundle publishing should be handled by a dedicated workflow',
+  );
+  assert.match(
+    raw,
+    /publish_ui_web:[\s\S]*?channel:\s*\$\{\{\s*inputs\.environment == 'production' && 'stable' \|\| 'preview'\s*\}\}/,
+    'ui web bundle publishing should select stable vs preview through the shared channel mapping',
+  );
+  assert.match(
+    raw,
+    /publish_ui_web:[\s\S]*?source_ref:\s*\$\{\{\s*inputs\.environment == 'production' && 'main' \|\| 'preview'\s*\}\}/,
+    'ui web bundle publishing should build from main for production and preview for preview releases',
+  );
+  assert.match(
+    raw,
+    /publish_ui_web:[\s\S]*?allow_stable:\s*\$\{\{\s*inputs\.environment == 'production'\s*\}\}/,
+    'ui web bundle publishing should explicitly unlock stable publishing only for production releases',
+  );
+});
+
+test('release workflow routes docker publishing through stable for production and preview for preview', async () => {
+  const raw = await loadWorkflow('release.yml');
+  assert.match(
+    raw,
+    /publish_docker:[\s\S]*?channel:\s*\$\{\{\s*inputs\.environment == 'production' && 'stable' \|\| 'preview'\s*\}\}/,
+    'docker publishing should select stable vs preview through the shared channel mapping',
+  );
+  assert.match(
+    raw,
+    /publish_docker:[\s\S]*?source_ref:\s*\$\{\{\s*inputs\.environment == 'production' && 'main' \|\| 'preview'\s*\}\}/,
+    'docker publishing should build from main for production and preview for preview releases',
   );
 });
 
