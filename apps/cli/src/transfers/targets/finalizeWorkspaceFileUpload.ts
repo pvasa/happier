@@ -1,6 +1,7 @@
-import { mkdir, rename, rm, stat } from 'fs/promises';
+import { mkdir, rm, stat } from 'fs/promises';
 import { dirname } from 'path';
 
+import { moveFileWithCrossDeviceFallback } from '../../utils/fs/moveFileWithCrossDeviceFallback';
 import type { UploadTransferFinalizeResult } from './uploadTransferTarget';
 
 export async function finalizeWorkspaceFileUpload(input: Readonly<{
@@ -30,7 +31,7 @@ export async function finalizeWorkspaceFileUpload(input: Readonly<{
     await rm(input.destPath, { force: true });
   }
 
-  await rename(input.tempPath, input.destPath);
+  await moveFileWithCrossDeviceFallback(input.tempPath, input.destPath);
   return {
     success: true,
     path: input.destDisplayPath,
