@@ -183,6 +183,29 @@ describe('useNewSessionMachinePathState', () => {
         await hook.unmount();
     });
 
+    it('reconciles a persisted machine preference to another online machine when the persisted machine is offline', async () => {
+        const now = Date.now();
+
+        const hook = await renderMachinePathState({
+            machines: toMachines(
+                { id: 'machine-online', metadata: { homeDir: '/online' }, active: true, activeAt: now - 10_000 },
+                { id: 'machine-offline', metadata: { homeDir: '/offline' }, active: false, activeAt: now - 10 * 60_000 },
+            ),
+            recentMachinePaths: [],
+            machineIdParam: null,
+            pathParam: null,
+            persistedMachineId: 'machine-offline',
+            persistedPath: '/repo/stale',
+        });
+
+        expect(getSelection(hook.getCurrent())).toEqual({
+            selectedMachineId: 'machine-online',
+            selectedPath: '/online',
+        });
+
+        await hook.unmount();
+    });
+
     it('upgrades an implicitly selected offline machine to an online replacement once machines hydrate', async () => {
         const now = Date.now();
 

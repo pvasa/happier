@@ -27,6 +27,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
     recentMachinePaths: unknown;
     machineIdParam: unknown;
     pathParam: unknown;
+    persistedMachineId?: unknown;
+    persistedPath?: unknown;
 }>): Readonly<{
     selectedMachineId: string | null;
     setSelectedMachineId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -65,11 +67,27 @@ export function useNewSessionMachinePathState(params: Readonly<{
         return machine?.metadata?.homeDir ?? '';
     }, [params.machines, recentMachinePaths]);
 
+    const getPersistedPathForMachine = React.useCallback((machineId: string | null): string => {
+        if (!machineId) return '';
+        const persistedMachineId = normalizeMachineIdParam(params.persistedMachineId);
+        if (!persistedMachineId || persistedMachineId !== machineId) {
+            return '';
+        }
+        return normalizePathParam(params.persistedPath);
+    }, [params.persistedMachineId, params.persistedPath]);
+
+    const resolvePersistedMachineId = React.useCallback((): string | null => {
+        const persistedMachineId = normalizeMachineIdParam(params.persistedMachineId);
+        if (!persistedMachineId) return null;
+        return resolveMachineId(persistedMachineId);
+    }, [params.persistedMachineId, resolveMachineId]);
+
     const [selectedMachineId, setSelectedMachineIdState] = React.useState<string | null>(() => {
-        return resolveMachineId(null);
+        return resolvePersistedMachineId() ?? resolveMachineId(null);
     });
     const hasUserSelectedMachineRef = React.useRef(false);
     const selectedMachineOnlineSeenByIdRef = React.useRef<Map<string, boolean>>(new Map());
+    const lastAppliedPersistedMachineIdRef = React.useRef<string>('');
 
     const setSelectedMachineId = React.useCallback<React.Dispatch<React.SetStateAction<string | null>>>((next) => {
         hasUserSelectedMachineRef.current = true;
@@ -79,6 +97,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
     const [selectedPath, setSelectedPathState] = React.useState<string>(() => {
         const trimmedPath = normalizePathParam(params.pathParam);
         if (trimmedPath) return trimmedPath;
+        const persistedPath = getPersistedPathForMachine(selectedMachineId);
+        if (persistedPath) return persistedPath;
         return getBestPathForMachine(selectedMachineId);
     });
     const hasUserEditedPathRef = React.useRef(false);
@@ -117,8 +137,45 @@ export function useNewSessionMachinePathState(params: Readonly<{
         setSelectedMachineIdState(machineId);
         hasUserEditedPathRef.current = false;
         const trimmedPath = normalizePathParam(params.pathParam);
-        setSelectedPathState(trimmedPath || getBestPathForMachine(machineId));
-    }, [getBestPathForMachine, hasMachine, params.machineIdParam, params.pathParam, selectedMachineId]);
+        setSelectedPathState(trimmedPath || getPersistedPathForMachine(machineId) || getBestPathForMachine(machineId));
+    }, [getBestPathForMachine, getPersistedPathForMachine, hasMachine, params.machineIdParam, params.pathParam, selectedMachineId]);
+
+    React.useEffect(() => {
+        const routeMachineId = normalizeMachineIdParam(params.machineIdParam);
+        if (routeMachineId) {
+            lastAppliedPersistedMachineIdRef.current = '';
+            return;
+        }
+        if (hasUserSelectedMachineRef.current) {
+            return;
+        }
+
+        const reconciledPersistedMachineId = resolvePersistedMachineId();
+        if (!reconciledPersistedMachineId) {
+            lastAppliedPersistedMachineIdRef.current = '';
+            return;
+        }
+        if (reconciledPersistedMachineId === lastAppliedPersistedMachineIdRef.current) {
+            return;
+        }
+
+        lastAppliedPersistedMachineIdRef.current = reconciledPersistedMachineId;
+        if (reconciledPersistedMachineId === selectedMachineId) {
+            return;
+        }
+
+        setSelectedMachineIdState(reconciledPersistedMachineId);
+        hasUserEditedPathRef.current = false;
+        setSelectedPathState(
+            getPersistedPathForMachine(reconciledPersistedMachineId) || getBestPathForMachine(reconciledPersistedMachineId),
+        );
+    }, [
+        getBestPathForMachine,
+        getPersistedPathForMachine,
+        params.machineIdParam,
+        resolvePersistedMachineId,
+        selectedMachineId,
+    ]);
 
     // Ensure a machine is pre-selected once machines have loaded (wizard expects this).
     React.useEffect(() => {
@@ -130,8 +187,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
         hasUserSelectedMachineRef.current = false;
         setSelectedMachineIdState(machineIdToUse);
         hasUserEditedPathRef.current = false;
-        setSelectedPathState(trimmedPath || getBestPathForMachine(machineIdToUse));
-    }, [getBestPathForMachine, params.machines, params.pathParam, resolveMachineId, selectedMachineId]);
+        setSelectedPathState(trimmedPath || getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
+    }, [getBestPathForMachine, getPersistedPathForMachine, params.machines, params.pathParam, resolveMachineId, selectedMachineId]);
 
     // Keep selection valid when machine snapshots change (server/account switch, revoke, reconnect).
     React.useEffect(() => {
@@ -144,8 +201,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
         hasUserSelectedMachineRef.current = false;
         setSelectedMachineIdState(machineIdToUse);
         hasUserEditedPathRef.current = false;
-        setSelectedPathState(getBestPathForMachine(machineIdToUse));
-    }, [getBestPathForMachine, hasMachine, resolveMachineId, selectedMachineId]);
+        setSelectedPathState(getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
+    }, [getBestPathForMachine, getPersistedPathForMachine, hasMachine, resolveMachineId, selectedMachineId]);
 
     React.useEffect(() => {
         if (!selectedMachineId) return;
@@ -172,8 +229,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
         if (hasUserEditedPathRef.current) return;
         const trimmedPath = normalizePathParam(params.pathParam);
         hasUserEditedPathRef.current = false;
-        setSelectedPathState(trimmedPath || getBestPathForMachine(machineIdToUse));
-    }, [getBestPathForMachine, params.machineIdParam, params.pathParam, resolveMachineId, selectedMachineId]);
+        setSelectedPathState(trimmedPath || getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
+    }, [getBestPathForMachine, getPersistedPathForMachine, params.machineIdParam, params.pathParam, resolveMachineId, selectedMachineId]);
 
     // Handle path route param from picker screens (main's navigation pattern)
     React.useEffect(() => {
@@ -199,10 +256,22 @@ export function useNewSessionMachinePathState(params: Readonly<{
         if (!selectedMachineId) {
             return;
         }
-        if (selectedPath.trim().length > 0) {
+        if (normalizePathParam(params.pathParam)) {
             return;
         }
         if (hasUserEditedPathRef.current) {
+            return;
+        }
+
+        const persistedPath = getPersistedPathForMachine(selectedMachineId);
+        if (persistedPath) {
+            if (selectedPath !== persistedPath) {
+                setSelectedPathState(persistedPath);
+            }
+            return;
+        }
+
+        if (selectedPath.trim().length > 0) {
             return;
         }
 
@@ -212,7 +281,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         }
 
         setSelectedPathState(bestPath);
-    }, [getBestPathForMachine, selectedMachineId, selectedPath]);
+    }, [getBestPathForMachine, getPersistedPathForMachine, params.pathParam, selectedMachineId, selectedPath]);
 
     return {
         selectedMachineId,

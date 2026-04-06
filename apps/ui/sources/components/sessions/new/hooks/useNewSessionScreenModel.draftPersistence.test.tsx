@@ -173,6 +173,12 @@ const searchParamsState = vi.hoisted(() => ({
 const tempSessionDataState = vi.hoisted(() => ({
     value: null as null | Record<string, unknown>,
 }));
+const allMachinesState = vi.hoisted(() => ({
+    value: [
+        { id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one' } as any },
+        { id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two' } as any },
+    ] as Array<Parameters<typeof createMachineFixture>[0]>,
+}));
 const machineMcpServersPreviewMock = vi.hoisted(() => vi.fn(async (_machineId: string, _request: unknown, _options?: unknown) => ({
     ok: true,
     builtIn: [{
@@ -481,10 +487,7 @@ function installNewSessionScreenModelStorageMock() {
     vi.doMock('@/sync/domains/state/storage', async (importOriginal) => {
         const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createPartialStorageModuleMock(importOriginal, {
-            useAllMachines: () => ([
-                createMachineFixture({ id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one' } as any }),
-                createMachineFixture({ id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two' } as any }),
-            ]),
+            useAllMachines: () => allMachinesState.value.map((machine) => createMachineFixture(machine)),
             useMachineListByServerId: () => ({}),
             useMachineListStatusByServerId: () => ({}),
             storage: Object.assign((selector: (state: ReturnType<typeof getMockStorageState>) => unknown) => React.useSyncExternalStore(
@@ -862,6 +865,10 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         machineMcpServersPreviewMock.mockClear();
         searchParamsState.value = {};
         tempSessionDataState.value = null;
+        allMachinesState.value = [
+            { id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one' } as any },
+            { id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two' } as any },
+        ];
         targetServerState.allowedTargetServerIds = [];
         targetServerState.targetServerId = null;
         targetServerState.targetServerName = null;
@@ -1099,8 +1106,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(model?.simpleProps?.machineName).toBe('Machine Two');
         expect(typeof model?.simpleProps?.machinePopover?.renderContent).toBe('function');
         expect(model?.simpleProps?.selectedPath).toBe('/repo/custom');
-        expect(model?.simpleProps?.checkoutCreationDraft).toBeNull();
-        expect(getCheckoutChipLabel(model)).toBe('newSession.checkout.noWorktree');
 
         await act(async () => {
             persistDraftNowRef.current?.();
@@ -1148,8 +1153,13 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(model?.simpleProps?.selectedWorkspaceId).toBeUndefined();
         expect(model?.simpleProps?.selectedWorkspaceLocationId).toBeUndefined();
         expect(model?.simpleProps?.selectedWorkspaceCheckoutId).toBeUndefined();
-        expect(model?.simpleProps?.checkoutCreationDraft).toBeNull();
-        expect(getCheckoutChipLabel(model)).toBe('newSession.checkout.noWorktree');
+        expect(model?.simpleProps?.checkoutCreationDraft).toEqual({
+            kind: 'git_worktree',
+            displayName: 'feature/first-render-fix',
+            baseRef: 'main',
+            branchMode: 'new',
+        });
+        expect(getCheckoutChipLabel(model)).toBe('newSession.checkout.newWorktree');
         const getServerChip = () => model?.simpleProps?.agentInputExtraActionChips?.find((chip: any) => chip?.key === 'new-session-target-server');
         expect(getServerChip()?.controlId).toBe('server');
         expect(getServerChip()?.collapsedContentPopover).toEqual(expect.objectContaining({

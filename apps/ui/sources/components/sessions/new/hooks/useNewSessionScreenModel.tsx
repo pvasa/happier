@@ -393,10 +393,8 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         if (raw) return raw;
         const temp = typeof tempSessionData?.machineId === 'string' ? tempSessionData.machineId.trim() : '';
         if (temp) return temp;
-        const draft = typeof persistedDraft?.selectedMachineId === 'string' ? persistedDraft.selectedMachineId.trim() : '';
-        if (draft) return draft;
         return null;
-    }, [machineIdParam, persistedDraft?.selectedMachineId, tempSessionData?.machineId]);
+    }, [machineIdParam, tempSessionData?.machineId]);
 
     const effectivePathParam = React.useMemo(() => {
         const normalizedDirectoryParam = normalizeOptionalParam(directoryParam);
@@ -408,21 +406,8 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         if (raw) return raw;
         const temp = typeof hydratedTempAuthoringDraft?.directory === 'string' ? hydratedTempAuthoringDraft.directory.trim() : '';
         if (temp) return temp;
-
-        const draftPath = typeof hydratedPersistedAuthoringDraft?.directory === 'string' ? hydratedPersistedAuthoringDraft.directory.trim() : '';
-        if (!draftPath) return null;
-
-        // If this navigation explicitly targets a different machine, avoid applying the old draft path (machine-scoped).
-        const normalizedMachineIdParam = normalizeOptionalParam(machineIdParam);
-        if (typeof normalizedMachineIdParam === 'string' && normalizedMachineIdParam.trim().length > 0) {
-            const draftMachineId = typeof persistedDraft?.selectedMachineId === 'string' ? persistedDraft.selectedMachineId.trim() : '';
-            if (draftMachineId && draftMachineId !== normalizedMachineIdParam.trim()) {
-                return null;
-            }
-        }
-
-        return draftPath;
-    }, [directoryParam, hydratedPersistedAuthoringDraft?.directory, hydratedTempAuthoringDraft?.directory, machineIdParam, pathParam, persistedDraft?.selectedMachineId]);
+        return null;
+    }, [directoryParam, hydratedTempAuthoringDraft?.directory, pathParam]);
 
     const effectiveWorktreeRouteMode = React.useMemo(() => {
         const normalizedWorktreeParam = normalizeOptionalParam(worktreeParam);
@@ -478,6 +463,8 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         recentMachinePaths,
         machineIdParam: effectiveMachineIdParam,
         pathParam: effectivePathParam,
+        persistedMachineId: persistedDraft?.selectedMachineId ?? null,
+        persistedPath: hydratedPersistedAuthoringDraft?.directory ?? null,
     });
     const [pathPickerSearchQuery, setPathPickerSearchQuery] = React.useState('');
     const repoScmSnapshot = useNewSessionRepoScmSnapshot({
