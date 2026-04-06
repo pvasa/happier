@@ -32,6 +32,40 @@ function readMachineDaemonCliVersion(machineId: string): string | null {
     return typeof rawVersion === 'string' && rawVersion.trim().length > 0 ? rawVersion.trim() : null;
 }
 
+function remapLegacyDirectoryCompatibilityError(params: Readonly<{
+    result: SpawnSessionResult;
+    directory: string;
+    daemonCliVersion: string | null;
+}>): SpawnSessionResult {
+    if (params.result.type !== 'error') {
+        return params.result;
+    }
+
+    if (params.result.errorCode !== SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST) {
+        return params.result;
+    }
+
+    const sentDirectory = params.directory.trim();
+    if (!sentDirectory) {
+        return params.result;
+    }
+
+    const normalizedMessage = params.result.errorMessage.trim().toLowerCase();
+    if (normalizedMessage !== 'directory is required') {
+        return params.result;
+    }
+
+    const versionLabel = params.daemonCliVersion ?? 'an older preview build';
+    return {
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+        errorMessage:
+            `The selected machine rejected the session directory even though the app sent one. ` +
+            `This usually means the machine is running an incompatible daemon (${versionLabel}) ` +
+            `or a stale machine registration. Restart or re-authorize the CLI on that machine, then update it to a compatible 0.1.0-dev or v0.2.0+ build.`,
+    };
+}
+
 // Exported session operation functions
 
 /**
@@ -68,7 +102,11 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
             serverId,
             timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv(),
         });
-        return normalizeSpawnSessionResult(result);
+        return remapLegacyDirectoryCompatibilityError({
+            result: normalizeSpawnSessionResult(result),
+            directory: options.directory,
+            daemonCliVersion,
+        });
     } catch (error) {
         const rpcErrorCode = readRpcErrorCode(error);
         if (rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {

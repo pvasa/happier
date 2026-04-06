@@ -222,4 +222,44 @@ describe('machineSpawnNewSession error mapping', () => {
     });
     expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
   });
+
+  it('maps misleading legacy daemon directory errors into a compatibility hint when the app sent a directory', async () => {
+    storage.getState().applyMachines([
+      {
+        id: 'machine-legacy',
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        active: true,
+        activeAt: 1,
+        metadata: null,
+        metadataVersion: 0,
+        daemonState: {
+          startedWithCliVersion: '0.1.0',
+        },
+        daemonStateVersion: 1,
+      },
+    ]);
+    machineRpcWithServerScopeMock.mockResolvedValueOnce({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+      errorMessage: 'Directory is required',
+    });
+
+    const { machineSpawnNewSession } = await import('./machines');
+    const result = await machineSpawnNewSession({
+      machineId: 'machine-legacy',
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      serverId: 'server-b',
+    });
+
+    expect(result).toEqual({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+      errorMessage: expect.stringContaining('incompatible'),
+    });
+    if (result.type !== 'error') throw new Error('expected an error result');
+    expect(result.errorMessage).toContain('re-authorize');
+  });
 });
