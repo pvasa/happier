@@ -7,6 +7,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+let platformOs: 'ios' | 'android' = 'ios';
 let pinnedSessionKeysV1: string[] = [];
 const setPinnedSessionKeysV1 = vi.fn();
 const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
@@ -144,6 +145,7 @@ const sessionB = {
 } as any;
 
 vi.mock('react-native-gesture-handler', () => ({
+    GestureDetector: (props: any) => React.createElement('GestureDetector', props, props.children),
     Swipeable: 'Swipeable',
 }));
 
@@ -238,7 +240,12 @@ installSessionShellCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
-            Platform: { OS: 'ios', select: (value: any) => value.ios ?? value.default },
+            Platform: {
+                get OS() {
+                    return platformOs;
+                },
+                select: (value: any) => value[platformOs] ?? value.default,
+            },
             TurboModuleRegistry: { get: () => ({}) },
         });
     },
@@ -367,8 +374,13 @@ vi.mock('@/utils/system/requestReview', () => ({
     requestReview: vi.fn(),
 }));
 
+const useSessionInlineDragSpy = vi.hoisted(() => vi.fn((params: any) => ({
+    gesture: undefined,
+    animatedStyle: params ? {} : {},
+})));
+
 vi.mock('./useSessionInlineDrag', () => ({
-    useSessionInlineDrag: () => ({ gesture: undefined, animatedStyle: {} }),
+    useSessionInlineDrag: (params: any) => useSessionInlineDragSpy(params),
 }));
 
 vi.mock('./SessionItem', () => ({
@@ -429,6 +441,7 @@ function expectPresent<T>(value: T | null | undefined, label: string): T {
 
 describe('SessionsList (native virtualization)', () => {
     beforeEach(() => {
+        platformOs = 'ios';
         pinnedSessionKeysV1 = [];
         sessionTagsV1 = {};
         workspaceLabelsV1 = {};
@@ -437,6 +450,7 @@ describe('SessionsList (native virtualization)', () => {
         setSessionTagsV1.mockClear();
         setWorkspaceLabelsV1.mockClear();
         setCollapsedGroupKeysV1.mockClear();
+        useSessionInlineDragSpy.mockClear();
         mockAllowedServerIds = ['server_a'];
         readMachineTargetForSessionMock.mockReset();
         readMachineTargetForSessionMock.mockImplementation(() => null);
@@ -457,6 +471,31 @@ describe('SessionsList (native virtualization)', () => {
         expect(first.props.isLast).toBe(false);
         expect(second.props.isFirst).toBe(false);
         expect(second.props.isLast).toBe(true);
+    });
+
+    it('passes drag gestures into iOS rows without wrapping the full row in a GestureDetector', async () => {
+        useSessionInlineDragSpy.mockReturnValueOnce({ gesture: { type: 'pan' }, animatedStyle: {} } as any);
+        useSessionInlineDragSpy.mockReturnValueOnce({ gesture: { type: 'pan' }, animatedStyle: {} } as any);
+
+        const screen = await renderSessionsList();
+
+        const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
+        expect(first.props.reorderHandleGesture).toEqual({ type: 'pan' });
+        expect(first.props.nativeInlineDragEnabled).toBe(true);
+
+        const nativeRowGestureDetectors = screen.root.findAll((node) => String(node.type) === 'GestureDetector');
+        expect(nativeRowGestureDetectors).toHaveLength(0);
+    });
+
+    it('disables Android reorder gestures during the hotfix', async () => {
+        platformOs = 'android';
+
+        const screen = await renderSessionsList();
+
+        const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
+        expect(first.props.reorderHandleGesture).toBeUndefined();
+        expect(first.props.nativeInlineDragEnabled).toBe(false);
+        expect(useSessionInlineDragSpy).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
     });
 
     it('passes path secondary-line mode for date-grouped rows', async () => {

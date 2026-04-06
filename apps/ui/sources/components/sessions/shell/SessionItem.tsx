@@ -738,7 +738,10 @@ export const SessionItem = React.memo(
             sessionStatus,
         });
         const showTagChips = tagChips.length > 0 && (!isMinimal || !showMinimalStatusLine);
-        const enableLongPressContextMenu = isNativeMobile && contextMenuItems.length > 0 && nativeInlineDragEnabled !== true;
+        const enableLongPressContextMenu =
+            Platform.OS === 'ios'
+            && contextMenuItems.length > 0
+            && (nativeInlineDragEnabled !== true || showReorderHandle);
 
         const itemContent = (
             <Pressable

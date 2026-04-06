@@ -1,7 +1,6 @@
 import React from 'react';
 import { View, FlatList, Pressable, Platform } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
-import { GestureDetector } from 'react-native-gesture-handler';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { Text } from '@/components/ui/text/Text';
 import { usePathname, useRouter } from 'expo-router';
@@ -219,6 +218,7 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     }, [getCellWrapper, onDragEnd]);
 
     const isWeb = Platform.OS === 'web';
+    const isAndroid = Platform.OS === 'android';
     const onNativeContextMenuOpenChange = itemProps.onNativeContextMenuOpenChange;
     const handleLongPressActivated = React.useCallback(() => {
         if (isWeb || typeof onNativeContextMenuOpenChange !== 'function' || isDragActive) return;
@@ -237,6 +237,7 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     }, [isDragActive, isWeb, onNativeContextMenuOpenChange]);
 
     const { gesture, animatedStyle } = useSessionInlineDrag({
+        enabled: !isAndroid,
         sessionKey, groupKey, rowHeight,
         onDragStart: handleDragStart,
         onDragEnd: handleDragEnd,
@@ -245,7 +246,7 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
         dropIndicatorIdx,
         dropIndicatorEdge,
         activateAfterLongPressMs: isWeb ? undefined : 350,
-        onLongPressActivated: !isWeb && typeof onNativeContextMenuOpenChange === 'function'
+        onLongPressActivated: !isWeb && !isAndroid && typeof onNativeContextMenuOpenChange === 'function'
             ? () => handleLongPressActivated()
             : undefined,
     });
@@ -287,27 +288,11 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     return (
         <Animated.View ref={wrapperRef} style={animatedStyle} pointerEvents={rowPointerEvents}>
             <Animated.View style={[styles.dropIndicator, indicatorAnimatedStyle]} pointerEvents="none" />
-            {isWeb ? (
-                <SessionItem
-                    {...itemProps}
-                    reorderHandleGesture={gesture}
-                    isBeingDragged={isBeingDragged}
-                />
-            ) : (
-                gesture ? (
-                    <GestureDetector gesture={gesture}>
-                        <SessionItem
-                            {...itemProps}
-                            isBeingDragged={isBeingDragged}
-                        />
-                    </GestureDetector>
-                ) : (
-                    <SessionItem
-                        {...itemProps}
-                        isBeingDragged={isBeingDragged}
-                    />
-                )
-            )}
+            <SessionItem
+                {...itemProps}
+                reorderHandleGesture={gesture}
+                isBeingDragged={isBeingDragged}
+            />
         </Animated.View>
     );
 });
@@ -839,7 +824,7 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
                 compactMinimal={Boolean(compactSessionView && compactSessionViewMinimal)}
                 {...(isNative && sessionKey != null
                     ? {
-                        nativeInlineDragEnabled: true,
+                        nativeInlineDragEnabled: Platform.OS === 'ios',
                         nativeContextMenuOpen,
                         onNativeContextMenuOpenChange: handleNativeContextMenuOpenChange,
                     }
