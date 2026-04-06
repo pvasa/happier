@@ -234,6 +234,15 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
             size: number,
             color: string,
             style?: React.ComponentProps<typeof Ionicons>['style'],
+        ) => <Ionicons name={name} size={size} color={color} style={style} />,
+        [],
+    );
+    const renderNormalizedIconNode = React.useCallback(
+        (
+            name: React.ComponentProps<typeof Ionicons>['name'],
+            size: number,
+            color: string,
+            style?: React.ComponentProps<typeof Ionicons>['style'],
         ) => normalizeNodeForView(<Ionicons name={name} size={size} color={color} style={style} />),
         [],
     );
@@ -365,7 +374,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                 {useProfiles && (
                                     <>
                                         <View style={styles.wizardSectionHeaderRow}>
-                                            {renderIconNode('person-outline', 18, theme.colors.text)}
+                                            {renderNormalizedIconNode('person-outline', 18, theme.colors.text)}
                                             <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>
                                                 {t('newSession.selectAiProfileTitle')}
                                             </Text>
@@ -392,7 +401,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                 {/* Section: AI Backend */}
                                 <View onLayout={registerWizardSectionOffset('agent')}>
                                     <View style={styles.wizardSectionHeaderRow}>
-                                        {renderIconNode('hardware-chip-outline', 18, theme.colors.text)}
+                                        {renderNormalizedIconNode('hardware-chip-outline', 18, theme.colors.text)}
                                         <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>
                                             {t('newSession.selectAiBackendTitle')}
                                         </Text>
@@ -415,7 +424,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         borderColor: theme.colors.box.warning.border,
                                     }}>
                                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                                            {renderIconNode('warning', 16, theme.colors.warning)}
+                                            {renderNormalizedIconNode('warning', 16, theme.colors.warning)}
                                             <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.text, ...Typography.default('semiBold') }}>
                                                 {t('machine.tmux.notDetectedSubtitle')}
                                             </Text>
@@ -479,7 +488,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                         setAgentType(option.agentId);
                                                     }}
                                                     rightElement={(
-                                                        <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+                                                        <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>
                                                             {renderIconNode(
                                                                 'checkmark-circle',
                                                                 24,
@@ -499,8 +508,8 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                 {modelOptions.length > 0 && (
                                     <View style={{ marginTop: 24 }}>
                                         <View onLayout={registerWizardSectionOffset('model')}>
-                                            <View style={styles.wizardSectionHeaderRow}>
-                                                {renderIconNode('sparkles-outline', 18, theme.colors.text)}
+                                                <View style={styles.wizardSectionHeaderRow}>
+                                                {renderNormalizedIconNode('sparkles-outline', 18, theme.colors.text)}
                                                 <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectModelTitle')}</Text>
                                             </View>
                                         </View>
@@ -521,7 +530,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                         selected={isSelected}
                                                         onPress={() => setModelMode(option.value)}
                                                         rightElement={(
-                                                            <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+                                                            <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>
                                                                 {renderIconNode(
                                                                     'checkmark-circle',
                                                                     24,
@@ -621,7 +630,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                 {/* Section 3: Working Directory */}
                                 <View onLayout={registerWizardSectionOffset('path')}>
                                     <View style={styles.wizardSectionHeaderRow}>
-                                        {renderIconNode('folder-outline', 18, theme.colors.text)}
+                                        {renderNormalizedIconNode('folder-outline', 18, theme.colors.text)}
                                         <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectWorkingDirectoryTitle')}</Text>
                                     </View>
                                 </View>
@@ -651,7 +660,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                 {/* Section 4: Permission Mode */}
                                 <View onLayout={registerWizardSectionOffset('permission')}>
                                     <View style={styles.wizardSectionHeaderRow}>
-                                        {renderIconNode('shield-outline', 18, theme.colors.text)}
+                                        {renderNormalizedIconNode('shield-outline', 18, theme.colors.text)}
                                         <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectPermissionModeTitle')}</Text>
                                     </View>
                                 </View>

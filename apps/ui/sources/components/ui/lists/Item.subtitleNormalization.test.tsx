@@ -197,6 +197,31 @@ describe('Item', () => {
         expect(collectUnexpectedRawTextNodes(screen.tree.toJSON())).toEqual([]);
     });
 
+    it('resizes icon-like leftElement nodes using the shared item icon density', async () => {
+        const { Item } = await import('./Item');
+
+        const screen = await renderScreen(
+            <Item
+                title="Title"
+                leftElement={React.createElement('Ionicons', { name: 'home-outline', size: 20, color: '#fff' })}
+                density="comfortable"
+                showChevron={false}
+            />,
+        );
+
+        expect(findTestInstanceByTypeWithProps(screen, 'Ionicons' as any, {
+            name: 'home-outline',
+            size: 32,
+        })).toBeTruthy();
+        const textWrappers = screen.findAllByType('Text' as any).filter((node) => {
+            const children = node.props?.children;
+            return Array.isArray(children)
+                ? children.some((child) => React.isValidElement(child) && child.type === 'Ionicons')
+                : React.isValidElement(children) && children.type === 'Ionicons';
+        });
+        expect(textWrappers).toEqual([]);
+    });
+
     it('adds spacing between detail and rightElement', async () => {
         const { Item } = await import('./Item');
 

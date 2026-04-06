@@ -258,7 +258,7 @@ export function ProfilesList(props: ProfilesListProps) {
 
         return (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-                <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>
                     {normalizeNodeForView(
                         <Ionicons name="checkmark-circle" size={24} color={selectedIndicatorColor} style={{ opacity: isSelected ? 1 : 0 }} />,
                     )}
@@ -296,7 +296,7 @@ export function ProfilesList(props: ProfilesListProps) {
                         } : undefined}
                     />
                 )}
-                <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+                <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>
                     {normalizeNodeForView(
                         <Ionicons name="checkmark-circle" size={24} color={selectedIndicatorColor} style={{ opacity: isSelected ? 1 : 0 }} />,
                     )}

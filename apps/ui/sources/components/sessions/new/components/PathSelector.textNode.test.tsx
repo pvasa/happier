@@ -127,6 +127,8 @@ describe('PathSelector', () => {
 
         const selectedRow = findTestInstanceByTypeWithProps(tree, 'Item', { title: '/Users/leeroy/Development/happier/dev' });
         expect(selectedRow).toBeTruthy();
+        expect((selectedRow!.props.leftElement as any)?.type).toEqual(expect.any(Function));
+        expect((selectedRow!.props.rightElement as any)?.props?.children?.[0]?.props?.style?.width).toBe(28);
 
         await act(async () => {
             await pressTestInstanceAsync(selectedRow);

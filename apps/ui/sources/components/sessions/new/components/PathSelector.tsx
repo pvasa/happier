@@ -111,7 +111,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: ITEM_RIGHT_GAP,
     },
     iconSlot: {
-        width: 24,
+        width: 28,
         alignItems: 'center',
         justifyContent: 'center',
     },

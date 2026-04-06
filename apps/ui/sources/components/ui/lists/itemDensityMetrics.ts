@@ -64,7 +64,7 @@ export const ITEM_SUBTITLE_TEXT_METRICS: Record<ResolvedItemDensity, Readonly<{
 };
 
 export const ITEM_ICON_BOX_SIZE: Record<ResolvedItemDensity, number> = {
-    comfortable: selectValue({ ios: 29, default: 32 }),
+    comfortable: selectValue({ ios: 32, default: 32 }),
     cozy: selectValue({ ios: 22, default: 24 }),
     compact: selectValue({ ios: 18, default: 20 }),
     tight: selectValue({ ios: 18, default: 18 }),

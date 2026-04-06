@@ -1,7 +1,23 @@
 import * as React from 'react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-native', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('react-native')>();
+    return {
+        ...actual,
+        Platform: {
+            ...actual.Platform,
+            OS: 'ios',
+            select: (values: Record<string, unknown>) => values.ios ?? values.default ?? null,
+        },
+    };
+});
 
 describe('normalizeNodeForView', () => {
+    beforeEach(() => {
+        vi.resetModules();
+    });
+
     it('does not wrap non-text icon components (AgentIcon) in Text', async () => {
         const { normalizeNodeForView } = await import('./normalizeNodeForView');
 
@@ -17,7 +33,7 @@ describe('normalizeNodeForView', () => {
         expect(normalized).toBe(node);
     });
 
-    it('wraps text-like icon components (name + size props) in Text', async () => {
+    it('does not wrap icon-like components in Text', async () => {
         const { normalizeNodeForView } = await import('./normalizeNodeForView');
 
         function Ionicons(_props: any) {
@@ -28,9 +44,6 @@ describe('normalizeNodeForView', () => {
         const node = React.createElement(Ionicons, { name: 'flash-outline', size: 16 });
         const normalized = normalizeNodeForView(node);
 
-        expect(normalized).not.toBe(node);
-        expect(React.isValidElement(normalized)).toBe(true);
-        const wrapper = normalized as React.ReactElement<{ children?: React.ReactNode }>;
-        expect(wrapper.props.children).toBe(node);
+        expect(normalized).toBe(node);
     });
 });

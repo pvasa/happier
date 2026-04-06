@@ -267,7 +267,7 @@ export function SearchableListSelector<T>(props: SearchableListSelectorProps<T>)
                             {renderStatus(status)}
                             {statusExtra}
                         </View>
-                        <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+                        <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>
                             {normalizeNodeForView(
                                 <Ionicons
                                     name="checkmark-circle"

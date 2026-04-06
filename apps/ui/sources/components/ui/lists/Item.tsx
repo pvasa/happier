@@ -30,6 +30,26 @@ function resizeItemIconForDensity(icon: React.ReactNode, iconSize: number): Reac
     } as Record<string, unknown>);
 }
 
+function resizeAccessoryIconForDensity(accessory: React.ReactNode, iconSize: number): React.ReactNode {
+    if (!React.isValidElement(accessory) || accessory.type === React.Fragment) {
+        return accessory;
+    }
+
+    const props = (accessory.props ?? {}) as Record<string, unknown>;
+    const isIconLikeAccessory =
+        typeof props.name === 'string'
+        && (typeof props.size === 'number' || typeof props.size === 'string')
+        && props.children == null;
+
+    if (!isIconLikeAccessory) {
+        return accessory;
+    }
+
+    return React.cloneElement(accessory, {
+        size: iconSize,
+    } as Record<string, unknown>);
+}
+
 export interface ItemProps {
     testID?: string;
     title: string;
@@ -398,10 +418,14 @@ export const Item = React.memo<ItemProps>((props) => {
     const titleSizeStyle = isTight ? styles.titleTight : isCompact ? styles.titleCompact : isCozy ? styles.titleCozy : null;
     const subtitleSizeStyle = isTight ? styles.subtitleTight : isCompact ? styles.subtitleCompact : isCozy ? styles.subtitleCozy : null;
     const detailSizeStyle = isTight ? styles.detailTight : isCompact ? styles.detailCompact : isCozy ? styles.detailCozy : null;
+    const resizedLeftElement = React.useMemo(
+        () => resizeAccessoryIconForDensity(leftElement ?? null, resolvedIconBoxSize),
+        [leftElement, resolvedIconBoxSize],
+    );
     const leftAccessory = React.useMemo(() => {
-        const candidate = leftElement ?? sizedIcon ?? null;
+        const candidate = resizedLeftElement ?? sizedIcon ?? null;
         return normalizeNodeForView(candidate);
-    }, [leftElement, sizedIcon]);
+    }, [resizedLeftElement, sizedIcon]);
     const rightAccessory = React.useMemo(() => normalizeNodeForView(rightElement ?? null), [rightElement]);
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
     const chevronAccessory = React.useMemo(() => {

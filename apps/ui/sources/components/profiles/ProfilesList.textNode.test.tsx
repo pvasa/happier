@@ -192,4 +192,29 @@ describe('ProfilesList', () => {
         expect(screen.findAllByProps({ testID: 'profiles-list-row:default-environment' }).length).toBeGreaterThan(0);
         expect(screen.findAllByProps({ testID: 'profiles-list-row:anthropic' }).length).toBeGreaterThan(0);
     });
+
+    it('reserves extra room around selection icons in profile rows', async () => {
+        profilesListState.groups = {
+            favoriteIds: new Set<string>(),
+            favoriteProfiles: [],
+            customProfiles: [],
+            builtInProfiles: [],
+        };
+
+        const { ProfilesList } = await import('./ProfilesList');
+        const screen = await renderScreen(
+            <ProfilesList
+                customProfiles={[]}
+                favoriteProfileIds={[]}
+                onFavoriteProfileIdsChange={() => {}}
+                selectedProfileId={null}
+                onPressDefaultEnvironment={() => {}}
+                machineId={null}
+                includeDefaultEnvironmentRow
+            />,
+        );
+
+        const defaultEnvironmentRow = screen.findByProps({ testID: 'profiles-list-row:default-environment' });
+        expect((defaultEnvironmentRow.props.rightElement as any)?.props?.children?.[0]?.props?.style?.width).toBe(28);
+    });
 });
