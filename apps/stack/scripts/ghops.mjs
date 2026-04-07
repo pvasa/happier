@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 
+import { expandHome } from './utils/paths/canonical_home.mjs';
+
 function printHelp() {
   process.stdout.write(`
 ghops: run GitHub CLI as the Happier bot
@@ -36,10 +38,11 @@ function resolveRepoRoot(cwd) {
   return out ? resolve(out) : resolve(cwd);
 }
 
-function resolvePath(repoRoot, maybePath) {
+function resolvePath(repoRoot, maybePath, env = process.env) {
   const trimmed = String(maybePath ?? '').trim();
   if (!trimmed) return null;
-  return isAbsolute(trimmed) ? trimmed : resolve(repoRoot, trimmed);
+  const expanded = expandHome(trimmed, env);
+  return isAbsolute(expanded) ? expanded : resolve(repoRoot, expanded);
 }
 
 function main() {
@@ -55,10 +58,10 @@ function main() {
     process.exit(2);
   }
 
-  const ghPath = String(process.env.HAPPIER_GHOPS_GH_PATH ?? '').trim() || 'gh';
   const repoRoot = resolveRepoRoot(process.cwd());
+  const ghPath = resolvePath(repoRoot, process.env.HAPPIER_GHOPS_GH_PATH, process.env) || 'gh';
   const configDir =
-    resolvePath(repoRoot, process.env.HAPPIER_GHOPS_CONFIG_DIR) ?? join(repoRoot, '.happier', 'local', 'ghops', 'gh');
+    resolvePath(repoRoot, process.env.HAPPIER_GHOPS_CONFIG_DIR, process.env) ?? join(repoRoot, '.happier', 'local', 'ghops', 'gh');
 
   mkdirSync(configDir, { recursive: true });
 

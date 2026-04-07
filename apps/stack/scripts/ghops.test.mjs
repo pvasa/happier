@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -72,6 +72,47 @@ process.stdout.write(JSON.stringify(payload));
   assert.equal(res.status, 0, res.stderr);
   const out = JSON.parse(res.stdout);
   assert.deepEqual(out.argv, ['api', 'repos/happier-dev/happier']);
+  assert.equal(out.env.GH_TOKEN, token);
+  assert.equal(out.env.GH_PROMPT_DISABLED, '1');
+  assert.equal(out.env.GH_CONFIG_DIR, configDir);
+});
+
+test('expands ~/ overrides for gh binary and config dir against HOME', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ghops-home-test-'));
+  const homeDir = join(dir, 'home');
+  const fakeGh = join(homeDir, 'bin', 'fake-gh');
+  const configDir = join(homeDir, 'gh-config');
+  mkdirSync(join(homeDir, 'bin'), { recursive: true });
+
+  writeFileSync(
+    fakeGh,
+    `#!/usr/bin/env node
+const payload = {
+  argv: process.argv.slice(2),
+  env: {
+    GH_TOKEN: process.env.GH_TOKEN ?? null,
+    GH_PROMPT_DISABLED: process.env.GH_PROMPT_DISABLED ?? null,
+    GH_CONFIG_DIR: process.env.GH_CONFIG_DIR ?? null,
+  },
+};
+process.stdout.write(JSON.stringify(payload));
+`,
+    'utf8',
+  );
+  chmodSync(fakeGh, 0o755);
+
+  const token = 'test-bot-token';
+  const res = runGhop(['api', 'user'], {
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    HAPPIER_GITHUB_BOT_TOKEN: token,
+    HAPPIER_GHOPS_GH_PATH: '~/bin/fake-gh',
+    HAPPIER_GHOPS_CONFIG_DIR: '~/gh-config',
+  });
+
+  assert.equal(res.status, 0, res.stderr);
+  const out = JSON.parse(res.stdout);
+  assert.deepEqual(out.argv, ['api', 'user']);
   assert.equal(out.env.GH_TOKEN, token);
   assert.equal(out.env.GH_PROMPT_DISABLED, '1');
   assert.equal(out.env.GH_CONFIG_DIR, configDir);
