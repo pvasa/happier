@@ -138,6 +138,20 @@ If implementation exists before the test:
 - Prefer small focused files and coherent subfolders; extract mixed-responsibility or oversized files when that improves clarity, reuse, and long-term maintainability.
 - Before handoff, review your change like a merge reviewer: look for stale logic, duplicate paths, ownership drift, missing cleanup, missing edge-case handling, and leftover compatibility layers.
 
+### Home-Relative Path Canonicalization (Required)
+- Do not hand-roll `~` or home-directory path handling. Reuse the owning helper for the layer you are editing:
+  - UI absolute expansion: `apps/ui/sources/utils/path/pathUtils.ts#resolveAbsolutePath`
+  - UI absolute-to-display formatting: `apps/ui/sources/utils/sessions/formatPathRelativeToHome.ts`
+  - CLI env/path expansion: `apps/cli/src/utils/path/expandHomeDirPath.ts`
+  - CLI handoff absolute/home-relative normalization: `apps/cli/src/session/handoff/paths/sessionHandoffPathNormalization.ts`
+- When reviewing or editing path code, explicitly check Windows behavior as a first-class contract, not a follow-up:
+  - accept both `~/...` and `~\\...`
+  - trim both trailing `/` and trailing `\\` at the home boundary
+  - normalize mixed separators after expansion when the result is used for equality, dedupe, repo identity, or persistence keys
+  - guard against sibling-prefix collisions when converting absolute paths to `~/...` or checking “is under home” (for example `C:\\Users\\alice` must not match `C:\\Users\\alice2`)
+- Do not introduce manual `${homeDir}/${child}` or `${homeDir}\\${child}` concatenation, slash-sensitive `startsWith(\`${homeDir}/\`)` checks, or one-off `~` expanders when an owning helper already exists.
+- If a shared path contract changes, update the existing owning tests for that helper and at least one downstream consumer test that proves the canonicalized value is stable at the call site.
+
 ### Repo Testing Guardrails (Mandatory)
 - Before behavior-changing edits, do a test impact inventory: identify the affected lanes, the existing tests that cover the contract, and any shared/package-local harnesses that the change can invalidate.
 - If you change a runtime contract, routing contract, transport shape, feature gate behavior, or provider capability, update the affected tests in the same change. Do not defer the test updates to a later cleanup pass.

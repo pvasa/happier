@@ -67,7 +67,13 @@ export function resolveAbsolutePath(path: string, homeDir?: string): string {
         const normalizedHome = homeDir.endsWith('/') || homeDir.endsWith('\\') 
             ? homeDir.slice(0, -1) 
             : homeDir;
-        return normalizedHome + separator + relativePart;
+        const normalizedRelativePart = relativePart
+            .split(/[\\/]+/)
+            .filter(Boolean)
+            .join(separator);
+        return normalizedRelativePart
+            ? normalizedHome + separator + normalizedRelativePart
+            : normalizedHome + separator;
     }
     
     // Handle ~username paths (not supported, return original)

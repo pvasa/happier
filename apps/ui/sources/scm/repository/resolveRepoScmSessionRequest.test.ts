@@ -63,4 +63,49 @@ describe('resolveRepoScmSessionRequest', () => {
             repoIdentityKey: 'machine-a:/Users/tester/repo',
         });
     });
+
+    it('normalizes Windows home-relative workspace paths before building the repo identity key', async () => {
+        storageGetStateMock.mockReturnValue({
+            machines: {
+                'machine-a': {
+                    id: 'machine-a',
+                    active: true,
+                    activeAt: 42,
+                    metadata: {
+                        homeDir: 'C:\\Users\\tester',
+                        host: 'windows-box.local',
+                    },
+                },
+            },
+            sessions: {
+                session_1: {
+                    id: 'session_1',
+                    active: false,
+                    updatedAt: 100,
+                    metadata: {
+                        machineId: 'machine-a',
+                        path: '~\\repo\\subdir',
+                        homeDir: 'C:\\Users\\tester',
+                        host: 'windows-box.local',
+                    },
+                },
+            },
+            getProjectForSession: (sessionId: string) => sessionId === 'session_1'
+                ? {
+                    key: {
+                        machineId: 'machine-a',
+                        path: '~/repo/subdir',
+                    },
+                }
+                : null,
+        } as any);
+
+        const { resolveRepoScmSessionRequest } = await import('./resolveRepoScmSessionRequest');
+        expect(resolveRepoScmSessionRequest({ sessionId: 'session_1' })).toEqual({
+            sessionId: 'session_1',
+            machineId: 'machine-a',
+            resolvedPath: 'C:\\Users\\tester\\repo\\subdir',
+            repoIdentityKey: 'machine-a:C:\\Users\\tester\\repo\\subdir',
+        });
+    });
 });

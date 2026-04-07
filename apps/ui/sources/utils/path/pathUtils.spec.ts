@@ -57,7 +57,7 @@ describe('pathUtils', () => {
 
             it('should use Windows separator for Windows home', () => {
                 expect(resolveAbsolutePath('~/Documents', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents');
-                expect(resolveAbsolutePath('~/Documents/project', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents/project');
+                expect(resolveAbsolutePath('~/Documents/project', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents\\project');
             });
 
             it('should handle Windows home with forward slashes', () => {
@@ -89,7 +89,7 @@ describe('pathUtils', () => {
 
             it('should handle paths with spaces', () => {
                 expect(resolveAbsolutePath('~/My Documents', '/Users/steve')).toBe('/Users/steve/My Documents');
-                expect(resolveAbsolutePath('~/Program Files/My App', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Program Files/My App');
+                expect(resolveAbsolutePath('~/Program Files/My App', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Program Files\\My App');
             });
 
             it('should handle paths with special characters', () => {
@@ -105,12 +105,16 @@ describe('pathUtils', () => {
             });
 
             it('should use Windows separator for Windows home paths', () => {
-                expect(resolveAbsolutePath('~/Documents/subfolder', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents/subfolder');
+                expect(resolveAbsolutePath('~/Documents/subfolder', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents\\subfolder');
+            });
+
+            it('should normalize Windows shorthand that already uses backslashes to the same canonical path', () => {
+                expect(resolveAbsolutePath('~\\Documents\\subfolder', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents\\subfolder');
             });
 
             it('should handle mixed separators in home directory', () => {
                 // Edge case: mixed separators in homeDir - should use the last separator type found
-                expect(resolveAbsolutePath('~/Documents', 'C:/Users\\steve')).toBe('C:/Users\\steve\\Documents');
+                expect(resolveAbsolutePath('~/Documents\\nested', 'C:/Users\\steve')).toBe('C:/Users\\steve\\Documents\\nested');
             });
         });
 
@@ -212,8 +216,8 @@ describe('pathUtils', () => {
         it('should work with typical Windows home directories', () => {
             const homeDir = 'C:\\Users\\developer';
             expect(resolveAbsolutePath('~', homeDir)).toBe('C:\\Users\\developer');
-            expect(resolveAbsolutePath('~/Projects/happy', homeDir)).toBe('C:\\Users\\developer\\Projects/happy');
-            expect(resolveAbsolutePath('~/Desktop/file.txt', homeDir)).toBe('C:\\Users\\developer\\Desktop/file.txt');
+            expect(resolveAbsolutePath('~/Projects/happy', homeDir)).toBe('C:\\Users\\developer\\Projects\\happy');
+            expect(resolveAbsolutePath('~/Desktop/file.txt', homeDir)).toBe('C:\\Users\\developer\\Desktop\\file.txt');
         });
 
         it('should handle common session creation scenarios', () => {
