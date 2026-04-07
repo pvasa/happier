@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+
+function writeExecutable(filePath, content) {
+  fs.writeFileSync(filePath, content, { encoding: 'utf8', mode: 0o700 });
+}
 
 test('ui-mobile-release supports local EAS builds (delegates --build-mode local)', () => {
   const out = execFileSync(
@@ -76,6 +82,13 @@ test('ui-mobile-release can delegate local Android builds to Dagger runtime', ()
 });
 
 test('ui-mobile-release native_submit dry-run does not require local build artifacts to exist yet', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'happier-ui-mobile-release-dry-run-'));
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+
+  // Keep commandExists() deterministic by preventing bash from sourcing developer profiles.
+  writeExecutable(path.join(binDir, 'bash'), ['#!/usr/bin/env sh', 'exec /bin/bash --noprofile --norc "$@"', ''].join('\n'));
+
   const out = execFileSync(
     process.execPath,
     [
@@ -99,6 +112,7 @@ test('ui-mobile-release native_submit dry-run does not require local build artif
       cwd: repoRoot,
       env: {
         ...process.env,
+        PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
         EXPO_TOKEN: 'test-token',
         APPLE_API_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n',
       },

@@ -830,7 +830,7 @@ async function main() {
       buildEnv.LC_ALL = 'en_US.UTF-8';
     }
 
-    if (platform === 'ios') {
+    if (platform === 'ios' && !dryRun) {
       if (!commandExists('fastlane', buildEnv)) {
         fail(
           [
