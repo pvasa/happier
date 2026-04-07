@@ -1,6 +1,8 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createReactNativeWebMock, renderScreen } from '@/dev/testkit';
+import { describe, expect, it, vi } from 'vitest';
+import { renderScreen } from '@/dev/testkit';
+
+import { Platform } from 'react-native';
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
 
 vi.mock('@/text', async () => {
@@ -21,179 +23,132 @@ function assertSingleCollapsedAction(
     }
 }
 
-afterEach(() => {
-    vi.resetModules();
-});
-
 describe('createAttachmentActionChip', () => {
-    it('on iOS it uses the shared simple chooser popover', async () => {
-        vi.doMock('react-native', async () => createReactNativeWebMock({
-            Platform: { OS: 'ios' },
-        }));
-
+    it('on iOS it opens a chooser popover (image vs file) instead of launching a picker immediately', async () => {
         const { createAttachmentActionChip } = await import('./createAttachmentActionChip');
-        const onPickFile = vi.fn();
-        const onPickImage = vi.fn();
+        const originalOs = Platform.OS;
+        (Platform as any).OS = 'ios';
 
-        const chip = createAttachmentActionChip({
-            onPickFile,
-            onPickImage,
-        } as any);
+        try {
+            const onPickFile = vi.fn();
+            const onPickImage = vi.fn();
 
-        expect(chip.collapsedContentPopover).toBeFalsy();
-        expect(chip.collapsedOptionsPopover).toMatchObject({
-            presentation: 'simple',
-            title: null,
-            closeOnSelect: false,
-            options: [
-                { id: 'add-image', label: 'common.addImage' },
-                { id: 'add-file', label: 'common.addFile' },
-            ],
-        });
+            const chip = createAttachmentActionChip({
+                onPickFile,
+                onPickImage,
+            } as any);
 
-        chip.collapsedOptionsPopover?.onSelect?.('add-image');
-        expect(onPickImage).toHaveBeenCalledTimes(1);
+            expect(chip.collapsedContentPopover).toBeTruthy();
 
-        chip.collapsedOptionsPopover?.onSelect?.('add-file');
-        expect(onPickFile).toHaveBeenCalledTimes(1);
+            const toggleCollapsedPopover = vi.fn();
+            const screen = await renderScreen(
+                <React.Fragment>
+                    {chip.render({
+                        chipStyle: () => ({}),
+                        showLabel: true,
+                        iconColor: '#000',
+                        textStyle: {},
+                        countTextStyle: {},
+                        chipAnchorRef: { current: null },
+                        popoverAnchorRef: { current: null },
+                        toggleCollapsedPopover,
+                    })}
+                </React.Fragment>,
+            );
 
-        const toggleCollapsedPopover = vi.fn();
-        const screen = await renderScreen(
-            <React.Fragment>
-                {chip.render({
-                    chipStyle: () => ({}),
-                    showLabel: true,
-                    iconColor: '#000',
-                    textStyle: {},
-                    countTextStyle: {},
-                    chipAnchorRef: { current: null },
-                    popoverAnchorRef: { current: null },
-                    toggleCollapsedPopover,
-                })}
-            </React.Fragment>,
-        );
+            expect(screen.tree.toJSON()).not.toBeNull();
+            await screen.pressByTestIdAsync('agent-input-attachments-chip');
+            expect(toggleCollapsedPopover).toHaveBeenCalledWith('attachments-add');
 
-        expect(screen.tree.toJSON()).not.toBeNull();
-        await screen.pressByTestIdAsync('agent-input-attachments-chip');
-        expect(toggleCollapsedPopover).toHaveBeenCalledWith('attachments-add');
-    });
+            const requestClose = vi.fn();
+            const renderContent = chip.collapsedContentPopover!.renderContent;
+            if (typeof renderContent !== 'function') {
+                throw new Error('Expected collapsedContentPopover.renderContent to be a function');
+            }
+            const contentScreen = await renderScreen(
+                <React.Fragment>
+                    {renderContent({ requestClose, maxHeight: 420 }) as React.ReactNode}
+                </React.Fragment>,
+            );
 
-    it('on Android it also uses the shared simple chooser popover', async () => {
-        vi.doMock('react-native', async () => createReactNativeWebMock({
-            Platform: { OS: 'android' },
-        }));
+            await contentScreen.pressByTestIdAsync('attachments-action-add-image');
+            expect(onPickImage).toHaveBeenCalled();
+            expect(requestClose).toHaveBeenCalled();
 
-        const { createAttachmentActionChip } = await import('./createAttachmentActionChip');
-        const onPickFile = vi.fn();
-        const onPickImage = vi.fn();
-
-        const chip = createAttachmentActionChip({
-            onPickFile,
-            onPickImage,
-        } as any);
-
-        expect(chip.collapsedContentPopover).toBeFalsy();
-        expect(chip.collapsedOptionsPopover).toMatchObject({
-            presentation: 'simple',
-            title: null,
-            closeOnSelect: false,
-            options: [
-                { id: 'add-image', label: 'common.addImage' },
-                { id: 'add-file', label: 'common.addFile' },
-            ],
-        });
-
-        chip.collapsedOptionsPopover?.onSelect?.('add-image');
-        expect(onPickImage).toHaveBeenCalledTimes(1);
-
-        chip.collapsedOptionsPopover?.onSelect?.('add-file');
-        expect(onPickFile).toHaveBeenCalledTimes(1);
-
-        const toggleCollapsedPopover = vi.fn();
-        const screen = await renderScreen(
-            <React.Fragment>
-                {chip.render({
-                    chipStyle: () => ({}),
-                    showLabel: true,
-                    iconColor: '#000',
-                    textStyle: {},
-                    countTextStyle: {},
-                    chipAnchorRef: { current: null },
-                    popoverAnchorRef: { current: null },
-                    toggleCollapsedPopover,
-                })}
-            </React.Fragment>,
-        );
-
-        expect(screen.tree.toJSON()).not.toBeNull();
-        await screen.pressByTestIdAsync('agent-input-attachments-chip');
-        expect(toggleCollapsedPopover).toHaveBeenCalledWith('attachments-add');
+            requestClose.mockClear();
+            await contentScreen.pressByTestIdAsync('attachments-action-add-file');
+            expect(onPickFile).toHaveBeenCalled();
+            expect(requestClose).toHaveBeenCalled();
+        } finally {
+            (Platform as any).OS = originalOs;
+        }
     });
 
     it('on web it keeps the attach chip as a direct action (no chooser popover)', async () => {
-        vi.doMock('react-native', async () => createReactNativeWebMock({
-            Platform: { OS: 'web' },
-        }));
-
         const { createAttachmentActionChip } = await import('./createAttachmentActionChip');
-        const callOrder: string[] = [];
-        const onPickFile = vi.fn(() => {
-            callOrder.push('pickFile');
-        });
-        const onPickImage = vi.fn();
-        const chip = createAttachmentActionChip({
-            onPickFile,
-            onPickImage,
-        } as any);
+        const originalOs = Platform.OS;
+        (Platform as any).OS = 'web';
 
-        expect(chip.collapsedContentPopover).toBeFalsy();
-        expect(typeof chip.collapsedAction).toBe('function');
+        try {
+            const callOrder: string[] = [];
+            const onPickFile = vi.fn(() => {
+                callOrder.push('pickFile');
+            });
+            const onPickImage = vi.fn();
+            const chip = createAttachmentActionChip({
+                onPickFile,
+                onPickImage,
+            } as any);
 
-        const dismiss = vi.fn(() => {
-            callOrder.push('dismiss');
-        });
-        const blurInput = vi.fn(() => {
-            callOrder.push('blur');
-        });
-        const collapsed = chip.collapsedAction?.({
-            tint: '#000',
-            dismiss,
-            blurInput,
-        });
-        assertSingleCollapsedAction(collapsed);
-        if (typeof collapsed.onPress !== 'function') {
-            throw new Error('Expected web attach chip to expose a single collapsedAction with onPress');
+            expect(chip.collapsedContentPopover).toBeFalsy();
+            expect(typeof chip.collapsedAction).toBe('function');
+
+            const dismiss = vi.fn(() => {
+                callOrder.push('dismiss');
+            });
+            const blurInput = vi.fn(() => {
+                callOrder.push('blur');
+            });
+            const collapsed = chip.collapsedAction?.({
+                tint: '#000',
+                dismiss,
+                blurInput,
+            });
+            assertSingleCollapsedAction(collapsed);
+            if (typeof collapsed.onPress !== 'function') {
+                throw new Error('Expected web attach chip to expose a single collapsedAction with onPress');
+            }
+
+            collapsed.onPress();
+            expect(callOrder).toEqual(['blur', 'pickFile', 'dismiss']);
+
+            const screen = await renderScreen(
+                <React.Fragment>
+                    {chip.render({
+                        chipStyle: () => ({}),
+                        showLabel: true,
+                        iconColor: '#000',
+                        textStyle: {},
+                        countTextStyle: {},
+                        chipAnchorRef: { current: null },
+                        popoverAnchorRef: { current: null },
+                        toggleCollapsedPopover: vi.fn(),
+                    })}
+                </React.Fragment>,
+            );
+            expect(screen.tree.toJSON()).not.toBeNull();
+            await screen.pressByTestIdAsync('agent-input-attachments-chip');
+            expect(onPickFile).toHaveBeenCalled();
+        } finally {
+            (Platform as any).OS = originalOs;
         }
-
-        collapsed.onPress();
-        expect(callOrder).toEqual(['blur', 'pickFile', 'dismiss']);
-
-        const screen = await renderScreen(
-            <React.Fragment>
-                {chip.render({
-                    chipStyle: () => ({}),
-                    showLabel: true,
-                    iconColor: '#000',
-                    textStyle: {},
-                    countTextStyle: {},
-                    chipAnchorRef: { current: null },
-                    popoverAnchorRef: { current: null },
-                    toggleCollapsedPopover: vi.fn(),
-                })}
-            </React.Fragment>,
-        );
-        expect(screen.tree.toJSON()).not.toBeNull();
-        await screen.pressByTestIdAsync('agent-input-attachments-chip');
-        expect(onPickFile).toHaveBeenCalled();
     });
 
     it('on web it ignores duplicate press events fired shortly after opening (prevents double-open)', async () => {
-        vi.doMock('react-native', async () => createReactNativeWebMock({
-            Platform: { OS: 'web' },
-        }));
-
         const { createAttachmentActionChip } = await import('./createAttachmentActionChip');
+        const originalOs = Platform.OS;
         const originalNow = Date.now;
+        (Platform as any).OS = 'web';
 
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-03-25T12:00:00.000Z'));
@@ -229,6 +184,7 @@ describe('createAttachmentActionChip', () => {
             await screen.pressByTestIdAsync('agent-input-attachments-chip');
             expect(onPickFile).toHaveBeenCalledTimes(2);
         } finally {
+            (Platform as any).OS = originalOs;
             vi.useRealTimers();
             (Date as any).now = originalNow;
         }

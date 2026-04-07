@@ -2353,7 +2353,6 @@ export const pt: TranslationStructure = {
       fileTooLargeTitle: "Arquivo muito grande",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `Ignorados ${count} ${plural({ count, singular: "arquivo", plural: "arquivos" })} que excedem o tamanho máximo de anexo.`,
-      pickerUnavailableBody: "Não foi possível abrir o seletor de anexos. Tente novamente.",
     },
   },
 

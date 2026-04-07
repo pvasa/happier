@@ -1971,14 +1971,6 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         },
     },
 
-    attachments: {
-        alerts: {
-            fileTooLargeTitle: '檔案過大',
-            fileTooLargeBody: ({ count }: { count: number }) => `已略過 ${count} 個超過附件大小上限的檔案。`,
-            pickerUnavailableBody: '無法開啟附件選擇器。請再試一次。',
-        },
-    },
-
     settingsAttachments: {
         disabled: {
             title: '附件',

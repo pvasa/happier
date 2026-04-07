@@ -2092,7 +2092,6 @@ export const en = {
             fileTooLargeTitle: 'File too large',
             fileTooLargeBody: ({ count }: { count: number }) =>
                 `Skipped ${count} ${plural({ count, singular: 'file', plural: 'files' })} that exceed the max attachment size.`,
-            pickerUnavailableBody: 'Unable to open the attachment picker. Please try again.',
         },
     },
 

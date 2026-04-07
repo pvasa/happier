@@ -2133,7 +2133,6 @@ export const ca: TranslationStructure = {
             fileTooLargeTitle: 'Fitxer massa gran',
             fileTooLargeBody: ({ count }: { count: number }) =>
                 `S\'han omès ${count} ${plural({ count, singular: 'fitxer', plural: 'fitxers' })} que superen la mida màxima d\'adjunt.`,
-            pickerUnavailableBody: 'No s\'ha pogut obrir el selector d\'adjunts. Torna-ho a provar.',
         },
     },
 

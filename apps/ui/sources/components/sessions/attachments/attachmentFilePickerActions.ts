@@ -1,5 +1,4 @@
 import type { AttachmentFilePickerHandle } from './AttachmentFilePicker.types';
-import { showAttachmentPickerUnavailableAlert } from './showAttachmentPickerUnavailableAlert';
 
 let hasOpenedThisTick = false;
 
@@ -19,57 +18,37 @@ function runOpenOncePerTick(action: () => void): void {
 }
 
 export function openAttachmentFilePickerFiles(handle: AttachmentFilePickerHandle | null | undefined): void {
-    if (!handle) {
-        showAttachmentPickerUnavailableAlert();
+    if (!handle) return;
+    if (typeof handle.openFiles === 'function') {
+        runOpenOncePerTick(() => {
+            handle.openFiles();
+        });
         return;
     }
-    try {
-        if (typeof handle.openFiles === 'function') {
-            runOpenOncePerTick(() => {
-                handle.openFiles();
-            });
-            return;
-        }
-        if (typeof handle.open === 'function') {
-            runOpenOncePerTick(() => {
-                handle.open();
-            });
-            return;
-        }
-    } catch (error) {
-        showAttachmentPickerUnavailableAlert(error);
-        return;
+    if (typeof handle.open === 'function') {
+        runOpenOncePerTick(() => {
+            handle.open();
+        });
     }
-    showAttachmentPickerUnavailableAlert();
 }
 
 export function openAttachmentFilePickerImages(handle: AttachmentFilePickerHandle | null | undefined): void {
-    if (!handle) {
-        showAttachmentPickerUnavailableAlert();
+    if (!handle) return;
+    if (typeof handle.openImages === 'function') {
+        runOpenOncePerTick(() => {
+            handle.openImages();
+        });
         return;
     }
-    try {
-        if (typeof handle.openImages === 'function') {
-            runOpenOncePerTick(() => {
-                handle.openImages();
-            });
-            return;
-        }
-        if (typeof handle.openFiles === 'function') {
-            runOpenOncePerTick(() => {
-                handle.openFiles();
-            });
-            return;
-        }
-        if (typeof handle.open === 'function') {
-            runOpenOncePerTick(() => {
-                handle.open();
-            });
-            return;
-        }
-    } catch (error) {
-        showAttachmentPickerUnavailableAlert(error);
+    if (typeof handle.openFiles === 'function') {
+        runOpenOncePerTick(() => {
+            handle.openFiles();
+        });
         return;
     }
-    showAttachmentPickerUnavailableAlert();
+    if (typeof handle.open === 'function') {
+        runOpenOncePerTick(() => {
+            handle.open();
+        });
+    }
 }

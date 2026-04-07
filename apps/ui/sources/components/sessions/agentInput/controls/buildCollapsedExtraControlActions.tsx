@@ -28,7 +28,7 @@ export function buildCollapsedExtraControlActions(params: Readonly<{
         } else if (chip.collapsedOptionsPopover && chip.collapsedOptionsPopover.options.length > 0) {
             actions = {
                 id: chip.controlId,
-                label: chip.collapsedOptionsPopover.label ?? chip.collapsedOptionsPopover.title ?? '',
+                label: chip.collapsedOptionsPopover.label ?? chip.collapsedOptionsPopover.title,
                 icon: chip.collapsedOptionsPopover.icon?.(params.tint) ?? null,
                 onPress: () => {
                     params.dismiss();

@@ -30,7 +30,6 @@ import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicator
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 import { nativePickFiles, type NativePickedFile } from '@/utils/files/nativePickFiles';
-import { showNativePickerUnavailableAlert } from '@/utils/files/showNativePickerUnavailableAlert';
 import { applyWebDirectoryInputAttributes } from '@/utils/files/applyWebDirectoryInputAttributes';
 import { useWorkspaceFileTransfers, type WorkspaceUploadEntry } from '@/hooks/session/files/useWorkspaceFileTransfers';
 import { showUploadConflictResolutionDialog } from '@/components/sessions/files/repositoryTree/showUploadConflictResolutionDialog';
@@ -278,24 +277,20 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
     }, [transfers]);
 
     const startNativeUploads = React.useCallback(async () => {
-        try {
-            const picked = await nativePickFiles({ multiple: true });
-            const nativePicked = picked.filter((p): p is Extract<NativePickedFile, { kind: 'native' }> => p.kind === 'native');
-            if (nativePicked.length === 0) return;
-            const entries: WorkspaceUploadEntry[] = nativePicked.map((p) => ({
-                kind: 'native',
-                uri: p.uri,
-                name: p.name,
-                sizeBytes: p.sizeBytes,
-                mimeType: p.mimeType,
-                relativePath: p.name,
-            }));
-            const res = await transfers.startUploads({ entries, destinationDir: uploadDestinationDir });
-            if (!res.ok) {
-                Modal.alert(t('common.error'), res.error);
-            }
-        } catch (error) {
-            showNativePickerUnavailableAlert(error);
+        const picked = await nativePickFiles({ multiple: true });
+        const nativePicked = picked.filter((p): p is Extract<NativePickedFile, { kind: 'native' }> => p.kind === 'native');
+        if (nativePicked.length === 0) return;
+        const entries: WorkspaceUploadEntry[] = nativePicked.map((p) => ({
+            kind: 'native',
+            uri: p.uri,
+            name: p.name,
+            sizeBytes: p.sizeBytes,
+            mimeType: p.mimeType,
+            relativePath: p.name,
+        }));
+        const res = await transfers.startUploads({ entries, destinationDir: uploadDestinationDir });
+        if (!res.ok) {
+            Modal.alert(t('common.error'), res.error);
         }
     }, [transfers, uploadDestinationDir]);
 

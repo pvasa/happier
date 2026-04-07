@@ -1560,10 +1560,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 closeSelectionOverlay('collapsedExtra');
                 return;
             }
-            // iOS can drop the first tap inside a popover when a different ScrollView/TextInput
-            // is focused. Blurring before opening makes the menu reliably interactive (and avoids
-            // native pickers failing to present while the keyboard animates).
-            inputRef.current?.blur();
             openSelectionOverlay('collapsedExtra', 'actionMenu', chipKey);
         },
         sessionModeLabel: sessionModeChipControl?.label ?? null,
@@ -1591,7 +1587,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         chips: props.extraActionChips,
         overlayAnchorRef,
         onToggleExtraChipCollapsedPopover: (chipKey) => {
-            inputRef.current?.blur();
             toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
         },
         themeTint: theme.colors.button.secondary.tint,

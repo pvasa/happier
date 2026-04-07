@@ -2523,7 +2523,6 @@ localTailscale: {
       fileTooLargeTitle: "ファイルが大きすぎます",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `最大添付サイズを超えるため、${count} 件のファイルをスキップしました。`,
-      pickerUnavailableBody: "添付ファイル選択画面を開けませんでした。もう一度お試しください。",
     },
   },
 
