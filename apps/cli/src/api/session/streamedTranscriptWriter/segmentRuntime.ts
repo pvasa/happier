@@ -9,9 +9,13 @@ export type StreamedTranscriptSegmentRuntime = {
   segmentLocalId: string;
   startedAtMs: number;
   accumulatedText: string;
+  textVersion: number;
   didWriteDurable: boolean;
   lastCheckpointAtMs: number;
   lastCheckpointTextLen: number;
+  lastCommittedTextVersion: number;
+  lastCommittedState: StreamedTranscriptSegmentState | null;
+  lastCommitFailedAtMs: number;
   isCommittingDurable: boolean;
   pendingDurableCommit: { state: StreamedTranscriptSegmentState; interruptedReason?: string } | null;
   idleWaiters: Array<() => void>;

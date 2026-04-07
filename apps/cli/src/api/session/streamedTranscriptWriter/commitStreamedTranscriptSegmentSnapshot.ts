@@ -4,6 +4,27 @@ import type { ACPMessageData, ACPProvider } from '../sessionMessageTypes';
 import type { StreamedTranscriptWriterSession } from './types';
 import type { StreamedTranscriptSegmentRuntime, StreamedTranscriptSegmentState } from './segmentRuntime';
 
+function serializeCommitErrorForLog(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  if (error && typeof error === 'object') {
+    const maybeError = error as Record<string, unknown>;
+    return {
+      name: typeof maybeError.name === 'string' ? maybeError.name : undefined,
+      message: typeof maybeError.message === 'string' ? maybeError.message : String(error),
+      code: typeof maybeError.code === 'string' ? maybeError.code : undefined,
+    };
+  }
+
+  return { message: String(error) };
+}
+
 function buildDurableSnapshotBody(segment: StreamedTranscriptSegmentRuntime): ACPMessageData {
   return segment.kind === 'assistant'
     ? {
@@ -58,31 +79,49 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   segment.isCommittingDurable = true;
 
   const nowMs = Date.now();
+  const commitVersion = segment.textVersion;
+  const commitTextLen = segment.accumulatedText.length;
   const durableLocalId = segment.segmentLocalId;
   const body = buildDurableSnapshotBody(segment);
   const meta = buildDurableSnapshotMeta({ segment, state, interruptedReason, nowMs });
 
   void session
     .sendAgentMessageCommitted(provider, body, { localId: durableLocalId, meta })
-    .catch((error) => {
+    .then(() => {
+      segment.didWriteDurable = true;
+      segment.lastCheckpointAtMs = Date.now();
+      segment.lastCheckpointTextLen = commitTextLen;
+      segment.lastCommittedTextVersion = commitVersion;
+      segment.lastCommittedState = state;
+    })
+    .catch(async (error) => {
+      segment.lastCommitFailedAtMs = Date.now();
       logger.debug('[StreamedTranscriptWriter] Durable snapshot commit failed (non-fatal)', {
-        error,
+        error: serializeCommitErrorForLog(error),
         localId: durableLocalId,
         segmentLocalId: segment.segmentLocalId,
         kind: segment.kind,
         sidechainId: segment.sidechainId,
+        state,
+        textLength: commitTextLen,
+        textVersion: commitVersion,
+        lastCommittedTextVersion: segment.lastCommittedTextVersion,
+        lastCommittedState: segment.lastCommittedState,
       });
 
       if (typeof session.sendAgentMessage === 'function') {
         try {
-          session.sendAgentMessage(provider, body, { localId: durableLocalId, meta });
+          await Promise.resolve(session.sendAgentMessage(provider, body, { localId: durableLocalId, meta }));
         } catch (fallbackError) {
           logger.debug('[StreamedTranscriptWriter] Durable snapshot fallback commit failed (non-fatal)', {
-            error: fallbackError,
+            error: serializeCommitErrorForLog(fallbackError),
             localId: durableLocalId,
             segmentLocalId: segment.segmentLocalId,
             kind: segment.kind,
             sidechainId: segment.sidechainId,
+            state,
+            textLength: commitTextLen,
+            textVersion: commitVersion,
           });
         }
       }
@@ -107,8 +146,4 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
         waiter();
       }
     });
-
-  segment.didWriteDurable = true;
-  segment.lastCheckpointAtMs = nowMs;
-  segment.lastCheckpointTextLen = segment.accumulatedText.length;
 }

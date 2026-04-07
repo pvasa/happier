@@ -6,7 +6,12 @@ import { buildStreamedTranscriptSegmentKey, type StreamedTranscriptSegmentKey, t
 import { commitStreamedTranscriptSegmentSnapshot } from './commitStreamedTranscriptSegmentSnapshot';
 import { normalizeSidechainId } from './normalizeSidechainId';
 import { waitForSegmentDrain, type StreamedTranscriptSegmentRuntime, type StreamedTranscriptSegmentState } from './segmentRuntime';
-import type { StreamedTranscriptWriter, StreamedTranscriptWriterSession } from './types';
+import type {
+  StreamedTranscriptFlushSummary,
+  StreamedTranscriptSegmentFlushSummary,
+  StreamedTranscriptWriter,
+  StreamedTranscriptWriterSession,
+} from './types';
 
 type SegmentKind = StreamedTranscriptSegmentKind;
 type SegmentState = StreamedTranscriptSegmentState;
@@ -14,6 +19,42 @@ type SegmentState = StreamedTranscriptSegmentState;
 type SegmentKey = StreamedTranscriptSegmentKey;
 
 type SegmentRuntime = StreamedTranscriptSegmentRuntime;
+
+function didSegmentDurablyFlush(segment: SegmentRuntime, expectedState: SegmentState): boolean {
+  if (segment.accumulatedText.length === 0) return false;
+  return segment.lastCommittedTextVersion === segment.textVersion && segment.lastCommittedState === expectedState;
+}
+
+function buildFlushSummary(params: {
+  flushedSegments: ReadonlyArray<SegmentRuntime>;
+  expectedState: SegmentState;
+}): StreamedTranscriptFlushSummary {
+  const segments: StreamedTranscriptSegmentFlushSummary[] = params.flushedSegments.map((segment) => ({
+    kind: segment.kind,
+    sidechainId: segment.sidechainId,
+    sawText: segment.accumulatedText.length > 0,
+    didDurablyFlush: didSegmentDurablyFlush(segment, params.expectedState),
+    lastCommittedState: segment.lastCommittedState,
+  }));
+
+  const buildAggregate = (kind: SegmentKind, sidechainId?: string | null) => {
+    const matches = segments.filter(
+      (segment) => segment.kind === kind && segment.sawText && (sidechainId === undefined || segment.sidechainId === sidechainId),
+    );
+    return {
+      sawText: matches.length > 0,
+      didDurablyFlush: matches.length > 0 && matches.every((segment) => segment.didDurablyFlush),
+    } as const;
+  };
+
+  return {
+    assistant: buildAggregate('assistant'),
+    assistantRoot: buildAggregate('assistant', null),
+    thinking: buildAggregate('thinking'),
+    thinkingRoot: buildAggregate('thinking', null),
+    segments,
+  };
+}
 
 export function createStreamedTranscriptWriter(params: {
   provider: ACPProvider;
@@ -54,9 +95,13 @@ export function createStreamedTranscriptWriter(params: {
       segmentLocalId: makeLocalId(),
       startedAtMs: nowMs,
       accumulatedText: '',
+      textVersion: 0,
       didWriteDurable: false,
       lastCheckpointAtMs: 0,
       lastCheckpointTextLen: 0,
+      lastCommittedTextVersion: 0,
+      lastCommittedState: null,
+      lastCommitFailedAtMs: 0,
       isCommittingDurable: false,
       pendingDurableCommit: null,
       idleWaiters: [],
@@ -75,6 +120,7 @@ export function createStreamedTranscriptWriter(params: {
 
     const segment = getOrCreateSegment(kind, sidechainId);
     segment.accumulatedText += deltaText;
+    segment.textVersion += 1;
 
     if (!segment.didWriteDurable) {
       commitDurableSnapshot(segment, { state: 'streaming' });
@@ -97,24 +143,28 @@ export function createStreamedTranscriptWriter(params: {
   const overrideSegmentText = (kind: SegmentKind, text: string, sidechainId: string | null): boolean => {
     const segment = getExistingSegment(kind, sidechainId);
     if (!segment) return false;
+    if (segment.accumulatedText === text) return true;
     segment.accumulatedText = text;
+    segment.textVersion += 1;
     return true;
   };
 
   const flushAll = async (opts: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
-  }): Promise<void> => {
+  }): Promise<StreamedTranscriptFlushSummary> => {
     const state: SegmentState = opts.reason === 'abort' ? 'interrupted' : 'complete';
     const drainPromises: Promise<void>[] = [];
+    const flushedSegments = Array.from(segments.values());
 
-    for (const segment of segments.values()) {
+    for (const segment of flushedSegments) {
       commitDurableSnapshot(segment, { state, interruptedReason: opts.interruptedReason });
       drainPromises.push(waitForSegmentDrain(segment));
       segments.delete(segment.key);
     }
 
     await Promise.all(drainPromises);
+    return buildFlushSummary({ flushedSegments, expectedState: state });
   };
 
   return {

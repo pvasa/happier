@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { logger } from '@/ui/logger';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,7 @@ describe('readClaudeSessionJsonlMessages', () => {
   });
 
   it('bounds parsing to the file tail when maxBytes is provided', async () => {
+    (logger.debug as any).mockClear();
     tmpRoot = await mkdtemp(join(tmpdir(), 'happier-claude-jsonl-'));
     const sessionFilePath = join(tmpRoot, 'sess.jsonl');
 
@@ -43,5 +45,32 @@ describe('readClaudeSessionJsonlMessages', () => {
     });
 
     expect(messages.map((m) => m.uuid)).toEqual(['u2', 'u3']);
+  });
+
+  it('drops the first partial line from a truncated tail without logging a parse error', async () => {
+    (logger.debug as any).mockClear();
+    tmpRoot = await mkdtemp(join(tmpdir(), 'happier-claude-jsonl-'));
+    const sessionFilePath = join(tmpRoot, 'sess.jsonl');
+
+    const line1 = JSON.stringify({
+      type: 'assistant',
+      uuid: 'u1',
+      message: {},
+      pad: 'x'.repeat(5000),
+    });
+    const line2 = JSON.stringify({ type: 'assistant', uuid: 'u2', message: {} });
+    const line3 = JSON.stringify({ type: 'assistant', uuid: 'u3', message: {} });
+
+    await writeFile(sessionFilePath, `${line1}\n${line2}\n${line3}\n`, 'utf8');
+
+    const { readClaudeSessionJsonlMessages } = await import('./readClaudeSessionJsonlMessages');
+    const messages = await readClaudeSessionJsonlMessages({
+      sessionFilePath,
+      logLabel: 'TEST',
+      maxBytes: Math.floor(line1.length / 2) + line2.length + line3.length + 2,
+    });
+
+    expect(messages.map((m) => m.uuid)).toEqual(['u2', 'u3']);
+    expect((logger.debug as any).mock.calls.some((call: unknown[]) => String(call[0]).includes('Error processing message'))).toBe(false);
   });
 });

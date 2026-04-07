@@ -98,13 +98,13 @@ describe('createStreamedTranscriptWriter', () => {
     });
 
     writer.appendAssistantDelta('Hello');
-    await Promise.resolve();
+    await settleCommittedSnapshot();
 
     expect(durableCalls).toHaveLength(1);
 
     vi.setSystemTime(new Date(1_000));
     writer.appendAssistantDelta(' world');
-    await Promise.resolve();
+    await settleCommittedSnapshot();
 
     expect(durableCalls).toHaveLength(2);
     expect(durableCalls[0]!.localId).toBe('segment-1');
@@ -273,6 +273,64 @@ describe('createStreamedTranscriptWriter', () => {
     expect(durableCalls).toHaveLength(0);
   });
 
+  it('reports a durable final turn flush when the committed snapshot succeeds', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const { session } = createSessionStub();
+
+    const writer = createStreamedTranscriptWriter({
+      provider: 'codex' as any,
+      session: session as any,
+      makeLocalId: () => 'segment-1',
+      checkpointIntervalMs: 10_000,
+      checkpointMinChars: 999,
+    });
+
+    writer.appendAssistantDelta('Hello');
+    const flushSummary = await writer.flushAll({ reason: 'turn-end' });
+    await settleCommittedSnapshot();
+
+    expect(flushSummary).toMatchObject({
+      assistant: { sawText: true, didDurablyFlush: true },
+      assistantRoot: { sawText: true, didDurablyFlush: true },
+      thinking: { sawText: false, didDurablyFlush: false },
+      thinkingRoot: { sawText: false, didDurablyFlush: false },
+    });
+  });
+
+  it('reports sidechain-only assistant flushes separately from the root assistant aggregate', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const { session } = createSessionStub();
+
+    const writer = createStreamedTranscriptWriter({
+      provider: 'codex' as any,
+      session: session as any,
+      makeLocalId: () => 'segment-1',
+      checkpointIntervalMs: 10_000,
+      checkpointMinChars: 999,
+    });
+
+    writer.appendAssistantDelta('Hello from sidechain', { sidechainId: 'sc-1' });
+    const flushSummary = await writer.flushAll({ reason: 'turn-end' });
+    await settleCommittedSnapshot();
+
+    expect(flushSummary).toMatchObject({
+      assistant: { sawText: true, didDurablyFlush: true },
+      assistantRoot: { sawText: false, didDurablyFlush: false },
+      segments: [
+        expect.objectContaining({
+          kind: 'assistant',
+          sidechainId: 'sc-1',
+          sawText: true,
+          didDurablyFlush: true,
+        }),
+      ],
+    });
+  });
+
   it('falls back to best-effort commits when sendAgentMessageCommitted fails', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
@@ -291,7 +349,7 @@ describe('createStreamedTranscriptWriter', () => {
     });
 
     writer.appendAssistantDelta('Hello');
-    await Promise.resolve();
+    await settleCommittedSnapshot();
 
     expect(bestEffortCalls).toHaveLength(1);
     expect(bestEffortCalls[0]).toMatchObject({
@@ -304,12 +362,42 @@ describe('createStreamedTranscriptWriter', () => {
     });
   });
 
+  it('reports an incomplete durable final turn flush when it had to fall back to best-effort commits', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const { session, bestEffortCalls } = createSessionStub();
+    session.sendAgentMessageCommitted = async () => {
+      throw new Error('boom');
+    };
+
+    const writer = createStreamedTranscriptWriter({
+      provider: 'codex' as any,
+      session: session as any,
+      makeLocalId: () => 'segment-1',
+      checkpointIntervalMs: 10_000,
+      checkpointMinChars: 999,
+    });
+
+    writer.appendAssistantDelta('Hello');
+    const flushSummary = await writer.flushAll({ reason: 'turn-end' });
+    await settleCommittedSnapshot();
+
+    expect(bestEffortCalls).toHaveLength(2);
+    expect(flushSummary).toMatchObject({
+      assistant: { sawText: true, didDurablyFlush: false },
+      assistantRoot: { sawText: true, didDurablyFlush: false },
+      thinking: { sawText: false, didDurablyFlush: false },
+      thinkingRoot: { sawText: false, didDurablyFlush: false },
+    });
+  });
+
   it('does not resolve flushAll until the fallback best-effort commit finishes after a durable commit failure', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
 
     const { session, bestEffortCalls } = createSessionStub();
-    let resolveFallback: (() => void) | undefined;
+    const resolveFallbacks: Array<() => void> = [];
     let fallbackPersisted = false;
 
     session.sendAgentMessageCommitted = async () => {
@@ -323,10 +411,10 @@ describe('createStreamedTranscriptWriter', () => {
         body,
       });
       await new Promise<void>((resolve) => {
-        resolveFallback = () => {
+        resolveFallbacks.push(() => {
           fallbackPersisted = true;
           resolve();
-        };
+        });
       });
     });
 
@@ -339,7 +427,7 @@ describe('createStreamedTranscriptWriter', () => {
     });
 
     writer.appendAssistantDelta('Hello');
-    await Promise.resolve();
+    await settleCommittedSnapshot();
 
     let didResolveFlush = false;
     const flushPromise = writer.flushAll({ reason: 'turn-end' }).then(() => {
@@ -349,15 +437,26 @@ describe('createStreamedTranscriptWriter', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(bestEffortCalls).toHaveLength(2);
+    expect(bestEffortCalls).toHaveLength(1);
     expect(fallbackPersisted).toBe(false);
     expect(didResolveFlush).toBe(false);
 
-    const releaseFallback = resolveFallback;
-    if (!releaseFallback) {
-      throw new Error('expected fallback resolver');
+    const releaseFirstFallback = resolveFallbacks.shift();
+    if (!releaseFirstFallback) {
+      throw new Error('expected first fallback resolver');
     }
-    releaseFallback();
+    releaseFirstFallback();
+    await settleCommittedSnapshot();
+    await settleCommittedSnapshot();
+
+    expect(bestEffortCalls).toHaveLength(2);
+    expect(didResolveFlush).toBe(false);
+
+    const releaseSecondFallback = resolveFallbacks.shift();
+    if (!releaseSecondFallback) {
+      throw new Error('expected second fallback resolver');
+    }
+    releaseSecondFallback();
     await flushPromise;
 
     expect(fallbackPersisted).toBe(true);

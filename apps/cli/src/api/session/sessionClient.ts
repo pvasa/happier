@@ -67,6 +67,25 @@ import {
 } from '@/session/services/executionRuns';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 
+function serializeUnknownErrorForLog(error: unknown): Record<string, unknown> {
+    if (error instanceof Error) {
+        return {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+        };
+    }
+    if (error && typeof error === 'object') {
+        const maybeError = error as Record<string, unknown>;
+        return {
+            name: typeof maybeError.name === 'string' ? maybeError.name : undefined,
+            message: typeof maybeError.message === 'string' ? maybeError.message : String(error),
+            code: typeof maybeError.code === 'string' ? maybeError.code : undefined,
+        };
+    }
+    return { message: String(error) };
+}
+
 function resolveSessionSocketMachineIdForBootstrap(metadata: Metadata | null): string | undefined {
     if (!metadata || typeof metadata.machineId !== 'string') {
         return undefined;
@@ -1164,7 +1183,13 @@ export class ApiSessionClient extends EventEmitter {
 
                     const parsed = MessageAckResponseSchema.safeParse(raw);
                     return parsed.success ? parsed.data : null;
-                } catch {
+                } catch (error) {
+                    logger.debug('[SOCKET] Direct transcript commit ack failed', {
+                        localId,
+                        sidechainId: params.sidechainId,
+                        requireCommit: params.requireCommit,
+                        error: serializeUnknownErrorForLog(error),
+                    });
                     return null;
                 }
             })();
@@ -1183,12 +1208,23 @@ export class ApiSessionClient extends EventEmitter {
                 if (!params.requireCommit) {
                     this.deleteMaterializedLocalId(localId);
                 }
+                logger.debug('[SOCKET] Direct transcript commit rejected', {
+                    localId,
+                    sidechainId: params.sidechainId,
+                    requireCommit: params.requireCommit,
+                    error: ack.error,
+                });
                 throw new Error(ack.error);
             }
             if (!params.requireCommit) {
                 this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId });
                 return;
             }
+            logger.debug('[SOCKET] Direct transcript commit was not confirmed', {
+                localId,
+                sidechainId: params.sidechainId,
+                requireCommit: params.requireCommit,
+            });
             throw new Error('Message send not confirmed');
         }
 
@@ -1219,7 +1255,13 @@ export class ApiSessionClient extends EventEmitter {
 
                 const parsed = MessageAckResponseSchema.safeParse(raw);
                 return parsed.success ? parsed.data : null;
-            } catch {
+            } catch (error) {
+                logger.debug('[SOCKET] Persisted transcript commit ack failed', {
+                    localId,
+                    sidechainId: params.sidechainId,
+                    requireCommit: params.requireCommit,
+                    error: serializeUnknownErrorForLog(error),
+                });
                 return null;
             }
         })();
@@ -1238,6 +1280,12 @@ export class ApiSessionClient extends EventEmitter {
         if (ack && ack.ok === false) {
             this.pendingCommitRetryAttemptsByLocalId.delete(localId);
             this.deleteMaterializedLocalId(localId);
+            logger.debug('[SOCKET] Persisted transcript commit rejected', {
+                localId,
+                sidechainId: params.sidechainId,
+                requireCommit: params.requireCommit,
+                error: ack.error,
+            });
             if (params.requireCommit) {
                 throw new Error(ack.error);
             }
@@ -1247,6 +1295,11 @@ export class ApiSessionClient extends EventEmitter {
         if (params.requireCommit) {
             const recovered = await this.recoverMaterializedLocalId(localId, { maxWaitMs: 12_000 });
             if (!recovered) {
+                logger.debug('[SOCKET] Persisted transcript commit was not confirmed after ACK timeout and recovery miss', {
+                    localId,
+                    sidechainId: params.sidechainId,
+                    requireCommit: params.requireCommit,
+                });
                 throw new Error('Message commit not confirmed (ACK timed out and transcript recovery failed)');
             }
             return;
@@ -1324,7 +1377,10 @@ export class ApiSessionClient extends EventEmitter {
                 markAsUserMessage: params.markAsUserMessage,
             }),
         ).catch((error) => {
-            logger.debug(params.logErrorMessage, { error });
+            logger.debug(params.logErrorMessage, {
+                localId: params.localId,
+                error: serializeUnknownErrorForLog(error),
+            });
         });
     }
 
