@@ -98,8 +98,13 @@ export function AgentInputChipPickerPanel(
     shouldShowAgentInputChipPickerRail(props.options, windowWidth)
       ? "split"
       : "stacked";
+  const showSinglePaneDetailed = detailed && !showDetailedSelector && detailedLayout === "stacked";
   const detailPaneStyle =
-    detailedLayout === "split" ? styles.detailPaneSplit : null;
+    detailedLayout === "split"
+      ? styles.detailPaneSplit
+      : showSinglePaneDetailed
+        ? styles.detailPaneSingle
+        : null;
   const railWidth = props.railWidth ?? styles.railScroll.width;
   const railMaxWidth = props.railMaxWidth ?? styles.railScroll.maxWidth;
 
@@ -156,8 +161,10 @@ export function AgentInputChipPickerPanel(
           <View
             style={[
               styles.bodyDetailed,
-              showDetailedSelector && detailedLayout === "stacked"
-                ? styles.bodyDetailedStacked
+              detailedLayout === "stacked"
+                ? showDetailedSelector
+                  ? styles.bodyDetailedStacked
+                  : styles.bodyDetailedSingle
                 : null,
             ]}
           >
@@ -181,7 +188,15 @@ export function AgentInputChipPickerPanel(
               </View>
             ) : null}
             {focusedOption ? (
-              <View style={detailedLayout === "split" ? styles.detailScroll : null}>
+              <View
+                style={
+                  detailedLayout === "split"
+                    ? styles.detailScroll
+                    : showSinglePaneDetailed
+                      ? styles.detailSinglePane
+                      : null
+                }
+              >
                 <View style={[styles.detailPane, detailedLayout === "split" ? styles.detailScrollContent : null]}>
                   {props.detailPaneHeaderAccessory ? (
                     <View style={styles.detailPaneHeaderAccessoryRow}>
@@ -262,6 +277,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     gap: 10,
     minHeight: 0,
   },
+  bodyDetailedSingle: {
+    flexDirection: "column",
+    minHeight: 0,
+  },
   railScroll: {
     width: 190,
     maxWidth: "30%",
@@ -275,6 +294,10 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailScroll: {
     flex: 1,
     backgroundColor: theme.colors.surface,
+  },
+  detailSinglePane: {
+    width: "100%",
+    flexShrink: 1,
   },
   detailScrollContent: {
     paddingHorizontal: 12,
@@ -290,6 +313,12 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailPaneSplit: {
     paddingHorizontal: 0,
     paddingVertical: 0,
+  },
+  detailPaneSingle: {
+    width: "100%",
+    paddingHorizontal: 12,
+    paddingTop: 19,
+    paddingBottom: 12,
   },
   detailPane: {
     position: 'relative',

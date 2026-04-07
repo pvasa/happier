@@ -95,6 +95,39 @@ describe('AgentInputChipPickerPanel', () => {
         expect(screen.findByTestId('agent-input-chip-picker.detail-pane')).toBeTruthy();
     });
 
+    it('uses the single-pane detailed layout when the selector rail is hidden', async () => {
+        const { AgentInputChipPickerPanel } = await import('./AgentInputChipPickerPanel');
+
+        const screen = await renderScreen(<AgentInputChipPickerPanel
+            title=""
+            showCloseButton={false}
+            options={[
+                {
+                    id: 'engine:codex',
+                    label: 'Codex',
+                    detailDescription: 'Engine detail',
+                } as any,
+            ]}
+            selectedOptionId="engine:codex"
+            onSelect={() => {}}
+            onRequestClose={() => {}}
+        />);
+
+        expect(screen.findByTestId('agent-input-chip-picker.option-rail')).toBeNull();
+        const detailPane = screen.findByTestId('agent-input-chip-picker.detail-pane');
+        expect(detailPane).toBeTruthy();
+
+        const resolvedStyle = Object.assign(
+            {},
+            ...(Array.isArray(detailPane?.props.style) ? detailPane?.props.style : [detailPane?.props.style]).filter(Boolean),
+        );
+
+        expect(resolvedStyle.paddingHorizontal).toBe(12);
+        expect(resolvedStyle.paddingTop).toBe(19);
+        expect(resolvedStyle.paddingBottom).toBe(12);
+        expect(resolvedStyle.width).toBe('100%');
+    });
+
     it('omits the title row when the title is empty', async () => {
         const { AgentInputChipPickerPanel } = await import('./AgentInputChipPickerPanel');
 

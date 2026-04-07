@@ -594,6 +594,128 @@ describe('SessionView (direct sessions)', () => {
     }));
   });
 
+  it('applies ACP config-option overrides optimistically to existing-session AgentInput props', async () => {
+    const session = (await import('@/sync/domains/state/storage')).storage.getState().sessions.s1 as any;
+    session.metadata = {
+      ...session.metadata,
+      sessionModelsV1: {
+        v: 1,
+        provider: 'codex',
+        updatedAt: 1,
+        currentModelId: 'default',
+        availableModels: [
+          {
+            id: 'default',
+            name: 'Use CLI settings',
+            modelOptions: [
+              {
+                id: 'thinking',
+                name: 'Thinking',
+                type: 'select',
+                currentValue: 'medium',
+                options: [
+                  { value: 'low', name: 'Low' },
+                  { value: 'medium', name: 'Medium' },
+                  { value: 'high', name: 'High' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    let agentInput = findAgentInput(screen);
+    expect(agentInput.props.acpConfigOptionOverridesOverride).toBeNull();
+
+    await act(async () => {
+      agentInput.props.onAcpConfigOptionChange('thinking', 'high');
+    });
+    await settleDirectSessionView();
+
+    agentInput = findAgentInput(screen);
+    expect(agentInput.props.acpConfigOptionOverridesOverride).toEqual({
+      v: 1,
+      updatedAt: expect.any(Number),
+      overrides: {
+        thinking: {
+          updatedAt: expect.any(Number),
+          value: 'high',
+        },
+      },
+    });
+    expect(publishSessionAcpConfigOptionOverrideToMetadataSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 's1',
+      configId: 'thinking',
+      value: 'high',
+    }));
+  });
+
+  it('includes the optimistic Claude reasoning effort override in the next submitted message', async () => {
+    const session = (await import('@/sync/domains/state/storage')).storage.getState().sessions.s1 as any;
+    session.metadata = {
+      ...session.metadata,
+      flavor: 'claude',
+      directSessionV1: {
+        ...session.metadata.directSessionV1,
+        providerId: 'claude',
+      },
+      sessionModelsV1: {
+        v: 1,
+        provider: 'claude',
+        updatedAt: 1,
+        currentModelId: 'claude-sonnet-4-6',
+        availableModels: [
+          {
+            id: 'claude-sonnet-4-6',
+            name: 'Sonnet 4.6',
+            modelOptions: [
+              {
+                id: 'reasoning_effort',
+                name: 'Thinking',
+                type: 'select',
+                currentValue: 'high',
+                options: [
+                  { value: 'low', name: 'Low' },
+                  { value: 'medium', name: 'Medium' },
+                  { value: 'high', name: 'High' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
+
+    const screen = await renderSessionView();
+
+    const agentInput = findAgentInput(screen);
+    await act(async () => {
+      agentInput.props.onAcpConfigOptionChange('reasoning_effort', 'low');
+    });
+    await settleDirectSessionView();
+
+    await act(async () => {
+      agentInput.props.onChangeText('use the lower effort');
+    });
+
+    await act(async () => {
+      await agentInput.props.onSend();
+    });
+
+    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
+      's1',
+      'use the lower effort',
+      undefined,
+      expect.objectContaining({
+        reasoningEffort: 'low',
+      }),
+    );
+  });
+
   it('prefers the shared live authoring snapshot overrides for permission and model composer props', async () => {
     const session = (await import('@/sync/domains/state/storage')).storage.getState().sessions.s1 as any;
     session.permissionMode = 'acceptEdits';

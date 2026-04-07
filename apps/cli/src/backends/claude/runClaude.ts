@@ -39,6 +39,7 @@ import { applyClaudeRemoteMetaState } from '@/backends/claude/remote/claudeRemot
 import { resolveInitialClaudeRemoteMetaState } from '@/backends/claude/remote/resolveInitialClaudeRemoteMetaState';
 import { inferPermissionIntentFromClaudeArgs } from './utils/inferPermissionIntentFromArgs';
 import { adoptModelOverrideFromMetadata } from './utils/adoptModelOverrideFromMetadata';
+import { adoptReasoningEffortOverrideFromMessageMeta } from './utils/adoptReasoningEffortOverrideFromMessageMeta';
 import { adoptReasoningEffortOverrideFromMetadata } from './utils/adoptReasoningEffortOverrideFromMetadata';
 import { resolveSessionModeOverrideFromMetadataSnapshot } from '@/agent/runtime/permission/permissionModeFromMetadata';
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
@@ -595,6 +596,21 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             currentReasoningEffort = adoptedReasoningEffort.valueId ?? undefined;
             currentReasoningEffortUpdatedAt = adoptedReasoningEffort.updatedAt;
             logger.debug(`[loop] Thinking updated from session metadata: ${currentReasoningEffort || 'default'}`);
+        }
+
+        const adoptedReasoningEffortFromMessage = adoptReasoningEffortOverrideFromMessageMeta({
+            currentValueId: currentReasoningEffort ?? null,
+            currentUpdatedAt: currentReasoningEffortUpdatedAt,
+            messageMeta: message.meta as Record<string, unknown> | null | undefined,
+            updatedAt:
+                typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) && message.createdAt > 0
+                    ? message.createdAt
+                    : Date.now(),
+        });
+        if (adoptedReasoningEffortFromMessage.didChange) {
+            currentReasoningEffort = adoptedReasoningEffortFromMessage.valueId ?? undefined;
+            currentReasoningEffortUpdatedAt = adoptedReasoningEffortFromMessage.updatedAt;
+            logger.debug(`[loop] Thinking updated from user message: ${currentReasoningEffort || 'default'}`);
         }
 
         // Resolve permission mode from meta - pass through as-is, mapping happens at SDK boundary
@@ -1186,6 +1202,20 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                     if (adoptedReasoningEffort.didChange) {
                         currentReasoningEffort = adoptedReasoningEffort.valueId ?? undefined;
                         currentReasoningEffortUpdatedAt = adoptedReasoningEffort.updatedAt;
+                    }
+
+                    const adoptedReasoningEffortFromMessage = adoptReasoningEffortOverrideFromMessageMeta({
+                        currentValueId: currentReasoningEffort ?? null,
+                        currentUpdatedAt: currentReasoningEffortUpdatedAt,
+                        messageMeta: message.meta as Record<string, unknown> | null | undefined,
+                        updatedAt:
+                            typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) && message.createdAt > 0
+                                ? message.createdAt
+                                : Date.now(),
+                    });
+                    if (adoptedReasoningEffortFromMessage.didChange) {
+                        currentReasoningEffort = adoptedReasoningEffortFromMessage.valueId ?? undefined;
+                        currentReasoningEffortUpdatedAt = adoptedReasoningEffortFromMessage.updatedAt;
                     }
 
                     let messagePermissionMode: PermissionMode = currentPermissionMode;

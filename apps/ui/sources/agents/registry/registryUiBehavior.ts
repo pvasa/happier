@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { AccountProfile, DirectSessionLinkEnsureRequest, DirectSessionsSource } from '@happier-dev/protocol';
+import type { AccountProfile, AcpConfigOptionOverridesV1, DirectSessionLinkEnsureRequest, DirectSessionsSource } from '@happier-dev/protocol';
 import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
 import type { AgentId } from './registryCore';
 import { AGENT_IDS, getAgentCore, resolveAgentIdFromFlavor } from './registryCore';
@@ -131,6 +131,13 @@ export type AgentUiBehavior = Readonly<{
             session?: Session | null;
         }) => Record<string, unknown>;
     }>;
+    sessionComposer?: Readonly<{
+        buildNextMessageMetaOverrides?: (opts: {
+            agentId: AgentId;
+            configOptionOverrides: AcpConfigOptionOverridesV1 | null | undefined;
+            metaOverrides?: Record<string, unknown>;
+        }) => Record<string, unknown> | undefined;
+    }>;
     sessionSubagents?: Readonly<{
         renderLaunchCards?: (ctx: {
             sessionId: string;
@@ -208,6 +215,7 @@ function mergeAgentUiBehavior(a: AgentUiBehavior, b: AgentUiBehavior): AgentUiBe
             }
             : {}),
         ...(a.payload || b.payload ? { payload: { ...(a.payload ?? {}), ...(b.payload ?? {}) } } : {}),
+        ...(a.sessionComposer || b.sessionComposer ? { sessionComposer: { ...(a.sessionComposer ?? {}), ...(b.sessionComposer ?? {}) } } : {}),
         ...(a.sessionSubagents || b.sessionSubagents
             ? { sessionSubagents: { ...(a.sessionSubagents ?? {}), ...(b.sessionSubagents ?? {}) } }
             : {}),
@@ -354,6 +362,21 @@ export function buildWakeResumeExtras(opts: {
 }): Record<string, unknown> {
     const fn = AGENTS_UI_BEHAVIOR[opts.agentId]?.payload?.buildWakeResumeExtras;
     return fn ? fn(opts) : {};
+}
+
+export function buildSessionComposerNextMessageMetaOverridesFromUiState(opts: {
+    agentId: AgentId | null | undefined;
+    configOptionOverrides: AcpConfigOptionOverridesV1 | null | undefined;
+    metaOverrides?: Record<string, unknown>;
+}): Record<string, unknown> | undefined {
+    if (!opts.agentId) return opts.metaOverrides;
+    const fn = AGENTS_UI_BEHAVIOR[opts.agentId]?.sessionComposer?.buildNextMessageMetaOverrides;
+    if (!fn) return opts.metaOverrides;
+    return fn({
+        agentId: opts.agentId,
+        configOptionOverrides: opts.configOptionOverrides,
+        metaOverrides: opts.metaOverrides,
+    });
 }
 
 export function supportsDetectedMcpConfigScan(agentId: AgentId): boolean {

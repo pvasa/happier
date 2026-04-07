@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { AgentUiBehavior } from '@/agents/registry/registryUiBehavior';
+import { buildClaudeSessionComposerNextMessageMetaOverrides } from '@/agents/providers/claude/buildClaudeSessionComposerNextMessageMetaOverrides';
 import { ClaudeAgentLaunchActionsCard } from '@/agents/providers/claude/sessionSubagents/ClaudeAgentLaunchActionsCard';
 import {
     createClaudeSubagentLauncherDetailsTab,
@@ -18,6 +19,13 @@ export const CLAUDE_UI_BEHAVIOR_OVERRIDE: AgentUiBehavior = {
             order: 20,
             getSourceOptions: () => resolveClaudeBrowseSourceOptions(),
         },
+    },
+    sessionComposer: {
+        buildNextMessageMetaOverrides: ({ configOptionOverrides, metaOverrides }) =>
+            buildClaudeSessionComposerNextMessageMetaOverrides({
+                configOptionOverrides,
+                metaOverrides,
+            }),
     },
     sessionSubagents: {
         renderLaunchCards: ({ scopeId, subagents }) => {

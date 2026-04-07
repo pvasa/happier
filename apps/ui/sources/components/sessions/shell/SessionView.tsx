@@ -31,11 +31,13 @@ import { storage, useAutomations, useIsDataReady, useLocalSetting, useRealtimeSt
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
+import { buildSessionComposerNextMessageMetaOverridesFromUiState } from '@/agents/registry/registryUiBehavior';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
 import { useSession } from '@/sync/domains/state/storage';
-import { Session } from '@/sync/domains/state/storageTypes';
+import { Session, type Metadata } from '@/sync/domains/state/storageTypes';
 import { sync } from '@/sync/sync';
+import { computeNextAcpConfigOptionOverrideMetadata } from '@/sync/engine/overrides/acpConfigOptionOverridePublish';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { buildReviewCommentsDisplayText, buildReviewCommentsPromptText } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
 import { buildReviewCommentsV1MetaPayload } from '@/sync/domains/input/reviewComments/reviewCommentMeta';
@@ -132,6 +134,7 @@ import type { SessionParticipantTarget } from '@/sync/domains/session/participan
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import { isHiddenSystemSession } from '@happier-dev/protocol';
+import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOptimisticAcpConfigOptionOverrides';
 
 
 export const SessionView = React.memo((props: {
@@ -622,6 +625,25 @@ function SessionViewLoaded({
     const isVoiceConversationSession = isVoiceConversationSystemSessionMetadata(session.metadata ?? null);
     const isHiddenSystemSessionSession = isHiddenSystemSession({ metadata: session.metadata ?? null });
     const modelMode = liveComposerState.modelMode;
+    const sessionAcpConfigOptionOverrides = React.useMemo<React.ComponentProps<typeof AgentInput>['acpConfigOptionOverridesOverride']>(() => {
+        return (session.metadata?.acpConfigOptionOverridesV1 ?? session.metadata?.sessionConfigOptionOverridesV1 ?? null) as React.ComponentProps<typeof AgentInput>['acpConfigOptionOverridesOverride'];
+    }, [session.metadata]);
+    const [optimisticAcpConfigOptionOverrides, setOptimisticAcpConfigOptionOverrides] =
+        React.useState<React.ComponentProps<typeof AgentInput>['acpConfigOptionOverridesOverride']>(
+            sessionAcpConfigOptionOverrides,
+        );
+    const optimisticAcpConfigOptionOverridesSessionIdRef = React.useRef(sessionId);
+    React.useEffect(() => {
+        setOptimisticAcpConfigOptionOverrides((current) => {
+            const sessionChanged = optimisticAcpConfigOptionOverridesSessionIdRef.current !== sessionId;
+            optimisticAcpConfigOptionOverridesSessionIdRef.current = sessionId;
+            return resolveNextOptimisticAcpConfigOptionOverrides({
+                current,
+                incoming: sessionAcpConfigOptionOverrides,
+                sessionChanged,
+            }) as typeof current;
+        });
+    }, [sessionAcpConfigOptionOverrides, sessionId]);
     const sessionStatus = useSessionStatus(session);
     const sessionUsage = useSessionUsage(sessionId);
     const activeServerId = getActiveServerSnapshot().serverId;
@@ -840,13 +862,37 @@ function SessionViewLoaded({
     }, [sessionId, sessionModeOptionIds]);
 
     const updateAcpConfigOptionOverride = React.useCallback((configId: string, valueId: string) => {
+        const updatedAt = nowServerMs();
+        setOptimisticAcpConfigOptionOverrides((current) => {
+            const baseMetadata = (current
+                ? {
+                    ...(session.metadata ?? {}),
+                    acpConfigOptionOverridesV1: current,
+                    sessionConfigOptionOverridesV1: current,
+                }
+                : (session.metadata ?? {})) as Metadata;
+            const nextMetadata = computeNextAcpConfigOptionOverrideMetadata({
+                metadata: baseMetadata,
+                configId,
+                value: valueId,
+                updatedAt,
+            });
+            return (nextMetadata.acpConfigOptionOverridesV1 ?? nextMetadata.sessionConfigOptionOverridesV1 ?? null) as React.ComponentProps<typeof AgentInput>['acpConfigOptionOverridesOverride'];
+        });
         fireAndForget(sync.publishSessionAcpConfigOptionOverrideToMetadata({
             sessionId,
             configId,
             value: valueId,
-            updatedAt: nowServerMs(),
+            updatedAt,
         }), { tag: 'SessionView.updateAcpConfigOptionOverride' });
-    }, [sessionId]);
+    }, [session.metadata, sessionId]);
+    const buildNextMessageMetaOverrides = React.useCallback((metaOverrides?: Record<string, unknown>) => {
+        return buildSessionComposerNextMessageMetaOverridesFromUiState({
+            agentId: liveComposerState.agentId,
+            configOptionOverrides: optimisticAcpConfigOptionOverrides,
+            metaOverrides,
+        });
+    }, [liveComposerState.agentId, optimisticAcpConfigOptionOverrides]);
 
     // Function to update model mode (only for agents that expose model selection in the UI)
     const updateModelMode = React.useCallback((mode: ModelMode) => {
@@ -1404,6 +1450,7 @@ function SessionViewLoaded({
                 onPermissionModeChange={updatePermissionMode}
                 onAcpSessionModeChange={supportsSessionModeOverrides(liveComposerState.agentId) ? updateAcpSessionModeOverride : undefined}
                 onAcpConfigOptionChange={updateAcpConfigOptionOverride}
+                acpConfigOptionOverridesOverride={optimisticAcpConfigOptionOverrides}
                 modelMode={modelMode}
                 onModelModeChange={updateModelMode}
                 metadata={session.metadata}
@@ -1506,7 +1553,11 @@ function SessionViewLoaded({
                                         },
                                     } as Record<string, unknown>;
 
-                                    const outbound = shouldSendReviewComments
+                                    const outbound: {
+                                        text: string;
+                                        displayText?: string;
+                                        metaOverrides?: Record<string, unknown>;
+                                    } = shouldSendReviewComments
                                         ? {
                                             text: buildReviewCommentsPromptText({
                                                 sessionId,
@@ -1528,6 +1579,7 @@ function SessionViewLoaded({
                                             displayText: trimmedText,
                                             metaOverrides: attachmentsMetaOverrides,
                                         };
+                                    outbound.metaOverrides = buildNextMessageMetaOverrides(outbound.metaOverrides);
 
                                     if (submitMode === 'interrupt') {
                                         try { await sessionAbort(sessionId); } catch { }
@@ -1547,7 +1599,11 @@ function SessionViewLoaded({
                             return;
                         }
 
-                        const outbound = shouldSendReviewComments
+                        const outbound: {
+                            text: string;
+                            displayText?: string;
+                            metaOverrides?: Record<string, unknown>;
+                        } | null = shouldSendReviewComments
                         ? {
                             text: buildReviewCommentsPromptText({
                                 sessionId,
@@ -1627,6 +1683,7 @@ function SessionViewLoaded({
                                 outbound.metaOverrides = routed.metaOverrides;
                             }
                         }
+                        outbound.metaOverrides = buildNextMessageMetaOverrides(outbound.metaOverrides);
 
                         if (executionRunSend) {
                             fireAndForget((async () => {
