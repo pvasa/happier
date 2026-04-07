@@ -9,7 +9,7 @@ import {
 } from '@happier-dev/agents';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 
-import { resolveWindowsCommandOnPath } from '../process/index.js';
+import { resolveWindowsCommandOnPath, resolveWindowsCommandPath } from '../process/index.js';
 import { resolveJavaScriptRuntimeCommand } from './managedJavaScriptRuntime.js';
 import { resolveHappyHomeDirFromEnvironment } from './resolveHappyHomeDir.js';
 
@@ -64,6 +64,13 @@ export function readProviderCliOverride(agentId: AgentId, processEnv: NodeJS.Pro
 function resolveProviderCliOverride(agentId: AgentId, processEnv: NodeJS.ProcessEnv): string | null {
   const override = readProviderCliOverride(agentId, processEnv);
   if (!override) return null;
+  if (process.platform === 'win32') {
+    const normalizedOverride =
+      (override.includes('/') || override.includes('\\') || override.includes(':'))
+        ? resolveWindowsCommandPath(override, processEnv)
+        : resolveWindowsCommandOnPath(override, processEnv);
+    if (normalizedOverride) return normalizedOverride;
+  }
   const accessMode = process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK;
   try {
     accessSync(override, accessMode);

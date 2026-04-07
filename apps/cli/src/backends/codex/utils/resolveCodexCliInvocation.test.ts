@@ -16,7 +16,12 @@ async function createExecutable(params: Readonly<{ dir: string; name: string }>)
 }
 
 describe('resolveCodexCliInvocation', () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
     afterEach(() => {
+        if (originalPlatformDescriptor) {
+            Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+        }
         vi.unstubAllEnvs();
     });
 
@@ -127,6 +132,40 @@ describe('resolveCodexCliInvocation', () => {
             });
 
             expect(invocation.command).toBe(codexPath);
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it('prefers the .cmd shim over an extensionless Windows override path', async () => {
+        if (!originalPlatformDescriptor) {
+            throw new Error('Expected process.platform to be configurable for this test');
+        }
+        Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+
+        const root = await mkdtemp(join(tmpdir(), 'happier-codex-cli-invocation-win32-'));
+        try {
+            const cwd = join(root, 'project');
+            const binDir = join(cwd, 'bin');
+            mkdirSync(binDir, { recursive: true });
+
+            const extensionlessPath = join(binDir, 'codex-app-server');
+            writeFileSync(extensionlessPath, '', 'utf8');
+            const cmdShimPath = join(binDir, 'codex-app-server.cmd');
+            writeFileSync(cmdShimPath, '@echo off\r\necho codex\r\n', 'utf8');
+
+            vi.stubEnv('HAPPIER_CODEX_APP_SERVER_BIN', './bin/codex-app-server');
+            vi.stubEnv('PATHEXT', '.CMD;.EXE');
+
+            const invocation = await resolveCodexCliInvocation({
+                args: ['app-server', '--listen', 'stdio://'],
+                cwd,
+                processEnv: process.env,
+                overrideEnvVarKeys: ['HAPPIER_CODEX_APP_SERVER_BIN'],
+                targetLabel: 'Codex app-server',
+            });
+
+            expect(invocation.command.toLowerCase()).toBe(cmdShimPath.toLowerCase());
         } finally {
             await rm(root, { recursive: true, force: true });
         }

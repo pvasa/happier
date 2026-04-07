@@ -21,8 +21,10 @@ const envKeys = [
   'HAPPIER_MANAGED_NODE_BIN',
   'HAPPIER_NODE_PATH',
   'PATH',
+  'PATHEXT',
 ] as const;
 const originalPath = process.env.PATH;
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 
 function makeExecutable(dir: string, name: string): string {
   const fileName = process.platform === 'win32' ? `${name}.cmd` : name;
@@ -49,6 +51,9 @@ describe('resolveProviderCliCommand', () => {
   let envScope = createEnvKeyScope(envKeys);
 
   afterEach(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
     envScope.restore();
     envScope = createEnvKeyScope(envKeys);
     for (const dir of tempDirs) {
@@ -258,5 +263,59 @@ describe('resolveProviderCliCommand', () => {
         command: systemPath,
       }),
     );
+  });
+
+  it('prefers the .cmd shim over an extensionless system file on Windows PATH', () => {
+    if (!originalPlatformDescriptor) {
+      throw new Error('Expected process.platform to be configurable for this test');
+    }
+    Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+
+    const root = createTempDirSync('happier-managed-cli-resolution-win32-', tmpdir());
+    tempDirs.add(root);
+    const systemBin = join(root, 'system-bin');
+    mkdirSync(systemBin, { recursive: true });
+
+    const extensionlessPath = join(systemBin, 'codex');
+    writeTextFileSync(extensionlessPath, '');
+    const cmdShimPath = writeExecutableShimSync({
+      dir: systemBin,
+      fileName: 'codex.cmd',
+      contents: '@echo off\r\necho ok\r\n',
+    });
+
+    process.env.PATH = systemBin;
+    process.env.PATHEXT = '.CMD;.EXE';
+
+    const resolved = resolveProviderCliCommand('codex');
+    expect(resolved?.source).toBe('system');
+    expect(resolved?.command.toLowerCase()).toBe(cmdShimPath.toLowerCase());
+  });
+
+  it('normalizes an explicit Windows override path to the matching .cmd shim', () => {
+    if (!originalPlatformDescriptor) {
+      throw new Error('Expected process.platform to be configurable for this test');
+    }
+    Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+
+    const root = createTempDirSync('happier-managed-cli-resolution-win32-override-', tmpdir());
+    tempDirs.add(root);
+    const overrideDir = join(root, 'override');
+    mkdirSync(overrideDir, { recursive: true });
+
+    const extensionlessPath = join(overrideDir, 'codex');
+    writeTextFileSync(extensionlessPath, '');
+    const cmdShimPath = writeExecutableShimSync({
+      dir: overrideDir,
+      fileName: 'codex.cmd',
+      contents: '@echo off\r\necho ok\r\n',
+    });
+
+    process.env.HAPPIER_CODEX_PATH = extensionlessPath;
+    process.env.PATHEXT = '.CMD;.EXE';
+
+    const resolved = resolveProviderCliCommand('codex');
+    expect(resolved?.source).toBe('override');
+    expect(resolved?.command.toLowerCase()).toBe(cmdShimPath.toLowerCase());
   });
 });

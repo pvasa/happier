@@ -2,6 +2,8 @@ import { accessSync, constants as fsConstants, existsSync, readFileSync, statSyn
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
+import { resolveWindowsCommandPath } from '@happier-dev/cli-common/process';
+
 import { requireJavaScriptRuntimeExecutable } from '@/runtime/js/requireJavaScriptRuntimeExecutable';
 import { requireProviderCliCommand } from '@/runtime/managedTools/requireProviderCliCommand';
 import { isBun } from '@/utils/runtime';
@@ -62,6 +64,13 @@ function resolveOverrideCommand(
                 : process.platform === 'win32'
                     ? fsConstants.F_OK
                     : fsConstants.X_OK;
+        if (process.platform === 'win32') {
+            const normalizedExpanded = resolveWindowsCommandPath(expanded, processEnv);
+            if (!normalizedExpanded) {
+                continue;
+            }
+            return normalizedExpanded;
+        }
         try {
             accessSync(expanded, accessMode);
             if (!statSync(expanded).isFile()) {
