@@ -457,6 +457,8 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         setSelectedMachineId,
         selectedPath,
         setSelectedPath,
+        setDraftSelectedPath,
+        getRequestedPath,
         getBestPathForMachine,
     } = useNewSessionMachinePathState({
         machines,
@@ -826,7 +828,10 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
                 machineHomeDir={selectedMachine?.metadata?.homeDir || '/home'}
                 selectedPath={selectedPath}
                 onChangeSelectedPath={setSelectedPath}
+                onChangeDraftSelectedPath={setDraftSelectedPath}
+                onBeforeBrowseMachinePath={requestClose}
                 submitBehavior="confirm"
+                commitDraftOnBlur={true}
                 onSubmitSelectedPath={(nextPath) => {
                     setSelectedPath(nextPath);
                     requestClose();
@@ -858,6 +863,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         selectedMachine?.id,
         selectedMachine?.metadata?.homeDir,
         selectedPath,
+        setDraftSelectedPath,
         setFavoriteDirectories,
         setSelectedPath,
         targetServerId,
@@ -1249,6 +1255,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         router,
         selectedMachineId,
         selectedPath,
+        getRequestedPath,
         selectedMachine,
         setIsCreating,
         setIsResumeSupportChecking,
@@ -1437,6 +1444,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         setSelectedMachineId,
         getBestPathForMachine,
         setSelectedPath,
+        setDraftSelectedPath,
         pathPopover,
         favoriteMachines,
         setFavoriteMachines,

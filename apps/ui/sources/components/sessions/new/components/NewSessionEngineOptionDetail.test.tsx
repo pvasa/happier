@@ -547,4 +547,104 @@ describe('NewSessionEngineOptionDetail', () => {
 	            },
 	        }));
 	    });
+
+    it('does not issue an extra commit when equal config overrides are re-passed with a fresh object', async () => {
+        const commitPhases: string[] = [];
+        const overrides = { service_tier: 'fast' } as const;
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        const screen = await renderScreen(
+            <React.Profiler
+                id="NewSessionEngineOptionDetail"
+                onRender={(_id, phase) => {
+                    commitPhases.push(phase);
+                }}
+            >
+                <NewSessionEngineOptionDetail
+                    backendTarget={backendTarget}
+                    selectedMachineId="machine-1"
+                    capabilityServerId="server-1"
+                    cwd="/repo"
+                    selectedModelId="gpt-5.4"
+                    selectedSessionModeId="default"
+                    selectedConfigOverrides={overrides}
+                />
+            </React.Profiler>,
+        );
+
+        commitPhases.length = 0;
+
+        await screen.update(
+            <React.Profiler
+                id="NewSessionEngineOptionDetail"
+                onRender={(_id, phase) => {
+                    commitPhases.push(phase);
+                }}
+            >
+                <NewSessionEngineOptionDetail
+                    backendTarget={backendTarget}
+                    selectedMachineId="machine-1"
+                    capabilityServerId="server-1"
+                    cwd="/repo"
+                    selectedModelId="gpt-5.4"
+                    selectedSessionModeId="default"
+                    selectedConfigOverrides={{ service_tier: 'fast' }}
+                />
+            </React.Profiler>,
+        );
+
+        expect(commitPhases).toEqual(['update']);
+    });
+
+    it('does not republish an identical config selection when the current option is chosen again', async () => {
+        configOptionsState.value = [
+            {
+                id: 'thinking',
+                name: 'Thinking',
+                type: 'select',
+                currentValue: 'high',
+                options: [
+                    { value: 'low', name: 'Low' },
+                    { value: 'high', name: 'High' },
+                ],
+            },
+        ];
+
+        const onSelectionChange = vi.fn();
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        const screen = await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="default"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{ thinking: 'high' }}
+            onSelectionChange={onSelectionChange}
+        />);
+
+        await screen.pressByTestIdAsync('agent-input-config-option-option:thinking:high');
+
+        expect(onSelectionChange).not.toHaveBeenCalled();
+    });
+
+    it('does not republish an identical model selection when the current model is chosen again', async () => {
+        const onSelectionChange = vi.fn();
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        const screen = await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="default"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{}}
+            onSelectionChange={onSelectionChange}
+        />);
+
+        act(() => {
+            lastModelPickerOverlayProps.onSelect('default');
+        });
+
+        expect(onSelectionChange).not.toHaveBeenCalled();
+    });
 });

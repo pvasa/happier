@@ -54,6 +54,37 @@ function resolveEffectiveModelLabel(
         : selectedModelId;
 }
 
+function areSelectedConfigOverridesEqual(
+    current: Readonly<Record<string, string>>,
+    next: Readonly<Record<string, string>>,
+): boolean {
+    if (current === next) return true;
+    const currentKeys = Object.keys(current);
+    const nextKeys = Object.keys(next);
+    if (currentKeys.length !== nextKeys.length) return false;
+    for (const key of currentKeys) {
+        if (current[key] !== next[key]) return false;
+    }
+    return true;
+}
+
+function areSelectionsEqual(
+    current: Readonly<{
+        modelId: string;
+        sessionModeId: string;
+        configOverrides: Readonly<Record<string, string>>;
+    }>,
+    next: Readonly<{
+        modelId: string;
+        sessionModeId: string;
+        configOverrides: Readonly<Record<string, string>>;
+    }>,
+): boolean {
+    return current.modelId === next.modelId
+        && current.sessionModeId === next.sessionModeId
+        && areSelectedConfigOverridesEqual(current.configOverrides, next.configOverrides);
+}
+
 export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetailProps) {
     const { modelOptions, preflightModels, probe: modelProbe } = useNewSessionPreflightModelsState({
         backendTarget: props.backendTarget,
@@ -89,7 +120,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             ...selectionRef.current,
             modelId: nextModelId,
         };
-        setSelectedModelId(nextModelId);
+        setSelectedModelId((current) => current === nextModelId ? current : nextModelId);
     }, [props.selectedModelId]);
 
     React.useEffect(() => {
@@ -98,7 +129,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             ...selectionRef.current,
             sessionModeId: nextSessionModeId,
         };
-        setSelectedSessionModeId(nextSessionModeId);
+        setSelectedSessionModeId((current) => current === nextSessionModeId ? current : nextSessionModeId);
     }, [props.selectedSessionModeId]);
 
     React.useEffect(() => {
@@ -107,7 +138,11 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             ...selectionRef.current,
             configOverrides: nextConfigOverrides,
         };
-        setSelectedConfigOverrides(nextConfigOverrides);
+        setSelectedConfigOverrides((current) => {
+            return areSelectedConfigOverridesEqual(current, nextConfigOverrides)
+                ? current
+                : nextConfigOverrides;
+        });
     }, [props.selectedConfigOverrides]);
 
     const publishSelection = React.useCallback((nextSelection: Readonly<{
@@ -115,10 +150,17 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
         sessionModeId: string;
         configOverrides: Readonly<Record<string, string>>;
     }>) => {
+        if (areSelectionsEqual(selectionRef.current, nextSelection)) {
+            return;
+        }
         selectionRef.current = nextSelection;
-        setSelectedModelId(nextSelection.modelId);
-        setSelectedSessionModeId(nextSelection.sessionModeId);
-        setSelectedConfigOverrides(nextSelection.configOverrides);
+        setSelectedModelId((current) => current === nextSelection.modelId ? current : nextSelection.modelId);
+        setSelectedSessionModeId((current) => current === nextSelection.sessionModeId ? current : nextSelection.sessionModeId);
+        setSelectedConfigOverrides((current) => {
+            return areSelectedConfigOverridesEqual(current, nextSelection.configOverrides)
+                ? current
+                : nextSelection.configOverrides;
+        });
         props.onSelectionChange?.(nextSelection);
     }, [props.onSelectionChange]);
 

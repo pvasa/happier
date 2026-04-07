@@ -25,6 +25,33 @@ type TempAuthoringDraftLike = Readonly<{
     codexBackendMode?: string | null;
 }> | null | undefined;
 
+function areSessionConfigOptionOverridesEqual(
+    current: AcpConfigOptionOverridesV1 | null,
+    next: AcpConfigOptionOverridesV1 | null,
+): boolean {
+    if (current === next) return true;
+    if (!current || !next) return current === next;
+    if (current.v !== next.v) return false;
+    if (current.updatedAt !== next.updatedAt) return false;
+
+    const currentOverrides = current.overrides ?? {};
+    const nextOverrides = next.overrides ?? {};
+    const currentKeys = Object.keys(currentOverrides);
+    const nextKeys = Object.keys(nextOverrides);
+
+    if (currentKeys.length !== nextKeys.length) return false;
+
+    for (const key of currentKeys) {
+        const currentValue = currentOverrides[key];
+        const nextValue = nextOverrides[key];
+        if (!nextValue) return false;
+        if (currentValue.updatedAt !== nextValue.updatedAt) return false;
+        if (currentValue.value !== nextValue.value) return false;
+    }
+
+    return true;
+}
+
 export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
     agentType: AgentId;
     hydratedTempAuthoringDraft: TempAuthoringDraftLike;
@@ -82,7 +109,11 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
     );
 
     React.useEffect(() => {
-        setSessionConfigOptionOverrides(initialSessionConfigOptionOverrides);
+        setSessionConfigOptionOverrides((current) => {
+            return areSessionConfigOptionOverridesEqual(current, initialSessionConfigOptionOverrides)
+                ? current
+                : initialSessionConfigOptionOverrides;
+        });
     }, [initialSessionConfigOptionOverrides]);
 
     const [mcpSelection, setMcpSelection] = React.useState<SessionMcpSelectionV1>(() => {
@@ -95,18 +126,26 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         const normalizedConfigId = typeof configId === 'string' ? configId.trim() : '';
         const normalizedValue = typeof value === 'string' ? value.trim() : '';
         if (!normalizedConfigId || !normalizedValue) return;
-        const updatedAt = Date.now();
-        setSessionConfigOptionOverrides((current) => ({
-            v: 1,
-            updatedAt,
-            overrides: {
-                ...(current?.overrides ?? {}),
-                [normalizedConfigId]: {
-                    updatedAt,
-                    value: normalizedValue,
+        setSessionConfigOptionOverrides((current) => {
+            const currentRawValue = current?.overrides?.[normalizedConfigId]?.value;
+            const currentValue = typeof currentRawValue === 'string' ? currentRawValue.trim() : '';
+            if (currentValue === normalizedValue) {
+                return current;
+            }
+
+            const updatedAt = Date.now();
+            return {
+                v: 1,
+                updatedAt,
+                overrides: {
+                    ...(current?.overrides ?? {}),
+                    [normalizedConfigId]: {
+                        updatedAt,
+                        value: normalizedValue,
+                    },
                 },
-            },
-        }));
+            };
+        });
     }, []);
 
     return {

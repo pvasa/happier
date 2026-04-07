@@ -14,14 +14,18 @@ import { TextInput } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { openMachinePathBrowserModal } from '@/components/ui/pathBrowser/openMachinePathBrowserModal';
 import { PathInputBrowseButton } from '@/components/ui/pathBrowser/PathInputBrowseButton';
+import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 
 
 type PathSelectorBaseProps = {
     machineHomeDir: string;
     selectedPath: string;
     onChangeSelectedPath: (path: string) => void;
+    onChangeDraftSelectedPath?: (path: string) => void;
     onSubmitSelectedPath?: (path: string) => void;
+    onBeforeBrowseMachinePath?: () => void | Promise<void>;
     submitBehavior?: 'showRow' | 'confirm';
+    commitDraftOnBlur?: boolean;
     recentPaths: ReadonlyArray<string>;
     usePickerSearch: boolean;
     searchVariant?: 'header' | 'group' | 'belowInput' | 'none';
@@ -121,6 +125,7 @@ export function PathSelector({
     machineHomeDir,
     selectedPath,
     onChangeSelectedPath,
+    onChangeDraftSelectedPath,
     recentPaths,
     usePickerSearch,
     searchVariant = 'header',
@@ -129,7 +134,9 @@ export function PathSelector({
     favoriteDirectories,
     onChangeFavoriteDirectories,
     onSubmitSelectedPath,
+    onBeforeBrowseMachinePath,
     submitBehavior = 'showRow',
+    commitDraftOnBlur = false,
     focusInputOnSelect = true,
     machineBrowse,
 }: PathSelectorProps) {
@@ -163,9 +170,9 @@ export function PathSelector({
     const suggestedPaths = useMemo(() => {
         const homeDir = machineHomeDir || '/home';
         return [
-            homeDir,
-            `${homeDir}/Documents`,
-            `${homeDir}/Desktop`,
+            resolveAbsolutePath('~', homeDir),
+            resolveAbsolutePath('~/Documents', homeDir),
+            resolveAbsolutePath('~/Desktop', homeDir),
         ];
     }, [machineHomeDir]);
 
@@ -287,10 +294,11 @@ export function PathSelector({
 
     const handleChangeSelectedPath = React.useCallback((text: string) => {
         setDraftSelectedPath(text);
+        onChangeDraftSelectedPath?.(text);
         if (submittedCustomPath && text.trim() !== submittedCustomPath) {
             setSubmittedCustomPath(null);
         }
-    }, [submittedCustomPath]);
+    }, [onChangeDraftSelectedPath, submittedCustomPath]);
 
     const focusInputAtEnd = React.useCallback((value: string) => {
         if (!focusInputOnSelect) return;
@@ -319,6 +327,7 @@ export function PathSelector({
         const trimmed = draftSelectedPath.trim();
         if (!trimmed) return;
 
+        onChangeDraftSelectedPath?.(trimmed);
         if (trimmed !== selectedPath) {
             onChangeSelectedPath(trimmed);
         }
@@ -327,10 +336,28 @@ export function PathSelector({
         if (submitBehavior !== 'confirm') {
             setSubmittedCustomPath(trimmed);
         }
-    }, [draftSelectedPath, onChangeSelectedPath, onSubmitSelectedPath, selectedPath, submitBehavior]);
+    }, [draftSelectedPath, onChangeDraftSelectedPath, onChangeSelectedPath, onSubmitSelectedPath, selectedPath, submitBehavior]);
+
+    const handleBlurPathInput = React.useCallback(() => {
+        if (!commitDraftOnBlur) {
+            return;
+        }
+        const trimmed = draftSelectedPath.trim();
+        if (!trimmed || trimmed === selectedPath) {
+            return;
+        }
+        onChangeDraftSelectedPath?.(trimmed);
+        onChangeSelectedPath(trimmed);
+    }, [commitDraftOnBlur, draftSelectedPath, onChangeDraftSelectedPath, onChangeSelectedPath, selectedPath]);
 
     const handleBrowseMachinePath = React.useCallback(async () => {
         if (!machineBrowse?.enabled || !machineBrowse.machineId) return;
+        await onBeforeBrowseMachinePath?.();
+        await new Promise<void>((resolve) => {
+            deferOnWeb(() => {
+                deferOnWeb(resolve);
+            });
+        });
         const browseStartPath = draftSelectedPath.trim() || machineHomeDir;
         const selected = await openMachinePathBrowserModal({
             machineId: machineBrowse.machineId,
@@ -340,6 +367,7 @@ export function PathSelector({
         });
         if (selected) {
             setDraftSelectedPath(selected);
+            onChangeDraftSelectedPath?.(selected);
             onChangeSelectedPath(selected);
             if (submitBehavior === 'confirm') {
                 onSubmitSelectedPath?.(selected);
@@ -347,7 +375,7 @@ export function PathSelector({
             }
             setSubmittedCustomPath(null);
         }
-    }, [draftSelectedPath, machineBrowse, machineHomeDir, onChangeSelectedPath, onSubmitSelectedPath, submitBehavior]);
+    }, [draftSelectedPath, machineBrowse, machineHomeDir, onBeforeBrowseMachinePath, onChangeDraftSelectedPath, onChangeSelectedPath, onSubmitSelectedPath, submitBehavior]);
 
     const renderRightElement = React.useCallback((absolutePath: string, isSelected: boolean, isFavorite: boolean) => {
         return (
@@ -454,6 +482,7 @@ export function PathSelector({
                                 blurOnSubmit={true}
                                 multiline={false}
                                 onSubmitEditing={handleSubmitPath}
+                                onBlur={handleBlurPathInput}
                             />
                         </View>
                         {machineBrowse?.enabled ? (

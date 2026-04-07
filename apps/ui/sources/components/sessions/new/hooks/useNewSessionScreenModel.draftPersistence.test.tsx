@@ -1632,6 +1632,37 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(routerPushMock).not.toHaveBeenCalled();
     });
 
+    it('tracks the latest typed path for session creation without changing the committed selectedPath on every keystroke', async () => {
+        const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
+
+        let model: any = null;
+        function Probe() {
+            model = useNewSessionScreenModel();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        const content = model?.simpleProps?.pathPopover?.renderContent?.({
+            requestClose: () => {},
+        });
+        expect(content).toBeTruthy();
+
+        const popoverScreen = await renderScreen(content);
+        const input = popoverScreen.tree.findByProps({ testID: 'path-selector-input' });
+
+        act(() => {
+            input.props.onChangeText('/repo/custom/subdir');
+        });
+
+        expect(model?.simpleProps?.selectedPath).toBe('/repo/custom');
+        expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
+            selectedPath: '/repo/custom',
+            getRequestedPath: expect.any(Function),
+        }));
+        expect((useCreateNewSessionArgsRef.current?.getRequestedPath as (() => string) | undefined)?.()).toBe('/repo/custom/subdir');
+    });
+
     it('keeps the current route stable and exposes a shared resume popover in the simple panel when resume is available', async () => {
         const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
 

@@ -74,9 +74,9 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
     formatPathRelativeToHome: (_home: string, path: string) => path,
 }));
 
-vi.mock('@/utils/path/pathUtils', () => ({
-    resolveAbsolutePath: (path: string) => path,
-}));
+vi.mock('@/utils/path/pathUtils', async (importOriginal) => {
+    return importOriginal<typeof import('@/utils/path/pathUtils')>();
+});
 
 vi.mock('@/components/ui/text/Text', () => ({
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
@@ -84,9 +84,14 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 const openMachinePathBrowserModalMock = vi.fn();
+const deferOnWebMock = vi.fn((callback: () => void) => callback());
 
 vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({
     openMachinePathBrowserModal: (input: unknown) => openMachinePathBrowserModalMock(input),
+}));
+
+vi.mock('@/utils/platform/deferOnWeb', () => ({
+    deferOnWeb: (callback: () => void) => deferOnWebMock(callback),
 }));
 
 describe('PathSelector', () => {
@@ -106,6 +111,27 @@ describe('PathSelector', () => {
         )).tree;
 
         expect(findTestInstanceByTypeWithProps(tree, 'Item', { title: '/home/luis/projects' })).toBeUndefined();
+    });
+
+    it('builds Windows suggested paths without duplicating separators when homeDir has a trailing backslash', async () => {
+        const { PathSelector } = await import('./PathSelector');
+
+        const tree = (await renderScreen(
+            <PathSelector
+                machineHomeDir="C:\\Users\\alice\\"
+                selectedPath=""
+                onChangeSelectedPath={() => {}}
+                recentPaths={[]}
+                usePickerSearch={false}
+                favoriteDirectories={[]}
+                onChangeFavoriteDirectories={() => {}}
+            />,
+        )).tree;
+
+        const itemTitles = tree.root.findAllByType('Item').map((item) => item.props.title).filter((title): title is string => typeof title === 'string');
+
+        expect(itemTitles).toHaveLength(3);
+        expect(itemTitles.some((title) => title.includes('\\/'))).toBe(false);
     });
 
     it('submits the selected row immediately when confirm behavior is enabled', async () => {
@@ -167,6 +193,50 @@ describe('PathSelector', () => {
             serverId: 'server-1',
             initialPath: '/Users/leeroy/project',
         }));
+    });
+
+    it('awaits the pre-browse callback before opening the shared path browser modal', async () => {
+        const callOrder: string[] = [];
+        openMachinePathBrowserModalMock.mockReset();
+        deferOnWebMock.mockClear();
+        openMachinePathBrowserModalMock.mockImplementationOnce(async () => {
+            callOrder.push('openMachinePathBrowserModal');
+            return '/Users/leeroy/from-browser';
+        });
+        const onBeforeBrowseMachinePath = vi.fn(async () => {
+            callOrder.push('onBeforeBrowseMachinePath:start');
+            await Promise.resolve();
+            callOrder.push('onBeforeBrowseMachinePath:end');
+        });
+        const { PathSelector } = await import('./PathSelector');
+
+        const screen = await renderScreen(<PathSelector
+                    machineHomeDir="/Users/leeroy"
+                    selectedPath="/Users/leeroy/project"
+                    onChangeSelectedPath={() => {}}
+                    recentPaths={[]}
+                    usePickerSearch={false}
+                    favoriteDirectories={[]}
+                    onChangeFavoriteDirectories={() => {}}
+                    onBeforeBrowseMachinePath={onBeforeBrowseMachinePath}
+                    machineBrowse={{
+                        enabled: true,
+                        machineId: 'machine-1',
+                        serverId: 'server-1',
+                    }}
+                />);
+
+        await act(async () => {
+            await screen.pressByTestIdAsync('path-browser-trigger');
+        });
+
+        expect(onBeforeBrowseMachinePath).toHaveBeenCalledTimes(1);
+        expect(callOrder).toEqual([
+            'onBeforeBrowseMachinePath:start',
+            'onBeforeBrowseMachinePath:end',
+            'openMachinePathBrowserModal',
+        ]);
+        expect(deferOnWebMock).toHaveBeenCalledTimes(2);
     });
 
     it('uses the current typed draft as the browse modal starting path', async () => {
@@ -276,6 +346,39 @@ describe('PathSelector', () => {
 
         expect(onChangeSelectedPath).toHaveBeenCalledWith('/Users/leeroy/Documents/Development/happier/dev');
         expect(onSubmitSelectedPath).toHaveBeenCalledWith('/Users/leeroy/Documents/Development/happier/dev');
+    });
+
+    it('commits the typed path on blur without committing every keystroke', async () => {
+        const onChangeSelectedPath = vi.fn();
+        const { PathSelector } = await import('./PathSelector');
+
+        const screen = await renderScreen(<PathSelector
+                    machineHomeDir="/Users/leeroy"
+                    selectedPath="/Users/leeroy/project"
+                    onChangeSelectedPath={onChangeSelectedPath}
+                    commitDraftOnBlur={true}
+                    recentPaths={[]}
+                    usePickerSearch={false}
+                    favoriteDirectories={[]}
+                    onChangeFavoriteDirectories={() => {}}
+                />);
+
+        const input = findTestInstanceByTypeWithProps(screen.tree, 'TextInput', { testID: 'path-selector-input' });
+        if (!input) {
+            throw new Error('Expected path selector input to render');
+        }
+
+        act(() => {
+            input.props.onChangeText('/Users/leeroy/Documents/Development/happier/dev');
+        });
+
+        expect(onChangeSelectedPath).not.toHaveBeenCalled();
+
+        act(() => {
+            input.props.onBlur?.();
+        });
+
+        expect(onChangeSelectedPath).toHaveBeenCalledWith('/Users/leeroy/Documents/Development/happier/dev');
     });
 
     it('does not render the browse button when machine browsing is not enabled', async () => {

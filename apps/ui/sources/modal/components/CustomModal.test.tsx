@@ -4,6 +4,7 @@ import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
 import { installModalComponentCommonModuleMocks } from './modalComponentTestHelpers';
 import { ModalCardFrame } from './card/ModalCardFrame';
+import { useModalCardChrome } from './card/useModalCardChrome';
 import type { CustomModalInjectedProps, CustomModalConfig } from '../types';
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -60,6 +61,16 @@ function PatchChromeModal(props: CustomModalInjectedProps & Readonly<{ label: st
         });
     }, [props.setChrome]);
     return React.createElement('PatchChromeModal', props);
+}
+
+function CallbackChromeModal(
+    props: CustomModalInjectedProps & Readonly<{ label: string; onAction: () => void }>,
+) {
+    useModalCardChrome(props.setChrome, React.useMemo(() => ({
+        kind: 'card' as const,
+        footer: React.createElement('FooterAction', { onPress: props.onAction }),
+    }), [props.onAction]));
+    return React.createElement('CallbackChromeModal', props);
 }
 
 function LegacyOnRequestCloseModal(
@@ -169,6 +180,41 @@ describe('CustomModal', () => {
         expect(modalCardFrame.props.actions?.type).toBe('BaseActions');
         expect(modalCardFrame.props.layout).toBe('fill');
         expect(modalCardFrame.props.footer?.type).toBe('PatchedFooter');
+    });
+
+    it('republishes chrome when only callback props change so footer actions stay fresh', async () => {
+        const firstAction = vi.fn();
+        const secondAction = vi.fn();
+        const { CustomModal } = await import('./CustomModal');
+
+        const screen = await renderScreen(React.createElement(CustomModal, {
+            config: {
+                id: 'test-modal',
+                type: 'custom',
+                component: CallbackChromeModal,
+                props: {
+                    label: 'callback',
+                    onAction: firstAction,
+                },
+            },
+            onClose: vi.fn(),
+        }));
+
+        await screen.update(React.createElement(CustomModal, {
+            config: {
+                id: 'test-modal',
+                type: 'custom',
+                component: CallbackChromeModal,
+                props: {
+                    label: 'callback',
+                    onAction: secondAction,
+                },
+            },
+            onClose: vi.fn(),
+        }));
+
+        const modalCardFrame = screen.findByType(ModalCardFrame);
+        expect(modalCardFrame.props.footer?.props.onPress).toBe(secondAction);
     });
 
     it('does not invoke legacy `props.onRequestClose` when dismissing', async () => {

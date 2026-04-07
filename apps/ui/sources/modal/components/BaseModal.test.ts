@@ -230,7 +230,13 @@ describe('BaseModal (web)', () => {
     it('provides a modal portal target to descendants (so popovers can portal inside the dialog subtree)', async () => {
         const { BaseModal } = await import('./BaseModal');
 
-        const portalHostMock = { nodeType: 1 } as any;
+        const originalDocument = (globalThis as any).document;
+        const portalHostMock = {
+            nodeType: 1,
+            appendChild: vi.fn(),
+            removeChild: vi.fn(),
+        } as any;
+        const portalTargetMock = { nodeType: 1, style: {}, setAttribute: vi.fn() } as any;
         let observedTarget: any = undefined;
 
         function Probe() {
@@ -238,20 +244,85 @@ describe('BaseModal (web)', () => {
             return React.createElement('Probe');
         }
 
-        await renderBaseModalScreen(
-            BaseModal,
-            { children: React.createElement(Probe) },
-            {
-                createNodeMock: (element: any) => {
-                    if (element?.props?.['data-happy-modal-portal-host'] !== undefined) {
-                        return portalHostMock;
-                    }
-                    return null;
-                },
-            },
-        );
+        (globalThis as any).document = {
+            ...(originalDocument ?? {}),
+            createElement: vi.fn(() => portalTargetMock),
+        };
 
-        expect(observedTarget).toBe(portalHostMock);
+        try {
+            await renderBaseModalScreen(
+                BaseModal,
+                { children: React.createElement(Probe) },
+                {
+                    createNodeMock: (element: any) => {
+                        if (element?.props?.['data-happy-modal-portal-host'] !== undefined) {
+                            return portalHostMock;
+                        }
+                        return null;
+                    },
+                },
+            );
+
+            expect(observedTarget).toBe(portalTargetMock);
+            expect(portalHostMock.appendChild).toHaveBeenCalledWith(portalTargetMock);
+        } finally {
+            (globalThis as any).document = originalDocument;
+        }
+    });
+
+    it('keeps the portal target stable during transient portal-host ref cleanups while the modal stays mounted', async () => {
+        const { BaseModal } = await import('./BaseModal');
+
+        const originalDocument = (globalThis as any).document;
+        const portalHostMock = {
+            nodeType: 1,
+            appendChild: vi.fn(),
+            removeChild: vi.fn(),
+        } as any;
+        const portalTargetMock = { nodeType: 1, style: {}, setAttribute: vi.fn() } as any;
+        let observedTarget: any = undefined;
+
+        function Probe() {
+            observedTarget = useModalPortalTarget();
+            return React.createElement('Probe');
+        }
+
+        (globalThis as any).document = {
+            ...(originalDocument ?? {}),
+            createElement: vi.fn(() => portalTargetMock),
+        };
+
+        try {
+            const screen = await renderBaseModalScreen(
+                BaseModal,
+                { children: React.createElement(Probe) },
+                {
+                    createNodeMock: (element: any) => {
+                        if (element?.props?.['data-happy-modal-portal-host'] !== undefined) {
+                            return portalHostMock;
+                        }
+                        return null;
+                    },
+                },
+            );
+
+            const portalHost = screen.find((node) => {
+                return node.type === 'div' && node.props?.['data-happy-modal-portal-host'] !== undefined;
+            }) as any;
+
+            const initialTarget = observedTarget;
+            expect(initialTarget).toBe(portalTargetMock);
+            expect(portalHostMock.appendChild).toHaveBeenCalledWith(initialTarget);
+
+            act(() => {
+                portalHost.props.ref(null);
+            });
+
+            expect(observedTarget).toBe(initialTarget);
+            expect(portalHostMock.removeChild).toHaveBeenCalledWith(initialTarget);
+        } finally {
+            (globalThis as any).document = originalDocument;
+        }
     });
 
     it('keeps the portal-host ref callback stable across rerenders (avoids ref/setState loops on web)', async () => {

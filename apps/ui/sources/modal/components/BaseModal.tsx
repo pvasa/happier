@@ -127,6 +127,24 @@ interface BaseModalProps {
     zIndexBase?: number;
 }
 
+function createWebModalPortalTarget(): HTMLElement | null {
+    if (Platform.OS !== 'web') return null;
+    if (typeof document === 'undefined') return null;
+    if (typeof document.createElement !== 'function') return null;
+
+    const target = document.createElement('div');
+    target.setAttribute('data-happy-modal-portal-target', '');
+    Object.assign(target.style, {
+        position: 'absolute',
+        top: '0px',
+        left: '0px',
+        width: '0px',
+        height: '0px',
+        overflow: 'visible',
+    } satisfies Partial<CSSStyleDeclaration>);
+    return target;
+}
+
 export function BaseModal({
     visible,
     onClose,
@@ -137,9 +155,33 @@ export function BaseModal({
 }: BaseModalProps) {
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const baseZ = zIndexBase ?? 100000;
-    const [modalPortalTarget, setModalPortalTarget] = React.useState<HTMLElement | null>(null);
+    const modalPortalTargetRef = React.useRef<HTMLElement | null>(null);
+    if (modalPortalTargetRef.current == null) {
+        modalPortalTargetRef.current = createWebModalPortalTarget();
+    }
+    const modalPortalHostRef = React.useRef<HTMLElement | null>(null);
     const setModalPortalHostRef = React.useCallback((node: HTMLElement | null) => {
-        setModalPortalTarget((prev) => (prev === node ? prev : node));
+        const target = modalPortalTargetRef.current;
+        const previousHost = modalPortalHostRef.current;
+        if (previousHost === node) return;
+
+        if (target && previousHost) {
+            try {
+                previousHost.removeChild(target);
+            } catch {
+                // ignore detach failures during ref cleanup
+            }
+        }
+
+        modalPortalHostRef.current = node;
+
+        if (target && node) {
+            try {
+                node.appendChild(target);
+            } catch {
+                // ignore attach failures and fall back to inline rendering
+            }
+        }
     }, []);
 
     useEffect(() => {
@@ -268,7 +310,7 @@ export function BaseModal({
                                 ref={setModalPortalHostRef}
                                 style={portalHostStyle}
                             />
-                            <ModalPortalTargetProvider target={modalPortalTarget}>
+                            <ModalPortalTargetProvider target={modalPortalTargetRef.current}>
                                 <ModalBoundaryProvider>
                                     <KeyboardAvoidingView
                                         pointerEvents="auto"

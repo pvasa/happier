@@ -621,6 +621,72 @@ describe('MachinePathBrowserModal', () => {
         expect(footerButtons.every((node) => node.props.size === 'normal')).toBe(true);
     });
 
+    it('keeps the modal on its inline chrome path even when CustomModal injects setChrome', async () => {
+        const setChrome = vi.fn();
+        const { MachinePathBrowserModal } = await import('./MachinePathBrowserModal');
+
+        const screen = await renderScreen(
+            <MachinePathBrowserModal
+                machineId="machine-1"
+                onResolve={vi.fn()}
+                onClose={vi.fn()}
+                setChrome={setChrome}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(setChrome).not.toHaveBeenCalled();
+        expect(screen.findByTestId(PATH_BROWSER_MODAL_TEST_ID)).toBeTruthy();
+    });
+
+    it('does not republish equivalent modal chrome on a parent rerender', async () => {
+        const setChrome = vi.fn();
+        const onPickPath = vi.fn();
+        const onRequestClose = vi.fn();
+        const { MachinePathBrowserView } = await import('./MachinePathBrowserModal');
+
+        const renderView = () => (
+            <MachinePathBrowserView
+                machineId="machine-1"
+                variant="modal"
+                interaction="confirm"
+                setChrome={setChrome}
+                onPickPath={onPickPath}
+                onRequestClose={onRequestClose}
+            />
+        );
+
+        const screen = await renderScreen(renderView());
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        setChrome.mockClear();
+
+        act(() => {
+            screen.tree.update(renderView());
+        });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(setChrome).toHaveBeenCalledTimes(0);
+    });
+
+    it('publishes modal chrome only once during initial mount when state is unchanged', async () => {
+        const setChrome = vi.fn();
+        const { MachinePathBrowserView } = await import('./MachinePathBrowserModal');
+
+        await renderScreen(
+            <MachinePathBrowserView
+                machineId="machine-1"
+                variant="modal"
+                interaction="confirm"
+                setChrome={setChrome}
+                onPickPath={vi.fn()}
+                onRequestClose={vi.fn()}
+            />,
+        );
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(setChrome).toHaveBeenCalledTimes(1);
+    });
+
     it('creates a folder under the selected directory via the header action', async () => {
         modalPromptMock.mockResolvedValueOnce('new-folder');
         const { MachinePathBrowserModal } = await import('./MachinePathBrowserModal');

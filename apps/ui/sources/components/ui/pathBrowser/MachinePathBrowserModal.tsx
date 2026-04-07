@@ -839,7 +839,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
         if (interaction !== 'confirm') return;
         if (!selectedPath) return;
         props.onPickPath(selectedPath);
-    }, [interaction, props, selectedPath]);
+    }, [interaction, props.onPickPath, selectedPath]);
 
     const selectedDirectoryPath = React.useMemo(() => {
         if (!selectedPath) return null;
@@ -900,16 +900,19 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
             setIsCreatingFolder(false);
         }
     }, [closeContextMenu, enableContextMenu, isCreatingFolder, props.machineId, props.serverId, retryDirectory]);
+    const createFolderInDirectoryRef = React.useRef(createFolderInDirectory);
+    createFolderInDirectoryRef.current = createFolderInDirectory;
+    const handleCreateFolderAction = React.useCallback(() => {
+        if (!selectedDirectoryPath) return;
+        void createFolderInDirectoryRef.current(selectedDirectoryPath);
+    }, [selectedDirectoryPath]);
 
     const chromeActions = React.useMemo(() => {
         if (!useCardChrome) return null;
         return (
             <Pressable
                 testID={PATH_BROWSER_CREATE_FOLDER_TEST_ID}
-                onPress={() => {
-                    if (!selectedDirectoryPath) return;
-                    void createFolderInDirectory(selectedDirectoryPath);
-                }}
+                onPress={handleCreateFolderAction}
                 disabled={!selectedDirectoryPath || isCreatingFolder}
                 hitSlop={10}
                 style={({ pressed }) => ([
@@ -922,7 +925,7 @@ export function MachinePathBrowserView(props: MachinePathBrowserViewProps): Reac
                 <Ionicons name="folder-outline" size={18} color={theme.colors.header.tint} />
             </Pressable>
         );
-    }, [createFolderInDirectory, isCreatingFolder, selectedDirectoryPath, styles.headerActionButton, theme.colors.header.tint, useCardChrome]);
+    }, [handleCreateFolderAction, isCreatingFolder, selectedDirectoryPath, styles.headerActionButton, theme.colors.header.tint, useCardChrome]);
 
     const chromeFooter = React.useMemo(() => {
         if (!useCardChrome || interaction !== 'confirm') return null;
@@ -1327,7 +1330,6 @@ export function MachinePathBrowserModal(props: MachinePathBrowserModalProps): Re
             selectionMode={props.selectionMode}
             variant="modal"
             interaction="confirm"
-            setChrome={props.setChrome}
             onPickPath={(path) => {
                 props.onResolve(path);
                 props.onClose();

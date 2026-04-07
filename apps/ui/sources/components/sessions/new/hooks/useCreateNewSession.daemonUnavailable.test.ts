@@ -293,6 +293,65 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await hook.unmount();
   });
 
+  it('uses the latest requested path getter even before the committed selectedPath rerenders', async () => {
+    const { useCreateNewSession, machineSpawnNewSessionSpy } = await setupHarness();
+
+    const requestedPathRef = { current: '/home/happier/projects/subdir' };
+    const setIsCreating = vi.fn();
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router: { push: vi.fn(), replace: vi.fn() },
+        selectedMachineId: 'm1',
+        selectedPath: '/home/happier',
+        getRequestedPath: () => requestedPathRef.current,
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating,
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: '',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    let createPromise: Promise<void> | void;
+    await act(async () => {
+      createPromise = hook.getCurrent().handleCreateSession();
+    });
+    await flushHookEffects({ runAllTimers: true });
+    await createPromise!;
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    const arg = machineSpawnNewSessionSpy.mock.calls[0]?.[0] as any;
+    expect(arg?.directory).toBe('/home/happier/projects/subdir');
+
+    await hook.unmount();
+  });
+
   it('does not retry after unmount when the alert Retry action is pressed', async () => {
     const { useCreateNewSession, modalAlertSpy, machineSpawnNewSessionSpy } = await setupHarness();
 

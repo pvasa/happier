@@ -43,4 +43,29 @@ describe('NewSessionPathSelectionContent', () => {
             searchQuery: 'repo',
         });
     });
+
+    it('forwards the pre-browse callback to PathSelector when provided', async () => {
+        const onBeforeBrowseMachinePath = vi.fn();
+        const { NewSessionPathSelectionContent } = await import('./NewSessionPathSelectionContent');
+
+        capturedPathSelectorProps.length = 0;
+
+        await renderScreen(React.createElement(NewSessionPathSelectionContent, {
+                    machineHomeDir: '/home/me',
+                    selectedPath: '/repo',
+                    onChangeSelectedPath: vi.fn(),
+                    recentPaths: ['/repo'],
+                    usePickerSearch: false,
+                    searchQuery: '',
+                    onChangeSearchQuery: vi.fn(),
+                    favoriteDirectories: [],
+                    onChangeFavoriteDirectories: vi.fn(),
+                    onBeforeBrowseMachinePath,
+                }));
+
+        expect(capturedPathSelectorProps).toHaveLength(1);
+        expect(capturedPathSelectorProps[0]).toMatchObject({
+            onBeforeBrowseMachinePath,
+        });
+    });
 });

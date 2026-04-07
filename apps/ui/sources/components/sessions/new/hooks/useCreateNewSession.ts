@@ -90,6 +90,7 @@ export function useCreateNewSession(params: Readonly<{
 
     selectedMachineId: string | null;
     selectedPath: string;
+    getRequestedPath?: () => string;
     selectedMachine: any;
 
     setIsCreating: (v: boolean) => void;
@@ -149,6 +150,13 @@ export function useCreateNewSession(params: Readonly<{
 
     const handleCreateSession = React.useCallback(async (opts?: HandleCreateSessionOptions) => {
         const current = latestParamsRef.current;
+        const requestedPath = typeof current.getRequestedPath === 'function'
+            ? current.getRequestedPath()
+            : current.selectedPath;
+        const effectiveSelectedPath = (typeof requestedPath === 'string'
+            ? requestedPath
+            : current.selectedPath).trim();
+        const trimmedEffectiveSelectedPath = effectiveSelectedPath;
         let rollbackActualPath: string | null = null;
         let rollbackServerId: string | null = current.targetServerId ?? null;
         const isRepoNativeWorktreeLaunch = current.checkoutCreationDraft?.kind === 'git_worktree';
@@ -157,7 +165,7 @@ export function useCreateNewSession(params: Readonly<{
             Modal.alert(t('common.error'), t('newSession.noMachineSelected'));
             return;
         }
-        if (current.selectedPath.trim().length === 0) {
+        if (trimmedEffectiveSelectedPath.length === 0) {
             Modal.alert(t('common.error'), t('newSession.noPathSelected'));
             return;
         }
@@ -181,7 +189,7 @@ export function useCreateNewSession(params: Readonly<{
                 : snapshot.serverId;
             rollbackServerId = resolvedTargetServerId;
 
-            const updatedPaths = [{ machineId: current.selectedMachineId, path: current.selectedPath }, ...current.recentMachinePaths.filter((rp) => rp.machineId !== current.selectedMachineId)].slice(0, 10);
+            const updatedPaths = [{ machineId: current.selectedMachineId, path: effectiveSelectedPath }, ...current.recentMachinePaths.filter((rp) => rp.machineId !== current.selectedMachineId)].slice(0, 10);
             const profilesActive = current.useProfiles;
 
             const settingsUpdate: MutableSettingsDelta = {
@@ -323,7 +331,7 @@ export function useCreateNewSession(params: Readonly<{
                 resumeSessionId: current.resumeSessionId,
             });
             const authoringDraft = buildNewSessionAuthoringDraftFromResolvedInputs({
-                directory: current.selectedPath,
+                directory: effectiveSelectedPath,
                 checkoutCreationDraft: current.checkoutCreationDraft ?? null,
                 prompt: normalizedSessionPrompt,
                 displayText: normalizedSessionPrompt,
@@ -402,7 +410,7 @@ export function useCreateNewSession(params: Readonly<{
 
             const checkoutResult = await materializeNewSessionCheckout({
                 machineId: current.selectedMachineId,
-                selectedPath: current.selectedPath,
+                selectedPath: effectiveSelectedPath,
                 checkoutCreationDraft: current.checkoutCreationDraft,
             });
 
@@ -416,7 +424,7 @@ export function useCreateNewSession(params: Readonly<{
                 return;
             }
             const actualPath = checkoutResult.path;
-            const sessionPath = checkoutResult.sessionPath.trim() || current.selectedPath.trim();
+            const sessionPath = checkoutResult.sessionPath.trim() || trimmedEffectiveSelectedPath;
             rollbackActualPath = actualPath;
 
             const result = await machineSpawnNewSession({
@@ -437,7 +445,7 @@ export function useCreateNewSession(params: Readonly<{
                 try {
                     await rollbackNewSessionArtifacts({
                         machineId: current.selectedMachineId!,
-                        selectedPath: current.selectedPath,
+                        selectedPath: effectiveSelectedPath,
                         actualPath,
                         checkoutCreationDraft: current.checkoutCreationDraft,
                         serverId: resolvedTargetServerId,
@@ -656,7 +664,7 @@ export function useCreateNewSession(params: Readonly<{
                 try {
                     await rollbackNewSessionArtifacts({
                         machineId: current.selectedMachineId,
-                        selectedPath: current.selectedPath,
+                        selectedPath: effectiveSelectedPath,
                         actualPath: rollbackActualPath,
                         checkoutCreationDraft: current.checkoutCreationDraft,
                         serverId: rollbackServerId,
@@ -671,7 +679,7 @@ export function useCreateNewSession(params: Readonly<{
                         extra: {
                             phase: 'rollback_artifacts',
                             machineId: current.selectedMachineId,
-                            selectedPath: current.selectedPath,
+                            selectedPath: effectiveSelectedPath,
                             actualPath: rollbackActualPath,
                         },
                     });
@@ -685,7 +693,7 @@ export function useCreateNewSession(params: Readonly<{
                 extra: {
                     phase: 'create_session',
                     machineId: current.selectedMachineId,
-                    selectedPath: current.selectedPath,
+                    selectedPath: effectiveSelectedPath,
                     hadRollbackPath: rollbackActualPath !== null,
                 },
             });
