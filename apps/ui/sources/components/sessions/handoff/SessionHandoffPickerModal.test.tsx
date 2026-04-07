@@ -563,6 +563,49 @@ describe('SessionHandoffPickerModal', () => {
         expect(switchNode.props.disabled).toBe(true);
     });
 
+    it('keeps workspace transfer enabled for Windows home-relative source paths', async () => {
+        sessionsByIdState = {
+            sess_1: {
+                id: 'sess_1',
+                metadata: {
+                    flavor: 'claude',
+                    machineId: 'machine_source',
+                    path: '~\\projects\\happier',
+                    homeDir: 'C:\\Users\\tester\\',
+                    directSessionV1: { source: 'claudeConfig' },
+                },
+            },
+        };
+        sessionsState = [
+            {
+                id: 'sess_1',
+                metadata: {
+                    flavor: 'claude',
+                    machineId: 'machine_source',
+                    path: '~',
+                    homeDir: 'C:\\Users\\tester\\',
+                    directSessionV1: { source: 'claudeConfig' },
+                },
+            },
+        ];
+
+        const onResolve = vi.fn();
+        const onClose = vi.fn();
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+
+        const tree = (await renderScreen(<SessionHandoffPickerModal
+                    onClose={onClose}
+                    onResolve={onResolve}
+                    sessionId="sess_1"
+                    sourceMachineId="machine_source"
+                    serverId="server_a"
+                />)).tree;
+
+        const switchNode = tree.findByType('Switch' as any);
+        expect(switchNode.props.value).toBe(true);
+        expect(switchNode.props.disabled).toBe(false);
+    });
+
     it('omits workspace transfer from the picker result when transfer stays disabled', async () => {
         const onResolve = vi.fn();
         const onClose = vi.fn();

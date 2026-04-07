@@ -28,6 +28,7 @@ import {
 import { resolveSessionHandoffPickerSourceMachineId } from '@/sync/domains/sessionHandoff/resolveSessionHandoffPickerSourceMachineId';
 import { useMachineListByServerId, useMachineRecordValues, useSession, useSessions, useSettingMutable } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
+import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 import { getRecentMachinesFromSessions } from '@/utils/sessions/recentMachines';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
@@ -89,24 +90,6 @@ function mergeMachinesById(machineGroups: readonly (readonly any[] | null | unde
     return Array.from(merged.values());
 }
 
-function expandHomeRelativePath(rawPath: unknown, homeDir: unknown): string {
-    const path = String(rawPath ?? '').trim();
-    if (!path) return '';
-    if (!path.startsWith('~')) return path;
-
-    const home = String(homeDir ?? '').trim();
-    if (!home) return path;
-    const normalizedHome = home.endsWith('/') ? home.slice(0, -1) : home;
-
-    if (path === '~' || path === '~/') {
-        return normalizedHome;
-    }
-    if (path.startsWith('~/')) {
-        return `${normalizedHome}${path.slice(1)}`;
-    }
-    return path;
-}
-
 export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessionId, sourceMachineId, serverId }: Props) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
@@ -154,9 +137,11 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         () => {
             const sourceHomeDir = (currentSession as any)?.metadata?.homeDir;
             const fallbackSourceHomeDir = (sourceMachine as any)?.metadata?.homeDir;
-            const sourcePath = expandHomeRelativePath(
-                (currentSession as any)?.metadata?.path,
-                sourceHomeDir ?? fallbackSourceHomeDir,
+            const sourcePath = resolveAbsolutePath(
+                String((currentSession as any)?.metadata?.path ?? '').trim(),
+                typeof (sourceHomeDir ?? fallbackSourceHomeDir) === 'string'
+                    ? String(sourceHomeDir ?? fallbackSourceHomeDir).trim()
+                    : undefined,
             );
             return evaluateSessionHandoffWorkspaceTransferSourcePathSafety({
                 sourcePath,

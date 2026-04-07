@@ -51,6 +51,10 @@ describe('pathUtils', () => {
                 expect(resolveAbsolutePath('~', 'C:\\Users\\steve')).toBe('C:\\Users\\steve');
             });
 
+            it('should expand Windows home-relative shorthand that uses backslashes', () => {
+                expect(resolveAbsolutePath('~\\Documents\\project', 'C:\\Users\\steve\\')).toBe('C:\\Users\\steve\\Documents\\project');
+            });
+
             it('should use Windows separator for Windows home', () => {
                 expect(resolveAbsolutePath('~/Documents', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents');
                 expect(resolveAbsolutePath('~/Documents/project', 'C:\\Users\\steve')).toBe('C:\\Users\\steve\\Documents/project');
