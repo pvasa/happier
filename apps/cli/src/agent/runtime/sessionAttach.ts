@@ -3,6 +3,7 @@ import { assertSessionAttachFilePathWithinBaseDir, resolveSessionAttachBaseDir }
 import { SessionAttachPayloadSchema } from '@/agent/runtime/sessionAttachPayload';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { lstat, readFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -15,7 +16,7 @@ export async function readSessionAttachFromEnv(): Promise<SessionAttachSecret | 
   if (!rawPath) return null;
   delete process.env.HAPPIER_SESSION_ATTACH_FILE;
 
-  const filePath = resolve(rawPath);
+  const filePath = resolve(expandHomeDirPath(rawPath, process.env));
   const baseDir = resolveSessionAttachBaseDir(configuration.happyHomeDir, configuration.publicReleaseRing);
 
   // Safety: require attach file to live within the session-attach temp dir.

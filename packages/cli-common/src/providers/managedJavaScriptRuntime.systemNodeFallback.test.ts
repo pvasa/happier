@@ -174,4 +174,28 @@ describe('managedJavaScriptRuntime binary-safe selection', () => {
             currentExecPath: join(root, 'bun.exe'),
         })?.toLowerCase()).toBe(cmdShimPath.toLowerCase());
     });
+
+    it('expands ~/ explicit JS runtime overrides against HOME', () => {
+        const root = join(tmpdir(), `happier-cli-common-js-runtime-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        const homeDir = join(root, 'home');
+        const runtimeDir = join(homeDir, 'custom-runtime');
+        mkdirSync(runtimeDir, { recursive: true });
+
+        const nodePath = join(runtimeDir, process.platform === 'win32' ? 'node.exe' : 'node');
+        if (process.platform === 'win32') {
+            makeExecutableFile(nodePath, '');
+        } else {
+            makeExecutableFile(nodePath, '#!/bin/sh\nexit 0\n');
+        }
+
+        expect(resolveJavaScriptRuntimeCommand({
+            isBunRuntime: false,
+            processEnv: {
+                HOME: homeDir,
+                USERPROFILE: homeDir,
+                HAPPIER_JS_RUNTIME_PATH: `~/custom-runtime/${process.platform === 'win32' ? 'node.exe' : 'node'}`,
+            },
+            currentExecPath: join(root, 'happier'),
+        })).toBe(nodePath);
+    });
 });

@@ -31,6 +31,7 @@ import { pathToFileURL } from 'node:url';
 import { initializeServerSentry } from '@/app/monitoring/sentry';
 import { inferAndApplyTailscaleServePublicServerUrl } from '@/app/integrations/tailscale/tailscaleServePublicUrlInference';
 import { startRetentionWorker } from '@/app/retention/runtime/startRetentionWorker';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 export type ServerFlavor = 'full' | 'light';
 export type ServerRole = 'all' | 'api' | 'worker';
@@ -80,13 +81,19 @@ export async function startServer(flavor: ServerFlavor): Promise<void> {
         await initDbPglite();
     } else if (dbProvider === 'sqlite') {
         if (!process.env.DATABASE_URL || !process.env.DATABASE_URL.trim()) {
-            const dataDir = (process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim();
+            const dataDir = expandHomeDirPath(
+                (process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').trim(),
+                process.env,
+            );
             if (!dataDir) {
                 throw new Error('HAPPIER_SERVER_LIGHT_DATA_DIR (or HAPPY_SERVER_LIGHT_DATA_DIR) must be set when using sqlite without DATABASE_URL');
             }
             process.env.DATABASE_URL = pathToFileURL(join(dataDir, 'happier-server-light.sqlite')).href;
         }
-        const dataDir = (process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? '').trim();
+        const dataDir = expandHomeDirPath(
+            (process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? '').trim(),
+            process.env,
+        );
         if (dataDir) {
             await applySqliteMigrationsIfNeeded({ env: process.env, dataDir });
         }

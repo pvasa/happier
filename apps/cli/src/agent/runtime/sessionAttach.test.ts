@@ -142,4 +142,41 @@ describe('readSessionAttachFromEnv', () => {
       await removeTempDir(dir);
     }
   });
+
+  test('expands ~/ attach file paths against HOME', async () => {
+    const homeDir = await createTempDir('happy-attach-home-');
+    const happierHomeDir = join(homeDir, '.happier');
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    try {
+      envScope.patch({
+        HAPPIER_HOME_DIR: happierHomeDir,
+        HAPPIER_SESSION_ATTACH_FILE: undefined,
+      });
+      process.env.HOME = homeDir;
+      process.env.USERPROFILE = homeDir;
+
+      vi.resetModules();
+
+      const { readSessionAttachFromEnv } = await import('./sessionAttach');
+
+      const attachDir = join(happierHomeDir, 'tmp', 'session-attach');
+      await mkdir(attachDir, { recursive: true });
+      const filePath = join(attachDir, 'attach.json');
+
+      await writeFile(filePath, JSON.stringify({ v: 2, encryptionMode: 'plain' }), { mode: 0o600 });
+      process.env.HAPPIER_SESSION_ATTACH_FILE = '~/.happier/tmp/session-attach/attach.json';
+
+      const res = await readSessionAttachFromEnv();
+      expect(res).toEqual({ encryptionMode: 'plain' });
+      await expect(stat(filePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+      envScope.restore();
+      await removeTempDir(homeDir);
+    }
+  });
 });

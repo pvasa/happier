@@ -1,10 +1,68 @@
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderCliLaunchSpec } from '@/backends/opencode/utils/resolveOpenCodeCliCommand';
 
-import { resolveSharedManagedOpenCodeServerBaseUrl, stopSharedManagedOpenCodeServerFromState } from './sharedManagedServer';
+import {
+  readSharedManagedOpenCodeServerStateBestEffort,
+  resolveSharedManagedOpenCodeServerBaseUrl,
+  stopSharedManagedOpenCodeServerFromState,
+} from './sharedManagedServer';
 
 describe('resolveSharedManagedOpenCodeServerBaseUrl', () => {
+  it('expands ~/ state path overrides against HOME when reading shared managed server state', async () => {
+    const tempRoot = await mkdtemp(join(os.tmpdir(), 'opencode-managed-state-'));
+    const homeDir = join(tempRoot, 'home');
+    const statePath = join(homeDir, '.opencode', 'managed-server.json');
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    const previousStatePath = process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH;
+
+    await mkdir(join(homeDir, '.opencode'), { recursive: true });
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        baseUrl: 'http://127.0.0.1:1234',
+        pid: 1234,
+        startedAtMs: 5,
+        status: 'ready',
+      }),
+      'utf8',
+    );
+
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH = '~/.opencode/managed-server.json';
+
+    try {
+      await expect(readSharedManagedOpenCodeServerStateBestEffort()).resolves.toEqual({
+        baseUrl: 'http://127.0.0.1:1234',
+        pid: 1234,
+        startedAtMs: 5,
+        status: 'ready',
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
+      }
+      if (previousStatePath === undefined) {
+        delete process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH;
+      } else {
+        process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH = previousStatePath;
+      }
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('reuses an existing healthy managed server when pid is alive', async () => {
     const deps = {
       withLock: async <T>(fn: () => Promise<T>) => await fn(),

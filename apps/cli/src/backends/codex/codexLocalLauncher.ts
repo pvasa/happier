@@ -10,9 +10,11 @@ import { join } from 'node:path';
 import { createManagedChildProcess } from '@/subprocess/supervision/managedChildProcess';
 import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { killProcessTree } from '@/agent/acp/killProcessTree';
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { resolveCodexCliInvocation } from './utils/resolveCodexCliInvocation';
 import { delay } from '@/utils/time';
+import { resolveConfiguredCodexHome } from './utils/resolveConfiguredCodexHome';
 
 import { CodexRolloutMirror } from './localControl/codexRolloutMirror';
 import { discoverCodexRolloutFileOnce } from './localControl/rolloutDiscovery';
@@ -45,16 +47,16 @@ function resolveRolloutDiscoveryConfig(overrides?: Partial<CodexRolloutDiscovery
 }
 
 function resolveCodexSessionsRootDir(): string {
-  const override =
+  const override = expandHomeDirPath(
     typeof process.env.HAPPIER_CODEX_SESSIONS_DIR === 'string'
       ? process.env.HAPPIER_CODEX_SESSIONS_DIR.trim()
       : typeof process.env.HAPPY_CODEX_SESSIONS_DIR === 'string'
         ? process.env.HAPPY_CODEX_SESSIONS_DIR.trim()
-        : '';
+        : '',
+    process.env,
+  );
   if (override) return override;
-  const codexHome = typeof process.env.CODEX_HOME === 'string' ? process.env.CODEX_HOME.trim() : '';
-  if (codexHome) return join(codexHome, 'sessions');
-  return join(os.homedir(), '.codex', 'sessions');
+  return join(resolveConfiguredCodexHome(process.env), 'sessions');
 }
 
 async function resolveCodexTuiInvocation(opts: {
@@ -79,6 +81,11 @@ function buildCodexTuiChildEnv(): NodeJS.ProcessEnv {
   // thread instead of creating a new one. That prevents the TUI from creating a new rollout
   // file and breaks local-control discovery + switching.
   const env: NodeJS.ProcessEnv = { ...process.env };
+  const expandedSessionsDir = resolveCodexSessionsRootDir();
+  if (typeof env.HAPPIER_CODEX_SESSIONS_DIR === 'string' || typeof env.HAPPY_CODEX_SESSIONS_DIR === 'string') {
+    env.HAPPIER_CODEX_SESSIONS_DIR = expandedSessionsDir;
+    delete env.HAPPY_CODEX_SESSIONS_DIR;
+  }
 
   const preserveRaw =
     typeof process.env.HAPPIER_CODEX_TUI_PRESERVE_CODEX_ENV_KEYS === 'string'

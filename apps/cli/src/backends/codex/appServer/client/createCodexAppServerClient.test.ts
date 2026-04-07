@@ -608,4 +608,57 @@ describe('createCodexAppServerClient', () => {
             );
         });
     });
+
+    it('expands ~/ RPC log paths against HOME', async () => {
+        await withTempDir('happier-codex-app-server-client-rpc-log-home-', async (root) => {
+            const homeDir = join(root, 'home');
+            const requestLogPath = join(homeDir, 'rpc.jsonl');
+            await mkdir(homeDir, { recursive: true });
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  if (msg.method === "state/read") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HOME: homeDir,
+                    USERPROFILE: homeDir,
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: '~/rpc.jsonl',
+                }),
+            });
+
+            try {
+                await expect(client.request('state/read')).resolves.toEqual({ ok: true });
+            } finally {
+                await client.dispose();
+            }
+
+            const lines = (await readFile(requestLogPath, 'utf8'))
+                .trim()
+                .split('\n')
+                .map((line) => JSON.parse(line) as { direction: string; method?: string });
+
+            expect(lines).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ direction: 'outgoing', method: 'initialize' }),
+                    expect.objectContaining({ direction: 'outgoing', method: 'state/read' }),
+                ]),
+            );
+        });
+    });
 });

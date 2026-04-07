@@ -9,6 +9,7 @@ import { createManagedToolScratchDir } from './createManagedToolScratchDir.js';
 import { downloadGitHubReleaseAsset } from './downloadGitHubReleaseAsset.js';
 import { extractGitHubReleaseAsset } from './extractGitHubReleaseAsset.js';
 import { fetchNodeRuntimeReleaseAsset } from './nodeRelease.js';
+import { expandHomeDirPath } from './resolution.js';
 import { resolveHappyHomeDirFromEnvironment } from './resolveHappyHomeDir.js';
 
 function resolveManagedJavaScriptRuntimeBinaryName(): string {
@@ -105,7 +106,7 @@ export function readExplicitJavaScriptRuntimeCommand(processEnv: NodeJS.ProcessE
     processEnv.HAPPIER_MANAGED_NODE_BIN,
     processEnv.HAPPIER_NODE_PATH,
   ]
-    .map((value) => String(value ?? '').trim())
+    .map((value) => expandHomeDirPath(String(value ?? '').trim(), processEnv))
     .find((value) => value.length > 0);
   return override ?? null;
 }

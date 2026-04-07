@@ -3,6 +3,7 @@ import { basename, dirname, join } from 'node:path';
 
 import { configuration } from '@/configuration';
 import { resolveOpenCodeCliLaunchSpec, type ProviderCliLaunchSpec } from '@/backends/opencode/utils/resolveOpenCodeCliCommand';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 import {
   getOpenCodeServerProcessInfoBestEffort,
@@ -161,11 +162,24 @@ export async function resolveSharedManagedOpenCodeServerBaseUrl(
 }
 
 function resolveStatePathFromEnv(): string {
-  const raw = typeof process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH === 'string'
-    ? process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH.trim()
-    : '';
+  const raw = expandHomeDirPath(
+    typeof process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH === 'string'
+      ? process.env.HAPPIER_OPENCODE_SERVER_STATE_PATH.trim()
+      : '',
+    process.env,
+  );
   if (raw) return raw;
   return join(configuration.happyHomeDir, 'opencode', 'managed-server.json');
+}
+
+function resolveXdgRootDirFromEnv(): string | null {
+  const raw = expandHomeDirPath(
+    typeof process.env.HAPPIER_OPENCODE_SERVER_XDG_ROOT_DIR === 'string'
+      ? process.env.HAPPIER_OPENCODE_SERVER_XDG_ROOT_DIR.trim()
+      : '',
+    process.env,
+  );
+  return raw.length > 0 ? raw : null;
 }
 
 async function readStateFile(statePath: string): Promise<SharedManagedOpenCodeServerState | null> {
@@ -222,10 +236,7 @@ export async function ensureSharedManagedOpenCodeServerBaseUrl(params: Readonly<
   //
   // If you need to isolate OpenCode’s XDG dirs (e.g. multi-user shared hosts), set:
   // `HAPPIER_OPENCODE_SERVER_XDG_ROOT_DIR=/path`.
-  const xdgRootDirFromEnv = typeof process.env.HAPPIER_OPENCODE_SERVER_XDG_ROOT_DIR === 'string'
-    ? process.env.HAPPIER_OPENCODE_SERVER_XDG_ROOT_DIR.trim()
-    : '';
-  const xdgRootDir = xdgRootDirFromEnv.length > 0 ? xdgRootDirFromEnv : null;
+  const xdgRootDir = resolveXdgRootDirFromEnv();
 
   const resolved = await resolveSharedManagedOpenCodeServerBaseUrl({
     withLock: async (fn) => await withOpenCodeServerFileLock(lockFile, fn),

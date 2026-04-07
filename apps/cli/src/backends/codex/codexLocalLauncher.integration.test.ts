@@ -290,6 +290,70 @@ describe('codexLocalLauncher', () => {
     }
   });
 
+  it('discovers rollout files under ~/sessions when HAPPIER_CODEX_SESSIONS_DIR uses HOME', async () => {
+    const fixture = await createCodexBinaryFixture();
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-codex-home-'));
+    const sessionsDir = join(homeDir, 'sessions');
+    const sessionId = randomUUID();
+    const nowIso = new Date().toISOString();
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+
+    await writeFakeCodexScript(fixture.fakeCodex, {
+      terminatedFlag: fixture.terminatedFlag,
+      assistantText: 'hello-from-local',
+      recordArgv: false,
+      exitAfterMs: 1_500,
+    });
+
+    const { session, codexMessages } = createLocalSessionHarness();
+    const messageQueue = createLocalMessageQueue();
+    const restoreEnv = applyCodexLauncherEnv({
+      HAPPIER_CODEX_SESSIONS_DIR: '~/sessions',
+      CODEX_HOME: undefined,
+      HAPPIER_CODEX_TUI_BIN: fixture.fakeCodex,
+      TEST_CODEX_SESSION_ID: sessionId,
+      TEST_CODEX_TIMESTAMP: nowIso,
+      TEST_CODEX_ARGV_PATH: undefined,
+    });
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+
+    try {
+      const launcherPromise = codexLocalLauncher({
+        path: fixture.sessionsRoot,
+        api: {},
+        session,
+        messageQueue,
+        permissionMode: 'default',
+        resumeId: sessionId,
+        rolloutDiscovery: {
+          initialTimeoutMs: 250,
+          initialPollIntervalMs: 25,
+          extendedPollIntervalMs: 25,
+        },
+      });
+
+      await waitFor(() => {
+        expect(codexMessages.some((m) => m.type === 'message' && m.message === 'hello-from-local')).toBe(true);
+      }, { timeoutMs: 5_000 });
+      await waitFor(() => {
+        expect(existsSync(join(sessionsDir, 'rollout-test.jsonl'))).toBe(true);
+      }, { timeoutMs: 5_000 });
+
+      messageQueue.push('hi', { permissionMode: 'default' });
+      await expect(launcherPromise).resolves.toEqual({ type: 'switch', resumeId: sessionId });
+    } finally {
+      restoreEnv();
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+      await cleanupCodexBinaryFixture(fixture);
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('maps read-only permission mode to never approvalPolicy', async () => {
     const fixture = await createCodexBinaryFixture();
     const argsPath = join(fixture.binDir, 'argv.json');

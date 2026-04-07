@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 
 import { resolveCodexCliInvocation } from '../../utils/resolveCodexCliInvocation';
 import { appendCodexCliConfigOverridesArgs } from '../../utils/appendCodexCliConfigOverridesArgs';
+import { resolveConfiguredCodexConfigTomlPath } from '../../utils/resolveConfiguredCodexHome';
 import { readCodexAppServerRequestTimeoutMs } from './codexAppServerRpcTimeout';
 import { safeJsonStringify } from '@/utils/safeJson';
 
@@ -54,18 +54,22 @@ type RpcLogEntry = Readonly<{
 }>;
 
 function resolveRpcLogPath(env: NodeJS.ProcessEnv): string | null {
-    const raw = typeof env.HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH === 'string'
-        ? env.HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH.trim()
-        : '';
+    const raw = expandHomeDirPath(
+        typeof env.HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH === 'string'
+            ? env.HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH.trim()
+            : '',
+        env,
+    );
     return raw ? raw : null;
 }
 
 function createRpcLogger(env: NodeJS.ProcessEnv): {
     append: (entry: RpcLogEntry) => void;
+    flush: () => Promise<void>;
 } {
     const path = resolveRpcLogPath(env);
     if (!path) {
-        return { append: () => undefined };
+        return { append: () => undefined, flush: async () => undefined };
     }
 
     let chain = Promise.resolve();
@@ -76,7 +80,12 @@ function createRpcLogger(env: NodeJS.ProcessEnv): {
             .catch(() => undefined);
     };
 
-    return { append };
+    return {
+        append,
+        flush: async () => {
+            await chain;
+        },
+    };
 }
 
 function failWaiters(state: MessageQueueState, error: Error): void {
@@ -107,9 +116,7 @@ function sanitizeCodexAppServerEnv(processEnv: NodeJS.ProcessEnv): NodeJS.Proces
 }
 
 function resolveCodexConfigTomlPath(env: NodeJS.ProcessEnv): string {
-    const codexHome = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-    if (codexHome) return join(codexHome, 'config.toml');
-    return join(homedir(), '.codex', 'config.toml');
+    return resolveConfiguredCodexConfigTomlPath(env);
 }
 
 function normalizeCodexMcpServerKeyFromConfigSection(raw: string): string | null {
@@ -462,6 +469,7 @@ export async function createCodexAppServerClient(params: Readonly<{
                 // ignore
             }
             await closedPromise;
+            await rpcLogger.flush().catch(() => undefined);
         })();
         return await disposePromise;
     };
