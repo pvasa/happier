@@ -2565,6 +2565,7 @@ export const it: TranslationStructure = {
       fileTooLargeTitle: "File troppo grande",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `Saltati ${count} ${plural({ count, singular: "file", plural: "file" })} che superano la dimensione massima dell’allegato.`,
+      pickerUnavailableBody: "Impossibile aprire il selettore degli allegati. Riprova.",
     },
   },
 

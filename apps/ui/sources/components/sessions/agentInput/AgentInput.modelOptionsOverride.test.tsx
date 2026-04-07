@@ -721,6 +721,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         await screen.pressByTestIdAsync('agent-input-simple-option:plan');
 
         expect(onAcpSessionModeChange).toHaveBeenCalledWith('plan');
+        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeNull();
     });
 
     it('cycles the ACP mode chip directly when only simple build-plan options are available', async () => {
@@ -828,6 +829,56 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(screen.findByTestId('agent-input-simple-option:review')).toBeTruthy();
         await screen.pressByTestIdAsync('agent-input-simple-option:build');
         expect(onAcpSessionModeChange).toHaveBeenCalledWith('build');
+        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeNull();
+    });
+
+    it('keeps a simple extra chip popover open after selection when closeOnSelect is disabled', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const onSelect = vi.fn();
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+                    value: 'hello',
+                    placeholder: 'placeholder',
+                    onChangeText: () => {},
+                    onSend: () => {},
+                    autocompletePrefixes: [],
+                    autocompleteSuggestions: async () => [],
+                    agentType: 'opencode',
+                    permissionMode: 'default',
+                    onPermissionModeChange: () => {},
+                    modelMode: 'default',
+                    onModelModeChange: () => {},
+                    extraActionChips: [{
+                        key: 'attachments-add',
+                        controlId: 'attachments',
+                        collapsedOptionsPopover: {
+                            presentation: 'simple',
+                            title: null,
+                            closeOnSelect: false,
+                            options: [
+                                { id: 'add-image', label: 'Add image' },
+                                { id: 'add-file', label: 'Add file' },
+                            ],
+                            onSelect,
+                        },
+                        render: ({ toggleCollapsedPopover, chipAnchorRef }: any) => React.createElement(
+                            'Pressable',
+                            {
+                                ref: chipAnchorRef,
+                                testID: 'agent-input-attachments-chip',
+                                onPress: () => toggleCollapsedPopover?.('attachments-add'),
+                            },
+                        ),
+                    }],
+                } as any));
+
+        await screen.pressByTestIdAsync('agent-input-attachments-chip');
+        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeTruthy();
+
+        await screen.pressByTestIdAsync('agent-input-simple-option:add-image');
+
+        expect(onSelect).toHaveBeenCalledWith('add-image');
+        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeTruthy();
     });
 
     it('opens env chip popover content instead of invoking the legacy env click callback when custom content exists', async () => {

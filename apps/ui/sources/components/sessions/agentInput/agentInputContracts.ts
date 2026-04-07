@@ -50,11 +50,12 @@ export type AgentInputExtraActionChip = Readonly<{
          * action menu. Defaults to the richer chip-picker panel.
          */
         presentation?: 'picker' | 'simple';
-        title: string;
+        title?: string | null;
         label?: string | null;
         icon?: (tint: string) => React.ReactNode;
         options: ReadonlyArray<AgentInputChipPickerOption>;
         selectedOptionId?: string | null;
+        closeOnSelect?: boolean;
         onSelect: (id: string) => void;
         applyLabel?: string;
         railWidth?: number;

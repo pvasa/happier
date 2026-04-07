@@ -8,9 +8,10 @@ import type { AgentInputChipPickerOption } from './AgentInputChipPickerTypes';
 export type AgentInputSimpleOptionsPopoverProps = Readonly<{
     open: boolean;
     anchorRef: React.RefObject<any>;
-    title: string;
+    title?: string | null;
     options: ReadonlyArray<AgentInputChipPickerOption>;
     selectedOptionId?: string | null;
+    closeOnSelect?: boolean;
     onSelect: (id: string) => void;
     onRequestClose: () => void;
     maxHeightCap?: number;
@@ -33,13 +34,18 @@ export function AgentInputSimpleOptionsPopover(
                     testID="agent-input-simple-options-popover"
                     maxHeight={maxHeight}
                     scrollEnabled
-                    keyboardShouldPersistTaps="handled"
+                    keyboardShouldPersistTaps="always"
                 >
                     <AgentInputSelectionSimpleList
                         title={props.title}
                         options={props.options}
                         selectedOptionId={props.selectedOptionId}
-                        onSelect={props.onSelect}
+                        onSelect={(selectedId) => {
+                            props.onSelect(selectedId);
+                            if (props.closeOnSelect !== false) {
+                                props.onRequestClose();
+                            }
+                        }}
                     />
                 </AgentInputPopoverSurface>
             )}

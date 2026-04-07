@@ -1,5 +1,6 @@
 import type { NativePickedFile } from './nativePickFiles';
 import { isBrowserFile, sanitizePickedName } from './pickedFileNormalization';
+import { runNativePickerWithRapidCancelRetry } from './runNativePickerWithRapidCancelRetry';
 
 function sanitizePickedNameFromAsset(asset: unknown): string {
     const anyAsset = asset as any;
@@ -19,11 +20,36 @@ export async function nativePickImages(params?: Readonly<{ multiple?: boolean }>
         ?? 'images';
     if (typeof launchImageLibraryAsync !== 'function') return [];
 
-    const result = await launchImageLibraryAsync({
-        mediaTypes: mediaTypeImages,
-        allowsMultipleSelection: multiple,
-        quality: 1,
-    });
+    const getPermissionsAsync: any =
+        ImagePicker.getMediaLibraryPermissionsAsync
+        ?? ImagePicker.default?.getMediaLibraryPermissionsAsync
+        ?? null;
+    const requestPermissionsAsync: any =
+        ImagePicker.requestMediaLibraryPermissionsAsync
+        ?? ImagePicker.default?.requestMediaLibraryPermissionsAsync
+        ?? null;
+    if (typeof getPermissionsAsync === 'function' && typeof requestPermissionsAsync === 'function') {
+        const current = await getPermissionsAsync();
+        if (!current?.granted) {
+            const next = await requestPermissionsAsync();
+            if (!next?.granted) {
+                throw new Error('Photo library permission is required to pick images.');
+            }
+        }
+    }
+
+    type ExpoImagePickerResult = Readonly<{
+        canceled?: boolean;
+        assets?: unknown;
+    }>;
+    const result = await runNativePickerWithRapidCancelRetry<ExpoImagePickerResult>(
+        () => launchImageLibraryAsync({
+            mediaTypes: mediaTypeImages,
+            allowsMultipleSelection: multiple,
+            quality: 1,
+        }),
+        { pickerLabelForError: 'Image picker' },
+    );
     if (!result || result.canceled) return [];
 
     const assets = Array.isArray(result.assets) ? result.assets : [];
