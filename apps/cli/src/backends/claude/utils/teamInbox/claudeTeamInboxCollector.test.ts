@@ -195,4 +195,52 @@ describe('createClaudeTeamInboxCollector', () => {
       await rm(claudeConfigDir, { recursive: true, force: true });
     }
   });
+
+  it('uses HAPPIER_CLAUDE_CONFIG_DIR from process env when no explicit config dir is provided', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-claude-team-env-'));
+    const fakeHome = join(root, 'home');
+    const claudeConfigDir = join(fakeHome, 'shared-claude');
+    const previousHome = process.env.HOME;
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const previousHappierClaudeConfigDir = process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+
+    try {
+      process.env.HOME = fakeHome;
+      delete process.env.CLAUDE_CONFIG_DIR;
+      process.env.HAPPIER_CLAUDE_CONFIG_DIR = '~/shared-claude';
+
+      const leadInboxPath = join(claudeConfigDir, 'teams', 'probe', 'inboxes', 'team-lead.json');
+      await mkdir(join(claudeConfigDir, 'teams', 'probe', 'inboxes'), { recursive: true });
+      await writeJson(leadInboxPath, [{ from: 'alpha', text: 'hello from env override', timestamp: 't1', read: false }]);
+
+      const emitted: any[] = [];
+      const collector = createClaudeTeamInboxCollector({
+        claudeConfigDir: null,
+        onInvalidate: () => {},
+        emit: (m) => emitted.push(m),
+      });
+
+      collector.observe(assistantToolUseMessage({ id: 'tool_team', name: 'AgentTeamCreate', input: { team_name: 'probe' } }));
+      collector.observe(
+        userToolResultMessage({
+          toolUseId: 'tool_spawn_1',
+          toolUseResult: { status: 'teammate_spawned', agent_id: 'alpha@probe', team_name: 'probe', name: 'alpha' },
+        }),
+      );
+
+      await collector.syncAll();
+
+      expect(emitted).toHaveLength(1);
+      const next = await readJson(leadInboxPath);
+      expect(next[0]?.read).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+      if (previousHappierClaudeConfigDir === undefined) delete process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+      else process.env.HAPPIER_CLAUDE_CONFIG_DIR = previousHappierClaudeConfigDir;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

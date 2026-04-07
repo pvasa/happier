@@ -150,4 +150,51 @@ describe('registerMachineTerminalRpcHandlers', () => {
       error: 'terminal_cwd_denied',
     });
   });
+
+  it('expands ~/ cwd against env HOME before validating terminal sessions', async () => {
+    const suiteDir = await mkdtemp(join(tmpdir(), 'happier-terminal-home-'));
+    const homeDir = join(suiteDir, 'home');
+    const rootDir = join(homeDir, 'workspace');
+    await mkdir(rootDir, { recursive: true });
+
+    const provider = new FakePtyProvider();
+    const sessionManager = createTerminalPtySessionManager({
+      ptyProvider: provider,
+      env: { SHELL: '/bin/bash' } as any,
+      platform: 'linux',
+      now: () => 0,
+      config: {
+        maxSessions: 10,
+        idleTimeoutMs: 60_000,
+        bufferMaxBytes: 1_000_000,
+        bufferMaxEvents: 1000,
+        urlParseBufferLimit: 32_768,
+        maxWriteChunkBytes: 16_384,
+        defaultCols: 80,
+        defaultRows: 24,
+      },
+    });
+
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => registered.set(method, handler),
+    } as unknown as RpcHandlerManager;
+
+    registerMachineTerminalRpcHandlers({
+      rpcHandlerManager,
+      deps: {
+        env: { HOME: homeDir, HAPPIER_DAEMON_TERMINAL_ENABLED: '1' },
+        workingDirectory: rootDir,
+        sessionManager,
+      },
+    });
+
+    const ensure = registered.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE);
+    expect(ensure).toBeDefined();
+
+    const result = await ensure!({ terminalKey: 'k', cwd: '~/workspace', cols: 80, rows: 24 });
+    expect(result).toEqual(expect.objectContaining({ ok: true, reused: false }));
+    expect(provider.spawned).toHaveLength(1);
+    expect(await realpath(provider.spawned[0]?.options.cwd ?? '')).toBe(await realpath(rootDir));
+  });
 });

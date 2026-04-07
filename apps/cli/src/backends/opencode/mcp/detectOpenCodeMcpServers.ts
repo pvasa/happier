@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
 import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1 } from '@happier-dev/protocol';
 
 export type DetectOpenCodeMcpServersResult = Readonly<{
@@ -10,9 +10,9 @@ export type DetectOpenCodeMcpServersResult = Readonly<{
 }>;
 
 function resolveXdgConfigHome(env: NodeJS.ProcessEnv): string {
-  const xdg = typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '';
+  const xdg = expandHomeDirPath(typeof env.XDG_CONFIG_HOME === 'string' ? env.XDG_CONFIG_HOME.trim() : '', env);
   if (xdg) return xdg;
-  return join(homedir(), '.config');
+  return join(resolveHomeDirFromEnvironment(env), '.config');
 }
 
 function safeReadJson(path: string): { ok: true; value: unknown } | { ok: false; warning: DaemonMcpServersDetectWarningV1 } {
@@ -137,4 +137,3 @@ export async function detectOpenCodeMcpServers(params: Readonly<{
 
   return { servers, warnings };
 }
-

@@ -8,7 +8,7 @@ import {
   DaemonTerminalStreamReadRequestSchema,
   type DaemonTerminalErrorCode,
 } from '@happier-dev/protocol';
-import { homedir as osHomedir } from 'node:os';
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { validatePath } from '@/rpc/handlers/pathSecurity';
@@ -52,12 +52,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
 
   const resolveCwd = (cwdInput: unknown): { ok: true; cwd: string } | ReturnType<typeof err> => {
     const raw = typeof cwdInput === 'string' && cwdInput.trim().length > 0 ? cwdInput.trim() : workingDirectory;
-    const expanded =
-      raw === '~'
-        ? osHomedir()
-        : raw.startsWith('~/') || raw.startsWith('~\\')
-          ? `${osHomedir()}/${raw.slice(2)}`
-          : raw;
+    const expanded = expandHomeDirPath(raw, env);
 
     const validation = validatePath(expanded, workingDirectory);
     if (!validation.valid) {

@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
-import { homedir } from 'node:os';
-import { resolveLightPublicUrl } from './env';
+import { resolveLightDataDir, resolveLightFilesDir, resolveLightPublicUrl } from './env';
 
 /**
  * Lightweight file storage for happier-server "light" flavor.
@@ -11,9 +10,7 @@ import { resolveLightPublicUrl } from './env';
  */
 
 export function resolveLightPublicFilesDir(env: NodeJS.ProcessEnv): string {
-    return env.HAPPIER_SERVER_LIGHT_FILES_DIR?.trim()
-        ? env.HAPPIER_SERVER_LIGHT_FILES_DIR.trim()
-        : join(homedir(), '.happier', 'server-light', 'files');
+    return resolveLightFilesDir(env, resolveLightDataDir(env));
 }
 
 export async function ensureLightFilesDir(env: NodeJS.ProcessEnv): Promise<void> {

@@ -77,6 +77,23 @@ describe('runDaemonServiceCliCommand', () => {
     expect(runtime.userHomeDir).toBe('/real-user-home');
   });
 
+  it('expands ~/ daemon service home overrides against the provided HOME', async () => {
+    const { resolveDaemonServiceCliRuntimeFromEnv } = await loadCliModule();
+    const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+      processEnv: {
+        ...process.env,
+        HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
+        HOME: '/scoped/home',
+        USERPROFILE: '/scoped/home',
+        HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '~/service-home',
+        HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: '~/service-happier',
+      },
+    });
+
+    expect(runtime.userHomeDir).toBe('/scoped/home/service-home');
+    expect(runtime.happierHomeDir).toBe('/scoped/home/service-happier');
+  });
+
   it('supports help JSON output', async () => {
     const { runDaemonServiceCliCommand } = await loadCliModule();
     envScope.patch({

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { applySqliteMigrationsIfNeeded, listSqliteMigrations, resolveSqliteDatabaseFilePath } from './sqliteMigrations';
+import { applySqliteMigrationsIfNeeded, listSqliteMigrations, resolveSqliteDatabaseFilePath, resolveSqliteMigrationsDir } from './sqliteMigrations';
 
 type SqliteState = { tables: Set<string>; applied: Set<string> };
 
@@ -103,6 +103,13 @@ describe('light sqlite migrations (unit)', () => {
     expect(migrations.map((m) => m.name)).toEqual(['20260101000000_first', '20260201000000_second']);
     expect(migrations[0]?.sql).toContain('CREATE TABLE one');
     expect(migrations[1]?.sql).toContain('CREATE TABLE two');
+  });
+
+  it('resolveSqliteMigrationsDir expands ~/ overrides against HOME', () => {
+    expect(resolveSqliteMigrationsDir({
+      HOME: '/scoped/home',
+      HAPPIER_SQLITE_MIGRATIONS_DIR: '~/migrations/sqlite',
+    }, '/fallback')).toBe('/scoped/home/migrations/sqlite');
   });
 
   it('applySqliteMigrationsIfNeeded applies missing migrations when auto-migrate is enabled', async () => {

@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expandHome, getCanonicalHomeEnvPathFromEnv } from '../paths/canonical_home.mjs';
+import { getStacksStorageRoot, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './sandbox.mjs';
 import { loadEnvFile, loadEnvFileIgnoringPrefixes } from './load_env_file.mjs';
 
@@ -16,7 +17,7 @@ const __cliRootDir = dirname(__scriptsDir);
 function resolveHomeDir() {
   const fromEnv = (process.env.HAPPIER_STACK_HOME_DIR ?? '').trim();
   if (fromEnv) {
-    return expandHome(fromEnv);
+    return expandHome(fromEnv, process.env);
   }
   return join(homedir(), '.happier-stack');
 }
@@ -76,13 +77,13 @@ if (hasHomeConfig) {
   if ((process.env.HAPPIER_STACK_DISABLE_STACK_ENV_AUTOLOAD ?? '').toString().trim() === '1') {
     return;
   }
-  const stacksEnv = (process.env.HAPPIER_STACK_ENV_FILE ?? '').trim();
+  const stacksEnv = resolveExplicitStackEnvFilePath(process.env);
   if (stacksEnv) {
+    process.env.HAPPIER_STACK_ENV_FILE = stacksEnv;
     return;
   }
   const stackName = (process.env.HAPPIER_STACK_STACK ?? '').trim() || 'main';
-  const stacksStorageRootRaw = (process.env.HAPPIER_STACK_STORAGE_DIR ?? '').trim();
-  const stacksStorageRoot = stacksStorageRootRaw ? expandHome(stacksStorageRootRaw) : join(homedir(), '.happier', 'stacks');
+  const stacksStorageRoot = getStacksStorageRoot(process.env);
 
   const candidates = [
     join(stacksStorageRoot, stackName, 'env'),
@@ -98,7 +99,10 @@ if (hasHomeConfig) {
 // Stack env files intentionally include some non-prefixed keys (e.g. DATABASE_URL, HAPPIER_SERVER_LIGHT_DATA_DIR)
 // that must apply for true per-stack isolation. Do not filter by prefix here.
 {
-  const stacksEnv = process.env.HAPPIER_STACK_ENV_FILE?.trim() ? process.env.HAPPIER_STACK_ENV_FILE.trim() : '';
+  const stacksEnv = resolveExplicitStackEnvFilePath(process.env);
+  if (stacksEnv) {
+    process.env.HAPPIER_STACK_ENV_FILE = stacksEnv;
+  }
   const unique = Array.from(new Set([stacksEnv].filter(Boolean)));
   for (const p of unique) {
     // eslint-disable-next-line no-await-in-loop

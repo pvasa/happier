@@ -19,6 +19,19 @@ test('resolveAutostartEnvFilePath prefers explicit HAPPIER_STACK_ENV_FILE overri
   );
 });
 
+test('resolveAutostartEnvFilePath expands ~/ explicit overrides against the provided home dir', () => {
+  assert.equal(
+    resolveAutostartEnvFilePath({
+      mode: 'user',
+      explicitEnvFilePath: '~/.happier/stacks/main/env',
+      defaultMainEnvFilePath: '/root/.happier/stacks/main/env',
+      systemUserHomeDir: '',
+      homeDir: '/scoped/home',
+    }),
+    '/scoped/home/.happier/stacks/main/env'
+  );
+});
+
 test('resolveAutostartEnvFilePath uses system user home when installing a system service', () => {
   assert.equal(
     resolveAutostartEnvFilePath({
@@ -114,4 +127,3 @@ test('resolveAutostartLogPaths uses system user home for system mode when storag
   assert.equal(res.stdoutPath, '/home/happier/.happier/stacks/main/logs/happier-stack.out.log');
   assert.equal(res.stderrPath, '/home/happier/.happier/stacks/main/logs/happier-stack.err.log');
 });
-

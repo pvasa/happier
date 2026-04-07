@@ -1,13 +1,18 @@
 import { basename, join } from 'node:path';
+import { expandHome } from '../paths/canonical_home.mjs';
 
 export function resolveAutostartEnvFilePath({
   mode,
   explicitEnvFilePath,
   defaultMainEnvFilePath,
   systemUserHomeDir,
+  homeDir,
 } = {}) {
   const explicit = String(explicitEnvFilePath ?? '').trim();
-  if (explicit) return explicit;
+  if (explicit) {
+    const scopedHomeDir = String(homeDir ?? '').trim();
+    return scopedHomeDir ? expandHome(explicit, { HOME: scopedHomeDir, USERPROFILE: scopedHomeDir }) : explicit;
+  }
 
   const m = String(mode ?? '').trim().toLowerCase() === 'system' ? 'system' : 'user';
   const home = String(systemUserHomeDir ?? '').trim();
@@ -74,4 +79,3 @@ export function resolveAutostartLogPaths({
     stderrPath: String(defaultStderrPath ?? '').trim(),
   };
 }
-

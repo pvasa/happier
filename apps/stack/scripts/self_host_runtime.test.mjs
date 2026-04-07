@@ -983,6 +983,53 @@ test('resolveSelfHostDefaults isolates publicdev into a side-by-side self-host r
   assert.equal(cfg.serviceName, 'happier-server-dev');
 });
 
+test('resolveConfig expands ~/ self-host path overrides against HOME', async () => {
+  const mod = await import('./self_host_runtime.mjs');
+  assert.equal(typeof mod.resolveConfig, 'function');
+
+  const previous = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HAPPIER_SELF_HOST_INSTALL_ROOT: process.env.HAPPIER_SELF_HOST_INSTALL_ROOT,
+    HAPPIER_SELF_HOST_BIN_DIR: process.env.HAPPIER_SELF_HOST_BIN_DIR,
+    HAPPIER_SELF_HOST_CONFIG_DIR: process.env.HAPPIER_SELF_HOST_CONFIG_DIR,
+    HAPPIER_SELF_HOST_DATA_DIR: process.env.HAPPIER_SELF_HOST_DATA_DIR,
+    HAPPIER_SELF_HOST_LOG_DIR: process.env.HAPPIER_SELF_HOST_LOG_DIR,
+  };
+
+  process.env.HOME = '/scoped/home';
+  process.env.USERPROFILE = '/scoped/home';
+  process.env.HAPPIER_SELF_HOST_INSTALL_ROOT = '~/relay/install';
+  process.env.HAPPIER_SELF_HOST_BIN_DIR = '~/relay/bin';
+  process.env.HAPPIER_SELF_HOST_CONFIG_DIR = '~/relay/config';
+  process.env.HAPPIER_SELF_HOST_DATA_DIR = '~/relay/data';
+  process.env.HAPPIER_SELF_HOST_LOG_DIR = '~/relay/logs';
+
+  try {
+    const config = mod.resolveConfig({ platform: 'linux', mode: 'user', channel: 'stable' });
+    assert.equal(config.installRoot, '/scoped/home/relay/install');
+    assert.equal(config.binDir, '/scoped/home/relay/bin');
+    assert.equal(config.configDir, '/scoped/home/relay/config');
+    assert.equal(config.dataDir, '/scoped/home/relay/data');
+    assert.equal(config.logDir, '/scoped/home/relay/logs');
+  } finally {
+    if (previous.HOME === undefined) delete process.env.HOME;
+    else process.env.HOME = previous.HOME;
+    if (previous.USERPROFILE === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previous.USERPROFILE;
+    if (previous.HAPPIER_SELF_HOST_INSTALL_ROOT === undefined) delete process.env.HAPPIER_SELF_HOST_INSTALL_ROOT;
+    else process.env.HAPPIER_SELF_HOST_INSTALL_ROOT = previous.HAPPIER_SELF_HOST_INSTALL_ROOT;
+    if (previous.HAPPIER_SELF_HOST_BIN_DIR === undefined) delete process.env.HAPPIER_SELF_HOST_BIN_DIR;
+    else process.env.HAPPIER_SELF_HOST_BIN_DIR = previous.HAPPIER_SELF_HOST_BIN_DIR;
+    if (previous.HAPPIER_SELF_HOST_CONFIG_DIR === undefined) delete process.env.HAPPIER_SELF_HOST_CONFIG_DIR;
+    else process.env.HAPPIER_SELF_HOST_CONFIG_DIR = previous.HAPPIER_SELF_HOST_CONFIG_DIR;
+    if (previous.HAPPIER_SELF_HOST_DATA_DIR === undefined) delete process.env.HAPPIER_SELF_HOST_DATA_DIR;
+    else process.env.HAPPIER_SELF_HOST_DATA_DIR = previous.HAPPIER_SELF_HOST_DATA_DIR;
+    if (previous.HAPPIER_SELF_HOST_LOG_DIR === undefined) delete process.env.HAPPIER_SELF_HOST_LOG_DIR;
+    else process.env.HAPPIER_SELF_HOST_LOG_DIR = previous.HAPPIER_SELF_HOST_LOG_DIR;
+  }
+});
+
 test('resolveMinisignPublicKeyText prefers inline override and otherwise returns bundled key', () => {
   const bundled = resolveMinisignPublicKeyText({});
   assert.match(bundled, /minisign public key/i);

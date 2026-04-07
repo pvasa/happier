@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildCodexAgentRuntimeDescriptor, resolvePersistedCodexRuntimeIdentity } from '@happier-dev/agents';
@@ -12,12 +11,8 @@ import {
 
 import { collectCodexSessionRolloutFiles } from '../directSessions/collectCodexSessionRolloutFiles';
 import { resolveCodexHomesForDirectSessionsSource } from '../directSessions/resolveCodexHomesForDirectSessionsSource';
+import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
 import type { CodexSessionBundle } from '../../../session/handoff/types';
-
-function resolveCodexHome(env: NodeJS.ProcessEnv): string {
-  const raw = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-  return raw || join(homedir(), '.codex');
-}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -36,7 +31,7 @@ async function resolvePreferredCodexHomes(params: Readonly<{
   env: NodeJS.ProcessEnv;
   activeServerDir: string;
 }>): Promise<string[]> {
-  const fallbackCodexHome = resolveCodexHome(params.env);
+  const fallbackCodexHome = resolveConfiguredCodexHome(params.env);
   const source = resolveCodexSource(params.metadata);
   if (!source || source.kind !== 'codexHome') {
     return [fallbackCodexHome];

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { join } from 'node:path';
+
 import { handleGeminiCliCommand } from './command';
 
 const { saveGeminiModelToConfig } = vi.hoisted(() => ({
@@ -44,6 +46,42 @@ describe('handleGeminiCliCommand (model set)', () => {
     exitSpy.mockRestore();
     logSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+
+  it('prints the env-aware Gemini config path when GEMINI_CLI_HOME uses ~/', async () => {
+    const previousHome = process.env.HOME;
+    const previousGeminiCliHome = process.env.GEMINI_CLI_HOME;
+    process.env.HOME = '/tmp/scoped-home';
+    process.env.GEMINI_CLI_HOME = '~/gemini-cli-home';
+
+    const exitCalls: number[] = [];
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      exitCalls.push(code ?? 0);
+      return undefined as never;
+    }) as any);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await handleGeminiCliCommand({
+        args: ['gemini', 'model', 'set', 'custom-model-id'],
+        terminalRuntime: null,
+      } as any);
+
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(exitCalls).toEqual([0]);
+      expect(logSpy).toHaveBeenCalledWith(
+        `  Config saved to: ${join('/tmp/scoped-home', 'gemini-cli-home', '.gemini', 'config.json')}`,
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousGeminiCliHome === undefined) delete process.env.GEMINI_CLI_HOME;
+      else process.env.GEMINI_CLI_HOME = previousGeminiCliHome;
+      exitSpy.mockRestore();
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it('rejects empty model ids', async () => {

@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
-import { getComponentDir, getRootDir, getStackName } from './utils/paths/paths.mjs';
+import { getComponentDir, getRootDir, getStackName, resolveExplicitStackEnvFilePath } from './utils/paths/paths.mjs';
 import { resolveCliHomeDir } from './utils/stack/dirs.mjs';
 import { getPublicServerUrlEnvOverride, resolveServerPortFromEnv } from './utils/server/urls.mjs';
 import { resolveLocalServerPortForStack } from './utils/server/resolve_stack_server_port.mjs';
@@ -328,7 +328,7 @@ async function main() {
   // We treat an invocation as "stack-scoped" only when the stack env file actually exists (or when the
   // CLI home dir is explicitly overridden by the stack). This keeps plain `hstack happier` able to
   // reuse the user's CLI settings even when stack helper env vars are present in test/dev harnesses.
-  const stackEnvFilePath = String(env.HAPPIER_STACK_ENV_FILE ?? '').trim();
+  const stackEnvFilePath = resolveExplicitStackEnvFilePath(env);
   const isStackScopedInvocation =
     Boolean(String(env.HAPPIER_STACK_CLI_HOME_DIR ?? '').trim()) ||
     Boolean(stackEnvFilePath && existsSync(stackEnvFilePath));

@@ -6,11 +6,11 @@
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, isAbsolute, resolve as resolvePath } from 'node:path'
 import { isServerIdFilesystemSafe, sanitizeServerIdForFilesystem } from '@/server/serverId'
 import { isLocalishServerUrl } from '@/server/serverUrlClassification'
 import { normalizeCliArgv } from '@/cli/parseArgs'
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath'
 import {
   inferPublicReleaseRingIdFromEnvAndArgv,
   resolveDaemonStateBasenameForRing,
@@ -57,6 +57,15 @@ export function isDaemonProcessArgv(args: readonly string[]): boolean {
   if (args.length < 2) return false
   if (args[0] !== 'daemon') return false
   return args[1] === 'start' || args[1] === 'start-sync'
+}
+
+function resolveCliHappyHomeDir(env: NodeJS.ProcessEnv): string {
+  const override = typeof env.HAPPIER_HOME_DIR === 'string' ? env.HAPPIER_HOME_DIR.trim() : ''
+  if (!override) {
+    return join(expandHomeDirPath('~', env), '.happier')
+  }
+  const expandedOverride = expandHomeDirPath(override, env)
+  return isAbsolute(expandedOverride) ? expandedOverride : resolvePath(expandedOverride)
 }
 
 class Configuration {
@@ -227,13 +236,7 @@ class Configuration {
     this.publicReleaseRing = inferPublicReleaseRingIdFromEnvAndArgv({ env: process.env, argv: process.argv })
 
     // Directory configuration - Priority: HAPPIER_HOME_DIR env > default home dir
-    if (process.env.HAPPIER_HOME_DIR) {
-      // Expand ~ to home directory if present
-      const expandedPath = process.env.HAPPIER_HOME_DIR.replace(/^~/, homedir())
-      this.happyHomeDir = expandedPath
-    } else {
-      this.happyHomeDir = join(homedir(), '.happier')
-    }
+    this.happyHomeDir = resolveCliHappyHomeDir(process.env)
 
     this.logsDir = join(this.happyHomeDir, 'logs')
     this.settingsFile = join(this.happyHomeDir, 'settings.json')

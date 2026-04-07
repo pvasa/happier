@@ -1,19 +1,20 @@
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import type { Metadata } from '@/api/types';
 import { buildCodexAgentRuntimeDescriptor, type CodexBackendMode } from '@happier-dev/agents';
 import { normalizeCodexBackendMode, type DirectSessionsSource } from '@happier-dev/protocol';
 import { inferCodexDirectSessionsSourceFromHome } from '../directSessions/resolveCodexHomeEntriesForDirectSessionsSource';
+import { resolveConfiguredCodexHome } from './resolveConfiguredCodexHome';
 
 function resolveCodexDirectSource(params: Readonly<{
   codexHome?: string | null;
   activeServerDir?: string | null;
+  processEnv?: NodeJS.ProcessEnv;
 }>): DirectSessionsSource {
   return inferCodexDirectSessionsSourceFromHome({
     codexHome: typeof params.codexHome === 'string' && params.codexHome.trim().length > 0
       ? resolve(params.codexHome.trim())
-      : resolve(join(homedir(), '.codex')),
+      : resolveConfiguredCodexHome(params.processEnv ?? process.env),
     activeServerDir: params.activeServerDir,
   });
 }
@@ -21,6 +22,7 @@ function resolveCodexDirectSource(params: Readonly<{
 function resolveCodexRuntimeSourceAffinity(params: Readonly<{
   codexHome?: string | null;
   activeServerDir?: string | null;
+  processEnv?: NodeJS.ProcessEnv;
 }>): Readonly<{
   home: 'user' | 'connectedService';
   connectedServiceId?: string;
@@ -61,6 +63,7 @@ function buildDirectSessionMetadata(
     backendMode?: CodexBackendMode | null;
     codexHome?: string | null;
     activeServerDir?: string | null;
+    processEnv?: NodeJS.ProcessEnv;
   }>,
 ): Metadata {
   if (params.transcriptStorage !== 'direct') {
@@ -104,6 +107,7 @@ export function maybeUpdateCodexSessionIdMetadata(params: {
   transcriptStorage?: 'persisted' | 'direct' | null;
   codexHome?: string | null;
   activeServerDir?: string | null;
+  processEnv?: NodeJS.ProcessEnv;
   updateHappySessionMetadata: (updater: (metadata: Metadata) => Metadata) => Promise<void> | void;
   lastPublished: { value: string | null; fingerprint?: string | null };
 }): void {
@@ -176,6 +180,7 @@ export function publishCodexSessionIdMetadata(params: {
   transcriptStorage?: 'persisted' | 'direct' | null;
   codexHome?: string | null;
   activeServerDir?: string | null;
+  processEnv?: NodeJS.ProcessEnv;
   lastPublished: { value: string | null; fingerprint?: string | null };
 }): void {
   maybeUpdateCodexSessionIdMetadata({
@@ -184,6 +189,7 @@ export function publishCodexSessionIdMetadata(params: {
     transcriptStorage: params.transcriptStorage,
     codexHome: params.codexHome,
     activeServerDir: params.activeServerDir,
+    processEnv: params.processEnv,
     updateHappySessionMetadata: (updater) => params.session.updateMetadata(updater),
     lastPublished: params.lastPublished,
   });

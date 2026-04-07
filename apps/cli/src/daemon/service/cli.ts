@@ -29,6 +29,7 @@ import { resolveDaemonServiceInstallRuntimeTarget } from './resolveDaemonService
 import { resolveLinuxSystemUserPaths } from './resolveLinuxSystemUserPaths';
 import { inferPublicReleaseRingIdFromEnvAndArgv } from '@/cli/runtime/publicReleaseChannel';
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 
 export type DaemonServiceCliAction =
   | 'paths'
@@ -212,8 +213,8 @@ export function resolveDaemonServiceCliRuntimeFromEnv(options: Readonly<{
   const uidFromProc = process.getuid ? process.getuid() : null;
   const uid = uidEnv !== null && Number.isFinite(uidEnv) && uidEnv >= 0 ? uidEnv : uidFromProc;
 
-  const explicitUserHomeDir = (processEnv.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR ?? '').trim();
-  const explicitHappierHomeDir = (processEnv.HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR ?? '').trim();
+  const explicitUserHomeDir = expandHomeDirPath((processEnv.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR ?? '').trim(), processEnv);
+  const explicitHappierHomeDir = expandHomeDirPath((processEnv.HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR ?? '').trim(), processEnv);
   const systemUserPaths =
     platform === 'linux' && options.mode === 'system' && String(options.systemUser ?? '').trim()
       ? resolveLinuxSystemUserPaths({

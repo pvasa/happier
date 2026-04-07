@@ -1,7 +1,8 @@
 import chalk from 'chalk';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname } from 'node:path';
+
+import { resolveGeminiConfigPaths } from '../utils/resolveGeminiConfigPaths';
 
 type GeminiOAuthTokens = Readonly<{
   access_token: string;
@@ -24,8 +25,8 @@ export function updateLocalGeminiCredentials(oauth: unknown): void {
   const tokens = oauth as GeminiOAuthTokens;
 
   try {
-    const geminiDir = join(homedir(), '.gemini');
-    const credentialsPath = join(geminiDir, 'oauth_creds.json');
+    const { userOauthCredsPath: credentialsPath } = resolveGeminiConfigPaths(process.env);
+    const geminiDir = dirname(credentialsPath);
 
     if (!existsSync(geminiDir)) {
       mkdirSync(geminiDir, { recursive: true });
@@ -46,4 +47,3 @@ export function updateLocalGeminiCredentials(oauth: unknown): void {
     console.log(chalk.yellow(`  ⚠️ Could not update local credentials: ${error}`));
   }
 }
-

@@ -37,4 +37,26 @@ describe('validateDirectMachineSource', () => {
       },
     });
   });
+
+  it('normalizes Claude configDir against env HOME before validating the source', () => {
+    expect(
+      validateDirectMachineSource({
+        providerId: 'claude',
+        source: {
+          kind: 'claudeConfig',
+          configDir: '~/.claude',
+        },
+        env: {
+          HOME: '/Users/tester',
+          HAPPIER_CLAUDE_CONFIG_DIR: '~/.claude',
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      source: {
+        kind: 'claudeConfig',
+        configDir: '/Users/tester/.claude',
+      },
+    });
+  });
 });

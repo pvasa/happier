@@ -1,6 +1,8 @@
 import { homedir as osHomedir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
+
 type Deps = Readonly<{
   env: NodeJS.ProcessEnv;
   homedir: () => string;
@@ -17,11 +19,15 @@ type Deps = Readonly<{
  */
 export function resolveMachineRpcWorkingDirectory(overrides?: Partial<Deps>): string {
   const env = overrides?.env ?? process.env;
-  const homedir = overrides?.homedir ?? osHomedir;
   const cwd = overrides?.cwd ?? process.cwd;
+  const fallbackHomedir = overrides?.homedir ?? osHomedir;
 
-  const explicit = String(env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY ?? '').trim();
-  const candidates = [explicit || null, homedir(), cwd()];
+  const explicit = expandHomeDirPath(String(env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY ?? '').trim(), env);
+  const envHomeRaw = process.platform === 'win32'
+    ? (env.USERPROFILE || env.HOME)
+    : env.HOME;
+  const envHomeDir = typeof envHomeRaw === 'string' ? envHomeRaw.trim() : '';
+  const candidates = [explicit || null, envHomeDir || fallbackHomedir(), cwd()];
 
   for (const candidate of candidates) {
     if (!candidate) continue;

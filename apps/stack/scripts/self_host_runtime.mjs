@@ -35,6 +35,8 @@ import {
 } from '@happier-dev/cli-common/service';
 import {
   parseEnvText as parseEnvTextShared,
+  resolveConfiguredRelayRuntimeBinaryOverride,
+  resolveConfiguredRelayRuntimePaths,
   renderSelfHostServerEnvText as renderSelfHostServerEnvTextShared,
 } from '@happier-dev/cli-common/firstPartyRuntime';
 import { DEFAULT_MINISIGN_PUBLIC_KEY } from '@happier-dev/release-runtime/minisign';
@@ -469,13 +471,14 @@ async function applySelfHostSqliteMigrationsAtInstallTime({ env }) {
   return { applied: appliedNow, skipped: false, reason: 'ok' };
 }
 
-function resolveConfig({ channel, mode = 'user', platform = process.platform } = {}) {
+export function resolveConfig({ channel, mode = 'user', platform = process.platform } = {}) {
   const defaults = resolveSelfHostDefaults({ platform, mode, channel, homeDir: homedir() });
-  const installRoot = String(process.env.HAPPIER_SELF_HOST_INSTALL_ROOT ?? defaults.installRoot).trim();
-  const binDir = String(process.env.HAPPIER_SELF_HOST_BIN_DIR ?? defaults.binDir).trim();
-  const configDir = String(process.env.HAPPIER_SELF_HOST_CONFIG_DIR ?? defaults.configDir).trim();
-  const dataDir = String(process.env.HAPPIER_SELF_HOST_DATA_DIR ?? defaults.dataDir).trim();
-  const logDir = String(process.env.HAPPIER_SELF_HOST_LOG_DIR ?? defaults.logDir).trim();
+  const configuredPaths = resolveConfiguredRelayRuntimePaths({ defaults, env: process.env });
+  const installRoot = configuredPaths.installRoot;
+  const binDir = configuredPaths.binDir;
+  const configDir = configuredPaths.configDir;
+  const dataDir = configuredPaths.dataDir;
+  const logDir = configuredPaths.logDir;
   const serviceName = String(process.env.HAPPIER_SELF_HOST_SERVICE_NAME ?? DEFAULTS.serviceName).trim();
   const serverHost = String(process.env.HAPPIER_SERVER_HOST ?? DEFAULTS.serverHost).trim();
   const serverPort = parsePort(process.env.HAPPIER_SERVER_PORT, DEFAULTS.serverPort);
@@ -1914,7 +1917,7 @@ async function cmdInstall({ channel, mode, argv, json }) {
       || parseBoolean(process.env.HAPPIER_WITH_UI, true) === false
       || parseBoolean(process.env.HAPPIER_SELF_HOST_WITH_UI, true) === false);
   const nonInteractive = argvSansEnv.includes('--non-interactive') || parseBoolean(process.env.HAPPIER_NONINTERACTIVE, false);
-  const serverBinaryOverride = String(process.env.HAPPIER_SELF_HOST_SERVER_BINARY ?? '').trim();
+  const serverBinaryOverride = resolveConfiguredRelayRuntimeBinaryOverride(process.env);
 
   if (normalizeOs(config.platform) !== 'windows' && !commandExists('tar')) {
     throw new Error('[self-host] tar is required to extract release artifacts');

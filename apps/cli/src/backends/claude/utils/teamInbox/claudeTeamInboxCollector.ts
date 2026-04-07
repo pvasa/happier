@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 
 import type { RawJSONLines } from '@/backends/claude/types';
 import { logger } from '@/ui/logger';
 import { startFileWatcher } from '@/integrations/watcher/startFileWatcher';
 import { tryParseJsonObject } from '@/utils/tryParseJsonRecord';
+import { resolveConfiguredClaudeConfigDir } from '../resolveConfiguredClaudeConfigDir';
 
 type LeadInboxEntry = Readonly<{
   from?: unknown;
@@ -119,8 +121,11 @@ export function createClaudeTeamInboxCollector(params: Readonly<{
   cleanup: () => void;
 } {
   const resolvedClaudeConfigDir = (() => {
-    const raw = (params.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? '').trim();
-    return raw.length > 0 ? raw : join(homedir(), '.claude');
+    const raw = typeof params.claudeConfigDir === 'string' ? params.claudeConfigDir.trim() : '';
+    if (raw.length > 0) {
+      return expandHomeDirPath(raw, process.env) || raw;
+    }
+    return resolveConfiguredClaudeConfigDir({ env: process.env });
   })();
 
   let teamName: string | null = null;

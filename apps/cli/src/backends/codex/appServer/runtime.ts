@@ -298,6 +298,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             transcriptStorage: runtimeEnv.HAPPIER_TRANSCRIPT_STORAGE === 'direct' ? 'direct' : 'persisted',
             codexHome: runtimeEnv.CODEX_HOME ?? null,
             activeServerDir: params.activeServerDir ?? null,
+            processEnv: runtimeEnv,
             lastPublished: lastPublishedThreadId,
         });
     };

@@ -1,6 +1,13 @@
 import './utils/env/env.mjs';
 import { run, runCapture } from './utils/proc/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir, getSystemdUnitInfo, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import {
+  getComponentDir,
+  getDefaultAutostartPaths,
+  getRootDir,
+  getSystemdUnitInfo,
+  resolveExplicitStackEnvFilePath,
+  resolveStackEnvPath,
+} from './utils/paths/paths.mjs';
 import { getInternalServerUrl, getPublicServerUrlEnvOverride } from './utils/server/urls.mjs';
 import { resolveServerUrls } from './utils/server/urls.mjs';
 import { installService as installManagedService, uninstallService as uninstallManagedService } from './utils/service/service_manager.mjs';
@@ -67,7 +74,7 @@ function getAutostartEnv({ mode, systemUserHomeDir } = {}) {
   // Main installs:
   // - default to the main stack env (outside the repo): ~/.happier/stacks/main/env
 
-  const explicitEnvFilePath = process.env.HAPPIER_STACK_ENV_FILE?.trim() ? process.env.HAPPIER_STACK_ENV_FILE.trim() : '';
+  const explicitEnvFilePath = resolveExplicitStackEnvFilePath(process.env);
   const defaultMainEnvFilePath = resolveStackEnvPath('main').envPath;
   const envFile = resolveAutostartEnvFilePath({
     mode,
@@ -546,7 +553,7 @@ async function stopLaunchAgent({ persistent, requestedBy = 'service stop', reaso
 
   const envFile = resolveAutostartEnvFilePath({
     mode: 'user',
-    explicitEnvFilePath: process.env.HAPPIER_STACK_ENV_FILE?.trim() ? process.env.HAPPIER_STACK_ENV_FILE.trim() : '',
+    explicitEnvFilePath: resolveExplicitStackEnvFilePath(process.env),
     defaultMainEnvFilePath: resolveStackEnvPath('main').envPath,
     systemUserHomeDir: null,
   });

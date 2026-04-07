@@ -1,11 +1,11 @@
 import { accessSync, constants as fsConstants, existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { delimiter as pathDelimiter } from 'node:path';
 
 import { isCodexPermissionMode, type PermissionMode } from '@/api/types';
 import { resolveExistingCodexAcpManagedBinPath } from '@/capabilities/deps/codexAcp';
 import { appendCodexCliConfigOverridesArgs } from '../utils/appendCodexCliConfigOverridesArgs';
+import { resolveConfiguredCodexConfigTomlPath } from '../utils/resolveConfiguredCodexHome';
 
 export type SpawnSpec = { command: string; args: string[] };
 export type ResolveCodexAcpSpawnOptions = {
@@ -58,9 +58,7 @@ function readCodexAcpConfigOverrides(env: NodeJS.ProcessEnv): string[] {
 }
 
 function resolveCodexConfigTomlPath(env: NodeJS.ProcessEnv): string {
-  const codexHome = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-  if (codexHome) return join(codexHome, 'config.toml');
-  return join(homedir(), '.codex', 'config.toml');
+  return resolveConfiguredCodexConfigTomlPath(env);
 }
 
 function normalizeCodexMcpServerKeyFromConfigSection(raw: string): string | null {

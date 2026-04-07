@@ -4,8 +4,18 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { parseArgs } from './utils/cli/args.mjs';
-import { expandHome } from './utils/paths/canonical_home.mjs';
-import { getComponentDir, getDevRepoDir, getHappyStacksHomeDir, getRepoDir, getRootDir, getStackLabel, getStackName, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import {
+  getComponentDir,
+  getDevRepoDir,
+  getHappyStacksHomeDir,
+  getRepoDir,
+  getRootDir,
+  getStackLabel,
+  getStackName,
+  getWorkspaceDir,
+  resolveExplicitStackEnvFilePath,
+  resolveStackEnvPath,
+} from './utils/paths/paths.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { getRuntimeDir } from './utils/paths/runtime.mjs';
 import { getCanonicalHomeDir, getCanonicalHomeEnvPath } from './utils/env/config.mjs';
@@ -52,8 +62,9 @@ async function main() {
   const stackName = getStackName();
   const stackLabel = getStackLabel(stackName);
   const resolvedMainEnv = resolveStackEnvPath('main');
-  const resolvedActiveEnv = process.env.HAPPIER_STACK_ENV_FILE?.trim()
-    ? { envPath: expandHome(process.env.HAPPIER_STACK_ENV_FILE.trim()) }
+  const explicitEnvPath = resolveExplicitStackEnvFilePath(process.env);
+  const resolvedActiveEnv = explicitEnvPath
+    ? { envPath: explicitEnvPath }
     : null;
 
   const { homeEnv, homeLocal } = getHomeEnvPaths();

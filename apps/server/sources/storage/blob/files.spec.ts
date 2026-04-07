@@ -21,6 +21,16 @@ describe('storage/files (S3 env parsing)', () => {
     }
   });
 
+  it('expands ~/ local file-storage overrides against HOME', async () => {
+    vi.resetModules();
+
+    const { resolveLightPublicFilesDir } = await import('@/flavors/light/files');
+    expect(resolveLightPublicFilesDir({
+      HOME: '/scoped/home',
+      HAPPIER_SERVER_LIGHT_FILES_DIR: '~/server-light/files',
+    } as unknown as NodeJS.ProcessEnv)).toBe('/scoped/home/server-light/files');
+  });
+
   it('passes an explicit S3 region to the MinIO client (S3_REGION override, default us-east-1)', async () => {
     vi.resetModules();
 

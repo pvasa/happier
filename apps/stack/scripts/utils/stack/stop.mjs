@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { getComponentDir } from '../paths/paths.mjs';
+import { getComponentDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 import { isPidAlive, killPid, readPidState } from '../expo/expo.mjs';
 import { stopLocalDaemon } from '../../daemon.mjs';
 import { stopHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
@@ -170,7 +170,7 @@ export async function stopStackWithEnv({
   const cliHomeDir = (env.HAPPIER_STACK_CLI_HOME_DIR ?? join(baseDir, 'cli')).toString();
   const cliDir = getComponentDir(rootDir, 'happier-cli', env);
   const cliBin = join(cliDir, 'bin', 'happier.mjs');
-  const envPath = (env.HAPPIER_STACK_ENV_FILE ?? '').toString();
+  const envPath = resolveExplicitStackEnvFilePath(env);
   const selfPgid = await getProcessGroupId(process.pid);
 
   // Preferred: stop stack-started processes (by PID) recorded in stack.runtime.json.

@@ -1,7 +1,7 @@
 import { join, dirname } from 'node:path';
 import * as fs from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths } from '@/daemon/service/cli';
 import {
@@ -107,5 +107,117 @@ describe('happier daemon service list', () => {
         }
       },
     );
+  });
+
+  it('expands ~/ daemon service home overrides before listing installed entries', async () => {
+    const output = captureStdoutJsonOutput<{
+      entries?: Array<{
+        serverId?: string;
+        installed?: boolean;
+        path?: string;
+        platform?: string;
+      }>;
+    }>();
+
+    try {
+      await withConfiguredDaemonTestHome(
+        {
+          prefix: 'happier-daemon-service-list-tilde-',
+          env: {
+            HOME: '/tmp/placeholder',
+            USERPROFILE: '/tmp/placeholder',
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+            HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '~/service-home',
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: '~/service-happier',
+          },
+        },
+        async ({ homeDir }) => {
+          const scopedHome = join(homeDir, 'scoped-home');
+          process.env.HOME = scopedHome;
+          process.env.USERPROFILE = scopedHome;
+          await writeDaemonSettingsFixture(homeDir);
+
+          const unitPath = join(scopedHome, 'service-home', '.config', 'systemd', 'user', 'happier-daemon.company.service');
+          fs.mkdirSync(dirname(unitPath), { recursive: true });
+          fs.writeFileSync(unitPath, '# fake', 'utf-8');
+
+          await handleDaemonCliCommand({ args: ['daemon', 'service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().entries).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              serverId: 'company',
+              installed: true,
+              platform: 'linux',
+              path: unitPath,
+            }),
+          ]));
+        },
+      );
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('uses the real OS user home for service listing when HOME is stack-isolated and no explicit override is set', async () => {
+    let mockedRealHomeDir = '';
+    vi.resetModules();
+    vi.doMock('node:os', async () => {
+      const actual = await vi.importActual<typeof import('node:os')>('node:os');
+      return {
+        ...actual,
+        homedir: vi.fn(() => '/isolated-stack-home'),
+        userInfo: vi.fn(() => ({ homedir: mockedRealHomeDir })),
+      };
+    });
+
+    const output = captureStdoutJsonOutput<{
+      entries?: Array<{
+        serverId?: string;
+        installed?: boolean;
+        path?: string;
+        platform?: string;
+      }>;
+    }>();
+
+    try {
+      await withConfiguredDaemonTestHome(
+        {
+          prefix: 'happier-daemon-service-list-real-home-',
+          env: {
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+            HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+            HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: '',
+            HOME: '/isolated-stack-home',
+            USERPROFILE: '/isolated-stack-home',
+          },
+        },
+        async ({ homeDir }) => {
+          mockedRealHomeDir = join(homeDir, 'real-user-home');
+          await writeDaemonSettingsFixture(homeDir);
+
+          const unitPath = join(mockedRealHomeDir, '.config', 'systemd', 'user', 'happier-daemon.company.service');
+          fs.mkdirSync(dirname(unitPath), { recursive: true });
+          fs.writeFileSync(unitPath, '# fake', 'utf-8');
+
+          const { handleDaemonCliCommand: handleCommand } = await import('./daemon');
+          await handleCommand({ args: ['daemon', 'service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().entries).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              serverId: 'company',
+              installed: true,
+              platform: 'linux',
+              path: unitPath,
+            }),
+          ]));
+        },
+      );
+    } finally {
+      output.restore();
+      vi.doUnmock('node:os');
+      vi.resetModules();
+    }
   });
 });

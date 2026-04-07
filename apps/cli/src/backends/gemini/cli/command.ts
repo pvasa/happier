@@ -4,6 +4,7 @@ import { ApiClient } from '@/api/api';
 import { runBackendSessionCliCommand } from '@/cli/runBackendSessionCliCommand';
 import { DEFAULT_GEMINI_MODEL, GEMINI_MODEL_ENV } from '@/backends/gemini/constants';
 import { readGeminiLocalConfig, saveGeminiModelToConfig, saveGoogleCloudProjectToConfig } from '@/backends/gemini/utils/config';
+import { resolveGeminiConfigPaths } from '@/backends/gemini/utils/resolveGeminiConfigPaths';
 import { buildGeminiWorkspaceProjectGuidanceLines } from '@/backends/gemini/utils/buildGeminiWorkspaceProjectGuidance';
 
 import type { CommandContext } from '@/cli/commandRegistry';
@@ -23,9 +24,7 @@ export async function handleGeminiCliCommand(context: CommandContext): Promise<v
 
     try {
       saveGeminiModelToConfig(modelName);
-      const { join } = await import('node:path');
-      const { homedir } = await import('node:os');
-      const configPath = join(homedir(), '.gemini', 'config.json');
+      const configPath = resolveGeminiConfigPaths(process.env).userConfigPath;
       console.log(`✓ Model set to: ${modelName}`);
       console.log(`  Config saved to: ${configPath}`);
       console.log('  This model will be used in future sessions.');

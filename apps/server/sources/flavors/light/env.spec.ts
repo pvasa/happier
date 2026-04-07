@@ -25,6 +25,21 @@ describe("light env helpers", () => {
     expect(env.PUBLIC_URL).toBe("http://example.com");
   });
 
+  it("applyLightDefaultEnv expands ~/ explicit light storage paths against HOME", () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: "/scoped/home",
+      HAPPY_SERVER_LIGHT_DATA_DIR: "~/custom/data",
+      HAPPY_SERVER_LIGHT_FILES_DIR: "~/custom/files",
+      HAPPY_SERVER_LIGHT_DB_DIR: "~/custom/db",
+    };
+
+    applyLightDefaultEnv(env);
+
+    expect(env.HAPPY_SERVER_LIGHT_DATA_DIR).toBe("/scoped/home/custom/data");
+    expect(env.HAPPY_SERVER_LIGHT_FILES_DIR).toBe("/scoped/home/custom/files");
+    expect(env.HAPPY_SERVER_LIGHT_DB_DIR).toBe("/scoped/home/custom/db");
+  });
+
   it("applyLightDefaultEnv derives defaults from homedir and PORT when missing", () => {
     const env: NodeJS.ProcessEnv = { PORT: "4000" };
     applyLightDefaultEnv(env, { homedir: "/home/test" });

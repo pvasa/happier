@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 
 import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1 } from '@happier-dev/protocol';
+import { resolveConfiguredCodexConfigTomlPath } from '../utils/resolveConfiguredCodexHome';
 
 export type DetectCodexMcpServersResult = Readonly<{
   servers: ReadonlyArray<DetectedMcpServerV1>;
@@ -10,9 +9,7 @@ export type DetectCodexMcpServersResult = Readonly<{
 }>;
 
 function resolveCodexConfigTomlPath(env: NodeJS.ProcessEnv): string {
-  const codexHome = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-  if (codexHome) return join(codexHome, 'config.toml');
-  return join(homedir(), '.codex', 'config.toml');
+  return resolveConfiguredCodexConfigTomlPath(env);
 }
 
 function normalizeCodexMcpServerName(rawSectionKey: string): string | null {
@@ -149,4 +146,3 @@ export async function detectCodexMcpServers(params: Readonly<{ env?: NodeJS.Proc
 
   return { servers, warnings };
 }
-

@@ -15,6 +15,7 @@ import {
   getRootDir,
   getWorkspaceDir,
   happyMonorepoSubdirForComponent,
+  resolveExplicitStackEnvFilePath,
   resolveStackEnvPath,
 } from './utils/paths/paths.mjs';
 import { isTcpPortFree, pickNextFreeTcpPort } from './utils/net/ports.mjs';
@@ -1115,7 +1116,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 serverPort,
                 internalServerUrl,
                 publicServerUrl,
-                envPath: env.HAPPIER_STACK_ENV_FILE ?? '',
+                envPath: resolveExplicitStackEnvFilePath(env),
                 stackMode: true,
                 runtimeStatePath: null,
                 serverAlreadyRunning: false,
@@ -1141,7 +1142,7 @@ async function cmdCreateDevAuthSeed({ rootDir, argv }) {
                 stackMode: true,
                 runtimeStatePath: null,
                 stackName: name,
-                envPath: env.HAPPIER_STACK_ENV_FILE ?? '',
+                envPath: resolveExplicitStackEnvFilePath(env),
                 children,
                 spawnOptions: quietAuthFlow ? { silent: true, teeFile: expoLogPath, teeLabel: 'expo' } : {},
                 quiet: quietAuthFlow,

@@ -3,9 +3,8 @@ import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 
 import { inferAgentIdFromSessionMetadata, resolveVendorResumeIdFromSessionMetadata } from '@happier-dev/agents';
-import os from 'node:os';
-import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 import { findHappyProcessByPid } from '../doctor';
 import type { TrackedSession } from '../types';
@@ -14,13 +13,6 @@ import { buildSessionRunnerRespawnDescriptorV1FromSpawnOptions } from '../proces
 
 const DEFAULT_PARENT_PID_LOOKUP_TIMEOUT_MS = 1000;
 const PARENT_PID_LOOKUP_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_PARENT_PID_LOOKUP_TIMEOUT_MS';
-
-function resolveTildePath(inputPath: string): string {
-  const trimmed = inputPath.trim();
-  if (trimmed === '~') return os.homedir();
-  if (trimmed.startsWith('~/')) return path.join(os.homedir(), trimmed.slice(2));
-  return inputPath;
-}
 
 function isPidPlaceholderSessionId(value: string): boolean {
   return /^PID-\d+$/.test(value);
@@ -86,7 +78,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
   } = params;
 
   return (sessionId: string, sessionMetadata: Metadata) => {
-    const normalizedPath = resolveTildePath(sessionMetadata.path);
+    const normalizedPath = expandHomeDirPath(sessionMetadata.path, process.env);
     const normalizedMetadata =
       normalizedPath === sessionMetadata.path ? sessionMetadata : { ...sessionMetadata, path: normalizedPath };
 

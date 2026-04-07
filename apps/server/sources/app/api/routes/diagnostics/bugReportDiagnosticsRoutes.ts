@@ -7,12 +7,13 @@ import { redactBugReportSensitiveText } from "@happier-dev/protocol";
 import { parseBooleanEnv, parseIntEnv } from "@/config/env";
 import { isServerOwnerUserId, resolveServerOwnerUserIds } from "@/app/features/serverOwners";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
+import { expandHomeDirPath } from "@/utils/path/expandHomeDirPath";
 import { type Fastify } from "../../types";
 
 function resolveServerLogPath(): string | null {
-    const explicit = (process.env.HAPPIER_BUG_REPORTS_SERVER_LOG_PATH ?? "").trim();
+    const explicit = expandHomeDirPath((process.env.HAPPIER_BUG_REPORTS_SERVER_LOG_PATH ?? "").trim(), process.env);
     if (explicit) return explicit;
-    const logDir = (process.env.HAPPIER_SELF_HOST_LOG_DIR ?? "").trim();
+    const logDir = expandHomeDirPath((process.env.HAPPIER_SELF_HOST_LOG_DIR ?? "").trim(), process.env);
     if (logDir) return join(logDir, "server.log");
     return null;
 }

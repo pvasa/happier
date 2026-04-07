@@ -59,10 +59,13 @@ export { syncInstalledFirstPartyShims } from './syncInstalledFirstPartyShims.js'
 export type { SyncInstalledFirstPartyShimsResult } from './syncInstalledFirstPartyShims.js';
 export {
   checkRelayRuntimeHealth,
+  resolveConfiguredRelayRuntimeBinaryOverride,
+  resolveConfiguredRelayRuntimePaths,
   normalizeRelayRuntimeStatus,
   resolveRelayRuntimeDefaults,
 } from './relayRuntime.js';
 export type {
+  RelayRuntimeConfiguredPaths,
   RelayRuntimeDefaults,
   RelayRuntimeHealthResult,
   RelayRuntimeNormalizedStatus,

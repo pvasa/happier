@@ -4,7 +4,7 @@ import { run } from './utils/proc/proc.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { isSandboxed, sandboxAllowsGlobalSideEffects } from './utils/env/sandbox.mjs';
 import { getInternalServerUrl } from './utils/server/urls.mjs';
-import { getStackName, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { getStackName, resolveExplicitStackEnvFilePath, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { banner, bullets, cmd as cmdFmt, kv, ok, sectionTitle } from './utils/ui/layout.mjs';
 import { cyan, dim, green } from './utils/ui/ansi.mjs';
 import {
@@ -352,7 +352,7 @@ async function main() {
         );
       }
       const stackName = getStackName(process.env);
-      const envPath = (process.env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim() || resolveStackEnvPath(stackName, process.env).envPath;
+      const envPath = resolveExplicitStackEnvFilePath(process.env) || resolveStackEnvPath(stackName, process.env).envPath;
       const { upstream } = getServeConfig(internalServerUrl);
       const res = await tailscaleServeEnable({ internalServerUrl });
       if (res?.enableUrl && !res?.httpsUrl) {

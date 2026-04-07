@@ -2,7 +2,7 @@ import './utils/env/env.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { killProcessTree, runCapture, spawnProc } from './utils/proc/proc.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getRootDir } from './utils/paths/paths.mjs';
+import { getComponentDir, getDefaultAutostartPaths, getRootDir, resolveExplicitStackEnvFilePath } from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/net/ports.mjs';
 import { getServerComponentName, isHappierServerRunning, waitForServerReady } from './utils/server/server.mjs';
 import { ensureCliBuilt, ensureDepsInstalled, pmExecBin, pmSpawnScript, requireDir } from './utils/proc/pm.mjs';
@@ -387,7 +387,7 @@ async function main() {
   if (serverComponentName === 'happier-server') {
     const managed = (baseEnv.HAPPIER_STACK_MANAGED_INFRA ?? '1') !== '0';
     if (managed) {
-      const envPath = baseEnv.HAPPIER_STACK_ENV_FILE ?? '';
+      const envPath = resolveExplicitStackEnvFilePath(baseEnv);
       const infra = await ensureHappyServerManagedInfra({
         stackName: autostart.stackName,
         baseDir: autostart.baseDir,

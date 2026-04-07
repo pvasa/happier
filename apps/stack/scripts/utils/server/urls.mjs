@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-import { getStackName, resolveStackEnvPath } from '../paths/paths.mjs';
+import { getStackName, resolveActiveStackEnvFilePath } from '../paths/paths.mjs';
 import { preferStackLocalhostUrl } from '../paths/localhost_host.mjs';
 import { resolvePublicServerUrl } from '../../tailscale.mjs';
 import { resolveServerPortFromEnv } from './port.mjs';
@@ -9,8 +9,7 @@ import { normalizeUrlNoTrailingSlash } from '../net/url.mjs';
 function stackEnvExplicitlySetsPublicUrl({ env, stackName }) {
   try {
     const envPath =
-      (env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim() ||
-      resolveStackEnvPath(stackName).envPath;
+      resolveActiveStackEnvFilePath(stackName, env);
     if (!envPath || !existsSync(envPath)) return false;
     const raw = readFileSync(envPath, 'utf-8');
     return /^HAPPIER_PUBLIC_SERVER_URL=/m.test(raw) || /^HAPPIER_STACK_SERVER_URL=/m.test(raw);
@@ -22,8 +21,7 @@ function stackEnvExplicitlySetsPublicUrl({ env, stackName }) {
 function stackEnvExplicitlySetsWebappUrl({ env, stackName }) {
   try {
     const envPath =
-      (env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim() ||
-      resolveStackEnvPath(stackName).envPath;
+      resolveActiveStackEnvFilePath(stackName, env);
     if (!envPath || !existsSync(envPath)) return false;
     const raw = readFileSync(envPath, 'utf-8');
     return /^HAPPIER_WEBAPP_URL=/m.test(raw);

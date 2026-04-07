@@ -1084,6 +1084,7 @@ export async function runCodex(opts: {
             transcriptStorage: process.env.HAPPIER_TRANSCRIPT_STORAGE === 'direct' ? 'direct' : 'persisted',
             codexHome: process.env.CODEX_HOME ?? null,
             activeServerDir: configuration.activeServerDir,
+            processEnv: process.env,
             lastPublished: lastCodexThreadIdPublished,
         });
     };

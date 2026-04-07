@@ -1,7 +1,7 @@
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { decodeJwtEmail, readJsonFileSafe } from '@/capabilities/cliAuth/shared';
+import { resolveConfiguredCodexHome } from '../../utils/resolveConfiguredCodexHome';
 
 export type CodexEnvironmentAuthMethod = 'api_key_env' | 'credentials_file';
 
@@ -31,20 +31,8 @@ function hasUsableJwtLifetime(token: string | null): boolean {
     return expMs === null || expMs > Date.now();
 }
 
-function resolveAuthBaseHomeDir(env: NodeJS.ProcessEnv): string {
-    const envHome = process.platform === 'win32'
-        ? (env.USERPROFILE || env.HOME)
-        : env.HOME;
-    const trimmed = typeof envHome === 'string' ? envHome.trim() : '';
-    return trimmed.length > 0 ? trimmed : homedir();
-}
-
 function resolveCodexAuthHomeDir(env: NodeJS.ProcessEnv): string {
-    const rawCodexHome = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-    if (rawCodexHome) {
-        return resolve(rawCodexHome);
-    }
-    return resolve(join(resolveAuthBaseHomeDir(env), '.codex'));
+    return resolve(resolveConfiguredCodexHome(env));
 }
 
 function readCodexAuthFileTokens(env: NodeJS.ProcessEnv): Readonly<{

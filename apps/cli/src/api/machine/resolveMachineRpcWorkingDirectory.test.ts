@@ -22,6 +22,29 @@ describe('resolveMachineRpcWorkingDirectory', () => {
     ).toBe('/home/user');
   });
 
+  it('defaults to env HOME when provided', () => {
+    expect(
+      resolveMachineRpcWorkingDirectory({
+        env: { HOME: '/scoped/home' },
+        homedir: () => '/home/user',
+        cwd: () => '/work/project',
+      }),
+    ).toBe('/scoped/home');
+  });
+
+  it('expands ~/ in HAPPIER_MACHINE_RPC_WORKING_DIRECTORY against env HOME', () => {
+    expect(
+      resolveMachineRpcWorkingDirectory({
+        env: {
+          HOME: '/scoped/home',
+          HAPPIER_MACHINE_RPC_WORKING_DIRECTORY: '~/workspace-root',
+        },
+        homedir: () => '/home/user',
+        cwd: () => '/work/project',
+      }),
+    ).toBe('/scoped/home/workspace-root');
+  });
+
   it('falls back to cwd when homedir is not absolute', () => {
     expect(
       resolveMachineRpcWorkingDirectory({

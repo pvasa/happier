@@ -3231,7 +3231,8 @@ function createLoopbackMachineTransferChannels() {
   });
 
   it('normalizes prepare-target targetPath onto the local machine home when the request carries an absolute /.happier/ path from another machine', async () => {
-    const os = await import('node:os');
+    const localHomeDir = await mkdtemp(join(os.tmpdir(), 'happier-session-handoff-local-home-'));
+    const activeServerDir = join(localHomeDir, '.happier', 'wsrepl-qa', 'servers', 'stack_wsrepl__id_default');
     const sourcePath = '/Users/tester/projects/demo';
     const registered = new Map<string, (params: unknown) => Promise<any>>();
     const createState = vi.fn(async () => ({
@@ -3289,6 +3290,16 @@ function createLoopbackMachineTransferChannels() {
     } as any;
 
     vi.resetModules();
+    vi.doMock('@/configuration', async () => {
+      const actual = await vi.importActual<typeof import('@/configuration')>('@/configuration');
+      return {
+        ...actual,
+        configuration: {
+          ...actual.configuration,
+          activeServerDir,
+        },
+      };
+    });
     vi.doMock('../../session/handoff/workspaceReplicationAdapter/sessionHandoffWorkspaceReplicationAdapter', () => ({
       createSessionHandoffWorkspaceReplicationAdapter,
       resolveSessionHandoffWorkspaceReplicationSourceOffer: resolveSourceOffer,
@@ -3371,7 +3382,7 @@ function createLoopbackMachineTransferChannels() {
         });
       }
 
-      const expectedTargetPath = `${os.homedir()}/.happier/wsrepl-qa-fixtures/large-repo`;
+      const expectedTargetPath = join(localHomeDir, '.happier', 'wsrepl-qa-fixtures', 'large-repo');
       expect(prepareTargetWorkspace).toHaveBeenCalledWith(expect.objectContaining({
         targetPath: expectedTargetPath,
       }));
@@ -3379,6 +3390,7 @@ function createLoopbackMachineTransferChannels() {
       vi.doUnmock('@/configuration');
       vi.doUnmock('../../session/handoff/workspaceReplicationAdapter/sessionHandoffWorkspaceReplicationAdapter');
       vi.resetModules();
+      await rm(localHomeDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
 
@@ -3765,6 +3777,8 @@ function createLoopbackMachineTransferChannels() {
   });
 
   it('rejects workspace transfer from an unsafe source path before exporting bundles when session metadata is missing homeDir', async () => {
+    const localHomeDir = await mkdtemp(join(os.tmpdir(), 'happier-session-handoff-home-missing-metadata-'));
+    const activeServerDir = join(localHomeDir, '.happier', 'wsrepl-qa', 'servers', 'stack_wsrepl__id_default');
     const registered = new Map<string, (params: unknown) => Promise<any>>();
     const exportSessionBundle = vi.fn<ExportSessionBundle>(async () => ({
       providerBundle: {
@@ -3780,42 +3794,61 @@ function createLoopbackMachineTransferChannels() {
       },
     } as any;
 
-    registerMachineSessionHandoffRpcHandlers({
-      rpcHandlerManager,
-      loadSessionMetadata: async () => ({
-        machineId: 'machine_source',
-        path: os.homedir(),
-        flavor: 'claude',
-        claudeSessionId: 'claude_session_1',
-      }),
-      exportSessionBundle,
-    });
-
-    const start = registered.get(RPC_METHODS.DAEMON_SESSION_HANDOFF_START);
-    expect(start).toBeDefined();
-
-    await expect(
-      start!({
-        sessionId: 'sess_1',
-        sourceMachineId: 'machine_source',
-        targetMachineId: 'machine_target',
-        sessionStorageMode: 'persisted',
-        preferredTransportStrategies: ['direct_peer', 'server_routed_stream'],
-        workspaceTransfer: {
-          enabled: true,
-          conflictPolicy: 'create_sibling_copy',
-          includeIgnoredMode: 'exclude',
-          ignoredIncludeGlobs: [],
+    vi.resetModules();
+    vi.doMock('@/configuration', async () => {
+      const actual = await vi.importActual<typeof import('@/configuration')>('@/configuration');
+      return {
+        ...actual,
+        configuration: {
+          ...actual.configuration,
+          activeServerDir,
         },
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      errorCode: 'unsafe_workspace_transfer_path',
-      error: 'Workspace transfer is unavailable for this source path',
-      reasonCode: 'path_is_home_directory',
+      };
     });
+    const { registerMachineSessionHandoffRpcHandlers: registerHandlers } = await import('./rpcHandlers.sessionHandoff');
 
-    expect(exportSessionBundle).not.toHaveBeenCalled();
+    try {
+      registerHandlers({
+        rpcHandlerManager,
+        loadSessionMetadata: async () => ({
+          machineId: 'machine_source',
+          path: localHomeDir,
+          flavor: 'claude',
+          claudeSessionId: 'claude_session_1',
+        }),
+        exportSessionBundle,
+      });
+
+      const start = registered.get(RPC_METHODS.DAEMON_SESSION_HANDOFF_START);
+      expect(start).toBeDefined();
+
+      await expect(
+        start!({
+          sessionId: 'sess_1',
+          sourceMachineId: 'machine_source',
+          targetMachineId: 'machine_target',
+          sessionStorageMode: 'persisted',
+          preferredTransportStrategies: ['direct_peer', 'server_routed_stream'],
+          workspaceTransfer: {
+            enabled: true,
+            conflictPolicy: 'create_sibling_copy',
+            includeIgnoredMode: 'exclude',
+            ignoredIncludeGlobs: [],
+          },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        errorCode: 'unsafe_workspace_transfer_path',
+        error: 'Workspace transfer is unavailable for this source path',
+        reasonCode: 'path_is_home_directory',
+      });
+
+      expect(exportSessionBundle).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('@/configuration');
+      vi.resetModules();
+      await rm(localHomeDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 
   it('starts handoff successfully when handoff requests the sync-changes workspace strategy', async () => {

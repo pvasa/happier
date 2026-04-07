@@ -60,4 +60,28 @@ describe('readCodexEnvironmentAuthState', () => {
       accountLabel: 'valid@example.test',
     });
   });
+
+  it('expands ~/ CODEX_HOME against the provided HOME before reading auth.json', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-codex-auth-state-home-'));
+    tempDirs.push(dir);
+    await mkdir(join(dir, 'scoped-codex-home'), { recursive: true });
+    await writeFile(
+      join(dir, 'scoped-codex-home', 'auth.json'),
+      JSON.stringify({
+        tokens: {
+          id_token: buildJwt({ email: 'scoped@example.test', exp: 4_102_444_800 }),
+        },
+      }),
+      'utf8',
+    );
+
+    expect(readCodexEnvironmentAuthState({
+      HOME: dir,
+      USERPROFILE: dir,
+      CODEX_HOME: '~/scoped-codex-home',
+    })).toEqual({
+      method: 'credentials_file',
+      accountLabel: 'scoped@example.test',
+    });
+  });
 });

@@ -59,7 +59,10 @@ import {
   createSessionHandoffProviderBundlePayloadSource,
   readSessionHandoffProviderBundleFile,
 } from '../../session/handoff/sessionHandoffProviderBundleFile';
-import { normalizeSessionHandoffTargetPathForLocalMachine } from '../../session/handoff/paths/sessionHandoffPathNormalization';
+import {
+  normalizeSessionHandoffTargetPathForLocalMachine,
+  resolveSessionHandoffLocalHomeDir,
+} from '../../session/handoff/paths/sessionHandoffPathNormalization';
 import { createSessionHandoffSourceExportStore } from '../../session/handoff/state/sessionHandoffSourceExportStore';
 import {
   buildSessionHandoffProviderBundleTransferId,
@@ -891,6 +894,10 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
   const sourceExportStore = createSessionHandoffSourceExportStore({
     activeServerDir: configuration.activeServerDir,
   });
+  const localHandoffHomeDir = resolveSessionHandoffLocalHomeDir({
+    activeServerDir: configuration.activeServerDir,
+    fallbackHomeDir: os.homedir(),
+  });
   const activePrepareJobs = new Map<string, Promise<void>>();
   // Used to restart prepare-target durable jobs when only status/result polling continues after a daemon restart.
   let restartPrepareTargetJobFromPersistedRequest: ((raw: unknown) => Promise<void>) | null = null;
@@ -1491,7 +1498,7 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
     }
     const workspaceTransferValidation = validateSessionHandoffWorkspaceTransferSourcePath({
       metadata,
-      fallbackSourceHomeDir: os.homedir(),
+      fallbackSourceHomeDir: localHandoffHomeDir,
       workspaceTransfer: parsed.data.workspaceTransfer,
     });
     if (!workspaceTransferValidation.ok) {
@@ -2343,7 +2350,7 @@ export function registerMachineSessionHandoffRpcHandlers(params: Readonly<{
 		            targetMachineId: parsed.data.targetMachineId,
 		            targetPath: normalizeSessionHandoffTargetPathForLocalMachine({
 		              requestedTargetPath: parsed.data.targetPath,
-		              homeDir: os.homedir(),
+		              homeDir: localHandoffHomeDir,
 		            }),
 		            workspaceTransfer: resolvedWorkspaceTransfer,
 		            metadata: persistedWorkspaceReplicationMetadata,

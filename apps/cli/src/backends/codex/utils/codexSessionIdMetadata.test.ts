@@ -370,6 +370,32 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
     ]);
   });
 
+  it('uses the provided processEnv HOME when deriving the default codex direct-session source', () => {
+    const lastPublished = { value: null as string | null };
+    const updates: Metadata[] = [];
+
+    maybeUpdateCodexSessionIdMetadata({
+      getCodexThreadId: () => 'thread-scoped-home',
+      backendMode: 'appServer',
+      transcriptStorage: 'direct',
+      processEnv: {
+        HOME: '/scoped/home',
+      },
+      updateHappySessionMetadata: (updater: (metadata: Metadata) => Metadata) => {
+        updates.push(updater(createTestMetadata({ machineId: 'machine-1', path: '/repo' })));
+      },
+      lastPublished,
+    } as any);
+
+    expect(updates[0]?.directSessionV1).toMatchObject({
+      source: {
+        kind: 'codexHome',
+        home: 'user',
+        homePath: '/scoped/home/.codex',
+      },
+    });
+  });
+
   it('publishes connected-service Codex source affinity through the generic runtime descriptor', () => {
     const lastPublished = { value: null as string | null };
     const updates: Metadata[] = [];

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { getHappyStacksHomeDir, getRootDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import { getHappyStacksHomeDir, getRootDir, resolveExplicitStackEnvFilePath, resolveStackEnvPath } from './utils/paths/paths.mjs';
 import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { ensureEnvLocalUpdated } from './utils/env/env_local.mjs';
@@ -208,7 +208,7 @@ async function main() {
     const pluginBasename = String(process.env.HAPPIER_STACK_SWIFTBAR_PLUGIN_BASENAME ?? '').trim() || defaultBasename;
     const pluginFile = `${pluginBasename}.${interval}.sh`;
 
-    const defaultEnvFile = (process.env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim();
+    const defaultEnvFile = resolveExplicitStackEnvFilePath(process.env);
     const resolvedEnvFile = explicitStack
       ? resolveStackEnvPath(normalizedStack, process.env).envPath
       : (defaultEnvFile || resolveStackEnvPath(normalizedStack, process.env).envPath);

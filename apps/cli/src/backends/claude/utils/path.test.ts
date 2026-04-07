@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getProjectPath } from './path';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { getProjectPath } from './path';
+
 let previousClaudeConfigDir: string | undefined;
+let previousHappierClaudeConfigDir: string | undefined;
+let previousHome: string | undefined;
 
 function restoreClaudeConfigDir(value: string | undefined): void {
   if (value === undefined) {
@@ -13,14 +18,35 @@ function restoreClaudeConfigDir(value: string | undefined): void {
   process.env.CLAUDE_CONFIG_DIR = value;
 }
 
+function restoreHappierClaudeConfigDir(value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+    return;
+  }
+  process.env.HAPPIER_CLAUDE_CONFIG_DIR = value;
+}
+
+function restoreHome(value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env.HOME;
+    return;
+  }
+  process.env.HOME = value;
+}
+
 describe('getProjectPath', () => {
   beforeEach(() => {
     previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    previousHappierClaudeConfigDir = process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+    previousHome = process.env.HOME;
     delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.HAPPIER_CLAUDE_CONFIG_DIR;
   });
 
   afterEach(() => {
     restoreClaudeConfigDir(previousClaudeConfigDir);
+    restoreHappierClaudeConfigDir(previousHappierClaudeConfigDir);
+    restoreHome(previousHome);
   });
 
   it('should replace slashes with hyphens in the project path', () => {
@@ -136,6 +162,22 @@ describe('getProjectPath', () => {
       const workingDir = '/Users/steve/projects/my-app';
       const result = getProjectPath(workingDir);
       expect(result).toBe(join('/custom/claude/config', 'projects', '-Users-steve-projects-my-app'));
+    });
+
+    it('should use HAPPIER_CLAUDE_CONFIG_DIR when CLAUDE_CONFIG_DIR is unset', () => {
+      process.env.HAPPIER_CLAUDE_CONFIG_DIR = '/custom/happier-claude/config';
+      const workingDir = '/Users/steve/projects/my-app';
+      const result = getProjectPath(workingDir);
+      expect(result).toBe(join('/custom/happier-claude/config', 'projects', '-Users-steve-projects-my-app'));
+    });
+
+    it('should expand ~/ CLAUDE_CONFIG_DIR using HOME', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'happier-claude-config-home-'));
+      process.env.HOME = fakeHome;
+      process.env.CLAUDE_CONFIG_DIR = '~/team-claude';
+      const workingDir = '/Users/steve/projects/my-app';
+      const result = getProjectPath(workingDir);
+      expect(result).toBe(join(fakeHome, 'team-claude', 'projects', '-Users-steve-projects-my-app'));
     });
 
     it('should handle relative CLAUDE_CONFIG_DIR path', () => {

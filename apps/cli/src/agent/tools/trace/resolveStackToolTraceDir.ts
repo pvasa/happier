@@ -1,6 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
 
+import { resolveHappyHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
+
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 function normalizeEnvPath(value: string | undefined, env: NodeJS.ProcessEnv): string | null {
@@ -33,7 +35,7 @@ export function resolveStackToolTraceDir(params: {
   const env = params.env ?? process.env;
 
   const storageOverride = normalizeEnvPath(env.HAPPIER_STACK_STORAGE_DIR, env);
-  const stacksRoot = storageOverride ?? path.join(os.homedir(), '.happier', 'stacks');
+  const stacksRoot = storageOverride ?? path.join(resolveHappyHomeDirFromEnvironment(env) || os.homedir(), 'stacks');
 
   return path.join(stacksRoot, stack, 'cli', 'tool-traces');
 }

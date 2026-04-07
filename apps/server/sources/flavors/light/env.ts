@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir as defaultHomedir, tmpdir } from 'node:os';
+import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@/utils/path/expandHomeDirPath';
 
 export type LightEnv = NodeJS.ProcessEnv;
 
@@ -10,11 +11,11 @@ function isBunfsHomeDir(path: string): boolean {
 }
 
 export function resolveLightDataDir(env: LightEnv, opts?: { homedir?: string }): string {
-    const fromEnv = (env.HAPPY_SERVER_LIGHT_DATA_DIR ?? env.HAPPIER_SERVER_LIGHT_DATA_DIR)?.trim();
+    const fromEnv = expandHomeDirPath((env.HAPPY_SERVER_LIGHT_DATA_DIR ?? env.HAPPIER_SERVER_LIGHT_DATA_DIR)?.trim() ?? '', env);
     if (fromEnv) {
         return fromEnv;
     }
-    const home = (opts?.homedir ?? defaultHomedir()).trim();
+    const home = String(opts?.homedir ?? resolveHomeDirFromEnvironment(env) ?? defaultHomedir()).trim();
     // Bun's in-memory "/$bunfs/root" homedir is ephemeral and not writable across runs.
     // Fall back to OS tmpdir for stable local light-server data during tests/dev.
     if (!home || isBunfsHomeDir(home)) {
@@ -24,7 +25,7 @@ export function resolveLightDataDir(env: LightEnv, opts?: { homedir?: string }):
 }
 
 export function resolveLightFilesDir(env: LightEnv, dataDir: string): string {
-    const fromEnv = (env.HAPPY_SERVER_LIGHT_FILES_DIR ?? env.HAPPIER_SERVER_LIGHT_FILES_DIR)?.trim();
+    const fromEnv = expandHomeDirPath((env.HAPPY_SERVER_LIGHT_FILES_DIR ?? env.HAPPIER_SERVER_LIGHT_FILES_DIR)?.trim() ?? '', env);
     if (fromEnv) {
         return fromEnv;
     }
@@ -32,7 +33,7 @@ export function resolveLightFilesDir(env: LightEnv, dataDir: string): string {
 }
 
 export function resolveLightDatabaseDir(env: LightEnv, dataDir: string): string {
-    const fromEnv = (env.HAPPY_SERVER_LIGHT_DB_DIR ?? env.HAPPIER_SERVER_LIGHT_DB_DIR)?.trim();
+    const fromEnv = expandHomeDirPath((env.HAPPY_SERVER_LIGHT_DB_DIR ?? env.HAPPIER_SERVER_LIGHT_DB_DIR)?.trim() ?? '', env);
     if (fromEnv) {
         return fromEnv;
     }

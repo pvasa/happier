@@ -1,4 +1,5 @@
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { expandHomeDirPath } from '../providers/resolution.js';
 
 type RelayRuntimeMode = 'user' | 'system';
 
@@ -42,6 +43,14 @@ export type RelayRuntimeDefaults = Readonly<{
   serverHost: string;
   serverPort: number;
   healthPath: string;
+}>;
+
+export type RelayRuntimeConfiguredPaths = Readonly<{
+  installRoot: string;
+  binDir: string;
+  configDir: string;
+  dataDir: string;
+  logDir: string;
 }>;
 
 export type RelayRuntimeNormalizedStatus = Readonly<{
@@ -91,6 +100,30 @@ function normalizeChannel(raw: unknown): PublicReleaseRingId {
   return normalized === 'stable' || normalized === 'preview' || normalized === 'publicdev'
     ? normalized
     : 'stable';
+}
+
+function readExpandedOverride(env: NodeJS.ProcessEnv, key: string): string {
+  const raw = typeof env[key] === 'string' ? env[key].trim() : '';
+  return expandHomeDirPath(raw, env);
+}
+
+export function resolveConfiguredRelayRuntimePaths(params: Readonly<{
+  defaults: RelayRuntimeConfiguredPaths;
+  env?: NodeJS.ProcessEnv;
+}>): RelayRuntimeConfiguredPaths {
+  const env = params.env ?? process.env;
+
+  return {
+    installRoot: readExpandedOverride(env, 'HAPPIER_SELF_HOST_INSTALL_ROOT') || params.defaults.installRoot,
+    binDir: readExpandedOverride(env, 'HAPPIER_SELF_HOST_BIN_DIR') || params.defaults.binDir,
+    configDir: readExpandedOverride(env, 'HAPPIER_SELF_HOST_CONFIG_DIR') || params.defaults.configDir,
+    dataDir: readExpandedOverride(env, 'HAPPIER_SELF_HOST_DATA_DIR') || params.defaults.dataDir,
+    logDir: readExpandedOverride(env, 'HAPPIER_SELF_HOST_LOG_DIR') || params.defaults.logDir,
+  };
+}
+
+export function resolveConfiguredRelayRuntimeBinaryOverride(env: NodeJS.ProcessEnv = process.env): string {
+  return readExpandedOverride(env, 'HAPPIER_SELF_HOST_SERVER_BINARY');
 }
 
 function buildRelayRuntimeUrl(params: Readonly<{

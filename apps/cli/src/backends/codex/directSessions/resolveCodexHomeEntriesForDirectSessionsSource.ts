@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { DirectSessionsSource } from '@happier-dev/protocol';
+import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
 
 export type CodexDirectSessionHomeEntry = Readonly<{
   codexHome: string;
@@ -106,9 +107,7 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
   if (params.source.home === 'user') {
     const codexHome = typeof params.source.homePath === 'string' && params.source.homePath.trim().length > 0
       ? normalizeHomePath(params.source.homePath)
-      : typeof params.env.CODEX_HOME === 'string' && params.env.CODEX_HOME.trim().length > 0
-        ? normalizeHomePath(params.env.CODEX_HOME)
-        : normalizeHomePath(join(homedir(), '.codex'));
+      : normalizeHomePath(resolveConfiguredCodexHome(params.env));
     return [{ codexHome, source: { kind: 'codexHome', home: 'user', homePath: codexHome } }];
   }
 

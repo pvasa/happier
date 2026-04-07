@@ -1,5 +1,6 @@
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 
@@ -11,7 +12,11 @@ function readNonEmptyEnv(env: EnvLike, key: string): string | null {
 }
 
 export function resolveGeminiCliHome(env: EnvLike = process.env): string {
-  return readNonEmptyEnv(env, 'GEMINI_CLI_HOME') ?? readNonEmptyEnv(env, 'HOME') ?? homedir();
+  const explicit = expandHomeDirPath(readNonEmptyEnv(env, 'GEMINI_CLI_HOME') ?? '', env);
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  return resolveHomeDirFromEnvironment(env);
 }
 
 export function resolveGeminiConfigPaths(env: EnvLike = process.env): Readonly<{
@@ -27,7 +32,7 @@ export function resolveGeminiConfigPaths(env: EnvLike = process.env): Readonly<{
   userOauthCredsPath: string;
 }> {
   const cliHomeDir = resolveGeminiCliHome(env);
-  const xdgConfigHome = readNonEmptyEnv(env, 'XDG_CONFIG_HOME') ?? join(cliHomeDir, '.config');
+  const xdgConfigHome = expandHomeDirPath(readNonEmptyEnv(env, 'XDG_CONFIG_HOME') ?? '', env) || join(cliHomeDir, '.config');
   const geminiDir = join(cliHomeDir, '.gemini');
   const geminiXdgDir = join(xdgConfigHome, 'gemini');
   return {

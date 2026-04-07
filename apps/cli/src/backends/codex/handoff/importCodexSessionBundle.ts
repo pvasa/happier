@@ -1,5 +1,4 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
@@ -12,6 +11,7 @@ import {
 } from '@happier-dev/protocol';
 
 import type { CodexSessionBundle, ImportedSessionHandoffBundle } from '../../../session/handoff/types';
+import { resolveConfiguredCodexHome } from '../utils/resolveConfiguredCodexHome';
 
 function resolveCodexRuntimeSourceAffinity(source: unknown): Readonly<{
   home?: 'user' | 'connectedService';
@@ -32,11 +32,6 @@ function resolveCodexRuntimeSourceAffinity(source: unknown): Readonly<{
     : { home: 'user' };
 }
 
-function resolveCodexHome(env: NodeJS.ProcessEnv): string {
-  const raw = typeof env.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
-  return raw || join(homedir(), '.codex');
-}
-
 function resolveContainedCodexPath(codexHome: string, relativePath: string): string {
   const root = resolve(codexHome);
   const candidate = resolve(root, relativePath);
@@ -53,7 +48,7 @@ export async function importCodexSessionBundle(params: Readonly<{
   env: NodeJS.ProcessEnv;
   sessionStorageMode?: 'direct' | 'persisted';
 }>): Promise<ImportedSessionHandoffBundle> {
-  const codexHome = resolveCodexHome(params.env);
+  const codexHome = resolveConfiguredCodexHome(params.env);
   const runtimeIdentity = resolvePersistedCodexRuntimeIdentity(params.bundle) ?? { backendMode: 'appServer' as const };
   const importedRuntimeDescriptor = readCanonicalAgentRuntimeDescriptorV1ForProvider(params.bundle.affinity?.runtimeDescriptor, 'codex');
   const sourceAffinity = resolveCodexRuntimeSourceAffinity(params.bundle.affinity?.source);

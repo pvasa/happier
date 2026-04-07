@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -86,6 +86,31 @@ describe("bugReportDiagnosticsRoutes", () => {
 
             expect((response as any).enabled).toBe(true);
             expect((response as any).logs.tail).toContain("[REDACTED]");
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it("expands ~/ configured log paths against HOME", async () => {
+        const dir = mkdtempSync(join(tmpdir(), "happier-bug-report-diag-tilde-"));
+        const homeDir = join(dir, "home");
+        const logDir = join(homeDir, ".happier", "logs");
+        const logPath = join(logDir, "server.log");
+        mkdirSync(logDir, { recursive: true });
+        writeFileSync(logPath, "INFO hello\n", "utf8");
+        resetEnv({
+            HOME: homeDir,
+            HAPPIER_BUG_REPORTS_SERVER_DIAGNOSTICS_ENABLED: "1",
+            HAPPIER_BUG_REPORTS_SERVER_DIAGNOSTICS_ACCESS_MODE: "authenticated",
+            HAPPIER_BUG_REPORTS_SERVER_LOG_PATH: "~/.happier/logs/server.log",
+        });
+
+        try {
+            const route = await createDiagnosticsRoute();
+            const { response } = await route.invoke();
+
+            expect((response as any).enabled).toBe(true);
+            expect((response as any).logs.tail).toContain("INFO hello");
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }

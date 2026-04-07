@@ -3,7 +3,15 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { pathExists } from './utils/fs/fs.mjs';
 import { runCapture } from './utils/proc/proc.mjs';
 import { resolveCommandPath } from './utils/proc/commands.mjs';
-import { getComponentDir, getDefaultAutostartPaths, getHappyStacksHomeDir, getRootDir, getWorkspaceDir, resolveStackEnvPath } from './utils/paths/paths.mjs';
+import {
+  getComponentDir,
+  getDefaultAutostartPaths,
+  getHappyStacksHomeDir,
+  getRootDir,
+  getWorkspaceDir,
+  resolveExplicitStackEnvFilePath,
+  resolveStackEnvPath,
+} from './utils/paths/paths.mjs';
 import { killPortListeners } from './utils/net/ports.mjs';
 import { getServerComponentName } from './utils/server/server.mjs';
 import { fetchHappierHealth } from './utils/server/server.mjs';
@@ -162,7 +170,7 @@ async function main() {
       homeEnv: join(homeDir, '.env'),
       homeLocal: join(homeDir, 'env.local'),
       mainStackEnv: resolveStackEnvPath('main').envPath,
-      activeEnv: process.env.HAPPIER_STACK_ENV_FILE?.trim() || null,
+      activeEnv: resolveExplicitStackEnvFilePath(process.env) || null,
     },
     internalServerUrl,
     publicServerUrl,

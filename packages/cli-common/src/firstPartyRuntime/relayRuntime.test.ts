@@ -49,6 +49,50 @@ describe('resolveRelayRuntimeDefaults', () => {
   });
 });
 
+describe('resolveConfiguredRelayRuntimePaths', () => {
+  it('expands ~/ self-host path overrides against the provided HOME', async () => {
+    const mod = await import('./relayRuntime');
+    expect(typeof mod.resolveConfiguredRelayRuntimePaths).toBe('function');
+
+    const defaults = resolveRelayRuntimeDefaults({
+      platform: 'linux',
+      mode: 'user',
+      channel: 'stable',
+      homeDir: '/home/default',
+    });
+
+    expect(mod.resolveConfiguredRelayRuntimePaths({
+      defaults,
+      env: {
+        HOME: '/scoped/home',
+        USERPROFILE: '/scoped/home',
+        HAPPIER_SELF_HOST_INSTALL_ROOT: '~/relay/install',
+        HAPPIER_SELF_HOST_BIN_DIR: '~/relay/bin',
+        HAPPIER_SELF_HOST_CONFIG_DIR: '~/relay/config',
+        HAPPIER_SELF_HOST_DATA_DIR: '~/relay/data',
+        HAPPIER_SELF_HOST_LOG_DIR: '~/relay/logs',
+      },
+    })).toEqual({
+      installRoot: '/scoped/home/relay/install',
+      binDir: '/scoped/home/relay/bin',
+      configDir: '/scoped/home/relay/config',
+      dataDir: '/scoped/home/relay/data',
+      logDir: '/scoped/home/relay/logs',
+    });
+  });
+
+  it('expands ~/ self-host binary overrides against the provided HOME', async () => {
+    const mod = await import('./relayRuntime');
+    expect(typeof mod.resolveConfiguredRelayRuntimeBinaryOverride).toBe('function');
+
+    expect(mod.resolveConfiguredRelayRuntimeBinaryOverride({
+      HOME: '/scoped/home',
+      USERPROFILE: '/scoped/home',
+      HAPPIER_SELF_HOST_SERVER_BINARY: '~/bin/happier-server',
+    })).toBe('/scoped/home/bin/happier-server');
+  });
+});
+
 describe('normalizeRelayRuntimeStatus', () => {
   it('normalizes platform-specific service reports into a stable status model', () => {
     expect(normalizeRelayRuntimeStatus({

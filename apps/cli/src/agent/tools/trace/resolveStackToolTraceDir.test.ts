@@ -14,6 +14,17 @@ describe('resolveStackToolTraceDir', () => {
     expect(dir).toBe(path.join(os.homedir(), '.happier', 'stacks', stack, 'cli', 'tool-traces'));
   });
 
+  it('defaults to HAPPIER_HOME_DIR/stacks when HAPPIER_HOME_DIR is configured', () => {
+    const stack = 'unit-test-stack';
+    const dir = resolveStackToolTraceDir({
+      stack,
+      env: {
+        HAPPIER_HOME_DIR: '/scoped/happier-home',
+      },
+    });
+    expect(dir).toBe(path.join('/scoped/happier-home', 'stacks', stack, 'cli', 'tool-traces'));
+  });
+
   it('respects HAPPIER_STACK_STORAGE_DIR override', () => {
     const storage = mkdtempSync(path.join(tmpdir(), 'happier-stack-storage-'));
     const stack = 'unit-test-stack';

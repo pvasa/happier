@@ -2,9 +2,9 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { DirectSessionsProviderId, DirectSessionsSource } from '@happier-dev/protocol';
+import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 
 import {
-  expandHomeDirForDirectSessions,
   resolveConfiguredClaudeConfigDir,
 } from '@/backends/claude/directSessions/resolveClaudeConfigDir';
 
@@ -16,8 +16,8 @@ function err(error: string): DirectSourceValidationResult {
   return { ok: false, error };
 }
 
-function canonicalizePath(raw: string): string {
-  const resolved = resolve(expandHomeDirForDirectSessions(raw));
+function canonicalizePath(raw: string, env: NodeJS.ProcessEnv): string {
+  const resolved = resolve(expandHomeDirPath(raw.trim(), env));
   try {
     return realpathSync(resolved);
   } catch {
@@ -56,8 +56,11 @@ export function validateDirectMachineSource(params: Readonly<{
     }
     case 'claude': {
       if (source.kind !== 'claudeConfig') return err('provider/source mismatch');
-      const requestedConfigDir = typeof source.configDir === 'string' && source.configDir.trim().length > 0 ? canonicalizePath(source.configDir) : null;
-      const configuredConfigDir = canonicalizePath(resolveConfiguredClaudeConfigDir({ env }));
+      const requestedConfigDir =
+        typeof source.configDir === 'string' && source.configDir.trim().length > 0
+          ? canonicalizePath(source.configDir, env)
+          : null;
+      const configuredConfigDir = canonicalizePath(resolveConfiguredClaudeConfigDir({ env }), env);
       if (requestedConfigDir && requestedConfigDir !== configuredConfigDir) {
         return err('source configDir override is not allowed');
       }

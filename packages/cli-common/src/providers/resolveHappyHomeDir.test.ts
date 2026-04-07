@@ -9,6 +9,13 @@ describe('resolveHappyHomeDirFromEnvironment', () => {
     expect(resolveHappyHomeDirFromEnvironment({ HAPPIER_HOME_DIR: '/tmp/happier-home' })).toBe('/tmp/happier-home');
   });
 
+  it('expands ~/ override paths against the configured home directory', () => {
+    expect(resolveHappyHomeDirFromEnvironment({
+      HAPPIER_HOME_DIR: '~/custom-happier-home',
+      HOME: '/Users/tester',
+    })).toBe('/Users/tester/custom-happier-home');
+  });
+
   it('resolves relative override paths to absolute paths', () => {
     expect(resolveHappyHomeDirFromEnvironment({ HAPPIER_HOME_DIR: 'relative-home' })).toBe(resolvePath('relative-home'));
   });

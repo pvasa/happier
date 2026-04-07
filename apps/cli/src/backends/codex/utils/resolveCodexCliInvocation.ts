@@ -1,7 +1,7 @@
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
+import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandPath } from '@happier-dev/cli-common/process';
 
 import { requireJavaScriptRuntimeExecutable } from '@/runtime/js/requireJavaScriptRuntimeExecutable';
@@ -32,14 +32,7 @@ function looksLikePath(value: string): boolean {
 }
 
 function expandHomeDir(value: string): string {
-    if (value === '~') {
-        return homedir();
-    }
-    if (value.startsWith('~/') || value.startsWith('~\\')) {
-        return resolve(homedir(), value.slice(2));
-    }
-    // Fall back to a conservative expansion for any other "~" prefix.
-    return resolve(homedir(), value.slice(1));
+    return resolve(value);
 }
 
 function resolveOverrideCommand(
@@ -56,7 +49,13 @@ function resolveOverrideCommand(
         }
 
         const expanded = value.startsWith('~')
-            ? expandHomeDir(value)
+            ? (() => {
+                const expandedHome = expandHomeDirPath(value, processEnv);
+                if (expandedHome.length > 0 && expandedHome !== value) {
+                    return expandHomeDir(expandedHome);
+                }
+                return resolve(resolveHomeDirFromEnvironment(processEnv), value.slice(1));
+            })()
             : resolve(cwd, value);
         const accessMode =
             JAVA_SCRIPT_ENTRYPOINT_EXTENSION.test(expanded)

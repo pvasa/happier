@@ -322,6 +322,37 @@ describe('claude session handoff bundle', () => {
     }
   });
 
+  it('uses the import env HOME fallback even when process.env.HOME points somewhere else', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-claude-handoff-import-env-home-'));
+    const targetPath = join(root, 'workspace');
+    await mkdir(targetPath, { recursive: true });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = join(root, 'wrong-home');
+    try {
+      const result = await importClaudeSessionBundle({
+        bundle: {
+          providerId: 'claude',
+          remoteSessionId: 'claude_session_env_home',
+          transcriptBase64: Buffer.from('{"type":"assistant","text":"env-home"}\n', 'utf8').toString('base64'),
+        },
+        targetPath,
+        env: {
+          HOME: join(root, 'expected-home'),
+        },
+      });
+
+      expect(result.directSource).toEqual({
+        kind: 'claudeConfig',
+        configDir: join(root, 'expected-home', '.claude'),
+        projectId: resolveClaudeProjectId(targetPath),
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+
   it('rejects remote session ids that contain path separators', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-claude-handoff-import-invalid-id-'));
     const targetPath = join(root, 'workspace');

@@ -5,6 +5,7 @@ import { createServerUrlComparableKey } from '@happier-dev/protocol';
 import { checkIfDaemonRunningAndCleanupStaleState, listDaemonSessions, stopDaemon, stopDaemonSession } from '@/daemon/controlClient';
 import { startDaemon } from '@/daemon/startDaemon';
 import {
+  resolveDaemonServiceCliRuntimeFromEnv,
   resolveDaemonServiceInstallationSnapshotFromEnv,
   runDaemonServiceCliCommand,
 } from '@/daemon/service/cli';
@@ -13,7 +14,6 @@ import { runDoctorCommand } from '@/ui/doctor';
 import { listDaemonStatusesForAllKnownServers, stopAllDaemonsBestEffort } from '@/daemon/multiDaemon';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 import { readCredentials, readSettings } from '@/persistence';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveLaunchAgentPlistPath, resolveSystemdUserUnitPath } from '@/daemon/service/plan';
 import { configuration } from '@/configuration';
@@ -32,8 +32,9 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     const serviceAction = args[2];
       if (serviceAction === 'list') {
         const json = args.includes('--json');
-        const userHomeDir = (process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR ?? '').trim() || homedir();
-        const happierHomeDir = (process.env.HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR ?? '').trim() || configuration.happyHomeDir;
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env });
+        const userHomeDir = runtime.userHomeDir;
+        const happierHomeDir = runtime.happierHomeDir || configuration.happyHomeDir;
         const settings = await readSettings();
         const servers = settings.servers ?? {};
         const entries = Object.values(servers);

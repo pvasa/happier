@@ -78,6 +78,34 @@ describe('resolveCodexCliInvocation', () => {
         }
     });
 
+    it('expands ~ in override env vars against the provided processEnv HOME', async () => {
+        if (process.platform === 'win32') {
+            return;
+        }
+
+        const root = await mkdtemp(join(tmpdir(), 'happier-codex-cli-invocation-scoped-home-'));
+        const scopedHome = join(root, 'home');
+        try {
+            const binDir = join(scopedHome, 'bin');
+            const codexPath = await createExecutable({ dir: binDir, name: 'codex-app-server' });
+
+            const invocation = await resolveCodexCliInvocation({
+                args: ['app-server', '--listen', 'stdio://'],
+                processEnv: {
+                    ...process.env,
+                    HOME: scopedHome,
+                    HAPPIER_CODEX_APP_SERVER_BIN: '~/bin/codex-app-server',
+                },
+                overrideEnvVarKeys: ['HAPPIER_CODEX_APP_SERVER_BIN'],
+                targetLabel: 'Codex app-server',
+            });
+
+            expect(invocation.command).toBe(codexPath);
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
     it('ignores override paths that point at a directory and falls back to provider CLI resolution', async () => {
         if (process.platform === 'win32') {
             // Windows PATH resolution + exec bits differ; current failure mode is Unix-only.

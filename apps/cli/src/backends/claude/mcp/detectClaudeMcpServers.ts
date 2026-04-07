@@ -1,10 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1 } from '@happier-dev/protocol';
 
-import { resolveClaudeConfigDirOverride } from '../utils/resolveClaudeConfigDirOverride';
+import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClaudeConfigDir';
 
 export type DetectClaudeMcpServersResult = Readonly<{
   servers: ReadonlyArray<DetectedMcpServerV1>;
@@ -91,7 +90,7 @@ export async function detectClaudeMcpServers(params: Readonly<{
   env?: NodeJS.ProcessEnv;
 }>): Promise<DetectClaudeMcpServersResult> {
   const env = params.env ?? process.env;
-  const configDir = resolveClaudeConfigDirOverride(env) ?? join(homedir(), '.claude');
+  const configDir = resolveConfiguredClaudeConfigDir({ env });
 
   const candidates: Array<Readonly<{ kind: 'user' | 'project'; path: string }>> = [
     { kind: 'user', path: join(configDir, 'settings.json') },
@@ -133,4 +132,3 @@ export async function detectClaudeMcpServers(params: Readonly<{
 
   return { servers, warnings };
 }
-

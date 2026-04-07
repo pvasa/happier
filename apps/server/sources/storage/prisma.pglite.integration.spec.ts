@@ -27,6 +27,7 @@ describe("storage/prisma initDbPglite", () => {
             HAPPY_SERVER_LIGHT_DATA_DIR: undefined,
             HAPPIER_SERVER_LIGHT_DB_DIR: undefined,
             HAPPIER_SERVER_LIGHT_DATA_DIR: undefined,
+            HOME: undefined,
         });
         while (createdDirs.length > 0) {
             const dir = createdDirs.pop();
@@ -84,6 +85,21 @@ describe("storage/prisma initDbPglite", () => {
         await shutdownDbPglite();
 
         const release = await acquirePgliteDirLock(dbDir, { purpose: "test-happier-prefix-after-shutdown" });
+        await release();
+    }, 30_000);
+
+    it("expands ~/ light data dir env vars against HOME", async () => {
+        const homeDir = await createHarnessDir();
+        const dbDir = join(homeDir, "light-data", "pglite");
+        applyEnvValues({
+            HOME: homeDir,
+            HAPPY_SERVER_LIGHT_DATA_DIR: "~/light-data",
+        });
+
+        await expect(initDbPglite()).resolves.toBeUndefined();
+        await shutdownDbPglite();
+
+        const release = await acquirePgliteDirLock(dbDir, { purpose: "test-tilde-home-after-shutdown" });
         await release();
     }, 30_000);
 });

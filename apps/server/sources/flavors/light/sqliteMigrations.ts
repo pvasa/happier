@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { parseBooleanEnv } from '@/config/env';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 type SqliteMigration = Readonly<{
   name: string;
@@ -65,7 +66,10 @@ export function shouldAutoMigrateSqliteOnStart(env: NodeJS.ProcessEnv): boolean 
 }
 
 export function resolveSqliteMigrationsDir(env: NodeJS.ProcessEnv, dataDir: string): string {
-  const explicit = String(env.HAPPIER_SQLITE_MIGRATIONS_DIR ?? env.HAPPY_SQLITE_MIGRATIONS_DIR ?? '').trim();
+  const explicit = expandHomeDirPath(
+    String(env.HAPPIER_SQLITE_MIGRATIONS_DIR ?? env.HAPPY_SQLITE_MIGRATIONS_DIR ?? '').trim(),
+    env,
+  );
   if (explicit) return explicit;
   const base = String(dataDir ?? '').trim();
   return base ? join(base, 'migrations', 'sqlite') : '';

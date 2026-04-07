@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveLightDataDir, resolveLightDatabaseDir } from "@/flavors/light/env";
 import { acquirePgliteDirLock } from "./locks/pgliteLock";
 export type TransactionClient = PrismaNamespace.TransactionClient;
 export type PrismaClientType = PrismaClientInstance;
@@ -187,16 +188,7 @@ export async function initDbSqlite(): Promise<void> {
 }
 
 function resolveLightPgliteDirFromEnv(env: NodeJS.ProcessEnv): string {
-    const fromEnv = (env.HAPPIER_SERVER_LIGHT_DB_DIR ?? env.HAPPY_SERVER_LIGHT_DB_DIR)?.trim();
-    if (fromEnv) return fromEnv;
-
-    const dataDir = (env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? env.HAPPY_SERVER_LIGHT_DATA_DIR)?.trim();
-    if (!dataDir) {
-        throw new Error(
-            "Missing HAPPIER_SERVER_LIGHT_DATA_DIR/HAPPY_SERVER_LIGHT_DATA_DIR (expected applyLightDefaultEnv to set it)",
-        );
-    }
-    return join(dataDir, "pglite");
+    return resolveLightDatabaseDir(env, resolveLightDataDir(env));
 }
 
 function withConnectionLimit(rawUrl: string, limit: number): string {

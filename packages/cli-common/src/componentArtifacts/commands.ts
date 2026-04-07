@@ -4,6 +4,7 @@ import { stat } from 'node:fs/promises';
 import { accessSync, constants as fsConstants } from 'node:fs';
 
 import { commandExistsOnPath } from '../process/index.js';
+import { expandHomeDirPath } from '../providers/resolution.js';
 
 export type RunCommand = (
   cmd: string,
@@ -70,7 +71,7 @@ export function resolveBunCommand({
   commandProbe?: (cmd: string) => boolean;
   platform?: NodeJS.Platform;
 } = {}): string | null {
-  const explicit = String(processEnv.HAPPIER_BUN_PATH ?? '').trim();
+  const explicit = expandHomeDirPath(String(processEnv.HAPPIER_BUN_PATH ?? '').trim(), processEnv);
   if (isRunnableExecutablePath(explicit, platform)) {
     return explicit;
   }

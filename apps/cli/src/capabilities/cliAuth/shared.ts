@@ -1,22 +1,16 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { providerCliPathRequiresJavaScriptRuntime } from '@happier-dev/cli-common/providers';
+import { providerCliPathRequiresJavaScriptRuntime, resolveHomeDirFromEnvironment } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { ensureJavaScriptRuntimeExecutable } from '@/runtime/js/ensureJavaScriptRuntimeExecutable';
 
 const execFileAsync = promisify(execFile);
 
 export function resolveCliAuthHomeDir(): string {
-  const envHome =
-    process.platform === 'win32'
-      ? (process.env.USERPROFILE || process.env.HOME)
-      : process.env.HOME;
-  const trimmed = typeof envHome === 'string' ? envHome.trim() : '';
-  return trimmed.length > 0 ? trimmed : homedir();
+  return resolveHomeDirFromEnvironment(process.env);
 }
 
 export async function runCliCommandBestEffort(params: Readonly<{

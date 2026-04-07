@@ -1,8 +1,8 @@
-import { getRepoDir } from '../paths/paths.mjs';
+import { getRepoDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 
 export function isStackMode(env = process.env) {
   const stack = String(env.HAPPIER_STACK_STACK ?? '').trim();
-  const envFile = String(env.HAPPIER_STACK_ENV_FILE ?? '').trim();
+  const envFile = resolveExplicitStackEnvFilePath(env);
   return Boolean(stack && envFile);
 }
 

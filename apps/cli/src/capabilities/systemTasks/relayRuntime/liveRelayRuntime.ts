@@ -17,6 +17,8 @@ import {
 import {
   checkRelayRuntimeHealth,
   extractReleasePayloadRootFromArchive,
+  resolveConfiguredRelayRuntimeBinaryOverride,
+  resolveConfiguredRelayRuntimePaths,
   resolveRelayRuntimeDefaults,
   type RelayRuntimeHealthResult,
   type RelayRuntimeNormalizedStatus,
@@ -147,10 +149,11 @@ function resolveRelayRuntimeConfig(params: RelayRuntimeTaskParams): RelayRuntime
     channel: params.channel as never,
     homeDir: params.homeDir ?? homedir(),
   });
-  const installRoot = String(process.env.HAPPIER_SELF_HOST_INSTALL_ROOT ?? defaults.installRoot).trim() || defaults.installRoot;
-  const configDir = String(process.env.HAPPIER_SELF_HOST_CONFIG_DIR ?? defaults.configDir).trim() || defaults.configDir;
-  const dataDir = String(process.env.HAPPIER_SELF_HOST_DATA_DIR ?? defaults.dataDir).trim() || defaults.dataDir;
-  const logDir = String(process.env.HAPPIER_SELF_HOST_LOG_DIR ?? defaults.logDir).trim() || defaults.logDir;
+  const configuredPaths = resolveConfiguredRelayRuntimePaths({ defaults, env: process.env });
+  const installRoot = configuredPaths.installRoot;
+  const configDir = configuredPaths.configDir;
+  const dataDir = configuredPaths.dataDir;
+  const logDir = configuredPaths.logDir;
   const serviceName = String(process.env.HAPPIER_SELF_HOST_SERVICE_NAME ?? defaults.serviceName).trim() || defaults.serviceName;
   const serverHost = String(process.env.HAPPIER_SERVER_HOST ?? defaults.serverHost).trim() || defaults.serverHost;
   const serverPort = parsePort(process.env.HAPPIER_SERVER_PORT, defaults.serverPort);
@@ -571,7 +574,7 @@ export async function installOrUpdateRelayRuntime(params: RelayRuntimeTaskParams
 
   try {
     const state = await readRelayRuntimeState(config.statePath);
-    const explicitBinaryPath = String(process.env.HAPPIER_SELF_HOST_SERVER_BINARY ?? '').trim();
+    const explicitBinaryPath = resolveConfiguredRelayRuntimeBinaryOverride(process.env);
     const previousVersionId =
       typeof state.version === 'string' && state.version.trim().length > 0
         ? state.version

@@ -8,7 +8,12 @@ import { pathExists } from '../fs/fs.mjs';
 import { readJsonIfExists, writeJsonAtomic } from '../fs/json.mjs';
 import { run, runCapture, spawnProc } from './proc.mjs';
 import { commandExists } from './commands.mjs';
-import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStacksHomeDir } from '../paths/paths.mjs';
+import {
+  coerceHappyMonorepoRootFromPath,
+  getDefaultAutostartPaths,
+  getHappyStacksHomeDir,
+  resolveExplicitStackEnvFilePath,
+} from '../paths/paths.mjs';
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 import { expandHome } from '../paths/canonical_home.mjs';
 import { withCliDistBuildLock } from './cliDistBuildLock.mjs';
@@ -325,12 +330,12 @@ function resolveStackCacheBaseDirFromEnv(env) {
   const explicit = (env.HAPPIER_STACK_PM_CACHE_BASE_DIR ?? '').toString().trim();
   if (explicit) {
     try {
-      return resolve(expandHome(explicit));
+      return resolve(expandHome(explicit, env));
     } catch {
       return null;
     }
   }
-  const envFile = (env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim();
+  const envFile = resolveExplicitStackEnvFilePath(env);
   if (!envFile) return null;
   try {
     return join(dirname(envFile), 'cache');
@@ -367,7 +372,7 @@ export async function applyStackCacheEnv(baseEnv) {
     env.NPM_CONFIG_PRODUCTION = 'false';
   }
 
-  const envFile = (env.HAPPIER_STACK_ENV_FILE ?? '').toString().trim();
+  const envFile = resolveExplicitStackEnvFilePath(env);
   const stackCacheBase = resolveStackCacheBaseDirFromEnv(env);
   if (!stackCacheBase) return env;
 

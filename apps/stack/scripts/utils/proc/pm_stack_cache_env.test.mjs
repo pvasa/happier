@@ -452,6 +452,34 @@ test('ensureDepsInstalled honors HAPPIER_STACK_PM_CACHE_BASE_DIR when no stack e
   assert.equal(parsed.HOME, join(cacheBase, 'home'));
 });
 
+test('ensureDepsInstalled derives stack cache roots from ~/ env file overrides against HOME', async (t) => {
+  const fixture = await createStackCacheFixture(t, 'hs-pm-tilde-stack-env-file-');
+  const { root, componentDir, binDir } = fixture;
+  const outputPath = join(root, 'env.json');
+  const homeDir = join(root, 'home');
+  const expectedCacheBase = join(homeDir, '.happier', 'stacks', 'dev', 'cache');
+  const expectedStackHome = join(homeDir, '.happier', 'stacks', 'dev', 'home');
+  await writeYarnEnvDumpStub({ binDir, outputPath });
+
+  applyEnvOverrides(t, {
+    PATH: `${binDir}:${process.env.PATH ?? ''}`,
+    OUTPUT_PATH: outputPath,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    HAPPIER_STACK_ENV_FILE: '~/.happier/stacks/dev/env',
+    XDG_CACHE_HOME: null,
+    YARN_CACHE_FOLDER: null,
+    npm_config_cache: null,
+  });
+
+  await ensureDepsInstalled(componentDir, 'test-component', { quiet: true });
+  const parsed = JSON.parse(await readFile(outputPath, 'utf-8'));
+  assert.equal(parsed.XDG_CACHE_HOME, join(expectedCacheBase, 'xdg'));
+  assert.equal(parsed.YARN_CACHE_FOLDER, join(expectedCacheBase, 'yarn'));
+  assert.equal(parsed.npm_config_cache, join(expectedCacheBase, 'npm'));
+  assert.equal(parsed.HOME, expectedStackHome);
+});
+
 test('ensureDepsInstalled prefers the .nvmrc node runtime for yarn shebangs when available', async (t) => {
   const fixture = await createStackCacheFixture(t, 'hs-pm-nvm-node-runtime-');
   const { root, componentDir, binDir } = fixture;

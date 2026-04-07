@@ -1,11 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ImportedSessionHandoffBundle } from '../../../session/handoff/types';
 import type { ClaudeSessionBundle } from '../../../session/handoff/types';
 import { getProjectPath, resolveClaudeProjectId } from '../utils/path';
-import { resolveClaudeConfigDirOverride } from '../utils/resolveClaudeConfigDirOverride';
+import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClaudeConfigDir';
 
 const CLAUDE_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS = '60000';
 
@@ -22,8 +21,7 @@ export async function importClaudeSessionBundle(params: Readonly<{
   env: NodeJS.ProcessEnv;
   sessionStorageMode?: 'direct' | 'persisted';
 }>): Promise<ImportedSessionHandoffBundle> {
-  const explicitClaudeConfigDir = resolveClaudeConfigDirOverride(params.env);
-  const resolvedClaudeConfigDir = explicitClaudeConfigDir ?? join(homedir(), '.claude');
+  const resolvedClaudeConfigDir = resolveConfiguredClaudeConfigDir({ env: params.env });
   const projectId = resolveClaudeProjectId(params.targetPath);
   const projectDir = getProjectPath(params.targetPath, resolvedClaudeConfigDir);
   await mkdir(projectDir, { recursive: true });
@@ -39,7 +37,7 @@ export async function importClaudeSessionBundle(params: Readonly<{
       configDir: resolvedClaudeConfigDir,
       projectId,
     },
-      resume: {
+    resume: {
       directory: params.targetPath,
       agent: 'claude',
       resume: params.bundle.remoteSessionId,

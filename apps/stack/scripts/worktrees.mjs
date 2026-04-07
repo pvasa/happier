@@ -13,6 +13,7 @@ import {
   getRootDir,
   getRepoDir,
   getWorkspaceDir,
+  resolveExplicitStackEnvFilePath,
   resolveStackEnvPath,
 } from './utils/paths/paths.mjs';
 import {
@@ -615,7 +616,7 @@ async function cmdUse({ rootDir, args, flags }) {
   }
 
   const workspaceDir = getWorkspaceDir(rootDir);
-  const envPath = process.env.HAPPIER_STACK_ENV_FILE?.trim() ? process.env.HAPPIER_STACK_ENV_FILE.trim() : null;
+  const envPath = resolveExplicitStackEnvFilePath(process.env) || null;
 
   if (spec === 'default' || spec === 'main') {
     const repoDir = getDefaultRepoDir(rootDir);

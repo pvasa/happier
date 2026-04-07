@@ -3,7 +3,6 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Credentials } from '@/persistence';
-import { resolveSessionAttachBaseDir } from '@/agent/runtime/sessionAttachPaths';
 import { configuration } from '@/configuration';
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
@@ -414,7 +413,10 @@ describe('runClaude fast-start', () => {
     getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_attach', metadataVersion: 1 }));
 
     const previousAttachFile = process.env.HAPPIER_SESSION_ATTACH_FILE;
-    const attachBaseDir = resolveSessionAttachBaseDir(configuration.happyHomeDir, configuration.publicReleaseRing);
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    const homeDir = join(configuration.happyHomeDir, 'fast-start-home');
+    const attachBaseDir = join(homeDir, '.happier-attach');
     await mkdir(attachBaseDir, { recursive: true });
     const attachPath = join(attachBaseDir, 'fast-start-attach.json');
     await writeFile(
@@ -427,7 +429,9 @@ describe('runClaude fast-start', () => {
       'utf8',
     );
     await chmod(attachPath, 0o600);
-    process.env.HAPPIER_SESSION_ATTACH_FILE = attachPath;
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    process.env.HAPPIER_SESSION_ATTACH_FILE = '~/.happier-attach/fast-start-attach.json';
 
     const { runClaude } = await import('./runClaude');
     const credentials = createLegacyCredentials();
@@ -454,6 +458,10 @@ describe('runClaude fast-start', () => {
       await runPromise;
       if (previousAttachFile === undefined) delete process.env.HAPPIER_SESSION_ATTACH_FILE;
       else process.env.HAPPIER_SESSION_ATTACH_FILE = previousAttachFile;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
     }
 
     if (testError) {

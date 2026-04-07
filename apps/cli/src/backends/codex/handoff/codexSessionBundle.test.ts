@@ -337,6 +337,44 @@ describe('codex session handoff bundle', () => {
     await expect(readFile(importedPath, 'utf8')).resolves.toBe('{"event":"hello"}\n');
   });
 
+  it('uses the import env HOME fallback even when process.env.HOME points somewhere else', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-handoff-import-env-home-'));
+    const targetPath = join(tmpdir(), 'repo-target-env-home');
+    const previousHome = process.env.HOME;
+    process.env.HOME = join(root, 'wrong-home');
+
+    try {
+      const result = await importCodexSessionBundle({
+        bundle: {
+          providerId: 'codex',
+          remoteSessionId: 'thread_env_home',
+          affinity: {
+            backendMode: 'appServer',
+          },
+          files: [
+            {
+              relativePath: 'sessions/2026/03/08/rollout-2026-03-08T10-00-00-thread_env_home.jsonl',
+              contentBase64: Buffer.from('{"event":"hello"}\n', 'utf8').toString('base64'),
+            },
+          ],
+        },
+        targetPath,
+        env: {
+          HOME: join(root, 'expected-home'),
+        },
+      });
+
+      expect(result.directSource).toEqual({
+        kind: 'codexHome',
+        home: 'user',
+        homePath: join(root, 'expected-home', '.codex'),
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+
   it('does not import source-machine codex homePath affinity into the target runtime descriptor', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'happier-codex-handoff-import-homepath-'));
     const targetPath = join(tmpdir(), 'repo-target-homepath');
