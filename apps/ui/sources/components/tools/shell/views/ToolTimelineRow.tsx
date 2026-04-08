@@ -89,8 +89,6 @@ export const ToolTimelineRow = React.memo((props: {
 
     const initialIsExpandedRef = React.useRef<boolean>(toolViewTimelineFeedDefaultExpanded === true || forceExpandedForPendingUserAction);
     const [isExpanded, setIsExpanded] = React.useState<boolean>(initialIsExpandedRef.current);
-    const [expandedByUser, setExpandedByUser] = React.useState<boolean>(false);
-
     React.useEffect(() => {
         if (!forceExpandedForPendingUserAction) return;
         setIsExpanded(true);
@@ -118,12 +116,6 @@ export const ToolTimelineRow = React.memo((props: {
         if (forceExpandedForPendingUserAction) return;
         const next = !isExpanded;
         setIsExpanded(next);
-        // Only show the persistent "expanded" chevron when the tool started collapsed and the user expanded it.
-        if (initialIsExpandedRef.current === false && next === true) {
-            setExpandedByUser(true);
-        } else {
-            setExpandedByUser(false);
-        }
     }, [forceExpandedForPendingUserAction, isExpanded]);
 
     const onPress = primaryTapAction === 'open' ? handleOpen : handleToggleExpand;
@@ -250,11 +242,9 @@ export const ToolTimelineRow = React.memo((props: {
     const headerSubtitle = effectiveDetailLevel === 'title' ? null : subtitle;
     const disclosure =
         primaryTapAction === 'expand' && !forceExpandedForPendingUserAction
-            ? expandedByUser && isExpanded
+            ? isExpanded
                 ? ({ behavior: 'persistent', state: 'expanded' } as const)
-                : !isExpanded
-                    ? ({ behavior: 'hover', state: 'collapsed' } as const)
-                    : null
+                : ({ behavior: 'hover', state: 'collapsed' } as const)
             : null;
 
     const actionRequiredStatusText = isPendingUserAction ? t('status.actionRequired') : null;

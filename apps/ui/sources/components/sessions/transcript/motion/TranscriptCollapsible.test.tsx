@@ -25,7 +25,7 @@ installTranscriptMotionCommonModuleMocks({
                     }
                 },
                 timing: hoistedAnimatedSpies.timingSpy,
-                View: ({ children, ...props }: any) => React.createElement('AnimatedView', props, children),
+                View: ({ children, ...props }: any) => React.createElement('animated-view', props, children),
             },
             Easing: {
                 bezier: () => (t: number) => t,

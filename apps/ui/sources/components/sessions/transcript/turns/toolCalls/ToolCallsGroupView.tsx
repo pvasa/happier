@@ -180,7 +180,10 @@ export const ToolCallsGroupView = React.memo((props: {
         return anchoredMessages.slice(-previewCount);
     }, [count, expanded, previewCount, props.toolMessages]);
 
-    const hiddenCount = !expanded && previewCount > 0 ? Math.max(0, count - previewMessages.length) : 0;
+    const hiddenCount = expanded ? 0 : Math.max(0, count - previewMessages.length);
+    const showExpandButton = !expanded && hiddenCount > 0;
+    const showCollapsedPreview = previewMessages.length > 0;
+    const headerPressable = expanded;
     const previewSidechainIds = React.useMemo(() => {
         return resolveGroupedPreviewSidechainIds({
             chromeMode: normalizedChromeMode,
@@ -215,10 +218,11 @@ export const ToolCallsGroupView = React.memo((props: {
         >
             <Pressable
                 testID="transcript-tool-calls-header"
-                onPress={() => props.setExpanded(!expanded)}
+                onPress={headerPressable ? () => props.setExpanded(false) : undefined}
+                disabled={!headerPressable}
                 style={({ pressed }) => [
                     styles.header,
-                    pressed && (normalizedChromeMode === 'activity_feed' ? styles.headerFeedPressed : styles.headerCardsPressed),
+                    headerPressable && pressed && (normalizedChromeMode === 'activity_feed' ? styles.headerFeedPressed : styles.headerCardsPressed),
                 ]}
             >
                 <View style={styles.headerGutter}>
@@ -238,11 +242,13 @@ export const ToolCallsGroupView = React.memo((props: {
                             <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
                         )}
                     </View>
-                    <Ionicons
-                        name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
-                        size={16}
-                        color={theme.colors.textSecondary}
-                    />
+                    {expanded ? (
+                        <Ionicons
+                            name="chevron-up-outline"
+                            size={16}
+                            color={theme.colors.textSecondary}
+                        />
+                    ) : null}
                 </View>
             </Pressable>
 
@@ -251,9 +257,9 @@ export const ToolCallsGroupView = React.memo((props: {
                     <View style={styles.gutterLine} />
                 </View>
                 <View style={styles.contentBody}>
-                    {previewMessages.length > 0 ? (
+                    {showExpandButton || showCollapsedPreview ? (
                         <View style={[styles.preview, normalizedChromeMode === 'activity_feed' ? styles.previewFeed : styles.previewCards]}>
-                            {hiddenCount > 0 ? (
+                            {showExpandButton ? (
                                 <Pressable
                                     testID="transcript-tool-calls-preview-more"
                                     onPress={() => props.setExpanded(true)}
@@ -264,7 +270,7 @@ export const ToolCallsGroupView = React.memo((props: {
                                     </Text>
                                 </Pressable>
                             ) : null}
-                            {previewMessages.map((m) => {
+                            {showCollapsedPreview ? previewMessages.map((m) => {
                                 const nestedMessageId = resolveToolRouteMessageId(m);
                                 return (
                                 <View
@@ -284,7 +290,7 @@ export const ToolCallsGroupView = React.memo((props: {
                                     })}
                                 </View>
                                 );
-                            })}
+                            }) : null}
                         </View>
                     ) : null}
 

@@ -22,7 +22,7 @@ export const TranscriptCollapsible = React.memo(function TranscriptCollapsible(p
         runtime?.config.preset !== 'off' &&
         runtime?.config.animateToolExpandCollapseEnabled === true;
 
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
         if (!didMountRef.current) {
             didMountRef.current = true;
             return;
