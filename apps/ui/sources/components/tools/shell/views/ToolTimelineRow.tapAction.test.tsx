@@ -286,6 +286,31 @@ describe('ToolTimelineRow (tap action)', () => {
         expect(screen.findByTestId('tool-timeline-row-error')).not.toBeNull();
     });
 
+    it('shows only the error icon in the activity-row header and leaves the error text out of the line', async () => {
+        const screen = await renderToolTimelineRow({
+            tool: {
+                name: 'CodexBash',
+                state: 'error',
+                input: {
+                    command: 'python -m pytest v2/tests/ -q --tb=line --deselect v2/tests/web/test_rate_limiter.py',
+                },
+                description: 'Terminal(cmd: python -m pytest v2/tests/ -q --tb=line --deselect v2/tests/web/test_rate_limiter.py)',
+                result: {
+                    error: {
+                        message: 'Request timed out',
+                    },
+                },
+            },
+        });
+
+        const errorIcon = screen.findByTestId('tool-timeline-row-error');
+        expect(errorIcon).toBeTruthy();
+        if (!errorIcon) {
+            throw new Error('Expected tool timeline row error indicator');
+        }
+        expect(screen.getTextContent()).not.toContain('Request timed out');
+    });
+
     it('preloads sidechain messages when a Task tool is expanded', async () => {
         const screen = await renderToolTimelineRow({
             tool: {

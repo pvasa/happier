@@ -206,7 +206,7 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         lineHeight: 20,
         ...Typography.default('semiBold'),
         color: theme.colors.text,
-        flexShrink: 0,
+        flexShrink: 1,
     },
     titleCompact: {
         fontSize: 13,
@@ -216,16 +216,21 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         fontSize: 13,
         color: theme.colors.textSecondary,
         ...Typography.default('regular'),
+        flexShrink: 1,
     },
     statusInline: {
         fontSize: 13,
         opacity: 0.4,
         ...Typography.default('regular'),
+        flexShrink: 1,
     },
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
+        minWidth: 0,
+        flexShrink: 1,
+        justifyContent: 'flex-end',
     },
     openSlot: {
         width: 26,

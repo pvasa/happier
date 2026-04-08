@@ -50,7 +50,7 @@ describe('ToolTimelinePreviewRow (error indicator)', () => {
         standardCleanup();
     });
 
-    it('shows an inline error badge when tool_use_result contains an Error: prefix', async () => {
+    it('shows only the inline error icon when tool_use_result contains an Error: prefix', async () => {
         const { ToolTimelinePreviewRow } = await import('./ToolTimelinePreviewRow');
         const message = makeToolMessage({
             result: {
@@ -59,7 +59,8 @@ describe('ToolTimelinePreviewRow (error indicator)', () => {
         });
 
         const screen = await renderScreen(<ToolTimelinePreviewRow toolMessage={message as any} metadata={null} />);
-        expect(collectHostText(screen.tree)).toContain('Ripgrep search timed out after 20 seconds.');
+        expect(screen.findByTestId('tool-timeline-preview-row-error')).toBeTruthy();
+        expect(collectHostText(screen.tree)).not.toContain('Ripgrep search timed out after 20 seconds.');
     });
 
     it('does not show the inline error badge for successful completed tools', async () => {

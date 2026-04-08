@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 
 import type { ToolCallMessage } from '@/sync/domains/messages/messageTypes';
@@ -16,9 +15,6 @@ import {
     resolveToolViewDetailLevelDefaultForChromeMode,
     type ToolViewDetailLevelSetting,
 } from '@/components/tools/normalization/policy/resolveToolViewDetailDefaultsForChromeMode';
-import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
-import { Text } from '@/components/ui/text/Text';
-import { t } from '@/text';
 
 export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow(props: {
     toolMessage: ToolCallMessage;
@@ -91,16 +87,9 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
     }, [iconSize, model.icon, props.metadata, props.toolMessage.tool, theme.colors.text, theme.colors.textSecondary]);
 
     const statusKind = resolveToolStatusIndicatorKind(model.toolForRendering);
-    const errorSummary =
-        statusKind === 'error' ? (resolveToolErrorSummary(model.toolForRendering) ?? t('common.error')) : null;
     const rightElement =
         statusKind === 'error' ? (
-            <View style={styles.errorContainer}>
-                <Ionicons name="alert-circle" size={16} color={theme.colors.textDestructive} />
-                <Text style={styles.errorText} numberOfLines={1}>
-                    {errorSummary}
-                </Text>
-            </View>
+            <Ionicons testID="tool-timeline-preview-row-error" name="alert-circle" size={16} color={theme.colors.textDestructive} />
         ) : null;
 
     return (
@@ -117,17 +106,3 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
         />
     );
 });
-
-const styles = StyleSheet.create((theme) => ({
-    errorContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        maxWidth: 220,
-    },
-    errorText: {
-        fontSize: 12,
-        color: theme.colors.textDestructive,
-        fontWeight: '600',
-    },
-}));
