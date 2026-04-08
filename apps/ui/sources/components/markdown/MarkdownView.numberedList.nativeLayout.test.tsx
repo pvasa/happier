@@ -63,7 +63,7 @@ describe('MarkdownView (native numbered lists)', () => {
         vi.resetModules();
     });
 
-    it('renders numbered list items with a dedicated flex content column on native', async () => {
+    it('uses shrink-wrap-safe row styles on native so user bubbles do not collapse to markers', async () => {
         mockPlatform('ios');
         const { MarkdownView } = await import('./MarkdownView');
 
@@ -86,19 +86,23 @@ describe('MarkdownView (native numbered lists)', () => {
             );
             expect(markers.map((node) => React.Children.toArray(node.props.children).join(''))).toEqual(['1.', '2.']);
 
+            expect(rows.every((row) => flattenStyle(row.props.style).width === undefined)).toBe(true);
+
             const contentColumns = rows.map((row) =>
                 row.findAll((node) => {
                     if (node === row) return false;
                     const flatStyle = flattenStyle(node.props?.style);
-                    return flatStyle.flex === 1 && flatStyle.minWidth === 0;
+                    return flatStyle.minWidth === 0;
                 })[0],
             );
             expect(contentColumns).toHaveLength(2);
             expect(contentColumns.every(Boolean)).toBe(true);
             expect(flattenStyle(contentColumns[0]?.props.style)).toMatchObject({
-                flex: 1,
+                flexShrink: 1,
                 minWidth: 0,
+                maxWidth: '100%',
             });
+            expect(flattenStyle(contentColumns[0]?.props.style).flex).toBeUndefined();
         } finally {
             act(() => {
                 screen?.tree.unmount();

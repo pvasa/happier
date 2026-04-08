@@ -383,11 +383,11 @@ const style = StyleSheet.create((theme) => ({
     listRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        width: '100%',
     },
     listContent: {
-        flex: 1,
+        flexShrink: 1,
         minWidth: 0,
+        maxWidth: '100%',
     },
     listText: {
         ...Typography.default(),

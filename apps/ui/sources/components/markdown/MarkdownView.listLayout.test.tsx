@@ -67,6 +67,22 @@ describe('MarkdownView (lists)', () => {
 
       expect(flattenStyle(rows[0].props.style).paddingLeft).toBe(0);
       expect(flattenStyle(rows[1].props.style).paddingLeft).toBe(20);
+      expect(rows.every((row) => flattenStyle(row.props.style).width === undefined)).toBe(true);
+
+      const contentColumns = rows.map((row) =>
+        row.findAll((node) => {
+          if (node === row) return false;
+          const flatStyle = flattenStyle(node.props?.style);
+          return flatStyle.minWidth === 0;
+        })[0],
+      );
+      expect(contentColumns).toHaveLength(2);
+      expect(flattenStyle(contentColumns[0]?.props.style)).toMatchObject({
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+      });
+      expect(flattenStyle(contentColumns[0]?.props.style).flex).toBeUndefined();
     } finally {
       act(() => {
         screen?.tree.unmount();
