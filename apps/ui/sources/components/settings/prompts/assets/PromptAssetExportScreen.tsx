@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { TextInput, View } from 'react-native';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Stack } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -19,6 +19,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { layout } from '@/components/ui/layout/layout';
 import { SettingsActionFooter } from '@/components/ui/settingsSurface/SettingsActionFooter';
+import { TextInput } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
 import { storage, useAllMachines, useSettingMutable } from '@/sync/domains/state/storage';
 import { machinePromptAssetsDelete, machinePromptAssetsListTypes } from '@/sync/ops/machinePromptAssets';
