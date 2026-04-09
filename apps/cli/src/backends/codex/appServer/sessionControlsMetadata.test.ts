@@ -95,6 +95,67 @@ describe('publishCodexAppServerSessionControlsMetadata', () => {
         });
     });
 
+    it('preserves model context window metadata from model/list when provided', async () => {
+        const client = {
+            request: vi.fn(async (method: string) => {
+                if (method === 'collaborationMode/list') {
+                    return {
+                        data: [{ name: 'Default', mode: 'default', reasoning_effort: null }],
+                    };
+                }
+                if (method === 'model/list') {
+                    return {
+                        data: [
+                            {
+                                id: 'gpt-5.4',
+                                displayName: 'GPT-5.4',
+                                contextWindow: 400_000,
+                                isDefault: true,
+                            },
+                        ],
+                    };
+                }
+                throw new Error(`Unexpected method: ${method}`);
+            }),
+        };
+        const { session, getMetadata } = createSessionHarness();
+
+        await publishCodexAppServerSessionControlsMetadata({
+            client,
+            session,
+            provider: 'codex',
+            updatedAt: 778,
+            authMethod: 'oauth_cli',
+            currentModelId: 'gpt-5.4',
+        });
+
+        expect(getMetadata()[SESSION_MODELS_STATE_KEY]).toEqual({
+            v: 1,
+            provider: 'codex',
+            updatedAt: 778,
+            currentModelId: 'gpt-5.4',
+            availableModels: [
+                {
+                    id: 'gpt-5.4',
+                    name: 'GPT 5.4',
+                    contextWindowTokens: 400_000,
+                    modelOptions: [
+                        {
+                            id: 'service_tier',
+                            name: 'Speed',
+                            type: 'select',
+                            currentValue: 'standard',
+                            options: [
+                                { value: 'standard', name: 'Standard' },
+                                { value: 'fast', name: 'Fast' },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+    });
+
     it('accepts snake_case reasoning effort fields from model/list', async () => {
         const client = {
             request: vi.fn(async (method: string) => {

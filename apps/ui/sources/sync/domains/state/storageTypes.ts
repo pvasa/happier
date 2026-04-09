@@ -106,6 +106,7 @@ const MetadataObjectSchema = z.object({
             id: z.string(),
             name: z.string(),
             description: z.string().optional(),
+            contextWindowTokens: z.number().int().positive().optional(),
             modelOptions: z.array(z.object({
                 id: z.string(),
                 name: z.string(),
@@ -129,6 +130,7 @@ const MetadataObjectSchema = z.object({
             id: z.string(),
             name: z.string(),
             description: z.string().optional(),
+            contextWindowTokens: z.number().int().positive().optional(),
             modelOptions: z.array(z.object({
                 id: z.string(),
                 name: z.string(),
@@ -401,6 +403,7 @@ export interface Session {
         cacheCreation: number;
         cacheRead: number;
         contextSize: number;
+        contextWindowTokens?: number;
         timestamp: number;
     } | null;
     // Sharing-related fields

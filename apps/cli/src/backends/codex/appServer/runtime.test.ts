@@ -227,6 +227,24 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 16);',
         '            continue;',
         '        }',
+        '        if (text === "bridge-token-usage") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: { threadId: msg.params?.threadId ?? null, turnId, tokenUsage: { total: { totalTokens: 1200, inputTokens: 700, cachedInputTokens: 200, outputTokens: 250, reasoningOutputTokens: 50 }, last: { totalTokens: 1200, inputTokens: 700, cachedInputTokens: 200, outputTokens: 250, reasoningOutputTokens: 50 }, modelContextWindow: 1000000 } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 16);',
+        '            continue;',
+        '        }',
+        '        if (text === "failed-turn") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "error", params: { threadId: msg.params?.threadId ?? null, turnId, willRetry: false, error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header", codexErrorInfo: "other", additionalDetails: null } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header", codexErrorInfo: "other", additionalDetails: null } } } }) + "\\n");',
+        '            }, 14);',
+        '            continue;',
+        '        }',
         '        if (text === "bridge-completed-only-command-result") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "call_failed_1", type: "commandExecution", command: "mkdir -p /tmp/demo", cwd: "/repo", stderr: "Rejected(\\\\\\"rejected by user\\\\\\")", exitCode: 1 } } }) + "\\n");',
@@ -1463,6 +1481,81 @@ describe('createCodexAppServerRuntime', () => {
                 configOptions: [],
             },
         });
+    });
+
+    it('forwards thread token usage updates and patches the active model context window from runtime telemetry', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-token-usage-');
+
+        const updateMetadata = vi.fn((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) =>
+            updater({ machineId: 'machine_1' }),
+        );
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata,
+                sendCodexMessage,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-token-usage');
+
+        expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'token_count',
+            model: 'gpt-5.4',
+            used: 1200,
+            size: 1_000_000,
+            tokens: expect.objectContaining({
+                total: 1200,
+                input: 700,
+                cache_read: 200,
+                output: 250,
+                thought: 50,
+            }),
+        }));
+
+        const latestMetadata = updateMetadata.mock.results.at(-1)?.value as Record<string, unknown>;
+        const modelsState = latestMetadata[SESSION_MODELS_STATE_KEY] as {
+            currentModelId?: string;
+            availableModels?: Array<Record<string, unknown>>;
+        };
+        expect(modelsState?.currentModelId).toBe('gpt-5.4');
+        expect(modelsState?.availableModels).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'gpt-5.4',
+                    contextWindowTokens: 1_000_000,
+                }),
+            ]),
+        );
+    });
+
+    it('surfaces failed turns as provider errors and aborts the pending turn', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-failed-turn-');
+
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect(runtime.sendPrompt('failed-turn')).rejects.toThrow(/401 Unauthorized/);
+
+        expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'message',
+            message: expect.stringContaining('401 Unauthorized'),
+        }));
+        expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'turn_aborted',
+        }));
     });
 
     it('rolls back the latest conversation turn through the app-server thread API and records its transcript seq range', async () => {

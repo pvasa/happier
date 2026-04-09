@@ -66,7 +66,7 @@ describe('openCodePreflightModelsProbeAdapter', () => {
       '  "name": "Codex Mini",',
       '  "family": "gpt-codex-mini",',
       '  "status": "active",',
-      '  "capabilities": { "toolcall": true, "reasoning": true, "input": { "text": true } },',
+      '  "capabilities": { "toolcall": true, "reasoning": true, "input": { "text": true, "contextWindow": 400000 } },',
       '  "variants": {',
       '    "low": { "reasoningEffort": "low" },',
       '    "medium": { "reasoningEffort": "medium" },',
@@ -105,6 +105,7 @@ describe('openCodePreflightModelsProbeAdapter', () => {
         id: 'openai/codex-mini-latest',
         name: 'Codex Mini',
         description: 'gpt-codex-mini',
+        contextWindowTokens: 400000,
         modelOptions: [
           {
             id: 'reasoning_effort',
@@ -123,6 +124,41 @@ describe('openCodePreflightModelsProbeAdapter', () => {
         id: 'openai/gpt-4o-mini',
         name: 'GPT-4o Mini',
         description: 'gpt-4o',
+      },
+    ]);
+  });
+
+  it('reads contextWindowTokens from OpenCode limit.context provider metadata', async () => {
+    tempDir = makeTempDir('happier-opencode-preflight-models-limit-context-');
+    const fakeOpenCode = writeFakeOpenCodeModelsBinary(tempDir, [
+      'openai/gpt-5.3-codex',
+      '{',
+      '  "id": "gpt-5.3-codex",',
+      '  "providerID": "openai",',
+      '  "name": "GPT-5.3 Codex",',
+      '  "family": "gpt-5.3",',
+      '  "status": "active",',
+      '  "capabilities": { "toolcall": true, "input": { "text": true } },',
+      '  "limit": { "context": 400000, "input": 272000, "output": 128000 }',
+      '}',
+    ]);
+
+    process.env.PATH = '/usr/bin:/bin';
+    process.env.HAPPIER_OPENCODE_PATH = fakeOpenCode;
+
+    const raw = await openCodePreflightModelsProbeAdapter.probeModelsRaw?.({
+      cwd: tempDir,
+      timeoutMs: 2_000,
+      backendTarget: undefined,
+      accountSettings: null,
+    });
+
+    expect(raw).toEqual([
+      {
+        id: 'openai/gpt-5.3-codex',
+        name: 'GPT-5.3 Codex',
+        description: 'gpt-5.3',
+        contextWindowTokens: 400000,
       },
     ]);
   });

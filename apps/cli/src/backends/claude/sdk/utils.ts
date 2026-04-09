@@ -290,7 +290,7 @@ export function getDefaultClaudeCodePathForAgentSdk(): string {
         if (!isAgentSdkCompatibleClaudeEntrypoint(override)) {
             throw new Error(`HAPPIER_CLAUDE_PATH points to an unsupported Claude entrypoint for Agent SDK: ${override}`);
         }
-        return canonicalizeClaudeEntrypointPath(override);
+        return override;
     }
 
     const resolved = resolveProviderCliCommand('claude', {
@@ -299,9 +299,8 @@ export function getDefaultClaudeCodePathForAgentSdk(): string {
         currentExecPath: process.execPath,
     });
     if (resolved) {
-        const canonical = canonicalizeClaudeEntrypointPath(resolved.command);
-        if (isAgentSdkCompatibleClaudeEntrypoint(canonical)) {
-            return canonical;
+        if (isAgentSdkCompatibleClaudeEntrypoint(resolved.command)) {
+            return resolved.command;
         }
     }
 

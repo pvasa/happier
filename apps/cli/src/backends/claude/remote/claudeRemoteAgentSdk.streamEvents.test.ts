@@ -1703,4 +1703,82 @@ describe('claudeRemoteAgentSdk stream events', () => {
             await runnerPromise.catch(() => {});
         }
     });
+
+    it('treats compact_boundary as a turn boundary so queued prompts keep flowing without waiting for a result message', async () => {
+        const onReady = vi.fn();
+        const onSessionFound = vi.fn();
+
+        let releaseStream!: () => void;
+        const streamClosed = new Promise<void>((resolve) => {
+            releaseStream = resolve;
+        });
+
+        const createQuery = vi.fn((_params: any) => {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        type: 'system',
+                        subtype: 'compact_boundary',
+                        session_id: 'sess_compacted_boundary_2',
+                        compact_metadata: {
+                            trigger: 'manual',
+                            pre_tokens: 175_000,
+                        },
+                    } as any;
+                    await streamClosed;
+                },
+                close: vi.fn(() => {
+                    releaseStream();
+                }),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        let didSendFirst = false;
+        const nextMessage = vi.fn(async () => {
+            if (!didSendFirst) {
+                didSendFirst = true;
+                return {
+                    message: '/compact',
+                    mode: makeMode({ claudeRemoteAgentSdkEnabled: true }),
+                };
+            }
+
+            return {
+                message: 'follow-up after compact boundary',
+                mode: makeMode({ claudeRemoteAgentSdkEnabled: true }),
+            };
+        });
+
+        const runnerPromise = claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady,
+            onSessionFound,
+            onMessage: () => {},
+            createQuery,
+        } as any);
+
+        try {
+            await vi.waitFor(() => {
+                expect(onReady).toHaveBeenCalledTimes(1);
+            });
+            await vi.waitFor(() => {
+                expect(nextMessage).toHaveBeenCalledTimes(2);
+            });
+            expect(onSessionFound).toHaveBeenCalledWith('sess_compacted_boundary_2', expect.anything());
+        } finally {
+            releaseStream();
+            await runnerPromise.catch(() => {});
+        }
+    });
 });

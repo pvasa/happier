@@ -4964,6 +4964,17 @@ export const it: TranslationStructure = {
     },
     context: {
       remaining: ({ percent }: { percent: number }) => `${percent}% restante`,
+      windowTitle: "Finestra di contesto",
+      usedDetail: ({
+        percent,
+        used,
+        total,
+      }: {
+        percent: string;
+        used: string;
+        total: string;
+      }) => `${percent} • ${used}/${total} di contesto usato`,
+      description: "Compatta automaticamente il contesto quando necessario.",
     },
     suggestion: {
       fileLabel: "FILE",

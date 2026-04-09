@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,9 +30,18 @@ describe('claude sdk query signal cleanup', () => {
   it('cleans up the child process when the parent receives SIGTERM (no hang)', { timeout: 20_000 }, async () => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'happier-claude-query-sigterm-'));
     const sleeper = join(tmpRoot, `sleep-${Date.now()}.js`);
+    const markerPath = join(tmpRoot, 'marker.json');
     writeFileSync(
       sleeper,
       `
+        const { spawn } = require('node:child_process');
+        const { writeFileSync } = require('node:fs');
+        const markerPath = ${JSON.stringify(markerPath)};
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+          stdio: 'ignore',
+        });
+        writeFileSync(markerPath, JSON.stringify({ childPid: child.pid }), 'utf8');
+
         // Stay alive until the parent terminates us.
         setInterval(() => {}, 1000);
       `,
@@ -62,9 +71,49 @@ describe('claude sdk query signal cleanup', () => {
       const iter = q[Symbol.asyncIterator]();
       const nextPromise = withTimeout(iter.next(), 5_000, 'query to terminate after SIGTERM');
 
+      const marker = await withTimeout(
+        new Promise<{ childPid: number }>((resolve, reject) => {
+          const startedAt = Date.now();
+          const poll = () => {
+            try {
+              resolve(JSON.parse(readFileSync(markerPath, 'utf8')) as { childPid: number });
+            } catch (error) {
+              if (Date.now() - startedAt > 5_000) {
+                reject(error);
+                return;
+              }
+              setTimeout(poll, 25);
+            }
+          };
+          poll();
+        }),
+        6_000,
+        'descendant marker before SIGTERM',
+      );
+
       process.emit('SIGTERM');
 
       await expect(nextPromise).rejects.toThrow(/Claude Code process/i);
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          const startedAt = Date.now();
+          const check = () => {
+            try {
+              process.kill(marker.childPid, 0);
+              if (Date.now() - startedAt > 5_000) {
+                reject(new Error(`Timed out waiting for descendant ${marker.childPid} to exit`));
+                return;
+              }
+              setTimeout(check, 25);
+            } catch {
+              resolve();
+            }
+          };
+          check();
+        }),
+        6_000,
+        'descendant process cleanup after SIGTERM',
+      );
 
       // Allow processExitPromise.finally() to run and detach listeners.
       await new Promise((resolve) => setTimeout(resolve, 0));

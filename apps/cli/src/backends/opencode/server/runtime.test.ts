@@ -43,7 +43,7 @@ function createFakeClient() {
             id: 'gpt-5.2',
             name: 'GPT-5.2',
             status: 'active',
-            capabilities: { toolcall: true, reasoning: true, input: { text: true } },
+            capabilities: { toolcall: true, reasoning: true, input: { text: true, contextWindow: 400000 } },
             variants: {
               low: { reasoningEffort: 'low' },
               medium: { reasoningEffort: 'medium' },
@@ -288,6 +288,7 @@ describe('createOpenCodeServerRuntime', () => {
         availableModels: [
           expect.objectContaining({
             id: 'openai/gpt-5.2',
+            contextWindowTokens: 400000,
             modelOptions: [expect.objectContaining({ id: 'reasoning_effort' })],
           }),
         ],
@@ -299,6 +300,7 @@ describe('createOpenCodeServerRuntime', () => {
         availableModels: [
           expect.objectContaining({
             id: 'openai/gpt-5.2',
+            contextWindowTokens: 400000,
             modelOptions: [expect.objectContaining({ id: 'reasoning_effort' })],
           }),
         ],
@@ -327,6 +329,205 @@ describe('createOpenCodeServerRuntime', () => {
     await runtime.startOrLoad({ resumeId: 'ses_remote' });
     expect(client.setDirectoryOverride).toHaveBeenCalledWith('/correct');
     expect(client.__getDirectoryOverride()).toBe('/correct');
+  });
+
+  it('forwards assistant usage telemetry as token_count context updates', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    await runtime.startOrLoad({});
+    await expect.poll(() => session.updateMetadata.mock.calls.length).toBeGreaterThan(0);
+
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_assistant_usage_1',
+            role: 'assistant',
+            sessionID: 'ses_1',
+            providerID: 'openai',
+            modelID: 'gpt-5.2',
+            cost: 0.25,
+            tokens: {
+              total: 19_070,
+              input: 16_000,
+              output: 900,
+              reasoning: 120,
+              cache: {
+                read: 2_000,
+                write: 50,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const tokenCountCall = (session.sendAgentMessage as any).mock.calls.find(
+      (call: any[]) => call?.[0] === 'opencode' && call?.[1]?.type === 'token_count',
+    );
+
+    expect(tokenCountCall?.[1]).toMatchObject({
+      type: 'token_count',
+      key: 'opencode-session:ses_1',
+      model: 'openai/gpt-5.2',
+      used: 19_070,
+      size: 400_000,
+      cost: { total: 0.25 },
+    });
+  });
+
+  it('falls back to provider model limit.context when assistant usage telemetry omits size', async () => {
+    const client = createFakeClient();
+    client.globalConfigGet = vi.fn(async () => ({ model: 'openai/gpt-5.3-codex' }));
+    client.providersList = vi.fn(async () => ([
+      {
+        id: 'openai',
+        env: ['OPENAI_API_KEY'],
+        models: ({
+          'gpt-5.3-codex': {
+            id: 'gpt-5.3-codex',
+            name: 'GPT-5.3 Codex',
+            status: 'active',
+            capabilities: { toolcall: true, reasoning: true, input: { text: true } },
+            limit: { context: 400000, input: 272000, output: 128000 },
+            variants: {
+              medium: { reasoningEffort: 'medium' },
+            },
+          },
+        }) as Record<string, unknown>,
+      },
+    ]));
+
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    await runtime.startOrLoad({});
+    await expect.poll(() => session.updateMetadata.mock.calls.length).toBeGreaterThan(0);
+
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_assistant_usage_limit_1',
+            role: 'assistant',
+            sessionID: 'ses_1',
+            providerID: 'openai',
+            modelID: 'gpt-5.3-codex',
+            tokens: {
+              input: 160,
+            },
+          },
+        },
+      },
+    });
+
+    expect(session.sendAgentMessage).toHaveBeenCalledWith('opencode', expect.objectContaining({
+      type: 'token_count',
+      key: 'opencode-session:ses_1',
+      model: 'openai/gpt-5.3-codex',
+      used: 160,
+      size: 400_000,
+    }));
+  });
+
+  it('keeps live provider model metadata when auth is CLI-managed and provider env vars are absent', async () => {
+    const client = createFakeClient();
+    client.globalConfigGet = vi.fn(async () => ({}));
+    client.providersList = vi.fn(async () => ([
+      {
+        id: 'openai',
+        env: ['OPENAI_API_KEY'],
+        models: ({
+          'gpt-5.3-codex': {
+            id: 'gpt-5.3-codex',
+            name: 'GPT-5.3 Codex',
+            status: 'active',
+            capabilities: { toolcall: true, reasoning: true, input: { text: true } },
+            limit: { context: 400000, input: 272000, output: 128000 },
+            variants: {
+              medium: { reasoningEffort: 'medium' },
+            },
+          },
+        }) as Record<string, unknown>,
+      },
+    ]));
+
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createFakePermissionHandler() as unknown as ProviderEnforcedPermissionHandler,
+      onThinkingChange: vi.fn(),
+      env: {},
+    }, {
+      createClient: async () => client as unknown as OpenCodeServerRuntimeClient,
+    });
+
+    await runtime.startOrLoad({});
+    await expect.poll(() => session.updateMetadata.mock.calls.length).toBeGreaterThan(0);
+
+    expect(session.__getMetadata().sessionModelsV1).toMatchObject({
+      currentModelId: 'openai/gpt-5.3-codex',
+      availableModels: [
+        expect.objectContaining({
+          id: 'openai/gpt-5.3-codex',
+          contextWindowTokens: 400000,
+        }),
+      ],
+    });
+
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'msg_assistant_usage_cli_auth_1',
+            role: 'assistant',
+            sessionID: 'ses_1',
+            providerID: 'openai',
+            modelID: 'gpt-5.3-codex',
+            tokens: {
+              input: 160,
+            },
+          },
+        },
+      },
+    });
+
+    expect(session.sendAgentMessage).toHaveBeenCalledWith('opencode', expect.objectContaining({
+      type: 'token_count',
+      key: 'opencode-session:ses_1',
+      model: 'openai/gpt-5.3-codex',
+      used: 160,
+      size: 400_000,
+    }));
   });
 
   it('applies the OpenCode session directory after sessionCreate when available', async () => {

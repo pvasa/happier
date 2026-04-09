@@ -264,12 +264,12 @@ describe('settings', () => {
             } as any);
 
             expect((parsed as any).featureToggles?.['files.editor']).toBeUndefined();
-            expect((parsed as any).schemaVersion).toBe(6);
+            expect((parsed as any).schemaVersion).toBe(7);
         });
 
         it('keeps explicit disable for files.editor when schemaVersion matches current (user intent)', () => {
             const parsed = settingsParse({
-                schemaVersion: 6,
+                schemaVersion: 7,
                 experiments: false,
                 featureToggles: {
                     'files.editor': false,
@@ -277,7 +277,7 @@ describe('settings', () => {
             } as any);
 
             expect((parsed as any).featureToggles?.['files.editor']).toBe(false);
-            expect((parsed as any).schemaVersion).toBe(6);
+            expect((parsed as any).schemaVersion).toBe(7);
         });
 
         it('migrates legacy filesDiffPresentationStyle=split to unified (new default) for old schema versions', () => {
@@ -287,17 +287,43 @@ describe('settings', () => {
             } as any);
 
             expect((parsed as any).filesDiffPresentationStyle).toBe('unified');
-            expect((parsed as any).schemaVersion).toBe(6);
+            expect((parsed as any).schemaVersion).toBe(7);
         });
 
         it('keeps explicit filesDiffPresentationStyle=split when schemaVersion matches current (user intent)', () => {
             const parsed = settingsParse({
-                schemaVersion: 6,
+                schemaVersion: 7,
                 filesDiffPresentationStyle: 'split',
             } as any);
 
             expect((parsed as any).filesDiffPresentationStyle).toBe('split');
-            expect((parsed as any).schemaVersion).toBe(6);
+            expect((parsed as any).schemaVersion).toBe(7);
+        });
+
+        it('defaults alwaysShowContextSize to true', () => {
+            const parsed = settingsParse({});
+
+            expect(parsed.alwaysShowContextSize).toBe(true);
+        });
+
+        it('migrates alwaysShowContextSize=false to true for settings from older schema versions', () => {
+            const parsed = settingsParse({
+                schemaVersion: 6,
+                alwaysShowContextSize: false,
+            } as any);
+
+            expect(parsed.alwaysShowContextSize).toBe(true);
+            expect(parsed.schemaVersion).toBe(7);
+        });
+
+        it('keeps explicit alwaysShowContextSize=false when schemaVersion matches current (user intent)', () => {
+            const parsed = settingsParse({
+                schemaVersion: 7,
+                alwaysShowContextSize: false,
+            } as any);
+
+            expect(parsed.alwaysShowContextSize).toBe(false);
+            expect(parsed.schemaVersion).toBe(7);
         });
 
         it('migrates legacy sessionListDensity=compact to cozy', () => {
@@ -865,8 +891,9 @@ describe('settings', () => {
 
         describe('settingsDefaults', () => {
             it('should have correct default values', () => {
-            expect(settingsDefaults.schemaVersion).toBe(6);
+            expect(settingsDefaults.schemaVersion).toBe(7);
             expect(settingsDefaults.experiments).toBe(false);
+            expect(settingsDefaults.alwaysShowContextSize).toBe(true);
             expect(settingsDefaults.backendEnabledByTargetKey).toMatchObject({
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: true,
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: true,
@@ -989,7 +1016,7 @@ describe('settings', () => {
 
         it('preserves legacy Codex backend mode when upgrading a pre-v6 payload', () => {
             const parsed = settingsParse({ schemaVersion: 5, codexBackendMode: 'mcp' } as any);
-            expect(parsed.schemaVersion).toBe(6);
+            expect(parsed.schemaVersion).toBe(7);
             expect((parsed as any).codexBackendMode).toBe('mcp');
         });
 

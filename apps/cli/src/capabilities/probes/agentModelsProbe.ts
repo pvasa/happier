@@ -16,6 +16,7 @@ import { buildAgentProbeCacheKey } from './buildAgentProbeCacheKey';
 import { resolveAgentProbeVariant } from './resolveAgentProbeVariant';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
+import { normalizeContextWindowTokens } from '@/backends/modelCapabilities/contextWindowTokens';
 
 type ProbedAgentModelOptionValue = string | number | boolean | null;
 
@@ -36,6 +37,7 @@ export type ProbedAgentModel = Readonly<{
   id: string;
   name: string;
   description?: string;
+  contextWindowTokens?: number;
   modelOptions?: ReadonlyArray<ProbedAgentModelOption>;
 }>;
 
@@ -74,6 +76,7 @@ const ProbeDynamicModelInputSchema = z.object({
   id: ProbeNonEmptyStringSchema,
   name: ProbeNonEmptyStringSchema,
   description: ProbeDescriptionSchema.optional(),
+  contextWindowTokens: z.unknown().optional(),
   modelOptions: z.array(z.unknown()).optional(),
 });
 const ProbeConfigOptionCandidateSchema = z.object({
@@ -97,6 +100,7 @@ function buildStatic(agentId: CatalogAgentId): ProbedAgentModelsResult {
         id: model.id,
         name: model.name,
         ...(typeof model.description === 'string' ? { description: model.description } : {}),
+        ...(typeof model.contextWindowTokens === 'number' ? { contextWindowTokens: model.contextWindowTokens } : {}),
         ...(Array.isArray(model.modelOptions) && model.modelOptions.length > 0 ? { modelOptions: model.modelOptions } : {}),
       })),
     ]
@@ -161,6 +165,9 @@ function normalizeProbeModel(modelRaw: unknown): ProbedAgentModel | null {
     id: parsed.data.id,
     name: parsed.data.name,
     ...(parsed.data.description ? { description: parsed.data.description } : {}),
+    ...(normalizeContextWindowTokens(parsed.data.contextWindowTokens) !== undefined
+      ? { contextWindowTokens: normalizeContextWindowTokens(parsed.data.contextWindowTokens) }
+      : {}),
     ...(normalizedOptions && normalizedOptions.length > 0 ? { modelOptions: normalizedOptions } : {}),
   };
 }

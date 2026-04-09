@@ -31,6 +31,7 @@ import { buildMissingJavaScriptRuntimeMessage } from '@/runtime/js/buildMissingJ
 import { stripNestedSessionDetectionEnv } from '@/utils/processEnv/stripNestedSessionDetectionEnv'
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process'
 import { resolveExistingManagedJavaScriptRuntimeCommand } from '@happier-dev/cli-common/providers'
+import { killProcessTree } from '@/agent/acp/killProcessTree'
 
 /**
  * Query class manages Claude Code process interaction
@@ -417,10 +418,19 @@ export function query(config: {
     })
 
     // Setup cleanup
+    let cleanupStarted = false
     const cleanup = () => {
-        if (!child.killed) {
-            child.kill('SIGTERM')
-        }
+        if (cleanupStarted) return
+        cleanupStarted = true
+        void killProcessTree(child, { graceMs: 250 }).catch(() => {
+            if (!child.killed) {
+                try {
+                    child.kill('SIGTERM')
+                } catch {
+                    // ignore
+                }
+            }
+        })
     }
 
     config.options?.abort?.addEventListener('abort', cleanup)

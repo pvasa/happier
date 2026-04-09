@@ -278,6 +278,7 @@ vi.mock('./inputMaxHeight', () => ({
 }));
 
 vi.mock('./contextWarning', () => ({
+    getContextUsageState: () => null,
     getContextWarning: () => null,
 }));
 

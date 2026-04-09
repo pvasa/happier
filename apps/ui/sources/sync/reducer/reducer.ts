@@ -242,6 +242,7 @@ export type ReducerState = {
         cacheCreation: number;
         cacheRead: number;
         contextSize: number;
+        contextWindowTokens?: number;
         timestamp: number;
     };
 };
@@ -280,6 +281,7 @@ export type ReducerResult = {
         cacheCreation: number;
         cacheRead: number;
         contextSize: number;
+        contextWindowTokens?: number;
     };
     hasReadyEvent?: boolean;
 };
@@ -599,7 +601,10 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
             outputTokens: state.latestUsage.outputTokens,
             cacheCreation: state.latestUsage.cacheCreation,
             cacheRead: state.latestUsage.cacheRead,
-            contextSize: state.latestUsage.contextSize
+            contextSize: state.latestUsage.contextSize,
+            ...(typeof state.latestUsage.contextWindowTokens === 'number'
+                ? { contextWindowTokens: state.latestUsage.contextWindowTokens }
+                : {})
         } : undefined,
         hasReadyEvent: hasReadyEvent || undefined
     };
@@ -613,15 +618,34 @@ function allocateId() {
     return Math.random().toString(36).substring(2, 15);
 }
 
+function readContextUsageTelemetryNumber(usage: UsageData, key: string): number | null {
+    const record = asRecord(usage);
+    const value = record?.[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null;
+}
+
+function readContextWindowTokensFromUsage(usage: UsageData): number | null {
+    return readContextUsageTelemetryNumber(usage, 'context_window_tokens');
+}
+
+function readContextUsedTokensFromUsage(usage: UsageData): number | null {
+    return readContextUsageTelemetryNumber(usage, 'context_used_tokens');
+}
+
 function processUsageData(state: ReducerState, usage: UsageData, timestamp: number) {
     // Only update if this is newer than the current latest usage
     if (!state.latestUsage || timestamp > state.latestUsage.timestamp) {
+        const contextWindowTokens = readContextWindowTokensFromUsage(usage) ?? state.latestUsage?.contextWindowTokens ?? null;
+        const contextSize =
+            readContextUsedTokensFromUsage(usage) ??
+            ((usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + usage.input_tokens);
         state.latestUsage = {
             inputTokens: usage.input_tokens,
             outputTokens: usage.output_tokens,
             cacheCreation: usage.cache_creation_input_tokens || 0,
             cacheRead: usage.cache_read_input_tokens || 0,
-            contextSize: (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0) + usage.input_tokens,
+            contextSize,
+            ...(contextWindowTokens !== null ? { contextWindowTokens } : {}),
             timestamp: timestamp
         };
     }

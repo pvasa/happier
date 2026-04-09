@@ -103,7 +103,7 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
     },
     alwaysShowContextSize: {
         schema: z.boolean(),
-        default: false,
+        default: true,
         description: 'Always show context size in agent input',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },

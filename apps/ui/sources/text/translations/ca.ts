@@ -4310,6 +4310,10 @@ deps: {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `${percent}% restant`,
+            windowTitle: 'Finestra de context',
+            usedDetail: ({ percent, used, total }: { percent: string; used: string; total: string }) =>
+                `${percent} • ${used}/${total} de context utilitzat`,
+            description: 'Compacta automàticament el context quan cal.',
         },
         suggestion: {
             fileLabel: 'FITXER',

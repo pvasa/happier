@@ -3,6 +3,7 @@ import { appendFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/prom
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SessionClientPort } from '@/api/session/sessionClientPort';
+import type { Metadata } from '@/api/types';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { CHANGE_TITLE_INSTRUCTION } from '@/agent/runtime/changeTitleInstruction';
 import { Session } from './session';
@@ -124,16 +125,25 @@ function hookWithTranscript(transcriptPath: string): SessionFoundHookData {
   return { transcript_path: transcriptPath };
 }
 
-function createRemoteHarness(options?: { sessionId?: string | null }): RemoteHarness {
+function createRemoteHarness(options?: {
+  sessionId?: string | null;
+  metadata?: Metadata | null;
+  applyMetadataUpdates?: boolean;
+}): RemoteHarness {
   const switchDeferred = createDeferred<RpcHandler>();
   const abortDeferred = createDeferred<RpcHandler>();
   const sendClaudeSessionMessage = vi.fn();
+  let metadataState = options?.metadata ?? null;
 
   const client: SessionClientStub = {
     sessionId: 'happy_sess_1',
     sendAgentMessage: vi.fn(),
     keepAlive: vi.fn(),
-    updateMetadata: vi.fn(),
+    updateMetadata: vi.fn((updater: (current: Metadata) => Metadata) => {
+      if (!options?.applyMetadataUpdates) return undefined;
+      metadataState = updater((metadataState ?? {}) as Metadata);
+      return undefined;
+    }),
     updateAgentState: vi.fn((updater) => updater({})),
     rpcHandlerManager: {
       registerHandler: vi.fn((method: string, handler: any) => {
@@ -148,7 +158,7 @@ function createRemoteHarness(options?: { sessionId?: string | null }): RemoteHar
     },
     sendClaudeSessionMessage,
     sendSessionEvent: vi.fn(),
-    getMetadataSnapshot: () => (options as any)?.metadata ?? null,
+    getMetadataSnapshot: () => metadataState,
     waitForMetadataUpdate: vi.fn(async () => false),
     popPendingMessage: vi.fn(async () => false),
     peekPendingMessageQueueV2Count: vi.fn(async () => 0),
@@ -1196,7 +1206,10 @@ function createRemoteHarness(options?: { sessionId?: string | null }): RemoteHar
   }, 30_000);
 
   it('persists the last assistant uuid into session metadata when observed in remote messages', async () => {
-    const { session, client, switchHandlerReady } = createRemoteHarness({ sessionId: 'sess_0' });
+    const { session, client, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      applyMetadataUpdates: true,
+    });
 
     const dispatchStarted = createDeferred<void>();
     mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
@@ -1227,7 +1240,10 @@ function createRemoteHarness(options?: { sessionId?: string | null }): RemoteHar
   }, 30_000);
 
   it('does not persist assistant uuids from sidechain messages (parent_tool_use_id)', async () => {
-    const { session, client, switchHandlerReady } = createRemoteHarness({ sessionId: 'sess_0' });
+    const { session, client, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      applyMetadataUpdates: true,
+    });
 
     const dispatchStarted = createDeferred<void>();
     mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
@@ -1254,6 +1270,163 @@ function createRemoteHarness(options?: { sessionId?: string | null }): RemoteHar
       expect(typeof updater).toBe('function');
       expect(updater({})).not.toHaveProperty('claudeLastAssistantUuid');
     }
+
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
+  it('persists supported Claude models from remote capabilities into session model metadata', async () => {
+    const { session, client, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      metadata: {
+        modelOverrideV1: {
+          v: 1,
+          updatedAt: 1,
+          modelId: 'sonnet[1m]',
+        },
+      } as Metadata,
+      applyMetadataUpdates: true,
+    });
+    session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
+
+    const dispatchStarted = createDeferred<void>();
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as any;
+      dispatchStarted.resolve(undefined);
+      dispatchOpts.onCapabilities?.({
+        models: [
+          {
+            value: 'sonnet[1m]',
+            displayName: 'Sonnet 4.6 1M',
+            description: '1 million token context window',
+          },
+          {
+            value: 'claude-sonnet-4-6',
+            displayName: 'Sonnet 4.6',
+          },
+        ],
+      });
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    const switchHandler = await switchHandlerReady;
+    await dispatchStarted.promise;
+
+    await vi.waitFor(() => {
+      expect(client.getMetadataSnapshot()).toEqual(expect.objectContaining({
+        sessionModelsV1: {
+          v: 1,
+          provider: 'claude',
+          updatedAt: expect.any(Number),
+          currentModelId: 'sonnet[1m]',
+          availableModels: [
+            {
+              id: 'sonnet[1m]',
+              name: 'Sonnet 4.6 1M',
+              description: '1 million token context window',
+              contextWindowTokens: 1_000_000,
+            },
+            {
+              id: 'claude-sonnet-4-6',
+              name: 'Sonnet 4.6',
+            },
+          ],
+        },
+        acpSessionModelsV1: {
+          v: 1,
+          provider: 'claude',
+          updatedAt: expect.any(Number),
+          currentModelId: 'sonnet[1m]',
+          availableModels: [
+            {
+              id: 'sonnet[1m]',
+              name: 'Sonnet 4.6 1M',
+              description: '1 million token context window',
+              contextWindowTokens: 1_000_000,
+            },
+            {
+              id: 'claude-sonnet-4-6',
+              name: 'Sonnet 4.6',
+            },
+          ],
+        },
+      }));
+    });
+
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
+  it('updates Claude session model metadata from runtime system init before capabilities arrive', async () => {
+    const { session, client, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      applyMetadataUpdates: true,
+    });
+    session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
+
+    const dispatchStarted = createDeferred<void>();
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as any;
+      dispatchStarted.resolve(undefined);
+      dispatchOpts.onMessage?.({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sess_runtime_model',
+        model: 'claude-opus-4-6',
+      });
+      dispatchOpts.onCapabilities?.({
+        models: [
+          {
+            value: 'claude-opus-4-6',
+            displayName: 'Opus 4.6',
+            description: '1 million token context window',
+          },
+        ],
+      });
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    const switchHandler = await switchHandlerReady;
+    await dispatchStarted.promise;
+
+    await vi.waitFor(() => {
+      expect(client.getMetadataSnapshot()).toEqual(expect.objectContaining({
+        sessionModelsV1: {
+          v: 1,
+          provider: 'claude',
+          updatedAt: expect.any(Number),
+          currentModelId: 'claude-opus-4-6',
+          availableModels: [
+            {
+              id: 'claude-opus-4-6',
+              name: 'Opus 4.6',
+              description: '1 million token context window',
+              contextWindowTokens: 1_000_000,
+            },
+          ],
+        },
+        acpSessionModelsV1: {
+          v: 1,
+          provider: 'claude',
+          updatedAt: expect.any(Number),
+          currentModelId: 'claude-opus-4-6',
+          availableModels: [
+            {
+              id: 'claude-opus-4-6',
+              name: 'Opus 4.6',
+              description: '1 million token context window',
+              contextWindowTokens: 1_000_000,
+            },
+          ],
+        },
+      }));
+    });
 
     expect(await switchHandler({ to: 'local' })).toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');

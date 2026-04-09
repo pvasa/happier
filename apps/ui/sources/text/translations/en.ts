@@ -4319,6 +4319,10 @@ export const en = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `${percent}% left`,
+            windowTitle: 'Context Window',
+            usedDetail: ({ percent, used, total }: { percent: string; used: string; total: string }) =>
+                `${percent} • ${used}/${total} context used`,
+            description: 'Automatically compacts its context when needed.',
         },
         suggestion: {
             fileLabel: 'FILE',

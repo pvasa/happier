@@ -1,5 +1,6 @@
 import type { MessageMeta } from '../domains/messages/messageMetaTypes';
 import { rawRecordSchema, type AgentEvent, type RawAgentContent, type RawRecord, type UsageData } from './schemas';
+import { buildUsageDataFromTokenCountMessage } from './tokenCountUsage';
 
 // Normalized types
 //
@@ -519,6 +520,22 @@ export function normalizeRawMessage(
         }
         if (raw.content.type === 'codex') {
             const structuredSidechain = resolveStructuredContentSidechain(raw.content.data);
+              if (raw.content.data.type === 'token_count') {
+                  const usage = buildUsageDataFromTokenCountMessage(raw.content.data);
+                  if (!usage) return null;
+                  return {
+                      id,
+                      ...(seq !== undefined ? { seq } : {}),
+                      localId,
+                      createdAt,
+                      role: 'agent',
+                      isSidechain: structuredSidechain.isSidechain,
+                    ...(structuredSidechain.sidechainId ? { sidechainId: structuredSidechain.sidechainId } : {}),
+                    content: [],
+                    usage,
+                    meta: raw.meta
+                } satisfies NormalizedMessage;
+            }
               if (raw.content.data.type === 'message') {
                   // Cast codex messages to agent text messages
                   return {
@@ -605,6 +622,22 @@ export function normalizeRawMessage(
           if (raw.content.type === 'acp') {
               const structuredSidechain = resolveStructuredContentSidechain(raw.content.data);
               const acpDataRecord = raw.content.data as unknown as Record<string, unknown>;
+              if (raw.content.data.type === 'token_count') {
+                  const usage = buildUsageDataFromTokenCountMessage(acpDataRecord);
+                  if (!usage) return null;
+                  return {
+                      id,
+                      ...(seq !== undefined ? { seq } : {}),
+                      localId,
+                      createdAt,
+                      role: 'agent',
+                      isSidechain: structuredSidechain.isSidechain,
+                    ...(structuredSidechain.sidechainId ? { sidechainId: structuredSidechain.sidechainId } : {}),
+                    content: [],
+                    usage,
+                    meta: raw.meta
+                } satisfies NormalizedMessage;
+            }
 
               if (raw.content.data.type === 'message') {
                   const messageText = typeof acpDataRecord.message === 'string' ? acpDataRecord.message : '';
@@ -825,8 +858,7 @@ export function normalizeRawMessage(
                     meta: raw.meta
                 } satisfies NormalizedMessage;
             }
-            // Task lifecycle events (task_started, task_complete, turn_aborted) and token_count
-            // are status/metrics - skip normalization, they don't need UI rendering
+            // Task lifecycle events are status/metrics - skip normalization, they don't need UI rendering
         }
     }
     // Default: never drop unknown/unsupported records silently. Surface an opaque placeholder instead,

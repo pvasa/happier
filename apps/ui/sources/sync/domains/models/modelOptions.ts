@@ -24,6 +24,7 @@ export type PreflightModelList = Readonly<{
         id: string;
         name: string;
         description?: string;
+        contextWindowTokens?: number;
         modelOptions?: readonly AcpConfigOption[];
     }>>;
     supportsFreeform: boolean;

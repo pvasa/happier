@@ -28,6 +28,7 @@ import {
 } from './openCodeMcpToolNames';
 import { parseOpenCodeModelId, resolveOpenCodeDefaultProviderIdFromModelId } from './openCodeModelParsing';
 import { parsePermissionRequest } from './openCodePermissionParsing';
+import { readOpenCodeUsageTelemetryFromMessageInfo } from './openCodeUsageTelemetry';
 import {
   buildQuestionAnswersArray,
   extractBashCommandHint,
@@ -47,6 +48,7 @@ import { extractOpenCodeFileDiff } from '../utils/extractOpenCodeFileDiff';
 import { readOpenCodeSessionRuntimeHandleFromMetadata } from '../utils/opencodeSessionAffinity';
 import { extractOpenCodeSessionDiffPayload } from './extractOpenCodeSessionDiffPayload';
 import { buildOpenCodeThinkingModelOptionsFromVariants } from '../modelOptions/openCodeThinkingModelOption';
+import { readContextWindowTokensFromModelRecord } from '@/backends/modelCapabilities/contextWindowTokens';
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -129,6 +131,7 @@ export function createOpenCodeServerRuntime(params: {
   let client: OpenCodeServerRuntimeClient | null = null;
   let sessionId: string | null = null;
   let subscriptionAbort: AbortController | null = null;
+  let currentContextWindowTokens: number | null = null;
 
   let selectedAgent: string | null = null;
   let selectedModel: OpenCodeModelRef | null = null;
@@ -205,19 +208,10 @@ export function createOpenCodeServerRuntime(params: {
       ]);
 
       const defaultModelId = typeof (config as any)?.model === 'string' ? String((config as any).model).trim() : '';
-      const defaultProviderId = defaultModelId ? resolveOpenCodeDefaultProviderIdFromModelId(defaultModelId) : '';
-
       const includedProviders = (Array.isArray(providers) ? providers : []).filter((p) => {
         const id = normalizeString((p as any)?.id);
         if (!id) return false;
-        if (defaultProviderId && id === defaultProviderId) return true;
-        const requiredEnvKeys = Array.isArray((p as any)?.env) ? (p as any).env : [];
-        if (!Array.isArray(requiredEnvKeys) || requiredEnvKeys.length === 0) return false;
-        return requiredEnvKeys.some((k: unknown) => {
-          const key = normalizeString(k);
-          if (!key) return false;
-          return normalizeEnvVar(env[key]) !== '';
-        });
+        return asRecord((p as any)?.models) !== null;
       });
 
       type SessionModelEntry = NonNullable<NonNullable<Metadata['sessionModelsV1']>['availableModels']>[number];
@@ -241,6 +235,7 @@ export function createOpenCodeServerRuntime(params: {
           const name = normalizeString(asRecord(modelRec)?.name) || modelId;
           const description = normalizeString(asRecord(modelRec)?.family) || '';
           const supportsReasoning = capabilities ? capabilities.reasoning === true : false;
+          const contextWindowTokens = readContextWindowTokensFromModelRecord(asRecord(modelRec) ?? {});
           const modelOptions: SessionModelEntry['modelOptions'] | null = supportsReasoning
             ? (buildOpenCodeThinkingModelOptionsFromVariants((asRecord(modelRec) as any)?.variants, variantCandidate) as SessionModelEntry['modelOptions'])
             : null;
@@ -248,6 +243,7 @@ export function createOpenCodeServerRuntime(params: {
             id: fullId,
             name,
             ...(description ? { description } : {}),
+            ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
             ...(modelOptions ? { modelOptions } : {}),
           });
         }
@@ -265,6 +261,8 @@ export function createOpenCodeServerRuntime(params: {
         || defaultModelId
         || availableModels[0]?.id
         || '';
+      currentContextWindowTokens =
+        availableModels.find((model) => model.id === currentModelId)?.contextWindowTokens ?? null;
       const snapshot = await params.session.ensureMetadataSnapshot({ timeoutMs: 60_000 }).catch(() => null);
       if (!snapshot) return;
 
@@ -1616,6 +1614,30 @@ export function createOpenCodeServerRuntime(params: {
     const props = payload.properties;
     shapeLogger.log(`event:${type || 'unknown'}`, payload);
 
+    if (type === 'message.updated') {
+      const info = asRecord(asRecord(props)?.info);
+      if (!info) return;
+      const infoSessionId = normalizeString(info.sessionID);
+      if (!infoSessionId || infoSessionId !== sessionId) return;
+
+      const usageTelemetry = readOpenCodeUsageTelemetryFromMessageInfo({
+        info,
+        fallbackContextWindowTokens: currentContextWindowTokens,
+      });
+      if (!usageTelemetry) return;
+
+      params.session.sendAgentMessage(provider, {
+        type: 'token_count',
+        id: randomUUID(),
+        key: `opencode-session:${infoSessionId}`,
+        used: usageTelemetry.used,
+        size: usageTelemetry.size,
+        ...(usageTelemetry.model ? { model: usageTelemetry.model } : {}),
+        ...(usageTelemetry.cost ? { cost: usageTelemetry.cost } : {}),
+      });
+      return;
+    }
+
     if (type === 'message.part.updated' || type === 'message.part.created') {
       const part = asRecord(asRecord(props)?.part);
       if (!part) return;
@@ -2185,6 +2207,7 @@ export function createOpenCodeServerRuntime(params: {
       sessionId = null;
       selectedAgent = null;
       selectedModel = null;
+      currentContextWindowTokens = null;
       omitCustomMessageIdOnFirstPromptAfterResume = false;
       for (const key of Object.keys(configOverrides)) delete configOverrides[key];
       ensuredMcpServersForDirectory = false;

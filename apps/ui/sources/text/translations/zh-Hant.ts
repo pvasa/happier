@@ -3604,6 +3604,10 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         },
         context: {
             remaining: ({ percent }: { percent: number }) => `剩餘 ${percent}%`,
+            windowTitle: '上下文視窗',
+            usedDetail: ({ percent, used, total }: { percent: string; used: string; total: string }) =>
+                `${percent} • 已使用 ${used}/${total} 上下文`,
+            description: '會在需要時自動壓縮其上下文。',
         },
         suggestion: {
             fileLabel: '檔案',

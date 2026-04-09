@@ -219,6 +219,133 @@ describe('reducer', () => {
     });
 
     describe('agent text message handling', () => {
+        it('updates latestUsage from usage-only agent telemetry without creating a transcript message', () => {
+            const state = createReducer();
+            const messages: NormalizedMessage[] = [
+                {
+                    id: 'usage1',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [],
+                    usage: {
+                        input_tokens: 120,
+                        output_tokens: 40,
+                        cache_creation_input_tokens: 10,
+                        cache_read_input_tokens: 30,
+                    },
+                },
+            ];
+
+            const result = reducer(state, messages);
+
+            expect(result.messages).toHaveLength(0);
+            expect(result.usage).toEqual({
+                inputTokens: 120,
+                outputTokens: 40,
+                cacheCreation: 10,
+                cacheRead: 30,
+                contextSize: 160,
+            });
+            expect(state.latestUsage).toEqual({
+                inputTokens: 120,
+                outputTokens: 40,
+                cacheCreation: 10,
+                cacheRead: 30,
+                contextSize: 160,
+                timestamp: 1000,
+            });
+        });
+
+        it('prefers explicit context-window usage telemetry over derived token counts', () => {
+            const state = createReducer();
+            const messages: NormalizedMessage[] = [
+                {
+                    id: 'usage-context-window-1',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [],
+                    usage: {
+                        input_tokens: 700,
+                        output_tokens: 250,
+                        cache_read_input_tokens: 200,
+                        context_used_tokens: 1_200,
+                        context_window_tokens: 258_400,
+                    },
+                },
+            ];
+
+            const result = reducer(state, messages);
+
+            expect(result.messages).toHaveLength(0);
+            expect(result.usage).toEqual({
+                inputTokens: 700,
+                outputTokens: 250,
+                cacheCreation: 0,
+                cacheRead: 200,
+                contextSize: 1_200,
+                contextWindowTokens: 258_400,
+            });
+            expect(state.latestUsage).toEqual({
+                inputTokens: 700,
+                outputTokens: 250,
+                cacheCreation: 0,
+                cacheRead: 200,
+                contextSize: 1_200,
+                contextWindowTokens: 258_400,
+                timestamp: 1000,
+            });
+        });
+
+        it('preserves the known context window when compaction resets usage back to zero', () => {
+            const state = createReducer();
+
+            reducer(state, [
+                {
+                    id: 'usage-before-compaction',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [],
+                    usage: {
+                        input_tokens: 700,
+                        output_tokens: 250,
+                        cache_read_input_tokens: 200,
+                        context_used_tokens: 1_200,
+                        context_window_tokens: 258_400,
+                    },
+                },
+            ]);
+
+            reducer(state, [
+                {
+                    id: 'compaction-completed',
+                    localId: null,
+                    createdAt: 2000,
+                    role: 'event',
+                    isSidechain: false,
+                    content: {
+                        type: 'message',
+                        message: 'Compaction completed',
+                    },
+                },
+            ]);
+
+            expect(state.latestUsage).toEqual({
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheCreation: 0,
+                cacheRead: 0,
+                contextSize: 0,
+                contextWindowTokens: 258_400,
+                timestamp: 2000,
+            });
+        });
+
         it('should process agent text messages', () => {
             const state = createReducer();
             const messages: NormalizedMessage[] = [

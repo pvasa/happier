@@ -35,6 +35,7 @@ import {
 } from './streamEventBridge';
 import {
     publishCodexAppServerSessionControlsMetadata,
+    publishCodexAppServerRuntimeModelContextWindowMetadata,
     resolveCodexAppServerCollaborationModeSelection,
 } from './sessionControlsMetadata';
 import { createCodexSyntheticSubagentTracker } from '../collaboration/createCodexSyntheticSubagentTracker';
@@ -167,6 +168,80 @@ function readModelId(value: unknown): string | null {
 function readServiceTier(value: unknown): string | null {
     const record = readRecord(value);
     return record ? trimStringValue(record.serviceTier) ?? trimStringValue(record.service_tier) : null;
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        return null;
+    }
+    return Math.trunc(value);
+}
+
+function readCodexRuntimeContextWindowTokens(value: unknown): number | null {
+    const record = readRecord(value);
+    if (!record) return null;
+
+    const direct = readNonNegativeInteger(record.modelContextWindow ?? record.model_context_window);
+    if (direct !== null) return direct;
+
+    const turn = readRecord(record.turn);
+    return readNonNegativeInteger(turn?.modelContextWindow ?? turn?.model_context_window);
+}
+
+function readCodexTurnStatus(value: unknown): string | null {
+    const record = readRecord(value);
+    const turn = readRecord(record?.turn);
+    return trimStringValue(turn?.status);
+}
+
+function readCodexAppServerErrorMessage(value: unknown): string | null {
+    const record = readRecord(value);
+    if (!record) return null;
+
+    const directError = readRecord(record.error);
+    const turn = readRecord(record.turn);
+    const turnError = readRecord(turn?.error);
+    const error = directError ?? turnError;
+    if (!error) return null;
+
+    const message = trimStringValue(error.message);
+    const additionalDetails = trimStringValue(error.additionalDetails ?? error.additional_details);
+    if (message && additionalDetails) {
+        return `${message}\n\n${additionalDetails}`;
+    }
+    return message ?? additionalDetails;
+}
+
+function createCodexAppServerTurnFailure(value: unknown): Error {
+    return new Error(readCodexAppServerErrorMessage(value) ?? 'Codex app-server turn failed');
+}
+
+function formatCodexAppServerErrorForUi(error: Error): string {
+    const message = error.message.trim();
+    if (!message) return 'Codex error';
+    return /^error[:\s]/i.test(message) ? message : `Error: ${message}`;
+}
+
+function readCodexTokenUsageBreakdown(value: unknown): Record<string, number> | null {
+    const record = readRecord(value);
+    if (!record) return null;
+
+    const total = readNonNegativeInteger(record.totalTokens ?? record.total_tokens);
+    const input = readNonNegativeInteger(record.inputTokens ?? record.input_tokens);
+    const cacheRead = readNonNegativeInteger(record.cachedInputTokens ?? record.cached_input_tokens);
+    const output = readNonNegativeInteger(record.outputTokens ?? record.output_tokens);
+    const thought = readNonNegativeInteger(record.reasoningOutputTokens ?? record.reasoning_output_tokens);
+
+    const hasAnyPart = total !== null || input !== null || cacheRead !== null || output !== null || thought !== null;
+    if (!hasAnyPart) return null;
+
+    const tokens = Object.create(null) as Record<string, number>;
+    tokens.total = total ?? ((input ?? 0) + (cacheRead ?? 0) + (output ?? 0) + (thought ?? 0));
+    if (input !== null) tokens.input = input;
+    if (cacheRead !== null) tokens.cache_read = cacheRead;
+    if (output !== null) tokens.output = output;
+    if (thought !== null) tokens.thought = thought;
+    return tokens;
 }
 
 function buildThreadServiceTierParams(
@@ -314,6 +389,16 @@ export function createCodexAppServerRuntime(params: Readonly<{
             currentModelId,
             currentReasoningEffort,
             currentServiceTier,
+        }).catch(() => undefined);
+    };
+
+    const publishRuntimeContextWindow = async (contextWindowTokens: number | null): Promise<void> => {
+        if (contextWindowTokens === null) return;
+        await publishCodexAppServerRuntimeModelContextWindowMetadata({
+            session: params.session,
+            provider: 'codex',
+            currentModelId,
+            contextWindowTokens,
         }).catch(() => undefined);
     };
 
@@ -937,6 +1022,22 @@ export function createCodexAppServerRuntime(params: Readonly<{
         pendingTurnFinalizationTimer.unref?.();
     };
 
+    const abortPendingTurnWithFailure = async (failure: Error): Promise<void> => {
+        params.session.sendCodexMessage({
+            type: 'message',
+            message: formatCodexAppServerErrorForUi(failure),
+        });
+        params.session.sendCodexMessage({
+            type: 'turn_aborted',
+            id: randomUUID(),
+        });
+        await finishPendingTurn({
+            error: failure,
+            flushReason: 'abort',
+            insideBridgeWork: true,
+        });
+    };
+
     const notificationMatchesPendingTurn = (notificationParams: unknown): boolean => {
         const activeTurn = pendingTurn;
         if (!activeTurn) return false;
@@ -1008,8 +1109,44 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 threadId = nextThreadId;
                                 publishThreadId();
                             }
+                            await publishRuntimeContextWindow(readCodexRuntimeContextWindowTokens(notificationParams));
                             turnInFlight = true;
                             setThinking(true);
+                        });
+                    });
+                    client.registerNotificationHandler('thread/tokenUsage/updated', (notificationParams) => {
+                        void runBridgeWork(async () => {
+                            const notificationThreadId = readThreadId(notificationParams);
+                            if (notificationThreadId && threadId && notificationThreadId !== threadId) {
+                                return;
+                            }
+
+                            const notificationRecord = readRecord(notificationParams);
+                            const tokenUsage = readRecord(notificationRecord?.tokenUsage ?? notificationRecord?.token_usage);
+                            const totalBreakdown = readCodexTokenUsageBreakdown(tokenUsage?.total);
+                            const contextWindowTokens = readCodexRuntimeContextWindowTokens(tokenUsage);
+
+                            await publishRuntimeContextWindow(contextWindowTokens);
+
+                            if (!totalBreakdown) return;
+
+                            params.session.sendCodexMessage({
+                                type: 'token_count',
+                                tokens: totalBreakdown,
+                                used: totalBreakdown.total,
+                                ...(contextWindowTokens !== null ? { size: contextWindowTokens } : {}),
+                                ...(currentModelId ? { model: currentModelId } : {}),
+                                ...(threadId ? { key: `codex-app-server:${threadId}` } : {}),
+                                id: randomUUID(),
+                            });
+                        });
+                    });
+                    client.registerNotificationHandler('error', (notificationParams) => {
+                        void runBridgeWork(async () => {
+                            if (!notificationMatchesPendingTurn(notificationParams)) return;
+                            const notificationRecord = readRecord(notificationParams);
+                            if (notificationRecord?.willRetry === true) return;
+                            await abortPendingTurnWithFailure(createCodexAppServerTurnFailure(notificationParams));
                         });
                     });
                     registerActiveTurnStreamNotificationHandler(client, 'item/agentMessage/delta');
@@ -1035,6 +1172,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         client.registerNotificationHandler(method, async (notificationParams) => {
                             await runBridgeWork(async () => {
                                 if (notificationMatchesPendingTurn(notificationParams)) {
+                                    if (method === 'turn/completed' && readCodexTurnStatus(notificationParams) === 'failed') {
+                                        await abortPendingTurnWithFailure(createCodexAppServerTurnFailure(notificationParams));
+                                        return;
+                                    }
                                     schedulePendingTurnFinalization(
                                         method === 'turn/completed' ? 'turn-end' : 'abort',
                                     );

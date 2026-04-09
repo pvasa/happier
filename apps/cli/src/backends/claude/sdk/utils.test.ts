@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { getProviderCliRuntimeSpec } from '@happier-dev/agents';
@@ -93,7 +93,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePath', () => {
       body: 'echo "2.0.0 (Claude Code)"',
     });
 
-    expect(getDefaultClaudeCodePath()).toBe(realpathSync(nativeClaudePath));
+    expect(getDefaultClaudeCodePath()).toBe(nativeClaudePath);
   });
 
   it('resolves a versioned Claude JS entrypoint without requiring node on PATH', () => {
@@ -105,7 +105,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePath', () => {
     const versionedClaudePath = join(versionedDir, 'cli.js');
     writeTextFileSync(versionedClaudePath, 'console.log("claude");\n');
 
-    expect(getDefaultClaudeCodePath()).toBe(realpathSync(versionedClaudePath));
+    expect(getDefaultClaudeCodePath()).toBe(versionedClaudePath);
   });
 
   it('throws a helpful error when no Claude Code installation is found', () => {
@@ -163,7 +163,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePath', () => {
     const nativeClaudePath = join(localBin, 'claude.exe');
     writeTextFileSync(nativeClaudePath, 'MZ');
 
-    expect(getDefaultClaudeCodePath()).toBe(realpathSync(nativeClaudePath));
+    expect(getDefaultClaudeCodePath()).toBe(nativeClaudePath);
   });
 
   it('prefers HAPPIER_CLAUDE_PATH when set', () => {
@@ -231,10 +231,10 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
       body: 'echo "2.0.0 (Claude Code)"',
     });
 
-    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(jsClaude));
+    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(jsClaude);
   });
 
-  it('canonicalizes a PATH symlink before returning the Claude entrypoint for Agent SDK', () => {
+  it('preserves a PATH symlink entrypoint so Claude auto-updates can retarget it without pinning an old version path', () => {
     if (process.platform === 'win32') {
       return;
     }
@@ -249,8 +249,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
     const symlinkPath = join(binDir, 'claude');
     symlinkSync(realClaude, symlinkPath);
 
-    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(realClaude));
-    expect(getDefaultClaudeCodePathForAgentSdk()).not.toBe(symlinkPath);
+    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(symlinkPath);
   });
 
   it('rejects a non-executable .cjs entrypoint for Agent SDK (SDK may try to execute it directly)', () => {
@@ -280,7 +279,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
 
     process.env.HAPPIER_CLAUDE_PATH = '~/.local/bin/claude';
 
-    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(explicitPath));
+    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(explicitPath);
   });
 
   it('accepts shell wrapper scripts on PATH even when a versioned native binary is available', () => {
@@ -299,7 +298,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
     const nativeClaudePath = join(versionsDir, 'claude');
     writeFileSync(nativeClaudePath, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]));
 
-    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(wrapperPath));
+    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(wrapperPath);
   });
 
   it('prefers a PATH entrypoint when both PATH and a versioned install are present', () => {
@@ -318,7 +317,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
     const nativeClaudePath = join(versionsDir, 'claude');
     writeFileSync(nativeClaudePath, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]));
 
-    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(jsClaude));
+    expect(getDefaultClaudeCodePathForAgentSdk()).toBe(jsClaude);
   });
 
   it('does not pick a project-local node_modules/.bin/claude when a global install is available', () => {
@@ -346,7 +345,7 @@ describe('Claude SDK utils - getDefaultClaudeCodePathForAgentSdk', () => {
 
     try {
       process.chdir(projectRoot);
-      expect(getDefaultClaudeCodePathForAgentSdk()).toBe(realpathSync(globalClaude));
+      expect(getDefaultClaudeCodePathForAgentSdk()).toBe(globalClaude);
       expect(getDefaultClaudeCodePathForAgentSdk()).not.toBe(localClaude);
     } finally {
       process.chdir(originalCwd);

@@ -40,6 +40,17 @@ function isClaudeAgentSdkEarlyExitError(error: unknown): boolean {
     return false;
 }
 
+function isClaudeAgentSdkExecutableMissingError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const message = (error as { message?: unknown }).message;
+    if (typeof message !== 'string') return false;
+
+    if (message.includes('ENOENT')) return true;
+    if (message.includes('Claude Code executable not found at')) return true;
+    if (message.includes('Failed to spawn Claude Code process: spawn ')) return true;
+    return false;
+}
+
 export async function claudeRemoteDispatch<T extends { nextMessage: NextMessage }>(
     opts: T & { onRunnerSelected?: ((runner: ClaudeRemoteRunnerKind) => void) | null },
     deps?: Partial<ClaudeRemoteDispatchDependencies>,
@@ -86,24 +97,35 @@ export async function claudeRemoteDispatch<T extends { nextMessage: NextMessage 
     // Back-compat: older clients/daemons may not include this provider-scoped flag on the queued prompt.
     // Default is enabled (see provider settings defaults + DEFAULT_CLAUDE_REMOTE_META_STATE).
     if (first.mode.claudeRemoteAgentSdkEnabled !== false) {
-        try {
-            baseOpts.onRunnerSelected?.('agentSdk');
-            await repairClaudeTranscriptAfterInterrupt({
-                sessionId: (baseOpts as any).sessionId ?? null,
-                transcriptPath: (baseOpts as any).transcriptPath ?? null,
-                workDir: String((baseOpts as any).path ?? '').trim(),
-                claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
-            }).catch(() => {});
-            await resolvedAgentSdk({ ...baseOpts, nextMessage: createNextMessage() } as any);
-            return;
-        } catch (error) {
-            const canFallback = !consumedBeyondFirst && !didStartSession && !didEmitMessage;
-            if (canFallback && (isClaudeAgentSdkAuthenticationError(error) || isClaudeAgentSdkEarlyExitError(error))) {
-                baseOpts.onRunnerSelected?.('legacy');
-                await resolvedLegacy({ ...baseOpts, nextMessage: createNextMessage() } as any);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                baseOpts.onRunnerSelected?.('agentSdk');
+                await repairClaudeTranscriptAfterInterrupt({
+                    sessionId: (baseOpts as any).sessionId ?? null,
+                    transcriptPath: (baseOpts as any).transcriptPath ?? null,
+                    workDir: String((baseOpts as any).path ?? '').trim(),
+                    claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
+                }).catch(() => {});
+                await resolvedAgentSdk({ ...baseOpts, nextMessage: createNextMessage() } as any);
                 return;
+            } catch (error) {
+                const canFallback = !consumedBeyondFirst && !didStartSession && !didEmitMessage;
+                const shouldRetryAgentSdk =
+                    attempt === 0
+                    && canFallback
+                    && isClaudeAgentSdkExecutableMissingError(error);
+
+                if (shouldRetryAgentSdk) {
+                    continue;
+                }
+
+                if (canFallback && (isClaudeAgentSdkAuthenticationError(error) || isClaudeAgentSdkEarlyExitError(error))) {
+                    baseOpts.onRunnerSelected?.('legacy');
+                    await resolvedLegacy({ ...baseOpts, nextMessage: createNextMessage() } as any);
+                    return;
+                }
+                throw error;
             }
-            throw error;
         }
     }
 

@@ -4631,6 +4631,17 @@ export const ru: TranslationStructure = {
     },
     context: {
       remaining: ({ percent }: { percent: number }) => `Осталось ${percent}%`,
+      windowTitle: "Окно контекста",
+      usedDetail: ({
+        percent,
+        used,
+        total,
+      }: {
+        percent: string;
+        used: string;
+        total: string;
+      }) => `${percent} • использовано ${used}/${total} контекста`,
+      description: "Автоматически уплотняет контекст, когда это необходимо.",
     },
     suggestion: {
       fileLabel: "ФАЙЛ",

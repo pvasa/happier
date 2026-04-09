@@ -4893,6 +4893,17 @@ localTailscale: {
     },
     context: {
       remaining: ({ percent }: { percent: number }) => `残り ${percent}%`,
+      windowTitle: "コンテキストウィンドウ",
+      usedDetail: ({
+        percent,
+        used,
+        total,
+      }: {
+        percent: string;
+        used: string;
+        total: string;
+      }) => `${percent} • ${used}/${total} のコンテキストを使用`,
+      description: "必要に応じてコンテキストを自動的に圧縮します。",
     },
     suggestion: {
       fileLabel: "ファイル",

@@ -38,6 +38,9 @@ function normalizePersistedModelList(input: unknown): PreflightModelList | null 
                 id: String(m.id),
                 name: String(m.name),
                 ...(typeof m.description === 'string' ? { description: m.description } : {}),
+                ...(typeof m.contextWindowTokens === 'number' && Number.isFinite(m.contextWindowTokens) && m.contextWindowTokens > 0
+                    ? { contextWindowTokens: Math.trunc(m.contextWindowTokens) }
+                    : {}),
                 ...(modelOptions ? { modelOptions } : {}),
             };
         });

@@ -70,6 +70,9 @@ export function runMessageToEventConversion({
         cacheCreation: 0,
         cacheRead: 0,
         contextSize: 0,
+        ...(typeof state.latestUsage?.contextWindowTokens === 'number'
+          ? { contextWindowTokens: state.latestUsage.contextWindowTokens }
+          : {}),
         timestamp: msg.createdAt, // Use message timestamp to avoid blocking older usage data
       };
       // Don't continue - let the event be processed normally to create a message
@@ -88,6 +91,9 @@ export function runMessageToEventConversion({
         cacheCreation: 0,
         cacheRead: 0,
         contextSize: 0,
+        ...(typeof state.latestUsage?.contextWindowTokens === 'number'
+          ? { contextWindowTokens: state.latestUsage.contextWindowTokens }
+          : {}),
         timestamp: msg.createdAt, // Use message timestamp to avoid blocking older usage data
       };
       // Don't continue - let the event be processed normally to create a message

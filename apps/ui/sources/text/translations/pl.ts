@@ -4645,6 +4645,17 @@ export const pl: TranslationStructure = {
     },
     context: {
       remaining: ({ percent }: { percent: number }) => `Pozostało ${percent}%`,
+      windowTitle: "Okno kontekstu",
+      usedDetail: ({
+        percent,
+        used,
+        total,
+      }: {
+        percent: string;
+        used: string;
+        total: string;
+      }) => `${percent} • wykorzystano ${used}/${total} kontekstu`,
+      description: "Automatycznie kompaktuje kontekst, gdy jest to potrzebne.",
     },
     suggestion: {
       fileLabel: "PLIK",

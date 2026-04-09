@@ -477,6 +477,7 @@ export type Metadata = {
       id: string,
       name: string,
       description?: string,
+      contextWindowTokens?: number,
       modelOptions?: Array<{
         id: string,
         name: string,
@@ -500,6 +501,7 @@ export type Metadata = {
       id: string,
       name: string,
       description?: string,
+      contextWindowTokens?: number,
       modelOptions?: Array<{
         id: string,
         name: string,

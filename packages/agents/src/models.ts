@@ -19,6 +19,7 @@ export type AgentModelDescriptor = Readonly<{
   id: string;
   name: string;
   description?: string;
+  contextWindowTokens?: number;
   modelOptions?: readonly AgentModelOption[];
 }>;
 

@@ -56,10 +56,12 @@ import { getHasAnyAgentInputActions, shouldShowSecondaryControlRow } from './lay
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { computeAgentInputDefaultMaxHeight } from './inputMaxHeight';
-import { getContextWarning } from './contextWarning';
+import { getContextUsageState } from './contextWarning';
+import { resolveContextWindowTokens } from './resolveContextWarningWindowTokens';
 import { shouldRenderPermissionChip } from './permissionChipVisibility';
 import { type AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
 import { AgentInputEngineDetail } from './components/AgentInputEngineDetail';
+import { AgentInputContextUsageBadge } from './components/AgentInputContextUsageBadge';
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { AgentInputAttachmentsRow } from './components/AgentInputAttachmentsRow';
 import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
@@ -181,6 +183,7 @@ interface AgentInputProps {
         cacheCreation: number;
         cacheRead: number;
         contextSize: number;
+        contextWindowTokens?: number;
     };
     alwaysShowContextSize?: boolean;
     onFileViewerPress?: () => void;
@@ -348,6 +351,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
+        flex: 1,
     },
     statusText: {
         fontSize: 11,
@@ -355,6 +359,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     statusDot: {
         marginRight: 6,
+    },
+    statusTrailing: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginLeft: 12,
     },
     permissionModeContainer: {
         flexDirection: 'column',
@@ -364,12 +373,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         fontSize: 11,
         ...Typography.default(),
     },
-    contextWarningText: {
-        fontSize: 11,
-        marginLeft: 8,
-        ...Typography.default(),
-    },
-
     // Button styles
     actionButtonsContainer: {
         flexDirection: 'row',
@@ -750,9 +753,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 return 'person-circle-outline';
             }, []);
 
-    // Calculate context warning
-    const contextWarning = props.usageData?.contextSize
-        ? getContextWarning(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme)
+    const contextWindowTokens = React.useMemo(
+        () => resolveContextWindowTokens({ agentId, metadata: props.metadata ?? null, usageData: props.usageData }),
+        [agentId, props.metadata, props.usageData],
+    );
+
+    const contextUsageState = (
+        (props.usageData && typeof props.usageData.contextSize === 'number')
+        || props.alwaysShowContextSize === true
+    )
+        ? getContextUsageState(
+            props.usageData?.contextSize ?? 0,
+            props.alwaysShowContextSize ?? false,
+            contextWindowTokens,
+        )
         : null;
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
@@ -1851,8 +1865,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onEnvVarsPopoverRequestClose={closeEnvVarsPopover}
                 />
 
-                {/* Connection status, context warning, and permission mode */}
-                {(props.connectionStatus || contextWarning) && (
+                {/* Connection status, context usage, and permission mode */}
+                {(props.connectionStatus || contextUsageState) && (
                     <View style={styles.statusContainer}>
                         <View style={styles.statusRow}>
                             {props.connectionStatus && (
@@ -1871,38 +1885,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     </Text>
                                 </>
                             )}
-                            {contextWarning && (
-                                <Text
-                                    style={[
-                                        styles.statusText,
-                                        {
-                                            color: contextWarning.color,
-                                            marginLeft: props.connectionStatus ? 8 : 0,
-                                        },
-                                    ]}
-                                >
-                                    {props.connectionStatus ? '• ' : ''}{contextWarning.text}
-                                </Text>
-                            )}
                         </View>
-                        <View style={styles.permissionModeContainer}>
-                            {shouldRenderPermissionChip(permissionChipLabel) ? (
-                                <Text
-                                    style={[
-                                        styles.permissionModeText,
-                                        {
-                                            color: effectivePermissionPolicy.effectiveMode === 'acceptEdits' ? theme.colors.permission.acceptEdits :
-                                                effectivePermissionPolicy.effectiveMode === 'bypassPermissions' ? theme.colors.permission.bypass :
-                                                    effectivePermissionPolicy.effectiveMode === 'plan' ? theme.colors.permission.plan :
-                                                        effectivePermissionPolicy.effectiveMode === 'read-only' ? theme.colors.permission.readOnly :
-                                                            effectivePermissionPolicy.effectiveMode === 'safe-yolo' ? theme.colors.permission.safeYolo :
-                                                                effectivePermissionPolicy.effectiveMode === 'yolo' ? theme.colors.permission.yolo :
-                                                                    theme.colors.textSecondary, // Use secondary text color for default
-                                        },
-                                    ]}
-                                >
-                                    {permissionChipLabel}
-                                </Text>
+                        <View testID="agent-input-status-trailing" style={styles.statusTrailing}>
+                            <View style={[styles.permissionModeContainer, contextUsageState ? { marginRight: 8 } : null]}>
+                                {shouldRenderPermissionChip(permissionChipLabel) ? (
+                                    <Text
+                                        style={[
+                                            styles.permissionModeText,
+                                            {
+                                                color: effectivePermissionPolicy.effectiveMode === 'acceptEdits' ? theme.colors.permission.acceptEdits :
+                                                    effectivePermissionPolicy.effectiveMode === 'bypassPermissions' ? theme.colors.permission.bypass :
+                                                        effectivePermissionPolicy.effectiveMode === 'plan' ? theme.colors.permission.plan :
+                                                            effectivePermissionPolicy.effectiveMode === 'read-only' ? theme.colors.permission.readOnly :
+                                                                effectivePermissionPolicy.effectiveMode === 'safe-yolo' ? theme.colors.permission.safeYolo :
+                                                                    effectivePermissionPolicy.effectiveMode === 'yolo' ? theme.colors.permission.yolo :
+                                                                        theme.colors.textSecondary, // Use secondary text color for default
+                                            },
+                                        ]}
+                                    >
+                                        {permissionChipLabel}
+                                    </Text>
+                                ) : null}
+                            </View>
+                            {contextUsageState ? (
+                                <AgentInputContextUsageBadge state={contextUsageState} />
                             ) : null}
                         </View>
                     </View>

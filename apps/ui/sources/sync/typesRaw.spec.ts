@@ -580,6 +580,80 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                 }
             }
         });
+
+        it('normalizeRawMessage() converts Codex token_count into usage-only agent telemetry', () => {
+            const raw = {
+                role: 'agent',
+                content: {
+                    type: 'codex',
+                    data: {
+                        type: 'token_count',
+                        tokens: {
+                            input: 120,
+                            output: 40,
+                            cache_read: 30,
+                            cache_creation: 10,
+                            total: 200,
+                        },
+                        id: 'codex-token-count-1',
+                    },
+                },
+            };
+
+            const normalized = normalizeRawMessage('msg-codex-token-count', null, 1000, raw);
+
+            expect(normalized).not.toBeNull();
+            expect(normalized).toMatchObject({
+                id: 'msg-codex-token-count',
+                role: 'agent',
+                isSidechain: false,
+                content: [],
+                usage: {
+                    input_tokens: 120,
+                    output_tokens: 40,
+                    cache_read_input_tokens: 30,
+                    cache_creation_input_tokens: 10,
+                },
+            });
+        });
+
+        it('normalizeRawMessage() preserves explicit context-window telemetry from token_count messages', () => {
+            const raw = {
+                role: 'agent',
+                content: {
+                    type: 'codex',
+                    data: {
+                        type: 'token_count',
+                        used: 1_200,
+                        size: 258_400,
+                        tokens: {
+                            input: 700,
+                            output: 250,
+                            cache_read: 200,
+                            total: 1_200,
+                        },
+                        id: 'codex-token-count-2',
+                    },
+                },
+            };
+
+            const normalized = normalizeRawMessage('msg-codex-token-count-size', null, 1000, raw);
+
+            expect(normalized).not.toBeNull();
+            expect(normalized).toMatchObject({
+                id: 'msg-codex-token-count-size',
+                role: 'agent',
+                isSidechain: false,
+                content: [],
+                usage: {
+                    input_tokens: 700,
+                    output_tokens: 250,
+                    cache_read_input_tokens: 200,
+                    context_used_tokens: 1_200,
+                    context_window_tokens: 258_400,
+                },
+            });
+        });
     });
 
     describe('Handles unexpected data formats gracefully', () => {

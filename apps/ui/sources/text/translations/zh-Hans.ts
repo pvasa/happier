@@ -4434,6 +4434,17 @@ export const zhHans: TranslationStructure = {
     },
     context: {
       remaining: ({ percent }: { percent: number }) => `剩余 ${percent}%`,
+      windowTitle: "上下文窗口",
+      usedDetail: ({
+        percent,
+        used,
+        total,
+      }: {
+        percent: string;
+        used: string;
+        total: string;
+      }) => `${percent} • 已使用 ${used}/${total} 上下文`,
+      description: "会在需要时自动压缩其上下文。",
     },
     suggestion: {
       fileLabel: "文件",

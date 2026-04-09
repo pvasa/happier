@@ -1,20 +1,96 @@
 import type { Theme } from '@/theme';
 import { t } from '@/text';
 
-const MAX_CONTEXT_SIZE = 190000;
+import { toContextWarningWindowTokens } from './resolveContextWarningWindowTokens';
 
-export function getContextWarning(contextSize: number, alwaysShow: boolean = false, theme: Theme) {
-    const percentageUsed = (contextSize / MAX_CONTEXT_SIZE) * 100;
-    const percentageRemaining = Math.max(0, Math.min(100, 100 - percentageUsed));
+export type ContextUsageSeverity = 'neutral' | 'warning' | 'critical';
 
-    if (percentageRemaining <= 5) {
-        return { text: t('agentInput.context.remaining', { percent: Math.round(percentageRemaining) }), color: theme.colors.warningCritical };
-    } else if (percentageRemaining <= 10) {
-        return { text: t('agentInput.context.remaining', { percent: Math.round(percentageRemaining) }), color: theme.colors.warning };
-    } else if (alwaysShow) {
-        // Show context remaining in neutral color when not near limit
-        return { text: t('agentInput.context.remaining', { percent: Math.round(percentageRemaining) }), color: theme.colors.warning };
-    }
-    return null; // No display needed
+export type ContextUsageState = Readonly<{
+    contextWindowTokens: number;
+    warningWindowTokens: number;
+    usedTokens: number;
+    usedRatio: number;
+    usedPercentage: number;
+    remainingWarningPercentage: number;
+    severity: ContextUsageSeverity;
+}>;
+
+function normalizeContextWindowTokens(raw: number | null | undefined): number | null {
+    return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+        ? Math.trunc(raw)
+        : null;
 }
 
+function trimTrailingZero(value: string): string {
+    return value.endsWith('.0') ? value.slice(0, -2) : value;
+}
+
+export function formatContextUsagePercent(value: number): string {
+    const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
+    return `${trimTrailingZero(safeValue.toFixed(1))}%`;
+}
+
+export function formatContextTokenCount(value: number): string {
+    const safeValue = Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+    if (safeValue >= 1_000_000) {
+        return `${trimTrailingZero((safeValue / 1_000_000).toFixed(safeValue >= 10_000_000 ? 0 : 1))}M`;
+    }
+    if (safeValue >= 1_000) {
+        return `${trimTrailingZero((safeValue / 1_000).toFixed(safeValue >= 100_000 ? 0 : 1))}k`;
+    }
+    return String(safeValue);
+}
+
+export function getContextUsageState(
+    contextSize: number,
+    alwaysShow: boolean = false,
+    contextWindowTokens: number | null = null,
+): ContextUsageState | null {
+    const safeContextWindowTokens = normalizeContextWindowTokens(contextWindowTokens);
+    if (safeContextWindowTokens === null) return null;
+    const safeContextSize = Number.isFinite(contextSize) ? Math.max(0, contextSize) : 0;
+    const warningWindowTokens = toContextWarningWindowTokens(safeContextWindowTokens);
+    const usedRatio = safeContextSize / safeContextWindowTokens;
+    const usedPercentage = usedRatio * 100;
+    const warningPercentageUsed = (safeContextSize / warningWindowTokens) * 100;
+    const remainingWarningPercentage = Math.max(0, Math.min(100, 100 - warningPercentageUsed));
+
+    const severity: ContextUsageSeverity =
+        remainingWarningPercentage <= 5
+            ? 'critical'
+            : remainingWarningPercentage <= 10
+                ? 'warning'
+                : 'neutral';
+
+    if (!alwaysShow && severity === 'neutral') return null;
+
+    return {
+        contextWindowTokens: safeContextWindowTokens,
+        warningWindowTokens,
+        usedTokens: safeContextSize,
+        usedRatio,
+        usedPercentage,
+        remainingWarningPercentage,
+        severity,
+    };
+}
+
+export function getContextWarning(
+    contextSize: number,
+    alwaysShow: boolean = false,
+    theme: Theme,
+    maxContextSize: number | null = null,
+) {
+    const usageState = getContextUsageState(contextSize, alwaysShow, maxContextSize);
+    if (!usageState) return null;
+
+    return {
+        text: t('agentInput.context.remaining', { percent: Math.round(usageState.remainingWarningPercentage) }),
+        color:
+            usageState.severity === 'critical'
+                ? theme.colors.warningCritical
+                : usageState.severity === 'warning'
+                    ? theme.colors.warning
+                    : theme.colors.textSecondary,
+    };
+}

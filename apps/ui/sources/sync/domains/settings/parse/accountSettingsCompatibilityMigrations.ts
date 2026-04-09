@@ -188,6 +188,10 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
         next.filesDiffPresentationStyle = 'unified';
     }
 
+    if (inputSchemaVersion < 7 && next.alwaysShowContextSize === false) {
+        next.alwaysShowContextSize = true;
+    }
+
     next.featureToggles = migrateAccountFeatureToggles({
         featureToggles: next.featureToggles,
         inputSchemaVersion,

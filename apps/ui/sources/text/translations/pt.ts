@@ -4759,6 +4759,17 @@ export const pt: TranslationStructure = {
     },
     context: {
       remaining: ({ percent }: { percent: number }) => `${percent}% restante`,
+      windowTitle: "Janela de contexto",
+      usedDetail: ({
+        percent,
+        used,
+        total,
+      }: {
+        percent: string;
+        used: string;
+        total: string;
+      }) => `${percent} • ${used}/${total} de contexto usado`,
+      description: "Compacta automaticamente o contexto quando necessário.",
     },
     suggestion: {
       fileLabel: "ARQUIVO",

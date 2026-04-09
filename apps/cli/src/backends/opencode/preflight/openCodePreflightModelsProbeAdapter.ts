@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { asRecord, normalizeString } from '../server/openCodeParsing';
 import { modelSupportsToolCalls } from '../server/openCodeModelParsing';
 import { buildOpenCodeThinkingModelOptionsFromVariants } from '../modelOptions/openCodeThinkingModelOption';
+import { readContextWindowTokensFromModelRecord } from '@/backends/modelCapabilities/contextWindowTokens';
 
 type OpenCodeVerboseModelRecord = Readonly<{
   id?: string;
@@ -173,6 +174,7 @@ async function probeOpenCodeModelsVerbose(params: Readonly<{ cwd: string; timeou
           const description = normalizeString(record.family) || normalizeString(record.providerID) || undefined;
           const capabilities = asRecord(record.capabilities);
           const supportsReasoning = capabilities ? capabilities.reasoning === true : false;
+          const contextWindowTokens = readContextWindowTokensFromModelRecord(record);
           const modelOptions = supportsReasoning
             ? buildOpenCodeThinkingModelOptionsFromVariants(record.variants, null)
             : null;
@@ -180,6 +182,7 @@ async function probeOpenCodeModelsVerbose(params: Readonly<{ cwd: string; timeou
             id: fullId,
             name,
             ...(description ? { description } : {}),
+            ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
             ...(modelOptions ? { modelOptions } : {}),
           };
         })

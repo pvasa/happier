@@ -218,6 +218,36 @@ describe('claudeRemoteDispatch', () => {
         expect(mockLegacy).toHaveBeenCalledTimes(1);
     });
 
+    it('retries Agent SDK once when startup fails with ENOENT before the session starts', async () => {
+        const mockLegacy = vi.fn(async () => {});
+        const mockAgentSdk = vi
+            .fn()
+            .mockRejectedValueOnce(new Error('Failed to spawn Claude Code process: spawn /home/hidde/.local/bin/claude ENOENT'))
+            .mockResolvedValueOnce(undefined);
+        const onRunnerSelected = vi.fn();
+
+        let sent = false;
+        await claudeRemoteDispatch(
+            {
+                onRunnerSelected,
+                nextMessage: async () => {
+                    if (sent) return null;
+                    sent = true;
+                    return {
+                        message: 'hello',
+                        mode: { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any,
+                    };
+                },
+            } as any,
+            { claudeRemote: mockLegacy, claudeRemoteAgentSdk: mockAgentSdk },
+        );
+
+        expect(onRunnerSelected).toHaveBeenNthCalledWith(1, 'agentSdk');
+        expect(onRunnerSelected).toHaveBeenNthCalledWith(2, 'agentSdk');
+        expect(mockAgentSdk).toHaveBeenCalledTimes(2);
+        expect(mockLegacy).toHaveBeenCalledTimes(0);
+    });
+
     it('does not fall back to legacy runner when Agent SDK exits with code 1 after emitting a message', async () => {
         const mockLegacy = vi.fn(async () => {});
         const mockAgentSdk = vi.fn(async (params: any) => {
@@ -303,4 +333,3 @@ describe('claudeRemoteDispatch', () => {
         expect(mockLegacy).toHaveBeenCalledTimes(1);
     });
 });
-

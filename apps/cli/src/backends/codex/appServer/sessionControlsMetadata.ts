@@ -4,6 +4,10 @@ import {
     SESSION_MODES_STATE_KEY,
 } from '@happier-dev/agents';
 import type { Metadata } from '@/api/types';
+import {
+    normalizeContextWindowTokens,
+    readContextWindowTokensFromModelRecord,
+} from '@/backends/modelCapabilities/contextWindowTokens';
 
 type JsonRpcClient = Readonly<{
     request: (method: string, params?: unknown) => Promise<unknown>;
@@ -31,6 +35,7 @@ type SessionConfigOption = {
 };
 
 type SessionModelOption = SessionControlOption & Readonly<{
+    contextWindowTokens?: number;
     modelOptions?: SessionConfigOption[];
 }>;
 
@@ -226,6 +231,7 @@ function normalizeSessionModelMasks(params: Readonly<{
                 const reasoningEffort = normalizeString(record.reasoning_effort);
                 return reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : null;
             })();
+        const contextWindowTokens = readContextWindowTokensFromModelRecord(record);
         const reasoningOption = buildReasoningEffortModelOption({
             modelId: id,
             record,
@@ -244,6 +250,7 @@ function normalizeSessionModelMasks(params: Readonly<{
             id,
             name,
             ...(description ? { description } : {}),
+            ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
             ...(modelOptions.length > 0 ? { modelOptions } : {}),
             isDefault: record.default === true || record.isDefault === true || record.selected === true || record.current === true,
         });
@@ -533,4 +540,70 @@ export async function publishCodexAppServerSessionControlsMetadata(params: Reado
             };
         })(),
     })));
+}
+
+export async function publishCodexAppServerRuntimeModelContextWindowMetadata(params: Readonly<{
+    session: MetadataSession;
+    provider?: string;
+    updatedAt?: number;
+    currentModelId?: string | null;
+    contextWindowTokens: number;
+}>): Promise<void> {
+    const provider = normalizeString(params.provider) ?? 'codex';
+    const currentModelId = normalizeString(params.currentModelId);
+    const contextWindowTokens = normalizeContextWindowTokens(params.contextWindowTokens);
+    if (!currentModelId || contextWindowTokens === undefined) {
+        return;
+    }
+
+    const updatedAt = typeof params.updatedAt === 'number' && Number.isFinite(params.updatedAt)
+        ? Math.trunc(params.updatedAt)
+        : Date.now();
+
+    await Promise.resolve(params.session.updateMetadata((metadata) => {
+        const existing = (metadata as Record<string, unknown>)[SESSION_MODELS_STATE_KEY];
+        const existingState = hasGenericSessionModelsState(existing, provider) ? existing : null;
+        const existingModels = existingState?.availableModels ?? [];
+        const nextCurrentModelId = currentModelId;
+        let didChange = existingState?.currentModelId !== nextCurrentModelId;
+        let sawCurrentModel = false;
+
+        const nextAvailableModels = existingModels.map((model) => {
+            if (!model || typeof model !== 'object') return model;
+            if (model.id !== currentModelId) return model;
+            sawCurrentModel = true;
+            if (model.contextWindowTokens === contextWindowTokens) {
+                return model;
+            }
+            didChange = true;
+            return {
+                ...model,
+                contextWindowTokens,
+            };
+        });
+
+        if (!sawCurrentModel) {
+            didChange = true;
+            nextAvailableModels.push({
+                id: currentModelId,
+                name: normalizeCodexModelDisplayName(currentModelId),
+                contextWindowTokens,
+            });
+        }
+
+        if (!didChange) {
+            return metadata;
+        }
+
+        return {
+            ...metadata,
+            [SESSION_MODELS_STATE_KEY]: {
+                v: 1,
+                provider,
+                updatedAt: existingState ? Math.max(existingState.updatedAt, updatedAt) : updatedAt,
+                currentModelId: nextCurrentModelId,
+                availableModels: nextAvailableModels,
+            },
+        };
+    }));
 }

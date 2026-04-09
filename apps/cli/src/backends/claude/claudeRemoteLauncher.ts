@@ -47,6 +47,10 @@ import type { AccountSettings } from '@happier-dev/protocol';
 import { buildTurnChangeSetDiffInput } from '@/agent/tools/diff/buildTurnChangeSetDiffInput';
 import { ClaudeTurnChangeTracker } from './utils/ClaudeTurnChangeTracker';
 import { isClaudeExplicitDiffToolInput } from './utils/isClaudeExplicitDiffToolInput';
+import {
+    buildClaudeSessionModelsMetadataFromSupportedModels,
+    buildClaudeSessionModelsMetadataWithCurrentModelId,
+} from './remote/buildClaudeSessionModelsMetadataFromSupportedModels';
 import { createStreamedTranscriptWriter, type StreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
 
 interface PermissionsField {
@@ -121,6 +125,23 @@ function resolveClaudeCodeArtifacts(error: unknown): ClaudeCodeArtifacts | null 
     const stderrFilePath = typeof (raw as any).stderrFilePath === 'string' ? (raw as any).stderrFilePath : null;
     if (!debugFilePath && !stderrFilePath) return null;
     return { debugFilePath, stderrFilePath };
+}
+
+function resolveClaudeCurrentModelIdFromMetadata(metadata: Record<string, unknown> | null | undefined): string | null {
+    const preferred = typeof (metadata as any)?.modelOverrideV1?.modelId === 'string'
+        ? String((metadata as any).modelOverrideV1.modelId).trim()
+        : '';
+    if (preferred) return preferred;
+
+    const sessionCurrent = typeof (metadata as any)?.sessionModelsV1?.currentModelId === 'string'
+        ? String((metadata as any).sessionModelsV1.currentModelId).trim()
+        : '';
+    if (sessionCurrent) return sessionCurrent;
+
+    const acpCurrent = typeof (metadata as any)?.acpSessionModelsV1?.currentModelId === 'string'
+        ? String((metadata as any).acpSessionModelsV1.currentModelId).trim()
+        : '';
+    return acpCurrent || null;
 }
 
 async function formatClaudeCodeArtifactsTailForUi(artifacts: ClaudeCodeArtifacts): Promise<string> {
@@ -450,6 +471,21 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     let lastAssistantUuidSeen: string | null = null;
 
     function onMessage(message: SDKMessage) {
+        if (message.type === 'system') {
+            updateMetadataBestEffort(
+                session.client,
+                (metadata) => ({
+                    ...metadata,
+                    ...(buildClaudeSessionModelsMetadataWithCurrentModelId({
+                        currentModelId: (message as any).model,
+                        metadata,
+                    }) ?? {}),
+                }),
+                '[remote]',
+                'runtime_model_update',
+            );
+        }
+
         let releaseIds: string[] = [];
 
         if (message.type === 'assistant') {
@@ -968,11 +1004,18 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         if (!caps || typeof caps !== 'object') return;
                         updateMetadataBestEffort(
                             session.client,
-                            (metadata) => ({
-                                ...metadata,
-                                ...(Array.isArray(caps.slashCommands) ? { slashCommands: caps.slashCommands } : {}),
-                                ...(Array.isArray(caps.slashCommandDetails) ? { slashCommandDetails: caps.slashCommandDetails } : {}),
-                            }),
+                            (metadata) => {
+                                const modelsMetadata = buildClaudeSessionModelsMetadataFromSupportedModels({
+                                    modelsRaw: caps.models,
+                                    metadata,
+                                });
+                                return {
+                                    ...metadata,
+                                    ...(Array.isArray(caps.slashCommands) ? { slashCommands: caps.slashCommands } : {}),
+                                    ...(Array.isArray(caps.slashCommandDetails) ? { slashCommandDetails: caps.slashCommandDetails } : {}),
+                                    ...(modelsMetadata ?? {}),
+                                };
+                            },
                             '[remote]',
                             'capabilities_update',
                         );
