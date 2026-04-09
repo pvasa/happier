@@ -113,7 +113,7 @@ export const TranscriptList = React.memo((props: {
                     autoscrollToTopThreshold: 10,
                 }}
                 keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+                keyboardDismissMode="none"
                 renderItem={renderItem}
                 ListHeaderComponent={<ListHeader isLoading={props.isLoaded === false} />}
                 ListFooterComponent={<ListFooter bottomNotice={props.bottomNotice ?? null} />}
@@ -125,7 +125,7 @@ export const TranscriptList = React.memo((props: {
                 getItemType={getItemType}
                 maintainVisibleContentPosition={{ startRenderingFromBottom: true }}
                 keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+                keyboardDismissMode="none"
                 renderItem={renderItem}
                 ListHeaderComponent={<ListHeader isLoading={props.isLoaded === false} />}
                 ListFooterComponent={<ListFooter bottomNotice={props.bottomNotice ?? null} />}

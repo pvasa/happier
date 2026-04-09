@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { ViewStyle } from 'react-native';
-import { Platform, View, useWindowDimensions } from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { Keyboard, Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { AgentInput } from '@/components/sessions/agentInput';
 import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker';
 import { PopoverBoundaryProvider } from '@/components/ui/popover';
@@ -11,6 +10,10 @@ import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
 import type { CreatedSessionFollowUpContext } from '../hooks/useCreateNewSession';
 import { useNewSessionAttachmentsController } from '@/components/sessions/new/attachments/useNewSessionAttachmentsController';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { NewSessionComposerKeyboardHost } from './NewSessionComposerKeyboardHost';
+import { NewSessionKeyboardContainer } from './NewSessionKeyboardContainer';
+
+const SIMPLE_NEW_SESSION_MIN_TOP_GAP = 8;
 
 export type NewSessionSimplePanelProps = Readonly<{
     popoverBoundaryRef: React.RefObject<View>;
@@ -75,6 +78,14 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
     const { width: windowWidth } = useWindowDimensions();
     const shouldBottomAnchor =
         props.shouldBottomAnchor ?? (Platform.OS !== 'web' || isMobileLayoutWidth(windowWidth));
+    const [availableComposerHeight, setAvailableComposerHeight] = React.useState<number | null>(null);
+    const minimumTopGap = shouldBottomAnchor ? Math.min(props.newSessionTopPadding, SIMPLE_NEW_SESSION_MIN_TOP_GAP) : 0;
+    const measuredComposerPanelMaxHeight = availableComposerHeight == null
+        ? undefined
+        : Math.max(0, availableComposerHeight - props.newSessionBottomPadding - minimumTopGap);
+    const handleDismissKeyboard = React.useCallback(() => {
+        Keyboard.dismiss();
+    }, []);
 
     const {
         attachmentsUploadsEnabled,
@@ -96,9 +107,9 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
     });
 
     return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? props.headerHeight + props.safeAreaBottom + 16 : 0}
+        <NewSessionKeyboardContainer
+            headerHeight={props.headerHeight}
+            safeAreaBottom={props.safeAreaBottom}
             style={[
                 props.containerStyle,
                 ...(shouldBottomAnchor
@@ -122,98 +133,107 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                     width: '100%',
                     justifyContent: shouldBottomAnchor ? 'flex-end' : 'center',
                 }}
+                onLayout={(event) => {
+                    setAvailableComposerHeight(event.nativeEvent.layout.height);
+                }}
             >
+                {shouldBottomAnchor ? (
+                    <Pressable
+                        accessible={false}
+                        style={{ flex: 1, width: '100%', minHeight: minimumTopGap }}
+                        onPress={handleDismissKeyboard}
+                    />
+                ) : null}
                 <PopoverBoundaryProvider boundaryRef={props.popoverBoundaryRef}>
+                    <NewSessionComposerKeyboardHost
+                        style={{
+                            width: '100%',
+                            alignSelf: 'center',
+                        }}
+                    >
+                        {/* AgentInput with inline chips - sticky at bottom */}
                         <View
                             style={{
-                                width: '100%',
-                                alignSelf: 'center',
-                                paddingTop: props.safeAreaTop + props.newSessionTopPadding,
-                                ...(shouldBottomAnchor ? { marginTop: 'auto' } : {}),
+                                paddingBottom: props.newSessionBottomPadding,
                             }}
                         >
-                            {/* AgentInput with inline chips - sticky at bottom */}
-                            <View
-                                style={{
-                                    paddingBottom: props.newSessionBottomPadding,
-                                }}
-                            >
-                                <View style={{ paddingHorizontal: props.newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}>
-                                    <View style={{ width: '100%', alignSelf: 'center' }}>
-                                        <AgentInput
-                                            value={props.sessionPrompt}
-                                            onChangeText={props.setSessionPrompt}
-                                            onSend={handleSend}
-                                            isSendDisabled={!props.canCreate}
-                                            isSending={props.isCreating}
-                                            placeholder={t('session.inputPlaceholder')}
-                                            autocompletePrefixes={props.emptyAutocompletePrefixes}
-                                            autocompleteSuggestions={props.emptyAutocompleteSuggestions}
-                                            extraActionChips={extraActionChips}
-                                            inputMaxHeight={props.sessionPromptInputMaxHeight}
-                                            submitAccessibilityLabel={props.submitAccessibilityLabel}
-                                            agentType={props.agentType}
-                                            agentLabel={props.agentLabel}
-                                            onAgentClick={props.handleAgentClick}
-                                            agentPickerOptions={props.agentPickerOptions}
-                                            agentPickerSelectedOptionId={props.agentPickerSelectedOptionId}
-                                            onAgentPickerSelect={props.onAgentPickerSelect}
-                                            agentPickerApplyLabel={props.agentPickerApplyLabel}
-                                            agentPickerProbe={props.agentPickerProbe}
-                                            attachments={agentInputAttachments}
-                                            onAttachmentsAdded={attachmentsUploadsEnabled ? addWebFiles : undefined}
-                                            hasSendableAttachments={hasSendableAttachments}
-                                            permissionMode={props.permissionMode}
-                                            onPermissionModeChange={props.handlePermissionModeChange}
-                                            modelMode={props.modelMode}
-                                            onModelModeChange={props.setModelMode}
-                                            modelOptionsOverride={props.modelOptions}
-                                            modelOptionsOverrideProbe={props.modelOptionsProbe}
-                                            acpSessionModeOptionsOverride={props.acpSessionModeOptions}
-                                            acpSessionModeSelectedIdOverride={props.acpSessionModeId ?? null}
-                                            acpSessionModeOptionsOverrideProbe={props.acpSessionModeProbe}
-                                            onAcpSessionModeChange={
-                                                (props.acpSessionModeOptions?.length ?? 0) > 0 && props.setAcpSessionModeId
-                                                    ? (modeId) => props.setAcpSessionModeId?.(modeId === 'default' ? null : modeId)
-                                                    : undefined
+                            <View style={{ paddingHorizontal: props.newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}>
+                                <View style={{ width: '100%', alignSelf: 'center' }}>
+                                    <AgentInput
+                                        value={props.sessionPrompt}
+                                        onChangeText={props.setSessionPrompt}
+                                        onSend={handleSend}
+                                        isSendDisabled={!props.canCreate}
+                                        isSending={props.isCreating}
+                                        placeholder={t('session.inputPlaceholder')}
+                                        autocompletePrefixes={props.emptyAutocompletePrefixes}
+                                        autocompleteSuggestions={props.emptyAutocompleteSuggestions}
+                                        extraActionChips={extraActionChips}
+                                        inputMaxHeight={props.sessionPromptInputMaxHeight}
+                                        maxPanelHeight={measuredComposerPanelMaxHeight}
+                                        submitAccessibilityLabel={props.submitAccessibilityLabel}
+                                        agentType={props.agentType}
+                                        agentLabel={props.agentLabel}
+                                        onAgentClick={props.handleAgentClick}
+                                        agentPickerOptions={props.agentPickerOptions}
+                                        agentPickerSelectedOptionId={props.agentPickerSelectedOptionId}
+                                        onAgentPickerSelect={props.onAgentPickerSelect}
+                                        agentPickerApplyLabel={props.agentPickerApplyLabel}
+                                        agentPickerProbe={props.agentPickerProbe}
+                                        attachments={agentInputAttachments}
+                                        onAttachmentsAdded={attachmentsUploadsEnabled ? addWebFiles : undefined}
+                                        hasSendableAttachments={hasSendableAttachments}
+                                        permissionMode={props.permissionMode}
+                                        onPermissionModeChange={props.handlePermissionModeChange}
+                                        modelMode={props.modelMode}
+                                        onModelModeChange={props.setModelMode}
+                                        modelOptionsOverride={props.modelOptions}
+                                        modelOptionsOverrideProbe={props.modelOptionsProbe}
+                                        acpSessionModeOptionsOverride={props.acpSessionModeOptions}
+                                        acpSessionModeSelectedIdOverride={props.acpSessionModeId ?? null}
+                                        acpSessionModeOptionsOverrideProbe={props.acpSessionModeProbe}
+                                        onAcpSessionModeChange={
+                                            (props.acpSessionModeOptions?.length ?? 0) > 0 && props.setAcpSessionModeId
+                                                ? (modeId) => props.setAcpSessionModeId?.(modeId === 'default' ? null : modeId)
+                                                : undefined
+                                        }
+                                        acpConfigOptionsOverride={props.acpConfigOptions}
+                                        acpConfigOptionsOverrideProbe={props.acpConfigOptionsProbe}
+                                        acpConfigOptionOverridesOverride={props.acpConfigOptionOverrides ?? null}
+                                        onAcpConfigOptionChange={props.setAcpConfigOptionOverride}
+                                        connectionStatus={props.connectionStatus}
+                                        machineName={props.machineName}
+                                        machinePopover={props.machinePopover}
+                                        onMachineClick={undefined}
+                                        currentPath={props.selectedPath}
+                                        onPathClick={undefined}
+                                        pathPopover={props.pathPopover}
+                                        resumeSessionId={props.showResumePicker ? props.resumeSessionId : undefined}
+                                        onResumeClick={undefined}
+                                        resumePopover={props.showResumePicker ? props.resumePopover : undefined}
+                                        resumeIsChecking={props.isResumeSupportChecking}
+                                        contentPaddingHorizontal={0}
+                                        maxWidthCap={null}
+                                        {...(props.useProfiles
+                                            ? {
+                                                profileId: props.selectedProfileId,
+                                                profilePopover: props.profilePopover,
+                                                onProfileClick: undefined,
+                                                envVarsCount: undefined,
+                                                envVarsPopover: undefined,
+                                                onEnvVarsClick: undefined,
                                             }
-                                            acpConfigOptionsOverride={props.acpConfigOptions}
-                                            acpConfigOptionsOverrideProbe={props.acpConfigOptionsProbe}
-                                            acpConfigOptionOverridesOverride={props.acpConfigOptionOverrides ?? null}
-                                            onAcpConfigOptionChange={props.setAcpConfigOptionOverride}
-                                            connectionStatus={props.connectionStatus}
-                                            machineName={props.machineName}
-                                            machinePopover={props.machinePopover}
-                                            onMachineClick={undefined}
-                                            currentPath={props.selectedPath}
-                                            onPathClick={undefined}
-                                            pathPopover={props.pathPopover}
-                                            resumeSessionId={props.showResumePicker ? props.resumeSessionId : undefined}
-                                            onResumeClick={undefined}
-                                            resumePopover={props.showResumePicker ? props.resumePopover : undefined}
-                                            resumeIsChecking={props.isResumeSupportChecking}
-                                            contentPaddingHorizontal={0}
-                                            maxWidthCap={null}
-                                            {...(props.useProfiles
-                                                ? {
-                                                    profileId: props.selectedProfileId,
-                                                    profilePopover: props.profilePopover,
-                                                    onProfileClick: undefined,
-                                                    envVarsCount: undefined,
-                                                    envVarsPopover: undefined,
-                                                    onEnvVarsClick: undefined,
-                                                }
-                                                : {})}
-                                        />
-                                        {attachmentsUploadsEnabled ? (
-                                            <AttachmentFilePicker ref={filePickerRef} onAttachmentsPicked={addPickedAttachments} multiple />
-                                        ) : null}
-                                    </View>
+                                            : {})}
+                                    />
+                                    {attachmentsUploadsEnabled ? (
+                                        <AttachmentFilePicker ref={filePickerRef} onAttachmentsPicked={addPickedAttachments} multiple />
+                                    ) : null}
                                 </View>
                             </View>
                         </View>
-                    </PopoverBoundaryProvider>
+                    </NewSessionComposerKeyboardHost>
+                </PopoverBoundaryProvider>
             </View>
-        </KeyboardAvoidingView>
+        </NewSessionKeyboardContainer>
     );
 }

@@ -55,7 +55,7 @@ import { PathAndResumeRow } from './layout/PathAndResumeRow';
 import { getHasAnyAgentInputActions, shouldShowSecondaryControlRow } from './layout/actionBarLogic';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { computeAgentInputDefaultMaxHeight } from './inputMaxHeight';
+import { computeAgentInputDefaultMaxHeight, computeMeasuredPanelInputMaxHeight } from './inputMaxHeight';
 import { getContextUsageState } from './contextWarning';
 import { resolveContextWindowTokens } from './resolveContextWarningWindowTokens';
 import { shouldRenderPermissionChip } from './permissionChipVisibility';
@@ -211,6 +211,7 @@ interface AgentInputProps {
     disabled?: boolean;
     minHeight?: number;
     inputMaxHeight?: number;
+    maxPanelHeight?: number;
     profileId?: string | null;
     onProfileClick?: () => void;
     profilePopover?: AgentInputContentPopoverConfig;
@@ -624,6 +625,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             keyboardHeight,
         });
     }, [keyboardHeight, screenHeight]);
+    const [panelHeightPx, setPanelHeightPx] = React.useState<number | null>(null);
+    const [inputContainerHeightPx, setInputContainerHeightPx] = React.useState<number | null>(null);
+    const [inputViewportHeightPx, setInputViewportHeightPx] = React.useState<number | null>(null);
+    const fallbackInputMaxHeight = props.inputMaxHeight ?? defaultInputMaxHeight;
+    const resolvedInputMaxHeight = React.useMemo(() => {
+        return computeMeasuredPanelInputMaxHeight({
+            panelMaxHeight: props.maxPanelHeight,
+            panelHeight: panelHeightPx,
+            inputContainerHeight: inputContainerHeightPx,
+            inputViewportHeight: inputViewportHeightPx,
+            fallbackMaxHeight: fallbackInputMaxHeight,
+        });
+    }, [
+        fallbackInputMaxHeight,
+        inputContainerHeightPx,
+        inputViewportHeightPx,
+        panelHeightPx,
+        props.maxPanelHeight,
+    ]);
 
     const hasText = props.value.trim().length > 0;
     const hasSendableContent = hasText || props.hasSendableAttachments === true;
@@ -1915,7 +1935,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 )}
 
                 {/* Box 2: Action Area (Input + Send) */}
-                <View style={[styles.unifiedPanel, props.panelStyle]}>
+                <View
+                    style={[styles.unifiedPanel, props.panelStyle]}
+                    onLayout={(event) => {
+                        setPanelHeightPx(event.nativeEvent.layout.height);
+                    }}
+                >
                     {fileDragActive && typeof props.onAttachmentsAdded === 'function' ? (
                         <View testID="agent-input-drop-overlay" pointerEvents="none" style={styles.fileDropOverlay}>
                             <View style={styles.fileDropOverlayContent}>
@@ -1956,6 +1981,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         ref={composerAnchorRef}
                         collapsable={false}
                         style={[styles.inputContainer, props.minHeight ? { minHeight: props.minHeight } : undefined]}
+                        onLayout={(event) => {
+                            setInputContainerHeightPx(event.nativeEvent.layout.height);
+                        }}
                     >
                         <MultiTextInput
                             ref={inputRef}
@@ -1970,11 +1998,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             onStateChange={handleInputStateChange}
                             submitBehavior={submitBehavior}
                             onSubmitEditing={handleSubmitEditing}
-                            maxHeight={props.inputMaxHeight ?? defaultInputMaxHeight}
+                            maxHeight={resolvedInputMaxHeight}
                             editable={!props.disabled}
                             onFilesDropped={props.onAttachmentsAdded}
                             onFilesPasted={props.onAttachmentsAdded}
                             onFileDragActiveChange={typeof props.onAttachmentsAdded === 'function' ? setFileDragActive : undefined}
+                            onLayout={(event) => {
+                                setInputViewportHeightPx(event.nativeEvent.layout.height);
+                            }}
                         />
                     </View>
 

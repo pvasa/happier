@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { computeAgentInputDefaultMaxHeight, computeNewSessionInputMaxHeight } from './inputMaxHeight';
+import {
+    computeAgentInputDefaultMaxHeight,
+    computeMeasuredPanelInputMaxHeight,
+    computeNewSessionInputMaxHeight,
+} from './inputMaxHeight';
 
 describe('inputMaxHeight', () => {
     it('reduces default max height when keyboard is open (native)', () => {
@@ -27,6 +31,42 @@ describe('inputMaxHeight', () => {
         expect(open).toBeLessThanOrEqual(360);
     });
 
+    it('reserves composer chrome before sizing the /new input', () => {
+        const withoutReservedChrome = computeNewSessionInputMaxHeight({
+            useEnhancedSessionWizard: false,
+            screenHeight: 720,
+            keyboardHeight: 280,
+        });
+        const withReservedChrome = computeNewSessionInputMaxHeight({
+            useEnhancedSessionWizard: false,
+            screenHeight: 720,
+            keyboardHeight: 280,
+            reservedHeight: 132,
+        });
+        expect(withReservedChrome).toBeLessThan(withoutReservedChrome);
+        expect(withReservedChrome).toBe(231);
+    });
+
+    it('derives the input max height from measured panel chrome when layout metrics are available', () => {
+        expect(computeMeasuredPanelInputMaxHeight({
+            panelMaxHeight: 480,
+            panelHeight: 220,
+            inputContainerHeight: 60,
+            inputViewportHeight: 52,
+            fallbackMaxHeight: 200,
+        })).toBe(312);
+    });
+
+    it('falls back to the heuristic max height when panel layout metrics are incomplete', () => {
+        expect(computeMeasuredPanelInputMaxHeight({
+            panelMaxHeight: 480,
+            panelHeight: null,
+            inputContainerHeight: 60,
+            inputViewportHeight: 52,
+            fallbackMaxHeight: 200,
+        })).toBe(200);
+    });
+
     it('keeps /new wizard input cap when keyboard is open', () => {
         const open = computeNewSessionInputMaxHeight({ useEnhancedSessionWizard: true, screenHeight: 900, keyboardHeight: 400 });
         expect(open).toBeLessThanOrEqual(240);
@@ -49,12 +89,13 @@ describe('inputMaxHeight', () => {
         { useEnhancedSessionWizard: false, screenHeight: Number.NaN, keyboardHeight: 10, expected: 120 },
         { useEnhancedSessionWizard: false, screenHeight: 10_000, keyboardHeight: 0, expected: 900 },
         { useEnhancedSessionWizard: false, screenHeight: 10_000, keyboardHeight: 3_000, expected: 360 },
+        { useEnhancedSessionWizard: false, screenHeight: 844, keyboardHeight: 336, reservedHeight: 600, expected: 120 },
         { useEnhancedSessionWizard: true, screenHeight: 10_000, keyboardHeight: 0, expected: 240 },
         { useEnhancedSessionWizard: true, screenHeight: Number.POSITIVE_INFINITY, keyboardHeight: Number.NaN, expected: 120 },
     ])(
         'clamps /new input max height for wizard=$useEnhancedSessionWizard screen=$screenHeight keyboard=$keyboardHeight',
-        ({ useEnhancedSessionWizard, screenHeight, keyboardHeight, expected }) => {
-            expect(computeNewSessionInputMaxHeight({ useEnhancedSessionWizard, screenHeight, keyboardHeight })).toBe(expected);
+        ({ useEnhancedSessionWizard, screenHeight, keyboardHeight, expected, ...rest }) => {
+            expect(computeNewSessionInputMaxHeight({ useEnhancedSessionWizard, screenHeight, keyboardHeight, ...rest })).toBe(expected);
         },
     );
 });

@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as React from 'react';
 import { Platform, ScrollView, View, useWindowDimensions, type View as RNView } from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { LinearGradient } from 'expo-linear-gradient';
 import Color from 'color';
 import { Typography } from '@/constants/Typography';
@@ -37,6 +36,8 @@ import { NewSessionProfilesBrowserContent } from '@/components/sessions/new/comp
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
 import { useNewSessionAttachmentsController } from '@/components/sessions/new/attachments/useNewSessionAttachmentsController';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { NewSessionComposerKeyboardHost } from './NewSessionComposerKeyboardHost';
+import { NewSessionKeyboardContainer } from './NewSessionKeyboardContainer';
 
 
 export interface NewSessionWizardLayoutProps {
@@ -346,9 +347,9 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
     }, [machineDisplayName, props.popoverBoundaryRef, props.profiles, serverId]);
 
     return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight + safeAreaBottom + 16 : 0}
+        <NewSessionKeyboardContainer
+            headerHeight={headerHeight}
+            safeAreaBottom={safeAreaBottom}
             style={[
                 styles.container,
                 {
@@ -707,23 +708,26 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                 </ScrollView>
 
                 {/* AgentInput - Sticky at bottom */}
-                <View style={{
-                    paddingTop: 12,
-                    paddingBottom: newSessionBottomPadding,
-                    position: 'relative',
-                    overflow: 'visible',
-                    ...Platform.select({
-                        web: { boxShadow: '0 -10px 30px rgba(0,0,0,0.08)' } as any,
-                        ios: {
-                            shadowColor: theme.colors.shadow.color,
-                            shadowOffset: { width: 0, height: -4 },
-                            shadowOpacity: 0.08,
-                            shadowRadius: 14,
-                        },
-                        android: { borderTopWidth: 1, borderTopColor: theme.colors.divider },
-                        default: {},
-                    }),
+                <NewSessionComposerKeyboardHost style={{
+                    width: '100%',
                 }}>
+                    <View style={{
+                        paddingTop: 12,
+                        paddingBottom: newSessionBottomPadding,
+                        position: 'relative',
+                        overflow: 'visible',
+                        ...Platform.select({
+                            web: { boxShadow: '0 -10px 30px rgba(0,0,0,0.08)' } as any,
+                            ios: {
+                                shadowColor: theme.colors.shadow.color,
+                                shadowOffset: { width: 0, height: -4 },
+                                shadowOpacity: 0.08,
+                                shadowRadius: 14,
+                            },
+                            android: { borderTopWidth: 1, borderTopColor: theme.colors.divider },
+                            default: {},
+                        }),
+                    }}>
                     {/* Always-on top divider gradient (wizard only).
                         Matches web: boxShadow 0 -10px 30px rgba(0,0,0,0.08) and fades into true transparency above. */}
                     {Platform.OS !== 'web' ? (
@@ -819,9 +823,10 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                               ) : null}
                           </View>
                       </View>
-                </View>
+                    </View>
+                </NewSessionComposerKeyboardHost>
                 </PopoverBoundaryProvider>
             </View>
-        </KeyboardAvoidingView>
+        </NewSessionKeyboardContainer>
     );
 });

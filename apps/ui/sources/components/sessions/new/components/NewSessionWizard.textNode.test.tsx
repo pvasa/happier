@@ -10,6 +10,8 @@ import { installNewSessionComponentsCommonModuleMocks, resetNewSessionComponents
 const mockEnv = vi.hoisted(() => ({
     windowWidth: 800,
 }));
+let platformOs: 'web' | 'android' = 'web';
+const useKeyboardHandlerMock = vi.fn();
 
 const pathSelectorPropsRef: { current: Record<string, unknown> | null } = { current: null };
 const CliNotDetectedBannerMock = vi.fn((_props: Record<string, unknown>) => null);
@@ -19,6 +21,12 @@ installNewSessionComponentsCommonModuleMocks({
         return createReactNativeWebMock({
             useWindowDimensions: () => ({ width: mockEnv.windowWidth, height: 600 }),
             Dimensions: { get: () => ({ width: mockEnv.windowWidth, height: 600, scale: 1, fontScale: 1 }) },
+            Platform: {
+                get OS() {
+                    return platformOs;
+                },
+                select: (value: any) => value?.[platformOs] ?? value?.default ?? value?.native ?? value?.ios ?? value?.android,
+            },
         });
     },
 });
@@ -26,7 +34,28 @@ installNewSessionComponentsCommonModuleMocks({
 vi.mock('react-native-keyboard-controller', () => ({
     KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('KeyboardAvoidingView', props, props.children),
+    useKeyboardHandler: (...args: any[]) => useKeyboardHandlerMock(...args),
+    useReanimatedKeyboardAnimation: () => ({
+        height: { value: 240 },
+        progress: { value: 1 },
+    }),
 }));
+
+vi.mock('react-native-safe-area-context', () => ({
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+vi.mock('react-native-reanimated', async () => {
+    const React = await import('react');
+    return {
+        __esModule: true,
+        default: {
+            View: (props: any) => React.createElement('AnimatedView', props, props.children),
+        },
+        useAnimatedStyle: (fn: any) => fn(),
+        useSharedValue: (initial: any) => ({ value: initial }),
+    };
+});
 
 vi.mock('expo-linear-gradient', () => ({
     LinearGradient: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -118,10 +147,18 @@ describe('NewSessionWizard', () => {
                 return createReactNativeWebMock({
                     useWindowDimensions: () => ({ width: mockEnv.windowWidth, height: 600 }),
                     Dimensions: { get: () => ({ width: mockEnv.windowWidth, height: 600, scale: 1, fontScale: 1 }) },
+                    Platform: {
+                        get OS() {
+                            return platformOs;
+                        },
+                        select: (value: any) => value?.[platformOs] ?? value?.default ?? value?.native ?? value?.ios ?? value?.android,
+                    },
                 });
             },
         });
         mockEnv.windowWidth = 800;
+        platformOs = 'web';
+        useKeyboardHandlerMock.mockReset();
         pathSelectorPropsRef.current = null;
     });
 
@@ -379,6 +416,125 @@ describe('NewSessionWizard', () => {
         />);
 
         expect(CliNotDetectedBannerMock).not.toHaveBeenCalled();
+    });
+
+    it('uses the native keyboard-shift host on Android so the whole footer composer can move above the keyboard', async () => {
+        platformOs = 'android';
+        const { NewSessionWizard } = await import('./NewSessionWizard');
+
+        const screen = await renderScreen(<NewSessionWizard
+            popoverBoundaryRef={{ current: null } as any}
+            layout={{
+                theme: {
+                    colors: {
+                        divider: '#ddd',
+                        shadow: { color: '#000' },
+                        groupped: { background: '#fff' },
+                        text: '#000',
+                        textSecondary: '#666',
+                        input: { background: '#fff' },
+                        button: { secondary: { tint: '#000' } },
+                        warning: '#d97706',
+                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    },
+                } as any,
+                styles: {} as any,
+                safeAreaBottom: 0,
+                headerHeight: 44,
+                newSessionSidePadding: 0,
+                newSessionBottomPadding: 0,
+            }}
+            profiles={{
+                useProfiles: false,
+                profiles: [],
+                favoriteProfileIds: [],
+                setFavoriteProfileIds: () => {},
+                selectedProfileId: null,
+                onPressDefaultEnvironment: () => {},
+                onPressProfile: () => {},
+                selectedMachineId: 'machine-1',
+                getProfileDisabled: () => false,
+                getProfileSubtitleExtra: () => null,
+                handleAddProfile: () => {},
+                openProfileEdit: () => {},
+                handleDuplicateProfile: () => {},
+                handleDeleteProfile: () => {},
+                openProfileEnvVarsPreview: () => {},
+                suppressNextSecretAutoPromptKeyRef: { current: null },
+                openSecretRequirementModal: () => {},
+                profilesGroupTitles: { favorites: 'Favorites', custom: 'Custom', builtIn: 'Built in' },
+                getSecretOverrideReady: () => true,
+                getSecretSatisfactionForProfile: () => ({ isSatisfied: true }),
+            } as any}
+            agent={{
+                cliAvailability: { available: {}, isLoaded: true } as any,
+                tmuxRequested: false,
+                enabledAgentIds: ['codex'] as any,
+                isAgentSelectable: () => true,
+                isCliBannerDismissed: () => true,
+                dismissCliBanner: () => {},
+                agentType: 'codex' as any,
+                setAgentType: () => {},
+                modelOptions: [{ value: 'default', label: 'Default', description: '' }] as any,
+                setModelMode: () => {},
+                selectedIndicatorColor: '#000',
+                profileMap: new Map(),
+                permissionMode: 'default',
+                handlePermissionModeChange: () => {},
+            } as any}
+            machine={{
+                machines: [{
+                    id: 'machine-1',
+                    active: true,
+                    activeAt: 0,
+                    revokedAt: null,
+                    metadata: {
+                        host: 'box.local',
+                        platform: 'test',
+                        happyCliVersion: '0.0.0-test',
+                        happyHomeDir: '/tmp/happy-home',
+                        homeDir: '/tmp',
+                        displayName: 'Box',
+                    },
+                    metadataVersion: 1,
+                    daemonState: null,
+                    daemonStateVersion: 0,
+                }],
+                serverId: 'server-1',
+                selectedMachine: null,
+                recentMachines: [],
+                favoriteMachineItems: [],
+                useMachinePickerSearch: false,
+                onRefreshMachines: () => {},
+                setSelectedMachineId: () => {},
+                getBestPathForMachine: () => '/tmp',
+                setSelectedPath: () => {},
+                favoriteMachines: [],
+                setFavoriteMachines: () => {},
+                selectedPath: '/tmp',
+                recentPaths: [],
+                usePathPickerSearch: false,
+                favoriteDirectories: [],
+                setFavoriteDirectories: () => {},
+            } as any}
+            footer={{
+                sessionPrompt: '',
+                setSessionPrompt: () => {},
+                handleCreateSession: () => {},
+                canCreate: true,
+                isCreating: false,
+                emptyAutocompletePrefixes: [],
+                emptyAutocompleteSuggestions: async () => [],
+                sessionPromptInputMaxHeight: 200,
+                isResumeSupportChecking: false,
+                resumeSessionId: null,
+                connectionStatus: undefined,
+                showResumePicker: false,
+            } as any}
+        />);
+
+        expect(screen.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
+        expect(screen.findAllByType('AnimatedView').length).toBeGreaterThan(0);
     });
 
     it('renders AI backend providers as a full list', async () => {

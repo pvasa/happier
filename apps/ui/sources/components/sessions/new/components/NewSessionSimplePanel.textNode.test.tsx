@@ -438,14 +438,14 @@ describe('NewSessionSimplePanel', () => {
         );
 
         const keyboardView = screen.findByType('KeyboardAvoidingView');
-        const allViews = screen.findAllByType('View');
+        const pressables = screen.findAllByType('Pressable');
 
         expect(keyboardView.props.style).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 justifyContent: 'flex-end',
             }),
         ]));
-        expect(allViews.some((view) => view.props.style?.marginTop === 'auto')).toBe(true);
+        expect(pressables.some((node) => flattenStyle(node.props.style).minHeight === 8)).toBe(true);
     });
 
     it('does not render the legacy visible session type selector even when the feature flag is enabled', async () => {

@@ -1,5 +1,13 @@
 import * as React from 'react';
-import { Platform, View, NativeSyntheticEvent, TextInputKeyPressEventData, TextInputSelectionChangeEventData, TextStyle } from 'react-native';
+import {
+    Platform,
+    View,
+    NativeSyntheticEvent,
+    TextInputKeyPressEventData,
+    TextInputSelectionChangeEventData,
+    TextStyle,
+    type LayoutChangeEvent,
+} from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { TextInput } from '@/components/ui/text/Text';
@@ -43,6 +51,7 @@ interface MultiTextInputProps {
     paddingBottom?: number;
     paddingLeft?: number;
     paddingRight?: number;
+    onLayout?: (event: LayoutChangeEvent) => void;
     onKeyPress?: OnKeyPressCallback;
     onSelectionChange?: (selection: { start: number; end: number }) => void;
     onStateChange?: (state: TextInputState) => void;
@@ -187,7 +196,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     }), [onChangeText, onStateChange, onSelectionChange]);
 
     return (
-        <View style={{ width: '100%' }}>
+        <View style={{ width: '100%' }} onLayout={props.onLayout}>
             <TextInput
                 ref={inputRef}
                 testID={props.testID}

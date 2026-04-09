@@ -1,13 +1,16 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const AgentInputMock = vi.fn((_props: any) => null);
+const keyboardDismissMock = vi.fn();
+const useKeyboardHandlerMock = vi.fn();
+let platformOs: 'ios' | 'android' = 'ios';
 
 installNewSessionComponentsCommonModuleMocks({
     reactNative: async () => {
@@ -22,9 +25,15 @@ installNewSessionComponentsCommonModuleMocks({
             AppState: {
                 addEventListener: () => ({ remove: () => {} }),
             },
+            Keyboard: {
+                addListener: () => ({ remove: () => {} }),
+                dismiss: keyboardDismissMock,
+            },
             Platform: {
-                OS: 'ios',
-                select: (v: any) => v.ios,
+                get OS() {
+                    return platformOs;
+                },
+                select: (v: any) => v[platformOs] ?? v.native ?? v.default ?? v.ios ?? v.android,
             },
         });
     },
@@ -49,7 +58,28 @@ installNewSessionComponentsCommonModuleMocks({
 vi.mock('react-native-keyboard-controller', () => ({
     KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('KeyboardAvoidingView', props, props.children),
+    useKeyboardHandler: (...args: any[]) => useKeyboardHandlerMock(...args),
+    useReanimatedKeyboardAnimation: () => ({
+        height: { value: 240 },
+        progress: { value: 1 },
+    }),
 }));
+
+vi.mock('react-native-safe-area-context', () => ({
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+vi.mock('react-native-reanimated', async () => {
+    const React = await import('react');
+    return {
+        __esModule: true,
+        default: {
+            View: (props: any) => React.createElement('AnimatedView', props, props.children),
+        },
+        useAnimatedStyle: (fn: any) => fn(),
+        useSharedValue: (initial: any) => ({ value: initial }),
+    };
+});
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -70,6 +100,22 @@ vi.mock('@/components/sessions/agentInput', () => ({
 }));
 
 describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
+    beforeEach(() => {
+        keyboardDismissMock.mockReset();
+        useKeyboardHandlerMock.mockReset();
+        platformOs = 'ios';
+    });
+
+    function flattenStyle(style: unknown): Record<string, unknown> {
+        if (!style) return {};
+        if (Array.isArray(style)) {
+            return style.reduce<Record<string, unknown>>((acc, entry) => ({ ...acc, ...flattenStyle(entry) }), {});
+        }
+        if (typeof style === 'number') return {};
+        if (typeof style === 'object') return style as Record<string, unknown>;
+        return {};
+    }
+
     it('passes modelOptions to AgentInput as modelOptionsOverride', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
@@ -126,6 +172,238 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                 { value: 'm1', label: 'Model 1', description: '' },
             ]);
             expect(typeof props.machinePopover?.renderContent).toBe('function');
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
+    it('keeps the iOS keyboard offset while letting the top gap collapse elastically', async () => {
+        const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
+
+        AgentInputMock.mockClear();
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            tree = (await renderScreen(React.createElement(NewSessionSimplePanel, {
+                        popoverBoundaryRef: { current: null } as unknown as React.RefObject<any>,
+                        headerHeight: 44,
+                        safeAreaTop: 32,
+                        safeAreaBottom: 34,
+                        newSessionTopPadding: 20,
+                        newSessionSidePadding: 0,
+                        newSessionBottomPadding: 8,
+                        containerStyle: {},
+                        sessionPrompt: '',
+                        setSessionPrompt: () => {},
+                        handleCreateSession: () => {},
+                        canCreate: true,
+                        isCreating: false,
+                        emptyAutocompletePrefixes: [],
+                        emptyAutocompleteSuggestions: async () => [],
+                        sessionPromptInputMaxHeight: 200,
+                        agentType: 'codex',
+                        handleAgentClick: () => {},
+                        permissionMode: 'default',
+                        handlePermissionModeChange: () => {},
+                        modelMode: 'default',
+                        setModelMode: () => {},
+                        modelOptions: [{ value: 'default', label: 'Default', description: '' }],
+                        connectionStatus: undefined,
+                        machineName: undefined,
+                        selectedPath: '',
+                        showResumePicker: false,
+                        resumeSessionId: null,
+                        isResumeSupportChecking: false,
+                        useProfiles: false,
+                        selectedProfileId: null,
+                    } as any))).tree;
+
+            const keyboardView = tree.root.findByType('KeyboardAvoidingView');
+            expect(keyboardView.props.keyboardVerticalOffset).toBe(44 + 34 + 16);
+
+            const dismissSpacer = tree.root.findAllByType('Pressable').find((node) => {
+                return flattenStyle(node.props.style).flex === 1;
+            });
+
+            expect(dismissSpacer).toBeTruthy();
+            expect(flattenStyle(dismissSpacer?.props.style).minHeight).toBe(8);
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
+    it('passes a measured max panel height to AgentInput on simple mobile layouts', async () => {
+        const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
+
+        AgentInputMock.mockClear();
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            tree = (await renderScreen(React.createElement(NewSessionSimplePanel, {
+                        popoverBoundaryRef: { current: null } as unknown as React.RefObject<any>,
+                        headerHeight: 44,
+                        safeAreaTop: 0,
+                        safeAreaBottom: 34,
+                        newSessionTopPadding: 20,
+                        newSessionSidePadding: 16,
+                        newSessionBottomPadding: 12,
+                        containerStyle: {},
+                        sessionPrompt: '',
+                        setSessionPrompt: () => {},
+                        handleCreateSession: () => {},
+                        canCreate: true,
+                        isCreating: false,
+                        emptyAutocompletePrefixes: [],
+                        emptyAutocompleteSuggestions: async () => [],
+                        sessionPromptInputMaxHeight: 200,
+                        agentType: 'codex',
+                        handleAgentClick: () => {},
+                        permissionMode: 'default',
+                        handlePermissionModeChange: () => {},
+                        modelMode: 'default',
+                        setModelMode: () => {},
+                        modelOptions: [{ value: 'default', label: 'Default', description: '' }],
+                        connectionStatus: undefined,
+                        machineName: undefined,
+                        selectedPath: '',
+                        showResumePicker: false,
+                        resumeSessionId: null,
+                        isResumeSupportChecking: false,
+                        useProfiles: false,
+                        selectedProfileId: null,
+                    } as any))).tree;
+
+            const layoutHost = tree.root.findAllByType('View').find((node) => {
+                const style = flattenStyle(node.props.style);
+                return typeof node.props.onLayout === 'function'
+                    && style.flex === 1
+                    && style.justifyContent === 'flex-end';
+            });
+
+            expect(layoutHost).toBeTruthy();
+
+            act(() => {
+                invokeTestInstanceHandler(
+                    layoutHost!,
+                    'onLayout',
+                    { nativeEvent: { layout: { width: 390, height: 500, x: 0, y: 0 } } },
+                    'new-session-available-height',
+                );
+            });
+
+            const latestCall = AgentInputMock.mock.calls.at(-1);
+            const latestProps = (latestCall?.[0] ?? {}) as any;
+            expect(latestProps.maxPanelHeight).toBe(480);
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
+    it('dismisses the keyboard when the empty area above the composer is pressed on iOS', async () => {
+        const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
+
+        AgentInputMock.mockClear();
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            tree = (await renderScreen(React.createElement(NewSessionSimplePanel, {
+                        popoverBoundaryRef: { current: null } as unknown as React.RefObject<any>,
+                        headerHeight: 44,
+                        safeAreaTop: 0,
+                        safeAreaBottom: 34,
+                        newSessionTopPadding: 20,
+                        newSessionSidePadding: 16,
+                        newSessionBottomPadding: 8,
+                        containerStyle: {},
+                        sessionPrompt: '',
+                        setSessionPrompt: () => {},
+                        handleCreateSession: () => {},
+                        canCreate: true,
+                        isCreating: false,
+                        emptyAutocompletePrefixes: [],
+                        emptyAutocompleteSuggestions: async () => [],
+                        sessionPromptInputMaxHeight: 200,
+                        agentType: 'codex',
+                        handleAgentClick: () => {},
+                        permissionMode: 'default',
+                        handlePermissionModeChange: () => {},
+                        modelMode: 'default',
+                        setModelMode: () => {},
+                        modelOptions: [{ value: 'default', label: 'Default', description: '' }],
+                        connectionStatus: undefined,
+                        machineName: undefined,
+                        selectedPath: '',
+                        showResumePicker: false,
+                        resumeSessionId: null,
+                        isResumeSupportChecking: false,
+                        useProfiles: false,
+                        selectedProfileId: null,
+                    } as any))).tree;
+
+            const dismissPressable = tree.root.findAllByType('Pressable').find((node) => {
+                return typeof node.props.onPress === 'function' && flattenStyle(node.props.style).flex === 1;
+            });
+
+            expect(dismissPressable).toBeTruthy();
+
+            act(() => {
+                invokeTestInstanceHandler(dismissPressable!, 'onPress', undefined, 'new-session-dismiss-background');
+            });
+
+            expect(keyboardDismissMock).toHaveBeenCalledTimes(1);
+        } finally {
+            act(() => {
+                tree?.unmount();
+            });
+        }
+    });
+
+    it('uses the native keyboard-shift host on Android so the whole composer can move above the keyboard', async () => {
+        const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
+        platformOs = 'android';
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        try {
+            tree = (await renderScreen(React.createElement(NewSessionSimplePanel, {
+                        popoverBoundaryRef: { current: null } as unknown as React.RefObject<any>,
+                        headerHeight: 44,
+                        safeAreaTop: 0,
+                        safeAreaBottom: 0,
+                        newSessionTopPadding: 20,
+                        newSessionSidePadding: 16,
+                        newSessionBottomPadding: 8,
+                        containerStyle: {},
+                        sessionPrompt: '',
+                        setSessionPrompt: () => {},
+                        handleCreateSession: () => {},
+                        canCreate: true,
+                        isCreating: false,
+                        emptyAutocompletePrefixes: [],
+                        emptyAutocompleteSuggestions: async () => [],
+                        sessionPromptInputMaxHeight: 200,
+                        agentType: 'codex',
+                        handleAgentClick: () => {},
+                        permissionMode: 'default',
+                        handlePermissionModeChange: () => {},
+                        modelMode: 'default',
+                        setModelMode: () => {},
+                        modelOptions: [{ value: 'default', label: 'Default', description: '' }],
+                        connectionStatus: undefined,
+                        machineName: undefined,
+                        selectedPath: '',
+                        showResumePicker: false,
+                        resumeSessionId: null,
+                        isResumeSupportChecking: false,
+                        useProfiles: false,
+                        selectedProfileId: null,
+                    } as any))).tree;
+
+            expect(tree.root.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
+            expect(tree.root.findAllByType('AnimatedView').length).toBeGreaterThan(0);
+            expect(useKeyboardHandlerMock).toHaveBeenCalled();
         } finally {
             act(() => {
                 tree?.unmount();

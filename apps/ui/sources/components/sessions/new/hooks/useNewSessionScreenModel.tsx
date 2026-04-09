@@ -107,6 +107,7 @@ import { canBrowseDirectSessions, resolveDirectBrowseLockedSource } from '@/comp
 
 // Configuration constants
 const RECENT_PATHS_DEFAULT_VISIBLE = 5;
+const SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT = 96;
 const styles = newSessionScreenStyles;
 
 export function useNewSessionScreenModel(): NewSessionScreenModel {
@@ -197,12 +198,22 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     useNewSessionHappyRouteFlag(pathname);
 
     const sessionPromptInputMaxHeight = React.useMemo(() => {
+        const reservedHeight = useEnhancedSessionWizard
+            ? 0
+            : simpleNewSessionTopPadding + simpleNewSessionBottomPadding + SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT;
         return computeNewSessionInputMaxHeight({
             useEnhancedSessionWizard,
             screenHeight,
             keyboardHeight,
+            reservedHeight,
         });
-    }, [keyboardHeight, screenHeight, useEnhancedSessionWizard]);
+    }, [
+        keyboardHeight,
+        screenHeight,
+        simpleNewSessionBottomPadding,
+        simpleNewSessionTopPadding,
+        useEnhancedSessionWizard,
+    ]);
     const useProfiles = useSetting('useProfiles');
     const [secrets, setSecrets] = useSettingMutable('secrets');
     const [secretBindingsByProfileId, setSecretBindingsByProfileId] = useSettingMutable('secretBindingsByProfileId');

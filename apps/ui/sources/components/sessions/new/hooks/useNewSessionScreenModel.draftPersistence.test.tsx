@@ -143,6 +143,7 @@ const persistedDraft = vi.hoisted(() => ({
 const saveNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const clearNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const loadNewSessionDraftMock = vi.hoisted(() => vi.fn(() => JSON.parse(JSON.stringify(persistedDraft))));
+const computeNewSessionInputMaxHeightMock = vi.hoisted(() => vi.fn((_params: unknown) => 100));
 const platformOsState = vi.hoisted(() => ({
     value: 'web' as 'web' | 'ios' | 'android',
 }));
@@ -789,7 +790,7 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
 }));
 
 vi.mock('@/components/sessions/agentInput/inputMaxHeight', () => ({
-    computeNewSessionInputMaxHeight: () => 100,
+    computeNewSessionInputMaxHeight: (params: unknown) => computeNewSessionInputMaxHeightMock(params),
 }));
 
 vi.mock('@/components/sessions/new/newSessionScreenStyles', () => ({
@@ -858,6 +859,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         saveNewSessionDraftMock.mockClear();
         clearNewSessionDraftMock.mockClear();
         loadNewSessionDraftMock.mockClear();
+        computeNewSessionInputMaxHeightMock.mockClear();
         readCachedSnapshotForMachinePathMock.mockReset();
         readCachedSnapshotForMachinePathMock.mockReturnValue(null);
         fetchSnapshotForMachinePathMock.mockReset();
@@ -1119,6 +1121,21 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     speed: { updatedAt: 123, value: 'fast' },
                 },
             },
+        }));
+    });
+
+    it('reserves simple-panel chrome when computing the new-session input max height', async () => {
+        let model: any = null;
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        expect(model?.variant).toBe('simple');
+        expect(computeNewSessionInputMaxHeightMock).toHaveBeenCalledWith(expect.objectContaining({
+            useEnhancedSessionWizard: false,
+            screenHeight: 800,
+            keyboardHeight: 0,
+            reservedHeight: 132,
         }));
     });
 
