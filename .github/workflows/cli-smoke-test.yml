@@ -76,8 +76,6 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_settings_lock_repro == true }}
     runs-on: windows-latest
     timeout-minutes: 45
-    env:
-      HAPPIER_REPRO_DIAG_DIR: ${{ runner.temp }}\happier-cli-win-lock-repro-diagnostics
 
     steps:
     - name: Checkout code
@@ -94,6 +92,7 @@ jobs:
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
+        "HAPPIER_REPRO_DIAG_DIR=$(Join-Path $env:RUNNER_TEMP 'happier-cli-win-lock-repro-diagnostics')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         New-Item -ItemType Directory -Path $env:HAPPIER_REPRO_DIAG_DIR -Force | Out-Null
 
     - name: Enable Corepack
@@ -288,7 +287,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: windows-cli-settings-lock-repro
-        path: ${{ env.HAPPIER_REPRO_DIAG_DIR }}
+        path: ${{ runner.temp }}/happier-cli-win-lock-repro-diagnostics
         if-no-files-found: error
 
 # We don't need a smoke test for macOS because most contributors are developing on macOS.
