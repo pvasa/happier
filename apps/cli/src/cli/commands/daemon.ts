@@ -19,9 +19,37 @@ import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
 import { waitForDaemonRunningWithinBudget } from '@/daemon/waitForDaemonRunningWithinBudget';
 import { readDaemonStatusSnapshot } from '@/daemon/statusSnapshot';
+import { restartDaemonAndWait } from '@/daemon/restartDaemonAndWait';
 import { handleServiceRepairCliCommand } from './serviceRepair/handleServiceRepairCliCommand';
+import { evaluateCurrentDaemonOwner } from '@/daemon/ownership/evaluateCurrentDaemonOwner';
+import { renderDaemonOwnerConflict } from '@/daemon/ownership/renderDaemonOwnerConflict';
+import {
+  buildDaemonTakeoverNotice,
+  resolveDaemonTakeoverDecision,
+} from '@/daemon/ownership/resolveDaemonTakeoverDecision';
+import {
+  evaluateDaemonStartupServiceConflict,
+  renderDaemonInstalledServiceConflict,
+} from '@/daemon/ownership/daemonServiceInventory';
+import {
+  resolveDaemonStartupSourceFromEnv,
+  isDaemonStartupSourceServiceManaged,
+} from '@/daemon/ownership/daemonOwnershipMetadata';
+import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 
 import type { CommandContext } from '@/cli/commandRegistry';
+
+function printDaemonJson(payload: unknown): void {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function flattenDaemonMessage(title: string, lines: readonly string[]): string {
+  return [title, ...lines].join(' ').trim();
+}
+
+function isManualOrLegacyManualOwner(serviceManaged: boolean | null | undefined): boolean {
+  return serviceManaged !== true;
+}
 
 export async function handleDaemonCliCommand(context: CommandContext): Promise<void> {
   const args = context.args;
@@ -74,7 +102,87 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   }
 
   if (daemonSubcommand === 'start') {
-    const child = await spawnDetachedDaemonStartSync();
+    const jsonRequested = args.includes('--json');
+    const ownership = await evaluateCurrentDaemonOwner();
+    const takeoverRequested = args.includes('--takeover');
+    const startupSource = resolveDaemonStartupSourceFromEnv(process.env);
+    if (ownership.kind === 'compatible') {
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: true,
+          status: 'already_running',
+          relay: configuration.serverUrl,
+          relayId: configuration.activeServerId,
+        });
+      } else {
+        console.log('Daemon already running');
+        console.log(`  Relay: ${configuration.serverUrl}`);
+        console.log(`  Relay ID: ${configuration.activeServerId}`);
+      }
+      process.exit(0);
+    }
+    const takeoverAllowed = takeoverRequested
+      && ownership.kind === 'conflict'
+      && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
+
+    if (ownership.kind === 'conflict' && !takeoverAllowed) {
+      const message = renderDaemonOwnerConflict({
+        intent: 'daemon-start',
+        owner: ownership.owner,
+      });
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: false,
+          error: 'owner_conflict',
+          message: flattenDaemonMessage(message.title, message.lines),
+        });
+      } else {
+        console.error(message.title);
+        for (const line of message.lines) {
+          console.error(`  ${line}`);
+        }
+      }
+      process.exit(1);
+    }
+
+    if (!isDaemonStartupSourceServiceManaged(startupSource) && startupSource !== 'self-restart') {
+      const startupServiceConflict = await evaluateDaemonStartupServiceConflict({
+        startupSource,
+        runtime: resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env }),
+      });
+      if (startupServiceConflict.kind === 'installed-background-service-conflict') {
+        const message = renderDaemonInstalledServiceConflict({
+          action: 'daemon-start',
+          services: startupServiceConflict.services,
+        });
+        if (jsonRequested) {
+          printDaemonJson({
+            ok: false,
+            error: 'installed_background_service_conflict',
+            message: flattenDaemonMessage(message.title, message.lines),
+          });
+        } else {
+          console.error(message.title);
+          for (const line of message.lines) {
+            console.error(line);
+          }
+        }
+        process.exit(1);
+      }
+    }
+
+    if (takeoverAllowed && !jsonRequested) {
+      console.error('Taking over the current manual relay runtime before starting a new relay...');
+    }
+
+    const child = await spawnDetachedDaemonStartSync(takeoverRequested
+      ? {
+        env: {
+          ...process.env,
+          HAPPIER_DAEMON_TAKEOVER: '1',
+        },
+      }
+      : {});
     child.unref();
 
     const timeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_START_WAIT_TIMEOUT_MS', 5000);
@@ -86,22 +194,43 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     });
 
     if (started) {
-      console.log('Daemon started successfully');
-      console.log(`  Server: ${configuration.serverUrl}`);
-      console.log(`  Server ID: ${configuration.activeServerId}`);
+      let account: string | undefined;
       try {
         const creds = await readCredentials();
         const payload = creds?.token ? decodeJwtPayload(creds.token) : null;
         const sub = typeof payload?.sub === 'string' ? payload.sub : '';
-        if (sub) console.log(`  Account: ${sub}`);
+        if (sub) account = sub;
       } catch {
         // ignore
       }
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: true,
+          status: 'started',
+          relay: configuration.serverUrl,
+          relayId: configuration.activeServerId,
+          ...(account ? { account } : {}),
+        });
+      } else {
+        console.log('Daemon started successfully');
+        console.log(`  Relay: ${configuration.serverUrl}`);
+        console.log(`  Relay ID: ${configuration.activeServerId}`);
+        if (account) console.log(`  Account: ${account}`);
+      }
     } else {
-      console.error('Failed to start daemon');
       const latestDaemonLog = await getLatestDaemonLog().catch(() => null);
-      if (latestDaemonLog?.path) {
-        console.error(`Latest daemon log: ${latestDaemonLog.path}`);
+      if (jsonRequested) {
+        printDaemonJson({
+          ok: false,
+          error: 'start_failed',
+          message: 'Failed to start daemon',
+          ...(latestDaemonLog?.path ? { latestDaemonLogPath: latestDaemonLog.path } : {}),
+        });
+      } else {
+        console.error('Failed to start daemon');
+        if (latestDaemonLog?.path) {
+          console.error(`Latest daemon log: ${latestDaemonLog.path}`);
+        }
       }
       process.exit(1);
     }
@@ -109,7 +238,54 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   }
 
   if (daemonSubcommand === 'start-sync') {
-    await startDaemon();
+    const ownership = await evaluateCurrentDaemonOwner();
+    const takeoverRequested = args.includes('--takeover');
+    const startupSource = resolveDaemonStartupSourceFromEnv(process.env);
+    if (ownership.kind === 'compatible') {
+      console.log(chalk.green('Daemon already running'));
+      console.log(`  Relay: ${configuration.serverUrl}`);
+      console.log(`  Relay ID: ${configuration.activeServerId}`);
+      process.exit(0);
+    }
+    const takeoverAllowed = takeoverRequested
+      && ownership.kind === 'conflict'
+      && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
+
+    if (ownership.kind === 'conflict' && !takeoverAllowed) {
+      const message = renderDaemonOwnerConflict({
+        intent: 'daemon-start-sync',
+        owner: ownership.owner,
+      });
+      console.error(message.title);
+      for (const line of message.lines) {
+        console.error(`  ${line}`);
+      }
+      process.exit(1);
+    }
+
+    if (!isDaemonStartupSourceServiceManaged(startupSource) && startupSource !== 'self-restart') {
+      const startupServiceConflict = await evaluateDaemonStartupServiceConflict({
+        startupSource,
+        runtime: resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env }),
+      });
+      if (startupServiceConflict.kind === 'installed-background-service-conflict') {
+        const message = renderDaemonInstalledServiceConflict({
+          action: 'daemon-start-sync',
+          services: startupServiceConflict.services,
+        });
+        console.error(message.title);
+        for (const line of message.lines) {
+          console.error(line);
+        }
+        process.exit(1);
+      }
+    }
+
+    if (takeoverAllowed) {
+      console.error('Taking over the current manual relay runtime before starting a new relay...');
+    }
+
+    await startDaemon({ takeover: takeoverRequested });
     process.exit(0);
   }
 
@@ -119,8 +295,88 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       await stopAllDaemonsBestEffort({ stopSessions });
       process.exit(0);
     }
+    const ownership = await evaluateCurrentDaemonOwner();
+    if (ownership.kind !== 'none' && !isManualOrLegacyManualOwner(ownership.owner.serviceManaged)) {
+      const message = renderDaemonOwnerConflict({
+        intent: 'daemon-stop',
+        owner: ownership.owner,
+      });
+      console.error(message.title);
+      for (const line of message.lines) {
+        console.error(`  ${line}`);
+      }
+      process.exit(1);
+    }
     await stopDaemon({ stopSessions });
     process.exit(0);
+  }
+
+  if (daemonSubcommand === 'restart') {
+    if (args.includes('--all')) {
+      console.error('`happier daemon restart --all` is not supported yet.');
+      process.exit(1);
+    }
+
+    const ownership = await evaluateCurrentDaemonOwner();
+    const takeoverRequested = args.includes('--takeover');
+    const takeoverAllowed = takeoverRequested
+      && ownership.kind === 'conflict'
+      && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
+    if (ownership.kind === 'conflict' && !takeoverAllowed) {
+      const message = renderDaemonOwnerConflict({
+        intent: 'daemon-restart',
+        owner: ownership.owner,
+      });
+      console.error(message.title);
+      for (const line of message.lines) {
+        console.error(`  ${line}`);
+      }
+      process.exit(1);
+    }
+
+    const startupSource = resolveDaemonStartupSourceFromEnv(process.env);
+    if (!isDaemonStartupSourceServiceManaged(startupSource) && startupSource !== 'self-restart') {
+      const startupServiceConflict = await evaluateDaemonStartupServiceConflict({
+        startupSource,
+        runtime: resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env }),
+      });
+      if (startupServiceConflict.kind === 'installed-background-service-conflict') {
+        const message = renderDaemonInstalledServiceConflict({
+          action: 'daemon-restart',
+          services: startupServiceConflict.services,
+        });
+        console.error(message.title);
+        for (const line of message.lines) {
+          console.error(line);
+        }
+        process.exit(1);
+      }
+    }
+
+    if (takeoverAllowed) {
+      const takeoverNotice = buildDaemonTakeoverNotice({ action: 'restart' });
+      console.error(takeoverNotice.title);
+      for (const line of takeoverNotice.lines) {
+        console.error(`  ${line}`);
+      }
+    }
+
+    const stopSessions = args.includes('--kill-sessions');
+    const started = await restartDaemonAndWait({ stopSessions, takeover: takeoverRequested });
+
+    if (started) {
+      console.log('Daemon restarted successfully');
+      console.log(`  Relay: ${configuration.serverUrl}`);
+      console.log(`  Relay ID: ${configuration.activeServerId}`);
+      process.exit(0);
+    }
+
+    console.error('Failed to restart daemon');
+    const latestDaemonLog = await getLatestDaemonLog().catch(() => null);
+    if (latestDaemonLog?.path) {
+      console.error(`Latest daemon log: ${latestDaemonLog.path}`);
+    }
+    process.exit(1);
   }
 
   if (daemonSubcommand === 'status') {
@@ -198,7 +454,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       for (const entry of statuses) {
         const state = entry.daemon.running ? `running (pid ${entry.daemon.pid ?? '—'})` : 'not running';
         console.log(`${entry.name} (${entry.serverId})`);
-        if (entry.serverUrl) console.log(`  Server: ${entry.serverUrl}`);
+        if (entry.serverUrl) console.log(`  Relay: ${entry.serverUrl}`);
         console.log(`  Daemon: ${state}`);
         if (entry.daemon.staleStateFile) console.log(`  Note: stale state file: ${entry.daemonStatePath}`);
         console.log('');
@@ -243,10 +499,14 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
 ${chalk.bold('happier daemon')} - Background service management
 
 ${chalk.bold('Usage:')}
-  happier daemon start              Start the daemon (detached)
+  happier daemon start [--takeover]  Start the daemon (detached)
+  happier daemon restart [--takeover]  Restart the daemon (stop → start)
   happier daemon stop               Stop the daemon (sessions stay alive)
   happier daemon stop --kill-sessions  Stop the daemon and its tracked sessions
   happier daemon stop --all         Stop daemons for all configured servers
+  happier daemon restart [--takeover]  Restart the daemon
+  happier daemon restart --kill-sessions  Restart the daemon and its tracked sessions
+  happier daemon start-sync [--takeover]  Start the daemon synchronously
   happier daemon status             Show daemon status
   happier daemon status --all       Show daemon status for all configured servers
   happier daemon list               List active sessions

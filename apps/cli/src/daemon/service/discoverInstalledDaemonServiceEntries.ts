@@ -11,6 +11,8 @@ export type InstalledDaemonServiceEntry = Readonly<{
   installed: true;
   path: string;
   platform: 'darwin' | 'linux' | 'win32';
+  mode?: DaemonServiceMode;
+  happierHomeDir?: string | null;
   releaseChannel: PublicReleaseRingId;
   label: string;
   targetMode: DaemonServiceTargetMode;
@@ -83,33 +85,96 @@ function parseWindowsWrapperValue(contents: string, key: string): string | null 
   return String(match?.[1] ?? '').trim() || null;
 }
 
+function hasDaemonStartSyncCommand(contents: string): boolean {
+  return /\bdaemon\b[\s"']+\bstart-sync\b/i.test(contents);
+}
+
+function hasLegacyManagedLinuxServiceEnv(path: string): boolean {
+  return readInstalledDaemonServiceEnvValue({ platform: 'linux', path, key: 'HAPPIER_HOME_DIR' }) !== null
+    || readInstalledDaemonServiceEnvValue({ platform: 'linux', path, key: 'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR' }) !== null;
+}
+
+export function readInstalledDaemonServiceEnvValue(params: Readonly<{
+  platform: 'darwin' | 'linux' | 'win32';
+  path: string;
+  key: string;
+}>): string | null {
+  const contents = readInstalledServiceFile(params.path);
+  if (!contents) {
+    return null;
+  }
+
+  if (params.platform === 'linux') {
+    return parseLinuxUnitValue(contents, params.key);
+  }
+  if (params.platform === 'darwin') {
+    return parseDarwinPlistValue(contents, params.key);
+  }
+  return parseWindowsWrapperValue(contents, params.key);
+}
+
+export function isValidInstalledDaemonServiceFile(params: Readonly<{
+  platform: 'darwin' | 'linux' | 'win32';
+  path: string;
+  expectedLabel: string;
+}>): boolean {
+  const contents = readInstalledServiceFile(params.path);
+  if (!contents) {
+    return false;
+  }
+
+  if (params.platform === 'darwin') {
+    return parseDarwinPlistValue(contents, 'Label') === params.expectedLabel
+      && parseDarwinPlistValue(contents, 'HAPPIER_DAEMON_STARTUP_SOURCE') === 'background-service';
+  }
+
+  if (params.platform === 'linux') {
+    return /(^|\n)ExecStart=/.test(contents)
+      && hasDaemonStartSyncCommand(contents)
+      && (
+        parseLinuxUnitValue(contents, 'HAPPIER_DAEMON_STARTUP_SOURCE') === 'background-service'
+        || hasLegacyManagedLinuxServiceEnv(params.path)
+      );
+  }
+
+  return hasDaemonStartSyncCommand(contents)
+    && parseWindowsWrapperValue(contents, 'HAPPIER_DAEMON_STARTUP_SOURCE') === 'background-service';
+}
+
 function parseInstalledServiceMetadata(params: Readonly<{
   platform: 'darwin' | 'linux' | 'win32';
   path: string;
   initialReleaseChannel: PublicReleaseRingId;
   initialTargetMode: DaemonServiceTargetMode;
 }>): Readonly<{
+  serverId: string | null;
+  happierHomeDir: string | null;
   releaseChannel: PublicReleaseRingId;
   targetMode: DaemonServiceTargetMode;
 }> {
   const contents = readInstalledServiceFile(params.path);
   if (!contents) {
     return {
+      serverId: null,
+      happierHomeDir: null,
       releaseChannel: params.initialReleaseChannel,
       targetMode: params.initialTargetMode,
     };
   }
 
-  const readValue =
-    params.platform === 'linux'
-      ? (key: string) => parseLinuxUnitValue(contents, key)
-      : params.platform === 'darwin'
-        ? (key: string) => parseDarwinPlistValue(contents, key)
-        : (key: string) => parseWindowsWrapperValue(contents, key);
+  const readValue = (key: string) => readInstalledDaemonServiceEnvValue({
+    platform: params.platform,
+    path: params.path,
+    key,
+  });
 
   const parsedTargetMode = readValue('HAPPIER_DAEMON_SERVICE_TARGET_MODE');
+  const parsedServerId = readValue('HAPPIER_ACTIVE_SERVER_ID');
+  const parsedHappierHomeDir = readValue('HAPPIER_HOME_DIR') ?? readValue('HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR');
   const parsedReleaseChannel = normalizeParsedReleaseChannel(readValue('HAPPIER_PUBLIC_RELEASE_CHANNEL'));
   return {
+    serverId: parsedServerId,
+    happierHomeDir: parsedHappierHomeDir,
     releaseChannel: parsedReleaseChannel ?? params.initialReleaseChannel,
     targetMode: parsedTargetMode === 'default-following' ? 'default-following' : params.initialTargetMode,
   };
@@ -145,24 +210,34 @@ export async function discoverInstalledDaemonServiceEntries(params: Readonly<{
       if (!parsed) {
         return [];
       }
+      if (!isValidInstalledDaemonServiceFile({
+        platform: params.platform,
+        path,
+        expectedLabel: parsed.label,
+      })) {
+        return [];
+      }
       const metadata = parseInstalledServiceMetadata({
         platform: params.platform,
         path,
         initialReleaseChannel: parsed.releaseChannel,
         initialTargetMode: parsed.targetMode,
       });
-      const profile = params.serversById[parsed.serverId];
+      const resolvedServerId = String(metadata.serverId ?? '').trim() || parsed.serverId;
+      const profile = params.serversById[resolvedServerId];
       const name = metadata.targetMode === 'default-following'
         ? 'Default background service'
         : typeof profile === 'object' && profile && !Array.isArray(profile) && typeof (profile as { name?: unknown }).name === 'string'
-          ? String((profile as { name: string }).name).trim() || parsed.serverId
-          : parsed.serverId;
+          ? String((profile as { name: string }).name).trim() || resolvedServerId
+          : resolvedServerId;
       return [{
-        serverId: parsed.serverId,
+        serverId: resolvedServerId,
         name,
         installed: true as const,
         path,
         platform: params.platform,
+        mode: params.mode,
+        happierHomeDir: metadata.happierHomeDir,
         releaseChannel: metadata.releaseChannel,
         label: parsed.label,
         targetMode: metadata.targetMode,
