@@ -53,6 +53,101 @@ describe('installDaemonService conflict handling', () => {
     vi.resetModules();
   });
 
+  it('skips reinstalling when the exact target service already exists', async () => {
+    discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
+      {
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/Users/tester/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+        platform: 'darwin',
+        happierHomeDir: '/Users/tester/.happier',
+        releaseChannel: 'stable',
+        label: 'com.happier.cli.daemon.default',
+        targetMode: 'default-following',
+      },
+    ]);
+
+    const { installDaemonService } = await import('./installer');
+
+    await installDaemonService({
+      platform: 'darwin',
+      uid: 501,
+      userHomeDir: '/Users/tester',
+      happierHomeDir: '/Users/tester/.happier',
+      channel: 'stable',
+      targetMode: 'default-following',
+      instanceId: 'default',
+      runCommands: true,
+      commandFailureMode: 'strict',
+    });
+
+    expect(planDaemonServiceInstallMock).not.toHaveBeenCalled();
+    expect(applyDaemonServiceInstallPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('treats an existing implicit stable default-following service as the exact target', async () => {
+    discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
+      {
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/home/tester/.config/systemd/user/happier-daemon.default.service',
+        platform: 'linux',
+        happierHomeDir: '/home/tester/.happier',
+        releaseChannel: 'stable',
+        label: 'happier-daemon.default',
+        targetMode: 'default-following',
+      },
+    ]);
+
+    const { installDaemonService } = await import('./installer');
+
+    await installDaemonService({
+      platform: 'linux',
+      uid: 123,
+      userHomeDir: '/home/tester',
+      happierHomeDir: '/home/tester/.happier',
+      instanceId: 'default',
+      runCommands: false,
+    });
+
+    expect(planDaemonServiceInstallMock).not.toHaveBeenCalled();
+    expect(applyDaemonServiceInstallPlanMock).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a same-lane default-following service from another Happier home as the exact target', async () => {
+    discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
+      {
+        serverId: 'default',
+        name: 'Default background service',
+        installed: true,
+        path: '/home/tester/.config/systemd/user/happier-daemon.default.service',
+        platform: 'linux',
+        happierHomeDir: '/home/tester/.happier-old',
+        releaseChannel: 'stable',
+        label: 'happier-daemon.default',
+        targetMode: 'default-following',
+      },
+    ]);
+
+    const { installDaemonService } = await import('./installer');
+
+    await installDaemonService({
+      platform: 'linux',
+      uid: 123,
+      userHomeDir: '/home/tester',
+      happierHomeDir: '/home/tester/.happier',
+      instanceId: 'default',
+      strategy: 'add',
+      runCommands: true,
+      commandFailureMode: 'strict',
+    });
+
+    expect(planDaemonServiceInstallMock).toHaveBeenCalledTimes(1);
+    expect(applyDaemonServiceInstallPlanMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects conflicting installed services by default', async () => {
     discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
       {
@@ -61,6 +156,7 @@ describe('installDaemonService conflict handling', () => {
         installed: true,
         path: '/home/tester/.config/systemd/user/happier-daemon.default.service',
         platform: 'linux',
+        happierHomeDir: '/home/tester/.happier',
         releaseChannel: 'stable',
         label: 'happier-daemon.default',
         targetMode: 'default-following',
@@ -85,7 +181,7 @@ describe('installDaemonService conflict handling', () => {
     expect(applyDaemonServiceInstallPlanMock).not.toHaveBeenCalled();
   });
 
-  it('removes competing services and reapplies the exact target when replace-all is requested', async () => {
+  it('removes competing services without reinstalling the exact target when replace-all is requested', async () => {
     discoverInstalledDaemonServiceEntriesMock.mockResolvedValueOnce([
       {
         serverId: 'default',
@@ -93,6 +189,7 @@ describe('installDaemonService conflict handling', () => {
         installed: true,
         path: '/home/tester/.config/systemd/user/happier-daemon.default.service',
         platform: 'linux',
+        happierHomeDir: '/home/tester/.happier',
         releaseChannel: 'publicdev',
         label: 'happier-daemon.dev.default',
         targetMode: 'default-following',
@@ -120,7 +217,8 @@ describe('installDaemonService conflict handling', () => {
       targetMode: 'default-following',
       instanceId: 'default',
       strategy: 'replace-all',
-      runCommands: false,
+      runCommands: true,
+      commandFailureMode: 'strict',
     });
 
     expect(planDaemonServiceUninstallMock).toHaveBeenCalledTimes(1);
@@ -130,15 +228,15 @@ describe('installDaemonService conflict handling', () => {
       instanceId: 'company',
     }));
     expect(applyDaemonServiceUninstallPlanMock).toHaveBeenCalledTimes(1);
-    expect(planDaemonServiceInstallMock).toHaveBeenCalledTimes(1);
-    expect(planDaemonServiceInstallMock).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'publicdev',
-      targetMode: 'default-following',
-      instanceId: 'default',
-      nodePath: '/managed/node',
-      entryPath: '/opt/happier/package-dist/index.mjs',
-    }));
-    expect(applyDaemonServiceInstallPlanMock).toHaveBeenCalledTimes(1);
+    expect(applyDaemonServiceUninstallPlanMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        runCommands: true,
+        commandFailureMode: 'strict',
+      }),
+    );
+    expect(planDaemonServiceInstallMock).not.toHaveBeenCalled();
+    expect(applyDaemonServiceInstallPlanMock).not.toHaveBeenCalled();
   });
 
   it('treats replace-ring for default-following installs as same-release-channel replacement', async () => {

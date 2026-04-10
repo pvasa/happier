@@ -13,9 +13,9 @@ export function renderServiceRepairPlan(params: Readonly<{
     '',
     ...params.plan.actions.map((action, index) => {
       if (action.kind === 'remove-service') {
-        return `${index + 1}. Remove ${action.service.label} (${action.service.releaseChannel}, ${action.service.targetMode})`;
+        return `${index + 1}. Remove ${action.service.label} (${action.service.mode}, ${action.service.releaseChannel}, ${action.service.targetMode})`;
       }
-      return `${index + 1}. Install one default background service on ${action.releaseChannel}`;
+      return `${index + 1}. Install one default background service on ${action.releaseChannel} (${action.mode})`;
     }),
     '',
     `Run ${params.commandPath} --yes to apply these actions non-interactively.`,

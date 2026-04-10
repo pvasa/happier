@@ -31,7 +31,7 @@ vi.mock('@/ui/logger', () => ({
 
 import { readFileSync } from 'fs';
 
-import { readDaemonState } from '@/persistence';
+import { readDaemonState, writeDaemonState } from '@/persistence';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 
 describe('startDaemonHeartbeatLoop daemon self-restart', () => {
@@ -163,6 +163,7 @@ describe('startDaemonHeartbeatLoop daemon self-restart', () => {
         httpPort: 8765,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',
+        runtimeId: 'runtime-heartbeat-restart',
         daemonLogPath: '/tmp/daemon.log',
       },
       currentCliVersion: '1.0.0',
@@ -174,6 +175,12 @@ describe('startDaemonHeartbeatLoop daemon self-restart', () => {
     await tick!();
 
     expect(spawnDetachedDaemonStartSync).toHaveBeenCalledTimes(1);
+    expect(spawnDetachedDaemonStartSync).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({
+        HAPPIER_DAEMON_RUNTIME_ID: 'runtime-heartbeat-restart',
+      }),
+      startupSource: 'self-restart',
+    }));
     expect(exitSpy).not.toHaveBeenCalled();
 
     clearInterval(interval);
@@ -228,6 +235,7 @@ describe('startDaemonHeartbeatLoop daemon self-restart', () => {
         httpPort: 5555,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',
+        runtimeId: 'runtime-heartbeat-confirmed',
       },
       currentCliVersion: '1.0.0',
       requestShutdown: vi.fn(),
@@ -238,8 +246,79 @@ describe('startDaemonHeartbeatLoop daemon self-restart', () => {
     await tick!();
 
     expect(spawnDetachedDaemonStartSync).toHaveBeenCalledTimes(1);
+    expect(spawnDetachedDaemonStartSync).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({
+        HAPPIER_DAEMON_RUNTIME_ID: 'runtime-heartbeat-confirmed',
+      }),
+      startupSource: 'self-restart',
+    }));
     expect(exitSpy).toHaveBeenCalledWith(0);
 
     clearInterval(interval);
+  }, 15_000);
+
+  it('preserves ownership metadata when writing heartbeat state updates', async () => {
+    happyHomeDir = join(tmpdir(), `happier-cli-heartbeat-metadata-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    process.env.HAPPIER_HOME_DIR = happyHomeDir;
+    mkdirSync(join(happyHomeDir, 'logs'), { recursive: true });
+    process.env.HAPPIER_DAEMON_HEARTBEAT_INTERVAL = '1';
+
+    vi.resetModules();
+
+    let tick: (() => Promise<void>) | undefined;
+    vi.spyOn(global, 'setInterval').mockImplementation(((handler: (...args: any[]) => any) => {
+      tick = handler as unknown as () => Promise<void>;
+      return 1 as any;
+    }) as any);
+
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify({ version: '1.0.0' }) as any);
+    vi.mocked(spawnDetachedDaemonStartSync).mockResolvedValue({ unref: vi.fn() } as any);
+    vi.mocked(readDaemonState).mockResolvedValue({
+      pid: process.pid,
+      httpPort: 4001,
+      startedAt: Date.now(),
+      startedWithCliVersion: '1.0.0',
+      startedWithPublicReleaseChannel: 'preview',
+      runtimeId: 'runtime-heartbeat',
+      startupSource: 'background-service',
+      serviceLabel: 'com.happier.cli.daemon.default',
+      daemonLogPath: '/tmp/daemon.log',
+      controlToken: 'token',
+      lastHeartbeatAt: Date.now(),
+    });
+
+    const { startDaemonHeartbeatLoop } = await import('./heartbeat');
+
+    startDaemonHeartbeatLoop({
+      pidToTrackedSession: new Map(),
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      controlPort: 8765,
+      fileState: {
+        pid: process.pid,
+        httpPort: 8765,
+        startedAt: Date.now(),
+        startedWithCliVersion: '1.0.0',
+        startedWithPublicReleaseChannel: 'preview',
+        runtimeId: 'runtime-heartbeat',
+        startupSource: 'background-service',
+        serviceLabel: 'com.happier.cli.daemon.default',
+        daemonLogPath: '/tmp/daemon.log',
+        controlToken: 'token',
+      },
+      currentCliVersion: '1.0.0',
+      requestShutdown: vi.fn(),
+    });
+
+    expect(tick).toBeTypeOf('function');
+    await tick!();
+
+    expect(vi.mocked(writeDaemonState)).toHaveBeenCalledWith(expect.objectContaining({
+      startedWithPublicReleaseChannel: 'preview',
+      runtimeId: 'runtime-heartbeat',
+      startupSource: 'background-service',
+      serviceLabel: 'com.happier.cli.daemon.default',
+    }));
   }, 15_000);
 });

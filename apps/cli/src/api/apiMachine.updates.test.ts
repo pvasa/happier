@@ -74,6 +74,9 @@ describe('ApiMachineClient updates', () => {
     const updateHandler = machineSocket.getHandler('update');
     expect(updateHandler).toBeDefined();
 
+    const relayOwnerProbeHandler = machineSocket.getHandler('relay-owner-probe');
+    expect(relayOwnerProbeHandler).toBeUndefined();
+
     updateHandler?.({
       id: 'u-1',
       seq: 123,

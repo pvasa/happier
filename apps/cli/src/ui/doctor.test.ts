@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { maskValue, redactDaemonStateForDisplay, shouldShowGlobalProcessInventory } from './doctor';
+import {
+    formatDaemonOwnerLabel,
+    hasDaemonOwnerMismatchForCurrentInvocation,
+    maskValue,
+    redactDaemonStateForDisplay,
+    shouldShowGlobalProcessInventory,
+} from './doctor';
 
 describe('doctor redaction', () => {
     it('does not treat ${VAR:-default} templates as safe', () => {
@@ -64,5 +70,48 @@ describe('doctor process inventory visibility', () => {
 
     it('shows global process inventory for full doctor output', () => {
         expect(shouldShowGlobalProcessInventory('all')).toBe(true);
+    });
+});
+
+describe('doctor daemon owner formatting', () => {
+    it('formats background-service owner details', () => {
+        expect(formatDaemonOwnerLabel({
+            startedWithPublicReleaseChannel: 'preview',
+            startedWithCliVersion: '1.2.3',
+            serviceManaged: true,
+            serviceLabel: 'com.happier.cli.daemon.default',
+        })).toContain('background service');
+        expect(formatDaemonOwnerLabel({
+            startedWithPublicReleaseChannel: 'preview',
+            startedWithCliVersion: '1.2.3',
+            serviceManaged: true,
+            serviceLabel: 'com.happier.cli.daemon.default',
+        })).toContain('com.happier.cli.daemon.default');
+    });
+
+    it('keeps legacy owner wording neutral when startup metadata is missing', () => {
+        expect(formatDaemonOwnerLabel({
+            startedWithPublicReleaseChannel: 'preview',
+            startedWithCliVersion: '1.2.3',
+            serviceManaged: null,
+            serviceLabel: null,
+        })).toContain('relay owner');
+        expect(formatDaemonOwnerLabel({
+            startedWithPublicReleaseChannel: 'preview',
+            startedWithCliVersion: '1.2.3',
+            serviceManaged: null,
+            serviceLabel: null,
+        })).not.toContain('manual relay runtime');
+    });
+
+    it('detects release-channel mismatch for the current invocation', () => {
+        expect(hasDaemonOwnerMismatchForCurrentInvocation({
+            currentCliVersion: '1.2.3',
+            currentPublicReleaseChannel: 'dev',
+            daemonState: {
+                startedWithCliVersion: '1.2.3',
+                startedWithPublicReleaseChannel: 'preview',
+            },
+        })).toBe(true);
     });
 });

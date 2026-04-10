@@ -1,7 +1,8 @@
 import fs from 'fs/promises';
 import os from 'os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { getReleaseRingCatalogEntry } from '@happier-dev/release-runtime/releaseRings';
 
 import { ApiClient, isMachineContentPublicKeyMismatchError } from '@/api/api';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
@@ -35,6 +36,22 @@ import {
 import { createSessionAttachFile } from './sessionAttachFile';
 import { getDaemonShutdownExitCode, getDaemonShutdownWatchdogTimeoutMs } from './shutdownPolicy';
 import { shouldRetryMachineRegistrationError } from './machineRegistrationRetryPolicy';
+import {
+  isDaemonStartupSourceServiceManaged,
+  resolveDaemonTakeoverRequestedFromEnv,
+  resolveDaemonServiceLabelFromEnv,
+  resolveDaemonStartupSourceFromEnv,
+} from '@/daemon/ownership/daemonOwnershipMetadata';
+import { evaluateCurrentDaemonOwner } from '@/daemon/ownership/evaluateCurrentDaemonOwner';
+import { DaemonOwnershipConflictError } from '@/daemon/ownership/DaemonOwnershipConflictError';
+import { DaemonStartupConflictError } from '@/daemon/ownership/DaemonStartupConflictError';
+import { evaluateDaemonStartupServiceConflict } from '@/daemon/ownership/daemonServiceInventory';
+import {
+  buildDaemonTakeoverNotice,
+  resolveDaemonTakeoverDecision,
+} from '@/daemon/ownership/resolveDaemonTakeoverDecision';
+import { resolveDaemonOwnershipConflictExitCode } from '@/daemon/ownership/resolveDaemonOwnershipConflictExitCode';
+import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
 
 import { isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
@@ -181,7 +198,7 @@ function mapExistingSessionAttachFailureToSpawnError(reason: import('./sessionEn
   }
 }
 
-export async function startDaemon(): Promise<void> {
+export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}): Promise<void> {
   // We don't have cleanup function at the time of server construction
   // Control flow is:
   // 1. Create promise that will resolve when shutdown is requested
@@ -199,8 +216,58 @@ export async function startDaemon(): Promise<void> {
   const { waitForAuthEnabled, waitForAuthTimeoutMs } = resolveWaitForAuthConfig(process.env);
 
   let daemonLockHandle: Awaited<ReturnType<typeof acquireDaemonLock>> = null;
+  const inheritedRuntimeId = String(process.env.HAPPIER_DAEMON_RUNTIME_ID ?? '').trim();
+  const runtimeId = inheritedRuntimeId || randomUUID();
+  const startupSource = resolveDaemonStartupSourceFromEnv(process.env);
+  const serviceLabel = resolveDaemonServiceLabelFromEnv(process.env);
+  const takeoverRequested = options.takeover ?? resolveDaemonTakeoverRequestedFromEnv(process.env);
 
   try {
+    const ownership = await evaluateCurrentDaemonOwner();
+    const takeoverDecision = resolveDaemonTakeoverDecision({
+      ownership,
+      takeoverRequested,
+    });
+    if (takeoverDecision.kind === 'conflict') {
+      const error = new DaemonOwnershipConflictError({
+        intent: 'daemon-start',
+        owner: takeoverDecision.owner,
+      });
+      logger.warn('[DAEMON RUN] Relay ownership conflict prevented daemon startup', {
+        title: error.title,
+        lines: error.lines,
+      });
+      throw error;
+    }
+
+    const startupServiceConflict = await evaluateDaemonStartupServiceConflict({
+      startupSource,
+      runtime: resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env }),
+    });
+    if (startupServiceConflict.kind === 'installed-background-service-conflict') {
+      const error = new DaemonStartupConflictError({
+        action: 'daemon-start-sync',
+        services: startupServiceConflict.services,
+      });
+      logger.warn('[DAEMON RUN] Installed background service prevented manual daemon startup', {
+        title: error.title,
+        lines: error.lines,
+      });
+      throw error;
+    }
+
+    if (takeoverDecision.kind === 'manual-owner-takeover') {
+      const takeoverNotice = buildDaemonTakeoverNotice({ action: 'start-sync' });
+      logger.warn('[DAEMON RUN] Relay takeover requested; replacing the current manual relay runtime', {
+        runtimeId,
+        ownerCliVersion: takeoverDecision.owner.state.startedWithCliVersion,
+        ownerReleaseChannel: takeoverDecision.owner.state.startedWithPublicReleaseChannel,
+        title: takeoverNotice.title,
+        lines: takeoverNotice.lines,
+      });
+      await stopDaemon();
+    }
+
     const credentialsGate = await waitForInitialCredentials({
       isInteractive,
       waitForAuthEnabled,
@@ -1393,6 +1460,10 @@ export async function startDaemon(): Promise<void> {
       httpPort: controlPort,
       startedAt: Date.now(),
       startedWithCliVersion: packageJson.version,
+      startedWithPublicReleaseChannel: getReleaseRingCatalogEntry(configuration.publicReleaseRing).publicLabel,
+      runtimeId,
+      startupSource,
+      serviceLabel,
       machineId,
       daemonLogPath: logger.logFilePath,
       controlToken,
@@ -1556,7 +1627,14 @@ export async function startDaemon(): Promise<void> {
             // Create realtime machine session
             const connectedApiMachine = diagnosticSubsystemGates.disableMachineSync
               ? null
-              : api.machineSyncClient(machine);
+              : api.machineSyncClient(machine, {
+                  runtimeId,
+                  cliVersion: packageJson.version,
+                  publicReleaseChannel: getReleaseRingCatalogEntry(configuration.publicReleaseRing).publicLabel,
+                  startupSource,
+                  serviceManaged: isDaemonStartupSourceServiceManaged(startupSource),
+                  ...(serviceLabel ? { serviceLabel } : null),
+                });
             apiMachine = connectedApiMachine;
             apiMachineForSessions = connectedApiMachine;
 
@@ -1669,6 +1747,7 @@ export async function startDaemon(): Promise<void> {
 
               let didRefreshMachineMetadata = false;
               connectedApiMachine.connect({
+                takeover: takeoverRequested,
                 onConnect: async () => {
                   if (shutdownInitiated) return;
 
@@ -1712,6 +1791,10 @@ export async function startDaemon(): Promise<void> {
                     didRefreshMachineMetadata = false;
                     logger.warn('[DAEMON RUN] Failed to refresh machine metadata on reconnect', error);
                   });
+                },
+                onOwnershipConflict: () => {
+                  logger.warn('[DAEMON RUN] Machine relay ownership conflict detected; shutting down');
+                  requestShutdown('happier-app');
                 },
               });
             } else {
@@ -1876,6 +1959,12 @@ export async function startDaemon(): Promise<void> {
       }
     } catch {
       // ignore
+    }
+    if (error instanceof DaemonOwnershipConflictError) {
+      process.exit(resolveDaemonOwnershipConflictExitCode(startupSource));
+    }
+    if (error instanceof DaemonStartupConflictError) {
+      process.exit(1);
     }
     // IMPORTANT: Do not log raw Axios errors here; they can contain bearer tokens.
     logger.debug('[DAEMON RUN][FATAL] Failed somewhere unexpectedly - exiting with code 1', serializeAxiosErrorForLog(error));

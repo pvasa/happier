@@ -15,6 +15,7 @@ export type BackgroundServiceRepairAction =
       kind: 'remove-service';
       service: Readonly<{
         label: string;
+        mode: DaemonServiceMode;
         releaseChannel: PublicReleaseRingId;
         targetMode: DaemonServiceTargetMode;
         instanceId: string;
@@ -23,11 +24,11 @@ export type BackgroundServiceRepairAction =
   | Readonly<{
       kind: 'install-default-following-service';
       releaseChannel: PublicReleaseRingId;
+      mode: DaemonServiceMode;
     }>;
 
 export type BackgroundServiceRepairApplyRuntime = Readonly<{
   platform: 'darwin' | 'linux' | 'win32';
-  mode: DaemonServiceMode;
   systemUser: string;
   uid: number | null;
   userHomeDir: string;

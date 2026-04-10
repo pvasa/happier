@@ -3,7 +3,6 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { configuration, reloadConfiguration } from '@/configuration'
-import { resolveDaemonStateBasenameForRing } from '@/cli/runtime/publicReleaseChannel'
 import { createEnvKeyScope } from '@/testkit/env/envScope'
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir'
 import {
@@ -72,7 +71,7 @@ export async function writeDaemonStateFixture(homeDir: string, serverId: string,
   controlToken?: string
 }): Promise<string> {
   const serverDir = join(homeDir, 'servers', serverId)
-  const statePath = join(serverDir, resolveDaemonStateBasenameForRing(configuration.publicReleaseRing))
+  const statePath = join(serverDir, 'daemon.state.json')
 
   mkdirSync(serverDir, { recursive: true })
   await writeFile(

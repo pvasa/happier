@@ -1,8 +1,6 @@
 import { compareVersions } from '@happier-dev/cli-common/update';
 
-import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServiceListEntries } from '@/daemon/service/cli';
-import { isDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
-import { buildBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
+import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
 
 import { handleServiceRepairCliCommand } from '../serviceRepair/handleServiceRepairCliCommand';
 
@@ -33,37 +31,29 @@ export async function maybeRunVersionGatedRuntimeMigration(params: Readonly<{
     return false;
   }
 
-  const repairInvocations: Array<readonly string[]> = [];
+  const { runtime, plan } = await resolveBackgroundServiceRepairPlanForCurrentRuntime({
+    preferredMode: 'user',
+    includeAllModes: true,
+    systemUser: '',
+  });
 
-  for (const mode of ['user', 'system'] as const) {
-    const runtime = resolveDaemonServiceCliRuntimeFromEnv({ mode });
-    if (!isDaemonServiceModeSupported(runtime.platform, mode)) {
-      continue;
-    }
-    const services = await resolveDaemonServiceListEntries(runtime, { mode });
-    const plan = buildBackgroundServiceRepairPlan({
-      currentReleaseChannel: runtime.channel,
-      services,
-    });
-    if (plan.actions.length === 0 && plan.manualWarnings.length === 0) {
-      continue;
-    }
-    if (mode === 'system' && runtime.platform === 'linux' && runtime.uid !== 0) {
-      console.warn('Skipping automatic system background-service migration without root privileges. Re-run manually with: sudo happier self migrate --yes --mode system');
-      continue;
-    }
-    repairInvocations.push([...params.argv, '--mode', mode]);
-  }
-
-  if (repairInvocations.length === 0) {
+  if (plan.actions.length === 0 && plan.manualWarnings.length === 0) {
     return false;
   }
 
-  for (const argv of repairInvocations) {
-    await handleServiceRepairCliCommand({
-      argv,
-      commandPath: params.commandPath,
-    });
+  const requiresRootForPlan = runtime.platform === 'linux'
+    && runtime.uid !== 0
+    && plan.actions.some((action) => action.kind === 'remove-service'
+      ? action.service.mode === 'system'
+      : action.mode === 'system');
+  if (requiresRootForPlan) {
+    console.warn('Skipping automatic system background-service migration without root privileges. Re-run manually with: sudo happier self migrate --yes');
+    return false;
   }
+
+  await handleServiceRepairCliCommand({
+    argv: [...params.argv],
+    commandPath: params.commandPath,
+  });
   return true;
 }

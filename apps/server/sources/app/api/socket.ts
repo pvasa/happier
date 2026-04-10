@@ -1,6 +1,7 @@
 import { onShutdown } from "@/utils/process/shutdown";
 import { Fastify } from "./types";
 import { buildMachineActivityEphemeral, ClientConnection, eventRouter } from "@/app/events/eventRouter";
+import { buildMachineOwnerConflictSocketPayload, readMachineDaemonOwnershipMetadataFromSocketAuth } from "@happier-dev/protocol";
 import { Server, Socket } from "socket.io";
 import { log } from "@/utils/logging/log";
 import { auth } from "@/app/auth/auth";
@@ -24,6 +25,7 @@ import { db } from "@/storage/db";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { readMachineTransferFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { resolveSessionScopedSocketBinding } from "./socket/sessionScopedBinding";
+import { createMachineSocketOwnershipRegistry } from "./socket/machineSocketOwnershipRegistry";
 
 export const DEFAULT_SOCKET_MAX_HTTP_BUFFER_SIZE = 25_000_000;
 
@@ -77,12 +79,13 @@ export function startSocket(app: Fastify) {
         serveClient: false // Don't serve the client files
     });
 
-    function rejectSocket(params: { statusCode: number; error: string; provider?: string }) {
+    function rejectSocket(params: { statusCode: number; error: string; provider?: string; owner?: Record<string, unknown> }) {
         const err: any = new Error(params.error);
         err.data = {
             error: params.error,
             statusCode: params.statusCode,
             ...(params.provider ? { provider: params.provider } : {}),
+            ...(params.owner ? { owner: params.owner } : {}),
         };
         return err;
     }
@@ -93,6 +96,10 @@ export function startSocket(app: Fastify) {
         allRpcListeners: rpcListeners,
         redisRegistry: shouldEnableRedisAdapter ? { enabled: true, instanceId } : { enabled: false },
     });
+    const machineSocketOwnershipRegistry = createMachineSocketOwnershipRegistry({
+        io,
+        config: shouldEnableRedisAdapter ? { enabled: true, instanceId } : { enabled: false },
+    });
     eventRouter.setIo(io);
 
     io.use(async (socket, next) => {
@@ -101,6 +108,7 @@ export function startSocket(app: Fastify) {
         const clientPurpose = socket.handshake.auth.clientPurpose as string | undefined;
         const sessionId = socket.handshake.auth.sessionId as string | undefined;
         const machineId = socket.handshake.auth.machineId as string | undefined;
+        const takeoverRequested = socket.handshake.auth.takeover === true;
 
         if (!token) {
             return next(rejectSocket({ statusCode: 401, error: 'invalid-token' }));
@@ -135,6 +143,24 @@ export function startSocket(app: Fastify) {
             });
             if (!machine) {
                 return next(rejectSocket({ statusCode: 403, error: 'invalid-machine' }));
+            }
+
+            const ownershipResult = await machineSocketOwnershipRegistry.claimOwner({
+                accountId: verified.userId,
+                machineId: machineId!,
+                socketId: socket.id,
+                owner: {
+                    ...readMachineDaemonOwnershipMetadataFromSocketAuth(socket.handshake.auth),
+                    takeoverRequested,
+                },
+            });
+            if (ownershipResult.result === 'conflict') {
+                const { socketId: _socketId, ...ownerDetails } = ownershipResult.owner;
+                return next(rejectSocket({
+                    statusCode: 409,
+                    error: 'machine-owner-conflict',
+                    owner: buildMachineOwnerConflictSocketPayload(readMachineDaemonOwnershipMetadataFromSocketAuth(ownerDetails)).owner,
+                }));
             }
         }
 
@@ -259,6 +285,13 @@ export function startSocket(app: Fastify) {
             // Cleanup connections
             eventRouter.removeConnection(userId, connection);
             decrementWebSocketConnection(connection.connectionType);
+            if (connection.connectionType === 'machine-scoped') {
+                void machineSocketOwnershipRegistry.releaseOwner({
+                    accountId: userId,
+                    machineId: connection.machineId,
+                    socketId: socket.id,
+                });
+            }
 
             const durationMs = Math.max(0, Date.now() - connectedAtMs);
             const isFastDisconnect = fastDisconnectLogThresholdMs > 0 && durationMs <= fastDisconnectLogThresholdMs;

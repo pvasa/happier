@@ -18,6 +18,7 @@ export type DaemonServicePlannedFile = Readonly<{
 export type DaemonServicePlannedCommand = Readonly<{
   cmd: string;
   args: readonly string[];
+  ignoreFailure?: boolean;
 }>;
 
 export type DaemonServiceInstallPlan = Readonly<{
@@ -71,7 +72,7 @@ function shouldApplyLegacyCloudCleanup(params: Readonly<{
   instanceId: string;
   targetMode: DaemonServiceTargetMode;
 }>): boolean {
-  return params.targetMode === 'default-following' || params.instanceId === 'cloud';
+  return params.instanceId === 'cloud';
 }
 
 export function resolveDaemonServiceLaunchdLabel(
@@ -179,6 +180,7 @@ export function planDaemonServiceInstall(params: Readonly<{
   systemUser?: string;
   channel?: PublicReleaseRingId;
   targetMode?: DaemonServiceTargetMode;
+  darwinInstallMode?: 'rebootstrap' | 'kickstart';
   instanceId: string;
   userHomeDir: string;
   happierHomeDir: string;
@@ -207,6 +209,8 @@ export function planDaemonServiceInstall(params: Readonly<{
   const baseEnv: Record<string, string> = {
     HAPPIER_HOME_DIR: params.happierHomeDir,
     HAPPIER_PUBLIC_RELEASE_CHANNEL: publicReleaseChannel,
+    HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+    HAPPIER_DAEMON_SERVICE_LABEL: label,
     HAPPIER_DAEMON_SERVICE_TARGET_MODE: targetMode,
     HAPPIER_NO_BROWSER_OPEN: '1',
     HAPPIER_DAEMON_WAIT_FOR_AUTH: '1',
@@ -244,15 +248,19 @@ export function planDaemonServiceInstall(params: Readonly<{
     const uid = params.uid;
     const commands: DaemonServicePlannedCommand[] = [];
     if (typeof uid === 'number' && uid > 0) {
+      if (params.darwinInstallMode === 'kickstart') {
+        commands.push({ cmd: 'launchctl', args: ['kickstart', '-k', `gui/${uid}/${label}`] });
+      } else {
       // Back-compat: if the legacy (non-instance) service is enabled, disable it so it won't auto-load on login.
-      if (shouldApplyLegacyCloudCleanup({ instanceId, targetMode })) {
-        commands.push({ cmd: 'launchctl', args: ['bootout', `gui/${uid}/${LEGACY_DAEMON_SERVICE_LAUNCHD_LABEL}`] });
-        commands.push({ cmd: 'launchctl', args: ['disable', `gui/${uid}/${LEGACY_DAEMON_SERVICE_LAUNCHD_LABEL}`] });
+        if (shouldApplyLegacyCloudCleanup({ instanceId, targetMode })) {
+          commands.push({ cmd: 'launchctl', args: ['bootout', `gui/${uid}/${LEGACY_DAEMON_SERVICE_LAUNCHD_LABEL}`] });
+          commands.push({ cmd: 'launchctl', args: ['disable', `gui/${uid}/${LEGACY_DAEMON_SERVICE_LAUNCHD_LABEL}`] });
+        }
+        commands.push({ cmd: 'launchctl', args: ['bootout', `gui/${uid}/${label}`] });
+        commands.push({ cmd: 'launchctl', args: ['enable', `gui/${uid}/${label}`] });
+        commands.push({ cmd: 'launchctl', args: ['bootstrap', `gui/${uid}`, plistPath] });
+        commands.push({ cmd: 'launchctl', args: ['kickstart', '-k', `gui/${uid}/${label}`] });
       }
-      commands.push({ cmd: 'launchctl', args: ['bootout', `gui/${uid}/${label}`] });
-      commands.push({ cmd: 'launchctl', args: ['bootstrap', `gui/${uid}`, plistPath] });
-      commands.push({ cmd: 'launchctl', args: ['enable', `gui/${uid}/${label}`] });
-      commands.push({ cmd: 'launchctl', args: ['kickstart', '-k', `gui/${uid}/${label}`] });
     }
 
     return {
@@ -337,9 +345,14 @@ export function planDaemonServiceInstall(params: Readonly<{
 
   const commands: DaemonServicePlannedCommand[] = [{ cmd: 'systemctl', args: [...prefix, 'daemon-reload'] }];
   if (shouldApplyLegacyCloudCleanup({ instanceId, targetMode })) {
-    commands.push({ cmd: 'systemctl', args: [...prefix, 'disable', '--now', LEGACY_DAEMON_SERVICE_SYSTEMD_UNIT_NAME] });
+    commands.push({
+      cmd: 'systemctl',
+      args: [...prefix, 'disable', '--now', LEGACY_DAEMON_SERVICE_SYSTEMD_UNIT_NAME],
+      ignoreFailure: true,
+    });
   }
-  commands.push({ cmd: 'systemctl', args: [...prefix, 'enable', '--now', unitName] });
+  commands.push({ cmd: 'systemctl', args: [...prefix, 'enable', unitName] });
+  commands.push({ cmd: 'systemctl', args: [...prefix, 'restart', unitName] });
 
   return {
     platform: 'linux',
@@ -440,8 +453,16 @@ export function planDaemonServiceUninstall(params: Readonly<{
       { cmd: 'systemctl', args: [...prefix, 'stop', unitName] },
       ...(shouldApplyLegacyCloudCleanup({ instanceId, targetMode })
         ? [
-            { cmd: 'systemctl', args: [...prefix, 'disable', '--now', LEGACY_DAEMON_SERVICE_SYSTEMD_UNIT_NAME] },
-            { cmd: 'systemctl', args: [...prefix, 'stop', LEGACY_DAEMON_SERVICE_SYSTEMD_UNIT_NAME] },
+            {
+              cmd: 'systemctl',
+              args: [...prefix, 'disable', '--now', LEGACY_DAEMON_SERVICE_SYSTEMD_UNIT_NAME],
+              ignoreFailure: true,
+            },
+            {
+              cmd: 'systemctl',
+              args: [...prefix, 'stop', LEGACY_DAEMON_SERVICE_SYSTEMD_UNIT_NAME],
+              ignoreFailure: true,
+            },
           ]
         : []),
       { cmd: 'systemctl', args: [...prefix, 'daemon-reload'] },
@@ -461,6 +482,8 @@ export function planDaemonServiceLifecycle(params: Readonly<{
   userHomeDir: string;
   happierHomeDir?: string;
   uid?: number;
+  darwinStartMode?: 'rebootstrap' | 'kickstart';
+  darwinRestartMode?: 'rebootstrap' | 'kickstart';
 }>): Readonly<{ platform: DaemonServicePlatform; commands: DaemonServicePlannedCommand[] }> {
   const instanceId = sanitizeServiceInstanceId(params.instanceId);
   const channel: PublicReleaseRingId = params.channel ?? 'stable';
@@ -483,12 +506,23 @@ export function planDaemonServiceLifecycle(params: Readonly<{
       };
     }
 
+    if (
+      (params.action === 'start' && params.darwinStartMode === 'kickstart')
+      || (params.action === 'restart' && params.darwinRestartMode === 'kickstart')
+    ) {
+      return {
+        platform: 'darwin',
+        commands: [{ cmd: 'launchctl', args: ['kickstart', '-k', `gui/${uid}/${label}`] }],
+      };
+    }
+
     if (params.action === 'restart' || params.action === 'start') {
       return {
         platform: 'darwin',
         commands: [
-          { cmd: 'launchctl', args: ['bootstrap', `gui/${uid}`, plistPath] },
+          { cmd: 'launchctl', args: ['bootout', `gui/${uid}/${label}`] },
           { cmd: 'launchctl', args: ['enable', `gui/${uid}/${label}`] },
+          { cmd: 'launchctl', args: ['bootstrap', `gui/${uid}`, plistPath] },
           { cmd: 'launchctl', args: ['kickstart', '-k', `gui/${uid}/${label}`] },
         ],
       };

@@ -2,12 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const {
   ensureJavaScriptRuntimeExecutableMock,
+  discoverInstalledDaemonServiceEntriesMock,
   resolveDaemonServiceRuntimeTargetMock,
   planDaemonServiceInstallMock,
   applyDaemonServiceInstallPlanMock,
   isBunMock,
+  readDefaultManagedReleaseChannelMock,
+  resolveDesiredShimTargetsMock,
+  resolveInstalledFirstPartyComponentPathsMock,
 } = vi.hoisted(() => ({
   ensureJavaScriptRuntimeExecutableMock: vi.fn(async () => '/managed/node'),
+  discoverInstalledDaemonServiceEntriesMock: vi.fn(async () => []),
   resolveDaemonServiceRuntimeTargetMock: vi.fn(() => ({
     nodePath: '/managed/node',
     entryPath: '/opt/happier/package-dist/index.mjs',
@@ -15,6 +20,9 @@ const {
   planDaemonServiceInstallMock: vi.fn(() => ({ files: [], commands: [] })),
   applyDaemonServiceInstallPlanMock: vi.fn(async () => undefined),
   isBunMock: vi.fn(() => true),
+  readDefaultManagedReleaseChannelMock: vi.fn(async () => 'stable'),
+  resolveDesiredShimTargetsMock: vi.fn(async (): Promise<Array<{ shimPath: string; binaryPath: string }>> => []),
+  resolveInstalledFirstPartyComponentPathsMock: vi.fn(() => ({ shimPaths: [] })),
 }));
 
 vi.mock('@/runtime/js/ensureJavaScriptRuntimeExecutable', () => ({
@@ -23,6 +31,10 @@ vi.mock('@/runtime/js/ensureJavaScriptRuntimeExecutable', () => ({
 
 vi.mock('./runtimeTarget', () => ({
   resolveDaemonServiceRuntimeTarget: resolveDaemonServiceRuntimeTargetMock,
+}));
+
+vi.mock('./discoverInstalledDaemonServiceEntries', () => ({
+  discoverInstalledDaemonServiceEntries: discoverInstalledDaemonServiceEntriesMock,
 }));
 
 vi.mock('./plan', async (importOriginal) => {
@@ -45,8 +57,39 @@ vi.mock('@/utils/runtime', () => ({
   isBun: isBunMock,
 }));
 
+vi.mock('@happier-dev/cli-common/firstPartyRuntime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@happier-dev/cli-common/firstPartyRuntime')>();
+  return {
+    ...actual,
+    readDefaultManagedReleaseChannel: readDefaultManagedReleaseChannelMock,
+    resolveDesiredShimTargets: resolveDesiredShimTargetsMock,
+    resolveInstalledFirstPartyComponentPaths: resolveInstalledFirstPartyComponentPathsMock,
+  };
+});
+
 describe('installDaemonService runtime resolution', () => {
   afterEach(() => {
+    ensureJavaScriptRuntimeExecutableMock.mockReset();
+    ensureJavaScriptRuntimeExecutableMock.mockResolvedValue('/managed/node');
+    discoverInstalledDaemonServiceEntriesMock.mockReset();
+    discoverInstalledDaemonServiceEntriesMock.mockResolvedValue([]);
+    resolveDaemonServiceRuntimeTargetMock.mockReset();
+    resolveDaemonServiceRuntimeTargetMock.mockReturnValue({
+      nodePath: '/managed/node',
+      entryPath: '/opt/happier/package-dist/index.mjs',
+    });
+    planDaemonServiceInstallMock.mockReset();
+    planDaemonServiceInstallMock.mockReturnValue({ files: [], commands: [] });
+    applyDaemonServiceInstallPlanMock.mockReset();
+    applyDaemonServiceInstallPlanMock.mockResolvedValue(undefined);
+    isBunMock.mockReset();
+    isBunMock.mockReturnValue(true);
+    readDefaultManagedReleaseChannelMock.mockReset();
+    readDefaultManagedReleaseChannelMock.mockResolvedValue('stable');
+    resolveDesiredShimTargetsMock.mockReset();
+    resolveDesiredShimTargetsMock.mockResolvedValue([]);
+    resolveInstalledFirstPartyComponentPathsMock.mockReset();
+    resolveInstalledFirstPartyComponentPathsMock.mockReturnValue({ shimPaths: [] });
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -72,5 +115,36 @@ describe('installDaemonService runtime resolution', () => {
         runtimeExecutable: '/managed/node',
       }),
     );
+  });
+
+  it('uses the managed default release-channel shim for default-following installs', async () => {
+    readDefaultManagedReleaseChannelMock.mockResolvedValueOnce('publicdev');
+    resolveDesiredShimTargetsMock.mockResolvedValueOnce([{ shimPath: process.execPath, binaryPath: '/managed/happier' }]);
+
+    const { installDaemonService } = await import('./installer');
+
+    await installDaemonService({
+      platform: 'linux',
+      uid: 123,
+      userHomeDir: '/home/test',
+      happierHomeDir: '/home/test/.happier',
+      instanceId: 'cloud',
+      targetMode: 'default-following',
+      runCommands: false,
+    });
+
+    expect(readDefaultManagedReleaseChannelMock).toHaveBeenCalledWith({
+      processEnv: process.env,
+    });
+    expect(resolveDesiredShimTargetsMock).toHaveBeenCalledWith({
+      componentId: 'happier-daemon',
+      channel: 'publicdev',
+      processEnv: process.env,
+    });
+    expect(resolveDaemonServiceRuntimeTargetMock).toHaveBeenCalledWith({
+      currentExecPath: process.execPath,
+      explicitNodePath: process.execPath,
+    });
+    expect(ensureJavaScriptRuntimeExecutableMock).not.toHaveBeenCalled();
   });
 });

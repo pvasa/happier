@@ -13,8 +13,9 @@ import { normalizeCliArgv } from '@/cli/parseArgs'
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath'
 import {
   inferPublicReleaseRingIdFromEnvAndArgv,
-  resolveDaemonStateBasenameForRing,
 } from '@/cli/runtime/publicReleaseChannel'
+import { CANONICAL_DAEMON_STATE_BASENAME } from '@/daemon/ownership/daemonOwnershipPaths'
+import { createServerUrlComparableKey } from '@happier-dev/protocol'
 import packageJson from '../package.json'
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings'
 
@@ -258,6 +259,7 @@ class Configuration {
       envWebappUrl: envWebappUrl || null,
       envActiveServerId,
       persisted,
+      serversDir: this.serversDir,
     });
 
     this.serverUrl = resolved.serverUrl
@@ -269,9 +271,8 @@ class Configuration {
     this.activeServerDir = join(this.serversDir, this.activeServerId)
     this.legacyPrivateKeyFile = join(this.happyHomeDir, 'access.key')
     this.privateKeyFile = join(this.activeServerDir, 'access.key')
-    const daemonStateBasename = resolveDaemonStateBasenameForRing(this.publicReleaseRing)
-    this.daemonStateFile = join(this.activeServerDir, daemonStateBasename)
-    this.daemonLockFile = join(this.activeServerDir, `${daemonStateBasename}.lock`)
+    this.daemonStateFile = join(this.activeServerDir, CANONICAL_DAEMON_STATE_BASENAME)
+    this.daemonLockFile = join(this.activeServerDir, `${CANONICAL_DAEMON_STATE_BASENAME}.lock`)
 
     const attachMaxAgeRaw = String(process.env.HAPPIER_SESSION_ATTACH_FILE_MAX_AGE_MS ?? '').trim();
     const attachMaxAgeMs = Number.parseInt(attachMaxAgeRaw, 10);
@@ -851,9 +852,11 @@ function readActiveServerFromSettingsFile(path: string): PersistedServerSettings
 function deriveServerIdFromUrl(url: string): string {
   // Deterministic, filesystem-safe id for ad-hoc server URLs (used when env overrides are set).
   // Not cryptographic; intended only for local directory names.
+  const comparableKey = safeCreateComparableServerUrlKey(url)
+  const value = comparableKey || url
   let h = 2166136261;
-  for (let i = 0; i < url.length; i += 1) {
-    h ^= url.charCodeAt(i);
+  for (let i = 0; i < value.length; i += 1) {
+    h ^= value.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
   return `env_${(h >>> 0).toString(16)}`;
@@ -863,6 +866,16 @@ function normalizeServerUrl(url: string): string {
   return String(url ?? '').trim().replace(/\/+$/, '');
 }
 
+function safeCreateComparableServerUrlKey(url: string | null | undefined): string {
+  const value = String(url ?? '').trim();
+  if (!value) return '';
+  try {
+    return createServerUrlComparableKey(value);
+  } catch {
+    return '';
+  }
+}
+
 function resolveServerSelection(params: Readonly<{
   envServerUrl: string | null;
   envLocalServerUrl: string | null;
@@ -870,6 +883,7 @@ function resolveServerSelection(params: Readonly<{
   envWebappUrl: string | null;
   envActiveServerId: string | null;
   persisted: PersistedServerSettings | null;
+  serversDir: string;
 }>): Readonly<{ activeServerId: string; serverUrl: string; apiServerUrl: string; webappUrl: string }> {
   const DEFAULT_SERVER_URL = 'https://api.happier.dev';
   const DEFAULT_WEBAPP_URL = 'https://app.happier.dev';
@@ -900,11 +914,42 @@ function resolveServerSelection(params: Readonly<{
 
     const persistedMatch = params.persisted
       ? (() => {
+          const matchesUrl = (server: Readonly<{ serverUrl: string; localServerUrl?: string | null }>, url: string): boolean => {
+            const targetComparableKey = safeCreateComparableServerUrlKey(url);
+            const serverComparableKey = safeCreateComparableServerUrlKey(server.serverUrl);
+            if (targetComparableKey && serverComparableKey && targetComparableKey === serverComparableKey) return true;
+            if (normalizeServerUrl(server.serverUrl) === url) return true;
+            const local = normalizeServerUrl(server.localServerUrl ?? '');
+            if (local && local === url) return true;
+            const localComparableKey = safeCreateComparableServerUrlKey(server.localServerUrl ?? '');
+            return Boolean(targetComparableKey && localComparableKey && targetComparableKey === localComparableKey);
+          };
+
           const persistedActive = params.persisted.servers[params.persisted.activeServerId] ?? null;
-          if (persistedActive && normalizeServerUrl(persistedActive.serverUrl) === envCanonicalServerUrl) {
-            return persistedActive;
+          const findMatch = (url: string): Readonly<{ id: string; serverUrl: string; localServerUrl?: string | null; webappUrl: string }> | null =>
+            Object.values(params.persisted!.servers).find((s) => matchesUrl(s, url)) ?? null;
+
+          const canonicalMatch =
+            (persistedActive && matchesUrl(persistedActive, envCanonicalServerUrl) ? persistedActive : null)
+            ?? findMatch(envCanonicalServerUrl);
+
+          if (envApiServerUrl && envApiServerUrl !== envCanonicalServerUrl) {
+            const apiMatch =
+              (persistedActive && matchesUrl(persistedActive, envApiServerUrl) ? persistedActive : null)
+              ?? findMatch(envApiServerUrl);
+
+            if (canonicalMatch && apiMatch && canonicalMatch.id !== apiMatch.id) {
+              const canonicalHasAccessKey = existsSync(join(params.serversDir, canonicalMatch.id, 'access.key'));
+              const apiHasAccessKey = existsSync(join(params.serversDir, apiMatch.id, 'access.key'));
+              if (apiHasAccessKey && !canonicalHasAccessKey) return apiMatch;
+              if (canonicalHasAccessKey && !apiHasAccessKey) return canonicalMatch;
+              return canonicalMatch;
+            }
+
+            return canonicalMatch ?? apiMatch;
           }
-          return Object.values(params.persisted.servers).find((s) => normalizeServerUrl(s.serverUrl) === envCanonicalServerUrl) ?? null;
+
+          return canonicalMatch;
         })()
       : null;
 
@@ -922,7 +967,10 @@ function resolveServerSelection(params: Readonly<{
         }
       }
     }
-    const activeServerId = resolveActiveServerId(persistedMatch?.id ?? deriveServerIdFromUrl(envCanonicalServerUrl));
+    const activeServerId = sanitizeServerIdForFilesystem(
+      persistedMatch?.id ?? (params.envActiveServerId ?? deriveServerIdFromUrl(envCanonicalServerUrl)),
+      'cloud',
+    );
     return { activeServerId, serverUrl: envCanonicalServerUrl, apiServerUrl: envApiServerUrl, webappUrl };
   }
 

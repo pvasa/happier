@@ -16,6 +16,14 @@ test('install.ps1 defaults background service installation to opt-in when nonint
   assert.match(trimmed, /else\s*\{\s*"0"\s*\}/i);
 });
 
+test('install.ps1 reuses the user state home for background-service commands instead of the install dir', async () => {
+  const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1');
+  const raw = await readFile(path, 'utf8');
+
+  assert.match(raw, /\$DaemonServiceStateHomeDir\s*=\s*if\s*\(\$env:HAPPIER_HOME_DIR\)\s*\{\s*\$env:HAPPIER_HOME_DIR\s*\}\s*else\s*\{\s*Join-Path \$env:USERPROFILE "\.happier"\s*\}/i);
+  assert.doesNotMatch(raw, /Invoke-InstallerCommandWithDaemonServiceContext[^\n]*-HomeDir \$InstallDir/i);
+});
+
 test('published preview and dev PowerShell installers keep background-service auto-install opt-in by default', async () => {
   const previewRaw = await readFile(join(repoRoot, 'apps', 'website', 'public', 'install-preview.ps1'), 'utf8');
   const devRaw = await readFile(join(repoRoot, 'apps', 'website', 'public', 'install-dev.ps1'), 'utf8');

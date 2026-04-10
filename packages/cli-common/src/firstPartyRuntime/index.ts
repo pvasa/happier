@@ -29,6 +29,11 @@ export type { FirstPartyRetentionResolution } from './retentionPolicy.js';
 export { resolveInstalledFirstPartyComponentPaths } from './resolveInstalledComponentPaths.js';
 export type { InstalledFirstPartyComponentPaths } from './resolveInstalledComponentPaths.js';
 export {
+  readDefaultManagedReleaseChannel,
+  resolveDefaultManagedReleaseChannelStatePath,
+  writeDefaultManagedReleaseChannel,
+} from './defaultReleaseChannelState.js';
+export {
   prepareFirstPartyComponentPayloadFromGitHubRelease,
 } from './prepareFirstPartyComponentPayloadFromGitHubRelease.js';
 export type {
@@ -57,6 +62,8 @@ export type { FirstPartyRollbackResult } from './rollbackVersionedPayload.js';
 
 export { syncInstalledFirstPartyShims } from './syncInstalledFirstPartyShims.js';
 export type { SyncInstalledFirstPartyShimsResult } from './syncInstalledFirstPartyShims.js';
+export { resolveDesiredShimTargets } from './resolveDesiredShimTargets.js';
+export type { DesiredFirstPartyShimTarget } from './resolveDesiredShimTargets.js';
 export {
   checkRelayRuntimeHealth,
   resolveConfiguredRelayRuntimeBinaryOverride,

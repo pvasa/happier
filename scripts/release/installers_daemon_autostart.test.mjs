@@ -17,16 +17,35 @@ async function sha256(path) {
 
 async function runInstallerScenario(envOverrides = {}) {
   const root = await mkdtemp(join(tmpdir(), 'happier-installer-daemon-'));
+  const homeDir = join(root, 'home');
   const binDir = join(root, 'bin');
   const installDir = join(root, 'install');
   const outBinDir = join(root, 'out-bin');
   const fixtureDir = join(root, 'fixture');
+  const systemdUserDir = join(root, 'systemd', 'user');
+  const systemdSystemDir = join(root, 'systemd', 'system');
   const logPath = join(root, 'happier.invocations.log');
 
+  await mkdir(homeDir, { recursive: true });
   await mkdir(binDir, { recursive: true });
   await mkdir(installDir, { recursive: true });
   await mkdir(outBinDir, { recursive: true });
   await mkdir(fixtureDir, { recursive: true });
+  await mkdir(systemdUserDir, { recursive: true });
+  await mkdir(systemdSystemDir, { recursive: true });
+
+  const {
+    HAPPIER_TEST_NATIVE_USER_SERVICE_CONTENT: nativeUserServiceContent,
+    HAPPIER_TEST_NATIVE_SYSTEM_SERVICE_CONTENT: nativeSystemServiceContent,
+    ...installerEnvOverrides
+  } = envOverrides;
+
+  if (nativeUserServiceContent) {
+    await writeFile(join(systemdUserDir, 'happier-daemon.default.service'), nativeUserServiceContent, 'utf8');
+  }
+  if (nativeSystemServiceContent) {
+    await writeFile(join(systemdSystemDir, 'happier-daemon.default.service'), nativeSystemServiceContent, 'utf8');
+  }
 
   // Stub uname so the installer deterministically selects linux-x64 assets.
   const unameStubPath = join(binDir, 'uname');
@@ -110,7 +129,11 @@ if [[ "$1" = "service" && "$2" = "install" ]]; then
     echo "Usage: happier <command> [options]"
     exit 0
   fi
-  echo "service install ${version}" >> "${logPath}"
+  if [[ -f "${logPath}.repair-ran" && " $* " != *" --yes "* ]]; then
+    echo "conflict: service already installed" >&2
+    exit 1
+  fi
+  echo "service install ${version} args=$* home=$HAPPIER_HOME_DIR" >> "${logPath}"
   exit 0
 fi
 if [[ "$1" = "service" && "$2" = "repair" && "$3" = "--yes" ]]; then
@@ -118,15 +141,44 @@ if [[ "$1" = "service" && "$2" = "repair" && "$3" = "--yes" ]]; then
     echo "error: unknown option '--yes'" >&2
     exit 1
   fi
-  echo "service repair ${version}" >> "${logPath}"
+  if [[ "\${HAPPIER_TEST_SERVICE_REPAIR_FAIL:-0}" = "1" ]]; then
+    echo "repair failed: root privileges are required" >&2
+    exit 1
+  fi
+  : > "${logPath}.repair-ran"
+  echo "service repair ${version} args=$* home=$HAPPIER_HOME_DIR" >> "${logPath}"
   exit 0
+fi
+if [[ "$1" = "service" && "$2" = "repair" && "$3" = "--json" ]]; then
+  if [[ -n "\${HAPPIER_TEST_SERVICE_REPAIR_JSON:-}" ]]; then
+    printf '%s' "\${HAPPIER_TEST_SERVICE_REPAIR_JSON}"
+    exit 0
+  fi
+  echo "error: unknown option '--json'" >&2
+  exit 1
 fi
 if [[ "$1" = "service" && "$2" = "list" && "$3" = "--json" ]]; then
   if [[ "\${HAPPIER_TEST_UNSUPPORTED_SERVICE_SURFACE:-0}" = "1" ]]; then
     echo "error: unknown option '--json'" >&2
     exit 1
   fi
+  if [[ -n "\${HAPPIER_TEST_SERVICE_LIST_JSON:-}" ]]; then
+    printf '%s' "\${HAPPIER_TEST_SERVICE_LIST_JSON}"
+    exit 0
+  fi
   echo '{"entries":[]}'
+  exit 0
+fi
+if [[ "$1" = "service" && "$2" = "list" ]]; then
+  if [[ -n "\${HAPPIER_TEST_SERVICE_LIST_TEXT:-}" ]]; then
+    printf '%s\n' "\${HAPPIER_TEST_SERVICE_LIST_TEXT}"
+  fi
+  exit 0
+fi
+if [[ "$1" = "service" && "$2" = "status" ]]; then
+  if [[ -n "\${HAPPIER_TEST_SERVICE_STATUS_TEXT:-}" ]]; then
+    printf '%s\n' "\${HAPPIER_TEST_SERVICE_STATUS_TEXT}"
+  fi
   exit 0
 fi
 if [[ "$1" = "daemon" && "$2" = "service" && "$3" = "install" ]]; then
@@ -244,16 +296,24 @@ printf '%s' '${releaseJson}'
   const installerPath = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
   const env = {
     ...process.env,
+    HOME: homeDir,
     PATH: `${binDir}:${process.env.PATH ?? ''}`,
     HAPPIER_PRODUCT: 'cli',
     HAPPIER_INSTALL_DIR: installDir,
     HAPPIER_BIN_DIR: outBinDir,
+    HAPPIER_WITH_DAEMON: '',
     HAPPIER_NO_PATH_UPDATE: '1',
     HAPPIER_NONINTERACTIVE: '1',
+    HAPPIER_HOME_DIR: '',
+    HAPPIER_SYSTEMD_USER_UNIT_DIR: systemdUserDir,
+    HAPPIER_SYSTEMD_SYSTEM_UNIT_DIR: systemdSystemDir,
+    HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY: '',
+    HAPPIER_PUBLIC_RELEASE_CHANNEL: '',
+    HAPPIER_DAEMON_SERVICE_CHANNEL: '',
     HAPPIER_GITHUB_TOKEN: '',
     GITHUB_TOKEN: '',
     HAPPIER_TEST_LOG: logPath,
-    ...envOverrides,
+    ...installerEnvOverrides,
   };
 
   const res = spawnSync('bash', [installerPath], { env, encoding: 'utf8' });
@@ -289,10 +349,22 @@ test('install.sh skips daemon service installation by default in noninteractive 
 });
 
 test('install.sh installs and enables daemon service when explicitly opted in (best-effort)', async () => {
-  const scenario = await runInstallerScenario({ HAPPIER_WITH_DAEMON: '1' });
+  const scenario = await runInstallerScenario({
+    HAPPIER_WITH_DAEMON: '1',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [],
+      actions: [
+        { kind: 'install-default-following-service', releaseChannel: 'stable', mode: 'user' },
+      ],
+      manualWarnings: [],
+    }, null, 2),
+  });
   try {
-    assert.match(scenario.log, /service repair 1\.2\.4/);
-    assert.match(scenario.log, /service install 1\.2\.4/);
+    assert.equal(scenario.stderr.trim(), '');
+    assert.match(scenario.log, /service repair 1\.2\.4 args=service repair --yes home=.*\/home\/\.happier/);
+    assert.match(scenario.log, /service install 1\.2\.4 args=service install --yes home=.*\/home\/\.happier/);
     assert.ok(
       scenario.log.indexOf('service repair 1.2.4') < scenario.log.indexOf('service install 1.2.4'),
       'expected background-service repair to run before install',
@@ -311,6 +383,138 @@ test('install.sh silently skips automatic background-service setup when the inst
     assert.equal(scenario.log.trim(), '');
     assert.equal(scenario.stderr.trim(), '');
     assert.doesNotMatch(scenario.stdout, /Installing background service \(user-mode\)\.\.\./);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh fails closed and prints sudo repair guidance when noninteractive repair would need root', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_WITH_DAEMON: '1',
+    HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
+      entries: [
+        { mode: 'user', targetMode: 'default-following' },
+        { mode: 'system', targetMode: 'default-following' },
+      ],
+    }),
+    HAPPIER_TEST_SERVICE_LIST_TEXT: 'default service (user)\ndefault service (system)',
+    HAPPIER_TEST_SERVICE_STATUS_TEXT: 'current owner: background service',
+    HAPPIER_TEST_SERVICE_REPAIR_FAIL: '1',
+  });
+  try {
+    assert.match(scenario.stderr, /system background services require sudo to repair or switch/i);
+    assert.match(scenario.stderr, /sudo .*service repair --yes/);
+    assert.doesNotMatch(scenario.stdout, /Installing background service \(user-mode\)\.\.\./);
+    assert.equal(scenario.log.trim(), '');
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh does not attempt tty prompting for daemon opt-in when no controlling tty is available', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_NONINTERACTIVE: '',
+  });
+  try {
+    assert.equal(scenario.log.trim(), '');
+    assert.doesNotMatch(scenario.stderr, /\/dev\/tty/);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh keeps existing background services unchanged when no controlling tty is available', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_NONINTERACTIVE: '',
+    HAPPIER_WITH_DAEMON: '1',
+    HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
+      entries: [
+        { mode: 'user', targetMode: 'default-following' },
+      ],
+    }),
+    HAPPIER_TEST_SERVICE_LIST_TEXT: 'default service (user)',
+    HAPPIER_TEST_SERVICE_STATUS_TEXT: 'current owner: background service',
+  });
+  try {
+    assert.equal(scenario.log.trim(), '');
+    assert.doesNotMatch(scenario.stderr, /\/dev\/tty/);
+    assert.match(scenario.stdout, /Keeping existing background services unchanged\./);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh uses aggregated repair preflight JSON before attempting noninteractive repair', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_WITH_DAEMON: '1',
+    HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
+      entries: [
+        { mode: 'user', targetMode: 'default-following' },
+      ],
+    }),
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [
+        { mode: 'user', targetMode: 'default-following' },
+        { mode: 'system', targetMode: 'default-following' },
+      ],
+      actions: [
+        { kind: 'remove-service', service: { mode: 'system', targetMode: 'default-following' } },
+      ],
+      manualWarnings: [],
+    }, null, 2),
+    HAPPIER_TEST_SERVICE_LIST_TEXT: 'default service (user)',
+    HAPPIER_TEST_SERVICE_STATUS_TEXT: 'current owner: background service\nsystem duplicate exists',
+    HAPPIER_TEST_SERVICE_REPAIR_FAIL: '1',
+  });
+  try {
+    assert.match(scenario.stderr, /system background services require sudo to repair or switch/i);
+    assert.match(scenario.stderr, /sudo .*service repair --yes/);
+    assert.doesNotMatch(scenario.stderr, /background service install failed/i);
+    assert.equal(scenario.log.trim(), '');
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh trusts CLI repair preflight over native Linux unit scans when service inventory is supported', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_WITH_DAEMON: '1',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [
+        { targetMode: 'default-following' },
+      ],
+      actions: [
+        { kind: 'remove-service', service: { targetMode: 'default-following' } },
+        { kind: 'install-default-following-service', releaseChannel: 'stable' },
+      ],
+      manualWarnings: [],
+    }, null, 2),
+    HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
+      entries: [
+        { targetMode: 'default-following' },
+      ],
+    }),
+    HAPPIER_TEST_SERVICE_LIST_TEXT: 'default service (user)',
+    HAPPIER_TEST_SERVICE_STATUS_TEXT: 'current owner: background service',
+    HAPPIER_TEST_NATIVE_SYSTEM_SERVICE_CONTENT: `[Unit]
+Description=Happier CLI daemon (default)
+
+[Service]
+Environment=HAPPIER_DAEMON_SERVICE_LABEL=com.happier.cli.daemon.default
+Environment=HAPPIER_DAEMON_SERVICE_TARGET_MODE=default-following
+Environment=HAPPIER_PUBLIC_RELEASE_CHANNEL=preview
+ExecStart=/usr/bin/node /tmp/happier daemon start-sync
+`,
+  });
+  try {
+    assert.doesNotMatch(scenario.stderr, /system background services require sudo to repair or switch/i);
+    assert.doesNotMatch(scenario.stderr, /outside the installer CLI inventory/i);
+    assert.match(scenario.log, /service repair 1\.2\.4 args=service repair --yes home=.*\/home\/\.happier/);
+    assert.match(scenario.log, /service install 1\.2\.4 args=service install --yes home=.*\/home\/\.happier/);
   } finally {
     await scenario.cleanup();
   }

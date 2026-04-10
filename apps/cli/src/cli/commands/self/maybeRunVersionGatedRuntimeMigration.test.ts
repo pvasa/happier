@@ -6,30 +6,17 @@ type MockDaemonServiceListEntry = {
   installed: boolean;
   path: string;
   platform: string;
+  mode: 'user' | 'system';
   releaseChannel: string;
   label: string;
   targetMode: string;
 };
 
-type MockRepairPlan = {
-  currentReleaseChannel: string;
-  existingServices: MockDaemonServiceListEntry[];
-  actions: Array<{ kind: 'install-default-following-service'; releaseChannel: string }>;
-  manualWarnings: [];
-};
-
 const {
-  buildBackgroundServiceRepairPlanMock,
   handleServiceRepairCliCommandMock,
   resolveDaemonServiceCliRuntimeFromEnvMock,
   resolveDaemonServiceListEntriesMock,
 } = vi.hoisted(() => ({
-  buildBackgroundServiceRepairPlanMock: vi.fn<(_params: unknown) => MockRepairPlan>((_params: unknown) => ({
-    currentReleaseChannel: 'preview',
-    existingServices: [],
-    actions: [{ kind: 'install-default-following-service', releaseChannel: 'preview' }],
-    manualWarnings: [],
-  })),
   handleServiceRepairCliCommandMock: vi.fn(async (_params: unknown) => undefined),
   resolveDaemonServiceCliRuntimeFromEnvMock: vi.fn((_params?: unknown) => ({
     platform: 'linux',
@@ -53,10 +40,6 @@ vi.mock('@/daemon/service/cli', () => ({
   resolveDaemonServiceListEntries: (runtime: unknown, options?: unknown) => resolveDaemonServiceListEntriesMock(runtime, options),
 }));
 
-vi.mock('@/diagnostics/backgroundServiceRepair', () => ({
-  buildBackgroundServiceRepairPlan: (params: unknown) => buildBackgroundServiceRepairPlanMock(params),
-}));
-
 vi.mock('../serviceRepair/handleServiceRepairCliCommand', () => ({
   handleServiceRepairCliCommand: (params: unknown) => handleServiceRepairCliCommandMock(params),
 }));
@@ -68,13 +51,30 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    buildBackgroundServiceRepairPlanMock.mockClear();
     handleServiceRepairCliCommandMock.mockClear();
     resolveDaemonServiceCliRuntimeFromEnvMock.mockClear();
     resolveDaemonServiceListEntriesMock.mockClear();
   });
 
-  it('delegates to service repair when an update crosses the 0.2.3 migration boundary and repair work exists', async () => {
+  it('delegates to one aggregated repair pass when an update crosses the 0.2.3 migration boundary and repair work exists', async () => {
+    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
+      const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
+      if (normalizedOptions?.mode === 'user') {
+        return [{
+          serverId: 'company',
+          name: 'Company',
+          installed: true,
+          path: '/tmp/user/.config/systemd/user/happier-daemon.preview.company.service',
+          platform: 'linux',
+          mode: 'user',
+          releaseChannel: 'preview',
+          label: 'happier-daemon.preview.company',
+          targetMode: 'pinned',
+        }];
+      }
+      return [];
+    });
+
     const { maybeRunVersionGatedRuntimeMigration } = await import('./maybeRunVersionGatedRuntimeMigration');
 
     await expect(maybeRunVersionGatedRuntimeMigration({
@@ -86,12 +86,8 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
 
     expect(resolveDaemonServiceCliRuntimeFromEnvMock).toHaveBeenCalled();
     expect(resolveDaemonServiceListEntriesMock).toHaveBeenCalled();
-    expect(buildBackgroundServiceRepairPlanMock).toHaveBeenCalledWith({
-      currentReleaseChannel: 'preview',
-      services: [],
-    });
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
-      argv: ['repair', '--mode', 'user'],
+      argv: ['repair'],
       commandPath: 'happier self migrate',
     });
   });
@@ -107,23 +103,10 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
     })).resolves.toBe(false);
 
     expect(resolveDaemonServiceCliRuntimeFromEnvMock).not.toHaveBeenCalled();
-    expect(buildBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
     expect(handleServiceRepairCliCommandMock).not.toHaveBeenCalled();
   });
 
-  it('routes update-triggered migration through system-scoped repair when only system services need work', async () => {
-    buildBackgroundServiceRepairPlanMock.mockImplementation((params: unknown) => {
-      const { services } = params as { services: MockDaemonServiceListEntry[] };
-      return {
-        currentReleaseChannel: 'preview',
-        existingServices: services,
-        actions: services.length > 0
-          ? [{ kind: 'install-default-following-service', releaseChannel: 'preview' }]
-          : [],
-        manualWarnings: [],
-      };
-    });
-
+  it('skips automatic migration when aggregated repair would require system-mode actions without root', async () => {
     resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
       const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
       if (normalizedOptions?.mode === 'system') {
@@ -131,11 +114,12 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
           serverId: 'company',
           name: 'Company',
           installed: true,
-          path: '/etc/systemd/system/happier-daemon.default.service',
+          path: '/etc/systemd/system/happier-daemon.preview.company.service',
           platform: 'linux',
+          mode: 'system',
           releaseChannel: 'preview',
-          label: 'happier-daemon.default',
-          targetMode: 'default-following',
+          label: 'happier-daemon.preview.company',
+          targetMode: 'pinned',
         }];
       }
       return [];
@@ -150,68 +134,10 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       commandPath: 'happier self migrate',
     })).resolves.toBe(false);
 
-    expect(resolveDaemonServiceListEntriesMock).toHaveBeenCalledTimes(2);
-    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(1, expect.anything(), { mode: 'user' });
-    expect(resolveDaemonServiceListEntriesMock).toHaveBeenNthCalledWith(2, expect.anything(), { mode: 'system' });
     expect(handleServiceRepairCliCommandMock).not.toHaveBeenCalled();
   });
 
-  it('runs only the user-scoped repair pass when system repair also exists but root privileges are unavailable', async () => {
-    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
-      const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
-      if (normalizedOptions?.mode === 'system') {
-        return [{
-          serverId: 'company',
-          name: 'Company',
-          installed: true,
-          path: '/etc/systemd/system/happier-daemon.default.service',
-          platform: 'linux',
-          releaseChannel: 'preview',
-          label: 'happier-daemon.default',
-          targetMode: 'default-following',
-        }];
-      }
-      return [{
-        serverId: 'cloud',
-        name: 'Cloud',
-        installed: true,
-        path: '/home/test/.config/systemd/user/happier-daemon.default.service',
-        platform: 'linux',
-        releaseChannel: 'preview',
-        label: 'happier-daemon.default',
-        targetMode: 'default-following',
-      }];
-    });
-
-    buildBackgroundServiceRepairPlanMock.mockImplementation((params: unknown) => {
-      const { services } = params as { services: MockDaemonServiceListEntry[] };
-      return {
-      currentReleaseChannel: 'preview',
-      existingServices: services,
-      actions: services.length > 0
-        ? [{ kind: 'install-default-following-service', releaseChannel: 'preview' }]
-        : [],
-      manualWarnings: [],
-      };
-    });
-
-    const { maybeRunVersionGatedRuntimeMigration } = await import('./maybeRunVersionGatedRuntimeMigration');
-
-    await expect(maybeRunVersionGatedRuntimeMigration({
-      fromVersion: '0.2.2',
-      toVersion: '0.2.3',
-      argv: ['repair'],
-      commandPath: 'happier self migrate',
-    })).resolves.toBe(true);
-
-    expect(handleServiceRepairCliCommandMock).toHaveBeenNthCalledWith(1, {
-      argv: ['repair', '--mode', 'user'],
-      commandPath: 'happier self migrate',
-    });
-    expect(handleServiceRepairCliCommandMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('runs both user and system repair passes when root privileges are available', async () => {
+  it('aggregates user and system services into one repair invocation when root is available', async () => {
     resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation((params?: unknown) => {
       const normalizedParams = params as { mode?: 'user' | 'system' } | undefined;
       return {
@@ -234,38 +160,28 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
       if (normalizedOptions?.mode === 'system') {
         return [{
-          serverId: 'company',
-          name: 'Company',
+          serverId: 'default',
+          name: 'Default background service',
           installed: true,
           path: '/etc/systemd/system/happier-daemon.default.service',
           platform: 'linux',
+          mode: 'system',
           releaseChannel: 'preview',
           label: 'happier-daemon.default',
           targetMode: 'default-following',
         }];
       }
       return [{
-        serverId: 'cloud',
-        name: 'Cloud',
+        serverId: 'default',
+        name: 'Default background service',
         installed: true,
         path: '/home/test/.config/systemd/user/happier-daemon.default.service',
         platform: 'linux',
+        mode: 'user',
         releaseChannel: 'preview',
         label: 'happier-daemon.default',
         targetMode: 'default-following',
-      }];
-    });
-
-    buildBackgroundServiceRepairPlanMock.mockImplementation((params: unknown) => {
-      const { services } = params as { services: MockDaemonServiceListEntry[] };
-      return {
-        currentReleaseChannel: 'preview',
-        existingServices: services,
-        actions: services.length > 0
-          ? [{ kind: 'install-default-following-service', releaseChannel: 'preview' }]
-          : [],
-        manualWarnings: [],
-      };
+        }];
     });
 
     const { maybeRunVersionGatedRuntimeMigration } = await import('./maybeRunVersionGatedRuntimeMigration');
@@ -277,12 +193,9 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
       commandPath: 'happier self migrate',
     })).resolves.toBe(true);
 
-    expect(handleServiceRepairCliCommandMock).toHaveBeenNthCalledWith(1, {
-      argv: ['repair', '--mode', 'user'],
-      commandPath: 'happier self migrate',
-    });
-    expect(handleServiceRepairCliCommandMock).toHaveBeenNthCalledWith(2, {
-      argv: ['repair', '--mode', 'system'],
+    expect(handleServiceRepairCliCommandMock).toHaveBeenCalledTimes(1);
+    expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
+      argv: ['repair'],
       commandPath: 'happier self migrate',
     });
   });
@@ -305,31 +218,22 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
         webappUrl: 'https://company.example.test',
       };
     });
+
     resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, options?: unknown) => {
       const normalizedOptions = options as { mode?: 'user' | 'system' } | undefined;
       return normalizedOptions?.mode === 'user'
         ? [{
-            serverId: 'cloud',
-            name: 'Cloud',
+            serverId: 'company',
+            name: 'Company',
             installed: true,
-            path: '/Users/test/Library/LaunchAgents/com.happier.cli.daemon.default.plist',
+            path: '/Users/test/Library/LaunchAgents/com.happier.cli.daemon.preview.company.plist',
             platform: 'darwin',
+            mode: 'user',
             releaseChannel: 'preview',
-            label: 'com.happier.cli.daemon.default',
-            targetMode: 'default-following',
+            label: 'com.happier.cli.daemon.preview.company',
+            targetMode: 'pinned',
           }]
         : [];
-    });
-    buildBackgroundServiceRepairPlanMock.mockImplementation((params: unknown) => {
-      const { services } = params as { services: MockDaemonServiceListEntry[] };
-      return {
-        currentReleaseChannel: 'preview',
-        existingServices: services,
-        actions: services.length > 0
-          ? [{ kind: 'install-default-following-service', releaseChannel: 'preview' }]
-          : [],
-        manualWarnings: [],
-      };
     });
 
     const { maybeRunVersionGatedRuntimeMigration } = await import('./maybeRunVersionGatedRuntimeMigration');
@@ -343,7 +247,7 @@ describe('maybeRunVersionGatedRuntimeMigration', () => {
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledTimes(1);
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
-      argv: ['repair', '--mode', 'user'],
+      argv: ['repair'],
       commandPath: 'happier self migrate',
     });
   });

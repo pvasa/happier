@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 
 import { configuration, reloadConfiguration } from '@/configuration';
+import { readCredentials } from '@/persistence';
 import {
   addServerProfile,
   getActiveServerProfile,
@@ -31,6 +32,12 @@ import {
   isLoopbackHttpServerUrl,
 } from '@/server/serverUrlClassification';
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
+import { resolveInstalledDaemonServiceInventoryForCurrentRelay } from '@/daemon/ownership/daemonServiceInventory';
+import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
+import {
+  runDefaultFollowingBackgroundServiceServerChangeFollowUp,
+  resolveInstalledDefaultFollowingDaemonServiceModes,
+} from '../backgroundServiceFollowUp.js';
 
 export async function runServerSubcommand(subcommand: string, args: string[]): Promise<boolean> {
   switch (subcommand) {
@@ -327,6 +334,12 @@ async function cmdAdd(args: string[]): Promise<void> {
   if (startDaemon && !installService) {
     await runCliAction(['--server', created.id, 'daemon', 'start']);
   }
+  if (shouldUse && !installService && !startDaemon) {
+    await runServerSelectionBackgroundServiceFollowUp({
+      interactive: isInteractiveTerminal(),
+      targetServerUrl: created.serverUrl,
+    });
+  }
 }
 
 async function cmdUse(args: string[]): Promise<void> {
@@ -341,6 +354,11 @@ async function cmdUse(args: string[]): Promise<void> {
   }
   console.log(chalk.green(`✓ Active server: ${active.name} (${active.id})`));
   console.log(chalk.gray(`  ${active.serverUrl}`));
+
+  await runServerSelectionBackgroundServiceFollowUp({
+    interactive: isInteractiveTerminal(),
+    targetServerUrl: active.serverUrl,
+  });
 }
 
 async function cmdRemove(args: string[]): Promise<void> {
@@ -460,4 +478,32 @@ async function cmdSet(args: string[]): Promise<void> {
   }
   console.log(chalk.green(`✓ Active server: ${created.name} (${created.id})`));
   console.log(chalk.gray(`  ${created.serverUrl}`));
+
+  await runServerSelectionBackgroundServiceFollowUp({
+    interactive: isInteractiveTerminal(),
+    targetServerUrl: created.serverUrl,
+  });
+}
+
+async function runServerSelectionBackgroundServiceFollowUp(params: Readonly<{
+  interactive: boolean;
+  targetServerUrl: string;
+}>): Promise<void> {
+  const runtime = resolveDaemonServiceCliRuntimeFromEnv({ processEnv: process.env });
+  const services = await resolveInstalledDaemonServiceInventoryForCurrentRelay(runtime);
+  const installedDefaultFollowingServiceModes = resolveInstalledDefaultFollowingDaemonServiceModes(services);
+  if (installedDefaultFollowingServiceModes.length === 0) {
+    return;
+  }
+
+  const credentials = await readCredentials().catch(() => null);
+  await runDefaultFollowingBackgroundServiceServerChangeFollowUp({
+    interactive: params.interactive,
+    promptInput,
+    runCliAction,
+    targetServerUrl: params.targetServerUrl,
+    hasCredentials: credentials != null,
+    log: console.log,
+    services,
+  });
 }

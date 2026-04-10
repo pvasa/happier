@@ -2,6 +2,7 @@ import { createServerUrlComparableKey, type DoctorSnapshot } from '@happier-dev/
 
 import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import { configuration } from '@/configuration';
+import { resolveDaemonStartupSourceServiceManagedState } from '@/daemon/ownership/daemonOwnershipMetadata';
 import { readCredentials, readDaemonState, readSettings } from '@/persistence';
 import { resolveDaemonServiceInstallationSnapshotFromEnv } from '@/daemon/service/cli';
 
@@ -78,6 +79,16 @@ export async function readDaemonStatusSnapshot(): Promise<DaemonStatusSnapshot> 
       running: daemonRunning,
       pid,
       httpPort: typeof daemonState?.httpPort === 'number' ? daemonState.httpPort : null,
+      startedWithCliVersion: typeof daemonState?.startedWithCliVersion === 'string'
+        ? daemonState.startedWithCliVersion
+        : undefined,
+      startedWithPublicReleaseChannel: daemonState?.startedWithPublicReleaseChannel ?? null,
+      runtimeId: typeof daemonState?.runtimeId === 'string' ? daemonState.runtimeId : undefined,
+      startupSource: typeof daemonState?.startupSource === 'string' ? daemonState.startupSource : undefined,
+      serviceManaged: resolveDaemonStartupSourceServiceManagedState(daemonState?.startupSource, daemonState?.serviceLabel),
+      serviceLabel: typeof daemonState?.serviceLabel === 'string'
+        ? daemonState.serviceLabel
+        : null,
     },
     service: {
       installed: serviceSnapshot.installed,

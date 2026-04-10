@@ -41,6 +41,11 @@ describe('DoctorSnapshotSchema', () => {
           running: true,
           pid: 4321,
           httpPort: null,
+          startedWithCliVersion: '1.2.3',
+          startedWithPublicReleaseChannel: 'preview',
+          startupSource: 'background-service',
+          serviceManaged: true,
+          serviceLabel: 'com.happier.cli.daemon.default',
         },
         service: {
           installed: true,
@@ -66,6 +71,11 @@ describe('DoctorSnapshotSchema', () => {
     expect(serialized).not.toContain('?token=');
     expect(serialized).not.toContain('#frag');
     expect(parsed.snapshot.daemonStatus?.server.localServerUrl).toBe('http://127.0.0.1:3005');
+    expect(parsed.snapshot.daemonStatus?.daemon.startedWithCliVersion).toBe('1.2.3');
+    expect(parsed.snapshot.daemonStatus?.daemon.startedWithPublicReleaseChannel).toBe('preview');
+    expect(parsed.snapshot.daemonStatus?.daemon.startupSource).toBe('background-service');
+    expect(parsed.snapshot.daemonStatus?.daemon.serviceManaged).toBe(true);
+    expect(parsed.snapshot.daemonStatus?.daemon.serviceLabel).toBe('com.happier.cli.daemon.default');
   });
 
   it('returns a stable error for invalid JSON', () => {

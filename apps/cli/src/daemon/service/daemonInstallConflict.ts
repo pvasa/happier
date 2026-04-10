@@ -10,6 +10,7 @@ export type DaemonServiceInstallTarget = Readonly<{
   targetMode: DaemonServiceTargetMode;
   ring: PublicReleaseRingId | null;
   instanceId: string | null;
+  happierHomeDir: string | null;
 }>;
 
 export type DaemonServiceInstallConflictPlan = Readonly<{
@@ -18,11 +19,19 @@ export type DaemonServiceInstallConflictPlan = Readonly<{
   servicesToRemove: readonly InstalledDaemonServiceEntry[];
 }>;
 
+function normalizeHomeDir(value: string | null | undefined): string | null {
+  const trimmed = String(value ?? '').trim();
+  return trimmed || null;
+}
+
 function matchesTarget(service: InstalledDaemonServiceEntry, target: DaemonServiceInstallTarget): boolean {
   if (service.platform !== target.platform) {
     return false;
   }
   if (service.targetMode !== target.targetMode) {
+    return false;
+  }
+  if (normalizeHomeDir(service.happierHomeDir) !== normalizeHomeDir(target.happierHomeDir)) {
     return false;
   }
   if (target.targetMode === 'default-following') {

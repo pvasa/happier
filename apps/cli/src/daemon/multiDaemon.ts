@@ -8,7 +8,7 @@ import { configuration } from '@/configuration';
 import { DaemonLocallyPersistedStateSchema, readSettings } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { resolveDaemonServiceInstallationSnapshotFromEnv } from '@/daemon/service/cli';
-import { resolveDaemonStateBasenameForRing } from '@/cli/runtime/publicReleaseChannel';
+import { resolveDaemonStateCandidatePaths } from '@/daemon/ownership/daemonOwnershipPaths';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
 type NormalizedDaemonState = Readonly<{
   pid: number;
@@ -65,8 +65,29 @@ async function readDaemonStateFromPath(path: string): Promise<NormalizedDaemonSt
   }
 }
 
-function resolveDaemonStatePath(serverId: string): string {
-  return join(configuration.serversDir, serverId, resolveDaemonStateBasenameForRing(configuration.publicReleaseRing));
+async function resolveDaemonStatePath(serverId: string): Promise<string> {
+  const serverDir = join(configuration.serversDir, serverId);
+  const [canonicalPath, ...legacyPaths] = resolveDaemonStateCandidatePaths({
+    serverDir,
+    preferredRing: configuration.publicReleaseRing,
+  });
+  let firstReadablePath: string | null = null;
+  for (const candidatePath of [canonicalPath, ...legacyPaths]) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    const state = await readDaemonStateFromPath(candidatePath);
+    if (!state) {
+      continue;
+    }
+    if (isPidAlive(state.pid)) {
+      return candidatePath;
+    }
+    if (!firstReadablePath) {
+      firstReadablePath = candidatePath;
+    }
+  }
+  return firstReadablePath ?? canonicalPath;
 }
 
 export type DaemonStatusEntry = Readonly<{
@@ -181,7 +202,7 @@ export async function listDaemonStatusesForAllKnownServers(): Promise<DaemonStat
     const serverUrl =
       (profile?.serverUrl ?? '').toString().trim() ||
       (serverId === activeServerId ? (configuration.serverUrl ?? '').toString().trim() : '');
-    const daemonStatePath = resolveDaemonStatePath(serverId);
+    const daemonStatePath = await resolveDaemonStatePath(serverId);
     const state = await readDaemonStateFromPath(daemonStatePath);
     const running = state ? isPidAlive(state.pid) : false;
     const staleStateFile = Boolean(state && !running);

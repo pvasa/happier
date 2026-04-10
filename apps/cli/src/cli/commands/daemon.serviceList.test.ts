@@ -2,6 +2,7 @@ import { join, dirname } from 'node:path';
 import * as fs from 'node:fs';
 
 import { describe, expect, it, vi } from 'vitest';
+import { renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
 
 import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths } from '@/daemon/service/cli';
 import {
@@ -13,6 +14,50 @@ import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 
 import { handleServiceCliCommand } from './service';
 import { handleDaemonCliCommand } from './daemon';
+
+function writeValidLinuxDaemonServiceDefinition(params: Readonly<{
+  path: string;
+  releaseChannel?: string;
+  targetMode?: 'default-following' | 'pinned';
+  happierHomeDir?: string;
+}>): void {
+  fs.writeFileSync(
+    params.path,
+    renderSystemdServiceUnit({
+      description: 'Happier Daemon',
+      execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+      env: {
+        HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+        HAPPIER_DAEMON_SERVICE_TARGET_MODE: params.targetMode ?? 'pinned',
+        HAPPIER_PUBLIC_RELEASE_CHANNEL: params.releaseChannel ?? 'stable',
+        HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: params.happierHomeDir ?? '/Users/tester/.happier',
+      },
+      wantedBy: 'default.target',
+    }),
+    'utf-8',
+  );
+}
+
+function writeValidWindowsDaemonServiceDefinition(params: Readonly<{
+  path: string;
+  workingDirectory: string;
+  releaseChannel?: string;
+  targetMode?: 'default-following' | 'pinned';
+}>): void {
+  fs.writeFileSync(
+    params.path,
+    renderWindowsScheduledTaskWrapperPs1({
+      workingDirectory: params.workingDirectory,
+      programArgs: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+      env: {
+        HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+        HAPPIER_DAEMON_SERVICE_TARGET_MODE: params.targetMode ?? 'pinned',
+        HAPPIER_PUBLIC_RELEASE_CHANNEL: params.releaseChannel ?? 'stable',
+      },
+    }),
+    'utf-8',
+  );
+}
 
 describe('happier daemon service list', () => {
   it('lists installed background services through the canonical service command', async () => {
@@ -44,7 +89,10 @@ describe('happier daemon service list', () => {
 
         const unitDir = join(homeDir, '.config', 'systemd', 'user');
         fs.mkdirSync(unitDir, { recursive: true });
-        fs.writeFileSync(join(unitDir, 'happier-daemon.company.prod.service'), '# fake', 'utf-8');
+        writeValidLinuxDaemonServiceDefinition({
+          path: join(unitDir, 'happier-daemon.company.prod.service'),
+          happierHomeDir: join(homeDir, '.happier'),
+        });
 
         const output = captureStdoutJsonOutput<{
           entries?: Array<{
@@ -88,15 +136,12 @@ describe('happier daemon service list', () => {
 
         const unitDir = join(homeDir, '.config', 'systemd', 'user');
         fs.mkdirSync(unitDir, { recursive: true });
-        fs.writeFileSync(
-          join(unitDir, 'happier-daemon.default.service'),
-          [
-            '[Service]',
-            'Environment=HAPPIER_DAEMON_SERVICE_TARGET_MODE=default-following',
-            'Environment=HAPPIER_PUBLIC_RELEASE_CHANNEL=preview',
-          ].join('\n'),
-          'utf-8',
-        );
+        writeValidLinuxDaemonServiceDefinition({
+          path: join(unitDir, 'happier-daemon.default.service'),
+          targetMode: 'default-following',
+          releaseChannel: 'preview',
+          happierHomeDir: join(homeDir, '.happier'),
+        });
 
         const output = captureStdoutJsonOutput<{
           services?: Array<{
@@ -115,6 +160,79 @@ describe('happier daemon service list', () => {
               ring: 'preview',
               targetMode: 'default-following',
               label: 'happier-daemon.default',
+            }),
+          ]));
+        } finally {
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('marks the currently owning background service as running in JSON inventory', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-running-owner-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+          processEnv: {
+            ...process.env,
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+          },
+        });
+        const paths = resolveDaemonServicePaths(runtime);
+        fs.mkdirSync(dirname(paths.unitPath), { recursive: true });
+        fs.writeFileSync(
+          paths.unitPath,
+          renderSystemdServiceUnit({
+            description: 'Happier Daemon',
+            execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+            env: {
+              HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+              HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+              HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            },
+            wantedBy: 'default.target',
+          }),
+          'utf-8',
+        );
+
+        const { writeDaemonState } = await import('@/persistence');
+        writeDaemonState({
+          pid: process.pid,
+          httpPort: 43118,
+          startedAt: Date.now(),
+          startedWithCliVersion: '0.0.0-test',
+          startedWithPublicReleaseChannel: 'stable',
+          startupSource: 'background-service',
+          serviceLabel: paths.unitName.replace(/\.service$/i, ''),
+        });
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            label?: string;
+            running?: boolean;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              label: paths.unitName.replace(/\.service$/i, ''),
+              running: true,
             }),
           ]));
         } finally {
@@ -156,7 +274,10 @@ describe('happier daemon service list', () => {
 
           const unitDir = join(homeDir, '.config', 'systemd', 'user');
           fs.mkdirSync(unitDir, { recursive: true });
-          fs.writeFileSync(join(unitDir, 'happier-daemon.company.prod.service'), '# fake', 'utf-8');
+          writeValidLinuxDaemonServiceDefinition({
+            path: join(unitDir, 'happier-daemon.company.prod.service'),
+            happierHomeDir: join(homeDir, '.happier'),
+          });
 
           await handleDaemonCliCommand({ args: ['daemon', 'service', 'list'], rawArgv: [], terminalRuntime: null });
 
@@ -202,7 +323,12 @@ describe('happier daemon service list', () => {
         });
         const wrapperPath = resolveDaemonServicePaths(runtime).wrapperPath;
         fs.mkdirSync(dirname(wrapperPath), { recursive: true });
-        fs.writeFileSync(wrapperPath, '# fake', 'utf-8');
+        writeValidWindowsDaemonServiceDefinition({
+          path: wrapperPath,
+          workingDirectory: homeDir,
+          releaseChannel: 'stable',
+          targetMode: 'pinned',
+        });
         expect(fs.existsSync(wrapperPath)).toBe(true);
 
         const output = captureStdoutJsonOutput<{
@@ -279,7 +405,10 @@ describe('happier daemon service list', () => {
 
           const unitPath = join(scopedHome, 'service-home', '.config', 'systemd', 'user', 'happier-daemon.company.service');
           fs.mkdirSync(dirname(unitPath), { recursive: true });
-          fs.writeFileSync(unitPath, '# fake', 'utf-8');
+          writeValidLinuxDaemonServiceDefinition({
+            path: unitPath,
+            happierHomeDir: join(scopedHome, 'service-happier'),
+          });
 
           await handleDaemonCliCommand({ args: ['daemon', 'service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
 
@@ -338,7 +467,10 @@ describe('happier daemon service list', () => {
 
           const unitPath = join(mockedRealHomeDir, '.config', 'systemd', 'user', 'happier-daemon.company.service');
           fs.mkdirSync(dirname(unitPath), { recursive: true });
-          fs.writeFileSync(unitPath, '# fake', 'utf-8');
+          writeValidLinuxDaemonServiceDefinition({
+            path: unitPath,
+            happierHomeDir: join(mockedRealHomeDir, '.happier'),
+          });
 
           const { handleDaemonCliCommand: handleCommand } = await import('./daemon');
           await handleCommand({ args: ['daemon', 'service', 'list', '--json'], rawArgv: [], terminalRuntime: null });

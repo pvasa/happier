@@ -171,6 +171,20 @@ export { buildConnectedServiceCredentialRecord } from './connect/buildConnectedS
 
 export { parseBooleanEnv, parseOptionalBooleanEnv } from './env/parseBooleanEnv.js';
 export type { ServerRetentionCapabilities } from './features/payload/capabilities/serverRetentionCapabilities.js';
+export {
+  MACHINE_DAEMON_STARTUP_SOURCE_VALUES,
+  MACHINE_OWNER_CONFLICT_ERROR,
+  MachineDaemonOwnershipMetadataSchema,
+  MachineDaemonStartupSourceSchema,
+  MachineOwnerConflictSocketPayloadSchema,
+  buildMachineOwnerConflictSocketPayload,
+  buildMachineScopedSocketAuth,
+  readMachineDaemonOwnershipMetadataFromSocketAuth,
+  readMachineOwnerConflictSocketPayload,
+  type MachineDaemonOwnershipMetadata,
+  type MachineOwnerConflictMetadata,
+  type MachineOwnerConflictSocketPayload,
+} from './machineOwnership/daemonOwnership.js';
 
 export {
   buildReadyNotificationContent,
