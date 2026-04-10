@@ -95,6 +95,7 @@ jobs:
         $diagDir = Join-Path $env:RUNNER_TEMP "happier-cli-win-lock-repro-diagnostics"
         "HAPPIER_REPRO_DIAG_DIR=$diagDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         New-Item -ItemType Directory -Path $diagDir -Force | Out-Null
+        "workflow-start=$([DateTime]::UtcNow.ToString('o'))" | Set-Content -Path (Join-Path $diagDir "workflow-start.txt") -Encoding utf8
 
     - name: Enable Corepack
       shell: bash
@@ -122,6 +123,8 @@ jobs:
         yarn workspace @happier-dev/release-runtime build
         yarn workspace @happier-dev/protocol build
         yarn workspace @happier-dev/agents build
+        yarn workspace @happier-dev/connection-supervisor build
+        yarn workspace @happier-dev/transfers build
         yarn workspace @happier-dev/cli-common build
 
     - name: Build Windows CLI binary
