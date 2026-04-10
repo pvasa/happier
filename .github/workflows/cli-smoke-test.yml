@@ -18,6 +18,11 @@ on:
         required: true
         type: boolean
         default: false
+      windows_settings_lock_repro_release_tag:
+        description: "CLI release tag to reproduce with"
+        required: false
+        type: string
+        default: "cli-v0.2.3-dev.36.1"
 
 jobs:
   smoke-test-linux:
@@ -109,50 +114,175 @@ jobs:
       with:
         bun-version: 1.3.5
 
-    - name: Install dependencies
+    - name: Standalone Bun fs.open lock probe
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $diagDir = $env:HAPPIER_REPRO_DIAG_DIR
+        $probeRoot = Join-Path $env:RUNNER_TEMP "happier-bun-open-probe"
+        $scriptPath = Join-Path $probeRoot "fs-open-lock-probe.mjs"
+        $binaryPath = Join-Path $probeRoot "fs-open-lock-probe.exe"
+        $probeHomeDir = Join-Path $probeRoot ".happier"
+        $probeSettingsPath = Join-Path $probeHomeDir "settings.json"
+        $probeLockPath = "$probeSettingsPath.lock"
+
+        if (Test-Path $probeRoot) {
+          Remove-Item -Recurse -Force $probeRoot
+        }
+        New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+
+        @'
+        import { constants } from 'node:fs';
+        import { mkdir, open, rm, writeFile } from 'node:fs/promises';
+        import { dirname } from 'node:path';
+
+        const mode = process.argv[2];
+        const targetPath = process.argv[3];
+        const prepare = process.argv[4] ?? 'dir';
+
+        if (!mode || !targetPath) {
+          throw new Error('usage: <numeric|wx> <targetPath> [dir|empty-settings]');
+        }
+
+        const parentDir = dirname(targetPath);
+        await rm(parentDir, { recursive: true, force: true }).catch(() => {});
+        await mkdir(parentDir, { recursive: true });
+        if (prepare === 'empty-settings') {
+          await writeFile(targetPath.replace(/\.lock$/, ''), '');
+        }
+
+        const flags = mode === 'numeric'
+          ? constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY
+          : 'wx';
+
+        try {
+          const handle = await open(targetPath, flags);
+          await handle.close();
+          console.log(JSON.stringify({ ok: true, mode, prepare, targetPath }));
+        } catch (error) {
+          const err = error;
+          console.error(JSON.stringify({
+            ok: false,
+            mode,
+            prepare,
+            targetPath,
+            code: err && typeof err === 'object' && 'code' in err ? err.code : null,
+            message: err instanceof Error ? err.message : String(err),
+          }));
+          process.exit(1);
+        }
+        '@ | Set-Content -Path $scriptPath -Encoding utf8
+
+        bun build --compile --target bun-windows-x64 $scriptPath --outfile $binaryPath
+
+        function Invoke-Probe {
+          param(
+            [Parameter(Mandatory = $true)][string] $Label,
+            [Parameter(Mandatory = $true)][string] $Executable,
+            [Parameter(Mandatory = $true)][string[]] $Arguments
+          )
+
+          $stdoutPath = Join-Path $diagDir "$Label.stdout.txt"
+          $stderrPath = Join-Path $diagDir "$Label.stderr.txt"
+          $metaPath = Join-Path $diagDir "$Label.meta.json"
+
+          $psi = [System.Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = $Executable
+          $psi.WorkingDirectory = $env:USERPROFILE
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+
+          foreach ($argument in $Arguments) {
+            [void]$psi.ArgumentList.Add($argument)
+          }
+
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo = $psi
+          [void]$process.Start()
+          [void]$process.WaitForExit()
+
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $stderr = $process.StandardError.ReadToEnd()
+
+          Set-Content -Path $stdoutPath -Value $stdout -Encoding utf8
+          Set-Content -Path $stderrPath -Value $stderr -Encoding utf8
+          @{
+            label = $Label
+            executable = $Executable
+            arguments = $Arguments
+            exitCode = $process.ExitCode
+          } | ConvertTo-Json -Depth 4 | Set-Content -Path $metaPath -Encoding utf8
+        }
+
+        Invoke-Probe -Label "node-probe-numeric-dir" -Executable "node" -Arguments @($scriptPath, "numeric", $probeLockPath, "dir")
+        Invoke-Probe -Label "node-probe-wx-dir" -Executable "node" -Arguments @($scriptPath, "wx", $probeLockPath, "dir")
+        Invoke-Probe -Label "node-probe-numeric-empty-settings" -Executable "node" -Arguments @($scriptPath, "numeric", $probeLockPath, "empty-settings")
+        Invoke-Probe -Label "node-probe-wx-empty-settings" -Executable "node" -Arguments @($scriptPath, "wx", $probeLockPath, "empty-settings")
+        Invoke-Probe -Label "bun-probe-numeric-dir" -Executable "bun" -Arguments @($scriptPath, "numeric", $probeLockPath, "dir")
+        Invoke-Probe -Label "bun-probe-wx-dir" -Executable "bun" -Arguments @($scriptPath, "wx", $probeLockPath, "dir")
+        Invoke-Probe -Label "bun-probe-numeric-empty-settings" -Executable "bun" -Arguments @($scriptPath, "numeric", $probeLockPath, "empty-settings")
+        Invoke-Probe -Label "bun-probe-wx-empty-settings" -Executable "bun" -Arguments @($scriptPath, "wx", $probeLockPath, "empty-settings")
+        Invoke-Probe -Label "compiled-probe-numeric-dir" -Executable $binaryPath -Arguments @("numeric", $probeLockPath, "dir")
+        Invoke-Probe -Label "compiled-probe-wx-dir" -Executable $binaryPath -Arguments @("wx", $probeLockPath, "dir")
+        Invoke-Probe -Label "compiled-probe-numeric-empty-settings" -Executable $binaryPath -Arguments @("numeric", $probeLockPath, "empty-settings")
+        Invoke-Probe -Label "compiled-probe-wx-empty-settings" -Executable $binaryPath -Arguments @("wx", $probeLockPath, "empty-settings")
+
+    - name: Download Windows CLI release asset
+      shell: pwsh
       env:
-        YARN_PRODUCTION: "false"
-        npm_config_production: "false"
-        HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-      run: yarn install --frozen-lockfile --ignore-engines
-
-    - name: Build Windows CLI binary prerequisites
-      shell: pwsh
+        GH_TOKEN: ${{ github.token }}
       run: |
         $ErrorActionPreference = "Stop"
-        yarn workspace @happier-dev/release-runtime build
-        yarn workspace @happier-dev/protocol build
-        yarn workspace @happier-dev/agents build
-        yarn workspace @happier-dev/connection-supervisor build
-        yarn workspace @happier-dev/transfers build
-        yarn workspace @happier-dev/cli-common build
+        $tag = "${{ inputs.windows_settings_lock_repro_release_tag }}"
+        if (-not $tag) {
+          throw "Missing windows_settings_lock_repro_release_tag input"
+        }
 
-    - name: Build Windows CLI binary
-      shell: pwsh
-      run: |
-        $ErrorActionPreference = "Stop"
-        node scripts/pipeline/release/build-cli-binaries.mjs --channel dev --targets windows-x64
+        $downloadsDir = Join-Path $env:RUNNER_TEMP "happier-cli-release-download"
+        if (Test-Path $downloadsDir) {
+          Remove-Item -Recurse -Force $downloadsDir
+        }
+        New-Item -ItemType Directory -Path $downloadsDir -Force | Out-Null
+
+        gh release download $tag --repo happier-dev/happier --pattern "happier-v*-windows-x64.tar.gz" --dir $downloadsDir
+
+        @(
+          "releaseTag=$tag"
+          "downloadsDir=$downloadsDir"
+        ) | Set-Content -Path (Join-Path $env:HAPPIER_REPRO_DIAG_DIR "release-download.txt") -Encoding utf8
 
     - name: Extract Windows CLI binary
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
 
-        $archive = Get-ChildItem -Path "dist/release-assets/cli" -Filter "happier-v*-windows-x64.tar.gz" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $downloadsDir = Join-Path $env:RUNNER_TEMP "happier-cli-release-download"
+        $archive = Get-ChildItem -Path $downloadsDir -Filter "happier-v*-windows-x64.tar.gz" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if (-not $archive) {
-          throw "Missing Windows CLI archive under dist/release-assets/cli"
+          throw "Missing downloaded Windows CLI archive under $downloadsDir"
         }
 
-        $extractDir = Join-Path $env:RUNNER_TEMP "happier-cli-win-lock-repro"
-        New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-        tar -xzf $archive.FullName -C $extractDir
+        $installRoot = Join-Path $env:SystemDrive "bin"
+        New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+        tar -xzf $archive.FullName -C $installRoot
 
-        $binary = Get-ChildItem -Path $extractDir -Filter "happier.exe" -Recurse | Select-Object -First 1
+        $binary = Get-ChildItem -Path $installRoot -Filter "happier.exe" -Recurse | Where-Object { $_.FullName -like "*happier-v*-windows-x64*" } | Select-Object -First 1
         if (-not $binary) {
           throw "Missing happier.exe after extracting $($archive.FullName)"
         }
 
+        $binaryDir = Split-Path -Parent $binary.FullName
         "HAPPIER_BINARY=$($binary.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        $binaryDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+        @(
+          "archive=$($archive.FullName)"
+          "installRoot=$installRoot"
+          "binary=$($binary.FullName)"
+          "binaryDir=$binaryDir"
+        ) | Set-Content -Path (Join-Path $env:HAPPIER_REPRO_DIAG_DIR "release-extract.txt") -Encoding utf8
 
     - name: Seed auth state and run repro
       shell: pwsh
@@ -210,7 +340,9 @@ jobs:
           param(
             [Parameter(Mandatory = $true)][string] $Label,
             [Parameter(Mandatory = $true)][string[]] $Arguments,
-            [int] $TimeoutSeconds = 20
+            [int] $TimeoutSeconds = 20,
+            [string] $WorkingDirectory = $env:USERPROFILE,
+            [string] $Executable = $env:HAPPIER_BINARY
           )
 
           $stdoutPath = Join-Path $diagDir "$Label.stdout.txt"
@@ -218,8 +350,8 @@ jobs:
           $metaPath = Join-Path $diagDir "$Label.meta.json"
 
           $psi = [System.Diagnostics.ProcessStartInfo]::new()
-          $psi.FileName = $env:HAPPIER_BINARY
-          $psi.WorkingDirectory = $PWD.Path
+          $psi.FileName = $Executable
+          $psi.WorkingDirectory = $WorkingDirectory
           $psi.UseShellExecute = $false
           $psi.RedirectStandardOutput = $true
           $psi.RedirectStandardError = $true
@@ -277,13 +409,18 @@ jobs:
         $preflight | Set-Content -Path (Join-Path $diagDir "preflight.txt") -Encoding utf8
 
         Invoke-HappierCapture -Label "auth-status" -Arguments @("auth", "status")
+        Invoke-HappierCapture -Label "auth-status-path" -Arguments @("auth", "status") -Executable "happier"
+        Invoke-HappierCapture -Label "auth-status-repo-root" -Arguments @("auth", "status") -WorkingDirectory $PWD.Path
 
         New-Item -ItemType File -Path $lockPath -Force | Out-Null
         Get-Item $lockPath | Format-List FullName,Length,Attributes | Out-File -FilePath (Join-Path $diagDir "manual-lock-probe.txt") -Encoding utf8
         Remove-Item $lockPath -Force
 
         Invoke-HappierCapture -Label "auth-login" -Arguments @("auth", "login")
+        Invoke-HappierCapture -Label "auth-login-path" -Arguments @("auth", "login") -Executable "happier"
         Invoke-HappierCapture -Label "default-command" -Arguments @() -TimeoutSeconds 30
+        Invoke-HappierCapture -Label "default-command-path" -Arguments @() -TimeoutSeconds 30 -Executable "happier"
+        Invoke-HappierCapture -Label "default-command-repo-root" -Arguments @() -TimeoutSeconds 30 -WorkingDirectory $PWD.Path
 
         if (Test-Path $homeDir) {
           Copy-Item -Path $homeDir -Destination (Join-Path $diagDir "happier-home-final") -Recurse -Force
