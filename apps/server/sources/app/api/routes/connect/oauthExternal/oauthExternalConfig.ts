@@ -1,5 +1,6 @@
 import { isLoopbackHostname } from "@/utils/network/urlSafety";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
+import { DEFAULT_WEBAPP_URL, resolveEffectiveWebappBaseUrl } from "../../../../serverUrls/effectiveServerUrls";
 
 export function isProviderResetEnabled(env: NodeJS.ProcessEnv): boolean {
     return isServerFeatureEnabledForRequest("auth.recovery.providerReset", env);
@@ -43,7 +44,7 @@ function tryNormalizeSafeWebRedirectUrl(env: NodeJS.ProcessEnv, raw: string): st
 }
 
 function resolveWebAppBaseUrlFromEnv(env: NodeJS.ProcessEnv): string {
-    return (env.HAPPIER_WEBAPP_URL ?? env.HAPPY_WEBAPP_URL ?? "https://app.happier.dev").toString().trim() || "https://app.happier.dev";
+    return resolveEffectiveWebappBaseUrl(env).trim() || DEFAULT_WEBAPP_URL;
 }
 
 function readSingleHeaderValue(headers: Record<string, unknown>, name: string): string {
@@ -114,7 +115,7 @@ export function resolveWebAppOAuthReturnUrlFromEnv(env: NodeJS.ProcessEnv, provi
 
     const base = resolveWebAppBaseUrlFromEnv(env).trim();
     const suffix = `/oauth/${encodedProvider}`;
-    if (!base) return `https://app.happier.dev${suffix}`;
+    if (!base) return `${DEFAULT_WEBAPP_URL}${suffix}`;
     let candidate: string;
     if (new RegExp(`${suffix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?$`).test(base)) {
         candidate = base;
@@ -127,7 +128,7 @@ export function resolveWebAppOAuthReturnUrlFromEnv(env: NodeJS.ProcessEnv, provi
     const normalized = tryNormalizeSafeWebRedirectUrl(env, candidate);
     if (normalized) return normalized;
 
-    return `https://app.happier.dev${suffix}`;
+    return `${DEFAULT_WEBAPP_URL}${suffix}`;
 }
 
 export function buildRedirectUrl(baseUrl: string, params: Record<string, string>): string {

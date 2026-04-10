@@ -12,6 +12,16 @@ vi.mock('./logger', () => ({
   },
 }));
 
+const ensureDaemonRunningForSessionCommandMock = vi.fn(async (): Promise<undefined> => undefined);
+
+vi.mock('@/daemon/ensureDaemon', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/daemon/ensureDaemon')>();
+  return {
+    ...actual,
+    ensureDaemonRunningForSessionCommand: ensureDaemonRunningForSessionCommandMock,
+  };
+});
+
 function makeJwtWithSub(sub: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(JSON.stringify({ sub })).toString('base64url');
@@ -21,6 +31,9 @@ function makeJwtWithSub(sub: string): string {
 describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
   const previousHomeDir = process.env.HAPPIER_HOME_DIR;
   const previousActiveServerId = process.env.HAPPIER_ACTIVE_SERVER_ID;
+  const previousServerUrl = process.env.HAPPIER_SERVER_URL;
+  const previousWebappUrl = process.env.HAPPIER_WEBAPP_URL;
+  const previousPublicServerUrl = process.env.HAPPIER_PUBLIC_SERVER_URL;
   const previousAutostart = process.env.HAPPIER_SESSION_AUTOSTART_DAEMON;
 
   afterEach(() => {
@@ -28,9 +41,16 @@ describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
     else process.env.HAPPIER_HOME_DIR = previousHomeDir;
     if (previousActiveServerId === undefined) delete process.env.HAPPIER_ACTIVE_SERVER_ID;
     else process.env.HAPPIER_ACTIVE_SERVER_ID = previousActiveServerId;
+    if (previousServerUrl === undefined) delete process.env.HAPPIER_SERVER_URL;
+    else process.env.HAPPIER_SERVER_URL = previousServerUrl;
+    if (previousWebappUrl === undefined) delete process.env.HAPPIER_WEBAPP_URL;
+    else process.env.HAPPIER_WEBAPP_URL = previousWebappUrl;
+    if (previousPublicServerUrl === undefined) delete process.env.HAPPIER_PUBLIC_SERVER_URL;
+    else process.env.HAPPIER_PUBLIC_SERVER_URL = previousPublicServerUrl;
     if (previousAutostart === undefined) delete process.env.HAPPIER_SESSION_AUTOSTART_DAEMON;
     else process.env.HAPPIER_SESSION_AUTOSTART_DAEMON = previousAutostart;
     vi.clearAllMocks();
+    vi.doUnmock('@/persistence');
     vi.resetModules();
   });
 
@@ -93,6 +113,84 @@ describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
       const raw = JSON.parse(readFileSync(settingsPath, 'utf8'));
       expect(raw.machineIdByServerId.cloud).toBe('machine-acct-b');
       expect(raw.lastTokenSubByServerId.cloud).toBe('acct-b');
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rehydrates relay scope env from the active relay profile before any post-auth daemon autostart', async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'happier-cli-auth-relay-scope-env-'));
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_SERVER_URL = 'http://127.0.0.1:24541';
+    process.env.HAPPIER_WEBAPP_URL = 'http://happier-stack.localhost:24541';
+    process.env.HAPPIER_SESSION_AUTOSTART_DAEMON = '1';
+    delete process.env.HAPPIER_ACTIVE_SERVER_ID;
+
+    try {
+      const settingsPath = join(homeDir, 'settings.json');
+      writeFileSync(
+        settingsPath,
+        JSON.stringify(
+          {
+            schemaVersion: 6,
+            onboardingCompleted: true,
+            activeServerId: 'stack_main__id_default',
+            servers: {
+              stack_main__id_default: {
+                id: 'stack_main__id_default',
+                name: 'stack',
+                serverUrl: 'http://127.0.0.1:24541',
+                publicServerUrl: 'http://localhost:24541',
+                webappUrl: 'http://happier-stack.localhost:24541',
+                createdAt: 0,
+                updatedAt: 0,
+                lastUsedAt: 0,
+              },
+            },
+            machineIdByServerId: { stack_main__id_default: 'machine-stack' },
+            machineIdByServerIdByAccountId: {
+              stack_main__id_default: {
+                'acct-a': 'machine-stack',
+              },
+            },
+            lastTokenSubByServerId: { stack_main__id_default: 'acct-a' },
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      vi.doMock('@/persistence', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('@/persistence')>();
+        return {
+          ...actual,
+          readCredentials: vi.fn(async () => ({
+            token: makeJwtWithSub('acct-a'),
+            encryption: {
+              type: 'legacy',
+              secret: new Uint8Array([1]),
+            },
+          })),
+        };
+      });
+
+      ensureDaemonRunningForSessionCommandMock.mockImplementationOnce(() => {
+        expect(process.env.HAPPIER_ACTIVE_SERVER_ID).toBe('stack_main__id_default');
+        expect(process.env.HAPPIER_SERVER_URL).toBe('http://127.0.0.1:24541');
+        expect(process.env.HAPPIER_WEBAPP_URL).toBe('http://happier-stack.localhost:24541');
+        return Promise.resolve(undefined);
+      });
+
+      vi.resetModules();
+      const { authAndSetupMachineIfNeeded } = await import('./auth');
+      const result = await authAndSetupMachineIfNeeded();
+
+      expect(result.machineId).toEqual(expect.any(String));
+      expect(ensureDaemonRunningForSessionCommandMock).toHaveBeenCalledTimes(1);
+      expect(process.env.HAPPIER_ACTIVE_SERVER_ID).toBe('stack_main__id_default');
+      expect(process.env.HAPPIER_SERVER_URL).toBe('http://127.0.0.1:24541');
+      expect(process.env.HAPPIER_WEBAPP_URL).toBe('http://happier-stack.localhost:24541');
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

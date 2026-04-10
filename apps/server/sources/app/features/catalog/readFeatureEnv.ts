@@ -1,6 +1,7 @@
 import { parseBooleanEnv, parseIntEnv } from '../../../config/env';
 import { MACHINE_TRANSFER_SERVER_ROUTED_MAX_BYTES_ENV_KEY, normalizeMachineTransferServerRoutedMaxBytes } from '@happier-dev/protocol';
 import { FEATURE_ENV_KEYS } from './featureEnvSchema';
+import { resolveEffectiveWebappBaseUrl } from '../../serverUrls/effectiveServerUrls';
 
 export type AutomationsFeatureEnv = Readonly<{
   enabled: boolean;
@@ -356,7 +357,7 @@ export function readAuthMtlsFeatureEnv(env: NodeJS.ProcessEnv): AuthMtlsFeatureE
     .toLowerCase();
 
   const allowPrefixesFromEnv = parseCsvList(env[FEATURE_ENV_KEYS.authMtlsReturnToAllowPrefixes]);
-  const webUrl = (env.HAPPIER_WEBAPP_URL ?? env.HAPPY_WEBAPP_URL ?? "https://app.happier.dev").toString().trim();
+  const webUrl = resolveEffectiveWebappBaseUrl(env).trim();
   const returnToAllowPrefixes = Object.freeze(
     (allowPrefixesFromEnv.length > 0 ? allowPrefixesFromEnv : ["happier://", webUrl])
       .map((s) => s.trim())
