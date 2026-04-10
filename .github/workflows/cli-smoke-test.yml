@@ -339,7 +339,7 @@ jobs:
         function Invoke-HappierCapture {
           param(
             [Parameter(Mandatory = $true)][string] $Label,
-            [Parameter(Mandatory = $true)][string[]] $Arguments,
+            [string[]] $Arguments = @(),
             [int] $TimeoutSeconds = 20,
             [string] $WorkingDirectory = $env:USERPROFILE,
             [string] $Executable = $env:HAPPIER_BINARY
@@ -359,8 +359,10 @@ jobs:
           $psi.Environment["HAPPIER_NONINTERACTIVE"] = "1"
           $psi.Environment["HAPPIER_SESSION_AUTOSTART_DAEMON"] = "0"
 
-          foreach ($argument in $Arguments) {
-            [void]$psi.ArgumentList.Add($argument)
+          if ($Arguments) {
+            foreach ($argument in $Arguments) {
+              [void]$psi.ArgumentList.Add($argument)
+            }
           }
 
           $process = [System.Diagnostics.Process]::new()
@@ -418,6 +420,8 @@ jobs:
 
         Invoke-HappierCapture -Label "auth-login" -Arguments @("auth", "login")
         Invoke-HappierCapture -Label "auth-login-path" -Arguments @("auth", "login") -Executable "happier"
+        Invoke-HappierCapture -Label "auth-login-force" -Arguments @("auth", "login", "--force")
+        Invoke-HappierCapture -Label "auth-login-force-path" -Arguments @("auth", "login", "--force") -Executable "happier"
         Invoke-HappierCapture -Label "default-command" -Arguments @() -TimeoutSeconds 30
         Invoke-HappierCapture -Label "default-command-path" -Arguments @() -TimeoutSeconds 30 -Executable "happier"
         Invoke-HappierCapture -Label "default-command-repo-root" -Arguments @() -TimeoutSeconds 30 -WorkingDirectory $PWD.Path
