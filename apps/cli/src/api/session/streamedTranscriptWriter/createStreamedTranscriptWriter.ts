@@ -123,6 +123,18 @@ export function createStreamedTranscriptWriter(params: {
     segment.textVersion += 1;
 
     if (!segment.didWriteDurable) {
+      // While the first durable snapshot is still in flight, keep coalescing text in memory and
+      // let the in-flight commit or a later terminal flush capture the newer snapshot. Emitting
+      // another streaming checkpoint here creates duplicate transcript rows with the same final text.
+      if (segment.isCommittingDurable) {
+        if (
+          checkpointIntervalMs === 0
+          && segment.accumulatedText.length - segment.lastCheckpointTextLen >= checkpointMinChars
+        ) {
+          commitDurableSnapshot(segment, { state: 'streaming' });
+        }
+        return;
+      }
       commitDurableSnapshot(segment, { state: 'streaming' });
       return;
     }

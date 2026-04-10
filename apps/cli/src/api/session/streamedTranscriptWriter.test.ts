@@ -557,6 +557,98 @@ describe('createStreamedTranscriptWriter', () => {
     });
   });
 
+  it('does not enqueue an extra streaming checkpoint when more deltas arrive before the first durable snapshot finishes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const { session, durableCalls } = createSessionStub();
+    let resolveFirstCommit: (() => void) | undefined;
+    session.sendAgentMessageCommitted = vi.fn(async (provider: any, body: any, opts: any) => {
+      durableCalls.push({
+        provider: String(provider),
+        localId: String(opts.localId),
+        meta: opts.meta,
+        body,
+      });
+      if (durableCalls.length === 1) {
+        await new Promise<void>((resolve) => {
+          resolveFirstCommit = resolve;
+        });
+      }
+    });
+
+    const writer = createStreamedTranscriptWriter({
+      provider: 'codex' as any,
+      session: session as any,
+      makeLocalId: () => 'segment-1',
+      checkpointIntervalMs: 10_000,
+      checkpointMinChars: 999,
+    });
+
+    writer.appendAssistantDelta('Hello');
+    writer.appendAssistantDelta(' world');
+    await Promise.resolve();
+
+    expect(durableCalls).toHaveLength(1);
+    expect(durableCalls[0]!.body).toMatchObject({ type: 'message', message: 'Hello' });
+
+    const releaseFirstCommit = resolveFirstCommit;
+    if (!releaseFirstCommit) {
+      throw new Error('expected first durable commit resolver');
+    }
+    releaseFirstCommit();
+    await settleCommittedSnapshot();
+    for (let i = 0; i < 12; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+
+    expect(durableCalls).toHaveLength(1);
+
+    await writer.flushAll({ reason: 'turn-end' });
+    await settleCommittedSnapshot();
+
+    expect(durableCalls).toHaveLength(2);
+    expect(durableCalls[1]!.body).toMatchObject({ type: 'message', message: 'Hello world' });
+    expect(durableCalls[1]!.meta).toMatchObject({
+      happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }),
+    });
+  });
+
+  it('flushes the latest complete snapshot when flushAll runs immediately after another delta while the first durable snapshot is still in flight', async () => {
+    const { session, durableCalls } = createSessionStub();
+    session.sendAgentMessageCommitted = vi.fn(async (provider: any, body: any, opts: any) => {
+      durableCalls.push({
+        provider: String(provider),
+        localId: String(opts.localId),
+        meta: opts.meta,
+        body,
+      });
+    });
+
+    const writer = createStreamedTranscriptWriter({
+      provider: 'codex' as any,
+      session: session as any,
+      makeLocalId: () => 'segment-1',
+      checkpointIntervalMs: 10_000,
+      checkpointMinChars: 999,
+    });
+
+    writer.appendAssistantDelta('The');
+    writer.appendAssistantDelta(' directory is empty.');
+    const flushPromise = writer.flushAll({ reason: 'tool-call-boundary' });
+
+    await flushPromise;
+    await settleCommittedSnapshot();
+
+    expect(durableCalls).toHaveLength(2);
+    expect(durableCalls[0]!.body).toMatchObject({ type: 'message', message: 'The' });
+    expect(durableCalls[1]!.body).toMatchObject({ type: 'message', message: 'The directory is empty.' });
+    expect(durableCalls[1]!.meta).toMatchObject({
+      happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }),
+    });
+  });
+
   it('tracks an in-flight durable commit and drains it before flushAll resolves', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
