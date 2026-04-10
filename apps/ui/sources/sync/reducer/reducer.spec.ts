@@ -1257,6 +1257,66 @@ describe('reducer', () => {
             }
         });
 
+        it('should update an existing permission placeholder to the real tool name when the tool call arrives later', () => {
+            const state = createReducer();
+
+            const agentState1: AgentState = {
+                requests: {
+                    'call-1': {
+                        tool: 'external_directory',
+                        arguments: {
+                            permissionId: 'call-1',
+                            providerPermissionId: 'perm-1',
+                            toolCallId: 'call-1',
+                            toolName: 'external_directory',
+                            filePath: '/tmp/outside.txt',
+                            toolCall: {
+                                toolCallId: 'call-1',
+                                status: 'pending',
+                                rawInput: {
+                                    filePath: '/tmp/outside.txt',
+                                },
+                            },
+                            permission: {
+                                id: 'perm-1',
+                                kind: 'external_directory',
+                            },
+                        },
+                        createdAt: 1000,
+                    },
+                },
+            };
+
+            reducer(state, [], agentState1);
+
+            const permissionMessageId = state.toolIdToMessageId.get('call-1');
+            expect(permissionMessageId).toBeDefined();
+            expect(state.messages.get(permissionMessageId!)?.tool?.name).toBe('external_directory');
+
+            const messages: NormalizedMessage[] = [
+                {
+                    id: 'tool-msg-1',
+                    localId: null,
+                    createdAt: 5000,
+                    role: 'agent',
+                    content: [{
+                        type: 'tool-call',
+                        id: 'call-1',
+                        name: 'Read',
+                        input: { filePath: '/tmp/outside.txt' },
+                        description: null,
+                        uuid: 'tool-uuid-1',
+                        parentUUID: null,
+                    }],
+                    isSidechain: false,
+                },
+            ];
+
+            reducer(state, messages, agentState1);
+
+            expect(state.messages.get(permissionMessageId!)?.tool?.name).toBe('Read');
+        });
+
         it('should create separate messages for same tool name with different arguments', () => {
             const state = createReducer();
 
