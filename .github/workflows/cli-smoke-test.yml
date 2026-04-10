@@ -115,11 +115,14 @@ jobs:
         HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
       run: yarn install --frozen-lockfile --ignore-engines
 
-    - name: Build shared CLI workspace dependencies
+    - name: Build Windows CLI binary prerequisites
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
-        node apps/cli/scripts/buildSharedDeps.mjs
+        yarn workspace @happier-dev/release-runtime build
+        yarn workspace @happier-dev/protocol build
+        yarn workspace @happier-dev/agents build
+        yarn workspace @happier-dev/cli-common build
 
     - name: Build Windows CLI binary
       shell: pwsh

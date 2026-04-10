@@ -31,21 +31,33 @@ const repoRoot = findRepoRoot(__dirname);
 const DEFAULT_BUILD_LOCK_PATH = resolve(repoRoot, '.project', 'tmp', 'cli-shared-deps-build.lock');
 
 function execYarn(args, options) {
-  const { command, args: invocationArgs } = resolveYarnInvocation();
-  return execFileSync(command, [...invocationArgs, ...args], options);
+  const { command, args: invocationArgs, shell } = resolveYarnInvocation();
+  return execFileSync(command, [...invocationArgs, ...args], {
+    ...options,
+    ...(shell != null ? { shell } : {}),
+  });
 }
 
-export function resolveYarnInvocation(npmExecPath = process.env.npm_execpath) {
+export function resolveYarnInvocation(npmExecPath = process.env.npm_execpath, options = {}) {
   const normalizedNpmExecPath = String(npmExecPath ?? '').trim();
-  const yarnCommand = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
+  const platform = options.platform ?? process.platform;
+  const yarnCommand = platform === 'win32' ? 'yarn.cmd' : 'yarn';
 
   if (!normalizedNpmExecPath) {
-    return { command: yarnCommand, args: [] };
+    return {
+      command: yarnCommand,
+      args: [],
+      ...(platform === 'win32' ? { shell: true } : {}),
+    };
   }
 
   const isNpmCliPath = /(^|[\\/])npm-cli\.js$/i.test(normalizedNpmExecPath);
   if (isNpmCliPath) {
-    return { command: yarnCommand, args: [] };
+    return {
+      command: yarnCommand,
+      args: [],
+      ...(platform === 'win32' ? { shell: true } : {}),
+    };
   }
 
   return { command: process.execPath, args: [normalizedNpmExecPath] };

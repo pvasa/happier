@@ -113,6 +113,15 @@ test('commandExists does not execute shell metacharacters on Unix', async () => 
   }
 });
 
+test('resolveDefaultShellForCommand enables a shell for Yarn shims on Windows', async () => {
+  const artifacts = await import('../dist/componentArtifacts/index.js');
+  assert.equal(artifacts.resolveDefaultShellForCommand('yarn', { platform: 'win32' }), true);
+  assert.equal(artifacts.resolveDefaultShellForCommand('yarn.cmd', { platform: 'win32' }), true);
+  assert.equal(artifacts.resolveDefaultShellForCommand('corepack', { platform: 'win32' }), true);
+  assert.equal(artifacts.resolveDefaultShellForCommand('git', { platform: 'win32' }), false);
+  assert.equal(artifacts.resolveDefaultShellForCommand('yarn', { platform: 'linux' }), false);
+});
+
 test('buildCliBinaryArtifactPayload compiles the local CLI binary into the payload dir', async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'component-artifacts-cli-'));
   try {

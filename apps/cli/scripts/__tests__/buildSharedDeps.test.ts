@@ -68,6 +68,18 @@ describe('buildSharedDeps', () => {
     });
   });
 
+  it('uses a shell-safe Yarn invocation on Windows when npm_execpath points at npm-cli.js', () => {
+    const invocation = resolveYarnInvocation('/somewhere/lib/node_modules/npm/bin/npm-cli.js', {
+      platform: 'win32',
+    });
+
+    expect(invocation).toEqual({
+      command: 'yarn.cmd',
+      args: [],
+      shell: true,
+    });
+  });
+
   it('uses node + npm_execpath when npm_execpath points at a Yarn entrypoint', () => {
     const invocation = resolveYarnInvocation('/somewhere/lib/node_modules/yarn/bin/yarn.js');
 

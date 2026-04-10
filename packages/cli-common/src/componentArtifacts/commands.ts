@@ -17,6 +17,27 @@ export type RunCommand = (
   },
 ) => void;
 
+export function resolveDefaultShellForCommand(
+  cmd: string,
+  { platform = process.platform }: { platform?: NodeJS.Platform } = {},
+): boolean {
+  if (platform !== 'win32') return false;
+  const raw = String(cmd ?? '').trim();
+  if (!raw) return false;
+  const normalized = raw.toLowerCase();
+  if (
+    normalized === 'yarn' ||
+    normalized.endsWith('\\yarn') ||
+    normalized.endsWith('/yarn') ||
+    normalized === 'corepack' ||
+    normalized.endsWith('\\corepack') ||
+    normalized.endsWith('/corepack')
+  ) {
+    return true;
+  }
+  return normalized.endsWith('.cmd') || normalized.endsWith('.bat') || normalized.endsWith('.ps1');
+}
+
 export function execOrThrow(
   cmd: string,
   args: string[],
@@ -33,6 +54,7 @@ export function execOrThrow(
     stdio,
     encoding: 'utf-8',
     input,
+    shell: resolveDefaultShellForCommand(cmd),
   });
   if (result.error) {
     throw new Error(`[component-artifacts] failed to run ${cmd}: ${String(result.error.message || result.error)}`);
