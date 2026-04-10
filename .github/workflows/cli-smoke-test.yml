@@ -76,6 +76,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_settings_lock_repro == true }}
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      HAPPIER_REPRO_DIAG_DIR: ${{ runner.temp }}\happier-cli-win-lock-repro-diagnostics
 
     steps:
     - name: Checkout code
@@ -87,6 +89,12 @@ jobs:
         node-version: 22.x
         cache: 'yarn'
         cache-dependency-path: yarn.lock
+
+    - name: Prepare repro diagnostics directory
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        New-Item -ItemType Directory -Path $env:HAPPIER_REPRO_DIAG_DIR -Force | Out-Null
 
     - name: Enable Corepack
       shell: bash
@@ -106,6 +114,12 @@ jobs:
         npm_config_production: "false"
         HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
       run: yarn install --frozen-lockfile --ignore-engines
+
+    - name: Build shared CLI workspace dependencies
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        node apps/cli/scripts/buildSharedDeps.mjs
 
     - name: Build Windows CLI binary
       shell: pwsh
@@ -133,7 +147,6 @@ jobs:
         }
 
         "HAPPIER_BINARY=$($binary.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-        "HAPPIER_REPRO_DIAG_DIR=$(Join-Path $env:RUNNER_TEMP 'happier-cli-win-lock-repro-diagnostics')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
     - name: Seed auth state and run repro
       shell: pwsh
