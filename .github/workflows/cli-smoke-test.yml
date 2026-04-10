@@ -12,9 +12,16 @@ on:
       - 'apps/cli/**'
       - '.github/workflows/cli-smoke-test.yml'
   workflow_dispatch:
+    inputs:
+      run_windows_settings_lock_repro:
+        description: "Run the compiled Windows settings.json.lock repro job"
+        required: true
+        type: boolean
+        default: false
 
 jobs:
   smoke-test-linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_windows_settings_lock_repro != true }}
     runs-on: ubuntu-latest
 
     steps:
@@ -40,6 +47,7 @@ jobs:
       run: node scripts/pipeline/run.mjs smoke-cli
 
   smoke-test-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_windows_settings_lock_repro != true }}
     runs-on: windows-latest
 
     steps:
@@ -63,5 +71,211 @@ jobs:
 
     - name: CLI smoke (pipeline)
       run: node scripts/pipeline/run.mjs smoke-cli
+
+  settings-lock-repro-windows:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_settings_lock_repro == true }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'yarn'
+        cache-dependency-path: yarn.lock
+
+    - name: Enable Corepack
+      shell: bash
+      run: |
+        set -euo pipefail
+        corepack enable
+        corepack prepare yarn@1.22.22 --activate
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.5
+
+    - name: Install dependencies
+      env:
+        YARN_PRODUCTION: "false"
+        npm_config_production: "false"
+        HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
+      run: yarn install --frozen-lockfile --ignore-engines
+
+    - name: Build Windows CLI binary
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        node scripts/pipeline/release/build-cli-binaries.mjs --channel dev --targets windows-x64
+
+    - name: Extract Windows CLI binary
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $archive = Get-ChildItem -Path "dist/release-assets/cli" -Filter "happier-v*-windows-x64.tar.gz" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if (-not $archive) {
+          throw "Missing Windows CLI archive under dist/release-assets/cli"
+        }
+
+        $extractDir = Join-Path $env:RUNNER_TEMP "happier-cli-win-lock-repro"
+        New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+        tar -xzf $archive.FullName -C $extractDir
+
+        $binary = Get-ChildItem -Path $extractDir -Filter "happier.exe" -Recurse | Select-Object -First 1
+        if (-not $binary) {
+          throw "Missing happier.exe after extracting $($archive.FullName)"
+        }
+
+        "HAPPIER_BINARY=$($binary.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "HAPPIER_REPRO_DIAG_DIR=$(Join-Path $env:RUNNER_TEMP 'happier-cli-win-lock-repro-diagnostics')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Seed auth state and run repro
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $diagDir = $env:HAPPIER_REPRO_DIAG_DIR
+        New-Item -ItemType Directory -Path $diagDir -Force | Out-Null
+
+        $homeDir = Join-Path $env:USERPROFILE ".happier"
+        $serversDir = Join-Path $homeDir "servers"
+        $cloudDir = Join-Path $serversDir "cloud"
+        $accessKeyPath = Join-Path $cloudDir "access.key"
+        $settingsPath = Join-Path $homeDir "settings.json"
+        $lockPath = "$settingsPath.lock"
+
+        if (Test-Path $homeDir) {
+          Remove-Item -Recurse -Force $homeDir
+        }
+
+        New-Item -ItemType Directory -Path $cloudDir -Force | Out-Null
+
+        function ConvertTo-Base64([byte[]] $bytes) {
+          return [Convert]::ToBase64String($bytes)
+        }
+
+        function ConvertTo-Base64UrlJson([string] $json) {
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+          return $encoded.TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        }
+
+        $header = ConvertTo-Base64UrlJson '{"alg":"HS256","typ":"JWT"}'
+        $payload = ConvertTo-Base64UrlJson '{"sub":"github-actions-repro-user"}'
+        $token = "$header.$payload.signature"
+
+        $credentials = @{
+          token = $token
+          encryption = @{
+            publicKey = ConvertTo-Base64 ([byte[]](1..32))
+            machineKey = ConvertTo-Base64 ([byte[]](65..96))
+          }
+        } | ConvertTo-Json -Depth 5
+
+        Set-Content -Path $accessKeyPath -Value $credentials -Encoding utf8
+
+        @(
+          "binary=$env:HAPPIER_BINARY"
+          "userprofile=$env:USERPROFILE"
+          "homeDir=$homeDir"
+          "settingsPath=$settingsPath"
+          "lockPath=$lockPath"
+        ) | Set-Content -Path (Join-Path $diagDir "environment.txt") -Encoding utf8
+
+        function Invoke-HappierCapture {
+          param(
+            [Parameter(Mandatory = $true)][string] $Label,
+            [Parameter(Mandatory = $true)][string[]] $Arguments,
+            [int] $TimeoutSeconds = 20
+          )
+
+          $stdoutPath = Join-Path $diagDir "$Label.stdout.txt"
+          $stderrPath = Join-Path $diagDir "$Label.stderr.txt"
+          $metaPath = Join-Path $diagDir "$Label.meta.json"
+
+          $psi = [System.Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = $env:HAPPIER_BINARY
+          $psi.WorkingDirectory = $PWD.Path
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.Environment["DEBUG"] = "1"
+          $psi.Environment["HAPPIER_NONINTERACTIVE"] = "1"
+          $psi.Environment["HAPPIER_SESSION_AUTOSTART_DAEMON"] = "0"
+
+          foreach ($argument in $Arguments) {
+            [void]$psi.ArgumentList.Add($argument)
+          }
+
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo = $psi
+          [void]$process.Start()
+
+          $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
+          if ($timedOut) {
+            try {
+              $process.Kill($true)
+            } catch {
+            }
+            [void]$process.WaitForExit()
+          }
+
+          $stdout = $process.StandardOutput.ReadToEnd()
+          $stderr = $process.StandardError.ReadToEnd()
+
+          Set-Content -Path $stdoutPath -Value $stdout -Encoding utf8
+          Set-Content -Path $stderrPath -Value $stderr -Encoding utf8
+
+          @{
+            label = $Label
+            arguments = $Arguments
+            exitCode = $process.ExitCode
+            timedOut = $timedOut
+          } | ConvertTo-Json -Depth 4 | Set-Content -Path $metaPath -Encoding utf8
+
+          Write-Host "== $Label =="
+          Write-Host "exitCode=$($process.ExitCode) timedOut=$timedOut"
+          if ($stdout) {
+            Write-Host "-- stdout --"
+            Write-Host $stdout
+          }
+          if ($stderr) {
+            Write-Host "-- stderr --"
+            Write-Host $stderr
+          }
+        }
+
+        $preflight = @(
+          "Test-Path homeDir: $(Test-Path $homeDir)"
+          "Test-Path homeDir container: $(Test-Path $homeDir -PathType Container)"
+          "Test-Path access.key: $(Test-Path $accessKeyPath)"
+        )
+        $preflight | Set-Content -Path (Join-Path $diagDir "preflight.txt") -Encoding utf8
+
+        Invoke-HappierCapture -Label "auth-status" -Arguments @("auth", "status")
+
+        New-Item -ItemType File -Path $lockPath -Force | Out-Null
+        Get-Item $lockPath | Format-List FullName,Length,Attributes | Out-File -FilePath (Join-Path $diagDir "manual-lock-probe.txt") -Encoding utf8
+        Remove-Item $lockPath -Force
+
+        Invoke-HappierCapture -Label "auth-login" -Arguments @("auth", "login")
+        Invoke-HappierCapture -Label "default-command" -Arguments @() -TimeoutSeconds 30
+
+        if (Test-Path $homeDir) {
+          Copy-Item -Path $homeDir -Destination (Join-Path $diagDir "happier-home-final") -Recurse -Force
+        }
+
+    - name: Upload repro diagnostics
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-cli-settings-lock-repro
+        path: ${{ env.HAPPIER_REPRO_DIAG_DIR }}
+        if-no-files-found: error
 
 # We don't need a smoke test for macOS because most contributors are developing on macOS.
