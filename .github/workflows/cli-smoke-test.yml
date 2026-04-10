@@ -420,11 +420,11 @@ jobs:
 
         Invoke-HappierCapture -Label "auth-login" -Arguments @("auth", "login")
         Invoke-HappierCapture -Label "auth-login-path" -Arguments @("auth", "login") -Executable "happier"
-        Invoke-HappierCapture -Label "auth-login-force" -Arguments @("auth", "login", "--force")
-        Invoke-HappierCapture -Label "auth-login-force-path" -Arguments @("auth", "login", "--force") -Executable "happier"
         Invoke-HappierCapture -Label "default-command" -Arguments @() -TimeoutSeconds 30
         Invoke-HappierCapture -Label "default-command-path" -Arguments @() -TimeoutSeconds 30 -Executable "happier"
         Invoke-HappierCapture -Label "default-command-repo-root" -Arguments @() -TimeoutSeconds 30 -WorkingDirectory $PWD.Path
+        Invoke-HappierCapture -Label "auth-login-force" -Arguments @("auth", "login", "--force")
+        Invoke-HappierCapture -Label "auth-login-force-path" -Arguments @("auth", "login", "--force") -Executable "happier"
 
         if (Test-Path $homeDir) {
           Copy-Item -Path $homeDir -Destination (Join-Path $diagDir "happier-home-final") -Recurse -Force
