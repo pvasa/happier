@@ -92,8 +92,9 @@ jobs:
       shell: pwsh
       run: |
         $ErrorActionPreference = "Stop"
-        "HAPPIER_REPRO_DIAG_DIR=$(Join-Path $env:RUNNER_TEMP 'happier-cli-win-lock-repro-diagnostics')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-        New-Item -ItemType Directory -Path $env:HAPPIER_REPRO_DIAG_DIR -Force | Out-Null
+        $diagDir = Join-Path $env:RUNNER_TEMP "happier-cli-win-lock-repro-diagnostics"
+        "HAPPIER_REPRO_DIAG_DIR=$diagDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        New-Item -ItemType Directory -Path $diagDir -Force | Out-Null
 
     - name: Enable Corepack
       shell: bash
