@@ -1577,7 +1577,11 @@ export async function claudeRemoteAgentSdk(opts: {
                 if (
                     awaitingNextTurnStart &&
                     didFinalizeTurn &&
-                    (incomingMessageType === 'assistant' || (incomingMessageType === 'user' && isUserTextMessage(message)))
+                    (
+                        incomingMessageType === 'assistant'
+                        || incomingMessageType === 'user'
+                        || incomingMessageType === 'result'
+                    )
                 ) {
                     awaitingNextTurnStart = false;
                     didFinalizeTurn = false;
