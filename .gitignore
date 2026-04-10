@@ -109,3 +109,5 @@ _.env.pipeline.production.local
 /authoring-qa-*.png
 /.codex-tmp
 /apps/stack/output
+
+/cli/.dist*
