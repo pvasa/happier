@@ -47,3 +47,44 @@ test('expo-testflight-distribute dry-run accepts an EAS build json artifact for 
   assert.match(out, /eas_build_id=eas-build-123/);
   assert.doesNotMatch(out, /build_number=/);
 });
+
+test('expo-testflight-distribute dry-run accepts a local iOS build json artifact emitted by expo native-build', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'happier-testflight-local-build-json-'));
+  const buildJsonPath = path.join(tmpDir, 'eas_build.ios.json');
+  fs.writeFileSync(
+    buildJsonPath,
+    `${JSON.stringify({ mode: 'local', platform: 'ios', artifactPath: '/tmp/Happier.ipa' }, null, 2)}\n`,
+    'utf8',
+  );
+
+  const out = execFileSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'scripts', 'pipeline', 'run.mjs'),
+      'expo-testflight-distribute',
+      '--environment',
+      'dev',
+      '--build-json',
+      buildJsonPath,
+      '--external-groups',
+      'Public Beta',
+      '--dry-run',
+      '--secrets-source',
+      'env',
+    ],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        APPLE_API_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n',
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    },
+  );
+
+  assert.match(out, /\[pipeline\] testflight distribute: environment=dev/);
+  assert.match(out, /artifact_path=\/tmp\/Happier\.ipa/);
+  assert.doesNotMatch(out, /eas_build_id=/);
+});

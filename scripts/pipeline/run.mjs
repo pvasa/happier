@@ -31,6 +31,7 @@ import {
   supportsMobileApkReleasePublishing,
   supportsMobileNativeSubmit,
 } from './expo/mobile-release-environments.mjs';
+import { resolveTestflightDistributionConfig } from './expo/testflight-distribution-config.mjs';
 import {
   formatPublicReleaseChannel,
   formatPublicReleaseChannelChoices,
@@ -3011,6 +3012,41 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
                 ...(dryRun ? ['--dry-run'] : []),
               ],
             });
+          }
+        }
+
+        const shouldHandleIos = platform === 'ios' || platform === 'all';
+        if (shouldHandleIos) {
+          const testflightDistribution = resolveTestflightDistributionConfig({
+            environment,
+            env: mergedEnv,
+          });
+          if (testflightDistribution.enabled) {
+            if (!dryRun && nativeBuildMode === 'cloud' && !cloudBuildPresence.ios) {
+              console.log('[pipeline] ui-mobile release: skipping TestFlight external distribution (no iOS build was scheduled).');
+            } else {
+              runExpoTestflightDistribute({
+                repoRoot,
+                env: mergedEnv,
+                dryRun,
+                args: [
+                  '--environment',
+                  environmentArg,
+                  '--build-json',
+                  buildJsonForPlatform('ios'),
+                  '--external-groups',
+                  testflightDistribution.externalGroups,
+                  '--submit-beta-review',
+                  testflightDistribution.submitBetaReview,
+                  '--wait-processing',
+                  String(testflightDistribution.waitProcessing),
+                  '--processing-timeout-seconds',
+                  String(testflightDistribution.processingTimeoutSeconds),
+                  ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
+                  ...(dryRun ? ['--dry-run'] : []),
+                ],
+              });
+            }
           }
         }
       }

@@ -47,6 +47,7 @@ export const COMMAND_HELP_EXPO = {
     bullets: [
       'This command composes expo-ota / expo-native-build / expo-submit for convenience.',
       'native_submit is intentionally limited to dev, preview, and production because only those lanes have store submit profiles.',
+      'When APP_STORE_CONNECT_<ENV>_EXTERNAL_GROUPS is configured for the selected environment, native_submit also runs the App Store Connect external TestFlight distribution step from inside the shared pipeline.',
       'Expo OTA and submit default to interactive on a local TTY and non-interactive in CI or when output is piped.',
       'Cloud native builds use two unified paths: interactive local TTY runs schedule normally and then resolve the build via EAS list/view; CI/non-interactive runs keep the direct JSON path.',
       "For local iOS builds, use --native-build-mode local and keep --native-local-runtime host (requires Xcode).",

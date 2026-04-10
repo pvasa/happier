@@ -17,6 +17,7 @@ import {
 import { buildAscBuildsListUrl } from './testflight-asc-builds-url.mjs';
 import { buildEasBuildViewArgs } from './testflight-eas-cli-args.mjs';
 import { resolveExternalGroupSelections } from './testflight-group-resolution.mjs';
+import { readIosIpaMetadata } from './read-ios-ipa-metadata.mjs';
 
 function fail(message) {
   console.error(message);
@@ -155,17 +156,34 @@ function loadExpoIosSubmitProfile({ repoRoot, submitProfile }) {
   return { ascAppId, ascApiKeyId, ascApiKeyIssuerId };
 }
 
-function readBuildJsonBuildId(buildJsonPath) {
+function normalizeBuildJsonPlatform(value) {
+  const platform = String(value ?? '').trim();
+  if (!platform) return '';
+  if (platform.toUpperCase() === 'IOS') return 'ios';
+  if (platform.toUpperCase() === 'ANDROID') return 'android';
+  return platform.toLowerCase();
+}
+
+function readBuildJsonDetails(buildJsonPath) {
   const absolutePath = path.resolve(buildJsonPath);
   if (!fs.existsSync(absolutePath)) fail(`--build-json path does not exist: ${absolutePath}`);
   const parsed = JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
   const items = Array.isArray(parsed) ? parsed : [parsed];
   for (const item of items) {
     const id = String(item?.id ?? item?.buildId ?? '').trim();
-    const platform = String(item?.platform ?? '').trim().toLowerCase();
-    if (id && (!platform || platform === 'ios')) return id;
+    const platform = normalizeBuildJsonPlatform(item?.platform);
+    const mode = String(item?.mode ?? '').trim().toLowerCase();
+    const artifactPath = String(item?.artifactPath ?? '').trim();
+    const buildNumber = String(item?.buildNumber ?? item?.appBuildVersion ?? item?.metadata?.buildNumber ?? '').trim();
+    const appVersion = String(item?.appVersion ?? item?.version ?? item?.metadata?.appVersion ?? '').trim();
+    if (id && (!platform || platform === 'ios')) {
+      return { easBuildId: id, artifactPath: '', buildNumber, appVersion };
+    }
+    if (mode === 'local' && (!platform || platform === 'ios')) {
+      return { easBuildId: '', artifactPath, buildNumber, appVersion };
+    }
   }
-  fail(`Unable to resolve an iOS EAS build id from ${absolutePath}`);
+  fail(`Unable to resolve an iOS EAS build or local artifact from ${absolutePath}`);
 }
 
 function readEasBuildIdentity(buildPayload) {
@@ -209,6 +227,15 @@ function resolveBuildIdentityFromEas({ repoRoot, easBuildId, easCliVersion }) {
     fail(`Unable to resolve iOS build number from EAS build ${easBuildId}.`);
   }
   return { buildNumber, appVersion };
+}
+
+function resolveBuildIdentityFromLocalArtifact({ artifactPath, env }) {
+  const absolutePath = path.resolve(artifactPath);
+  const metadata = readIosIpaMetadata({ ipaPath: absolutePath, env });
+  if (!metadata?.buildNumber) {
+    fail(`Unable to resolve iOS build number from local artifact ${absolutePath}.`);
+  }
+  return { buildNumber: metadata.buildNumber, appVersion: metadata.version };
 }
 
 function getIncludedMap(collection, type) {
@@ -383,16 +410,25 @@ async function main() {
 
   let buildNumber = String(values['build-number'] ?? '').trim();
   let appVersion = String(values['app-version'] ?? '').trim();
-  const easBuildId = String(values['eas-build-id'] ?? '').trim() || (values['build-json'] ? readBuildJsonBuildId(String(values['build-json'])) : '');
+  const buildJsonDetails = values['build-json'] ? readBuildJsonDetails(String(values['build-json'])) : null;
+  const easBuildId = String(values['eas-build-id'] ?? '').trim() || String(buildJsonDetails?.easBuildId ?? '').trim();
+  const artifactPath = String(buildJsonDetails?.artifactPath ?? '').trim();
   const easCliVersion =
     String(values['eas-cli-version'] ?? '').trim() || String(process.env.EAS_CLI_VERSION ?? '').trim() || '18.0.1';
+  if (!buildNumber) buildNumber = String(buildJsonDetails?.buildNumber ?? '').trim();
+  if (!appVersion) appVersion = String(buildJsonDetails?.appVersion ?? '').trim();
   if ((!buildNumber || !appVersion) && easBuildId && !dryRun) {
     const resolved = resolveBuildIdentityFromEas({ repoRoot, easBuildId, easCliVersion });
     if (!buildNumber) buildNumber = resolved.buildNumber;
     if (!appVersion) appVersion = resolved.appVersion;
   }
+  if ((!buildNumber || !appVersion) && artifactPath && !dryRun) {
+    const resolved = resolveBuildIdentityFromLocalArtifact({ artifactPath, env: process.env });
+    if (!buildNumber) buildNumber = resolved.buildNumber;
+    if (!appVersion) appVersion = resolved.appVersion;
+  }
   if (!buildNumber && !dryRun) {
-    fail('A build number is required. Provide --build-number directly, or pass --eas-build-id / --build-json for EAS-backed resolution.');
+    fail('A build number is required. Provide --build-number directly, or pass --eas-build-id / --build-json for EAS-backed or local artifact resolution.');
   }
 
   console.log(
@@ -403,6 +439,7 @@ async function main() {
       buildNumber ? `build_number=${buildNumber}` : '',
       appVersion ? `app_version=${appVersion}` : '',
       easBuildId ? `eas_build_id=${easBuildId}` : '',
+      artifactPath ? `artifact_path=${artifactPath}` : '',
     ]
       .filter(Boolean)
       .join(' '),
