@@ -19,6 +19,7 @@ import { PopoverPortalTargetContextProvider } from './PopoverPortalTarget';
 export function PopoverPortalTargetProvider(props: { children: React.ReactNode }) {
     if (Platform.OS === 'web') {
         const [webPortalTarget, setWebPortalTarget] = React.useState<HTMLElement | null>(null);
+        const webPortalHostRef = React.useRef<HTMLElement | null>(null);
         const anchorRef = React.useRef<HTMLElement | null>(null);
 
         React.useLayoutEffect(() => {
@@ -106,9 +107,10 @@ export function PopoverPortalTargetProvider(props: { children: React.ReactNode }
                 }
             }
 
-            setWebPortalTarget(host);
+            webPortalHostRef.current = host;
+            setWebPortalTarget((prev) => prev ?? host);
             return () => {
-                setWebPortalTarget(null);
+                webPortalHostRef.current = null;
                 try {
                     host.remove();
                 } catch {
