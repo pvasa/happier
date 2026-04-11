@@ -242,6 +242,7 @@ export function planDaemonServiceInstall(params: Readonly<{
       env,
       stdoutPath,
       stderrPath,
+      abandonProcessGroup: true,
       workingDirectory: '/tmp',
     });
 
@@ -338,6 +339,7 @@ export function planDaemonServiceInstall(params: Readonly<{
       ...baseEnv,
       ...pinnedTargetEnv,
     },
+    killMode: 'process',
     restart: 'on-failure',
     runAsUser: mode === 'system' ? systemUser : '',
     wantedBy: mode === 'system' ? 'multi-user.target' : 'default.target',

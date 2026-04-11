@@ -131,6 +131,7 @@ describe('daemon service install plan', () => {
     expect(plan.files[0]?.content).toContain('Environment=HAPPIER_DAEMON_WAIT_FOR_AUTH=1');
     expect(plan.files[0]?.content).toContain('Environment=PATH=');
     expect(plan.files[0]?.content).toContain('/home/test/.local/bin');
+    expect(plan.files[0]?.content).toContain('KillMode=process');
 
     let hasSystemctl = false;
     let systemctlArgsText = '';
@@ -255,6 +256,7 @@ describe('daemon service install plan', () => {
     expect(plan.files[0]?.content).toContain('Environment=HAPPIER_HOME_DIR=/home/happier/.happier');
     expect(plan.files[0]?.content).toContain('Environment=PATH=/usr/local/bin:/root/.cargo/bin:/usr/local/sbin:/home/happier/.local/bin:/home/happier/bin');
     expect(plan.files[0]?.content).toContain('Environment=HAPPIER_ACTIVE_SERVER_ID=cloud');
+    expect(plan.files[0]?.content).toContain('KillMode=process');
 
     const systemctlArgsText = plan.commands
       .filter((c) => c.cmd === 'systemctl')
