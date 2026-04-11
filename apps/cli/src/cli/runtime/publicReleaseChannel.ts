@@ -66,6 +66,8 @@ export function resolvePublicReleaseRingIdFromCliArgs(params: Readonly<{
 
   const ch = args.find((a) => a === '--channel' || a.startsWith('--channel='));
   if (!ch) {
+    const ringFromPath = resolvePublicReleaseRingIdFromPathHint(params.invokedPath);
+    if (ringFromPath) return ringFromPath;
     const name = normalizeInvokerCandidate(params.invokedPath);
     if (name === 'hprev') return 'preview';
     if (name === 'hdev') return 'publicdev';
