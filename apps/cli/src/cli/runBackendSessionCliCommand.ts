@@ -28,6 +28,7 @@ import { acquireSessionRunnerLock } from '@/daemon/sessionRunnerLock';
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptSecret } from '@/terminal/prompts/promptSecret';
 import { maybePassthroughProviderCliInfoRequest } from '@/cli/providerCliPassthrough';
+import { selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup } from '@/daemon/platform/linux/daemonSpawnedSessionCgroupSelfMigration';
 
 type CommonBackendRunOptions = ParsedSessionStartArgs & {
   credentials: Credentials;
@@ -91,6 +92,13 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
     const profileQuery = typeof profileQueryRaw === 'string' ? profileQueryRaw.trim() : '';
     const extraOptions = params.resolveExtraOptions ? params.resolveExtraOptions(params.context.args) : ({} as Extra);
     const startedBy = resolved.startedBy ?? 'terminal';
+
+    const selfMigration = await selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup();
+    if (selfMigration) {
+      logger.debug('[session] Self-migrated daemon-spawned runner out of daemon service cgroup', {
+        migration: selfMigration,
+      });
+    }
 
     const normalizedExistingSessionId = typeof existingSessionId === 'string' ? existingSessionId.trim() : '';
     if (normalizedExistingSessionId) {

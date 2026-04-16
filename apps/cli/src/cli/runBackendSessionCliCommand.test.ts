@@ -8,6 +8,10 @@ const { spawnSyncSpy } = vi.hoisted(() => ({
   spawnSyncSpy: vi.fn(),
 }));
 
+const { selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup } = vi.hoisted(() => ({
+  selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup: vi.fn(async () => null),
+}));
+
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
@@ -15,6 +19,11 @@ vi.mock('node:child_process', async (importOriginal) => {
     spawnSync: spawnSyncSpy,
   };
 });
+
+vi.mock('@/daemon/platform/linux/daemonSpawnedSessionCgroupSelfMigration', () => ({
+  HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY: 'HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP',
+  selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup,
+}));
 
 import { runBackendSessionCliCommand } from './runBackendSessionCliCommand';
 import * as authModule from '@/ui/auth';
@@ -27,7 +36,9 @@ import type { Credentials } from '@/persistence';
 afterEach(() => {
   vi.restoreAllMocks();
   spawnSyncSpy.mockReset();
+  selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup.mockReset();
   delete process.env.HAPPIER_CODEX_PATH;
+  delete process.env.HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP;
 });
 
 describe('runBackendSessionCliCommand', () => {
@@ -137,6 +148,32 @@ describe('runBackendSessionCliCommand', () => {
         refresh: 'force',
       }),
     );
+  });
+
+  it('self-migrates daemon-spawned linux session runners out of the daemon service cgroup before continuing startup', async () => {
+    const credentials = { token: 'x' } as any;
+
+    process.env.HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP = '1';
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
+    vi.spyOn(persistenceModule, 'readSettings').mockResolvedValue({ machineId: 'machine-1' } as any);
+    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'none',
+      settings: {} as any,
+      settingsVersion: 0,
+      loadedAtMs: Date.now(),
+      whenRefreshed: null,
+    } as any);
+
+    const run = vi.fn().mockResolvedValue(undefined);
+    const loadRun = vi.fn().mockResolvedValue(run);
+
+    await runBackendSessionCliCommand({
+      context: { args: ['codex', '--started-by', 'daemon'], terminalRuntime: null } as any,
+      loadRun,
+      agentIdForAccountSettings: 'codex' as any,
+    });
+
+    expect(selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup).toHaveBeenCalledTimes(1);
   });
 
   it('forces refresh without blocking Codex terminal starts on fast account settings', async () => {

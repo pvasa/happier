@@ -5,6 +5,7 @@ import { AGENTS, type AgentCatalogEntry } from '@/backends/catalog';
 import { handleAttachCliCommand } from './commands/attach';
 import { handleAuthCliCommand } from './commands/auth';
 import { handleBugReportCliCommand } from './commands/bugReport';
+import { handleCapabilitiesCliCommand } from './commands/capabilities';
 import { handleConnectCliCommand } from './commands/connect';
 import { handleDaemonCliCommand } from './commands/daemon';
 import { handleDoctorCliCommand } from './commands/doctor';
@@ -51,6 +52,7 @@ export const commandRegistry: Readonly<Record<string, CommandHandler>> = {
   'acp-catalog': handleConfiguredAcpCatalogCliCommand,
   auth: handleAuthCliCommand,
   'bug-report': handleBugReportCliCommand,
+  capabilities: handleCapabilitiesCliCommand,
   // Backwards-compatible alias for the MCP command namespace.
   // Prefer `happier mcp ...` in docs and help output.
   bridge: handleMcpCliCommand,
@@ -68,6 +70,7 @@ export const commandRegistry: Readonly<Record<string, CommandHandler>> = {
   resume: handleResumeCliCommand,
   service: handleServiceCliCommand,
   session: handleSessionCliCommand,
+  sessions: handleSessionCliCommand,
   server: handleServerCliCommand,
   self: handleSelfCliCommand,
   'self-update': handleSelfUpdateCliCommand,

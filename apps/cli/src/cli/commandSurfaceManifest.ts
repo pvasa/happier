@@ -105,6 +105,10 @@ const COMMAND_SURFACE_MANIFEST: readonly CliCommandSurfaceEntry[] = [
     command: 'session',
     allowTmux: false,
   },
+  {
+    command: 'sessions',
+    allowTmux: false,
+  },
 ];
 
 export function listRootHelpCommands(): readonly CliCommandSurfaceEntry[] {
