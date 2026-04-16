@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 
+import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
+
 import { readSharedManagedOpenCodeServerStateBestEffort } from '@/backends/opencode/server/sharedManagedServer';
 import { createOpenCodeAttachArgs } from '@/backends/opencode/localControl/createOpenCodeAttachArgs';
 import { resolveOpenCodeCliLaunchSpec } from '@/backends/opencode/utils/resolveOpenCodeCliCommand';
@@ -38,16 +40,26 @@ export async function runOpenCodeProviderAttach(params: Readonly<{
     : (params.resolveCommandFn ?? resolveOpenCodeCliLaunchSpec)(env);
   const command = params.command ?? launch?.command ?? resolveOpenCodeCliLaunchSpec(env).command;
   const commandArgs = params.commandArgs ?? launch?.args ?? resolveOpenCodeCliLaunchSpec(env).args;
+  const invocation = resolveWindowsCommandInvocation({
+    command,
+    args: [
+      ...commandArgs,
+      ...createOpenCodeAttachArgs({
+        baseUrl: target.baseUrl,
+        directory: target.directory,
+        sessionId: target.vendorSessionId,
+      }),
+    ],
+    env,
+    resolveCommandOnPath: false,
+  });
 
   return await new Promise<number>((resolve) => {
-    const child = spawnProcess(command, [...commandArgs, ...createOpenCodeAttachArgs({
-      baseUrl: target.baseUrl,
-      directory: target.directory,
-      sessionId: target.vendorSessionId,
-    })], {
+    const child = spawnProcess(invocation.command, invocation.args, {
       stdio: 'inherit',
       shell: false,
       env,
+      ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     }) as unknown as SpawnedProcess;
 
     child.once('error', () => resolve(1));

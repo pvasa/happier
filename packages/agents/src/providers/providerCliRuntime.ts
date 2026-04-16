@@ -131,13 +131,17 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     id: 'opencode',
     title: 'OpenCode CLI',
     binaryName: 'opencode',
-    knownCommandCandidates: [{ kind: 'homeBinDir', relativeDir: '.opencode/bin' }],
+    knownCommandCandidates: [
+      { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+      { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
+    ],
     sourcePreferenceDefault: 'system-first',
     managedInstall: null,
     manualInstallKind: 'vendor_recipe',
     manualInstallRecipes: {
       darwin: [bashCurlPipe('https://opencode.ai/install')],
       linux: [bashCurlPipe('https://opencode.ai/install')],
+      win32: [cmdInstall('npm install -g opencode-ai')],
     },
     acceptsJavaScriptFileOverride: false,
     installGuideUrl: 'https://opencode.ai/docs',

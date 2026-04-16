@@ -4,6 +4,7 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 
 import { asRecord, normalizeString } from './openCodeParsing';
+import { extractOpenCodeRenderableTextFromParts } from './openCodeRenderableText';
 
 function normalizeRole(value: unknown): 'user' | 'assistant' | null {
   const raw = normalizeString(value).trim().toLowerCase();
@@ -16,19 +17,6 @@ function extractCreatedAtMs(info: Record<string, unknown>): number {
   const timeRec = asRecord(info.time);
   const created = timeRec ? timeRec.created : null;
   return typeof created === 'number' && Number.isFinite(created) ? created : 0;
-}
-
-function extractTextFromParts(parts: unknown[]): string {
-  const out: string[] = [];
-  for (const part of parts) {
-    const rec = asRecord(part);
-    if (!rec) continue;
-    if (normalizeString(rec.type) !== 'text') continue;
-    const text = normalizeString(rec.text);
-    if (text.trim().length === 0) continue;
-    out.push(text);
-  }
-  return out.join('').trim();
 }
 
 export type OpenCodeTextHistoryItem = Readonly<{
@@ -51,7 +39,7 @@ export function extractOpenCodeTextHistoryItems(rawMessages: unknown[]): OpenCod
     const messageId = normalizeString(info.id).trim();
     if (!messageId) continue;
     const parts = Array.isArray(rec.parts) ? rec.parts : [];
-    const text = extractTextFromParts(parts);
+    const text = extractOpenCodeRenderableTextFromParts(parts);
     if (!text) continue;
     items.push({
       messageId,

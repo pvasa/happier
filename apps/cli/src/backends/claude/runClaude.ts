@@ -70,6 +70,7 @@ import { createClaudeRawMessageTurnDiffBridge } from './utils/createClaudeRawMes
 import { archiveAndCloseRuntimeSession } from '@/session/services/archiveAndCloseRuntimeSession';
 import { resolveRequestedSessionDirectory } from '@/agent/runtime/resolveRequestedSessionDirectory';
 import { publishClaudeSessionModelsMetadataBestEffort } from '@/backends/claude/sessionControls/publishClaudeSessionModelsMetadataBestEffort';
+import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -747,13 +748,18 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     // Setup signal handlers for graceful shutdown and crash reporting.
     const cleanup = async (event: RunnerTerminationEvent, outcome: ReturnType<typeof computeRunnerTerminationOutcome>) => {
+        const archiveDecision = resolveTerminationArchiveDecision({
+            startedBy: options.startedBy,
+            event,
+            outcome,
+        });
         restoreStdinBestEffort({ stdin: process.stdin as any });
         logger.debug('[START] Cleanup initiated', {
             kind: event.kind,
             ...(event.kind === 'signal' ? { signal: event.signal } : {}),
             exitCode: outcome.exitCode,
-            archive: outcome.archive,
-            archiveReason: outcome.archiveReason,
+            archive: archiveDecision.archive,
+            archiveReason: archiveDecision.archiveReason,
             ...(event.kind === 'unhandledRejection' ? { cause: formatErrorForUi(event.reason) } : {}),
             ...(event.kind === 'uncaughtException' ? { cause: formatErrorForUi(event.error) } : {}),
         });
@@ -763,14 +769,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 // Dispose the local permission bridge while the session transport is still alive so it can
                 // cancel and persist any outstanding local-mode permission requests.
                 disposeLocalPermissionBridge();
-                if (outcome.archive) {
-                    await archiveAndCloseRuntimeSession(session, credentials, outcome.archiveReason);
+                if (archiveDecision.archive) {
+                    await archiveAndCloseRuntimeSession(session, credentials, archiveDecision.archiveReason);
                 }
 
                 // Cleanup session resources (intervals, callbacks)
                 currentSession?.cleanup();
 
-                if (!outcome.archive) {
+                if (!archiveDecision.archive) {
                     // Send session death message
                     session.sendSessionDeath();
                     await session.flush();

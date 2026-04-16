@@ -6,7 +6,7 @@ import type { Machine } from './types';
 const { configurationMock, mockIo } = vi.hoisted(() => ({
   configurationMock: {
     apiServerUrl: 'http://localhost:3005',
-    socketIoTransports: ['websocket', 'polling'] as string[],
+    socketIoTransports: ['polling', 'websocket'] as string[],
   },
   mockIo: vi.fn<(url: string, opts: Record<string, unknown>) => any>(() => ({
     on: vi.fn(),
@@ -58,16 +58,16 @@ vi.mock('@/utils/time', () => ({ backoff: async <T>(fn: () => Promise<T>) => awa
 describe('ApiMachineClient transports', () => {
   beforeEach(() => {
     configurationMock.apiServerUrl = 'http://localhost:3005';
-    configurationMock.socketIoTransports = ['websocket', 'polling'];
+    configurationMock.socketIoTransports = ['polling', 'websocket'];
     bindApiSessionSocketMock(mockIo, createApiSessionSocketStub());
   });
 
   afterEach(() => {
     configurationMock.apiServerUrl = 'http://localhost:3005';
-    configurationMock.socketIoTransports = ['websocket', 'polling'];
+    configurationMock.socketIoTransports = ['polling', 'websocket'];
   });
 
-  it('uses websocket-first transports by default (fallback to polling)', async () => {
+  it('uses polling-first transports by default (upgrade to websocket when available)', async () => {
     const mod = await import('./apiMachine');
 
     const machine: Machine = {
@@ -85,7 +85,7 @@ describe('ApiMachineClient transports', () => {
 
     const opts = mockIo.mock.calls[0]?.[1] as any;
     expect(opts.path).toBe('/v1/updates');
-    expect(opts.transports).toEqual(['websocket', 'polling']);
+    expect(opts.transports).toEqual(['polling', 'websocket']);
     expect(opts.reconnection).toBe(false);
     expect(opts.autoConnect).toBe(false);
   });

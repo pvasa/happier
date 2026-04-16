@@ -4,6 +4,19 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it, vi } from 'vitest';
 
+const { resolveWindowsCommandInvocationMock } = vi.hoisted(() => ({
+  resolveWindowsCommandInvocationMock: vi.fn((
+    { command, args }: { command: string; args: readonly string[] },
+  ): { command: string; args: string[]; windowsVerbatimArguments?: boolean } => ({
+    command,
+    args: [...args],
+  })),
+}));
+
+vi.mock('@happier-dev/cli-common/process', () => ({
+  resolveWindowsCommandInvocation: resolveWindowsCommandInvocationMock,
+}));
+
 import { createOpenCodeTuiSupervisor } from './openCodeTuiSupervisor';
 
 type SpawnedProcessHarness = Readonly<{
@@ -193,6 +206,37 @@ describe('createOpenCodeTuiSupervisor', () => {
       runtimePath,
       [commandPath, 'attach', 'http://127.0.0.1:4096', '--dir', '/tmp/workspace', '--session', 'session-1'],
       expect.objectContaining({ stdio: 'inherit' }),
+    );
+  });
+
+  it('wraps Windows shell shims before attaching', async () => {
+    const proc = createSpawnedProcessHarness();
+    const spawnProcess = vi.fn(() => proc.child as any);
+    resolveWindowsCommandInvocationMock.mockReturnValueOnce({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD attach http://127.0.0.1:4096 --dir C:\\workspace --session session-2"'],
+      windowsVerbatimArguments: true,
+    });
+    const supervisor = createOpenCodeTuiSupervisor({
+      spawnProcess,
+      env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } as NodeJS.ProcessEnv,
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+    });
+
+    await expect(supervisor.attach({
+      baseUrl: 'http://127.0.0.1:4096',
+      directory: 'C:\\workspace',
+      sessionId: 'session-2',
+    })).resolves.toBe(true);
+
+    expect(resolveWindowsCommandInvocationMock).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      args: ['attach', 'http://127.0.0.1:4096', '--dir', 'C:\\workspace', '--session', 'session-2'],
+    }));
+    expect(spawnProcess).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\cmd.exe',
+      ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD attach http://127.0.0.1:4096 --dir C:\\workspace --session session-2"'],
+      expect.objectContaining({ stdio: 'inherit', windowsVerbatimArguments: true }),
     );
   });
 });

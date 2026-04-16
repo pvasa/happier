@@ -36,6 +36,7 @@ import { resolveCliMemoryRecallGuidanceEnabled } from '@/agent/promptLibrary/res
 import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 import { resolveAttachedRunRuntimeContext } from '@/agent/runtime/resolveAttachedRunRuntimeContext';
 import { archiveAndCloseRuntimeSession } from '@/session/services/archiveAndCloseRuntimeSession';
+import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
 
 type RuntimeForLoop = {
   beginTurn: () => void;
@@ -198,6 +199,8 @@ export async function runStandardAcpProvider(
 
   let session: ApiSessionClient;
   let permissionHandler: ProviderEnforcedPermissionHandler;
+  let rebindPermissionModeQueueSession: ((session: ApiSessionClient) => void) | null = null;
+  let pendingPermissionModeQueueSessionSwap: ApiSessionClient | null = null;
   const initializedSession = await initializeBackendRunSessionFn({
     api,
     sessionTag,
@@ -210,6 +213,11 @@ export async function runStandardAcpProvider(
       session = newSession;
       if (permissionHandler) {
         permissionHandler.updateSession(newSession);
+      }
+      if (rebindPermissionModeQueueSession) {
+        rebindPermissionModeQueueSession(newSession);
+      } else {
+        pendingPermissionModeQueueSessionSwap = newSession;
       }
       await config.onSessionSwap?.({ session: newSession });
     },
@@ -253,6 +261,11 @@ export async function runStandardAcpProvider(
     inFlightSteer: inFlightSteerController,
     resolvePermissionModeQueueKey: config.resolvePermissionModeQueueKey,
   });
+  rebindPermissionModeQueueSession = permissionModeState.rebindSession;
+  if (pendingPermissionModeQueueSessionSwap) {
+    rebindPermissionModeQueueSession(pendingPermissionModeQueueSessionSwap);
+    pendingPermissionModeQueueSessionSwap = null;
+  }
   const { messageQueue } = permissionModeState;
   const promptArtifactBodyCache = new Map<string, string | null>();
   const runtimeContext = resolveAttachedRunRuntimeContext({
@@ -359,12 +372,17 @@ export async function runStandardAcpProvider(
   const terminationHandlers = registerRunnerTerminationHandlers({
     process,
     exit: (code) => process.exit(code),
-    onTerminate: async (_event, outcome) => {
+    onTerminate: async (event, outcome) => {
       shouldExit = true;
       await handleAbort();
+      const archiveDecision = resolveTerminationArchiveDecision({
+        startedBy: opts.startedBy,
+        event,
+        outcome,
+      });
       try {
-        if (outcome.archive) {
-          await archiveAndCloseRuntimeSessionFn(session, opts.credentials, outcome.archiveReason);
+        if (archiveDecision.archive) {
+          await archiveAndCloseRuntimeSessionFn(session, opts.credentials, archiveDecision.archiveReason);
         }
       } finally {
         await cleanupOnce();

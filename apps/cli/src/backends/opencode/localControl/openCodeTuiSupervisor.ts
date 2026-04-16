@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 
+import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
+
 import { createOpenCodeAttachArgs } from './createOpenCodeAttachArgs';
 import { resolveOpenCodeCliLaunchSpec } from '../utils/resolveOpenCodeCliCommand';
 
@@ -95,9 +97,16 @@ export function createOpenCodeTuiSupervisor(params?: Readonly<{
     isAttached: () => proc !== null,
     attach: async ({ baseUrl, directory, sessionId }) => {
       if (proc) return true;
-      const child = spawnProcess(command, [...commandArgs, ...createOpenCodeAttachArgs({ baseUrl, directory, sessionId })], {
+      const invocation = resolveWindowsCommandInvocation({
+        command,
+        args: [...commandArgs, ...createOpenCodeAttachArgs({ baseUrl, directory, sessionId })],
+        env,
+        resolveCommandOnPath: false,
+      });
+      const child = spawnProcess(invocation.command, invocation.args, {
         stdio: 'inherit',
         env,
+        ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       }) as unknown as SpawnedProcess;
       proc = child;
       let startupCompleted = false;

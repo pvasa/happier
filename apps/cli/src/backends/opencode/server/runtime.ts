@@ -17,6 +17,7 @@ import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import type { OpenCodeGlobalEvent, OpenCodeModelRef, OpenCodePermissionRequest, OpenCodeQuestionRequest, OpenCodeSession } from './types';
 import { createOpenCodeServerRuntimeClient, type OpenCodeServerRuntimeClient } from './client';
 import { extractOpenCodeTextHistoryItems, importOpenCodeTextHistoryCommitted } from './openCodeSessionMessageImport';
+import { extractOpenCodeRuntimeRenderableTextFromPart } from './openCodeRenderableText';
 import { extractOpenCodeTaskChildSessionId, importOpenCodeTaskSidechainBestEffort } from './openCodeTaskSidechainImport';
 import { createOpenCodeTranscriptStreamBridge } from './openCodeTranscriptStreamBridge';
 import { asRecord, normalizeString, normalizeStringArray } from './openCodeParsing';
@@ -144,7 +145,7 @@ export function createOpenCodeServerRuntime(params: {
   let selectedAgent: string | null = null;
   let selectedModel: OpenCodeModelRef | null = null;
   const configOverrides: Record<string, unknown> = {};
-  let omitCustomMessageIdOnFirstPromptAfterResume = false;
+  let omitCustomMessageIdForResumedSession = false;
   let didSendChangeTitleInstructionForSession = false;
   let ensuredMcpServersForDirectory = false;
   const ensuredMcpServerNames = new Set<string>();
@@ -158,6 +159,7 @@ export function createOpenCodeServerRuntime(params: {
   let turnPromptTextForBackfill = '';
   let turnPrePromptMessageIdsAll: ReadonlySet<string> | null = null;
   let turnPreexistingMessageIds: ReadonlySet<string> | null = null;
+  const turnAssistantMessageIds = new Set<string>();
   const turnStreamedAssistantMessageIds = new Set<string>();
   const turnBackfilledAssistantMessageIds = new Set<string>();
   let turnAssistantBackfillAttempts = 0;
@@ -186,6 +188,13 @@ export function createOpenCodeServerRuntime(params: {
 
   let turnStreamKey: string | null = null;
   const accumulatedTextByPartKey = new Map<string, string>();
+  const pendingInlinePartSnapshotsByMessagePartKey = new Map<string, {
+    text: string;
+    partType: string;
+    remoteSessionId: string;
+    messageID: string;
+    sidechainId: string | null;
+  }>();
 
   const resolveSessionPermissionRuleset = (): ReadonlyArray<{ permission: string; pattern: string; action: 'ask' | 'allow' | 'deny' }> =>
     buildOpenCodeSessionPermissionRuleset(params.getPermissionMode?.() ?? 'default');
@@ -512,6 +521,7 @@ export function createOpenCodeServerRuntime(params: {
     turnPromptTextForBackfill = '';
     turnPrePromptMessageIdsAll = null;
     turnPreexistingMessageIds = null;
+    turnAssistantMessageIds.clear();
     turnStreamedAssistantMessageIds.clear();
     turnBackfilledAssistantMessageIds.clear();
     turnAssistantBackfillAttempts = 0;
@@ -526,6 +536,7 @@ export function createOpenCodeServerRuntime(params: {
     pendingTaskSidechainImportsBySidechainId.clear();
     pendingTaskChildSessionDiscoveryCallKeys.clear();
       accumulatedTextByPartKey.clear();
+      pendingInlinePartSnapshotsByMessagePartKey.clear();
       partTypeByPartKey.clear();
       toolCallSentByCallId.clear();
       toolResultSentByCallId.clear();
@@ -821,10 +832,24 @@ export function createOpenCodeServerRuntime(params: {
   const shouldTreatMessageIdAsTurnActivity = (messageID: string): boolean => {
     if (!turnPromptActive) return false;
     if (!messageID) return false;
+    if (turnAssistantMessageIds.has(messageID)) return true;
     if (turnUserMessageId && messageID === turnUserMessageId) return false;
     if (turnPreexistingMessageIds && turnPreexistingMessageIds.has(messageID)) return false;
     if (turnBackfilledAssistantMessageIds.has(messageID)) return false;
     return true;
+  };
+
+  const shouldTreatInlineSnapshotMessageIdAsTurnActivity = (messageID: string): boolean => {
+    return shouldTreatMessageIdAsTurnActivity(messageID);
+  };
+
+  const noteAssistantMessageIdForActiveTurn = (messageID: string): void => {
+    if (!turnPromptActive) return;
+    if (!messageID) return;
+    if (turnBackfilledAssistantMessageIds.has(messageID)) return;
+    if (turnStreamedAssistantMessageIds.has(messageID)) return;
+    if (turnPreexistingMessageIds?.has(messageID) && messageID !== turnUserMessageId) return;
+    turnAssistantMessageIds.add(messageID);
   };
 
   const abortTurnFailClosedDueToPermissionProtocolError = (error: unknown) => {
@@ -1352,7 +1377,7 @@ export function createOpenCodeServerRuntime(params: {
     });
   };
 
-    const sendThinkingDelta = (delta: string, remoteSessionId: string, messageID: string, sidechainId: string | null) => {
+  const sendThinkingDelta = (delta: string, remoteSessionId: string, messageID: string, sidechainId: string | null) => {
     if (!delta) return;
     turnActivitySeen = true;
     if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
@@ -1363,6 +1388,106 @@ export function createOpenCodeServerRuntime(params: {
       messageId: messageID,
       sidechainId,
     });
+  };
+
+  const applyInlinePartTextSnapshot = (paramsForSnapshot: {
+    text: string;
+    partType: string;
+    remoteSessionId: string;
+    messageID: string;
+    sidechainId: string | null;
+  }) => {
+    const { text, partType, remoteSessionId, messageID, sidechainId } = paramsForSnapshot;
+    if (!text) return;
+
+    const normalizedPartType = partType === 'reasoning' ? 'reasoning' : 'text';
+    const accumulationKey = `${remoteSessionId}:${messageID}:${normalizedPartType}`;
+    const accumulated = accumulatedTextByPartKey.get(accumulationKey) ?? '';
+    if (accumulated === text) return;
+    accumulatedTextByPartKey.set(accumulationKey, text);
+
+    if (normalizedPartType === 'reasoning') {
+      if (!accumulated) {
+        sendThinkingDelta(text, remoteSessionId, messageID, sidechainId);
+        return;
+      }
+      if (text.startsWith(accumulated)) {
+        const deltaOut = text.slice(accumulated.length);
+        if (!deltaOut) return;
+        sendThinkingDelta(deltaOut, remoteSessionId, messageID, sidechainId);
+        return;
+      }
+      transcriptStreamBridge.overrideThinkingText({
+        text,
+        streamKey: getStreamKeyForMessage(remoteSessionId, messageID),
+        remoteSessionId,
+        messageId: messageID,
+        sidechainId,
+      });
+      turnActivitySeen = true;
+      if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
+      return;
+    }
+
+    if (!accumulated) {
+      sendDelta(text, remoteSessionId, messageID, sidechainId);
+      return;
+    }
+    if (text.startsWith(accumulated)) {
+      const deltaOut = text.slice(accumulated.length);
+      if (!deltaOut) return;
+      sendDelta(deltaOut, remoteSessionId, messageID, sidechainId);
+      return;
+    }
+    turnActivitySeen = true;
+    if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
+    if (!sidechainId && sessionId && remoteSessionId === sessionId) {
+      turnStreamedAssistantMessageIds.add(messageID);
+      observedRemoteTextMessageIds.add(messageID);
+    }
+    transcriptStreamBridge.overrideAssistantText({
+      text,
+      streamKey: getStreamKeyForMessage(remoteSessionId, messageID),
+      remoteSessionId,
+      messageId: messageID,
+      sidechainId,
+    });
+  };
+
+  const queuePendingInlinePartSnapshot = (paramsForSnapshot: {
+    text: string;
+    partType: string;
+    remoteSessionId: string;
+    messageID: string;
+    sidechainId: string | null;
+  }) => {
+    const normalizedPartType = paramsForSnapshot.partType === 'reasoning' ? 'reasoning' : 'text';
+    pendingInlinePartSnapshotsByMessagePartKey.set(
+      `${paramsForSnapshot.remoteSessionId}:${paramsForSnapshot.messageID}:${normalizedPartType}`,
+      {
+        ...paramsForSnapshot,
+        partType: normalizedPartType,
+      },
+    );
+  };
+
+  const flushPendingInlineSnapshotsForMessage = (paramsForMessage: {
+    remoteSessionId: string;
+    messageID: string;
+  }): boolean => {
+    const keys = [
+      `${paramsForMessage.remoteSessionId}:${paramsForMessage.messageID}:reasoning`,
+      `${paramsForMessage.remoteSessionId}:${paramsForMessage.messageID}:text`,
+    ];
+    let applied = false;
+    for (const key of keys) {
+      const snapshot = pendingInlinePartSnapshotsByMessagePartKey.get(key);
+      if (!snapshot) continue;
+      pendingInlinePartSnapshotsByMessagePartKey.delete(key);
+      applyInlinePartTextSnapshot(snapshot);
+      applied = true;
+    }
+    return applied;
   };
 
   const sendToolFromPart = async (
@@ -1748,6 +1873,14 @@ export function createOpenCodeServerRuntime(params: {
       if (!info) return;
       const infoSessionId = normalizeString(info.sessionID);
       if (!infoSessionId || infoSessionId !== sessionId) return;
+      const infoRole = normalizeString(info.role).trim().toLowerCase();
+      const infoMessageId = normalizeString(info.id);
+      if (infoRole === 'assistant' && infoMessageId) {
+        noteAssistantMessageIdForActiveTurn(infoMessageId);
+        if (flushPendingInlineSnapshotsForMessage({ remoteSessionId: infoSessionId, messageID: infoMessageId }) && idleSignalSeen) {
+          void maybeResolveTurnOnIdleSignal();
+        }
+      }
 
       const usageTelemetry = readOpenCodeUsageTelemetryFromMessageInfo({
         info,
@@ -1794,6 +1927,36 @@ export function createOpenCodeServerRuntime(params: {
           }
         });
         return toolWork;
+      }
+      const inlineText = extractOpenCodeRuntimeRenderableTextFromPart(part);
+      const messageID = normalizeString(part.messageID);
+      if (turnPromptActive && inlineText && messageID) {
+        if (sessionID === sessionId) {
+          if (!shouldTreatInlineSnapshotMessageIdAsTurnActivity(messageID)) {
+            if (turnUserMessageId && messageID === turnUserMessageId) {
+              queuePendingInlinePartSnapshot({
+                text: inlineText,
+                partType,
+                remoteSessionId: sessionID,
+                messageID,
+                sidechainId,
+              });
+            }
+            return;
+          }
+        } else if (!sidechainId) {
+          return;
+        }
+        idleSignalSeen = false;
+        idleSignalSeenViaControlPlane = false;
+        applyInlinePartTextSnapshot({
+          text: inlineText,
+          partType,
+          remoteSessionId: sessionID,
+          messageID,
+          sidechainId,
+        });
+        return;
       }
       if (!turnPromptActive && sessionID === sessionId) {
         void importLiveCommittedTextHistoryBestEffort({ allowAssistantReplies: false });
@@ -2016,7 +2179,7 @@ export function createOpenCodeServerRuntime(params: {
       if (resumeId) {
         const existing = await c.sessionGet({ sessionId: resumeId });
         sessionId = existing.id ?? resumeId;
-        omitCustomMessageIdOnFirstPromptAfterResume = true;
+        omitCustomMessageIdForResumedSession = true;
         const sessionDirectory = normalizeString((existing as any)?.directory).trim();
         if (sessionDirectory) {
           try {
@@ -2077,7 +2240,7 @@ export function createOpenCodeServerRuntime(params: {
 
       const created: OpenCodeSession = await c.sessionCreate({ permission: [...resolveSessionPermissionRuleset()] as unknown[] });
       sessionId = created.id;
-      omitCustomMessageIdOnFirstPromptAfterResume = false;
+      omitCustomMessageIdForResumedSession = false;
       const createdDirectory = normalizeString((created as any)?.directory).trim();
       if (createdDirectory) {
         try {
@@ -2093,7 +2256,7 @@ export function createOpenCodeServerRuntime(params: {
     },
 
     async sendPrompt(prompt: string): Promise<void> {
-      const resumeBackfillLocalId = omitCustomMessageIdOnFirstPromptAfterResume
+      const resumeBackfillLocalId = omitCustomMessageIdForResumedSession
         ? `opencode-resume-local-${randomUUID()}`
         : null;
       await this.sendPromptWithMeta?.({ text: prompt, localId: resumeBackfillLocalId });
@@ -2127,7 +2290,7 @@ export function createOpenCodeServerRuntime(params: {
         return `${raw}\n\n${changeTitleInstruction}`;
       })();
 
-      const shouldOmitCustomMessageId = omitCustomMessageIdOnFirstPromptAfterResume === true;
+      const shouldOmitCustomMessageId = omitCustomMessageIdForResumedSession === true;
       const messageID = shouldOmitCustomMessageId
         ? undefined
         : (await resolveOrCreateUserMessageId(paramsWithMeta.localId ?? null)) ?? undefined;
@@ -2157,7 +2320,9 @@ export function createOpenCodeServerRuntime(params: {
       turnControlAbort = controlAbort;
       let prePromptMessageIdsForBackfill: Set<string> | null = null;
 
-      await waitForIdleBeforePromptBestEffort({ client: c, sessionId, signal: controlAbort.signal });
+      if (!shouldOmitCustomMessageId) {
+        await waitForIdleBeforePromptBestEffort({ client: c, sessionId, signal: controlAbort.signal });
+      }
       if (controlAbort.signal.aborted) {
         // Abort handling (runtime.cancel) will reject the turn; do not attempt to send another prompt.
         await thisTurnDeferred.promise;
@@ -2193,9 +2358,6 @@ export function createOpenCodeServerRuntime(params: {
           config,
           parts: [{ type: 'text', text: effectiveText }],
         });
-        if (shouldOmitCustomMessageId) {
-          omitCustomMessageIdOnFirstPromptAfterResume = false;
-        }
       } catch (error) {
         setThinking(false);
         await flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'prompt_async_error' });
@@ -2337,7 +2499,7 @@ export function createOpenCodeServerRuntime(params: {
       selectedAgent = null;
       selectedModel = null;
       currentContextWindowTokens = null;
-      omitCustomMessageIdOnFirstPromptAfterResume = false;
+      omitCustomMessageIdForResumedSession = false;
       for (const key of Object.keys(configOverrides)) delete configOverrides[key];
       ensuredMcpServersForDirectory = false;
       if (ensuredMcpServerNames.size > 0) {

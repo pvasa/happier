@@ -15,6 +15,7 @@ import { getClaudeRemoteSystemPrompt } from '@/backends/claude/utils/remoteSyste
 import { parseClaudeSdkFlagOverridesFromArgs } from '@/backends/claude/remote/sdkFlagOverrides';
 import { resolveClaudeRemoteSessionStartPlan } from '@/backends/claude/remote/sessionStartPlan';
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
+import { resolveClaudeConfigDirEnvOverlay } from '@/backends/claude/utils/resolveClaudeConfigDirEnvOverlay';
 import { resolveClaudeCodeExperimentalEnvOverlay } from '@/backends/claude/spawn/resolveClaudeCodeExperimentalEnvOverlay';
 import { normalizeClaudeToolUseNamesInSdkMessage } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { tryMergeUserMcpConfigArgsIntoHappierMcp } from '@/backends/claude/utils/mcpConfigMerge';
@@ -524,7 +525,10 @@ export async function claudeRemoteAgentSdk(opts: {
             }
 
             delete out.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
-            return { ...out };
+            return {
+                ...out,
+                ...resolveClaudeConfigDirEnvOverlay(process.env),
+            };
         };
 
         const mappedPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode(mode);

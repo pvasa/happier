@@ -143,6 +143,24 @@ describe('claudeRemote', () => {
     expect(call?.options?.env?.HAPPIER_CLAUDE_PATH).toBe('/resolved/claude-cli.js');
   });
 
+  it('forwards the resolved Claude config dir override into the remote launcher env', async () => {
+    mockQuery.mockReturnValue(messageStream(resultMessage()));
+    vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', '/tmp/happier-claude-config');
+    vi.unstubAllGlobals();
+
+    try {
+      const { claudeRemote } = await import('./claudeRemote');
+
+      await claudeRemote(createBaseOptions());
+
+      const call = mockQuery.mock.calls[0]?.[0] as QueryCall | undefined;
+      expect(call?.options?.env?.CLAUDE_CONFIG_DIR).toBe('/tmp/happier-claude-config');
+      expect(call?.options?.env?.HAPPIER_CLAUDE_PATH).toBe('/resolved/claude-cli.js');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('honors --continue in remote mode by passing continue=true to the SDK', async () => {
     mockQuery.mockReturnValue(messageStream(resultMessage()));
 

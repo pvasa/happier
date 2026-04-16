@@ -66,6 +66,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
   it('keeps upstream manual install hints on the runtime catalog for vendor-recipe providers', () => {
     expect(JSON.stringify(getProviderCliRuntimeSpec('claude'))).toContain('claude.ai/install.sh');
     expect(JSON.stringify(getProviderCliRuntimeSpec('opencode'))).toContain('opencode.ai/install');
+    expect(JSON.stringify(getProviderCliRuntimeSpec('opencode'))).toContain('npm install -g opencode-ai');
     expect(JSON.stringify(getProviderCliRuntimeSpec('kimi'))).toContain('code.kimi.com/install.sh');
   });
 
@@ -98,8 +99,23 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     ]);
     expect(getProviderCliRuntimeSpec('opencode').knownCommandCandidates).toEqual([
       { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+      { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ]);
     expect(getProviderCliRuntimeSpec('codex').knownCommandCandidates).toBeNull();
+  });
+
+  it('declares a Windows manual install recipe for OpenCode', () => {
+    expect(getProviderCliRuntimeSpec('opencode')).toMatchObject({
+      manualInstallKind: 'vendor_recipe',
+      manualInstallRecipes: {
+        win32: [
+          {
+            cmd: 'cmd.exe',
+            args: ['/c', 'npm install -g opencode-ai'],
+          },
+        ],
+      },
+    });
   });
 
   it('does not keep legacy manual install recipes for managed-install providers', () => {

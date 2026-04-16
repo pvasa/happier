@@ -18,6 +18,7 @@ const envKeys = [
     'HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS',
     'HAPPIER_FAKE_CODEX_APP_SERVER_DELAY_MS',
     'OPENAI_API_KEY',
+    'CODEX_API_KEY',
 ] as const;
 
 let envScope = createEnvKeyScope(envKeys);
@@ -37,45 +38,49 @@ describe('codexPreflightSessionControlsProbeAdapter', () => {
         }
     });
 
-    it('uses the probe timeout when spawning Codex app-server so model-scoped options do not disappear on slow model/list calls', async () => {
-        tempDir = makeTempDir('happier-codex-preflight-controls-');
+    for (const authEnvVar of ['OPENAI_API_KEY', 'CODEX_API_KEY'] as const) {
+        it(`uses the probe timeout when spawning Codex app-server so model-scoped options do not disappear on slow model/list calls (${authEnvVar})`, async () => {
+            tempDir = makeTempDir('happier-codex-preflight-controls-');
 
-        const fakeAppServerPath = fileURLToPath(new URL('./__fixtures__/fakeCodexAppServer.mjs', import.meta.url));
-        process.env.HAPPIER_CODEX_APP_SERVER_BIN = fakeAppServerPath;
-        process.env.HAPPIER_FAKE_CODEX_APP_SERVER_DELAY_MS = '600';
+            const fakeAppServerPath = fileURLToPath(new URL('./__fixtures__/fakeCodexAppServer.mjs', import.meta.url));
+            process.env.HAPPIER_CODEX_APP_SERVER_BIN = fakeAppServerPath;
+            process.env.HAPPIER_FAKE_CODEX_APP_SERVER_DELAY_MS = '600';
 
-        // Set an artificially small RPC timeout so the test proves the adapter overrides it.
-        process.env.HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS = '250';
-        // Force Speed to be ineligible (the real gating hides it when auth is API-key based).
-        process.env.OPENAI_API_KEY = 'test';
+            // Set an artificially small RPC timeout so the test proves the adapter overrides it.
+            process.env.HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS = '250';
+            // Force Speed to be ineligible (the real gating hides it when auth is API-key based).
+            process.env.OPENAI_API_KEY = undefined;
+            process.env.CODEX_API_KEY = undefined;
+            process.env[authEnvVar] = 'test';
 
-        const raw = await codexPreflightSessionControlsProbeAdapter.probeModelsRaw?.({
-            cwd: tempDir,
-            timeoutMs: 2_000,
-            backendTarget: undefined,
-            accountSettings: null,
+            const raw = await codexPreflightSessionControlsProbeAdapter.probeModelsRaw?.({
+                cwd: tempDir,
+                timeoutMs: 2_000,
+                backendTarget: undefined,
+                accountSettings: null,
+            });
+
+            expect(Array.isArray(raw)).toBe(true);
+            expect(raw).toEqual([
+                {
+                    id: 'gpt-5.4',
+                    name: 'GPT 5.4',
+                    description: 'Latest frontier agentic coding model.',
+                    modelOptions: [
+                        {
+                            id: 'reasoning_effort',
+                            name: 'Thinking',
+                            type: 'select',
+                            currentValue: 'medium',
+                            options: [
+                                { value: 'low', name: 'Low', description: 'Low' },
+                                { value: 'medium', name: 'Medium', description: 'Medium' },
+                                { value: 'high', name: 'High', description: 'High' },
+                            ],
+                        },
+                    ],
+                },
+            ]);
         });
-
-        expect(Array.isArray(raw)).toBe(true);
-        expect(raw).toEqual([
-            {
-                id: 'gpt-5.4',
-                name: 'GPT 5.4',
-                description: 'Latest frontier agentic coding model.',
-                modelOptions: [
-                    {
-                        id: 'reasoning_effort',
-                        name: 'Thinking',
-                        type: 'select',
-                        currentValue: 'medium',
-                        options: [
-                            { value: 'low', name: 'Low', description: 'Low' },
-                            { value: 'medium', name: 'Medium', description: 'Medium' },
-                            { value: 'high', name: 'High', description: 'High' },
-                        ],
-                    },
-                ],
-            },
-        ]);
-    });
+    }
 });

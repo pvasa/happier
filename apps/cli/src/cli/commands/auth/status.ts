@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import os from 'node:os';
 
+import { validateStoredAuthTokenAgainstActiveServer } from '@/auth/validateStoredAuthTokenAgainstActiveServer';
 import { readCredentials, readSettings } from '@/persistence';
 import { configuration } from '@/configuration';
 import { checkIfDaemonRunningAndCleanupStaleState } from '@/daemon/controlClient';
@@ -23,6 +24,19 @@ export async function handleAuthStatus(argv: string[] = []): Promise<void> {
   if (!credentials) {
     console.log(chalk.red('✗ Not authenticated'));
     console.log(chalk.gray('  Run "happier auth login" to authenticate'));
+    return;
+  }
+
+  const authValidation = await validateStoredAuthTokenAgainstActiveServer(credentials.token);
+  if (authValidation.state === 'invalid') {
+    if (json) {
+      printJsonEnvelope({ ok: false, kind: 'auth_status', error: { code: 'not_authenticated' } });
+      return;
+    }
+
+    console.log(chalk.red('✗ Not authenticated'));
+    console.log(chalk.gray('  Stored credentials were rejected by the selected server'));
+    console.log(chalk.gray('  Run "happier auth login --force" to authenticate again'));
     return;
   }
 

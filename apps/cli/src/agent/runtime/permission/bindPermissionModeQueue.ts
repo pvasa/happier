@@ -28,27 +28,27 @@ export type InFlightSteerController = Readonly<{
 }>;
 
 export function registerPermissionModeMessageQueueBinding(opts: {
-  session: {
-    onUserMessage: (handler: (message: UserMessage) => void) => void;
-    updateMetadata: (updater: (current: Metadata) => Metadata) => Promise<void> | void;
-    getMetadataSnapshot?: () => unknown;
-    refreshSessionSnapshotFromServerBestEffort?: (opts?: { reason: 'connect' | 'waitForMetadataUpdate' }) => Promise<void>;
-  };
+  session: PermissionModeQueueSessionBinding;
   queue: SpecialCommandQueue<{ permissionMode: PermissionMode; appendSystemPrompt?: string | null }, PermissionModeQueuedPrompt>;
   getCurrentPermissionMode: () => PermissionMode | undefined;
   setCurrentPermissionMode: (mode: PermissionMode | undefined) => void;
   inFlightSteer?: InFlightSteerController | null;
-}): void {
+}): { bindSession: (session: PermissionModeQueueSessionBinding) => void } {
   let steerSequence: Promise<void> = Promise.resolve();
   let didReplaySeedBootstrapForSteer = false;
+  let currentSession = opts.session;
 
-  opts.session.onUserMessage((message) => {
+  const handleMessage = (session: PermissionModeQueueSessionBinding, message: UserMessage) => {
+    if (currentSession !== session) {
+      return;
+    }
+
     const previousPermissionMode = opts.getCurrentPermissionMode();
     const resolvedMode = resolvePermissionModeForQueueingUserMessage({
       currentPermissionMode: previousPermissionMode,
       messagePermissionModeRaw: message.meta?.permissionMode,
       updateMetadata: (updater) =>
-        updateMetadataBestEffort(opts.session, updater, '[permissionMode]', 'permission_mode_from_user_message'),
+        updateMetadataBestEffort(session, updater, '[permissionMode]', 'permission_mode_from_user_message'),
       nowMs: () => resolvePermissionModeUpdatedAtFromMessage(message),
     });
 
@@ -74,13 +74,13 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       steerSequence = steerSequence.then(async () => {
         try {
           let providerText = text;
-          if (typeof opts.session.getMetadataSnapshot === 'function') {
+          if (typeof session.getMetadataSnapshot === 'function') {
             try {
               const seedResolution = await resolveProviderPromptWithReplaySeed({
                 session: {
-                  getMetadataSnapshot: opts.session.getMetadataSnapshot,
-                  updateMetadata: opts.session.updateMetadata,
-                  refreshSessionSnapshotFromServerBestEffort: opts.session.refreshSessionSnapshotFromServerBestEffort,
+                  getMetadataSnapshot: session.getMetadataSnapshot,
+                  updateMetadata: session.updateMetadata,
+                  refreshSessionSnapshotFromServerBestEffort: session.refreshSessionSnapshotFromServerBestEffort,
                 },
                 userText: text,
                 allowSeed: true,
@@ -125,5 +125,23 @@ export function registerPermissionModeMessageQueueBinding(opts: {
         ...resolveAppendSystemPromptModeOverride(message.meta),
       },
     });
-  });
+  };
+
+  const bindSession = (session: PermissionModeQueueSessionBinding) => {
+    currentSession = session;
+    session.onUserMessage((message) => {
+      handleMessage(session, message);
+    });
+  };
+
+  bindSession(opts.session);
+
+  return { bindSession };
 }
+
+type PermissionModeQueueSessionBinding = {
+  onUserMessage: (handler: (message: UserMessage) => void) => void;
+  updateMetadata: (updater: (current: Metadata) => Metadata) => Promise<void> | void;
+  getMetadataSnapshot?: () => unknown;
+  refreshSessionSnapshotFromServerBestEffort?: (opts?: { reason: 'connect' | 'waitForMetadataUpdate' }) => Promise<void>;
+};

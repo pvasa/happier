@@ -10,6 +10,7 @@ import { getClaudeRemoteSystemPrompt } from "./utils/remoteSystemPrompt";
 import { parseClaudeSdkFlagOverridesFromArgs } from "./remote/sdkFlagOverrides";
 import { resolveClaudeRemoteSessionStartPlan } from "./remote/sessionStartPlan";
 import { resolveClaudeConfigDirOverride } from "./utils/resolveClaudeConfigDirOverride";
+import { resolveClaudeConfigDirEnvOverlay } from "./utils/resolveClaudeConfigDirEnvOverlay";
 import { resolveClaudeCodeExperimentalEnvOverlay } from "./spawn/resolveClaudeCodeExperimentalEnvOverlay";
 import { ensureClaudeJsRuntimeExecutable } from "./utils/ensureClaudeJsRuntimeExecutable";
 import { resolveClaudeCliPath } from "./utils/resolveClaudeCliPath";
@@ -221,9 +222,12 @@ export async function claudeRemote(opts: {
     const extraArgs = [...effortArgs, ...(settingSourcesArgs ?? []), ...(passthroughMcpArgs ?? []), ...(injectedMcpArgs ?? [])];
     const runtimeExecutable = await ensureClaudeJsRuntimeExecutable(opts.jsRuntime);
     const resolvedClaudeCliPath = resolveClaudeCliPath();
-    const launcherEnv = resolveClaudeCodeExperimentalEnvOverlay({
-        claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
-    });
+    const launcherEnv = {
+        ...resolveClaudeCodeExperimentalEnvOverlay({
+            claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
+        }),
+        ...resolveClaudeConfigDirEnvOverlay(process.env),
+    };
     if (!launcherEnv.HAPPIER_CLAUDE_PATH && !launcherEnv.HAPPY_CLAUDE_PATH) {
         launcherEnv.HAPPIER_CLAUDE_PATH = resolvedClaudeCliPath;
     }

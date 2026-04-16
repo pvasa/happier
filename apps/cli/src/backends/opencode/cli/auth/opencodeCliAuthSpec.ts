@@ -1,6 +1,10 @@
 import { createCatalogCliAuthSpec } from '@/capabilities/cliAuth/createCatalogCliAuthSpec';
 import { runCliCommandBestEffort } from '@/capabilities/cliAuth/shared';
 import type { CliAuthSpec } from '@/backends/types';
+import {
+  probeOpenAiCodexOauthRefreshToken,
+  readOpenCodeOauthRefreshToken,
+} from '@/backends/opencode/shared/openCodeAuthState';
 
 const DEFAULT_OPENCODE_CLI_AUTH_PROBE_TIMEOUT_MS = 6_000;
 
@@ -32,11 +36,26 @@ export const opencodeCliAuthSpec: CliAuthSpec = createCatalogCliAuthSpec('openco
     });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
     if (result.ok && combined.length > 0) {
+      const accountLabel = extractAccountLabel(combined);
+      const refreshToken = readOpenCodeOauthRefreshToken();
+      if (refreshToken) {
+        const refreshTokenState = await probeOpenAiCodexOauthRefreshToken(refreshToken);
+        if (refreshTokenState === 'invalid') {
+          return {
+            state: 'logged_out',
+            reason: 'probe_failed',
+            source: 'mixed',
+            ...(accountLabel ? { accountLabel } : {}),
+            method: 'oauth_cli',
+          };
+        }
+      }
+
       return {
         state: 'logged_in',
         method: 'oauth_cli',
         source: 'command',
-        ...(extractAccountLabel(combined) ? { accountLabel: extractAccountLabel(combined) } : {}),
+        ...(accountLabel ? { accountLabel } : {}),
       };
     }
     return {

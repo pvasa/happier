@@ -5,27 +5,39 @@ import { registerPermissionModeMessageQueueBinding } from './bindPermissionModeQ
 import type { PermissionModeQueuedPrompt } from '@/agent/runtime/permission/permissionModeQueuedPrompt';
 
 describe('registerPermissionModeMessageQueueBinding', () => {
-  function createHarness() {
+  function createSessionHarness(initialMetadata?: Metadata) {
     let userMessageHandler: ((message: UserMessage) => void) | null = null;
+    let metadata =
+      initialMetadata ?? ({ permissionMode: 'default', permissionModeUpdatedAt: 0 } as unknown as Metadata);
+
+    return {
+      session: {
+        onUserMessage: (handler: (message: UserMessage) => void) => {
+          userMessageHandler = handler;
+        },
+        updateMetadata: (updater: (current: Metadata) => Metadata) => {
+          metadata = updater(metadata);
+        },
+      },
+      emit: (message: UserMessage) => {
+        if (!userMessageHandler) throw new Error('missing onUserMessage handler');
+        userMessageHandler(message);
+      },
+      getMetadata: () => metadata,
+    };
+  }
+
+  function createHarness() {
     const queueCalls: Array<{
       type: 'push' | 'clear';
       message: PermissionModeQueuedPrompt;
       mode: { permissionMode: PermissionMode; appendSystemPrompt?: string | null };
     }> = [];
     let currentPermissionMode: PermissionMode | undefined;
-    let metadata = { permissionMode: 'default', permissionModeUpdatedAt: 0 } as unknown as Metadata;
+    const sessionHarness = createSessionHarness();
 
-    const session = {
-      onUserMessage: (handler: (message: UserMessage) => void) => {
-        userMessageHandler = handler;
-      },
-      updateMetadata: (updater: (current: Metadata) => Metadata) => {
-        metadata = updater(metadata);
-      },
-    };
-
-    registerPermissionModeMessageQueueBinding({
-      session,
+    const binding = registerPermissionModeMessageQueueBinding({
+      session: sessionHarness.session,
       queue: {
         push: (message: PermissionModeQueuedPrompt, mode: { permissionMode: PermissionMode }) =>
           queueCalls.push({ type: 'push', message, mode }),
@@ -39,12 +51,10 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     });
 
     return {
-      emit: (message: UserMessage) => {
-        if (!userMessageHandler) throw new Error('missing onUserMessage handler');
-        userMessageHandler(message);
-      },
+      bindSession: binding.bindSession,
+      emit: sessionHarness.emit,
       getCurrentPermissionMode: () => currentPermissionMode,
-      getMetadata: () => metadata,
+      getMetadata: sessionHarness.getMetadata,
       queueCalls,
     };
   }
@@ -89,6 +99,55 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         mode: { permissionMode: 'safe-yolo' },
       },
     ]);
+  });
+
+  it('updates metadata through the rebound session after bindSession swaps the client', () => {
+    const harness = createHarness();
+    const reboundSession = createSessionHarness();
+
+    harness.bindSession(reboundSession.session);
+
+    reboundSession.emit({
+      role: 'user',
+      content: { type: 'text', text: 'approve this' },
+      localId: 'local-rebind-1',
+      meta: { permissionMode: 'acceptEdits' },
+      createdAt: 42,
+    } as UserMessage);
+
+    expect(reboundSession.getMetadata().permissionMode).toBe('safe-yolo');
+    expect(reboundSession.getMetadata().permissionModeUpdatedAt).toBe(42);
+    expect(harness.getMetadata().permissionMode).toBe('default');
+    expect(harness.getMetadata().permissionModeUpdatedAt).toBe(0);
+    expect(harness.queueCalls).toEqual([
+      {
+        type: 'push',
+        message: { text: 'approve this', localId: 'local-rebind-1' },
+        mode: { permissionMode: 'safe-yolo' },
+      },
+    ]);
+  });
+
+  it('ignores old-session user messages after bindSession swaps to a new client', () => {
+    const harness = createHarness();
+    const reboundSession = createSessionHarness();
+
+    harness.bindSession(reboundSession.session);
+
+    harness.emit({
+      role: 'user',
+      content: { type: 'text', text: 'stale session message' },
+      localId: 'local-stale-1',
+      meta: { permissionMode: 'acceptEdits' },
+      createdAt: 42,
+    } as UserMessage);
+
+    expect(harness.getCurrentPermissionMode()).toBeUndefined();
+    expect(harness.getMetadata().permissionMode).toBe('default');
+    expect(harness.getMetadata().permissionModeUpdatedAt).toBe(0);
+    expect(reboundSession.getMetadata().permissionMode).toBe('default');
+    expect(reboundSession.getMetadata().permissionModeUpdatedAt).toBe(0);
+    expect(harness.queueCalls).toEqual([]);
   });
 
   it('routes clear commands through isolate-and-clear queue path', () => {

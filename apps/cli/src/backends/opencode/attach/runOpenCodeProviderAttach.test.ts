@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const { resolveWindowsCommandInvocationMock } = vi.hoisted(() => ({
+  resolveWindowsCommandInvocationMock: vi.fn((
+    { command, args }: { command: string; args: readonly string[] },
+  ): { command: string; args: string[]; windowsVerbatimArguments?: boolean } => ({
+    command,
+    args: [...args],
+  })),
+}));
+
+vi.mock('@happier-dev/cli-common/process', () => ({
+  resolveWindowsCommandInvocation: resolveWindowsCommandInvocationMock,
+}));
+
 import { runOpenCodeProviderAttach } from './runOpenCodeProviderAttach';
 import type { ProviderCliLaunchSpec } from '@/runtime/managedTools/requireProviderCliLaunchSpec';
 
@@ -197,6 +210,47 @@ describe('runOpenCodeProviderAttach', () => {
       '/tmp/custom-node',
       ['/tmp/custom-opencode', 'attach', 'http://127.0.0.1:9999', '--dir', '/tmp/opencode-workspace', '--session', 'opencode-session-4'],
       expect.any(Object),
+    );
+  });
+
+  it('wraps Windows shell shims before launching provider attach', async () => {
+    const spawnProcess = vi.fn(() => ({
+      once: (event: string, handler: (...args: any[]) => void) => {
+        if (event === 'exit') setImmediate(() => handler(0, null));
+      },
+    }));
+    resolveWindowsCommandInvocationMock.mockReturnValueOnce({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD attach http://127.0.0.1:7777 --dir C:\\repo --session opencode-session-6"'],
+      windowsVerbatimArguments: true,
+    });
+
+    await expect(runOpenCodeProviderAttach({
+      sessionId: 'sid_opencode_6',
+      metadata: {
+        path: 'C:\\repo',
+        opencodeSessionId: 'opencode-session-6',
+        opencodeBackendMode: 'server',
+      },
+      spawnProcess: spawnProcess as any,
+      readManagedServerStateFn: async () => ({ baseUrl: 'http://127.0.0.1:7777' } as any),
+      resolveCommandFn: (): ProviderCliLaunchSpec => ({
+        source: 'system',
+        resolvedPath: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+        command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+        args: [],
+      }),
+      env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } as NodeJS.ProcessEnv,
+    })).resolves.toBe(0);
+
+    expect(resolveWindowsCommandInvocationMock).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      args: ['attach', 'http://127.0.0.1:7777', '--dir', 'C:\\repo', '--session', 'opencode-session-6'],
+    }));
+    expect(spawnProcess).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\cmd.exe',
+      ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD attach http://127.0.0.1:7777 --dir C:\\repo --session opencode-session-6"'],
+      expect.objectContaining({ shell: false, windowsVerbatimArguments: true }),
     );
   });
 });

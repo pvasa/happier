@@ -8,6 +8,7 @@
 import { AcpBackend, type AcpBackendOptions, type AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { AgentBackend, AgentFactoryOptions, McpServerConfig } from '@/agent/core';
 import { resolveCodexAcpSpawn, type SpawnSpec } from '@/backends/codex/acp/resolveCommand';
+import { resolveCodexApiKeyAuthMethodId } from '@/backends/codex/cli/auth/readCodexEnvironmentAuthState';
 import type { PermissionMode } from '@/api/types';
 import { CodexAcpTransport } from './transport';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
@@ -49,13 +50,7 @@ export function createCodexAcpBackend(options: CodexAcpBackendOptions): CodexAcp
     env: mergedEnv,
   });
 
-  const authMethodId = (() => {
-    const openAiKey = typeof mergedEnv.OPENAI_API_KEY === 'string' ? mergedEnv.OPENAI_API_KEY.trim() : '';
-    if (openAiKey) return 'openai-api-key';
-    const codexKey = typeof mergedEnv.CODEX_API_KEY === 'string' ? mergedEnv.CODEX_API_KEY.trim() : '';
-    if (codexKey) return 'codex-api-key';
-    return undefined;
-  })();
+  const authMethodId = resolveCodexApiKeyAuthMethodId(mergedEnv);
 
   const backendOptions: AcpBackendOptions = {
     agentName: 'codex',

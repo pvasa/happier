@@ -1,14 +1,20 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
+
 import { readOpenCodeSessionAffinityFromMetadata } from '../utils/opencodeSessionAffinity';
 import { resolveOpenCodeCliLaunchSpec } from '../utils/resolveOpenCodeCliCommand';
 import type { OpenCodeSessionBundle } from '../../../session/handoff/types';
 import { OPEN_CODE_EXPORT_MAX_BUFFER_BYTES, OPEN_CODE_IMPORT_EXPORT_JSON_MAX_BYTES } from './opencodeHandoffLimits';
 
-type ExecFileAsync = (command: string, args: readonly string[]) => Promise<Readonly<{ stdout: string; stderr: string }>>;
+type ExecFileAsync = (
+  command: string,
+  args: readonly string[],
+  options?: Readonly<{ windowsVerbatimArguments?: boolean }>,
+) => Promise<Readonly<{ stdout: string; stderr: string }>>;
 
-const execFileAsync: ExecFileAsync = async (command, args) =>
+const execFileAsync: ExecFileAsync = async (command, args, options) =>
   await new Promise((resolve, reject) => {
     execFileCallback(
       command,
@@ -16,6 +22,7 @@ const execFileAsync: ExecFileAsync = async (command, args) =>
       {
         encoding: 'utf8',
         maxBuffer: OPEN_CODE_EXPORT_MAX_BUFFER_BYTES,
+        ...(options?.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -38,7 +45,17 @@ export async function exportOpenCodeSessionBundle(params: Readonly<{
 }>): Promise<OpenCodeSessionBundle> {
   const execFile = params.execFile ?? execFileAsync;
   const launch = resolveOpenCodeCliLaunchSpec(params.processEnv);
-  const result = await execFile(launch.command, [...launch.args, 'export', params.remoteSessionId]);
+  const invocation = resolveWindowsCommandInvocation({
+    command: launch.command,
+    args: [...launch.args, 'export', params.remoteSessionId],
+    env: params.processEnv ?? process.env,
+    resolveCommandOnPath: false,
+  });
+  const result = await execFile(
+    invocation.command,
+    invocation.args,
+    invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : undefined,
+  );
   if (Buffer.byteLength(result.stdout, 'utf8') > OPEN_CODE_IMPORT_EXPORT_JSON_MAX_BYTES) {
     throw new Error(`OpenCode handoff export payload exceeds size limit (${OPEN_CODE_IMPORT_EXPORT_JSON_MAX_BYTES} bytes)`);
   }

@@ -1077,7 +1077,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(unhandled).toEqual([]);
   });
 
-  it('omits custom messageID for the first prompt after resume and restores it on later prompts', async () => {
+  it('omits custom messageID for resumed prompts so OpenCode can keep assigning vendor user ids after resume', async () => {
     const client = createFakeClient();
     const session = createFakeSession();
     const runtime = createOpenCodeServerRuntime({
@@ -1125,7 +1125,7 @@ describe('createOpenCodeServerRuntime', () => {
       sessionId: 'ses_remote',
       parts: [{ type: 'text', text: 'second after resume' }],
     });
-    expect(secondCall.messageId).toMatch(/^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
+    expect(secondCall.messageId).toBeUndefined();
 
     client.__emit({
       directory: '/tmp',
@@ -1140,6 +1140,70 @@ describe('createOpenCodeServerRuntime', () => {
       payload: { type: 'session.idle', properties: { sessionID: 'ses_remote' } },
     });
     await expect(secondPromptPromise).resolves.toBeUndefined();
+  });
+
+  it('does not block the first prompt after resume behind a stale busy status snapshot', async () => {
+    const prevPollInterval = process.env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_INTERVAL_MS;
+    const prevStatusPoll = process.env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED;
+    const prevPrePromptWaitMs = process.env.HAPPIER_OPENCODE_SERVER_PREPROMPT_IDLE_WAIT_MS;
+    process.env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_INTERVAL_MS = '25';
+    process.env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED = '1';
+    process.env.HAPPIER_OPENCODE_SERVER_PREPROMPT_IDLE_WAIT_MS = '5000';
+    try {
+      const resumedSessionId = 'ses_1';
+      const client = createFakeClient();
+      client.sessionGet = vi.fn(async () => ({ id: resumedSessionId }));
+      client.sessionStatusList = vi.fn(async () => ({ ses_1: { type: 'busy' } }));
+
+      const session = createFakeSession();
+      const runtime = createOpenCodeServerRuntime({
+        directory: '/tmp',
+        session,
+        messageBuffer: new MessageBuffer(),
+        mcpServers: {},
+        permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+        onThinkingChange: vi.fn(),
+      }, {
+        createClient: async () => client as any,
+      });
+
+      await runtime.startOrLoad({ resumeId: 'ses_remote' });
+
+      runtime.beginTurn();
+      const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'first after resume', localId: 'resume-local-stale-busy' });
+
+      await expect.poll(() => client.sessionPromptAsync.mock.calls.length, { timeout: 200 }).toBe(1);
+
+      client.__emit({
+        directory: '/tmp',
+        payload: { type: 'message.part.updated', properties: { part: { id: 'part_resume_stale_busy', type: 'text', sessionID: resumedSessionId } } },
+      });
+      client.__emit({
+        directory: '/tmp',
+        payload: {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: resumedSessionId,
+            messageID: 'msg_asst_resume_stale_busy',
+            partID: 'part_resume_stale_busy',
+            delta: 'ok',
+          },
+        },
+      });
+      client.__emit({
+        directory: '/tmp',
+        payload: { type: 'session.idle', properties: { sessionID: resumedSessionId } },
+      });
+
+      await expect(promptPromise).resolves.toBeUndefined();
+    } finally {
+      if (prevPollInterval === undefined) delete process.env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_INTERVAL_MS;
+      else process.env.HAPPIER_OPENCODE_SERVER_CONTROL_POLL_INTERVAL_MS = prevPollInterval;
+      if (prevStatusPoll === undefined) delete process.env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED;
+      else process.env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED = prevStatusPoll;
+      if (prevPrePromptWaitMs === undefined) delete process.env.HAPPIER_OPENCODE_SERVER_PREPROMPT_IDLE_WAIT_MS;
+      else process.env.HAPPIER_OPENCODE_SERVER_PREPROMPT_IDLE_WAIT_MS = prevPrePromptWaitMs;
+    }
   });
 
   it('backfills vendor-assigned user messageID for the first prompt after resume', async () => {
@@ -3507,6 +3571,253 @@ describe('createOpenCodeServerRuntime', () => {
         process.env.HAPPIER_OPENCODE_SERVER_STATUS_POLL_ENABLED = prevStatusPoll;
       }
     }
+  });
+
+  it('streams inline assistant text snapshots from message.part.updated when no assistant delta arrives', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'inline snapshot please', localId: 'local-inline-updated-1' });
+    await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+
+    client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'part_inline_1',
+            type: 'text',
+            sessionID: 'ses_1',
+            messageID: 'msg_asst_inline_1',
+            text: 'INLINE_UPDATED_E2E_OK',
+          },
+        },
+      },
+    });
+    client.__emit({
+      directory: '/tmp',
+      payload: { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    });
+
+    const outcome = await Promise.race([
+      promptPromise.then(() => 'resolved' as const),
+      new Promise<'timeout'>((resolve) => {
+        const timer = setTimeout(() => resolve('timeout'), 250);
+        timer.unref?.();
+      }),
+    ]);
+
+    expect(outcome).toBe('resolved');
+    await flushTranscriptCommitMicrotasks();
+
+    const matching = getCommittedTranscriptRows(session, { type: 'message' }).filter(
+      (row) => String(row.meta?.happierStreamKey ?? '').includes('msg_asst_inline_1'),
+    );
+    expect(matching[matching.length - 1]?.body?.message).toContain('INLINE_UPDATED_E2E_OK');
+  });
+
+  it('streams inline reasoning snapshots from message.part.updated when no reasoning delta arrives', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'inline reasoning please', localId: 'local-inline-reasoning-1' });
+    await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+
+    client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'part_inline_reasoning_1',
+            type: 'reasoning',
+            sessionID: 'ses_1',
+            messageID: 'msg_asst_inline_reasoning_1',
+            text: 'INLINE_REASONING_UPDATED_OK',
+          },
+        },
+      },
+    });
+    client.__emit({
+      directory: '/tmp',
+      payload: { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    });
+
+    await expect(promptPromise).resolves.toBeUndefined();
+    await flushTranscriptCommitMicrotasks();
+
+    const matching = getCommittedTranscriptRows(session, { type: 'thinking' }).filter(
+      (row) => String(row.meta?.happierStreamKey ?? '').includes('msg_asst_inline_reasoning_1'),
+    );
+    expect(matching[matching.length - 1]?.body?.text).toContain('INLINE_REASONING_UPDATED_OK');
+  });
+
+  it.each([
+    {
+      name: 'after the assistant role update',
+      expectedOutcome: 'resolved' as const,
+      expectedMessage: 'INLINE_REUSED_ID_E2E_OK',
+      emitSequence: async (client: ReturnType<typeof createFakeClient>, messageId: string) => {
+        client.__emit({
+          directory: '/tmp',
+          payload: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: messageId,
+                role: 'assistant',
+                sessionID: 'ses_1',
+              },
+            },
+          },
+        });
+        client.__emit({
+          directory: '/tmp',
+          payload: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'part_inline_reused_1',
+                type: 'text',
+                sessionID: 'ses_1',
+                messageID: messageId,
+                text: 'INLINE_REUSED_ID_E2E_OK',
+              },
+            },
+          },
+        });
+      },
+    },
+    {
+      name: 'before the assistant role update',
+      expectedOutcome: 'resolved' as const,
+      expectedMessage: 'INLINE_REUSED_ID_E2E_OK',
+      emitSequence: async (client: ReturnType<typeof createFakeClient>, messageId: string) => {
+        client.__emit({
+          directory: '/tmp',
+          payload: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'part_inline_reused_1',
+                type: 'text',
+                sessionID: 'ses_1',
+                messageID: messageId,
+                text: 'INLINE_REUSED_ID_E2E_OK',
+              },
+            },
+          },
+        });
+        client.__emit({
+          directory: '/tmp',
+          payload: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: messageId,
+                role: 'assistant',
+                sessionID: 'ses_1',
+              },
+            },
+          },
+        });
+      },
+    },
+    {
+      name: 'without any assistant role update',
+      expectedOutcome: 'timeout' as const,
+      expectedMessage: null,
+      emitSequence: async (client: ReturnType<typeof createFakeClient>, messageId: string) => {
+        client.__emit({
+          directory: '/tmp',
+          payload: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'part_inline_reused_1',
+                type: 'text',
+                sessionID: 'ses_1',
+                messageID: messageId,
+                text: 'INLINE_REUSED_ID_E2E_OK',
+              },
+            },
+          },
+        });
+      },
+    },
+  ])('handles inline assistant text snapshots when OpenCode reuses the prompt message id $name', async ({ emitSequence, expectedOutcome, expectedMessage }) => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'inline reused id please', localId: 'local-inline-updated-reused-1' });
+    await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+    const firstCall = client.sessionPromptAsync.mock.calls.at(0)?.at(0) as any;
+
+    await emitSequence(client, firstCall.messageId);
+    client.__emit({
+      directory: '/tmp',
+      payload: { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    });
+
+    const outcome = await Promise.race([
+      promptPromise.then(() => 'resolved' as const),
+      new Promise<'timeout'>((resolve) => {
+        const timer = setTimeout(() => resolve('timeout'), 250);
+        timer.unref?.();
+      }),
+    ]);
+
+    expect(outcome).toBe(expectedOutcome);
+    await flushTranscriptCommitMicrotasks();
+
+    const matching = getCommittedTranscriptRows(session, { type: 'message' }).filter(
+      (row) => String(row.meta?.happierStreamKey ?? '').includes(firstCall.messageId),
+    );
+    if (expectedMessage === null) {
+      expect(matching).toHaveLength(0);
+      return;
+    }
+    expect(matching[matching.length - 1]?.body?.message).toContain(expectedMessage);
   });
 
   it('aborts turns when control-plane status polling repeatedly fails (prevents wedged thinking)', async () => {

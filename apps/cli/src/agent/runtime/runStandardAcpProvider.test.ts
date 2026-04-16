@@ -530,6 +530,7 @@ describe('runStandardAcpProvider', () => {
     const callOrder: string[] = [];
     let swappedHookParams: unknown = null;
     let finishHook: (() => void) | null = null;
+    const rebindSession = vi.fn();
     const onSessionSwap = vi.fn(async (params: unknown) => {
       swappedHookParams = params;
       callOrder.push('hook:start');
@@ -541,6 +542,17 @@ describe('runStandardAcpProvider', () => {
       });
     });
     harness.config.onSessionSwap = onSessionSwap as any;
+    harness.deps.createPermissionModeQueueStateFn = () => ({
+      messageQueue: {
+        reset: () => undefined,
+        size: () => 0,
+      },
+      rebindSession,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => undefined,
+      getCurrentPermissionModeUpdatedAt: () => 0,
+      setCurrentPermissionModeUpdatedAt: () => undefined,
+    });
 
     harness.deps.initializeBackendRunSessionFn = async ({ onSessionSwap: notifySessionSwap, metadata }: any) => {
       expect((metadata as any).auggieAllowIndexing).toBe(true);
@@ -573,6 +585,7 @@ describe('runStandardAcpProvider', () => {
     await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
 
     expect(onSessionSwap).toHaveBeenCalledTimes(1);
+    expect(rebindSession).toHaveBeenCalledTimes(1);
     expect(swappedHookParams).toMatchObject({
       session: expect.objectContaining({ sessionId: 'session-2' }),
     });
@@ -604,7 +617,7 @@ describe('runStandardAcpProvider', () => {
     expect(harness.metrics.archiveCalls).toBe(0);
   });
 
-  it('invokes kill handler lifecycle and archives session', async () => {
+  it('invokes kill handler lifecycle without archiving the session', async () => {
     const harness = createHarness();
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     harness.deps.runPermissionModePromptLoopFn = async () => {
@@ -618,7 +631,7 @@ describe('runStandardAcpProvider', () => {
       exitSpy.mockRestore();
     }
 
-    expect(harness.metrics.archiveCalls).toBe(1);
+    expect(harness.metrics.archiveCalls).toBe(0);
     expect(harness.metrics.cleanupCalls).toBe(1);
   });
 

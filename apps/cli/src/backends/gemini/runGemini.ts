@@ -47,6 +47,7 @@ import { resolvePermissionModeSeedForAgentStart } from '@/settings/permissions/p
 import { shouldSendReadyPushNotification } from '@/settings/notifications/notificationsPolicy';
 import { resolveAttachedRunRuntimeContext } from '@/agent/runtime/resolveAttachedRunRuntimeContext';
 import { archiveAndCloseRuntimeSession } from '@/session/services/archiveAndCloseRuntimeSession';
+import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
 
 import type { AgentBackend } from '@/agent';
 import { GeminiDiffProcessor } from '@/backends/gemini/utils/diffProcessor';
@@ -503,13 +504,18 @@ export async function runGemini(opts: {
   terminationHandlers = registerRunnerTerminationHandlers({
     process,
     exit: (code) => process.exit(code),
-    onTerminate: async (_event, outcome) => {
+    onTerminate: async (event, outcome) => {
       shouldExit = true;
       await handleAbort();
+      const archiveDecision = resolveTerminationArchiveDecision({
+        startedBy: opts.startedBy,
+        event,
+        outcome,
+      });
 
       try {
-        if (outcome.archive) {
-          await archiveAndCloseRuntimeSession(session, opts.credentials, outcome.archiveReason);
+        if (archiveDecision.archive) {
+          await archiveAndCloseRuntimeSession(session, opts.credentials, archiveDecision.archiveReason);
         }
       } catch (e) {
         logger.debug('[Gemini] Failed to archive session during termination (non-fatal)', e);

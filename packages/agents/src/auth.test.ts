@@ -33,7 +33,15 @@ describe('AGENT_AUTH_PROBE_CONFIG', () => {
       statusCommand: ['login', 'status'],
       parser: 'codexLoginStatus',
       backgroundChecks: 'safe',
+      envVars: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     });
+  });
+
+  it('supports both current and legacy Claude credential file layouts', () => {
+    expect(getAgentAuthProbeConfig('claude').credentialPaths).toEqual([
+      '~/.claude/.credentials.json',
+      '~/.claude/.claude.json',
+    ]);
   });
 
   it('derives auth probe binary names from the provider runtime catalog', () => {

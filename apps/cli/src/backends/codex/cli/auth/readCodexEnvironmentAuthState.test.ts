@@ -61,6 +61,20 @@ describe('readCodexEnvironmentAuthState', () => {
     });
   });
 
+  it('accepts CODEX_API_KEY env auth without an auth file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-codex-auth-state-'));
+    tempDirs.push(dir);
+
+    expect(readCodexEnvironmentAuthState({
+      HOME: dir,
+      USERPROFILE: dir,
+      CODEX_API_KEY: 'codex-test-key',
+    })).toEqual({
+      method: 'api_key_env',
+      accountLabel: null,
+    });
+  });
+
   it('expands ~/ CODEX_HOME against the provided HOME before reading auth.json', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-codex-auth-state-home-'));
     tempDirs.push(dir);

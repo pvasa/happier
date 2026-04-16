@@ -1275,6 +1275,64 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         }
     });
 
+    it('forwards the resolved Claude config dir override to the Claude subprocess env', async () => {
+        const originalHappierClaudeConfigDir = process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+        const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+        process.env.HAPPIER_CLAUDE_CONFIG_DIR = '/tmp/happier-claude-config';
+        delete process.env.CLAUDE_CONFIG_DIR;
+
+        try {
+            let capturedOptions: any = null;
+
+            const createQuery = vi.fn((_params: any) => {
+                capturedOptions = _params.options;
+                return {
+                    async *[Symbol.asyncIterator]() {
+                        yield { type: 'result' } as any;
+                    },
+                    close: vi.fn(),
+                    setPermissionMode: vi.fn(),
+                    setModel: vi.fn(),
+                    setMaxThinkingTokens: vi.fn(),
+                    supportedCommands: vi.fn(async () => []),
+                    supportedModels: vi.fn(async () => []),
+                } as any;
+            });
+
+            let didSendFirst = false;
+            const nextMessage = vi.fn(async () => {
+                if (didSendFirst) return null;
+                didSendFirst = true;
+                return { message: 'hello', mode: makeMode({ permissionMode: 'default' } as any) };
+            });
+
+            await claudeRemoteAgentSdk({
+                sessionId: null,
+                transcriptPath: null,
+                path: '/tmp',
+                claudeArgs: [],
+                claudeExecutablePath: '/tmp/claude',
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+                isAborted: () => false,
+                nextMessage,
+                onReady: () => {},
+                onSessionFound: () => {},
+                onMessage: () => {},
+                createQuery,
+            } as any);
+
+            expect(capturedOptions).toBeTruthy();
+            expect(capturedOptions.env).toBeTruthy();
+            expect(capturedOptions.env.CLAUDE_CONFIG_DIR).toBe('/tmp/happier-claude-config');
+            expect(capturedOptions.env.HAPPIER_CLAUDE_CONFIG_DIR).toBeUndefined();
+        } finally {
+            if (originalHappierClaudeConfigDir === undefined) delete process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+            else process.env.HAPPIER_CLAUDE_CONFIG_DIR = originalHappierClaudeConfigDir;
+            if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+            else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+        }
+    });
+
     it('injects isolated XDG dirs so Claude Code does not contend with global version locks', async () => {
         const originals = {
             XDG_DATA_HOME: process.env.XDG_DATA_HOME,

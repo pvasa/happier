@@ -3,7 +3,7 @@
  * Handles spawning Claude process and managing message streams
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { existsSync } from 'node:fs'
 import { Stream } from './stream'
@@ -128,7 +128,19 @@ export class Query implements AsyncIterableIterator<SDKMessage> {
                         }
                         this.inputStream.enqueue(message)
                     } catch (e) {
-                        logger.debug(line)
+                        const trimmed = line.trim()
+                        if (!trimmed) continue
+
+                        const lower = trimmed.toLowerCase()
+                        if (lower.includes('not logged in') || lower.includes('/login')) {
+                            throw new Error(
+                                `Claude Code is not logged in on this machine. Run "claude auth login" and then restart the session.\n\nClaude output: ${trimmed}`,
+                            )
+                        }
+
+                        throw new Error(
+                            `Claude Code emitted non-JSON output in stream-json mode. This usually means the CLI is not configured correctly for headless use.\n\nClaude output: ${trimmed}`,
+                        )
                     }
                 }
             }
@@ -391,6 +403,7 @@ export function query(config: {
         signal: config.options?.abort,
         env: spawnEnv,
         windowsHide: true,
+        detached: process.platform !== 'win32',
         ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     }) as ChildProcessWithoutNullStreams
     const managedChild = createManagedChildProcess(child)
@@ -432,13 +445,45 @@ export function query(config: {
             }
         })
     }
+    const cleanupOnExit = () => {
+        if (cleanupStarted) return
+        cleanupStarted = true
+
+        if (!child.pid) return
+
+        if (process.platform === 'win32') {
+            try {
+                const result = spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' })
+                if (!result.error && result.status === 0) return
+            } catch {
+                // ignore and fall back to a direct child signal
+            }
+
+            try {
+                child.kill('SIGTERM')
+            } catch {
+                // ignore
+            }
+            return
+        }
+
+        try {
+            process.kill(-child.pid, 'SIGTERM')
+        } catch {
+            try {
+                child.kill('SIGTERM')
+            } catch {
+                // ignore
+            }
+        }
+    }
 
     config.options?.abort?.addEventListener('abort', cleanup)
     const cleanupOnSigterm = () => cleanup()
     const cleanupOnSigint = () => cleanup()
     process.on('SIGTERM', cleanupOnSigterm)
     process.on('SIGINT', cleanupOnSigint)
-    process.on('exit', cleanup)
+    process.on('exit', cleanupOnExit)
 
     // Handle process exit
     const processExitPromise = managedChild.waitForTermination().then((event) => {
@@ -483,7 +528,7 @@ export function query(config: {
         config.options?.abort?.removeEventListener('abort', cleanup)
         process.off('SIGTERM', cleanupOnSigterm)
         process.off('SIGINT', cleanupOnSigint)
-        process.off('exit', cleanup)
+        process.off('exit', cleanupOnExit)
     })
 
     return query

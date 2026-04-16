@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { createServer } from 'node:http';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { deriveBoxPublicKeyFromSeed } from '@happier-dev/protocol';
 
@@ -10,8 +12,16 @@ import { captureConsoleText } from '@/testkit/logger/captureOutput';
 
 import { handleAuthCommand } from '../auth';
 
-const envKeys = ['HAPPIER_HOME_DIR'] as const;
+const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL'] as const;
 let envScope = createEnvKeyScope(envKeys);
+
+beforeEach(() => {
+  vi.unstubAllGlobals();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('happier auth status --json', () => {
   it('prints a not_authenticated JSON envelope when no credentials exist', async () => {
@@ -60,6 +70,9 @@ describe('happier auth status --json', () => {
         try {
           envScope.patch({ HAPPIER_HOME_DIR: home });
           reloadConfiguration();
+          vi.stubGlobal('fetch', vi.fn(async () => {
+            throw new Error('network unavailable');
+          }));
 
           const machineKey = new Uint8Array(32).fill(8);
           await writeCredentialsDataKey({
@@ -88,6 +101,81 @@ describe('happier auth status --json', () => {
           expect(raw).not.toContain('token_super_secret');
           expect(process.exitCode).toBe(0);
         } finally {
+          output.restore();
+        }
+      });
+    } finally {
+      envScope.restore();
+      envScope = createEnvKeyScope(envKeys);
+      reloadConfiguration();
+      process.exitCode = prevExitCode;
+    }
+  });
+
+  it('prints a not_authenticated JSON envelope when the selected server rejects the stored token', async () => {
+    const prevExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await withTempDir('happier-auth-status-json-invalid-token-', async (home) => {
+        const output = captureConsoleText();
+        const server = createServer((req, res) => {
+          if (req.url !== '/v1/account/profile') {
+            res.statusCode = 404;
+            res.end('not-found');
+            return;
+          }
+
+          expect(req.headers.authorization).toBe('Bearer token_server_rejected');
+          res.statusCode = 401;
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ code: 'account-not-found', error: 'Invalid token' }));
+        });
+
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+          await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+          throw new Error('failed to resolve stub server address');
+        }
+        const serverUrl = `http://127.0.0.1:${address.port}`;
+
+        try {
+          envScope.patch({
+            HAPPIER_HOME_DIR: home,
+            HAPPIER_SERVER_URL: serverUrl,
+            HAPPIER_WEBAPP_URL: serverUrl,
+          });
+          reloadConfiguration();
+
+          const machineKey = new Uint8Array(32).fill(9);
+          await writeCredentialsDataKey({
+            token: 'token_server_rejected',
+            publicKey: deriveBoxPublicKeyFromSeed(machineKey),
+            machineKey,
+          });
+          await updateSettings((settings) => ({
+            ...settings,
+            machineIdByServerId: {
+              ...(settings.machineIdByServerId ?? {}),
+              [configuration.activeServerId ?? 'cloud']: 'mid_rejected',
+            },
+          }));
+
+          await handleAuthCommand(['status', '--json']);
+
+          const parsed = JSON.parse(output.text().trim()) as {
+            v: number;
+            ok: boolean;
+            kind: string;
+            error?: { code?: string };
+          };
+          expect(parsed.v).toBe(1);
+          expect(parsed.ok).toBe(false);
+          expect(parsed.kind).toBe('auth_status');
+          expect(parsed.error?.code).toBe('not_authenticated');
+          expect(process.exitCode).toBe(1);
+        } finally {
+          await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
           output.restore();
         }
       });

@@ -23,6 +23,7 @@ export function createPermissionModeQueueState(opts: {
   resolvePermissionModeQueueKey?: (permissionMode: PermissionMode) => string;
 }): {
   messageQueue: MessageQueue2<{ permissionMode: PermissionMode; appendSystemPrompt?: string | null }, PermissionModeQueuedPrompt>;
+  rebindSession: (session: ApiSessionClient) => void;
   getCurrentPermissionMode: () => PermissionMode | undefined;
   setCurrentPermissionMode: (mode: PermissionMode | undefined) => void;
   getCurrentPermissionModeUpdatedAt: () => number;
@@ -45,7 +46,7 @@ export function createPermissionModeQueueState(opts: {
     opts.session.getMetadataSnapshot(),
   );
 
-  registerPermissionModeMessageQueueBinding({
+  const binding = registerPermissionModeMessageQueueBinding({
     session: opts.session,
     queue: messageQueue,
     getCurrentPermissionMode: () => currentPermissionMode,
@@ -57,6 +58,9 @@ export function createPermissionModeQueueState(opts: {
 
   return {
     messageQueue,
+    rebindSession: (session) => {
+      binding.bindSession(session);
+    },
     getCurrentPermissionMode: () => currentPermissionMode,
     setCurrentPermissionMode: (mode) => {
       currentPermissionMode = mode;

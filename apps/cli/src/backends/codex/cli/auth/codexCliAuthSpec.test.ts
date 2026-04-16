@@ -16,6 +16,7 @@ const envKeys = [
   'HAPPIER_PNPM_BIN',
   'HAPPIER_CODEX_CLI_AUTH_PROBE_TIMEOUT_MS',
   'OPENAI_API_KEY',
+  'CODEX_API_KEY',
 ] as const;
 
 describe('codexCliAuthSpec', () => {
@@ -274,6 +275,49 @@ describe('codexCliAuthSpec', () => {
       }),
       'utf8',
     );
+
+    const detectAuthStatus = codexCliAuthSpec.detectAuthStatus;
+    expect(detectAuthStatus).toBeTypeOf('function');
+    if (!detectAuthStatus) {
+      throw new Error('codexCliAuthSpec.detectAuthStatus must be defined for this test');
+    }
+
+    await expect(detectAuthStatus({ resolvedPath: scriptPath })).resolves.toMatchObject({
+      state: 'logged_in',
+      method: 'api_key_env',
+      source: 'env',
+    });
+  });
+
+  it('treats CODEX_API_KEY env auth as logged in when login status exits non-zero', async () => {
+    const dir = await createTempDir('happier-codex-auth-spec-');
+    tempDirs.push(dir);
+
+    const scriptPath = join(dir, 'fake-codex.js');
+    await writeFile(
+      scriptPath,
+      [
+        '#!/usr/bin/env node',
+        'const args = process.argv.slice(2);',
+        'if (args[0] === "login" && args[1] === "status") process.exit(1);',
+        'if (args[0] === "--version" || args[0] === "version" || args[0] === "-v") {',
+        '  console.log("codex 0.0.0-fake");',
+        '  process.exit(0);',
+        '}',
+        'process.exit(1);',
+      ].join('\n'),
+      'utf8',
+    );
+    await chmod(scriptPath, 0o755);
+
+    envScope.patch({
+      PATH: '',
+      HOME: dir,
+      USERPROFILE: dir,
+      OPENAI_API_KEY: undefined,
+      CODEX_API_KEY: 'codex-test-key',
+    });
+    process.env.HAPPIER_PNPM_BIN = await writePnpmNodeBridge({ dir, pathLookup: systemPath });
 
     const detectAuthStatus = codexCliAuthSpec.detectAuthStatus;
     expect(detectAuthStatus).toBeTypeOf('function');

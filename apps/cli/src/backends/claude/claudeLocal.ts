@@ -13,6 +13,7 @@ import { isClaudeCliJavaScriptFile, resolveClaudeCliPath } from "./utils/resolve
 import { stripNestedSessionDetectionEnv } from "@/utils/processEnv/stripNestedSessionDetectionEnv";
 import { ensureClaudeJsRuntimeExecutable } from "./utils/ensureClaudeJsRuntimeExecutable";
 import { resolveClaudeConfigDirOverride } from "./utils/resolveClaudeConfigDirOverride";
+import { resolveClaudeConfigDirEnvOverlay } from "./utils/resolveClaudeConfigDirEnvOverlay";
 import { buildMissingJavaScriptRuntimeMessage } from "@/runtime/js/buildMissingJavaScriptRuntimeMessage";
 import { isEmbeddedBunBundlePath } from "@/runtime/js/isEmbeddedBunBundlePath";
 import { resolveWindowsCommandInvocation, type CommandInvocation } from '@happier-dev/cli-common/process';
@@ -338,6 +339,7 @@ export async function claudeLocal(opts: {
                 ...process.env,
                 // Keep behavior consistent with our wrapper script.
                 DISABLE_AUTOUPDATER: '1',
+                ...resolveClaudeConfigDirEnvOverlay(process.env),
                 ...(opts.envOverlay ?? {}),
             })
             // Internal daemon→CLI marker used for strict env filtering in Agent SDK remote mode.

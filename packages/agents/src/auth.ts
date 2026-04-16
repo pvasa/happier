@@ -31,7 +31,7 @@ export const AGENT_AUTH_PROBE_CONFIG: Readonly<Record<AgentId, AgentAuthProbeCon
     parser: 'claudeCredentialsFile',
     backgroundChecks: 'safe',
     envVars: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
-    credentialPaths: ['~/.claude/.credentials.json'],
+    credentialPaths: ['~/.claude/.credentials.json', '~/.claude/.claude.json'],
   },
   codex: {
     agentId: 'codex',
@@ -39,7 +39,7 @@ export const AGENT_AUTH_PROBE_CONFIG: Readonly<Record<AgentId, AgentAuthProbeCon
     statusCommand: ['login', 'status'],
     parser: 'codexLoginStatus',
     backgroundChecks: 'safe',
-    envVars: ['OPENAI_API_KEY'],
+    envVars: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     credentialPaths: ['~/.codex/auth.json'],
   },
   opencode: {

@@ -4,13 +4,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
+
 import { buildOpenCodeAgentRuntimeDescriptor } from '@happier-dev/agents';
 import { buildOpenCodeSessionEnvironmentVariables } from '../utils/opencodeSessionAffinity';
 import { resolveOpenCodeCliLaunchSpec } from '../utils/resolveOpenCodeCliCommand';
 import type { ImportedSessionHandoffBundle, OpenCodeSessionBundle } from '../../../session/handoff/types';
 import { OPEN_CODE_IMPORT_EXPORT_JSON_MAX_BYTES } from './opencodeHandoffLimits';
 
-type ExecFileAsync = (command: string, args: readonly string[]) => Promise<Readonly<{ stdout: string; stderr: string }>>;
+type ExecFileAsync = (
+  command: string,
+  args: readonly string[],
+  options?: Readonly<{ windowsVerbatimArguments?: boolean }>,
+) => Promise<Readonly<{ stdout: string; stderr: string }>>;
 
 const execFileAsync = promisify(execFileCallback) as unknown as ExecFileAsync;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -60,7 +66,17 @@ export async function importOpenCodeSessionBundle(params: Readonly<{
   try {
     await writeFile(importPath, decodeOpenCodeImportExportJson(params.bundle.exportJsonBase64), 'utf8');
     const launch = resolveOpenCodeCliLaunchSpec(params.processEnv);
-    await execFile(launch.command, [...launch.args, 'import', importPath]);
+    const invocation = resolveWindowsCommandInvocation({
+      command: launch.command,
+      args: [...launch.args, 'import', importPath],
+      env: params.processEnv ?? process.env,
+      resolveCommandOnPath: false,
+    });
+    await execFile(
+      invocation.command,
+      invocation.args,
+      invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : undefined,
+    );
 
     // Direct sessions currently only support OpenCode's server transport (`DirectSessionsSource.kind=opencodeServer`).
     // If an exported bundle claims ACP affinity, treat it as a requested/preferred mode and normalize the imported

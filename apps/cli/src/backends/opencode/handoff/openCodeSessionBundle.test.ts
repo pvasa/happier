@@ -2,10 +2,45 @@ import { access, chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { resolveWindowsCommandInvocationMock, resolveOpenCodeCliLaunchSpecMock } = vi.hoisted(() => ({
+  resolveWindowsCommandInvocationMock: vi.fn((
+    { command, args }: { command: string; args: readonly string[] },
+  ): { command: string; args: string[]; windowsVerbatimArguments?: boolean } => ({
+    command,
+    args: [...args],
+  })),
+  resolveOpenCodeCliLaunchSpecMock: vi.fn(),
+}));
+
+vi.mock('@happier-dev/cli-common/process', () => ({
+  resolveWindowsCommandInvocation: resolveWindowsCommandInvocationMock,
+}));
+
+vi.mock('../utils/resolveOpenCodeCliCommand', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../utils/resolveOpenCodeCliCommand')>();
+  return {
+    ...original,
+    resolveOpenCodeCliLaunchSpec: resolveOpenCodeCliLaunchSpecMock,
+  };
+});
 
 import { exportOpenCodeSessionBundle } from './exportOpenCodeSessionBundle';
 import { importOpenCodeSessionBundle } from './importOpenCodeSessionBundle';
+
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import('../utils/resolveOpenCodeCliCommand')>('../utils/resolveOpenCodeCliCommand');
+  resolveOpenCodeCliLaunchSpecMock.mockReset();
+  resolveOpenCodeCliLaunchSpecMock.mockImplementation(actual.resolveOpenCodeCliLaunchSpec);
+  resolveWindowsCommandInvocationMock.mockReset();
+  resolveWindowsCommandInvocationMock.mockImplementation((
+    { command, args }: { command: string; args: readonly string[] },
+  ): { command: string; args: string[]; windowsVerbatimArguments?: boolean } => ({
+    command,
+    args: [...args],
+  }));
+});
 
 async function createFakeExecutable(name: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'happier-opencode-cli-'));
@@ -67,7 +102,7 @@ describe('opencode session handoff bundle', () => {
       processEnv: { HAPPIER_OPENCODE_PATH: commandPath },
     });
 
-    expect(execFile).toHaveBeenCalledWith(commandPath, ['export', 'op_sess_1']);
+    expect(execFile).toHaveBeenCalledWith(commandPath, ['export', 'op_sess_1'], undefined);
     expect(result).toEqual({
       providerId: 'opencode',
       remoteSessionId: 'op_sess_1',
@@ -133,7 +168,7 @@ describe('opencode session handoff bundle', () => {
       processEnv: { HAPPIER_OPENCODE_PATH: commandPath },
     });
 
-    expect(execFile).toHaveBeenCalledWith(commandPath, ['import', expect.stringContaining('handoff-opencode-')]);
+    expect(execFile).toHaveBeenCalledWith(commandPath, ['import', expect.stringContaining('handoff-opencode-')], undefined);
     await expect(access(importPath)).rejects.toThrow();
 
     expect(result.remoteSessionId).toBe('op_sess_1');
@@ -248,7 +283,7 @@ describe('opencode session handoff bundle', () => {
       processEnv: { HAPPIER_OPENCODE_PATH: commandPath },
     });
 
-    expect(execFile).toHaveBeenCalledWith(commandPath, ['import', expect.stringContaining('handoff-opencode-')]);
+    expect(execFile).toHaveBeenCalledWith(commandPath, ['import', expect.stringContaining('handoff-opencode-')], undefined);
     await expect(access(importPath)).rejects.toThrow();
 
     expect(result.directSource).toEqual({
@@ -414,7 +449,7 @@ describe('opencode session handoff bundle', () => {
       processEnv: { HAPPIER_OPENCODE_PATH: commandPath, HAPPIER_JS_RUNTIME_PATH: runtimePath },
     });
 
-    expect(execFile).toHaveBeenCalledWith(runtimePath, [commandPath, 'export', 'op_sess_1']);
+    expect(execFile).toHaveBeenCalledWith(runtimePath, [commandPath, 'export', 'op_sess_1'], undefined);
   });
 
   it('wraps node-shebang opencode CLIs with the configured JS runtime during import', async () => {
@@ -450,7 +485,7 @@ describe('opencode session handoff bundle', () => {
       },
     });
 
-    expect(execFile).toHaveBeenCalledWith(runtimePath, [commandPath, 'import', expect.stringContaining('handoff-opencode-')]);
+    expect(execFile).toHaveBeenCalledWith(runtimePath, [commandPath, 'import', expect.stringContaining('handoff-opencode-')], undefined);
     await expect(access(importPath)).rejects.toThrow();
   });
 
@@ -485,5 +520,91 @@ describe('opencode session handoff bundle', () => {
       transcriptStorage: 'persisted',
       approvedNewDirectoryCreation: true,
     });
+  });
+
+  it('wraps Windows shell shims during export', async () => {
+    const execFile = vi.fn<(command: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>>(async () => ({
+      stdout: '{"id":"op_sess_win_export"}',
+      stderr: '',
+    }));
+    resolveWindowsCommandInvocationMock.mockReturnValueOnce({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD export op_sess_win_export"'],
+      windowsVerbatimArguments: true,
+    });
+    resolveOpenCodeCliLaunchSpecMock.mockReturnValueOnce({
+      source: 'override',
+      resolvedPath: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      args: [],
+    });
+
+    await exportOpenCodeSessionBundle({
+      metadata: {},
+      remoteSessionId: 'op_sess_win_export',
+      execFile,
+      processEnv: {
+        HAPPIER_OPENCODE_PATH: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+      },
+    });
+
+    expect(resolveWindowsCommandInvocationMock).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      args: ['export', 'op_sess_win_export'],
+    }));
+    expect(execFile).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\cmd.exe',
+      ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD export op_sess_win_export"'],
+      { windowsVerbatimArguments: true },
+    );
+  });
+
+  it('wraps Windows shell shims during import', async () => {
+    const execFile = vi.fn<(command: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>>(async () => ({
+      stdout: '',
+      stderr: '',
+    }));
+    resolveWindowsCommandInvocationMock.mockReturnValueOnce({
+      command: 'C:\\Windows\\System32\\cmd.exe',
+      args: ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD import C:\\\\Temp\\\\handoff-opencode-win.json"'],
+      windowsVerbatimArguments: true,
+    });
+    resolveOpenCodeCliLaunchSpecMock.mockReturnValueOnce({
+      source: 'override',
+      resolvedPath: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      args: [],
+    });
+    const root = await mkdtemp(join(tmpdir(), 'happier-opencode-handoff-import-win32-'));
+
+    await importOpenCodeSessionBundle({
+      bundle: {
+        providerId: 'opencode',
+        remoteSessionId: 'op_sess_win_import',
+        exportJsonBase64: Buffer.from('{"id":"op_sess_win_import"}', 'utf8').toString('base64'),
+        affinity: {
+          backendMode: 'server',
+          serverBaseUrl: 'http://127.0.0.1:4096',
+          serverBaseUrlExplicit: true,
+        },
+      },
+      targetPath: join(root, 'workspace'),
+      execFile,
+      processEnv: {
+        HAPPIER_OPENCODE_PATH: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+      },
+    });
+
+    expect(resolveWindowsCommandInvocationMock).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
+      args: ['import', expect.any(String)],
+    }));
+    expect(execFile).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\cmd.exe',
+      ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD import C:\\\\Temp\\\\handoff-opencode-win.json"'],
+      { windowsVerbatimArguments: true },
+    );
   });
 });

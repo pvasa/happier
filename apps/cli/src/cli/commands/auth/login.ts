@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import os from 'node:os';
 
 import { clearCredentials, clearMachineId, readCredentials, readSettings } from '@/persistence';
+import { validateStoredAuthTokenAgainstActiveServer } from '@/auth/validateStoredAuthTokenAgainstActiveServer';
 import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { stopDaemon } from '@/daemon/controlClient';
 import { logger } from '@/ui/logger';
@@ -58,8 +59,26 @@ export async function handleAuthLogin(args: string[]): Promise<void> {
   }
 
   if (!forceAuth) {
-    const existingCreds = await readCredentials();
+    let existingCreds = await readCredentials();
     const settings = await readSettings();
+
+    if (existingCreds) {
+      const authValidation = await validateStoredAuthTokenAgainstActiveServer(existingCreds.token);
+      if (authValidation.state === 'invalid') {
+        console.log(chalk.yellow('⚠️  Stored credentials were rejected by the selected server'));
+        console.log(chalk.gray('  Repairing local authentication state before logging in again...\n'));
+        try {
+          logger.debug('Stopping daemon before auth repair...');
+          await stopDaemon();
+          console.log(chalk.gray('✓ Stopped daemon'));
+        } catch (error) {
+          logger.debug('Daemon was not running or failed to stop during auth repair:', error);
+        }
+        await clearCredentials();
+        await clearMachineId();
+        existingCreds = null;
+      }
+    }
 
     if (existingCreds && settings?.machineId) {
       console.log(chalk.green('✓ Already authenticated'));

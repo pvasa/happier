@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { claudeLocal } from './claudeLocal';
 
@@ -998,5 +997,35 @@ describe('claudeLocal launcher selection', () => {
         expect(mockSpawn).toHaveBeenCalled();
         const spawnOpts = mockSpawn.mock.calls[0][2];
         expect(spawnOpts?.env?.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe('1');
+    });
+
+    it('publishes the resolved Claude config dir override to spawned Claude processes', async () => {
+        const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+        const previousHappierClaudeConfigDir = process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+        const claudeConfigDir = join(mkdtempSync(join(tmpdir(), 'happier-claude-local-config-')), '.claude');
+
+        delete process.env.CLAUDE_CONFIG_DIR;
+        process.env.HAPPIER_CLAUDE_CONFIG_DIR = claudeConfigDir;
+
+        try {
+            await claudeLocal({
+                abort: new AbortController().signal,
+                sessionId: null,
+                path: '/tmp',
+                onSessionFound,
+                claudeArgs: [],
+            });
+
+            expect(mockSpawn).toHaveBeenCalled();
+            const spawnOpts = mockSpawn.mock.calls[0][2];
+            expect(spawnOpts?.env?.CLAUDE_CONFIG_DIR).toBe(claudeConfigDir);
+            expect(spawnOpts?.env?.HAPPIER_CLAUDE_CONFIG_DIR).toBe(claudeConfigDir);
+        } finally {
+            if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+            else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+            if (previousHappierClaudeConfigDir === undefined) delete process.env.HAPPIER_CLAUDE_CONFIG_DIR;
+            else process.env.HAPPIER_CLAUDE_CONFIG_DIR = previousHappierClaudeConfigDir;
+            rmSync(dirname(claudeConfigDir), { recursive: true, force: true });
+        }
     });
 });

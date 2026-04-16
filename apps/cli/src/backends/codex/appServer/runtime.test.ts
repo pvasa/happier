@@ -245,6 +245,18 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 14);',
         '            continue;',
         '        }',
+        '        if (text === "retry-then-failed-turn") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "error", params: { threadId: msg.params?.threadId ?? null, turnId, willRetry: true, error: { message: "temporary upstream overload", codexErrorInfo: "other", additionalDetails: null } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "error", params: { threadId: msg.params?.threadId ?? null, turnId, willRetry: false, error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header", codexErrorInfo: "other", additionalDetails: null } } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header", codexErrorInfo: "other", additionalDetails: null } } } }) + "\\n");',
+        '            }, 18);',
+        '            continue;',
+        '        }',
         '        if (text === "bridge-completed-only-command-result") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "call_failed_1", type: "commandExecution", command: "mkdir -p /tmp/demo", cwd: "/repo", stderr: "Rejected(\\\\\\"rejected by user\\\\\\")", exitCode: 1 } } }) + "\\n");',
@@ -410,9 +422,38 @@ describe('createCodexAppServerRuntime', () => {
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
             HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '10000',
+            CODEX_HOME: join(root, 'codex-home'),
+            OPENAI_API_KEY: 'test-openai-key',
+            CODEX_API_KEY: undefined,
         });
         return { root, requestLogPath, fakeAppServer };
     }
+
+    it('allows app-server startup when Codex credentials are missing so the backend can surface auth errors itself', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-auth-missing-');
+
+        envScope.patch({
+            OPENAI_API_KEY: '',
+            CODEX_API_KEY: '',
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'acceptEdits',
+        });
+
+        await expect(runtime.startOrLoad({})).resolves.toBeUndefined();
+
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ method: 'initialize' }),
+                expect.objectContaining({ method: 'thread/start' }),
+            ]),
+        );
+    });
 
     it('starts a new app-server thread and publishes the thread id to session metadata', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-start-');
@@ -1458,30 +1499,32 @@ describe('createCodexAppServerRuntime', () => {
         });
     });
 
-    it('does not surface Speed controls when Codex is authenticated only by OPENAI_API_KEY', async () => {
-        const { root, requestLogPath, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-auth-');
-        const scopedEnv = createCodexAppServerProcessEnv(fakeAppServer, {
-            OPENAI_API_KEY: 'sk-test-codex',
-        });
+    for (const authEnvVar of ['OPENAI_API_KEY', 'CODEX_API_KEY'] as const) {
+        it(`does not surface Speed controls when Codex is authenticated only by ${authEnvVar}`, async () => {
+            const { root, requestLogPath: _requestLogPath, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-auth-');
+            const scopedEnv = createCodexAppServerProcessEnv(fakeAppServer, {
+                [authEnvVar]: 'sk-test-codex',
+            });
 
-        const updateMetadata = vi.fn((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) =>
-            updater({ machineId: 'machine_1' }),
-        );
-        const runtime = createCodexAppServerRuntime({
-            directory: root,
-            processEnv: scopedEnv,
-            onThinkingChange: vi.fn(),
-            session: { updateMetadata } as any,
-        });
+            const updateMetadata = vi.fn((updater: (metadata: Record<string, unknown>) => Record<string, unknown>) =>
+                updater({ machineId: 'machine_1' }),
+            );
+            const runtime = createCodexAppServerRuntime({
+                directory: root,
+                processEnv: scopedEnv,
+                onThinkingChange: vi.fn(),
+                session: { updateMetadata } as any,
+            });
 
-        await runtime.startOrLoad({});
+            await runtime.startOrLoad({});
 
-        expect(updateMetadata.mock.results.at(-1)?.value).toMatchObject({
-            [SESSION_CONFIG_OPTIONS_STATE_KEY]: {
-                configOptions: [],
-            },
+            expect(updateMetadata.mock.results.at(-1)?.value).toMatchObject({
+                [SESSION_CONFIG_OPTIONS_STATE_KEY]: {
+                    configOptions: [],
+                },
+            });
         });
-    });
+    }
 
     it('forwards thread token usage updates and patches the active model context window from runtime telemetry', async () => {
         const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-token-usage-');
@@ -1552,6 +1595,38 @@ describe('createCodexAppServerRuntime', () => {
         expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
             type: 'message',
             message: expect.stringContaining('401 Unauthorized'),
+        }));
+        expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'turn_aborted',
+        }));
+    });
+
+    it('suppresses retryable Codex errors until a later hard failure aborts the pending turn', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-retry-then-failed-turn-');
+
+        const sendCodexMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect(runtime.sendPrompt('retry-then-failed-turn')).rejects.toThrow(/401 Unauthorized/);
+
+        const surfacedMessages = sendCodexMessage.mock.calls
+            .map(([message]) => message)
+            .filter((message) => message?.type === 'message');
+        expect(surfacedMessages).toHaveLength(1);
+        expect(surfacedMessages[0]).toEqual(expect.objectContaining({
+            message: expect.stringContaining('401 Unauthorized'),
+        }));
+        expect(surfacedMessages[0]).toEqual(expect.not.objectContaining({
+            message: expect.stringContaining('temporary upstream overload'),
         }));
         expect(sendCodexMessage).toHaveBeenCalledWith(expect.objectContaining({
             type: 'turn_aborted',

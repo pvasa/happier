@@ -8,6 +8,7 @@ import {
   requireConnectedServiceTokenCredentialRecord,
   requireConnectedServiceOauthCredentialRecordWithExpiry,
 } from '@/daemon/connectedServices/shared/connectedServiceCredentialRecord';
+import { probeOpenAiCodexOauthRefreshToken } from '@/backends/opencode/shared/openCodeAuthState';
 
 export async function materializeOpenCodeConnectedServiceAuth(params: Readonly<{
   rootDir: string;
@@ -16,7 +17,11 @@ export async function materializeOpenCodeConnectedServiceAuth(params: Readonly<{
   anthropic: ConnectedServiceCredentialRecordV1 | null;
 }>): Promise<Readonly<{ env: Record<string, string> }>> {
   const homeDir = join(params.rootDir, 'home');
-  const xdgDataHome = join(params.rootDir, 'xdg', 'data');
+  // Keep auth/state isolated via explicit XDG dirs, but do not override HOME /
+  // USERPROFILE for the whole spawned session. On Windows, changing the process
+  // home can break OpenCode CLI discovery when the working install is located
+  // through real-user-home heuristics rather than a managed install.
+  const xdgDataHome = join(homeDir, '.local', 'share');
   const xdgCacheHome = join(params.rootDir, 'xdg', 'cache');
   const xdgConfigHome = join(params.rootDir, 'xdg', 'config');
   const xdgStateHome = join(params.rootDir, 'xdg', 'state');
@@ -25,6 +30,10 @@ export async function materializeOpenCodeConnectedServiceAuth(params: Readonly<{
 
   if (params.openaiCodex) {
     const record = requireConnectedServiceOauthCredentialRecordWithExpiry(params.openaiCodex);
+    const refreshTokenState = await probeOpenAiCodexOauthRefreshToken(record.oauth.refreshToken);
+    if (refreshTokenState === 'invalid') {
+      throw new Error('OpenCode OAuth credentials are stale or invalid. Reconnect OpenAI Codex.');
+    }
     auth.openai = buildConnectedServiceOauthAuthEntry(record);
   } else if (params.openai) {
     const record = requireConnectedServiceTokenCredentialRecord(params.openai);
@@ -49,14 +58,10 @@ export async function materializeOpenCodeConnectedServiceAuth(params: Readonly<{
 
   return {
     env: {
-      HOME: homeDir,
-      ...(process.platform === 'win32' ? { USERPROFILE: homeDir } : {}),
       XDG_DATA_HOME: xdgDataHome,
       XDG_CACHE_HOME: xdgCacheHome,
       XDG_CONFIG_HOME: xdgConfigHome,
       XDG_STATE_HOME: xdgStateHome,
-      // OpenCode uses this as an override for home discovery in multiple subsystems.
-      OPENCODE_TEST_HOME: homeDir,
     },
   };
 }

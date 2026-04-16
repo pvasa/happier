@@ -73,6 +73,7 @@ import { createCodexRequestUserInputBridge } from './runtime/codexRequestUserInp
 import { runCodexLocalModePass } from './runtime/localModePass';
 import { resolveCodexQueuedPromptWithReplaySeed } from './runtime/resolveCodexQueuedPromptWithReplaySeed';
 import { cleanupCodexRunResources } from './runtime/cleanupRunResources';
+import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
 import {
     emitReadyIfIdle,
     extractCodexToolErrorText,
@@ -835,13 +836,18 @@ export async function runCodex(opts: {
     const terminationHandlers = registerRunnerTerminationHandlers({
         process,
         exit: (code) => process.exit(code),
-        onTerminate: async (_event, outcome) => {
+        onTerminate: async (event, outcome) => {
             shouldExit = true;
             await handleAbort();
+            const archiveDecision = resolveTerminationArchiveDecision({
+                startedBy: opts.startedBy,
+                event,
+                outcome,
+            });
 
             try {
-                if (outcome.archive) {
-                    await archiveAndCloseRuntimeSession(session, opts.credentials, outcome.archiveReason);
+                if (archiveDecision.archive) {
+                    await archiveAndCloseRuntimeSession(session, opts.credentials, archiveDecision.archiveReason);
                 }
             } catch (e) {
                 logger.debug('[Codex] Failed to archive session during termination (non-fatal)', e);
