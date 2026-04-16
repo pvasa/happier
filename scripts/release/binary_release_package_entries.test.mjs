@@ -162,6 +162,91 @@ test('packagePreparedTargetBinary excludes nested @prisma/client node_modules (n
   }
 });
 
+test('packagePreparedTargetBinary excludes nested node_modules/.bin shim directories from archives', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'binary-release-node-bin-'));
+  const stageRoot = join(workspace, 'stage');
+  const stageDir = join(stageRoot, 'happier-v0.0.0-test-windows-x64');
+  const outDir = join(workspace, 'out');
+
+  const packageDir = join(stageDir, 'node_modules', 'fastify');
+  const binDir = join(packageDir, 'node_modules', '.bin');
+  await mkdir(binDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+  await writeFile(join(stageDir, 'happier.exe'), 'binary', 'utf-8');
+  await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: 'fastify', version: '0.0.0-test' }), 'utf-8');
+  await writeFile(join(binDir, 'pino'), 'shim', 'utf-8');
+
+  try {
+    const artifact = await packagePreparedTargetBinary({
+      product: 'happier',
+      version: '0.0.0-test',
+      target: { os: 'windows', arch: 'x64', exeExt: '.exe' },
+      stageDir,
+      outDir,
+    });
+
+    const listing = spawnSync('tar', ['-tzf', artifact.path], { encoding: 'utf-8' });
+    assert.equal(listing.status, 0, listing.stderr);
+    assert.match(listing.stdout, /\/node_modules\/fastify\/package\.json(?:\n|$)/);
+    assert.doesNotMatch(listing.stdout, /\/node_modules\/fastify\/node_modules\/\.bin(?:\/|\n|$)/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('packagePreparedTargetBinary excludes target-incompatible package directories from archives', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'binary-release-platform-prune-'));
+  const stageRoot = join(workspace, 'stage');
+  const stageDir = join(stageRoot, 'happier-v0.0.0-test-windows-x64');
+  const outDir = join(workspace, 'out');
+
+  const darwinSharpDir = join(stageDir, 'node_modules', '@img', 'sharp-darwin-arm64');
+  const windowsSharpDir = join(stageDir, 'node_modules', '@img', 'sharp-win32-x64');
+  await mkdir(darwinSharpDir, { recursive: true });
+  await mkdir(windowsSharpDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+  await writeFile(join(stageDir, 'happier.exe'), 'binary', 'utf-8');
+  await writeFile(
+    join(darwinSharpDir, 'package.json'),
+    JSON.stringify({
+      name: '@img/sharp-darwin-arm64',
+      version: '0.0.0-test',
+      os: ['darwin'],
+      cpu: ['arm64'],
+    }),
+    'utf-8',
+  );
+  await writeFile(join(darwinSharpDir, 'marker.txt'), 'darwin-only', 'utf-8');
+  await writeFile(
+    join(windowsSharpDir, 'package.json'),
+    JSON.stringify({
+      name: '@img/sharp-win32-x64',
+      version: '0.0.0-test',
+      os: ['win32'],
+      cpu: ['x64'],
+    }),
+    'utf-8',
+  );
+  await writeFile(join(windowsSharpDir, 'marker.txt'), 'windows-ok', 'utf-8');
+
+  try {
+    const artifact = await packagePreparedTargetBinary({
+      product: 'happier',
+      version: '0.0.0-test',
+      target: { os: 'windows', arch: 'x64', exeExt: '.exe' },
+      stageDir,
+      outDir,
+    });
+
+    const listing = spawnSync('tar', ['-tzf', artifact.path], { encoding: 'utf-8' });
+    assert.equal(listing.status, 0, listing.stderr);
+    assert.match(listing.stdout, /\/node_modules\/@img\/sharp-win32-x64\/marker\.txt(?:\n|$)/);
+    assert.doesNotMatch(listing.stdout, /\/node_modules\/@img\/sharp-darwin-arm64(?:\/|\n|$)/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('createDeterministicArchive disables macOS copyfile and xattr metadata when invoking tar', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'binary-release-tar-env-'));
   const fakeBinDir = join(workspace, 'bin');
