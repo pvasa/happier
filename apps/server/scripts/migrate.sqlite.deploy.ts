@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { applyLightDefaultEnv } from "../sources/flavors/light/env";
+import { applyLightDefaultEnv, resolveLightSqliteDatabaseUrl } from "../sources/flavors/light/env";
+import { resolveSqliteDatabaseFilePath } from "../sources/flavors/light/sqliteMigrations";
 import { requireLightDataDir } from "./migrate.light.deployPlan";
 
 function run(cmd: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
@@ -24,13 +25,12 @@ function ensureSqliteDatabaseUrl(env: NodeJS.ProcessEnv): void {
     if (raw) return;
 
     const dataDir = requireLightDataDir(env);
-    env.DATABASE_URL = `file:${join(dataDir, "happier-server-light.sqlite")}`;
+    env.DATABASE_URL = resolveLightSqliteDatabaseUrl(dataDir);
 }
 
 async function ensureSqliteDbDir(env: NodeJS.ProcessEnv): Promise<void> {
     const url = env.DATABASE_URL?.trim() ?? "";
-    if (!url.startsWith("file:")) return;
-    const filePath = url.slice("file:".length);
+    const filePath = resolveSqliteDatabaseFilePath(url);
     if (!filePath) return;
     await mkdir(dirname(filePath), { recursive: true });
 }

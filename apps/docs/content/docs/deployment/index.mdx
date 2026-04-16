@@ -56,8 +56,12 @@ See [Docker](./docker) for concrete examples.
 In production, run the API behind a reverse proxy that:
 
 - Terminates TLS
-- Supports WebSockets (Upgrade headers)
+- Supports WebSockets (Upgrade headers), especially for Socket.IO realtime at `/v1/updates`
 - Uses sensible timeouts for long-lived connections
 - Keeps secrets in your deployment platform (env vars), not in git
 
 If you serve `/files/*` from the server (light flavor), ensure your proxy allows those routes.
+
+Troubleshooting note: if `/v1/updates` websocket upgrades are broken, machines can register but stay offline (`machine.none_online`).
+
+See: [Environment variables → Networking / reverse proxy](./env#websockets-required-for-realtime--machine-online)

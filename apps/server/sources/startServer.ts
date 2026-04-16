@@ -10,7 +10,7 @@ import { loadFiles, initFilesLocalFromEnv, initFilesS3FromEnv } from '@/storage/
 import { db, getDbProviderFromEnv, initDbMysql, initDbPostgres, initDbPglite, initDbSqlite, shutdownDbPglite } from '@/storage/db';
 import { log } from '@/utils/logging/log';
 import { awaitShutdown, onShutdown } from '@/utils/process/shutdown';
-import { applyLightDefaultEnv, ensureHandyMasterSecret } from '@/flavors/light/env';
+import { applyLightDefaultEnv, ensureHandyMasterSecret, resolveLightSqliteDatabaseUrl } from '@/flavors/light/env';
 import { applySqliteMigrationsIfNeeded } from '@/flavors/light/sqliteMigrations';
 import {
     getFilesBackendFromEnv,
@@ -26,8 +26,6 @@ import { getRedisClient } from '@/storage/redis/redis';
 import { eventRouter } from '@/app/events/eventRouter';
 import { shouldConsumePresenceFromRedis, shouldEnableLocalPresenceDbFlush } from '@/app/presence/presenceMode';
 import { startPresenceRedisWorker } from '@/app/presence/presenceRedisQueue';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { initializeServerSentry } from '@/app/monitoring/sentry';
 import { inferAndApplyTailscaleServePublicServerUrl } from '@/app/integrations/tailscale/tailscaleServePublicUrlInference';
 import { startRetentionWorker } from '@/app/retention/runtime/startRetentionWorker';
@@ -88,7 +86,7 @@ export async function startServer(flavor: ServerFlavor): Promise<void> {
             if (!dataDir) {
                 throw new Error('HAPPIER_SERVER_LIGHT_DATA_DIR (or HAPPY_SERVER_LIGHT_DATA_DIR) must be set when using sqlite without DATABASE_URL');
             }
-            process.env.DATABASE_URL = pathToFileURL(join(dataDir, 'happier-server-light.sqlite')).href;
+            process.env.DATABASE_URL = resolveLightSqliteDatabaseUrl(dataDir);
         }
         const dataDir = expandHomeDirPath(
             (process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? '').trim(),

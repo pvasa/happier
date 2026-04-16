@@ -28,6 +28,12 @@ function anyFileContains(paths: string[], patterns: string[]): boolean {
     return false;
 }
 
+function expectProviderSchemasToContain(root: string, expectedText: string): void {
+    expect(readText(join(root, "prisma", "schema.prisma"))).toContain(expectedText);
+    expect(readText(join(root, "prisma", "sqlite", "schema.prisma"))).toContain(expectedText);
+    expect(readText(join(root, "prisma", "mysql", "schema.prisma"))).toContain(expectedText);
+}
+
 describe("migrations (provider completeness)", () => {
     it("includes AccountChange entity FK columns across providers", () => {
         const root = process.cwd();
@@ -66,5 +72,33 @@ describe("migrations (provider completeness)", () => {
             ]),
         ).toBe(true);
     });
-});
 
+    it("includes AccountPushToken.clientServerUrl across providers", () => {
+        const root = process.cwd();
+        expectProviderSchemasToContain(root, "clientServerUrl String?");
+
+        const pgFiles = listMigrationSqlFiles(join(root, "prisma", "migrations"));
+        expect(
+            anyFileContains(pgFiles, [
+                'ALTER TABLE "AccountPushToken" ADD COLUMN',
+                '"clientServerUrl"',
+            ]),
+        ).toBe(true);
+
+        const sqliteFiles = listMigrationSqlFiles(join(root, "prisma", "sqlite", "migrations"));
+        expect(
+            anyFileContains(sqliteFiles, [
+                'ALTER TABLE "AccountPushToken" ADD COLUMN',
+                '"clientServerUrl"',
+            ]),
+        ).toBe(true);
+
+        const mysqlFiles = listMigrationSqlFiles(join(root, "prisma", "mysql", "migrations"));
+        expect(
+            anyFileContains(mysqlFiles, [
+                "ALTER TABLE `AccountPushToken` ADD COLUMN",
+                "`clientServerUrl`",
+            ]),
+        ).toBe(true);
+    });
+});

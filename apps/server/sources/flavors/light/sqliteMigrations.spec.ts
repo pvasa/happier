@@ -5,14 +5,14 @@ import { join } from 'node:path';
 
 import { applySqliteMigrationsIfNeeded, listSqliteMigrations, resolveSqliteDatabaseFilePath, resolveSqliteMigrationsDir } from './sqliteMigrations';
 
-type SqliteState = { tables: Set<string>; applied: Set<string> };
+type SqliteState = { tables: Set<string>; applied: Set<string>; closeCount: number };
 
 const sqliteStore = new Map<string, SqliteState>();
 
 function getSqliteState(databasePath: unknown): SqliteState {
   const key = String(databasePath ?? '');
   if (!sqliteStore.has(key)) {
-    sqliteStore.set(key, { tables: new Set(), applied: new Set() });
+    sqliteStore.set(key, { tables: new Set(), applied: new Set(), closeCount: 0 });
   }
   return sqliteStore.get(key)!;
 }
@@ -73,6 +73,10 @@ class FakeDatabase {
     }
     throw new Error(`Unexpected bun:sqlite query: ${text}`);
   }
+
+  close(): void {
+    this.state.closeCount += 1;
+  }
 }
 
 vi.mock('bun:sqlite', () => ({ Database: FakeDatabase }));
@@ -88,6 +92,8 @@ describe('light sqlite migrations (unit)', () => {
   it('resolveSqliteDatabaseFilePath parses file: DATABASE_URL values', () => {
     expect(resolveSqliteDatabaseFilePath('file:/tmp/happier.sqlite')).toBe('/tmp/happier.sqlite');
     expect(resolveSqliteDatabaseFilePath('file:///tmp/happier.sqlite')).toBe('/tmp/happier.sqlite');
+    expect(resolveSqliteDatabaseFilePath('file:///tmp/happy%20server%20%23light/happier.sqlite')).toBe('/tmp/happy server #light/happier.sqlite');
+    expect(resolveSqliteDatabaseFilePath('file:relative.sqlite')).toBe('relative.sqlite');
   });
 
   it('listSqliteMigrations returns migration.sql entries in directory name order', async () => {
@@ -137,6 +143,26 @@ describe('light sqlite migrations (unit)', () => {
     expect(state.tables.has('Widget')).toBe(true);
     expect(state.applied.has('20260101000000_first')).toBe(true);
     expect(state.applied.has('20260201000000_second')).toBe(true);
+  });
+
+  it('applySqliteMigrationsIfNeeded closes the Bun sqlite connection before Prisma starts', async () => {
+    vi.stubGlobal('Bun', {});
+    const dir = await mkdtemp(join(tmpdir(), 'happier-sqlite-migrations-close-'));
+    const m1 = join(dir, '20260101000000_first');
+    await mkdir(m1, { recursive: true });
+    await writeFile(join(m1, 'migration.sql'), 'CREATE TABLE Account(id INTEGER);\n', 'utf8');
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'happier-sqlite-data-close-'));
+    const dbPath = join(dataDir, 'happier.sqlite');
+    const env = {
+      HAPPIER_SQLITE_AUTO_MIGRATE: '1',
+      HAPPIER_SQLITE_MIGRATIONS_DIR: dir,
+      DATABASE_URL: `file:${dbPath}`,
+    };
+
+    await applySqliteMigrationsIfNeeded({ env, dataDir });
+
+    expect(getSqliteState(dbPath).closeCount).toBe(1);
   });
 
   it('applySqliteMigrationsIfNeeded applies new migrations even when core tables already exist', async () => {

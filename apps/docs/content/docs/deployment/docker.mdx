@@ -165,6 +165,8 @@ Notes:
 - Use an **ephemeral**, **one-time** pre-auth key for `TS_AUTHKEY` when possible.
 - `tailscale serve` publishes the Happier UI + API (including WebSockets) behind the Tailscale HTTPS endpoint.
 - If your environment can’t use `/dev/net/tun` (some restricted hosts), fall back to a normal reverse proxy (Caddy/Traefik/nginx) or run Tailscale on the host OS and proxy to the container.
+  - Make sure your proxy supports **WebSocket upgrades** for Socket.IO realtime at `/v1/updates` (otherwise machines can stay offline).
+  - See: [Deployment → Environment variables → Networking / reverse proxy](./env#websockets-required-for-realtime--machine-online)
 
 ## Build images
 

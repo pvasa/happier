@@ -2,7 +2,7 @@ import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyLightDefaultEnv, ensureHandyMasterSecret } from "./env";
+import { applyLightDefaultEnv, ensureHandyMasterSecret, resolveLightSqliteDatabaseUrl } from "./env";
 
 describe("light env helpers", () => {
   it("applyLightDefaultEnv fills defaults without overriding explicit values", () => {
@@ -38,6 +38,17 @@ describe("light env helpers", () => {
     expect(env.HAPPY_SERVER_LIGHT_DATA_DIR).toBe("/scoped/home/custom/data");
     expect(env.HAPPY_SERVER_LIGHT_FILES_DIR).toBe("/scoped/home/custom/files");
     expect(env.HAPPY_SERVER_LIGHT_DB_DIR).toBe("/scoped/home/custom/db");
+  });
+
+  it("resolveLightSqliteDatabaseUrl renders Windows sqlite URLs in Prisma-compatible drive-letter form", () => {
+    expect(
+      resolveLightSqliteDatabaseUrl(
+        "C:\\Users\\me\\Happier QA\\self-host\\data",
+        "win32",
+      ),
+    ).toBe(
+      "file:C:/Users/me/Happier%20QA/self-host/data/happier-server-light.sqlite",
+    );
   });
 
   it("applyLightDefaultEnv derives defaults from homedir and PORT when missing", () => {

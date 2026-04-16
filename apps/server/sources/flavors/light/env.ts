@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, win32 as win32Path } from 'node:path';
 import { homedir as defaultHomedir, tmpdir } from 'node:os';
+import { renderPrismaCompatibleSqliteDatabaseUrl } from '@happier-dev/cli-common/firstPartyRuntime';
 import { expandHomeDirPath, resolveHomeDirFromEnvironment } from '@/utils/path/expandHomeDirPath';
 
 export type LightEnv = NodeJS.ProcessEnv;
@@ -38,6 +39,17 @@ export function resolveLightDatabaseDir(env: LightEnv, dataDir: string): string 
         return fromEnv;
     }
     return join(dataDir, 'pglite');
+}
+
+export function resolveLightSqliteDatabaseUrl(dataDir: string, platform: NodeJS.Platform = process.platform): string {
+    const trimmed = String(dataDir ?? '').trim();
+    if (!trimmed) {
+        return '';
+    }
+    const dbPath = platform === 'win32'
+        ? win32Path.join(trimmed, 'happier-server-light.sqlite')
+        : join(trimmed, 'happier-server-light.sqlite');
+    return renderPrismaCompatibleSqliteDatabaseUrl({ dbPath, platform });
 }
 
 export function resolveLightPublicUrl(env: LightEnv): string {

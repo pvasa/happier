@@ -110,23 +110,37 @@ class ActivityCache {
             const access = await checkSessionAccess(userId, sessionId);
             
             if (access) {
-                const session = await db.session.findUnique({
-                    where: { id: sessionId },
-                    select: { lastActiveAt: true, active: true },
-                });
-                if (!session?.lastActiveAt) {
-                    // Fail closed: presence should not mark unknown sessions as valid.
-                    return false;
+                const lastActiveAt = access.sessionLastActiveAt ?? null;
+                if (!lastActiveAt) {
+                    const session = await db.session.findUnique({
+                        where: { id: sessionId },
+                        select: { lastActiveAt: true, active: true },
+                    });
+                    if (!session?.lastActiveAt) {
+                        // Fail closed: presence should not mark unknown sessions as valid.
+                        return false;
+                    }
+
+                    // Cache the result
+                    this.sessionCache.set(cacheKey, {
+                        validUntil: now + this.CACHE_TTL,
+                        lastUpdateSent: session.lastActiveAt.getTime(),
+                        pendingUpdate: null,
+                        userId,
+                        sessionId,
+                        active: session.active,
+                    });
+                    return true;
                 }
 
                 // Cache the result
                 this.sessionCache.set(cacheKey, {
                     validUntil: now + this.CACHE_TTL,
-                    lastUpdateSent: session.lastActiveAt.getTime(),
+                    lastUpdateSent: lastActiveAt.getTime(),
                     pendingUpdate: null,
                     userId,
                     sessionId,
-                    active: session.active,
+                    active: access.sessionActive ?? true,
                 });
                 return true;
             }

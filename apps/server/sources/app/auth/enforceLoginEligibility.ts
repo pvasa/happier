@@ -14,12 +14,32 @@ export async function enforceLoginEligibility(params: {
     if (!accountId) return { ok: false, statusCode: 401, error: "invalid-token" };
 
     const policy = resolveAuthPolicyFromEnv(params.env);
-    const account = await db.account.findUnique({
-        where: { id: accountId },
-        select: { id: true },
-    });
+    let account: { id: string } | null = null;
+    try {
+        account = await db.account.findUnique({
+            where: { id: accountId },
+            select: { id: true },
+        });
+    } catch (error) {
+        log(
+            { module: "auth-login-eligibility", level: "error" },
+            "Failed to look up account for eligibility enforcement",
+            { accountId, error },
+        );
+        return { ok: false, statusCode: 503, error: "upstream_error" };
+    }
     if (!account) return { ok: false, statusCode: 401, error: "invalid-token" };
-    const disabled = await isAccountDisabled({ accountId: account.id });
+    let disabled = false;
+    try {
+        disabled = await isAccountDisabled({ accountId: account.id });
+    } catch (error) {
+        log(
+            { module: "auth-login-eligibility", level: "error" },
+            "Failed to check account disabled status",
+            { accountId: account.id, error },
+        );
+        return { ok: false, statusCode: 503, error: "upstream_error" };
+    }
     if (disabled) return { ok: false, statusCode: 403, error: "account-disabled" };
 
     if (policy.requiredLoginProviders.length === 0) {
@@ -41,12 +61,22 @@ export async function enforceLoginEligibility(params: {
             return { ok: false, statusCode: 503, error: "upstream_error" };
         }
 
-        const result = await provider.enforceLoginEligibility({
-            accountId: account.id,
-            env: params.env,
-            policy,
-            now,
-        });
+        let result: LoginEligibilityResult;
+        try {
+            result = await provider.enforceLoginEligibility({
+                accountId: account.id,
+                env: params.env,
+                policy,
+                now,
+            });
+        } catch (error) {
+            log(
+                { module: "auth-login-eligibility", level: "error" },
+                "Required login provider eligibility enforcement failed",
+                { accountId: account.id, providerId, error },
+            );
+            return { ok: false, statusCode: 503, error: "upstream_error" };
+        }
         if (!result.ok) return result;
     }
 

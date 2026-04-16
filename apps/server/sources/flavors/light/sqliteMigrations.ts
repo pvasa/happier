@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { parseBooleanEnv } from '@/config/env';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
@@ -20,18 +21,22 @@ export function resolveSqliteDatabaseFilePath(databaseUrl: string): string {
   const raw = String(databaseUrl ?? '').trim();
   if (!raw) return '';
   if (!raw.startsWith('file:')) return '';
+  const value = raw.slice('file:'.length);
+  if (!value) return '';
+  const shouldPreserveRelativePath =
+    !value.startsWith('/') &&
+    !value.startsWith('//') &&
+    !/^[A-Za-z]:[\\/]/.test(value);
+  if (shouldPreserveRelativePath) {
+    return value;
+  }
   try {
     const url = new URL(raw);
     // For file: URLs, pathname is already decoded and starts with / on unix.
     if (url.protocol !== 'file:') return '';
-    // On Windows, URL.pathname can start with /C:/...
-    const path = url.pathname.startsWith('/') && /^[A-Za-z]:\//.test(url.pathname.slice(1))
-      ? url.pathname.slice(1)
-      : url.pathname;
-    return path || '';
+    return fileURLToPath(url);
   } catch {
     // Prisma accepts file:/path and file:relative forms; treat them as best-effort paths.
-    const value = raw.slice('file:'.length);
     return value.startsWith('//') ? value.replace(/^\/+/, '/') : value;
   }
 }
@@ -59,6 +64,7 @@ type SqliteExecutor = Readonly<{
   queryTableNames: () => Set<string>;
   queryAppliedMigrations: () => Set<string>;
   insertAppliedMigration: (params: { name: string; checksum: string }) => void;
+  close: () => void;
 }>;
 
 export function shouldAutoMigrateSqliteOnStart(env: NodeJS.ProcessEnv): boolean {
@@ -128,6 +134,11 @@ async function createBunSqliteExecutor(params: { databasePath: string }): Promis
     insertAppliedMigration: ({ name, checksum }) => {
       insertQuery.run(randomUUID(), checksum, name);
     },
+    close: () => {
+      if (typeof db.close === 'function') {
+        db.close();
+      }
+    },
   });
 }
 
@@ -152,44 +163,48 @@ export async function applySqliteMigrationsIfNeeded(params: Readonly<{
   await mkdir(dirname(dbPath), { recursive: true }).catch(() => {});
 
   const executor = await createBunSqliteExecutor({ databasePath: dbPath });
-  const migrations = await listSqliteMigrations(migrationsDir);
-  if (migrations.length === 0) {
-    return { applied: [] };
-  }
-  const applied = executor.queryAppliedMigrations();
-  const existingTables = executor.queryTableNames();
-  const hasCoreTables = existingTables.has('Account') || existingTables.has('account') || existingTables.has('accounts');
-  const legacyMode = applied.size === 0 && hasCoreTables;
+  try {
+    const migrations = await listSqliteMigrations(migrationsDir);
+    if (migrations.length === 0) {
+      return { applied: [] };
+    }
+    const applied = executor.queryAppliedMigrations();
+    const existingTables = executor.queryTableNames();
+    const hasCoreTables = existingTables.has('Account') || existingTables.has('account') || existingTables.has('accounts');
+    const legacyMode = applied.size === 0 && hasCoreTables;
 
-  const isLikelyAlreadyAppliedError = (err: unknown): boolean => {
-    const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
-    return msg.includes('already exists') || msg.includes('duplicate column') || msg.includes('duplicate');
-  };
+    const isLikelyAlreadyAppliedError = (err: unknown): boolean => {
+      const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+      return msg.includes('already exists') || msg.includes('duplicate column') || msg.includes('duplicate');
+    };
 
-  const appliedNow: string[] = [];
-  for (const migration of migrations) {
-    if (applied.has(migration.name)) continue;
-    executor.exec('BEGIN');
-    try {
-      executor.exec(migration.sql);
-      executor.insertAppliedMigration({ name: migration.name, checksum: migration.checksum });
-      executor.exec('COMMIT');
-      appliedNow.push(migration.name);
-      applied.add(migration.name);
-    } catch (err) {
+    const appliedNow: string[] = [];
+    for (const migration of migrations) {
+      if (applied.has(migration.name)) continue;
+      executor.exec('BEGIN');
       try {
-        executor.exec('ROLLBACK');
-      } catch {
-        // ignore
-      }
-      if (legacyMode && isLikelyAlreadyAppliedError(err)) {
+        executor.exec(migration.sql);
         executor.insertAppliedMigration({ name: migration.name, checksum: migration.checksum });
+        executor.exec('COMMIT');
         appliedNow.push(migration.name);
         applied.add(migration.name);
-        continue;
+      } catch (err) {
+        try {
+          executor.exec('ROLLBACK');
+        } catch {
+          // ignore
+        }
+        if (legacyMode && isLikelyAlreadyAppliedError(err)) {
+          executor.insertAppliedMigration({ name: migration.name, checksum: migration.checksum });
+          appliedNow.push(migration.name);
+          applied.add(migration.name);
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    return { applied: appliedNow };
+  } finally {
+    executor.close();
   }
-  return { applied: appliedNow };
 }

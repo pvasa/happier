@@ -1,5 +1,6 @@
 import { isLoopbackHostname } from "@/utils/network/urlSafety";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
+import { resolveUiConfig } from "@/app/api/uiConfig";
 import { DEFAULT_WEBAPP_URL, resolveEffectiveWebappBaseUrl } from "../../../../serverUrls/effectiveServerUrls";
 
 export function isProviderResetEnabled(env: NodeJS.ProcessEnv): boolean {
@@ -47,10 +48,53 @@ function resolveWebAppBaseUrlFromEnv(env: NodeJS.ProcessEnv): string {
     return resolveEffectiveWebappBaseUrl(env).trim() || DEFAULT_WEBAPP_URL;
 }
 
+function resolveConfiguredWebAppBasePath(env: NodeJS.ProcessEnv): string {
+    try {
+        const pathname = new URL(resolveWebAppBaseUrlFromEnv(env)).pathname.replace(/\/+$/, "");
+        return pathname || "/";
+    } catch {
+        return "/";
+    }
+}
+
 function readSingleHeaderValue(headers: Record<string, unknown>, name: string): string {
     const raw = (headers as any)[name] ?? (headers as any)[name.toLowerCase()] ?? (headers as any)[name.toUpperCase()];
     if (Array.isArray(raw)) return typeof raw[0] === "string" ? raw[0] : "";
     return typeof raw === "string" ? raw : "";
+}
+
+function resolveLoopbackUiBasePath(pathname: string, uiPrefix: string, configuredBasePath: string): string {
+    const normalizedUiPrefix = uiPrefix === "/" ? "/" : `/${uiPrefix.replace(/^\/+|\/+$/g, "")}`;
+    const normalizedConfiguredBasePath =
+        configuredBasePath === "/" ? "/" : `/${configuredBasePath.replace(/^\/+|\/+$/g, "")}`;
+    if (pathname === "/" && normalizedConfiguredBasePath !== "/") {
+        return normalizedConfiguredBasePath;
+    }
+    if (normalizedUiPrefix === "/") {
+        if (
+            normalizedConfiguredBasePath !== "/" &&
+            (pathname === normalizedConfiguredBasePath || pathname.startsWith(`${normalizedConfiguredBasePath}/`))
+        ) {
+            return normalizedConfiguredBasePath;
+        }
+        return normalizedUiPrefix;
+    }
+
+    if (pathname === normalizedUiPrefix || pathname.startsWith(`${normalizedUiPrefix}/`)) {
+        return normalizedUiPrefix;
+    }
+
+    const prefixedSegment = `${normalizedUiPrefix}/`;
+    const prefixIndex = pathname.indexOf(prefixedSegment);
+    if (prefixIndex >= 0) {
+        return pathname.slice(0, prefixIndex + normalizedUiPrefix.length) || normalizedUiPrefix;
+    }
+
+    if (pathname.endsWith(normalizedUiPrefix)) {
+        return pathname;
+    }
+
+    return normalizedUiPrefix;
 }
 
 /**
@@ -70,17 +114,20 @@ export function resolveWebAppOAuthReturnUrlFromRequestHeaders(params: {
     if (!providerId) return null;
 
     const candidates: string[] = [];
-    const origin = readSingleHeaderValue(params.headers, "origin").trim();
-    if (origin) candidates.push(origin);
     const referer = readSingleHeaderValue(params.headers, "referer").trim();
     if (referer) candidates.push(referer);
+    const origin = readSingleHeaderValue(params.headers, "origin").trim();
+    if (origin) candidates.push(origin);
+    const uiPrefix = resolveUiConfig(params.env).prefix;
+    const configuredWebAppBasePath = resolveConfiguredWebAppBasePath(params.env);
 
     for (const raw of candidates) {
         try {
             const url = new URL(raw);
             if (!isLoopbackHostname(url.hostname)) continue;
             if (url.protocol !== "http:" && url.protocol !== "https:") continue;
-            const returnUrl = `${url.origin}/oauth/${encodeURIComponent(providerId)}`;
+            const loopbackUiBasePath = resolveLoopbackUiBasePath(url.pathname, uiPrefix, configuredWebAppBasePath);
+            const returnUrl = `${url.origin}${loopbackUiBasePath.replace(/\/+$/, "")}/oauth/${encodeURIComponent(providerId)}`;
             const normalized = tryNormalizeSafeWebRedirectUrl(params.env, returnUrl);
             if (normalized) return normalized;
         } catch {

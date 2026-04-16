@@ -121,8 +121,8 @@ function generateProviderSchemaFromPostgres(
     const generatorClient = [
         'generator client {',
         '    provider        = "prisma-client-js"',
-        '    // Include Linux query engines so macOS-built release artifacts can run on Linux (self-host).',
-        '    binaryTargets   = ["native", "debian-openssl-3.0.x", "linux-arm64-openssl-3.0.x"]',
+        '    // Include cross-compiled query engines so macOS-built release artifacts can run on Linux and Windows.',
+        '    binaryTargets   = ["native", "debian-openssl-3.0.x", "linux-arm64-openssl-3.0.x", "windows"]',
         `    previewFeatures = [${opts.previewFeatures.map((v) => JSON.stringify(v)).join(", ")}]`,
         `    output          = "${opts.output}"`,
         '}',
