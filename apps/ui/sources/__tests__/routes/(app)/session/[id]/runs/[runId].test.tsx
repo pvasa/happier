@@ -67,6 +67,7 @@ const navigateWithBlurOnWebSpy = vi.hoisted(() => vi.fn((action: () => void) => 
 const navigationCanGoBackSpy = vi.fn(() => true);
 let localSearchParamsMock: Record<string, unknown> = { id: 'session-1', runId: 'run_1' };
 let hydrateReady = true;
+const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => hydrateReady);
 let SessionRunDetailsScreen: typeof import('@/app/(app)/session/[id]/runs/[runId]').default;
 const sessionFixture: Session = {
     id: 'session-1',
@@ -215,7 +216,8 @@ installSessionRouteCommonModuleMocks({
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => hydrateReady,
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
 }));
 
 vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
@@ -261,6 +263,7 @@ describe('Session Run Details Screen', () => {
         routerPushSpy.mockReset();
         routerBackSpy.mockReset();
         routerReplaceSpy.mockReset();
+        hydrateSpy.mockReset();
         navigateWithBlurOnWebSpy.mockClear();
         navigationCanGoBackSpy.mockReturnValue(true);
         localSearchParamsMock = { id: 'session-1', runId: 'run_1' };
@@ -307,6 +310,7 @@ describe('Session Run Details Screen', () => {
 
     it('falls back to the parent session route when the run details screen has no back history', async () => {
         navigationCanGoBackSpy.mockReturnValue(false);
+        localSearchParamsMock = { id: 'session-1', runId: 'run_1', serverId: 'server-b' };
         const screen = await renderRunDetailsScreen();
 
         const stackOptions = stackScreenSpy.mock.calls.at(-1)?.[0]?.options;
@@ -316,7 +320,7 @@ describe('Session Run Details Screen', () => {
         await headerLeftScreen.pressByTestIdAsync('session-run-details-back');
 
         expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
     });
 
     it('renders invalid-link fallback when the run id param is missing', async () => {
@@ -328,9 +332,11 @@ describe('Session Run Details Screen', () => {
 
     it('does not load run details until route hydration is ready', async () => {
         hydrateReady = false;
+        localSearchParamsMock = { id: 'session-1', runId: 'run_1', serverId: 'server-b' };
         const screen = await renderRunDetailsScreen();
         expect(screen.findAllByType('ActivityIndicator')).toHaveLength(1);
         expect(getRunSpy).not.toHaveBeenCalled();
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionRunDetailsScreen.hydrate', { serverId: 'server-b' });
     });
 
     it('keeps the loading state visible while route hydration is pending even if params are not ready yet', async () => {
@@ -415,13 +421,14 @@ describe('Session Run Details Screen', () => {
     });
 
     it('opens the owning tool details when the run sidechain maps to a transcript tool message', async () => {
+        localSearchParamsMock = { id: 'session-1', runId: 'run_1', serverId: 'server-b' };
         const screen = await renderRunDetailsScreen();
         expect(screen.findByTestId('session-run-details-open-tool-message')).toBeTruthy();
 
         await screen.pressByTestIdAsync('session-run-details-open-tool-message');
 
         expect(navigateWithBlurOnWebSpy).toHaveBeenCalledTimes(1);
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/message/tool%3Aside_1');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/message/tool%3Aside_1?serverId=server-b');
     });
 
     it('can stop and send to running bounded backend runs', async () => {

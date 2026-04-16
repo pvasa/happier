@@ -43,6 +43,8 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useSettings: () => ({} as Settings),
         useSetting,
         useSettingMutable,
+        useSessionMessages: () => ({ messages: [], isLoaded: true } as const),
+        useSessionMessagesVersion: () => 0,
         useAllMachines: () => allMachines,
         useAllSessions: () => allSessions,
         useArtifacts: () => [],

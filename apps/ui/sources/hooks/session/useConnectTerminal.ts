@@ -21,6 +21,7 @@ import { isWebMobileLikeQrScannerHost } from '@/utils/platform/webMobileHeuristi
 interface UseConnectTerminalOptions {
     onSuccess?: () => void;
     onError?: (error: any) => void;
+    allowLoopbackServerOverride?: boolean;
 }
 
 function resolveTerminalProvisioningContentPrivateKey(credentials: AuthCredentials): Uint8Array {
@@ -43,6 +44,7 @@ export function useConnectTerminal(options?: UseConnectTerminalOptions) {
     const auth = useAuth();
     const { width, height } = useWindowDimensions();
     const [isLoading, setIsLoading] = React.useState(false);
+    const allowLoopbackServerOverride = options?.allowLoopbackServerOverride ?? false;
 
     const processAuthUrl = React.useCallback(async (url: string) => {
         const parsed = parseTerminalConnectUrl(url);
@@ -58,6 +60,7 @@ export function useConnectTerminal(options?: UseConnectTerminalOptions) {
             const effectiveParsedServerUrl = resolveEffectiveServerUrlOverride({
                 requestedServerUrl: parsed.serverUrl,
                 activeServerUrl: currentServerUrl,
+                allowLoopbackSwitch: allowLoopbackServerOverride,
             });
 
             if (effectiveParsedServerUrl) {
@@ -151,7 +154,7 @@ export function useConnectTerminal(options?: UseConnectTerminalOptions) {
         } finally {
             setIsLoading(false);
         }
-    }, [auth.credentials, options]);
+    }, [allowLoopbackServerOverride, auth.credentials, options]);
 
     const connectTerminal = React.useCallback(async () => {
         const isPhoneSizedWeb = Platform.OS === 'web' && isWebMobileLikeQrScannerHost({ width, height });

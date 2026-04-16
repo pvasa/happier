@@ -13,6 +13,10 @@ function resolveInstallChannel(input: Readonly<{ appVariant: AppVariant; distTag
     return 'preview';
 }
 
+export function buildHappierCliCommandName(input: Readonly<{ appVariant: AppVariant; distTagOverride?: unknown }>): 'happier' | 'hprev' {
+    return resolveInstallChannel(input) === 'preview' ? 'hprev' : 'happier';
+}
+
 export function buildHappierCliInstallCommand(input: Readonly<{ appVariant: AppVariant; distTagOverride?: unknown }>): string {
     const channel = resolveInstallChannel(input);
     if (channel === 'preview') {

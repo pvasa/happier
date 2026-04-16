@@ -11,8 +11,23 @@ const getSessionSharesSpy = vi.fn(async (..._args: any[]) => []);
 const getPublicShareSpy = vi.fn(async (..._args: any[]) => null);
 const getFriendsListSpy = vi.fn(async (..._args: any[]) => []);
 let sessionHydrated = true;
+let mockServerId: string | undefined;
+const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
 
 installSessionRouteCommonModuleMocks({
+    router: async () => {
+        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+        const routerMock = createExpoRouterMock({
+            params: {
+                id: 'session-1',
+                serverId: mockServerId,
+            },
+        });
+        return {
+            ...routerMock.module,
+            useLocalSearchParams: () => ({ id: 'session-1', serverId: mockServerId }),
+        };
+    },
     storageModule: async () => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
@@ -41,7 +56,8 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => sessionHydrated,
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
 }));
 
 vi.mock('@/sync/sync', () => ({
@@ -85,6 +101,7 @@ vi.mock('@/components/sessions/sharing', () => ({
 describe('Session Sharing Screen permissions', () => {
     it('waits for session hydration before rendering sharing content', async () => {
         sessionHydrated = false;
+        mockServerId = 'server-b';
         const Screen = (await import('@/app/(app)/session/[id]/sharing')).default;
 
         const screen = await renderScreen(<Screen />);
@@ -93,9 +110,13 @@ describe('Session Sharing Screen permissions', () => {
         expect(getSessionSharesSpy).not.toHaveBeenCalled();
         expect(getPublicShareSpy).not.toHaveBeenCalled();
         expect(getFriendsListSpy).not.toHaveBeenCalled();
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionSharingRoute.ensureSessionVisible', { serverId: 'server-b' });
     });
 
     it('does not attempt to load or manage shares when user is not an admin', async () => {
+        sessionHydrated = true;
+        mockServerId = undefined;
+        hydrateSpy.mockClear();
         const Screen = (await import('@/app/(app)/session/[id]/sharing')).default;
 
         await renderScreen(<Screen />);

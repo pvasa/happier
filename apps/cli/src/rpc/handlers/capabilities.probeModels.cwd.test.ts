@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('capabilities.invoke(cli.* probeModels)', () => {
   it('passes params.cwd through to probeAgentModelsBestEffort when provided', async () => {
@@ -32,7 +35,7 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
       registerHandlers: (manager) => registerCapabilitiesHandlers(manager),
     });
 
-    const cwd = '/tmp/happier-probe-cwd';
+    const cwd = mkdtempSync(join(tmpdir(), 'happier-probe-cwd-'));
     await call(RPC_METHODS.CAPABILITIES_INVOKE, {
       id: 'cli.opencode',
       method: 'probeModels',
@@ -41,6 +44,52 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
 
     expect(probeSpy).toHaveBeenCalledTimes(1);
     expect(probeSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'opencode', cwd, timeoutMs: 1234 }));
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('falls back to the closest existing directory when params.cwd does not exist', async () => {
+    vi.resetModules();
+
+    const probeSpy = vi.fn(async (_params: any) => ({
+      provider: 'opencode',
+      availableModels: [{ id: 'default', name: 'Default' }],
+      supportsFreeform: false,
+      source: 'static',
+    }));
+
+    vi.doMock('@/capabilities/probes/agentModelsProbe', () => ({
+      probeAgentModelsBestEffort: (params: any) => probeSpy(params),
+    }));
+
+    vi.doMock('@/backends/catalog', () => ({
+      AGENTS: {
+        opencode: { id: 'opencode' },
+      },
+    }));
+
+    const { registerCapabilitiesHandlers } = await import('./capabilities');
+    const { createEncryptedRpcTestClient } = await import('./encryptedRpc.testkit');
+
+    const { call } = createEncryptedRpcTestClient({
+      scopePrefix: 'machine-test',
+      encryptionKey: new Uint8Array(32).fill(7),
+      logger: () => undefined,
+      registerHandlers: (manager) => registerCapabilitiesHandlers(manager),
+    });
+
+    const baseDir = mkdtempSync(join(tmpdir(), 'happier-probe-cwd-parent-'));
+    const cwd = join(baseDir, 'missing', 'child');
+    await call(RPC_METHODS.CAPABILITIES_INVOKE, {
+      id: 'cli.opencode',
+      method: 'probeModels',
+      params: { timeoutMs: 1234, cwd },
+    });
+
+    expect(probeSpy).toHaveBeenCalledTimes(1);
+    expect(probeSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'opencode', cwd: baseDir, timeoutMs: 1234 }));
+
+    rmSync(baseDir, { recursive: true, force: true });
   });
 
   it('uses a long enough default timeout when timeoutMs is omitted', async () => {
@@ -73,14 +122,17 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
       registerHandlers: (manager) => registerCapabilitiesHandlers(manager),
     });
 
+    const cwd = mkdtempSync(join(tmpdir(), 'happier-probe-cwd-timeout-'));
     await call(RPC_METHODS.CAPABILITIES_INVOKE, {
       id: 'cli.opencode',
       method: 'probeModels',
-      params: { cwd: '/tmp/happier-probe-cwd' },
+      params: { cwd },
     });
 
     expect(probeSpy).toHaveBeenCalledTimes(1);
     expect(probeSpy).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   it('forwards backendTarget to probeAgentModelsBestEffort for cli.customAcp', async () => {
@@ -114,10 +166,11 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
     });
 
     const backendTarget = { kind: 'configuredAcpBackend', backendId: 'review-bot' } as const;
+    const cwd = mkdtempSync(join(tmpdir(), 'happier-probe-cwd-backend-target-'));
     await call(RPC_METHODS.CAPABILITIES_INVOKE, {
       id: 'cli.customAcp',
       method: 'probeModels',
-      params: { cwd: '/tmp/happier-probe-cwd', backendTarget },
+      params: { cwd, backendTarget },
     });
 
     expect(probeSpy).toHaveBeenCalledTimes(1);
@@ -125,6 +178,8 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
       agentId: 'customAcp',
       backendTarget,
     }));
+
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   it('loads account settings for probes when the agent catalog entry requires them', async () => {
@@ -224,10 +279,11 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
       registerHandlers: (manager) => registerCapabilitiesHandlers(manager),
     });
 
+    const cwd = mkdtempSync(join(tmpdir(), 'happier-probe-cwd-codex-'));
     await call(RPC_METHODS.CAPABILITIES_INVOKE, {
       id: 'cli.codex',
       method: 'probeModels',
-      params: { cwd: '/tmp/happier-probe-cwd' },
+      params: { cwd },
     });
 
     expect(readCredentialsMock).toHaveBeenCalledTimes(1);
@@ -241,6 +297,8 @@ describe('capabilities.invoke(cli.* probeModels)', () => {
       accountSettings: { codexBackendMode: 'appServer' },
       credentials: { token: 'token' },
     }));
+
+    rmSync(cwd, { recursive: true, force: true });
   });
 
   it('prefers an explicit runtime-kind override over the cached account settings', async () => {

@@ -14,6 +14,7 @@ const routerBackSpy = vi.fn();
 const routerPushSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 let mockSessionId = 'session-1';
+let mockServerId: string | undefined;
 let isFocused = true;
 let canGoBack = true;
 
@@ -21,6 +22,10 @@ const openRightSpy = vi.fn();
 const closeRightSpy = vi.fn();
 const setRightTabSpy = vi.fn();
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => {
+    ensureSessionVisibleSpy(sessionId);
+    return options;
+});
 let scopeState: any = {
     right: { isOpen: false, activeTabId: null, tabState: {} },
     details: null,
@@ -50,8 +55,8 @@ installSessionRouteCommonModuleMocks({
         });
         return {
             ...routerMock.module,
-            useLocalSearchParams: () => ({ id: mockSessionId }),
-            useGlobalSearchParams: () => ({ id: mockSessionId }),
+            useLocalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId }),
+            useGlobalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId }),
             useNavigation: () => ({
                 canGoBack: () => canGoBack,
             }),
@@ -87,8 +92,8 @@ vi.mock('@/sync/sync', () => ({
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string) => {
-        ensureSessionVisibleSpy(sessionId);
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) => {
+        hydrateSpy(sessionId, tag, options);
         return true;
     },
 }));
@@ -102,6 +107,7 @@ describe('/session/[id]/files', () => {
 
     beforeEach(() => {
         mockSessionId = 'session-1';
+        mockServerId = undefined;
         isFocused = true;
         canGoBack = true;
         scopeState = {
@@ -115,6 +121,7 @@ describe('/session/[id]/files', () => {
         routerPushSpy.mockClear();
         routerReplaceSpy.mockClear();
         ensureSessionVisibleSpy.mockClear();
+        hydrateSpy.mockClear();
         vi.clearAllMocks();
     });
 
@@ -149,9 +156,15 @@ describe('/session/[id]/files', () => {
     });
 
     it('hydrates the session for deep links by requesting session visibility', async () => {
+        mockServerId = 'server-b';
         await renderRouteScreen();
 
         expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('session-1');
+        expect(hydrateSpy).toHaveBeenCalledWith(
+            'session-1',
+            'SessionFilesRoute.ensureSessionVisible',
+            { serverId: 'server-b' },
+        );
     });
 
     it('closes by navigating back and closing the right-pane state', async () => {
@@ -167,6 +180,7 @@ describe('/session/[id]/files', () => {
     });
 
     it('falls back to the session route when closed without back history', async () => {
+        mockServerId = 'server-b';
         canGoBack = false;
         const screen = await renderRouteScreen();
 
@@ -177,10 +191,11 @@ describe('/session/[id]/files', () => {
 
         expect(closeRightSpy).toHaveBeenCalled();
         expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
     });
 
     it('navigates to details when a details tab is opened from the shared surface', async () => {
+        mockServerId = 'server-b';
         scopeState = {
             right: { isOpen: true, activeTabId: 'git', tabState: {} },
             details: {
@@ -194,7 +209,7 @@ describe('/session/[id]/files', () => {
 
         expect(routerPushSpy).toHaveBeenCalledWith({
             pathname: '/session/[id]/details',
-            params: { id: 'session-1', details: 'file', path: 'README.md' },
+            params: { id: 'session-1', serverId: 'server-b', details: 'file', path: 'README.md' },
         });
     });
 

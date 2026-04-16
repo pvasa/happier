@@ -26,12 +26,52 @@ import type { AgentId } from '@happier-dev/agents';
 import { applyAgentRuntimeKindOverrideToAccountSettings } from '@happier-dev/agents';
 import { BackendTargetRefSchema, type BackendTargetRefV1 } from '@happier-dev/protocol';
 import { invokeProviderCliInstall as invokeSharedProviderCliInstall } from '@/runtime/managedTools/invokeProviderCliInstall';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, resolve as resolvePath } from 'node:path';
+import os from 'node:os';
 
 const DEFAULT_PROBE_MODELS_TIMEOUT_MS = 30_000;
 
 function titleCase(value: string): string {
     if (!value) return value;
     return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+function isExistingDirectory(value: string): boolean {
+    if (!value) return false;
+    try {
+        return statSync(value).isDirectory();
+    } catch {
+        return false;
+    }
+}
+
+function resolveClosestExistingDirectory(value: string): string {
+    let candidate = resolvePath(value);
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+        if (isExistingDirectory(candidate)) return candidate;
+        const parent = dirname(candidate);
+        if (!parent || parent === candidate) break;
+        candidate = parent;
+    }
+    return candidate;
+}
+
+function resolveProbeCwd(raw: unknown): string {
+    const rawValue = typeof raw === 'string' ? raw.trim() : '';
+    const fallback = (process.env.HOME ?? '').toString().trim() || os.homedir() || process.cwd();
+    const initial = rawValue || process.cwd();
+
+    const candidate = resolveClosestExistingDirectory(initial);
+    if (isExistingDirectory(candidate)) return candidate;
+
+    const fallbackCandidate = resolveClosestExistingDirectory(fallback);
+    if (isExistingDirectory(fallbackCandidate)) return fallbackCandidate;
+
+    const cwdCandidate = resolveClosestExistingDirectory(process.cwd());
+    if (isExistingDirectory(cwdCandidate)) return cwdCandidate;
+
+    return process.cwd();
 }
 
 async function resolveProbeBackendContext(params?: Record<string, unknown>): Promise<{
@@ -163,8 +203,7 @@ function createGenericCliCapability(agentId: AgentCatalogEntry['id']): Capabilit
                 const probeContext = await resolveProbeBackendContext({ ...params, agentId });
                 const timeoutMsRaw = (params ?? {}).timeoutMs;
                 const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
-                const cwdRaw = (params ?? {}).cwd;
-                const cwd = typeof cwdRaw === 'string' && cwdRaw.trim().length > 0 ? cwdRaw.trim() : process.cwd();
+                const cwd = resolveProbeCwd((params ?? {}).cwd);
                 const result = await probeAgentModelsBestEffort({
                     agentId,
                     backendTarget: probeContext.backendTarget,
@@ -179,8 +218,7 @@ function createGenericCliCapability(agentId: AgentCatalogEntry['id']): Capabilit
                 const probeContext = await resolveProbeBackendContext({ ...params, agentId });
                 const timeoutMsRaw = (params ?? {}).timeoutMs;
                 const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
-                const cwdRaw = (params ?? {}).cwd;
-                const cwd = typeof cwdRaw === 'string' && cwdRaw.trim().length > 0 ? cwdRaw.trim() : process.cwd();
+                const cwd = resolveProbeCwd((params ?? {}).cwd);
                 const result = await probeAgentModesBestEffort({
                     agentId,
                     backendTarget: probeContext.backendTarget,
@@ -195,8 +233,7 @@ function createGenericCliCapability(agentId: AgentCatalogEntry['id']): Capabilit
                 const probeContext = await resolveProbeBackendContext({ ...params, agentId });
                 const timeoutMsRaw = (params ?? {}).timeoutMs;
                 const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
-                const cwdRaw = (params ?? {}).cwd;
-                const cwd = typeof cwdRaw === 'string' && cwdRaw.trim().length > 0 ? cwdRaw.trim() : process.cwd();
+                const cwd = resolveProbeCwd((params ?? {}).cwd);
                 const result = await probeAgentConfigOptionsBestEffort({
                     agentId,
                     backendTarget: probeContext.backendTarget,
@@ -234,8 +271,7 @@ function augmentCliCapabilityWithProbeModels(cap: Capability, agentId: AgentCata
             const probeContext = await resolveProbeBackendContext({ ...params, agentId });
             const timeoutMsRaw = (params ?? {}).timeoutMs;
             const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
-            const cwdRaw = (params ?? {}).cwd;
-            const cwd = typeof cwdRaw === 'string' && cwdRaw.trim().length > 0 ? cwdRaw.trim() : process.cwd();
+            const cwd = resolveProbeCwd((params ?? {}).cwd);
             const result = await probeAgentModelsBestEffort({
                 agentId,
                 backendTarget: probeContext.backendTarget,
@@ -250,8 +286,7 @@ function augmentCliCapabilityWithProbeModels(cap: Capability, agentId: AgentCata
             const probeContext = await resolveProbeBackendContext({ ...params, agentId });
             const timeoutMsRaw = (params ?? {}).timeoutMs;
             const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
-            const cwdRaw = (params ?? {}).cwd;
-            const cwd = typeof cwdRaw === 'string' && cwdRaw.trim().length > 0 ? cwdRaw.trim() : process.cwd();
+            const cwd = resolveProbeCwd((params ?? {}).cwd);
             const result = await probeAgentModesBestEffort({
                 agentId,
                 backendTarget: probeContext.backendTarget,
@@ -266,8 +301,7 @@ function augmentCliCapabilityWithProbeModels(cap: Capability, agentId: AgentCata
             const probeContext = await resolveProbeBackendContext({ ...params, agentId });
             const timeoutMsRaw = (params ?? {}).timeoutMs;
             const timeoutMs = typeof timeoutMsRaw === 'number' ? timeoutMsRaw : DEFAULT_PROBE_MODELS_TIMEOUT_MS;
-            const cwdRaw = (params ?? {}).cwd;
-            const cwd = typeof cwdRaw === 'string' && cwdRaw.trim().length > 0 ? cwdRaw.trim() : process.cwd();
+            const cwd = resolveProbeCwd((params ?? {}).cwd);
             const result = await probeAgentConfigOptionsBestEffort({
                 agentId,
                 backendTarget: probeContext.backendTarget,
@@ -289,45 +323,45 @@ function augmentCliCapabilityWithProbeModels(cap: Capability, agentId: AgentCata
     };
 }
 
+export async function createCliCapabilitiesService(): Promise<ReturnType<typeof createCapabilitiesService>> {
+    const cliCapabilities = await Promise.all(
+        (Object.values(AGENTS) as AgentCatalogEntry[]).map(async (entry) => {
+            if (entry.getCliCapabilityOverride) {
+                const override = await entry.getCliCapabilityOverride();
+                return augmentCliCapabilityWithProbeModels(override, entry.id);
+            }
+            return createGenericCliCapability(entry.id);
+        }),
+    );
+
+    const extraCapabilitiesNested = await Promise.all(
+        (Object.values(AGENTS) as AgentCatalogEntry[]).map(async (entry) => {
+            if (!entry.getCapabilities) return [];
+            return [...(await entry.getCapabilities())];
+        }),
+    );
+    const extraCapabilities: Capability[] = extraCapabilitiesNested.flat();
+
+    return createCapabilitiesService({
+        capabilities: [
+            ...cliCapabilities,
+            ...extraCapabilities,
+            tmuxCapability,
+            windowsTerminalCapability,
+            executionRunsCapability,
+            systemTasksCapability,
+        ],
+        checklists,
+        buildContext: buildDetectContext,
+    });
+}
+
 export function registerCapabilitiesHandlers(rpcHandlerManager: RpcHandlerRegistrar): void {
     let servicePromise: Promise<ReturnType<typeof createCapabilitiesService>> | null = null;
 
-    const createService = async (): Promise<ReturnType<typeof createCapabilitiesService>> => {
-        const cliCapabilities = await Promise.all(
-            (Object.values(AGENTS) as AgentCatalogEntry[]).map(async (entry) => {
-                if (entry.getCliCapabilityOverride) {
-                    const override = await entry.getCliCapabilityOverride();
-                    return augmentCliCapabilityWithProbeModels(override, entry.id);
-                }
-                return createGenericCliCapability(entry.id);
-            }),
-        );
-
-        const extraCapabilitiesNested = await Promise.all(
-            (Object.values(AGENTS) as AgentCatalogEntry[]).map(async (entry) => {
-                if (!entry.getCapabilities) return [];
-                return [...(await entry.getCapabilities())];
-            }),
-        );
-        const extraCapabilities: Capability[] = extraCapabilitiesNested.flat();
-
-        return createCapabilitiesService({
-            capabilities: [
-                ...cliCapabilities,
-                ...extraCapabilities,
-                tmuxCapability,
-                windowsTerminalCapability,
-                executionRunsCapability,
-                systemTasksCapability,
-            ],
-            checklists,
-            buildContext: buildDetectContext,
-        });
-    };
-
     const getService = (): Promise<ReturnType<typeof createCapabilitiesService>> => {
         if (servicePromise) return servicePromise;
-        const pending = createService().catch((error) => {
+        const pending = createCliCapabilitiesService().catch((error) => {
             if (servicePromise === pending) {
                 servicePromise = null;
             }

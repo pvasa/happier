@@ -140,6 +140,20 @@ const persistedDraft = vi.hoisted(() => ({
     backendTarget?: { kind: 'builtInAgent'; agentId: string };
     resumeSessionId?: string | null;
 });
+const cliDetectionState = vi.hoisted(() => ({
+    value: {
+        available: { codex: true, claude: true } as any,
+        login: {} as any,
+        authStatus: {} as any,
+        resolvedPath: {} as any,
+        resolvedCommand: {} as any,
+        resolutionSource: {} as any,
+        tmux: null,
+        isDetecting: false,
+        timestamp: 123,
+        refresh: vi.fn(),
+    },
+}));
 const saveNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const clearNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const loadNewSessionDraftMock = vi.hoisted(() => vi.fn(() => JSON.parse(JSON.stringify(persistedDraft))));
@@ -441,7 +455,7 @@ installNewSessionScreenModelCommonModuleMocks({
         const expoRouterMock = createExpoRouterMock({
             router: { push: routerPushMock, replace: vi.fn(), back: vi.fn(), setParams: routerSetParamsMock },
             params: () => searchParamsState.value as Record<string, string | string[] | undefined>,
-            navigation: {},
+            navigation: { setParams: routerSetParamsMock, dispatch: vi.fn() },
             pathname: '/new',
         });
         return expoRouterMock.module;
@@ -610,18 +624,7 @@ vi.mock('@/utils/sessions/recentPaths', () => ({
 }));
 
 vi.mock('@/hooks/auth/useCLIDetection', () => ({
-    useCLIDetection: () => ({
-        available: { codex: true, claude: true } as any,
-        login: {} as any,
-        authStatus: {} as any,
-        resolvedPath: {} as any,
-        resolvedCommand: {} as any,
-        resolutionSource: {} as any,
-        tmux: null,
-        isDetecting: false,
-        timestamp: 123,
-        refresh: vi.fn(),
-    }),
+    useCLIDetection: () => cliDetectionState.value,
 }));
 
 vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
@@ -900,6 +903,18 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         settingsState.acpCatalogSettingsV1 = {
             v: 2,
             backends: [],
+        };
+        cliDetectionState.value = {
+            available: { codex: true, claude: true } as any,
+            login: {} as any,
+            authStatus: {} as any,
+            resolvedPath: {} as any,
+            resolvedCommand: {} as any,
+            resolutionSource: {} as any,
+            tmux: null,
+            isDetecting: false,
+            timestamp: 123,
+            refresh: vi.fn(),
         };
         settingsState.useEnhancedSessionWizard = false;
         settingsState.useProfiles = false;
@@ -1942,6 +1957,70 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(model?.wizardProps?.profiles?.selectedProfileId).toBeNull();
         expect(model?.wizardProps?.profiles?.getProfileSubtitleExtra?.({ id: 'profile_docs' })).toBeNull();
         expect(model?.wizardProps?.profiles?.getProfileSubtitleExtra?.({ id: 'profile_workspace' })).toBeNull();
+    });
+
+    it('shows a not-logged-in subtitle for profiles whose only backend auth is logged out', async () => {
+        settingsState.useProfiles = true;
+        settingsState.useEnhancedSessionWizard = true;
+        settingsState.lastUsedAgent = 'codex';
+        settingsState.profiles = [
+            {
+                id: 'profile-1',
+                title: 'Profile One',
+                isBuiltIn: false,
+                compatibility: { codex: true, claude: false },
+                envVarRequirements: [],
+            },
+        ];
+        cliDetectionState.value = {
+            timestamp: 1,
+            available: { claude: true, codex: true },
+            authStatus: {
+                codex: { state: 'logged_out', checkedAt: 1 },
+            },
+        } as any;
+
+        const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
+
+        let model: any = null;
+        function Probe() {
+            model = useNewSessionScreenModel();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        expect(model?.wizardProps?.profiles?.getProfileSubtitleExtra?.({ id: 'profile-1' })).toBe('profiles.machineLogin.status.notLoggedIn');
+    });
+
+    it('rejects a profile route param when the profile is not selectable in the current backend set', async () => {
+        settingsState.useProfiles = true;
+        settingsState.useEnhancedSessionWizard = true;
+        settingsState.profiles = [
+            {
+                id: 'profile-1',
+                title: 'Profile One',
+                isBuiltIn: false,
+                compatibility: { codex: false, claude: false },
+                envVarRequirements: [],
+            },
+        ];
+        searchParamsState.value = {
+            profileId: 'profile-1',
+        };
+
+        const { useNewSessionScreenModel } = await useNewSessionScreenModelModulePromise;
+
+        let model: any = null;
+        function Probe() {
+            model = useNewSessionScreenModel();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        expect(model?.wizardProps?.profiles?.selectedProfileId).toBeNull();
+        expect(routerSetParamsMock).toHaveBeenCalledWith({ profileId: undefined });
     });
 
     it('persists updated checkout creation draft state after in-memory changes', async () => {

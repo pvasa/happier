@@ -26,7 +26,7 @@ import type { SessionGettingStartedDecisionKind } from './gettingStartedModel';
 import type { SessionGettingStartedViewModel } from './gettingStartedModel';
 import { buildSessionGettingStartedViewModel } from './gettingStartedModel';
 import { Text } from '@/components/ui/text/Text';
-import { buildHappierCliInstallCommand } from './happierCliInstallCommand';
+import { buildHappierCliCommandName, buildHappierCliInstallCommand } from './happierCliInstallCommand';
 import { listSessionGettingStartedCliCommands } from './listSessionGettingStartedCliCommands';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { SessionEmptyStateCard } from './SessionEmptyStateCard';
@@ -224,6 +224,13 @@ function buildCliInstallCommand(): string {
     });
 }
 
+function buildCliCommandName(): 'happier' | 'hprev' {
+    return buildHappierCliCommandName({
+        appVariant: resolveAppVariantForCliInstall(),
+        distTagOverride: config.cliNpmDistTag,
+    });
+}
+
 type SessionGettingStartedGuidanceStep = Readonly<{
     id: string;
     title: string;
@@ -236,6 +243,7 @@ function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGetti
     switch (model.kind) {
         case 'connect_machine': {
             const steps: SessionGettingStartedGuidanceStep[] = [];
+            const cliCommandName = buildCliCommandName();
             steps.push({
                 id: 'install_cli',
                 title: t('sessionGettingStarted.steps.installCli.title'),
@@ -248,7 +256,7 @@ function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGetti
                     id: 'server_setup',
                     title: t('sessionGettingStarted.steps.serverSetup.title'),
                     description: t('sessionGettingStarted.steps.serverSetup.description'),
-                    command: `happier server add --name \"${model.serverName}\" --server-url \"${model.serverUrl}\" --use`,
+                    command: `${cliCommandName} server add --name \"${model.serverName}\" --server-url \"${model.serverUrl}\" --use`,
                     copyLabel: t('sessionGettingStarted.steps.serverSetup.copyLabel'),
                 });
             }
@@ -256,50 +264,52 @@ function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGetti
                 id: 'auth_login',
                 title: t('sessionGettingStarted.steps.authLogin.title'),
                 description: t('sessionGettingStarted.steps.authLogin.description'),
-                command: 'happier auth login',
+                command: `${cliCommandName} auth login`,
                 copyLabel: t('sessionGettingStarted.steps.authLogin.copyLabel'),
             });
             steps.push({
                 id: 'daemon_install',
                 title: t('sessionGettingStarted.steps.daemonInstall.title'),
                 description: t('sessionGettingStarted.steps.daemonInstall.description'),
-                command: 'happier service install',
+                command: `${cliCommandName} service install`,
                 copyLabel: t('sessionGettingStarted.steps.daemonInstall.copyLabel'),
             });
             steps.push({
                 id: 'create_session',
                 title: t('sessionGettingStarted.steps.createSession.title'),
                 description: t('sessionGettingStarted.steps.createSession.description'),
-                command: listSessionGettingStartedCliCommands().join('\n'),
+                command: listSessionGettingStartedCliCommands(cliCommandName).join('\n'),
                 copyLabel: t('sessionGettingStarted.steps.createSession.copyLabel'),
             });
             return steps;
         }
         case 'start_daemon': {
+            const cliCommandName = buildCliCommandName();
             return [
                 {
                     id: 'daemon_install',
                     title: t('sessionGettingStarted.steps.daemonInstall.title'),
                     description: t('sessionGettingStarted.steps.startDaemonInstall.description'),
-                    command: 'happier service install',
+                    command: `${cliCommandName} service install`,
                     copyLabel: t('sessionGettingStarted.steps.daemonInstall.copyLabel'),
                 },
                 {
                     id: 'daemon_start',
                     title: t('sessionGettingStarted.steps.daemonStart.title'),
                     description: t('sessionGettingStarted.steps.daemonStart.description'),
-                    command: 'happier service start',
+                    command: `${cliCommandName} service start`,
                     copyLabel: t('sessionGettingStarted.steps.daemonStart.copyLabel'),
                 },
             ];
         }
         case 'create_session': {
+            const cliCommandName = buildCliCommandName();
             return [
                 {
                     id: 'start_session',
                     title: t('sessionGettingStarted.steps.startSession.title'),
                     description: t('sessionGettingStarted.steps.startSession.description'),
-                    command: 'happier',
+                    command: cliCommandName,
                     copyLabel: t('sessionGettingStarted.steps.startSession.copyLabel'),
                 },
             ];

@@ -34,8 +34,11 @@ function resolveBackendCatalogItemsForVoiceTool(params: Readonly<{
   agentId?: string;
   subtitle?: string | null;
   experimental?: boolean;
-  connectedServiceId?: string | null;
-  connectedServiceName?: string | null;
+  uiConnectedService?: Readonly<{
+    serviceId: string | null;
+    label: string;
+    connectRoute: string | null;
+  }> | null;
   flavorAliases?: readonly string[];
   supportsModelSelection?: boolean;
   supportsFreeformModels?: boolean;
@@ -65,8 +68,7 @@ function resolveBackendCatalogItemsForVoiceTool(params: Readonly<{
           enabled,
           agentId: entry.builtInAgentId,
           experimental: core.availability.experimental === true,
-          connectedServiceId: core.connectedService.id,
-          connectedServiceName: core.connectedService.name,
+          uiConnectedService: core.uiConnectedService,
           flavorAliases: core.flavorAliases,
           supportsModelSelection: core.model.supportsSelection === true,
           supportsFreeformModels: core.model.supportsFreeform === true,
@@ -80,8 +82,7 @@ function resolveBackendCatalogItemsForVoiceTool(params: Readonly<{
         enabled,
         agentId: 'customAcp',
         experimental: false,
-        connectedServiceId: null,
-        connectedServiceName: null,
+        uiConnectedService: null,
         flavorAliases: [],
         supportsModelSelection: true,
         supportsFreeformModels: true,
@@ -94,8 +95,11 @@ function resolveBackendCatalogItemsForVoiceTool(params: Readonly<{
       agentId?: string;
       subtitle?: string | null;
       experimental?: boolean;
-      connectedServiceId?: string | null;
-      connectedServiceName?: string | null;
+      uiConnectedService?: Readonly<{
+        serviceId: string | null;
+        label: string;
+        connectRoute: string | null;
+      }> | null;
       flavorAliases?: readonly string[];
       supportsModelSelection?: boolean;
       supportsFreeformModels?: boolean;

@@ -138,6 +138,26 @@ vi.mock('@/sync/domains/server/serverProfiles', async () => {
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
     normalizeServerUrl: (value: string) => String(value ?? '').trim().replace(/\/+$/, ''),
+    isSameServerUrl: (left: string, right: string) => {
+        const normalizeComparable = (value: string) => {
+            const raw = String(value ?? '').trim().replace(/\/+$/, '');
+            if (!raw) return '';
+            try {
+                const url = new URL(raw);
+                let hostname = String(url.hostname ?? '').trim().toLowerCase();
+                if (hostname === '127.0.0.1' || hostname === '::1' || hostname.endsWith('.localhost')) {
+                    hostname = 'localhost';
+                }
+                const port = String(url.port ?? '').trim();
+                return `${url.protocol}//${hostname}${port ? `:${port}` : ''}`;
+            } catch {
+                return raw;
+            }
+        };
+        const leftKey = normalizeComparable(left);
+        if (!leftKey) return false;
+        return leftKey === normalizeComparable(right);
+    },
     upsertActivateAndSwitchServer: upsertActivateAndSwitchServerSpy,
 }));
 
@@ -208,13 +228,14 @@ describe('App RootLayout server override', () => {
         expect(historyReplaceStateSpy).toHaveBeenCalledWith(null, '', '/server');
     });
 
-    it('redirects legacy `/?id=<sessionId>` deep-links to the canonical session route on web', async () => {
+    it('treats loopback-equivalent `?server=` overrides as already-active and refreshes auth without switching servers', async () => {
+        activeServerUrl = 'http://localhost:4325';
         (globalThis as any).document = {};
         (globalThis as any).window = {
             location: {
-                href: 'https://app.example.test/?id=session-123',
+                href: 'https://app.example.test/?server=http%3A%2F%2F127.0.0.1%3A4325',
                 pathname: '/',
-                search: '?id=session-123',
+                search: '?server=http%3A%2F%2F127.0.0.1%3A4325',
                 hash: '',
                 reload: vi.fn(),
             },
@@ -223,7 +244,27 @@ describe('App RootLayout server override', () => {
 
         await renderRootLayout();
 
+        expect(upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
+        expect(refreshFromActiveServerSpy).toHaveBeenCalled();
         expect(historyReplaceStateSpy).toHaveBeenCalledWith(null, '', '/');
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-123');
+    });
+
+    it('redirects legacy `/?id=<sessionId>` deep-links to the canonical session route on web', async () => {
+        (globalThis as any).document = {};
+        (globalThis as any).window = {
+            location: {
+                href: 'https://app.example.test/?id=session-123&serverId=server-abc&messageId=msg-9&jumpChildId=child-2',
+                pathname: '/',
+                search: '?id=session-123&serverId=server-abc&messageId=msg-9&jumpChildId=child-2',
+                hash: '',
+                reload: vi.fn(),
+            },
+            history: { replaceState: historyReplaceStateSpy },
+        };
+
+        await renderRootLayout();
+
+        expect(historyReplaceStateSpy).toHaveBeenCalledWith(null, '', '/?serverId=server-abc&messageId=msg-9&jumpChildId=child-2');
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-123/message/msg-9?serverId=server-abc&jumpChildId=child-2');
     });
 });

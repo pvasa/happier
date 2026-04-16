@@ -2,6 +2,7 @@ import type { TerminalSpawnOptions } from '@/terminal/runtime/terminalConfig';
 import type { PermissionMode } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { Metadata } from '@/api/types';
+import type { SessionAttachFilePayload } from '@/agent/runtime/sessionAttachPayload';
 import type { CodexBackendMode } from '@happier-dev/agents';
 import { configuration } from '@/configuration';
 import {
@@ -70,6 +71,13 @@ export interface SpawnSessionOptions {
      * When set, the CLI will connect to this session instead of creating a new one.
      */
     existingSessionId?: string;
+    /**
+     * Internal-only attach payload for a pre-resolved existing Happy session.
+     *
+     * This is used by daemon refresh flows that must avoid refetching the session after
+     * the old runner has already been stopped.
+     */
+    existingSessionAttachPayload?: SessionAttachFilePayload;
     /**
      * Optional attach-only metadata identity policy.
      * Preserve current persisted machine identity for normal attaches, but allow runtime replacement

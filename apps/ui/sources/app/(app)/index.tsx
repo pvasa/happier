@@ -33,6 +33,7 @@ import { readConfiguredServerUrlEnv } from "@/sync/domains/server/readConfigured
 import { getPendingSetupIntent, setPendingSetupIntent } from "@/sync/domains/pending/pendingSetupIntent";
 import { isTauriDesktop } from "@/utils/platform/tauri";
 import { isAuthenticatedRootDeepLinkRedirectAllowed } from "@/auth/routing/isAuthenticatedRootDeepLinkRedirectAllowed";
+import { buildScopedSessionRouteHref } from "@/hooks/session/sessionRouteServerScope";
 
 import { shouldAutoRedirectToSetupOnFirstLaunch } from "@/utils/navigation/firstLaunchSetupRedirectPolicy";
 
@@ -66,10 +67,16 @@ export default function Home() {
 }
 
 function Authenticated() {
-    const params = useLocalSearchParams<{ id?: string | string[]; messageId?: string | string[]; jumpChildId?: string | string[] }>();
+    const params = useLocalSearchParams<{
+        id?: string | string[];
+        serverId?: string | string[];
+        messageId?: string | string[];
+        jumpChildId?: string | string[];
+    }>();
     const router = useRouter();
 
     const sessionId = typeof params.id === 'string' ? params.id : Array.isArray(params.id) ? (params.id[0] ?? null) : null;
+    const serverId = typeof params.serverId === 'string' ? params.serverId : Array.isArray(params.serverId) ? (params.serverId[0] ?? null) : null;
     const messageId = typeof params.messageId === 'string' ? params.messageId : Array.isArray(params.messageId) ? (params.messageId[0] ?? null) : null;
     const jumpChildId = typeof params.jumpChildId === 'string' ? params.jumpChildId : Array.isArray(params.jumpChildId) ? (params.jumpChildId[0] ?? null) : null;
 
@@ -77,17 +84,18 @@ function Authenticated() {
         const sid = String(sessionId ?? '').trim();
         if (!sid) return;
         if (!isAuthenticatedRootDeepLinkRedirectAllowed()) return;
-
+        const normalizedServerId = String(serverId ?? '').trim() || null;
         const mid = String(messageId ?? '').trim();
-        if (mid) {
-            const child = String(jumpChildId ?? '').trim();
-            const qs = child ? `?jumpChildId=${encodeURIComponent(child)}` : '';
-            router.replace(`/session/${encodeURIComponent(sid)}/message/${encodeURIComponent(mid)}${qs}`);
-            return;
-        }
+        const child = String(jumpChildId ?? '').trim();
 
-        router.replace(`/session/${encodeURIComponent(sid)}`);
-    }, [jumpChildId, messageId, router, sessionId]);
+        const href = buildScopedSessionRouteHref({
+            sessionId: sid,
+            serverId: normalizedServerId,
+            suffix: mid ? `/message/${encodeURIComponent(mid)}` : '',
+            query: child ? { jumpChildId: child } : undefined,
+        });
+        router.replace(href);
+    }, [jumpChildId, messageId, router, serverId, sessionId]);
 
     React.useEffect(() => {
         const sid = String(sessionId ?? '').trim();

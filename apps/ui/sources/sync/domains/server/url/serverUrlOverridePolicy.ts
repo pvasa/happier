@@ -1,4 +1,4 @@
-import { canonicalizeServerUrl } from './serverUrlCanonical';
+import { canonicalizeServerUrl, createServerUrlComparableKey } from './serverUrlCanonical';
 import { isLoopbackServerUrl } from './serverUrlClassification';
 
 /**
@@ -12,14 +12,25 @@ import { isLoopbackServerUrl } from './serverUrlClassification';
 export function resolveEffectiveServerUrlOverride(params: Readonly<{
     requestedServerUrl: string | null | undefined;
     activeServerUrl: string | null | undefined;
+    allowLoopbackSwitch?: boolean;
 }>): string | null {
+    const allowLoopbackSwitch = params.allowLoopbackSwitch ?? false;
     const requested = canonicalizeServerUrl(String(params.requestedServerUrl ?? ''));
     if (!requested) return null;
 
+    const requestedKey = createServerUrlComparableKey(requested);
+    if (!requestedKey) return null;
+
     const active = canonicalizeServerUrl(String(params.activeServerUrl ?? ''));
-    if (requested && isLoopbackServerUrl(requested) && active && !isLoopbackServerUrl(active)) {
+    if (!active) return requested;
+
+    const activeKey = createServerUrlComparableKey(active);
+    if (!activeKey) return requested;
+
+    // Loopback targets are only safe when they resolve to the same active server unless
+    // the caller explicitly opts into a terminal-connect style switch.
+    if (!allowLoopbackSwitch && isLoopbackServerUrl(requested) && requestedKey !== activeKey) {
         return null;
     }
     return requested;
 }
-

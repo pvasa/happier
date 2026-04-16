@@ -48,7 +48,8 @@ export default function TerminalScreen() {
     const { processAuthUrl, isLoading } = useConnectTerminal({
         onSuccess: () => {
             router.back();
-        }
+        },
+        allowLoopbackServerOverride: true,
     });
 
     React.useEffect(() => {
@@ -61,6 +62,7 @@ export default function TerminalScreen() {
         const effectiveTarget = resolveEffectiveServerUrlOverride({
             requestedServerUrl: serverUrl,
             activeServerUrl: currentServerUrl,
+            allowLoopbackSwitch: true,
         });
         setPendingTerminalConnect({
             publicKeyB64Url: publicKey,

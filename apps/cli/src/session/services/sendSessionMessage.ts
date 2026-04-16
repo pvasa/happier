@@ -189,6 +189,27 @@ export async function sendSessionMessage(params: Readonly<{
   let waitSessionSnapshot = sessionTarget.rawSession;
 
   try {
+    if (!shouldUseRuntimeRpc) {
+      const materialized = await waitForTranscriptEncryptedMessageByLocalId({
+        token: params.credentials.token,
+        sessionId: sessionTarget.sessionId,
+        localId,
+        maxWaitMs: Math.max(1, deadlineMs - Date.now()),
+      });
+      if (!materialized) {
+        return {
+          ok: false,
+          code: 'timeout',
+        };
+      }
+      return {
+        ok: true,
+        sessionId: sessionTarget.sessionId,
+        localId,
+        waited: true,
+      };
+    }
+
     if (shouldUseRuntimeRpc) {
       const materialized = await waitForTranscriptEncryptedMessageByLocalId({
         token: params.credentials.token,

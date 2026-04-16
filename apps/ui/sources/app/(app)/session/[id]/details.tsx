@@ -7,6 +7,7 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
 import { applySessionPaneUrlState, parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
@@ -14,10 +15,15 @@ export default function SessionDetailsScreenRoute() {
     const router = useRouter();
     const navigation = useNavigation();
     const isFocused = useIsFocused();
-    const params = useLocalSearchParams<{ id: string; details?: string; path?: string; sha?: string }>();
+    const params = useLocalSearchParams<{ id: string; serverId?: string; details?: string; path?: string; sha?: string }>();
     const { id: sessionIdParam } = params;
     const sessionId = String(sessionIdParam ?? '').trim();
-    const sessionHydrated = useHydrateSessionForRoute(sessionId, 'SessionDetailsRoute.ensureSessionVisible');
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const sessionHydrated = useHydrateSessionForRoute(
+        sessionId,
+        'SessionDetailsRoute.ensureSessionVisible',
+        routeScope.hydrationOptions,
+    );
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
     const routeDetailsState = React.useMemo(() => {
@@ -31,8 +37,8 @@ export default function SessionDetailsScreenRoute() {
     const hasMountedRef = React.useRef(false);
     const prevDetailsIsOpenRef = React.useRef(detailsIsOpen);
     const returnToSession = React.useCallback(() => {
-        safeRouterBack({ router, navigation, fallbackHref: `/session/${sessionId}` });
-    }, [navigation, router, sessionId]);
+        safeRouterBack({ router, navigation, fallbackHref: routeScope.buildHref(sessionId) });
+    }, [navigation, routeScope, router, sessionId]);
 
     React.useEffect(() => {
         hasMountedRef.current = true;
@@ -58,8 +64,10 @@ export default function SessionDetailsScreenRoute() {
         // Navigate back to the previous screen (typically the session or sidebar screen).
         if (!hasMountedRef.current) return;
         if (!hasDetails && routeDetailsState) return;
-        if (!hasDetails) returnToSession();
-    }, [hasDetails, isFocused, returnToSession, routeDetailsState, sessionHydrated, sessionId]);
+        if (!hasDetails) {
+            router.replace(routeScope.buildHref(sessionId));
+        }
+    }, [hasDetails, isFocused, routeDetailsState, routeScope, router, sessionHydrated, sessionId]);
 
     React.useEffect(() => {
         if (!sessionId) return;

@@ -12,6 +12,7 @@ import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/s
 export default React.memo(() => {
     const params = useLocalSearchParams<{
         id?: string | string[];
+        serverId?: string | string[];
         jumpSeq?: string | string[];
         right?: string | string[];
         bottom?: string | string[];
@@ -20,7 +21,7 @@ export default React.memo(() => {
         sha?: string | string[];
         recoveryDataId?: string | string[];
     }>();
-    const { id: sessionIdParam, jumpSeq: jumpSeqParam, recoveryDataId: recoveryDataIdParam } = params;
+    const { id: sessionIdParam, serverId: serverIdParam, jumpSeq: jumpSeqParam, recoveryDataId: recoveryDataIdParam } = params;
     const sessionId =
         (typeof sessionIdParam === 'string'
             ? sessionIdParam
@@ -39,6 +40,11 @@ export default React.memo(() => {
         ? recoveryDataIdParam
         : Array.isArray(recoveryDataIdParam)
             ? (recoveryDataIdParam[0] ?? '')
+            : '';
+    const routeServerId = typeof serverIdParam === 'string'
+        ? serverIdParam
+        : Array.isArray(serverIdParam)
+            ? (serverIdParam[0] ?? '')
             : '';
     const recoverableAttachmentDrafts = React.useMemo(() => {
         const trimmedRecoveryDataId = recoveryDataId.trim();
@@ -61,6 +67,7 @@ export default React.memo(() => {
     const sessionHydrated = useHydrateSessionForRoute(
         sessionId,
         `SessionRoute.ensureSessionVisible gen=${activeServerGeneration}`,
+        routeServerId.trim() ? { serverId: routeServerId.trim() } : undefined,
     );
 
     if (!sessionId) {
@@ -70,6 +77,7 @@ export default React.memo(() => {
     return (
         <SessionView
             id={sessionId}
+            routeServerId={routeServerId.trim() || undefined}
             jumpToSeq={jumpToSeq}
             paneUrlState={paneUrlState ?? undefined}
             initialAttachmentDrafts={recoverableAttachmentDrafts}

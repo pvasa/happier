@@ -71,7 +71,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
     };
     const switchButtonTextStyle: TextStyle = {
         fontSize: 12,
-        color: theme.colors.box.warning.background,
+        color: theme.colors.button.primary.tint,
         fontWeight: '700',
         ...Typography.default(),
     };

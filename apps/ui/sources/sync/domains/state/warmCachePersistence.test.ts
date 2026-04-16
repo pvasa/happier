@@ -57,6 +57,7 @@ describe('warmCachePersistence', () => {
                 homeDir: '/home/u',
                 host: 'mbp',
                 machineId: 'm1',
+                keepVisibleWhenInactive: true,
                 hiddenSystemSession: false,
                 hasPendingPermissionRequests: false,
                 hasPendingUserActionRequests: true,
@@ -69,6 +70,7 @@ describe('warmCachePersistence', () => {
                 metadataVersion: 2,
                 agentStateVersion: 3,
                 name: 'Repo',
+                keepVisibleWhenInactive: true,
             }),
         });
         expect(loadSessionListWarmCacheEntries('server-b', 'account-a')).toEqual({});

@@ -25,7 +25,7 @@ export type LocalVoiceAgentToolResultEntry = Readonly<{
 
 const FOLLOW_UP_RESULT_MAX_ITEMS = 10;
 const FOLLOW_UP_RESULT_MAX_STRING_LENGTH = 160;
-const FOLLOW_UP_RESULT_OMITTED_KEYS = new Set(['connectedServiceId', 'connectedServiceName', 'flavorAliases']);
+const FOLLOW_UP_RESULT_OMITTED_KEYS = new Set(['uiConnectedService', 'flavorAliases']);
 
 function compactToolResultValue(value: unknown): unknown {
   if (value == null) return value;

@@ -105,9 +105,15 @@ describe('agent catalog voice tools', () => {
     const gemini = (res?.items ?? []).find((i: any) => i.targetKey === 'agent:gemini');
     expect(gemini).toBeTruthy();
     expect(gemini.enabled).toBe(false);
+    expect(gemini.uiConnectedService).toEqual({
+      serviceId: 'gemini',
+      label: 'Google Gemini',
+      connectRoute: null,
+    });
     const configured = (res?.items ?? []).find((i: any) => i.targetKey === 'acpBackend:team-review');
     expect(configured).toBeTruthy();
     expect(configured.enabled).toBe(false);
+    expect(configured.uiConnectedService).toBeNull();
   });
 
   it('applies limit to backend and model discovery results', async () => {

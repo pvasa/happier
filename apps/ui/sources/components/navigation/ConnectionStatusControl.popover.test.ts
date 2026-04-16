@@ -554,6 +554,66 @@ describe('ConnectionStatusControl (native popover config)', () => {
         }
     });
 
+    it('uses serverId-scoped auth lookups when switching between same-origin server profiles', async () => {
+        const previousScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+        const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
+
+        try {
+            vi.resetModules();
+            const profiles = await import('@/sync/domains/server/serverProfiles');
+            const local = profiles.upsertServerProfile({ serverUrl: 'https://shared.example.test', name: 'Local' });
+            const company = profiles.upsertServerProfile({ serverUrl: 'https://shared.example.test', name: 'Company' });
+            profiles.setActiveServerId(local.id, { scope: 'device' });
+
+            tokenStorageMock.getCredentialsForServerUrl.mockImplementation(async (_serverUrl: string, options?: { serverId?: string | null }) => {
+                if (options?.serverId === company.id) {
+                    return null;
+                }
+                return { token: 'scoped-token', secret: 'scoped-secret' };
+            });
+            modalMocks.confirm.mockResolvedValue(false);
+
+            const ConnectionStatusControl = await importConnectionStatusControl();
+
+            let tree: renderer.ReactTestRenderer | undefined;
+            const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+            tree = screen.tree;
+
+            const trigger = screen.findByProps({ accessibilityRole: 'button' });
+            await act(async () => {
+                await pressTestInstanceAsync(trigger);
+            });
+
+            const switchAction = capture.actionSections
+                .flatMap((section) => section.actions ?? [])
+                .find((action) => action && typeof action === 'object' && (action as any).id === `target-use-server-${company.id}`) as
+                | { onPress?: () => void }
+                | undefined;
+
+            expect(switchAction).toBeTruthy();
+
+            await act(async () => {
+                switchAction?.onPress?.();
+            });
+
+            expect(tokenStorageMock.getCredentialsForServerUrl).toHaveBeenCalledWith('https://shared.example.test', { serverId: local.id });
+            expect(tokenStorageMock.getCredentialsForServerUrl).toHaveBeenCalledWith('https://shared.example.test', { serverId: company.id });
+            expect(modalMocks.confirm).toHaveBeenCalledTimes(1);
+            expect(connectionMocks.switchConnectionToActiveServer).not.toHaveBeenCalled();
+
+            await act(async () => {
+                tree?.unmount();
+            });
+        } finally {
+            if (previousScope === undefined) {
+                delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+            } else {
+                process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = previousScope;
+            }
+        }
+    });
+
     it('uses target action ids and does not expose legacy scope toggles', async () => {
         const previousScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
         const scope = `test_${Date.now()}_${Math.random().toString(16).slice(2)}`;

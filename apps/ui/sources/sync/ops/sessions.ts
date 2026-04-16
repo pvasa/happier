@@ -813,6 +813,7 @@ export interface SessionArchiveResponse {
     success: boolean;
     archivedAt?: number | null;
     message?: string;
+    code?: string;
 }
 
 async function archiveRequestWithContext(params: Readonly<{
@@ -863,6 +864,9 @@ export async function sessionArchiveWithServerScope(
         const response = await archiveRequestWithContext({ sessionId, serverId: opts?.serverId ?? null, action: 'archive' });
         if (!response.ok) {
             const message = await response.text().catch(() => '');
+            if (response.status === 409) {
+                return { success: false, message: message || 'Cannot archive an active session', code: 'session_active' };
+            }
             return { success: false, message: message || 'Failed to archive session' };
         }
         const json = await response.json().catch(() => ({}));

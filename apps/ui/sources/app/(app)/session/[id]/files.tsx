@@ -7,6 +7,7 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { SessionRightPanel } from '@/components/sessions/panes/SessionRightPanel';
 import { buildActiveDetailsRouteParams } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
@@ -14,9 +15,15 @@ export default function FilesScreenRoute() {
     const router = useRouter();
     const navigation = useNavigation();
     const isFocused = useIsFocused();
-    const { id: sessionIdParam } = useLocalSearchParams<{ id: string }>();
+    const params = useLocalSearchParams<{ id: string; serverId?: string }>();
+    const { id: sessionIdParam } = params;
     const sessionId = String(sessionIdParam ?? '').trim();
-    const sessionHydrated = useHydrateSessionForRoute(sessionId, 'SessionFilesRoute.ensureSessionVisible');
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const sessionHydrated = useHydrateSessionForRoute(
+        sessionId,
+        'SessionFilesRoute.ensureSessionVisible',
+        routeScope.hydrationOptions,
+    );
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
     const openRight = pane.openRight;
@@ -55,17 +62,17 @@ export default function FilesScreenRoute() {
         lastPushedDetailsKeyRef.current = key;
         router.push({
             pathname: '/session/[id]/details',
-            params: {
+            params: routeScope.withParams({
                 id: sessionId,
                 ...buildActiveDetailsRouteParams(detailsTabs, key),
-            },
+            }),
         } as any);
-    }, [activeDetailsKey, detailsIsOpen, detailsTabs, isFocused, router, sessionId]);
+    }, [activeDetailsKey, detailsIsOpen, detailsTabs, isFocused, routeScope, router, sessionId]);
 
     const onRequestClose = React.useCallback(() => {
         closeRight();
-        safeRouterBack({ router, navigation, fallbackHref: `/session/${sessionId}` });
-    }, [closeRight, navigation, router, sessionId]);
+        safeRouterBack({ router, navigation, fallbackHref: routeScope.buildHref(sessionId) });
+    }, [closeRight, navigation, routeScope, router, sessionId]);
 
     if (!sessionId) {
         return <SessionInvalidLinkFallback />;

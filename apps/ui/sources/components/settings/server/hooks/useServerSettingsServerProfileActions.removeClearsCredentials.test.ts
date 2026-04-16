@@ -19,6 +19,12 @@ installServerSettingsHooksCommonModuleMocks({
     modal: () => createModalModuleMock({ spies: modalSpies }).module,
 });
 
+const promptSignedOutServerSwitchConfirmationMock = vi.hoisted(() => vi.fn(async () => true));
+
+vi.mock('@/components/settings/server/modals/ServerSwitchAuthPrompt', () => ({
+    promptSignedOutServerSwitchConfirmation: promptSignedOutServerSwitchConfirmationMock,
+}));
+
 vi.mock('expo-secure-store', () => ({}));
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;

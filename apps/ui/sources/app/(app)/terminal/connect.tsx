@@ -13,6 +13,7 @@ import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
 import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
 import { normalizeServerUrl, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
+import { resolveEffectiveServerUrlOverride } from '@/sync/domains/server/url/serverUrlOverridePolicy';
 import { clearPendingTerminalConnect, getPendingTerminalConnect, setPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import { buildTerminalConnectDeepLink, parseTerminalConnectUrl } from '@/utils/path/terminalConnectUrl';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -35,7 +36,8 @@ export default function TerminalConnectScreen() {
     const { processAuthUrl, isLoading } = useConnectTerminal({
         onSuccess: () => {
             navigateBackOrToHome();
-        }
+        },
+        allowLoopbackServerOverride: true,
     });
 
     // Extract key from hash on web platform
@@ -45,7 +47,15 @@ export default function TerminalConnectScreen() {
             if (parsed?.publicKeyB64Url) {
                 setPublicKey(parsed.publicKeyB64Url);
 
-                const desiredServerUrl = normalizeServerUrl(parsed.serverUrl ?? '') || getActiveServerUrl();
+                const activeServerUrl = normalizeServerUrl(getActiveServerUrl());
+                const requestedServerUrl = normalizeServerUrl(parsed.serverUrl ?? '');
+                const effectiveTarget = resolveEffectiveServerUrlOverride({
+                    requestedServerUrl,
+                    activeServerUrl,
+                    allowLoopbackSwitch: true,
+                });
+                const desiredServerUrl = effectiveTarget || activeServerUrl || getActiveServerUrl();
+
                 if (desiredServerUrl) {
                     // Persist the connect link in storage so dev strict-mode remounts still have access
                     // after we clear the URL (hash/query) for safety.
@@ -75,17 +85,23 @@ export default function TerminalConnectScreen() {
         if (authRedirectTriggeredRef.current) return;
 
         authRedirectTriggeredRef.current = true;
-        const desiredServerUrl = normalizeServerUrl(serverUrlFromHash ?? '');
+        const activeServerUrl = normalizeServerUrl(getActiveServerUrl());
+        const effectiveTarget = resolveEffectiveServerUrlOverride({
+            requestedServerUrl: serverUrlFromHash,
+            activeServerUrl,
+            allowLoopbackSwitch: true,
+        });
+        const desiredServerUrl = effectiveTarget || activeServerUrl || getActiveServerUrl();
         setPendingTerminalConnect({
             publicKeyB64Url: publicKey,
-            serverUrl: desiredServerUrl || getActiveServerUrl(),
+            serverUrl: desiredServerUrl,
         });
 
         fireAndForget((async () => {
-            if (desiredServerUrl) {
+            if (effectiveTarget && effectiveTarget !== activeServerUrl) {
                 try {
                     await upsertActivateAndSwitchServer({
-                        serverUrl: desiredServerUrl,
+                        serverUrl: effectiveTarget,
                         source: 'url',
                         scope: 'device',
                         refreshAuth: auth.refreshFromActiveServer,

@@ -14,8 +14,13 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
  * On failure, this hook retries with exponential backoff to handle transient errors
  * (server switch in flight, temporary RPC failure, stale encryption state, etc.).
  */
-export function useHydrateSessionForRoute(sessionId: string, tag: string): boolean {
+export function useHydrateSessionForRoute(
+    sessionId: string,
+    tag: string,
+    options?: Readonly<{ serverId?: string }>,
+): boolean {
     const normalizedSessionId = String(sessionId ?? '').trim();
+    const normalizedServerId = String(options?.serverId ?? '').trim();
     const [ready, setReady] = React.useState(false);
 
     React.useEffect(() => {
@@ -33,7 +38,10 @@ export function useHydrateSessionForRoute(sessionId: string, tag: string): boole
             if (canceled) return;
 
             attemptCount++;
-            const promise = sync.ensureSessionVisibleForMessageRoute(normalizedSessionId);
+            const promise = sync.ensureSessionVisibleForMessageRoute(
+                normalizedSessionId,
+                normalizedServerId ? { serverId: normalizedServerId } : undefined,
+            );
             fireAndForget(promise, { tag });
 
             void promise
@@ -71,7 +79,7 @@ export function useHydrateSessionForRoute(sessionId: string, tag: string): boole
                 clearTimeout(retryTimeoutId);
             }
         };
-    }, [normalizedSessionId, tag]);
+    }, [normalizedServerId, normalizedSessionId, tag]);
 
     return ready;
 }

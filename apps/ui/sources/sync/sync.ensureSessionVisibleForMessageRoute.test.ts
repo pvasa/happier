@@ -206,8 +206,29 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         expect(requestMock).not.toHaveBeenCalled();
     });
 
-    it('treats not-found session ids as terminal (returns true) so deep links can fail closed instead of spinning forever', async () => {
+    it('treats not-found session ids as terminal when the route carries explicit server scope', async () => {
         const sessionId = 'deep_link_missing_session';
+        const activeServer = upsertServerProfile({ serverUrl: 'https://active.example', name: 'Active' });
+        setActiveServerId(activeServer.id, { scope: 'device' });
+
+        const { sync } = await import('./sync');
+
+        (sync as any).credentials = { token: 't' };
+        (sync as any).activeServerSessionIds = new Set<string>();
+        (sync as any).hasFetchedSessionsSnapshotForActiveServer = false;
+        (sync as any).encryption = {
+            decryptEncryptionKey: async () => null,
+            initializeSessions: async () => {},
+            getSessionEncryption: () => null,
+        };
+
+        requestMock.mockResolvedValue(new Response('not found', { status: 404 }));
+
+        await expect(sync.ensureSessionVisibleForMessageRoute(sessionId, { serverId: activeServer.id })).resolves.toBe(true);
+    });
+
+    it('treats not-found session ids as terminal (returns true) so deep links can fail closed instead of spinning forever', async () => {
+        const sessionId = 'deep_link_missing_session_active_fallback';
 
         const { sync } = await import('./sync');
 

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
-import { AGENT_IDS as SHARED_AGENT_IDS, getAgentModelConfig, getProviderCliInstallGuideUrl } from '@happier-dev/agents';
+import {
+    AGENTS_CORE as SHARED_AGENTS_CORE,
+    AGENT_IDS as SHARED_AGENT_IDS,
+    getAgentModelConfig,
+    getProviderCliInstallGuideUrl,
+} from '@happier-dev/agents';
 
 import {
     resolveAgentIdFromCliDetectKey,
@@ -64,6 +69,7 @@ describe('agents/registryCore', () => {
     it('resolves connected service ids in a case-insensitive way', () => {
         expect(resolveAgentIdFromConnectedServiceId('anthropic')).toBe('claude');
         expect(resolveAgentIdFromConnectedServiceId('Anthropic')).toBe('claude');
+        expect(resolveAgentIdFromConnectedServiceId('claude-subscription')).toBe('claude');
         expect(resolveAgentIdFromConnectedServiceId('openai')).toBe('codex');
         expect(resolveAgentIdFromConnectedServiceId('')).toBeNull();
         expect(resolveAgentIdFromConnectedServiceId(null)).toBeNull();
@@ -122,6 +128,27 @@ describe('agents/registryCore', () => {
         expect(buildAgentToolsUiConfig({ agentId: 'gemini' })).toEqual({
             delivery: 'shell_bridge',
             support: 'experimental',
+        });
+    });
+
+    it('surfaces shared connected-services compatibility from @happier-dev/agents', () => {
+        for (const agentId of AGENT_IDS) {
+            expect(getAgentCore(agentId)).toMatchObject({
+                connectedServices: SHARED_AGENTS_CORE[agentId].connectedServices ?? null,
+            });
+        }
+    });
+
+    it('exposes an explicit UI-only connected service surface separate from capability metadata', () => {
+        expect(getAgentCore('claude').uiConnectedService).toEqual({
+            serviceId: 'anthropic',
+            label: 'Claude Code',
+            connectRoute: '/(app)/settings/connect/claude',
+        });
+        expect(getAgentCore('opencode').uiConnectedService).toEqual({
+            serviceId: null,
+            label: 'OpenCode',
+            connectRoute: null,
         });
     });
 

@@ -8,7 +8,7 @@ import { serverFetch, StaleServerGenerationError } from '@/sync/http/client';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveSocketIoTransports } from '@/sync/runtime/socketIoTransports';
 import { storage } from '@/sync/domains/state/storage';
-import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
+import { canonicalizeServerUrl, createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
 import {
     type ManagedConnectionState,
     type ManagedConnectionTransport,
@@ -411,8 +411,17 @@ class ApiSocket {
             throw new Error('SyncSocket not initialized');
         }
         const snapshot = getActiveServerSnapshot();
+        const endpointComparableKey = createServerUrlComparableKey(this.config.endpoint);
+        const activeServerComparableKey = createServerUrlComparableKey(snapshot.serverUrl);
+        const serverLookupOptions =
+            endpointComparableKey
+            && activeServerComparableKey
+            && endpointComparableKey === activeServerComparableKey
+            && snapshot.serverId
+                ? { serverId: snapshot.serverId }
+                : undefined;
 
-        const credentials = await TokenStorage.getCredentialsForServerUrl(this.config.endpoint);
+        const credentials = await TokenStorage.getCredentialsForServerUrl(this.config.endpoint, serverLookupOptions);
         if (!credentials) {
             throw new Error('No authentication credentials');
         }

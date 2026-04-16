@@ -123,4 +123,27 @@ describe('buildNewSessionAuthoringContext', () => {
         expect(context.canSubmit).toBe(false);
         expect(context.draft.automation).toBeNull();
     });
+
+    it('keeps live session submit available even when the selected provider/profile is inferred unavailable', () => {
+        const context = buildNewSessionAuthoringContext({
+            automationDraft: {
+                enabled: false,
+                name: '',
+                description: '',
+                scheduleKind: 'interval',
+                everyMinutes: 60,
+                cronExpr: '0 * * * *',
+                timezone: null,
+            },
+            automationFeatureEnabled: true,
+            selectedMachineId: 'machine-1',
+            selectedMachine: { id: 'machine-1', active: true, activeAt: 0 } as any,
+            selectedPath: '/repo/project',
+            automationEditId: null,
+            buildDraft: () => BASE_DRAFT,
+        });
+
+        expect(context.submissionMode).toBe('launch');
+        expect(context.canSubmit).toBe(true);
+    });
 });

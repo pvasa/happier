@@ -446,9 +446,10 @@ export const SessionItem = React.memo(
         const isOwnedByCurrentUser = !sessionOwnerId || (currentUserId && sessionOwnerId === currentUserId);
         const hasAdminAccess = isOwnedByCurrentUser || resolvedSession.accessLevel === 'admin';
         const isActiveSession = resolvedSession.active === true;
+        const isArchivedSession = resolvedSession.archivedAt != null;
         const isMinimal = Boolean(compact && compactMinimal);
         const canStopSession = isOwnedByCurrentUser;
-        const canArchiveSession = hasAdminAccess && !isActiveSession;
+        const canArchiveSession = hasAdminAccess && !isArchivedSession;
         const canRenameSession = hasAdminAccess;
         const hideInactiveSessions = useSetting('hideInactiveSessions');
         const swipeEnabled = Platform.OS !== 'web' && (isActiveSession ? canStopSession : canArchiveSession);
@@ -552,12 +553,26 @@ export const SessionItem = React.memo(
             onSetTags([...activeTags, newTag]);
         }, [onSetTags, activeTags]);
 
-        const [mutatingSession, performMutation] = useHappyAction(async () => {
+        const [stoppingSession, performStopMutation] = useHappyAction(async () => {
+            await stopSessionAndMaybeArchive({
+                sessionId: resolvedSession.id,
+                hideInactiveSessions: Boolean(hideInactiveSessions),
+                isPinned: Boolean(pinned),
+                archiveAfterStop: 'never',
+                stopSession: async () => await sessionStopWithServerScope(resolvedSession.id, { serverId: serverId ?? null }),
+                archiveSession: async () => await sessionArchiveWithServerScope(resolvedSession.id, { serverId: serverId ?? null }),
+                stopErrorMessage: t('sessionInfo.failedToStopSession'),
+                archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
+            });
+        });
+
+        const [archivingSession, performArchiveMutation] = useHappyAction(async () => {
             if (isActiveSession) {
                 await stopSessionAndMaybeArchive({
                     sessionId: resolvedSession.id,
                     hideInactiveSessions: Boolean(hideInactiveSessions),
                     isPinned: Boolean(pinned),
+                    archiveAfterStop: 'always',
                     stopSession: async () => await sessionStopWithServerScope(resolvedSession.id, { serverId: serverId ?? null }),
                     archiveSession: async () => await sessionArchiveWithServerScope(resolvedSession.id, { serverId: serverId ?? null }),
                     stopErrorMessage: t('sessionInfo.failedToStopSession'),
@@ -572,6 +587,7 @@ export const SessionItem = React.memo(
             }
             clearSessionVisibleWhenInactive(resolvedSession.id);
         });
+        const mutatingSession = stoppingSession || archivingSession;
 
         const handleSwipeAction = React.useCallback(() => {
             swipeableRef.current?.close();
@@ -581,7 +597,7 @@ export const SessionItem = React.memo(
                     {
                         text: t('sessionInfo.stopSession'),
                         style: 'destructive',
-                        onPress: performMutation,
+                        onPress: performStopMutation,
                     },
                 ]);
                 return;
@@ -591,10 +607,10 @@ export const SessionItem = React.memo(
                 {
                     text: t('sessionInfo.archiveSession'),
                     style: 'destructive',
-                    onPress: performMutation,
+                    onPress: performArchiveMutation,
                 },
             ]);
-        }, [isActiveSession, performMutation]);
+        }, [isActiveSession, performArchiveMutation, performStopMutation]);
 
         const handleRenameSession = React.useCallback(async () => {
             const newName = await Modal.prompt(
@@ -649,17 +665,17 @@ export const SessionItem = React.memo(
                 case 'stop':
                     Modal.alert(t('sessionInfo.stopSession'), t('sessionInfo.stopSessionConfirm'), [
                         { text: t('common.cancel'), style: 'cancel' },
-                        { text: t('sessionInfo.stopSession'), style: 'destructive', onPress: performMutation },
+                        { text: t('sessionInfo.stopSession'), style: 'destructive', onPress: performStopMutation },
                     ]);
                     break;
                 case 'archive':
                     Modal.alert(t('sessionInfo.archiveSession'), t('sessionInfo.archiveSessionConfirm'), [
                         { text: t('common.cancel'), style: 'cancel' },
-                        { text: t('sessionInfo.archiveSession'), style: 'destructive', onPress: performMutation },
+                        { text: t('sessionInfo.archiveSession'), style: 'destructive', onPress: performArchiveMutation },
                     ]);
                     break;
             }
-        }, [handleRenameSession, performMutation]);
+        }, [handleRenameSession, performArchiveMutation, performStopMutation]);
 
         const contextMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!isNativeMobile) return [];

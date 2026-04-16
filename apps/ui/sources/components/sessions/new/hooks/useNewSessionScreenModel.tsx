@@ -924,6 +924,33 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         useMachinePickerSearch,
     ]);
 
+    const resolvePreferredCompatibleProfileBackendEntry = React.useCallback((profile: AIBackendProfile) => {
+        const compatibleBackendEntries = getCompatibleProfileBackendEntries(profile);
+        const currentCompatible = compatibleBackendEntries.some((entry) => entry.targetKey === selectedBackendTargetKey);
+
+        if (compatibleBackendEntries.length === 0 || currentCompatible) {
+            return null;
+        }
+
+        return resolveNextSelectableBackendEntryForNewSession({
+            candidateBackendEntries: compatibleBackendEntries,
+            currentTargetKey: selectedBackendTargetKey,
+            detectionTimestamp: cliAvailability.timestamp,
+            availabilityById: cliAvailability.available,
+            authStatusById: cliAvailability.authStatus,
+            installableDepKeyCountByAgentId,
+            selectableWithoutCliByAgentId,
+        });
+    }, [
+        cliAvailability.authStatus,
+        cliAvailability.available,
+        cliAvailability.timestamp,
+        getCompatibleProfileBackendEntries,
+        installableDepKeyCountByAgentId,
+        selectableWithoutCliByAgentId,
+        selectedBackendTargetKey,
+    ]);
+
     React.useEffect(() => {
         if (!selectedProfileId) return;
         const pending = pendingProfileSelectionRef.current;
@@ -937,21 +964,9 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
             const profile = profileMap.get(pending.profileId) || getBuiltInProfile(pending.profileId);
             if (!profile) return;
 
-            const compatibleBackendEntries = getCompatibleProfileBackendEntries(profile);
-            const currentCompatible = compatibleBackendEntries.some((entry) => entry.targetKey === selectedBackendTargetKey);
-
-            if (compatibleBackendEntries.length > 0 && !currentCompatible) {
-                const nextEntry = resolveNextSelectableBackendEntryForNewSession({
-                    candidateBackendEntries: compatibleBackendEntries,
-                    currentTargetKey: selectedBackendTargetKey,
-                    detectionTimestamp: cliAvailability.timestamp,
-                    availabilityById: cliAvailability.available,
-                    installableDepKeyCountByAgentId,
-                    selectableWithoutCliByAgentId,
-                });
-                if (nextEntry) {
-                    setBackendTarget(nextEntry.target);
-                }
+            const nextEntry = resolvePreferredCompatibleProfileBackendEntry(profile);
+            if (nextEntry) {
+                setBackendTarget(nextEntry.target);
             }
 
             if (!hasUserSelectedPermissionModeRef.current) {
@@ -966,10 +981,9 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         cliAvailability.timestamp,
         installableDepKeyCountByAgentId,
         selectableWithoutCliByAgentId,
-        getCompatibleProfileBackendEntries,
         profileMap,
+        resolvePreferredCompatibleProfileBackendEntry,
         selectedProfileId,
-        selectedBackendTargetKey,
         setBackendTarget,
     ]);
 
@@ -983,13 +997,26 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         };
     }, []);
 
+    const canSelectProfile = React.useCallback((profileId: string): boolean => {
+        const profile = profileMap.get(profileId) ?? getBuiltInProfile(profileId);
+        if (!profile) {
+            return false;
+        }
+        // Keep profiles selectable when they still have structural backend support,
+        // even if all compatible backends are currently logged out or undiscovered.
+        return getCompatibleProfileBackendEntries(profile).length > 0;
+    }, [getCompatibleProfileBackendEntries, profileMap]);
+
     const getProfileDisabled = React.useCallback((profile: { id: string }) => {
-        return !(profileAvailabilityById.get(profile.id) ?? { available: true }).available;
-    }, [profileAvailabilityById]);
+        return !canSelectProfile(profile.id);
+    }, [canSelectProfile]);
 
     const getProfileSubtitleExtra = React.useCallback((profile: { id: string }) => {
         const availability = profileAvailabilityById.get(profile.id) ?? { available: true };
         if (availability.available || !availability.reason) return null;
+        if (availability.reason.startsWith('logged-out:')) {
+            return t('profiles.machineLogin.status.notLoggedIn');
+        }
         if (availability.reason.startsWith('requires-agent:')) {
             const required = availability.reason.split(':')[1];
             const agentLabel = isAgentId(required) ? t(getAgentCore(required).displayNameKey) : required;
@@ -1005,10 +1032,9 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     }, [profileAvailabilityById]);
 
     const onPressProfile = React.useCallback((profile: { id: string }) => {
-        const availability = profileAvailabilityById.get(profile.id) ?? { available: true };
-        if (!availability.available) return;
+        if (!canSelectProfile(profile.id)) return;
         selectProfile(profile.id);
-    }, [profileAvailabilityById, selectProfile]);
+    }, [canSelectProfile, selectProfile]);
 
     // Handle profile route param from picker screens
     React.useEffect(() => {
@@ -1020,16 +1046,17 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
             profileIdParam,
             selectedProfileId,
         });
+        const rejectedProfileIdParam = typeof nextSelectedProfileId === 'string' && !canSelectProfile(nextSelectedProfileId);
 
         if (nextSelectedProfileId === null) {
             if (selectedProfileId !== null) {
                 setSelectedProfileId(null);
             }
-        } else if (typeof nextSelectedProfileId === 'string') {
+        } else if (typeof nextSelectedProfileId === 'string' && !rejectedProfileIdParam) {
             selectProfile(nextSelectedProfileId);
         }
 
-        if (shouldClearParam) {
+        if (shouldClearParam || rejectedProfileIdParam) {
             const setParams = (navigation as any)?.setParams;
             if (typeof setParams === 'function') {
                 setParams({ profileId: undefined });
@@ -1040,7 +1067,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
                 } as never);
             }
         }
-    }, [navigation, profileIdParam, selectedProfileId, selectProfile, setSelectedProfileId, useProfiles]);
+    }, [canSelectProfile, navigation, profileIdParam, selectedProfileId, selectProfile, setSelectedProfileId, useProfiles]);
 
     // Keep agentType compatible with the currently selected profile.
     React.useEffect(() => {
@@ -1053,13 +1080,11 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
             return;
         }
 
-        const compatibleBackendEntries = getCompatibleProfileBackendEntries(profile);
-        const currentCompatible = compatibleBackendEntries.some((entry) => entry.targetKey === selectedBackendTargetKey);
-
-        if (compatibleBackendEntries.length > 0 && !currentCompatible) {
-            setBackendTarget(compatibleBackendEntries[0]!.target);
+        const nextEntry = resolvePreferredCompatibleProfileBackendEntry(profile);
+        if (nextEntry) {
+            setBackendTarget(nextEntry.target);
         }
-    }, [getCompatibleProfileBackendEntries, profileMap, selectedBackendTargetKey, selectedProfileId, setBackendTarget, useProfiles]);
+    }, [profileMap, resolvePreferredCompatibleProfileBackendEntry, selectedProfileId, setBackendTarget, useProfiles]);
 
     const prevAgentTypeRef = React.useRef(agentType);
 
@@ -1150,6 +1175,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         agentCore,
         agentOptionState,
         settings,
+        targetServerId,
         router,
         setAgentOptionStateForCurrentAgent,
     });

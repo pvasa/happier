@@ -63,7 +63,7 @@ export function useWebInitialRouteReconcile(params: Readonly<{ routerPathname: s
       // Only reconcile when the browser path is a strict extension of the current router path.
       if (!browserPathname.startsWith(currentPathname)) return;
       if (browserPathname.length <= currentPathname.length) return;
-      if (browserPathname.charAt(currentPathname.length) !== '/') return;
+      if (currentPathname !== '/' && browserPathname.charAt(currentPathname.length) !== '/') return;
 
       router.replace(expectedHref as any);
     };

@@ -18,9 +18,11 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let hydrateReady = true;
-const hydrateSpy = vi.fn((sessionId: string, tag: string) => {
+let routeServerId: string | undefined;
+const hydrateSpy = vi.fn((sessionId: string, tag: string, options?: { serverId?: string }) => {
     void sessionId;
     void tag;
+    void options;
     return hydrateReady;
 });
 const useSessionSpy = vi.fn<(sessionId: string) => Session | null>(() => null);
@@ -80,7 +82,7 @@ let executionRunsBackendsMock: Record<string, { available?: boolean; intents?: s
 let canLaunchExecutionRunsMock = true;
 
 const routerMock = createExpoRouterMock({
-    params: { id: 'session-1' },
+    params: () => ({ id: 'session-1', serverId: routeServerId }),
     router: {
         push: routerPushSpy,
         back: routerBackSpy,
@@ -114,7 +116,7 @@ vi.mock('@/components/ui/layout/ConstrainedScreenContent', () => ({
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string, tag: string) => hydrateSpy(sessionId, tag),
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) => hydrateSpy(sessionId, tag, options),
 }));
 
 vi.mock('@/hooks/server/useExecutionRunsBackendsForSession', () => ({
@@ -156,6 +158,7 @@ const Screen = (await import('@/app/(app)/session/[id]/runs')).default;
 describe('Session Runs Screen', () => {
     beforeEach(() => {
         hydrateReady = true;
+        routeServerId = undefined;
         hydrateSpy.mockClear();
         useSessionSpy.mockClear();
         useExecutionRunsBackendsForSessionSpy.mockClear();
@@ -172,7 +175,7 @@ describe('Session Runs Screen', () => {
         routerBackSpy.mockClear();
         routerReplaceSpy.mockClear();
         stackOptionsCapture.reset();
-        routerMock.state.params = { id: 'session-1' };
+        routerMock.state.params = { id: 'session-1', serverId: routeServerId };
     });
 
     afterEach(() => {
@@ -198,11 +201,12 @@ describe('Session Runs Screen', () => {
 
     it('waits for session hydration before listing runs', async () => {
         hydrateReady = false;
+        routeServerId = 'server-b';
         listRunsSpy.mockClear();
 
         await renderRunsScreen();
 
-        expect(hydrateSpy).toHaveBeenCalled();
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionRunsScreen.hydrate', { serverId: 'server-b' });
         expect(listRunsSpy).toHaveBeenCalledTimes(0);
     });
 
@@ -294,6 +298,7 @@ describe('Session Runs Screen', () => {
     });
 
     it('configures a runs header and navigates when Run review is pressed', async () => {
+        routeServerId = 'server-b';
         await renderRunsScreen();
         const headerRightScreen = await renderHeaderRight();
         const runReview = findHeaderAction(headerRightScreen, 'executionRuns.newRun.intents.review');
@@ -304,10 +309,11 @@ describe('Session Runs Screen', () => {
             pressTestInstance(runReview, 'executionRuns.newRun.intents.review');
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/runs/new?intent=review');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/runs/new?serverId=server-b&intent=review');
     });
 
     it('navigates to the new run screen when Delegate task is pressed', async () => {
+        routeServerId = 'server-b';
         await renderRunsScreen();
         const headerRightScreen = await renderHeaderRight();
         const delegate = findHeaderAction(headerRightScreen, 'executionRuns.newRun.intents.delegate');
@@ -318,7 +324,7 @@ describe('Session Runs Screen', () => {
             pressTestInstance(delegate, 'executionRuns.newRun.intents.delegate');
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/runs/new?intent=delegate');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/runs/new?serverId=server-b&intent=delegate');
     });
 
     it('shows only launch intents that the session backends actually support', async () => {
@@ -421,6 +427,7 @@ describe('Session Runs Screen', () => {
     });
 
     it('navigates to the run details screen when a run is pressed', async () => {
+        routeServerId = 'server-b';
         listRunsSpy.mockResolvedValueOnce({
             runs: [
                 {
@@ -439,6 +446,6 @@ describe('Session Runs Screen', () => {
         const screen = await renderRunsScreen();
         screen.pressByTestId('run:run_2');
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/runs/run_2');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/runs/run_2?serverId=server-b');
     });
 });

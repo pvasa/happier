@@ -14,6 +14,7 @@ const routerBackSpy = vi.fn();
 const routerPushSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 let mockSessionId = 'session-1';
+let mockServerId: string | undefined;
 let isFocused = true;
 let canGoBack = true;
 let terminalFeatureEnabled = true;
@@ -24,6 +25,10 @@ const openRightSpy = vi.fn();
 const closeRightSpy = vi.fn();
 const setRightTabSpy = vi.fn();
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => {
+    ensureSessionVisibleSpy(sessionId);
+    return options;
+});
 
 let scopeState: any = {
     right: { isOpen: false, activeTabId: null, tabState: {} },
@@ -55,8 +60,8 @@ installSessionRouteCommonModuleMocks({
 
         return {
             ...routerMock.module,
-            useLocalSearchParams: () => ({ id: mockSessionId }),
-            useGlobalSearchParams: () => ({ id: mockSessionId }),
+            useLocalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId }),
+            useGlobalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId }),
             useNavigation: () => ({ canGoBack: () => canGoBack }),
         };
     },
@@ -94,8 +99,8 @@ vi.mock('@/components/sessions/panes/SessionRightPanel', () => ({
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string) => {
-        ensureSessionVisibleSpy(sessionId);
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) => {
+        hydrateSpy(sessionId, tag, options);
         return true;
     },
 }));
@@ -123,6 +128,7 @@ describe('/session/[id]/terminal', () => {
 
     beforeEach(() => {
         mockSessionId = 'session-1';
+        mockServerId = undefined;
         isFocused = true;
         canGoBack = true;
         terminalFeatureEnabled = true;
@@ -139,6 +145,7 @@ describe('/session/[id]/terminal', () => {
         routerPushSpy.mockClear();
         routerReplaceSpy.mockClear();
         ensureSessionVisibleSpy.mockClear();
+        hydrateSpy.mockClear();
         vi.clearAllMocks();
     });
 
@@ -173,9 +180,15 @@ describe('/session/[id]/terminal', () => {
     });
 
     it('hydrates the session for deep links by requesting session visibility', async () => {
+        mockServerId = 'server-b';
         await renderRouteScreen();
 
         expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('session-1');
+        expect(hydrateSpy).toHaveBeenCalledWith(
+            'session-1',
+            'SessionTerminalRoute.ensureSessionVisible',
+            { serverId: 'server-b' },
+        );
     });
 
     it('closes by navigating back and closing the right-pane state', async () => {
@@ -191,6 +204,7 @@ describe('/session/[id]/terminal', () => {
     });
 
     it('falls back to the parent session route when there is no back stack', async () => {
+        mockServerId = 'server-b';
         canGoBack = false;
 
         const screen = await renderRouteScreen();
@@ -201,7 +215,7 @@ describe('/session/[id]/terminal', () => {
         });
 
         expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
     });
 
     it('does not open the terminal pane when the route is unavailable and is redirecting away', async () => {
@@ -214,6 +228,7 @@ describe('/session/[id]/terminal', () => {
     });
 
     it('pushes the details route again when the session id changes even if the details key is unchanged', async () => {
+        mockServerId = 'server-b';
         scopeState = {
             right: { isOpen: true, activeTabId: 'terminal', tabState: {} },
             details: {
@@ -234,7 +249,7 @@ describe('/session/[id]/terminal', () => {
         expect(routerPushSpy).toHaveBeenCalledTimes(1);
         expect(routerPushSpy).toHaveBeenLastCalledWith({
             pathname: '/session/[id]/details',
-            params: { id: 'session-1', details: 'file', path: 'README.md' },
+            params: { id: 'session-1', serverId: 'server-b', details: 'file', path: 'README.md' },
         });
 
         mockSessionId = 'session-2';
@@ -244,7 +259,7 @@ describe('/session/[id]/terminal', () => {
         expect(routerPushSpy).toHaveBeenCalledTimes(2);
         expect(routerPushSpy).toHaveBeenLastCalledWith({
             pathname: '/session/[id]/details',
-            params: { id: 'session-2', details: 'file', path: 'README.md' },
+            params: { id: 'session-2', serverId: 'server-b', details: 'file', path: 'README.md' },
         });
     });
 });

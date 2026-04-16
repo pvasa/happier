@@ -31,6 +31,7 @@ import {
     buildExecutionRunPublicStateFromTranscriptState,
     findTranscriptExecutionRunState,
 } from '@/sync/domains/session/subagents/executionRuns/deriveExecutionRunSubagents';
+import type { SessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 
 type LoadState =
     | { status: 'loading' }
@@ -77,6 +78,7 @@ export const SessionExecutionRunDetailsView = React.memo(React.forwardRef<Sessio
     presentation?: 'screen' | 'panel';
     showInfoCard?: boolean;
     showSendComposer?: boolean;
+    sessionRouteScope?: SessionRouteServerScope;
 }>>((props, ref) => {
     const { theme } = useUnistyles();
     const router = useRouter();
@@ -219,7 +221,10 @@ export const SessionExecutionRunDetailsView = React.memo(React.forwardRef<Sessio
                         testID="session-run-details-open-tool-message"
                         onPress={() => {
                             navigateWithBlurOnWeb(() => {
-                                router.push(`/session/${encodeURIComponent(props.sessionId)}/message/${encodeURIComponent(transcriptToolRouteId)}`);
+                                const href = props.sessionRouteScope?.buildHref(props.sessionId, {
+                                    suffix: `/message/${encodeURIComponent(transcriptToolRouteId)}`,
+                                }) ?? `/session/${encodeURIComponent(props.sessionId)}/message/${encodeURIComponent(transcriptToolRouteId)}`;
+                                router.push(href);
                             });
                         }}
                         style={{

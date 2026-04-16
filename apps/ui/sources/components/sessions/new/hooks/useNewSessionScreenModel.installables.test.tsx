@@ -558,12 +558,19 @@ vi.mock('@/components/sessions/new/hooks/useSecretRequirementFlow', () => ({
 }));
 
 vi.mock('@/components/sessions/new/hooks/useNewSessionWizardProps', () => ({
-    useNewSessionWizardProps: () => {
+    useNewSessionWizardProps: (params: any) => {
         React.useMemo(() => null, []);
         return {
             layout: {},
-            profiles: {},
-            agent: {},
+            profiles: {
+                selectedProfileId: params.selectedProfileId,
+                onPressProfile: params.onPressProfile,
+                getProfileDisabled: params.getProfileDisabled,
+            },
+            agent: {
+                agentType: params.agentType,
+                agentLabel: params.agentLabel,
+            },
             machine: {},
             footer: {},
         };
@@ -1301,6 +1308,141 @@ describe('useNewSessionScreenModel (installables)', () => {
         expect(model?.simpleProps?.agentType).toBe('customAcp');
         expect(model?.simpleProps?.agentLabel).toBe('Custom Preset');
         expect(model?.simpleProps?.selectedProfileId).toBe('profile-1');
+    });
+
+    it('prefers an auth-available backend when selecting a compatible profile', async () => {
+        settingsState.useEnhancedSessionWizard = true;
+        settingsState.useProfiles = true;
+        settingsState.lastUsedAgent = 'codex';
+        settingsState.acpCatalogSettingsV1 = {
+            v: 2,
+            backends: [
+                {
+                    id: 'custom-preset',
+                    name: 'custom-preset',
+                    title: 'Custom Preset',
+                    command: 'custom-acp',
+                    args: ['serve'],
+                    env: {},
+                    transportProfile: 'generic',
+                    capabilities: {
+                        supportsLoadSession: false,
+                        supportsModes: 'unknown',
+                        supportsModels: 'unknown',
+                        supportsConfigOptions: 'unknown',
+                        promptImageSupport: 'unknown',
+                    },
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            ],
+        };
+        settingsState.profiles = [{
+            id: 'profile-1',
+            name: 'Profile One',
+            environmentVariables: [],
+            defaultPermissionModeByAgent: {},
+            defaultPermissionModeByTargetKey: {},
+            defaultPersistenceModeByAgent: {},
+            defaultPersistenceModeByTargetKey: {},
+            compatibility: {},
+            compatibilityByTargetKey: {
+                [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: true,
+                [buildBackendTargetKey({ kind: 'configuredAcpBackend', backendId: 'custom-preset' })]: true,
+            },
+            envVarRequirements: [],
+            isBuiltIn: false,
+            createdAt: 0,
+            updatedAt: 0,
+            version: '1.0.0',
+        }] as any;
+        profileCompatibilityState.isProfileCompatibleWithAnyAgent = () => true;
+        profileCompatibilityState.isProfileCompatibleWithBackendTarget = (profile: any, target: any) =>
+            profile?.compatibilityByTargetKey?.[buildBackendTargetKey(target)] ?? false;
+        persistedDraft.agentType = 'codex';
+        persistedDraft.selectedProfileId = null;
+        enabledAgentIdsState.value = ['claude', 'codex', 'customAcp'];
+        cliAvailabilityState.value = {
+            timestamp: 1,
+            available: { claude: true, customAcp: false, codex: false, opencode: null },
+            authStatus: {
+                claude: { state: 'logged_out', checkedAt: 1 },
+            },
+        } as any;
+
+        const hook = await renderNewSessionScreenModel();
+        let model = hook.getCurrent();
+
+        expect(model?.variant).toBe('wizard');
+        expect(model?.wizardProps?.agent.agentType).toBe('codex');
+
+        await invokeHookAction(() => model?.variant === 'wizard'
+            ? model.wizardProps.profiles.onPressProfile(settingsState.profiles[0] as AIBackendProfile)
+            : undefined);
+
+        model = hook.getCurrent();
+
+        expect(model?.variant).toBe('wizard');
+        expect(model?.wizardProps?.profiles.selectedProfileId).toBe('profile-1');
+        expect(model?.wizardProps?.agent.agentType).toBe('customAcp');
+        expect(model?.wizardProps?.agent.agentLabel).toBe('Custom Preset');
+    });
+
+    it('keeps the current backend when a selected profile has no selectable compatible backend', async () => {
+        settingsState.useEnhancedSessionWizard = true;
+        settingsState.useProfiles = true;
+        settingsState.lastUsedAgent = 'codex';
+        settingsState.profiles = [{
+            id: 'profile-1',
+            name: 'Profile One',
+            environmentVariables: [],
+            defaultPermissionModeByAgent: {},
+            defaultPermissionModeByTargetKey: {},
+            defaultPersistenceModeByAgent: {},
+            defaultPersistenceModeByTargetKey: {},
+            compatibility: {},
+            compatibilityByTargetKey: {
+                [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: true,
+                [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'gemini' })]: true,
+            },
+            envVarRequirements: [],
+            isBuiltIn: false,
+            createdAt: 0,
+            updatedAt: 0,
+            version: '1.0.0',
+        }] as any;
+        profileCompatibilityState.isProfileCompatibleWithAnyAgent = () => true;
+        profileCompatibilityState.isProfileCompatibleWithBackendTarget = (profile: any, target: any) =>
+            profile?.compatibilityByTargetKey?.[buildBackendTargetKey(target)] ?? false;
+        persistedDraft.agentType = 'codex';
+        persistedDraft.selectedProfileId = null;
+        enabledAgentIdsState.value = ['claude', 'codex', 'gemini'];
+        cliAvailabilityState.value = {
+            timestamp: 1,
+            available: { claude: true, codex: false, gemini: true, opencode: null },
+            authStatus: {
+                claude: { state: 'logged_out', checkedAt: 1 },
+                gemini: { state: 'logged_out', checkedAt: 1 },
+            },
+        } as any;
+
+        const hook = await renderNewSessionScreenModel();
+        let model = hook.getCurrent();
+
+        expect(model?.variant).toBe('wizard');
+        expect(model?.wizardProps?.agent.agentType).toBe('codex');
+        expect(model?.wizardProps?.profiles.getProfileDisabled?.({ id: 'profile-1' })).toBe(false);
+
+        await invokeHookAction(() => model?.variant === 'wizard'
+            ? model.wizardProps.profiles.onPressProfile(settingsState.profiles[0] as AIBackendProfile)
+            : undefined);
+
+        model = hook.getCurrent();
+
+        expect(model?.variant).toBe('wizard');
+        expect(model?.wizardProps?.profiles.selectedProfileId).toBe('profile-1');
+        expect(model?.wizardProps?.agent.agentType).toBe('codex');
+        expect(model?.wizardProps?.agent.agentLabel).toBe('agentInput.agent.codex');
     });
 
     it('builds a picker when many selectable agents exist instead of cycling one-by-one', async () => {

@@ -35,6 +35,7 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
         presence: entry.active ? 'online' : entry.activeAt,
         accessLevel: entry.accessLevel,
         canApprovePermissions: entry.canApprovePermissions,
+        keepVisibleWhenInactive: entry.keepVisibleWhenInactive === true,
         hasPendingPermissionRequests: entry.hasPendingPermissionRequests === true,
         hasPendingUserActionRequests: entry.hasPendingUserActionRequests === true,
     };
@@ -89,6 +90,7 @@ export function buildSessionListCacheEntryFromRenderable(
         hiddenSystemSession: preserveMetadata
             ? previousEntry.hiddenSystemSession === true
             : session.metadata?.hiddenSystemSession === true,
+        keepVisibleWhenInactive: session.keepVisibleWhenInactive === true,
         hasPendingPermissionRequests: preserveAgentState
             ? previousEntry.hasPendingPermissionRequests === true
             : typeof session.hasPendingPermissionRequests === 'boolean'

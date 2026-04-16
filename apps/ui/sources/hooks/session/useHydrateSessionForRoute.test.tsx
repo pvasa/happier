@@ -6,11 +6,12 @@ import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const ensureSessionVisibleForMessageRouteSpy = vi.hoisted(() => vi.fn<(sessionId: string) => Promise<boolean>>());
+const ensureSessionVisibleForMessageRouteSpy = vi.hoisted(() => vi.fn<(sessionId: string, options?: { serverId?: string }) => Promise<boolean>>());
 
 vi.mock('@/sync/sync', () => ({
   sync: {
-    ensureSessionVisibleForMessageRoute: (sessionId: string) => ensureSessionVisibleForMessageRouteSpy(sessionId),
+    ensureSessionVisibleForMessageRoute: (sessionId: string, options?: { serverId?: string }) =>
+      ensureSessionVisibleForMessageRouteSpy(sessionId, options),
   },
 }));
 
@@ -85,5 +86,16 @@ describe('useHydrateSessionForRoute', () => {
     await new Promise((resolve) => setTimeout(resolve, 2_200));
 
     expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an explicit serverId override through to hydration', async () => {
+    ensureSessionVisibleForMessageRouteSpy.mockResolvedValueOnce(true);
+
+    const hook = await renderHook(() => useHydrateSessionForRoute('session-1', 'route.hydrate', { serverId: 'server-b' }));
+
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(hook.getCurrent()).toBe(true);
+    expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
   });
 });

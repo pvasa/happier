@@ -285,7 +285,7 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
                     detectKey: agentId,
                     installBanner: { installKind: 'installer', installCommand: null, guideUrl: null },
                 },
-                connectedService: { name: 'cloud' },
+                uiConnectedService: { serviceId: null, label: 'cloud', connectRoute: null },
                 localControl: { supported: false },
                 ui: { agentPickerIconName: 'code-slash' },
             };
@@ -317,7 +317,11 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
                 detectKey: agentId,
                 installBanner: { installKind: 'installer', installCommand: null, guideUrl: null },
             },
-            connectedService: { name: agentId === 'customAcp' ? 'Custom ACP' : 'cloud' },
+            uiConnectedService: {
+                serviceId: null,
+                label: agentId === 'customAcp' ? 'Custom ACP' : 'cloud',
+                connectRoute: null,
+            },
             localControl: { supported: false },
             ui: { agentPickerIconName: agentId === 'customAcp' ? 'git-network-outline' : 'code-slash' },
         };

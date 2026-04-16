@@ -153,7 +153,7 @@ export function NewSessionServerSelectionContent(props: NewSessionServerSelectio
         if (!profile) return { allowed: true, signedOut: false };
 
         try {
-            const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl);
+            const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
             if (creds) return { allowed: true, signedOut: false };
         } catch {
             return { allowed: true, signedOut: false };

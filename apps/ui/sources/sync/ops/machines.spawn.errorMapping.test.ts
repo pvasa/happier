@@ -110,6 +110,23 @@ describe('machineSpawnNewSession error mapping', () => {
     });
   });
 
+  it('maps legacy daemon success envelopes into a structured spawn success result', async () => {
+    machineRpcWithServerScopeMock.mockResolvedValueOnce({
+      success: true,
+      sessionId: 'session-legacy',
+    });
+
+    const { machineSpawnNewSession } = await import('./machines');
+    const result = await machineSpawnNewSession({
+      machineId: 'machine-1',
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      serverId: 'server-b',
+    });
+
+    expect(result).toEqual({ type: 'success', sessionId: 'session-legacy' });
+  });
+
   it('builds a legacy spawn payload for older daemon versions', async () => {
     storage.getState().applyMachines([
       {

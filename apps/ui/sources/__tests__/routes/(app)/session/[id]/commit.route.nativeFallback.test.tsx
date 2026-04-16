@@ -9,6 +9,7 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let mockShaParam = '';
+let mockServerIdParam = 'server-b';
 const routerReplaceSpy = vi.fn();
 const openDetailsTabSpy = vi.fn();
 const routerMock = createCommitRouteRouterMock();
@@ -23,6 +24,7 @@ function createCommitRouteRouterMock() {
         params: () => ({
             id: 'session-1',
             sha: mockShaParam,
+            serverId: mockServerIdParam,
         }),
     });
 }
@@ -91,7 +93,8 @@ describe('CommitScreen native route fallback', () => {
         vi.resetModules();
         const { default: CommitScreen } = await import('@/app/(app)/session/[id]/commit');
         mockShaParam = '';
-        routerMock.state.params = { id: 'session-1', sha: mockShaParam };
+        mockServerIdParam = 'server-b';
+        routerMock.state.params = { id: 'session-1', sha: mockShaParam, serverId: mockServerIdParam };
         routerReplaceSpy.mockClear();
         openDetailsTabSpy.mockClear();
         const screen = await renderScreen(React.createElement(CommitScreen));
@@ -114,7 +117,8 @@ describe('CommitScreen native route fallback', () => {
         vi.resetModules();
         const { default: CommitScreen } = await import('@/app/(app)/session/[id]/commit');
         mockShaParam = 'abc123';
-        routerMock.state.params = { id: 'session-1', sha: mockShaParam };
+        mockServerIdParam = 'server-b';
+        routerMock.state.params = { id: 'session-1', sha: mockShaParam, serverId: mockServerIdParam };
         routerReplaceSpy.mockClear();
         openDetailsTabSpy.mockClear();
         const screen = await renderScreen(React.createElement(CommitScreen));
@@ -123,11 +127,11 @@ describe('CommitScreen native route fallback', () => {
             expect(routerReplaceSpy).toHaveBeenCalledTimes(1);
             expect(routerReplaceSpy).toHaveBeenLastCalledWith({
                 pathname: '/session/[id]/details',
-                params: { id: 'session-1', details: 'commit', sha: 'abc123' },
+                params: { id: 'session-1', details: 'commit', sha: 'abc123', serverId: 'server-b' },
             });
 
             mockShaParam = 'def456';
-            routerMock.state.params = { id: 'session-1', sha: mockShaParam };
+            routerMock.state.params = { id: 'session-1', sha: mockShaParam, serverId: mockServerIdParam };
 
             await act(async () => {
                 screen.tree.update(React.createElement(CommitScreen));
@@ -138,11 +142,11 @@ describe('CommitScreen native route fallback', () => {
             expect(routerReplaceSpy).toHaveBeenCalledTimes(2);
             expect(routerReplaceSpy).toHaveBeenNthCalledWith(1, {
                 pathname: '/session/[id]/details',
-                params: { id: 'session-1', details: 'commit', sha: 'abc123' },
+                params: { id: 'session-1', details: 'commit', sha: 'abc123', serverId: 'server-b' },
             });
             expect(routerReplaceSpy).toHaveBeenNthCalledWith(2, {
                 pathname: '/session/[id]/details',
-                params: { id: 'session-1', details: 'commit', sha: 'def456' },
+                params: { id: 'session-1', details: 'commit', sha: 'def456', serverId: 'server-b' },
             });
         } finally {
             act(() => {

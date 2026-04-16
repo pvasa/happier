@@ -190,6 +190,10 @@ export default function ArchivedSessionsScreen() {
     }, [archivedSessions, hiddenInactiveSessions]);
 
     const handleUnarchive = React.useCallback((session: Session) => {
+        const serverId = typeof session.serverId === 'string' && session.serverId.trim()
+            ? session.serverId.trim()
+            : null;
+
         Modal.alert(
             t('sessionInfo.unarchiveSession'),
             t('sessionInfo.unarchiveSessionConfirm'),
@@ -199,7 +203,7 @@ export default function ArchivedSessionsScreen() {
                     text: t('sessionInfo.unarchiveSession'),
                     style: 'default',
                     onPress: async () => {
-                        const result = await sessionUnarchiveWithServerScope(session.id, { serverId: null });
+                        const result = await sessionUnarchiveWithServerScope(session.id, { serverId });
                         if (!result.success) {
                             Modal.alert(t('common.error'), result.message || t('sessionInfo.failedToUnarchiveSession'));
                         }
@@ -226,7 +230,12 @@ export default function ArchivedSessionsScreen() {
                         styles.sessionCard,
                         isSingle ? styles.sessionCardSingle : isFirst ? styles.sessionCardFirst : isLast ? styles.sessionCardLast : null,
                     ]}
-                    onPress={() => navigateToSession(item.id)}
+                    onPress={() => navigateToSession(
+                        item.id,
+                        typeof item.serverId === 'string' && item.serverId.trim()
+                            ? { serverId: item.serverId.trim() }
+                            : undefined,
+                    )}
                 >
                     <Avatar id={avatarId} size={48} />
                     <View style={styles.sessionContent}>

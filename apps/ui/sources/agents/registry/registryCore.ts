@@ -1,11 +1,13 @@
 import type { ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import type { TranslationKey, TranslationKeyNoParams } from '@/text';
 import type { Href } from 'expo-router';
+import type { ConnectedServiceId } from '@happier-dev/protocol';
 
 import {
     AGENT_IDS as SHARED_AGENT_IDS,
     DEFAULT_AGENT_ID,
     resolveAgentIdFromFlavor as resolveAgentIdFromFlavorShared,
+    type AgentCore as SharedAgentCore,
     type AgentId,
     type AgentModelConfig,
     type AgentSessionStorage,
@@ -59,21 +61,25 @@ export type AgentCoreConfig = Readonly<{
          */
         experimental: boolean;
     }>;
-    connectedService: Readonly<{
+    /**
+     * Shared Happier Connected Services compatibility from `@happier-dev/agents`.
+     */
+    connectedServices: SharedAgentCore['connectedServices'];
+    uiConnectedService: Readonly<{
         /**
-         * Server-side connected service id (e.g. `anthropic`, `openai`).
+         * UI presentation metadata for the service backing this agent.
          * When null, the agent has no account-level OAuth connection surface in the UI.
          */
-        id: string | null;
+        serviceId: ConnectedServiceId | null;
         /**
-         * Human-friendly name shown in account settings.
+         * Human-friendly label shown in account settings and provider surfaces.
          * (This is intentionally not i18n'd yet; can be moved to translations later.)
          */
-        name: string;
+        label: string;
         /**
          * Optional app route used to connect the service.
          */
-        connectRoute?: Href | null;
+        connectRoute: Href | null;
     }>;
     flavorAliases: readonly string[];
     cli: Readonly<{
@@ -255,8 +261,8 @@ export function resolveAgentIdFromConnectedServiceId(serviceId: string | null | 
     const normalized = serviceId.trim().toLowerCase();
     if (!normalized) return null;
     for (const id of AGENT_IDS) {
-        const svc = AGENTS_CORE[id].connectedService?.id;
-        if (typeof svc === 'string' && svc.toLowerCase() === normalized) return id;
+        const supportedServiceIds = AGENTS_CORE[id].connectedServices?.supportedServiceIds ?? [];
+        if (supportedServiceIds.some((svc) => typeof svc === 'string' && svc.toLowerCase() === normalized)) return id;
     }
     return null;
 }

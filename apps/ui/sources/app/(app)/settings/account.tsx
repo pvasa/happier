@@ -279,11 +279,11 @@ export default React.memo(() => {
                             const agentId = resolveAgentIdFromConnectedServiceId(serviceId);
                             if (!agentId) return null;
                             const core = getAgentCore(agentId);
-                            if (!core.connectedService?.id) return null;
+                            if (!core.uiConnectedService.serviceId) return null;
                             return {
                                 agentId,
                                 serviceId,
-                                name: core.connectedService.name,
+                                name: core.uiConnectedService.label,
                             };
                         })
                         .filter((x): x is NonNullable<typeof x> => Boolean(x));

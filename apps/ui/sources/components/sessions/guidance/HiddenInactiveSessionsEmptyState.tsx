@@ -12,7 +12,7 @@ export function HiddenInactiveSessionsEmptyState(): React.ReactElement {
         <SessionEmptyStateCard
             title={t('settingsFeatures.hiddenInactiveSessionsEmptyStateTitle')}
             subtitle={t('settingsFeatures.hiddenInactiveSessionsEmptyStateSubtitle')}
-            iconName="eye-off-outline"
+            iconName="chatbubbles-outline"
             actionLabel={t('sessionInfo.inactiveAndArchivedSessions')}
             onPressAction={() => router.push('/session/archived' as any)}
         />

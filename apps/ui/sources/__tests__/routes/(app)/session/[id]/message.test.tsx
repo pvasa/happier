@@ -28,6 +28,14 @@ const routerBackSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 const routerCanGoBackSpy = vi.fn(() => false);
 const syncOnSessionVisibleSpy = vi.fn();
+const ensureSessionVisibleForMessageRouteSpy = vi.fn(
+  async (_sessionId: string, _options?: { serverId?: string }) => {
+    if (!ensureSessionVisibleDeferred) {
+      ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    }
+    return await ensureSessionVisibleDeferred.promise;
+  },
+);
 let mockSearchParams: any = { id: 'session-1', messageId: 'message-1' };
 let loadOlderDeferred: DeferredPromise<{ loaded: number; hasMore: boolean; status: 'loaded' | 'no_more' | 'not_ready' | 'in_flight' }> | null = null;
 const syncLoadOlderMessagesSpy = vi.fn(async (_sessionId: string) => {
@@ -36,7 +44,7 @@ const syncLoadOlderMessagesSpy = vi.fn(async (_sessionId: string) => {
   }
   return { loaded: 0, hasMore: false, status: 'no_more' as const };
 });
-let ensureSessionVisibleDeferred: DeferredPromise<void> | null = null;
+let ensureSessionVisibleDeferred: DeferredPromise<boolean> | null = null;
 const mockTheme = {
   colors: {
     textSecondary: '#aaa',
@@ -102,12 +110,8 @@ vi.mock('@/sync/store/hooks', () => ({
 vi.mock('@/sync/sync', () => ({
   sync: {
     onSessionVisible: (sessionId: string) => syncOnSessionVisibleSpy(sessionId),
-    ensureSessionVisibleForMessageRoute: async () => {
-      if (!ensureSessionVisibleDeferred) {
-        ensureSessionVisibleDeferred = createDeferredPromise<void>();
-      }
-      await ensureSessionVisibleDeferred.promise;
-    },
+    ensureSessionVisibleForMessageRoute: (sessionId: string, options?: { serverId?: string }) =>
+      ensureSessionVisibleForMessageRouteSpy(sessionId, options),
     loadOlderMessages: (sessionId: string) => syncLoadOlderMessagesSpy(sessionId),
   },
 }));
@@ -186,6 +190,7 @@ describe('Session message route hydration', () => {
     mockCommittedMessages = [];
     loadOlderDeferred = null;
     ensureSessionVisibleDeferred = null;
+    ensureSessionVisibleForMessageRouteSpy.mockClear();
     mockSearchParams = { id: 'session-1', messageId: 'message-1' };
     routerBackSpy.mockClear();
     routerReplaceSpy.mockClear();
@@ -219,31 +224,45 @@ describe('Session message route hydration', () => {
     expect(syncOnSessionVisibleSpy).not.toHaveBeenCalled();
   });
 
+  it('renders invalid link fallback when hydration completes but the session is still missing', async () => {
+    mockSession = null;
+    mockMessagesLoaded = false;
+    ensureSessionVisibleForMessageRouteSpy.mockImplementation(async () => true);
+
+    const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
+    const screen = await renderMessageScreen(MessageScreen);
+    await flushHookEffects({ cycles: 2, turns: 2 });
+
+    expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(1);
+  });
+
   it('does not navigate back until message backfill completes', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
     loadOlderDeferred = createDeferredPromise();
+    mockSearchParams = { id: 'session-1', messageId: 'message-1', serverId: 'server-b' };
 
     const screen = await renderMessageScreen(MessageScreen);
     await flushHookEffects({ cycles: 1, turns: 1 });
 
     expect(syncOnSessionVisibleSpy).toHaveBeenCalledWith('session-1');
     expect(syncLoadOlderMessagesSpy).toHaveBeenCalledWith('session-1');
+    expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
     expect(routerBackSpy).not.toHaveBeenCalled();
 
     loadOlderDeferred!.resolve({ loaded: 0, hasMore: false, status: 'no_more' });
     await flushHookEffects({ cycles: 1, turns: 1 });
 
-    expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+    expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
   });
 
   it('keeps a stable tool route open when the route id resolves to a hydrated internal tool message id', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
     mockSearchParams = { id: 'session-1', messageId: 'tool:call_1' };
     mockResolvedRouteMessageId = 'resolved-tool-message';
     mockMessagesById = {
@@ -266,8 +285,8 @@ describe('Session message route hydration', () => {
   it('filters ignored Claude teammate lifecycle events from the focused transcript route', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
     mockSearchParams = { id: 'session-1', messageId: 'tool-msg-1' };
     mockSession = { id: 'session-1', accessLevel: 'edit', canApprovePermissions: false, metadata: { flavor: 'claude' } };
     mockMessage = {
@@ -355,8 +374,8 @@ describe('Session message route hydration', () => {
   it('keeps waiting when older paging is not ready instead of redirecting away from the deep link', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
     syncLoadOlderMessagesSpy.mockImplementation(async () => ({ loaded: 0, hasMore: true, status: 'not_ready' as const }));
 
     await renderMessageScreen(MessageScreen);
@@ -369,8 +388,8 @@ describe('Session message route hydration', () => {
   it('does not crash when message kind changes between renders', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
 
     mockMessage = {
       kind: 'user-text',
@@ -399,8 +418,8 @@ describe('Session message route hydration', () => {
   it('does not render the focused-tool composer when there are no participant targets', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
 
     mockMessage = {
       kind: 'tool-call',
@@ -437,8 +456,8 @@ describe('Session message route hydration', () => {
   it('includes focused execution run target when auto-recipient resolves to execution run', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
 
     mockMessage = {
       kind: 'tool-call',
@@ -469,8 +488,8 @@ describe('Session message route hydration', () => {
   it('includes focused broadcast target when auto-recipient resolves to agent-team broadcast', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
 
     mockMessage = {
       kind: 'tool-call',
@@ -501,8 +520,8 @@ describe('Session message route hydration', () => {
   it('includes focused teammate target when auto-recipient resolves to agent-team member', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
 
     mockMessage = {
       kind: 'tool-call',
@@ -540,8 +559,8 @@ describe('Session message route hydration', () => {
   it('does not render the focused-tool composer when the focused tool has no auto-recipient, even if other participant targets exist', async () => {
     const { default: MessageScreen } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
+    ensureSessionVisibleDeferred = createDeferredPromise<boolean>();
+    ensureSessionVisibleDeferred.resolve(true);
 
     mockMessage = {
       kind: 'tool-call',

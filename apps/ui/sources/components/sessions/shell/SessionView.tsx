@@ -23,6 +23,7 @@ import { VoiceSurface } from '@/components/voice/surface/VoiceSurface';
 import { useDraft } from '@/hooks/session/useDraft';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionExecutionRunsSupported } from '@/hooks/server/useSessionExecutionRunsSupported';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/files/useWarmRepositoryDirectoryCacheOnSessionOpen';
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
@@ -77,6 +78,7 @@ import { nowServerMs } from '@/sync/runtime/time';
 import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session/resume/resumeSessionBase';
 import { resolveHappierReplayConfig } from '@/sync/domains/session/resume/happierReplayPrompt';
 import { buildLiveSessionAuthoringContext } from '@/components/sessions/authoring/context/buildLiveSessionAuthoringContext';
+import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { resolveSessionComposerStateFromAuthoringContext } from '@/components/sessions/authoring/context/resolveSessionComposerStateFromAuthoringContext';
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
 import { getSessionLocalControlState, isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
@@ -84,6 +86,7 @@ import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/de
 import { isModelSelectableForSession } from '@/sync/domains/models/modelOptions';
 import { getInactiveSessionUiState } from '@/components/sessions/model/inactiveSessionUi';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
+import { useCLIDetection } from '@/hooks/auth/useCLIDetection';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { usePathname, useRouter } from 'expo-router';
@@ -93,7 +96,7 @@ import { ActivityIndicator, Platform, Pressable, View, useWindowDimensions } fro
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { sessionSwitch } from '@/sync/ops';
-import { shouldRenderChatTimelineForSession, shouldRequestRemoteControlAfterPendingEnqueue } from '@/sync/domains/session/control/localControlSwitch';
+import { shouldRenderChatTimelineForSession, shouldRequestRemoteControl, shouldRequestRemoteControlAfterPendingEnqueue } from '@/sync/domains/session/control/localControlSwitch';
 import { supportsEffectiveLocalControlForSession } from '@/sync/domains/session/control/effectiveRuntimeControlSurface';
 import { readControlSwitchUiTimeoutMsFromEnv } from '@/sync/domains/session/control/controlSwitchUiTimeout';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -139,6 +142,7 @@ import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOpti
 
 export const SessionView = React.memo((props: {
     id: string;
+    routeServerId?: string | null;
     jumpToSeq?: number | null;
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
@@ -175,6 +179,17 @@ export const SessionView = React.memo((props: {
     const sessionEncryptionMode: 'e2ee' | 'plain' = (session?.encryptionMode ?? 'e2ee');
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
+    const currentSessionRouteServerId =
+        (props.routeServerId ?? '').trim()
+        || resolveServerIdForSessionIdFromLocalCache(sessionId)
+        || getActiveServerSnapshot().serverId;
+    const buildCurrentSessionHref = React.useCallback((suffix = '') => {
+        return buildScopedSessionRouteHref({
+            sessionId,
+            serverId: currentSessionRouteServerId,
+            suffix,
+        });
+    }, [currentSessionRouteServerId, sessionId]);
 
     // Treat multi-pane panels as enabled unless explicitly disabled. `useLocalSetting` can return
     // `undefined` during hydration; failing closed here causes deep links like `?right=git` to be
@@ -202,7 +217,6 @@ export const SessionView = React.memo((props: {
         sessionId,
         sidechainIds: participantSidechainIds,
     });
-
     const sessionAutomationsEnabledCount = React.useMemo(() => {
         if (!showAutomations) return 0;
         return countEnabledAutomationsLinkedToSession(automations, sessionId);
@@ -307,7 +321,7 @@ export const SessionView = React.memo((props: {
                 <SessionHeaderTerminalButton sessionId={sessionId} scopeId={paneScopeId} />
                 {!shouldFoldHeaderIconActions && sessionExecutionRunsSupported ? (
                     <Pressable
-                        onPress={() => router.push(`/session/${sessionId}/runs` as any)}
+                        onPress={() => router.push(buildCurrentSessionHref('/runs') as any)}
                         hitSlop={15}
                         style={({ pressed }) => ({
                             width: 44,
@@ -324,7 +338,7 @@ export const SessionView = React.memo((props: {
                 ) : null}
                 {!shouldFoldHeaderIconActions && showAutomations ? (
                     <Pressable
-                        onPress={() => navigateWithBlurOnWeb(() => router.push(`/session/${sessionId}/automations` as any))}
+                        onPress={() => navigateWithBlurOnWeb(() => router.push(buildCurrentSessionHref('/automations') as any))}
                         hitSlop={15}
                         style={({ pressed }) => ({
                             width: 44,
@@ -369,7 +383,7 @@ export const SessionView = React.memo((props: {
             title: getSessionName(session),
             subtitle: session.metadata?.path ? formatPathRelativeToHome(session.metadata.path, session.metadata?.homeDir) : undefined,
             avatarId: getSessionAvatarId(session),
-            onAvatarPress: () => router.navigate((`/session/${sessionId}/info`) as any, {
+            onAvatarPress: () => router.navigate(buildCurrentSessionHref('/info') as any, {
                 dangerouslySingular() {
                     return 'session-info';
                 },
@@ -458,6 +472,7 @@ export const SessionView = React.memo((props: {
                        <SessionViewLoaded
                            key={sessionId}
                            sessionId={sessionId}
+                           routeServerId={currentSessionRouteServerId}
                            session={session}
                            onBackPress={handleBackPress}
                            isEncryptedSessionLocked={isEncryptedSessionLocked}
@@ -481,6 +496,7 @@ export const SessionView = React.memo((props: {
 function SessionViewLoaded({
     committedMessages,
     sessionId,
+    routeServerId,
     session,
     onBackPress,
     isEncryptedSessionLocked,
@@ -495,6 +511,7 @@ function SessionViewLoaded({
 }: {
     committedMessages: readonly Message[];
     sessionId: string;
+    routeServerId?: string | null;
     session: Session;
     onBackPress: () => void;
     isEncryptedSessionLocked: boolean;
@@ -525,6 +542,21 @@ function SessionViewLoaded({
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const sessionsRightPaneDefaultOpen = useLocalSetting('sessionsRightPaneDefaultOpen');
     const pane = useAppPaneScope(paneScopeId);
+    const activeServerId = getActiveServerSnapshot().serverId;
+    const sessionRouteServerId = (routeServerId ?? '').trim()
+        || resolveServerIdForSessionIdFromLocalCache(sessionId)
+        || activeServerId;
+    const capabilityServerId = sessionRouteServerId;
+    const buildSessionHref = React.useCallback((sid: string, suffix = '') => {
+        return buildScopedSessionRouteHref({
+            sessionId: sid,
+            serverId: resolveServerIdForSessionIdFromLocalCache(sid) ?? sessionRouteServerId,
+            suffix,
+        });
+    }, [sessionRouteServerId]);
+    const buildCurrentSessionHref = React.useCallback((suffix = '') => {
+        return buildSessionHref(sessionId, suffix);
+    }, [buildSessionHref, sessionId]);
 
     useSessionPaneUrlSync({
         enabled: multiPaneEnabled && Platform.OS === 'web',
@@ -646,8 +678,6 @@ function SessionViewLoaded({
     }, [sessionAcpConfigOptionOverrides, sessionId]);
     const sessionStatus = useSessionStatus(session);
     const sessionUsage = useSessionUsage(sessionId);
-    const activeServerId = getActiveServerSnapshot().serverId;
-    const capabilityServerId = activeServerId;
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const scmSessionAutoRefreshIntervalMsSetting = useSetting('scmSessionAutoRefreshIntervalMs' as any);
     const scmSessionAutoRefreshIntervalMs =
@@ -693,27 +723,14 @@ function SessionViewLoaded({
         };
     }, [scmSessionAutoRefreshIntervalMs, sessionId]);
 
-    const resolveServerIdForSessionId = React.useCallback((sid: string): string | null => {
-        const state: any = storage.getState();
-        const byServer = state?.sessionListViewDataByServerId ?? {};
-        for (const [serverId, items] of Object.entries(byServer)) {
-            if (!Array.isArray(items)) continue;
-            for (const item of items as any[]) {
-                if (!item || item.type !== 'session') continue;
-                if (item?.session?.id === sid) return String(serverId);
-            }
-        }
-        return null;
-    }, []);
-
     const actionExecutor = React.useMemo(
         () => createDefaultActionExecutor({
-            resolveServerIdForSessionId,
+            resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
             openSession: (sid) => {
-                router.push((`/session/${sid}`) as any);
+                router.push(buildSessionHref(sid) as any);
             },
         }),
-        [resolveServerIdForSessionId, router]
+        [buildSessionHref, router]
     );
 
     // Inactive session resume state
@@ -966,7 +983,7 @@ function SessionViewLoaded({
                         }
 
                         await sync.refreshSessions();
-                        router.push(`/session/${spawnResult.sessionId}` as any);
+                        router.push(buildSessionHref(spawnResult.sessionId) as any);
                         return true;
                     } catch (e) {
                         maybeAlert(e instanceof Error ? e.message : t('session.resumeFailed'));
@@ -1094,7 +1111,7 @@ function SessionViewLoaded({
 
     const showInactiveNotResumableNotice = inactiveUi.noticeKind === 'not-resumable';
     const showMachineOfflineNotice = inactiveUi.noticeKind === 'machine-offline';
-    const providerName = getAgentCore(agentId).connectedService?.name ?? t('status.unknown');
+    const providerName = getAgentCore(agentId).uiConnectedService.label ?? t('status.unknown');
     const machineName = session.metadata?.host ?? t('status.unknown');
 
     const bottomNotice = React.useMemo(() => {
@@ -1133,6 +1150,17 @@ function SessionViewLoaded({
 
     const localControlState = React.useMemo(() => getSessionLocalControlState(session), [session]);
     const isLocallyAttached = !isHiddenSystemSessionSession && isSessionLocallyAttached(session);
+    const cliAvailability = useCLIDetection(machineId ?? null, {
+        autoDetect: isLocallyAttached || localControlState?.canAttach === true,
+        includeLoginStatus: isLocallyAttached || localControlState?.canAttach === true,
+        agentIds: [agentId],
+        serverId: capabilityServerId,
+    });
+    const cliAuthStatus = cliAvailability.authStatus[agentId] ?? null;
+    const canRequestRemoteControl = shouldRequestRemoteControl(session, cliAuthStatus?.state ?? null);
+    const canRequestLocalControl = cliAuthStatus?.state === 'logged_out'
+        ? false
+        : localControlState?.canAttach === true;
     const [controlSwitchTo, setControlSwitchTo] = React.useState<'remote' | null>(null);
     const controlSwitchAttemptIdRef = React.useRef(0);
     React.useEffect(() => {
@@ -1250,9 +1278,9 @@ function SessionViewLoaded({
                           bottomNotice={bottomNotice}
                           controlledByUserOverride={isLocallyAttached}
                           controlSwitchTo={controlSwitchTo}
-                          onRequestSwitchToRemote={isHiddenSystemSessionSession ? undefined : handleRequestSwitchToRemote}
+                          onRequestSwitchToRemote={isHiddenSystemSessionSession || !canRequestRemoteControl ? undefined : handleRequestSwitchToRemote}
                           onRequestSwitchToLocal={
-                              isHiddenSystemSessionSession || localControlState?.canAttach !== true
+                              isHiddenSystemSessionSession || !canRequestLocalControl
                                   ? undefined
                                   : handleRequestSwitchToLocal
                           }
@@ -1370,7 +1398,7 @@ function SessionViewLoaded({
         });
 
         if (layoutIfOpened.kind === 'single') {
-            router.push(`/session/${sessionId}/files`);
+            router.push(buildCurrentSessionHref('/files'));
             return;
         }
 
@@ -1754,7 +1782,7 @@ function SessionViewLoaded({
                                     // Non-fatal: message is already persisted in the pending queue.
                                 }
 
-                                if (shouldRequestRemoteControlAfterPendingEnqueue(session)) {
+                                if (shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null)) {
                                     try {
                                         await sessionSwitch(sessionId, 'remote');
                                     } catch {
@@ -1875,7 +1903,7 @@ function SessionViewLoaded({
                             setMessage,
                             clearDraft,
                             trackMessageSent,
-                            navigateToRuns: () => router.push(`/session/${sessionId}/runs` as any),
+                            navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
                             modalAlert: (_title, msg) => Modal.alert(t('common.error'), msg),
                         });
                         return;

@@ -131,4 +131,21 @@ describe('resolveSessionListSourceData', () => {
             'server-b-1',
         ]);
     });
+
+    it('keeps the loading state when every selected server cache is still cold', () => {
+        const activeData: SessionListViewItem[] = [makeSession('active-only', 'server-a', 'Server A')];
+
+        const result = resolveSessionListSourceData({
+            enabled: true,
+            activeServerId: 'server-a',
+            activeData,
+            byServerId: {
+                'server-a': activeData,
+                'server-b': null,
+            },
+            selectedServerIds: ['server-b'],
+        });
+
+        expect(result).toBeNull();
+    });
 });

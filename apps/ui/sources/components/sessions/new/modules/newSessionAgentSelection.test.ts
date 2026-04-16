@@ -39,6 +39,21 @@ describe('newSessionAgentSelection', () => {
         })).toBe(true);
     });
 
+    it('treats logged-out agents as unavailable even when the CLI is installed', () => {
+        expect(isAgentSelectableForNewSession({
+            agentId: 'codex',
+            detectionTimestamp: 1,
+            availabilityById: { codex: true },
+            authStatusById: {
+                codex: {
+                    state: 'logged_out',
+                    checkedAt: 123,
+                },
+            },
+            installableDepKeyCountByAgentId: { codex: 0 },
+        })).toBe(false);
+    });
+
     it('treats missing availability as unavailable after detection completes unless another path keeps it selectable', () => {
         expect(isAgentSelectableForNewSession({
             agentId: 'codex',
@@ -77,6 +92,22 @@ describe('newSessionAgentSelection', () => {
             availabilityById: { claude: false, codex: false },
             installableDepKeyCountByAgentId: { codex: 1 },
         })).toEqual({ available: true });
+    });
+
+    it('marks multi-cli profiles unavailable with a logged-out reason when every installed agent is logged out', () => {
+        expect(resolveProfileAvailabilityForNewSession({
+            candidateBackendEntries: [
+                { target: { kind: 'builtInAgent', agentId: 'claude' }, targetKey: 'agent:claude', builtInAgentId: 'claude', family: 'builtInAgent' },
+                { target: { kind: 'builtInAgent', agentId: 'codex' }, targetKey: 'agent:codex', builtInAgentId: 'codex', family: 'builtInAgent' },
+            ],
+            detectionTimestamp: 1,
+            availabilityById: { claude: true, codex: true },
+            authStatusById: {
+                claude: { state: 'logged_out', checkedAt: 1 },
+                codex: { state: 'logged_out', checkedAt: 1 },
+            },
+            installableDepKeyCountByAgentId: {},
+        })).toEqual({ available: false, reason: 'logged-out:any' });
     });
 
     it('treats configured ACP backend entries as selectable without built-in CLI detection', () => {

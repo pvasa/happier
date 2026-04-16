@@ -138,7 +138,7 @@ describe('/oauth/[provider] (connect flow)', () => {
     it('cancels pending connect when user closes the username prompt', async () => {
         setAuthenticated();
         replaceSpy.mockReset();
-        setPendingExternalConnectState(null);
+        setPendingExternalConnectState({ provider: 'github', returnTo: '/settings/account' });
 
         localSearchParamsMock.mockReturnValue({
             provider: 'github',
@@ -173,7 +173,7 @@ describe('/oauth/[provider] (connect flow)', () => {
     it('navigates away even if cancel pending throws', async () => {
         setAuthenticated();
         replaceSpy.mockReset();
-        setPendingExternalConnectState(null);
+        setPendingExternalConnectState({ provider: 'github', returnTo: '/settings/account' });
 
         localSearchParamsMock.mockReturnValue({
             provider: 'github',
@@ -196,6 +196,43 @@ describe('/oauth/[provider] (connect flow)', () => {
         });
 
         promptSpy.mockRestore();
+    });
+
+    it('fails closed when username resolution returns without a matching pending connect state', async () => {
+        setAuthenticated();
+        replaceSpy.mockReset();
+        setPendingExternalConnectState(null);
+
+        localSearchParamsMock.mockReturnValue({
+            provider: 'github',
+            flow: 'connect',
+            status: 'username_required',
+            login: 'octocat',
+            pending: 'p1',
+        });
+
+        const promptSpy = vi.spyOn(modal, 'prompt').mockResolvedValue('octocat_2');
+        const alertSpy = vi.spyOn(modal, 'alert').mockImplementation(async () => {});
+        const fetchMock = stubFetch(async (url) => {
+            throw new Error(`Unexpected fetch: ${url}`);
+        });
+
+        await runWithOAuthScreen(async () => {
+            await flushOAuthEffects();
+            expect(alertSpy).toHaveBeenCalledWith(
+                t('common.error'),
+                t('errors.oauthStateMismatch'),
+            );
+            expect(promptSpy).not.toHaveBeenCalled();
+            expect(fetchMock).not.toHaveBeenCalledWith(
+                expect.stringContaining('/v1/connect/external/github/finalize'),
+                expect.anything(),
+            );
+            expect(replaceSpy).toHaveBeenCalledWith('/settings/account');
+        });
+
+        promptSpy.mockRestore();
+        alertSpy.mockRestore();
     });
 
     it('finalizes connect when the user picks an available username', async () => {

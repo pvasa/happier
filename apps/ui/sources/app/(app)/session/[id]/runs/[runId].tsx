@@ -9,6 +9,7 @@ import {
     type SessionExecutionRunDetailsViewHandle,
 } from '@/components/sessions/runs/details/SessionExecutionRunDetailsView';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { t } from '@/text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
@@ -24,12 +25,17 @@ export default function SessionRunDetailsScreen() {
     const router = useRouter();
     const navigation = useNavigation();
     const params = useLocalSearchParams();
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
     const sessionId = normalizeParam((params as Record<string, unknown>)?.id);
     const runId = normalizeParam((params as Record<string, unknown>)?.runId);
-    const hydrateReady = useHydrateSessionForRoute(sessionId ?? '', 'SessionRunDetailsScreen.hydrate');
+    const hydrateReady = useHydrateSessionForRoute(
+        sessionId ?? '',
+        'SessionRunDetailsScreen.hydrate',
+        routeScope.hydrationOptions,
+    );
     const detailsRef = React.useRef<SessionExecutionRunDetailsViewHandle | null>(null);
     const headerTint = theme.colors.header?.tint ?? theme.colors.text;
-    const parentSessionHref = sessionId ? `/session/${encodeURIComponent(sessionId)}` : '/session';
+    const parentSessionHref = sessionId ? routeScope.buildHref(sessionId) : '/session';
 
     const headerRight = React.useCallback(() => (
         <Pressable
@@ -83,6 +89,7 @@ export default function SessionRunDetailsScreen() {
                     sessionId={sessionId}
                     runId={runId}
                     presentation="screen"
+                    sessionRouteScope={routeScope}
                 />
             )}
         </View>

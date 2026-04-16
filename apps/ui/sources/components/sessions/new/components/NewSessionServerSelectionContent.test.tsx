@@ -15,6 +15,7 @@ import { renderScreen } from '@/dev/testkit';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const capturedItems: Array<Record<string, unknown>> = [];
+const getCredentialsForServerUrlMock = vi.fn(async (_serverUrl: string, _options?: { serverId?: string | null }) => ({ accessToken: 'token' }));
 const expoRouterMock = createExpoRouterMock({
     params: { selectedId: 'server-a' },
     navigation: { dispatch: vi.fn(), getState: () => undefined },
@@ -82,7 +83,8 @@ vi.mock('@/sync/domains/server/selection/serverSelectionResolution', () => ({
 
 vi.mock('@/auth/storage/tokenStorage', () => ({
     TokenStorage: {
-        getCredentialsForServerUrl: vi.fn(async () => ({ accessToken: 'token' })),
+        getCredentialsForServerUrl: (serverUrl: string, options?: { serverId?: string | null }) =>
+            getCredentialsForServerUrlMock(serverUrl, options),
     },
 }));
 
@@ -103,6 +105,27 @@ vi.mock('@/components/sessions/new/navigation/setNewSessionPickerReturnParams', 
 }));
 
 describe('NewSessionServerSelectionContent', () => {
+    it('checks auth against the selected server profile id, not just its URL', async () => {
+        capturedItems.length = 0;
+        getCredentialsForServerUrlMock.mockClear();
+        const { NewSessionServerSelectionContent } = await import('./NewSessionServerSelectionContent');
+
+        await renderScreen(<NewSessionServerSelectionContent
+                    maxHeight={520}
+                    onClose={() => {}}
+                    selectedServerId="server-b"
+                />);
+
+        const serverB = capturedItems.find((item) => item.title === 'Server B');
+        expect(serverB).toBeTruthy();
+
+        await React.act(async () => {
+            (serverB?.onPress as (() => void) | undefined)?.();
+        });
+
+        expect(getCredentialsForServerUrlMock).toHaveBeenCalledWith('http://server-b.local', { serverId: 'server-b' });
+    });
+
     it('prefers the explicit selected server over stale route params in popover mode', async () => {
         capturedItems.length = 0;
         const { NewSessionServerSelectionContent } = await import('./NewSessionServerSelectionContent');

@@ -54,11 +54,14 @@ export function resolveSessionListSourceData(
     const activeServerId = String(params.activeServerId ?? '').trim();
     const scoped = params.byServerId ?? {};
     const merged: SessionListViewItem[] = [];
+    let hasResolvedSelectedSource = false;
 
     for (const serverId of selectedServerIds) {
         const fromCache = scoped[serverId];
         const source = fromCache ?? (serverId === activeServerId ? params.activeData : null);
-        if (!source || source.length === 0) continue;
+        if (!source) continue;
+        hasResolvedSelectedSource = true;
+        if (source.length === 0) continue;
         merged.push(...source);
     }
 
@@ -66,7 +69,7 @@ export function resolveSessionListSourceData(
         return merged;
     }
 
-    return params.activeData;
+    return hasResolvedSelectedSource ? [] : null;
 }
 
 export function applySessionListPresentation(

@@ -17,20 +17,24 @@ installNewSessionScreenModelCommonModuleMocks({
 const cliRefreshA = vi.fn();
 const cliRefreshB = vi.fn();
 let cliRefreshCurrent = cliRefreshA;
+const useCLIDetectionMock = vi.fn();
 
 vi.mock('@/hooks/auth/useCLIDetection', () => ({
-    useCLIDetection: () => ({
-        available: { claude: false, codex: true },
-        login: {},
-        authStatus: {},
-        resolvedPath: {},
-        resolvedCommand: {},
-        resolutionSource: {},
-        tmux: null,
-        isDetecting: false,
-        timestamp: 123,
-        refresh: cliRefreshCurrent,
-    }),
+    useCLIDetection: (...args: unknown[]) => {
+        useCLIDetectionMock(...args);
+        return {
+            available: { claude: false, codex: true },
+            login: {},
+            authStatus: {},
+            resolvedPath: {},
+            resolvedCommand: {},
+            resolutionSource: {},
+            tmux: null,
+            isDetecting: false,
+            timestamp: 123,
+            refresh: cliRefreshCurrent,
+        };
+    },
 }));
 
 const capabilitiesRefreshA = vi.fn();
@@ -60,6 +64,7 @@ describe('useNewSessionAvailabilityState', () => {
     beforeEach(() => {
         cliRefreshA.mockClear();
         cliRefreshB.mockClear();
+        useCLIDetectionMock.mockClear();
         capabilitiesRefreshA.mockClear();
         capabilitiesRefreshB.mockClear();
         cliRefreshCurrent = cliRefreshA;
@@ -115,6 +120,99 @@ describe('useNewSessionAvailabilityState', () => {
         expect(setBackendTarget).not.toHaveBeenCalled();
     });
 
+    it('requests CLI login-status probes for the enabled agents on the selected server', async () => {
+        vi.resetModules();
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+
+        await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: 'machine-1',
+            selectedMachine: null,
+            capabilityServerId: 'server-1',
+            settings: {} as any,
+            agentType: 'claude' as any,
+            resumeSessionId: null,
+            enabledAgentIds: ['claude', 'codex'] as any,
+            agentNewSessionOptionStateByAgentId: {},
+            resolvedBackendEntries: [],
+            selectedBackendEntry: null,
+            setBackendTarget: vi.fn(),
+            machines: [],
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings: vi.fn(),
+            allProfiles: [],
+        }));
+
+        expect(useCLIDetectionMock).toHaveBeenCalledWith('machine-1', {
+            autoDetect: false,
+            includeLoginStatus: true,
+            includeLoginStatusForAgentIds: ['claude', 'codex'],
+            serverId: 'server-1',
+        });
+    });
+
+    it('filters manual-only providers out of automatic login-status probes', async () => {
+        vi.resetModules();
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+
+        await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: 'machine-1',
+            selectedMachine: null,
+            capabilityServerId: 'server-1',
+            settings: {} as any,
+            agentType: 'claude' as any,
+            resumeSessionId: null,
+            enabledAgentIds: ['claude', 'kiro'] as any,
+            agentNewSessionOptionStateByAgentId: {},
+            resolvedBackendEntries: [],
+            selectedBackendEntry: null,
+            setBackendTarget: vi.fn(),
+            machines: [],
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings: vi.fn(),
+            allProfiles: [],
+        }));
+
+        expect(useCLIDetectionMock).toHaveBeenCalledWith('machine-1', {
+            autoDetect: false,
+            includeLoginStatus: true,
+            includeLoginStatusForAgentIds: ['claude'],
+            serverId: 'server-1',
+        });
+    });
+
+    it('disables automatic login-status probes when no enabled agent supports background auth checks', async () => {
+        vi.resetModules();
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+
+        await renderHook(() => useNewSessionAvailabilityState({
+            selectedMachineId: 'machine-1',
+            selectedMachine: null,
+            capabilityServerId: 'server-1',
+            settings: {} as any,
+            agentType: 'kiro' as any,
+            resumeSessionId: null,
+            enabledAgentIds: ['kiro'] as any,
+            agentNewSessionOptionStateByAgentId: {},
+            resolvedBackendEntries: [],
+            selectedBackendEntry: null,
+            setBackendTarget: vi.fn(),
+            machines: [],
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings: vi.fn(),
+            allProfiles: [],
+        }));
+
+        expect(useCLIDetectionMock).toHaveBeenCalledWith('machine-1', {
+            autoDetect: false,
+            includeLoginStatus: false,
+            includeLoginStatusForAgentIds: [],
+            serverId: 'server-1',
+        });
+    });
+
     it('does not re-run the initial probe refresh when refresh callback identities churn', async () => {
         vi.resetModules();
 
@@ -154,7 +252,10 @@ describe('useNewSessionAvailabilityState', () => {
         }), { initialProps: { refreshSalt: 0 } });
 
         expect(cliRefreshA).toHaveBeenCalledTimes(1);
-        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({ bypassCache: true });
+        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({
+            bypassCache: true,
+            includeLoginStatusForAgentIds: ['claude', 'codex'],
+        });
         expect(capabilitiesRefreshA).toHaveBeenCalledTimes(1);
 
         cliRefreshCurrent = cliRefreshB;
@@ -162,7 +263,10 @@ describe('useNewSessionAvailabilityState', () => {
         await hook.rerender({ refreshSalt: 1 });
 
         expect(cliRefreshA).toHaveBeenCalledTimes(1);
-        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({ bypassCache: true });
+        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({
+            bypassCache: true,
+            includeLoginStatusForAgentIds: ['claude', 'codex'],
+        });
         expect(capabilitiesRefreshA).toHaveBeenCalledTimes(1);
         expect(cliRefreshB).toHaveBeenCalledTimes(0);
         expect(capabilitiesRefreshB).toHaveBeenCalledTimes(0);
@@ -211,13 +315,72 @@ describe('useNewSessionAvailabilityState', () => {
 
         await hook.rerender({ machine: { ...baseMachine, active: true, activeAt: Date.now() } });
         expect(cliRefreshA).toHaveBeenCalledTimes(1);
-        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({ bypassCache: true });
+        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({
+            bypassCache: true,
+            includeLoginStatusForAgentIds: ['claude', 'codex'],
+        });
         expect(capabilitiesRefreshA).toHaveBeenCalledTimes(1);
 
         await hook.rerender({ machine: { ...baseMachine, active: false } });
         await hook.rerender({ machine: { ...baseMachine, active: true, activeAt: Date.now() } });
         expect(cliRefreshA).toHaveBeenCalledTimes(2);
-        expect(cliRefreshA.mock.calls[1]?.[0]).toEqual({ bypassCache: true });
+        expect(cliRefreshA.mock.calls[1]?.[0]).toEqual({
+            bypassCache: true,
+            includeLoginStatusForAgentIds: ['claude', 'codex'],
+        });
+        expect(capabilitiesRefreshA).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-runs the initial probe refresh when the enabled agent set changes', async () => {
+        vi.resetModules();
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+
+        const machine: Machine = {
+            id: 'm1',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: Date.now(),
+            revokedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 1,
+        };
+
+        const hook = await renderHook((props: { enabledAgentIds: readonly string[] }) => useNewSessionAvailabilityState({
+            selectedMachineId: 'm1',
+            selectedMachine: machine,
+            capabilityServerId: 'server-1',
+            settings: {} as any,
+            agentType: 'claude' as any,
+            resumeSessionId: null,
+            enabledAgentIds: props.enabledAgentIds as any,
+            agentNewSessionOptionStateByAgentId: {},
+            resolvedBackendEntries: [],
+            selectedBackendEntry: null,
+            setBackendTarget: vi.fn(),
+            machines: [machine],
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings: vi.fn(),
+            allProfiles: [],
+        }), { initialProps: { enabledAgentIds: ['claude'] } });
+
+        expect(cliRefreshA).toHaveBeenCalledTimes(1);
+        expect(cliRefreshA.mock.calls[0]?.[0]).toEqual({
+            bypassCache: true,
+            includeLoginStatusForAgentIds: ['claude'],
+        });
+
+        await hook.rerender({ enabledAgentIds: ['claude', 'codex'] });
+
+        expect(cliRefreshA).toHaveBeenCalledTimes(2);
+        expect(cliRefreshA.mock.calls[1]?.[0]).toEqual({
+            bypassCache: true,
+            includeLoginStatusForAgentIds: ['claude', 'codex'],
+        });
         expect(capabilitiesRefreshA).toHaveBeenCalledTimes(2);
     });
 

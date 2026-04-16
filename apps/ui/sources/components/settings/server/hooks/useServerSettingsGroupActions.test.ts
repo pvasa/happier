@@ -217,4 +217,51 @@ describe('useServerSettingsGroupActions', () => {
         expect(setServerSelectionActiveTargetId).toHaveBeenCalled();
         expect(setRevision).toHaveBeenCalled();
     });
+
+    it('looks up same-URL target auth with serverId before switching a group', async () => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async (_serverUrl, options) => {
+            if (options?.serverId === 'server-b') {
+                return null;
+            }
+            return { token: 'token-a', secret: 'secret-a' };
+        });
+
+        const { useServerSettingsGroupActions } = await import('./useServerSettingsGroupActions');
+        const setServerSelectionActiveTargetKind = vi.fn();
+        const setServerSelectionActiveTargetId = vi.fn();
+        const setServerSelectionGroups = vi.fn();
+        const onSwitchServerById = vi.fn(async () => {});
+        const onAfterSignedOutSwitch = vi.fn();
+        const setRevision = vi.fn();
+        const sharedUrl = 'https://shared.example.test';
+        const serverA = makeServerProfile('server-a', 'Server A', sharedUrl);
+        const serverB = makeServerProfile('server-b', 'Server B', sharedUrl);
+
+        const actions = await renderHook(() => useServerSettingsGroupActions({
+            servers: [serverA, serverB],
+            activeServerId: 'server-a',
+            validServerIds: new Set(['server-a', 'server-b']),
+            authStatusByServerId: {},
+            normalizedGroupProfiles: [
+                { id: 'grp', name: 'Group', serverIds: ['server-b'], presentation: 'grouped' } as const,
+            ],
+            activeGroupId: null,
+            groupPresentation: 'grouped',
+            setRevision: setRevision as unknown as React.Dispatch<React.SetStateAction<number>>,
+            onSwitchServerById,
+            onAfterSignedOutSwitch,
+            setServerSelectionActiveTargetKind,
+            setServerSelectionActiveTargetId,
+            setServerSelectionGroups,
+        }));
+        mountedHookCleanups.push(actions.__cleanup);
+
+        await actions.onSwitchGroup({ id: 'grp', name: 'Group', serverIds: ['server-b'], presentation: 'grouped' });
+
+        expect(TokenStorage.getCredentialsForServerUrl).toHaveBeenCalledWith(sharedUrl, { serverId: 'server-b' });
+        expect(promptSignedOutServerSwitchConfirmationMock).toHaveBeenCalledTimes(1);
+        expect(onSwitchServerById).toHaveBeenCalledWith('server-b');
+        expect(onAfterSignedOutSwitch).toHaveBeenCalledTimes(1);
+    });
 });

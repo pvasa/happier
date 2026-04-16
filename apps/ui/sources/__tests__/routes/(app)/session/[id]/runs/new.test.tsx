@@ -41,6 +41,7 @@ let sessionMachineReachabilityMock: any = {
     machineRpcTargetAvailable: true,
 };
 let resumeCapabilityOptionsMock: any = {};
+const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => hydrateReady);
 const resumeSessionSpy = vi.fn(async () => ({ type: 'success', sessionId: 'session-1' }));
 let activeServerSnapshotMock: any = { serverId: 'server-active', serverUrl: 'http://server-active.test' };
 const useMachineCapabilitiesCacheSpy = vi.fn<(params: any) => { state: any; refresh: any }>();
@@ -198,7 +199,8 @@ installSessionRouteCommonModuleMocks({
 vi.mock('@/components/ui/layout/layout', () => ({ layout: { maxWidth: 999 } }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => hydrateReady,
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
 }));
 
 vi.mock('@/sync/store/hooks', async (importOriginal) => {
@@ -349,6 +351,7 @@ describe('Session New Run Screen', () => {
             machineRpcTargetAvailable: true,
         };
         resumeCapabilityOptionsMock = {};
+        hydrateSpy.mockClear();
         resumeSessionSpy.mockClear();
         useMachineCapabilitiesCacheSpy.mockClear();
         sessionServerIdStore.reset();
@@ -366,9 +369,10 @@ describe('Session New Run Screen', () => {
 
     it('renders a loading state while session hydration is pending', async () => {
         hydrateReady = false;
-        localSearchParamsMock = { id: 'session-1', intent: 'review' };
+        localSearchParamsMock = { id: 'session-1', intent: 'review', serverId: 'server-b' };
         const screen = await renderNewRunScreen();
         expect(screen.findAllByType('ActivityIndicator').length).toBeGreaterThan(0);
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionNewRunScreen.hydrate', { serverId: 'server-b' });
         hydrateReady = true;
     });
 
@@ -453,13 +457,14 @@ describe('Session New Run Screen', () => {
 
     it('falls back to the parent session route when the launcher is closed without back history', async () => {
         navigationCanGoBackSpy.mockReturnValue(false);
+        localSearchParamsMock = { id: 'session-1', intent: 'review', serverId: 'server-b' };
         const screen = await renderNewRunScreen();
 
         await act(async () => {
             await screen.pressByTestIdAsync('execution-run-new-cancel-button');
         });
 
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
     });
 
     it('resumes an inactive resumable session before starting a Subagent', async () => {

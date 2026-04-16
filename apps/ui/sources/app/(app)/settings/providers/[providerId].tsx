@@ -949,7 +949,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                     ) : null}
                     <Item
                         title={t('settingsProviders.connectedServiceTitle')}
-                        subtitle={core.connectedService.name}
+                        subtitle={core.uiConnectedService.label}
                         icon={<Ionicons name="cloud-outline" size={29} color={theme.colors.textSecondary} />}
                         mode="info"
                     />

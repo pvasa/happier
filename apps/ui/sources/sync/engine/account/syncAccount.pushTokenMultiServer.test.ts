@@ -112,4 +112,83 @@ describe('registerPushTokenIfAvailable (multi-server)', () => {
             clientServerUrl: 'https://company.example.test',
         });
     });
+
+    it('does not reuse another same-origin profile credentials when only one alternate profile is authenticated', async () => {
+        vi.resetModules();
+        const Notifications = await import('expo-notifications');
+        vi.mocked(Notifications.getPermissionsAsync).mockResolvedValue({
+            status: PermissionStatus.GRANTED,
+            expires: 'never',
+            granted: true,
+            canAskAgain: false,
+        } satisfies Awaited<ReturnType<typeof Notifications.getPermissionsAsync>>);
+        vi.mocked(Notifications.requestPermissionsAsync).mockResolvedValue({
+            status: PermissionStatus.GRANTED,
+            expires: 'never',
+            granted: true,
+            canAskAgain: false,
+        } satisfies Awaited<ReturnType<typeof Notifications.requestPermissionsAsync>>);
+        vi.mocked(Notifications.getExpoPushTokenAsync).mockResolvedValue({
+            type: 'expo',
+            data: 'ExponentPushToken[secret-token]',
+        } satisfies Awaited<ReturnType<typeof Notifications.getExpoPushTokenAsync>>);
+
+        const fetchSpy = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+            ok: true,
+            json: async () => ({ success: true }),
+        }));
+        vi.stubGlobal('fetch', fetchSpy as unknown as typeof fetch);
+
+        const state = {
+            activeServerId: 'server-a',
+            profiles: [
+                { id: 'server-a', serverUrl: 'https://shared.example.test', name: 'Primary', createdAt: 0, updatedAt: 0, lastUsedAt: 0 },
+                { id: 'server-b', serverUrl: 'https://shared.example.test', name: 'Alternate', createdAt: 0, updatedAt: 0, lastUsedAt: 0 },
+            ],
+        };
+
+        vi.doMock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+            const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
+            return {
+                ...actual,
+                listServerProfiles: () => state.profiles,
+                getActiveServerSnapshot: () => ({
+                    serverId: state.activeServerId,
+                    serverUrl: 'https://shared.example.test',
+                    generation: 1,
+                }),
+            };
+        });
+
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (_serverUrl, options) => {
+            if (options?.serverId === 'server-a') {
+                return { token: 't_primary', secret: 's' };
+            }
+            if (!options?.serverId) {
+                return { token: 't_primary', secret: 's' };
+            }
+            return null;
+        });
+
+        const messages: string[] = [];
+        const log = { log: (message: string) => messages.push(message) };
+
+        const { registerPushTokenIfAvailable } = await import('./syncAccount');
+        await registerPushTokenIfAvailable({
+            credentials: { token: 't_primary', secret: 's' } satisfies AuthCredentials,
+            log,
+        });
+
+        const registerCalls = fetchSpy.mock.calls.filter(([, init]) => ((init as RequestInit | undefined)?.method ?? 'GET') === 'POST');
+        expect(registerCalls).toHaveLength(1);
+        const [url, init] = registerCalls[0]!;
+        expect(String(url)).toBe('https://shared.example.test/v1/push-tokens');
+        expect((init as RequestInit | undefined)?.headers).toMatchObject({
+            Authorization: 'Bearer t_primary',
+        });
+        expect(messages.join('\n')).not.toContain('ExponentPushToken[secret-token]');
+
+        vi.doUnmock('@/sync/domains/server/serverProfiles');
+    });
 });

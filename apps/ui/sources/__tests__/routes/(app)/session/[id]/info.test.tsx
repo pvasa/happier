@@ -11,6 +11,7 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let mockSessionId = 'session-1';
+let mockServerId: string | undefined;
 let mockSession: any = null;
 let isDataReady = true;
 let sessionHydrated = true;
@@ -31,6 +32,7 @@ let hideInactiveSessions = false;
 let pinnedSessionKeysV1: unknown = null;
 let resolvedServerId = 'server-1';
 let sessionHandoffFeatureEnabled = false;
+let automationsEnabled = false;
 let serverFeaturesSnapshot: any = {
     status: 'ready',
     features: {
@@ -75,6 +77,7 @@ const AnimatedValue = vi.hoisted(
 );
 const mockResolveAgentIdFromFlavor = vi.fn<(flavor: string | null | undefined) => string | undefined>(() => 'claude');
 const useSessionSpy = vi.fn<(sessionId: string) => any>(() => mockSession);
+const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
 
 const routerMock = createExpoRouterMock({
     router: {
@@ -85,6 +88,7 @@ const routerMock = createExpoRouterMock({
     },
     params: () => ({
         id: mockSessionId,
+        serverId: mockServerId,
     }),
 });
 
@@ -153,7 +157,8 @@ vi.mock('@/sync/ops/sessionMachineTarget', () => ({
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => sessionHydrated,
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
 }));
 vi.mock('@/utils/navigation/safeRouterBack', () => ({
     safeRouterBack: (...args: any[]) => safeRouterBackSpy(...args),
@@ -176,6 +181,7 @@ vi.mock('@/sync/ops', () => ({
     sessionDelete: vi.fn(),
     sessionRename: vi.fn(),
     sessionStop: sessionStopSpy,
+    sessionStopWithServerScope: sessionStopSpy,
 }));
 vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/agents/catalog/catalog')>();
@@ -187,7 +193,9 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
     };
 });
 vi.mock('@/hooks/session/useSessionSharingSupport', () => ({ useSessionSharingSupport: () => false }));
-vi.mock('@/hooks/server/useAutomationsSupport', () => ({ useAutomationsSupport: () => ({ enabled: false }) }));
+vi.mock('@/hooks/server/useAutomationsSupport', () => ({
+    useAutomationsSupport: () => ({ enabled: automationsEnabled }),
+}));
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => {
         if (featureId === 'sessions.handoff') {
@@ -262,6 +270,7 @@ vi.mock('@/components/ui/layout/layout', () => ({ layout: { screenPaddingHorizon
 describe('/session/[id]/info', () => {
     beforeEach(() => {
         mockSessionId = 'session-1';
+        mockServerId = undefined;
         mockSession = null;
         isDataReady = true;
         sessionHydrated = true;
@@ -278,6 +287,7 @@ describe('/session/[id]/info', () => {
         resolvePreferredServerIdForSessionIdSpy.mockClear();
         usePreferredServerIdForSessionSpy.mockClear();
         machineRpcWithServerScopeSpy.mockClear();
+        hydrateSpy.mockClear();
         resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue(resolvedServerId);
         resolvePreferredServerIdForSessionIdSpy.mockImplementation(() => resolvedServerId);
         usePreferredServerIdForSessionSpy.mockImplementation(() => resolvedServerId);
@@ -286,6 +296,7 @@ describe('/session/[id]/info', () => {
         pinnedSessionKeysV1 = null;
         resolvedServerId = 'server-1';
         sessionHandoffFeatureEnabled = false;
+        automationsEnabled = false;
         serverFeaturesSnapshot = {
             status: 'ready',
             features: {
@@ -333,8 +344,10 @@ describe('/session/[id]/info', () => {
 
     it('shows loading while the route hydration is still in progress', async () => {
         sessionHydrated = false;
+        mockServerId = 'server-b';
         const screen = await renderInfoScreen();
         expect(screen.getTextContent()).toContain('common.loading');
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionInfoRoute.ensureSessionVisible', { serverId: 'server-b' });
     });
 
     it('fails open and renders the session when the record exists even if global hydration is still in progress', async () => {
@@ -728,6 +741,7 @@ describe('/session/[id]/info', () => {
     });
 
     it('always shows the View session log action even when developer mode is disabled', async () => {
+        mockServerId = 'server-b';
         mockSession = {
             id: 'session-1',
             active: false,
@@ -740,6 +754,27 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         expect(screen.findByTestId('sessionInfo.viewSessionLogTitle')).toBeTruthy();
+        screen.pressByTestId('sessionInfo.viewSessionLogTitle');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/log?serverId=server-b');
+    });
+
+    it('routes session automations through the current route scope', async () => {
+        mockServerId = 'server-b';
+        automationsEnabled = true;
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+        screen.pressByTestId('sessionInfo.automationsTitle');
+
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1/automations?serverId=server-b');
     });
 
     it('shows the session log path row when a sessionLogPath is present even when developer mode is disabled', async () => {
@@ -759,7 +794,8 @@ describe('/session/[id]/info', () => {
         expect(screen.findByTestId('sessionLog.logPathCopyLabel')).toBeTruthy();
     });
 
-    it('offers to archive after stopping an unpinned session when inactive sessions are hidden', async () => {
+    it('stops without archiving even when inactive sessions are hidden and unpinned', async () => {
+        mockServerId = 'server-b';
         hideInactiveSessions = true;
         pinnedSessionKeysV1 = [];
         mockSession = {
@@ -779,14 +815,14 @@ describe('/session/[id]/info', () => {
         const actions = modalAlertSpy.mock.calls[0][2];
         await actions[1].onPress();
 
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1');
-        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
-        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: null });
+        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
+        expect(sessionArchiveSpy).not.toHaveBeenCalled();
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
             router: expect.any(Object),
-            fallbackHref: '/session/session-1',
+            fallbackHref: '/session/session-1?serverId=server-b',
         });
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(2, {
             router: expect.any(Object),
@@ -794,7 +830,35 @@ describe('/session/[id]/info', () => {
         });
     });
 
+    it('stops with the cached owning server id when route scope and preferred scope are unavailable', async () => {
+        mockServerId = undefined;
+        hideInactiveSessions = true;
+        pinnedSessionKeysV1 = [];
+        resolvedServerId = 'server-cache-info';
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-cache-info');
+        usePreferredServerIdForSessionSpy.mockReturnValue(null);
+        mockSession = {
+            id: 'session-1',
+            active: true,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+        screen.pressByTestId('sessionInfo.stopSession');
+
+        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+        const actions = modalAlertSpy.mock.calls[0][2];
+        await actions[1].onPress();
+
+        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-cache-info' });
+    });
+
     it('stops without prompting to archive when the session is pinned', async () => {
+        mockServerId = 'server-b';
         hideInactiveSessions = true;
         pinnedSessionKeysV1 = ['server-1:session-1'];
         resolvedServerId = 'server-1';
@@ -815,14 +879,14 @@ describe('/session/[id]/info', () => {
         const actions = modalAlertSpy.mock.calls[0][2];
         await actions[1].onPress();
 
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1');
+        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
         expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(sessionArchiveSpy).not.toHaveBeenCalled();
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
             router: expect.any(Object),
-            fallbackHref: '/session/session-1',
+            fallbackHref: '/session/session-1?serverId=server-b',
         });
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(2, {
             router: expect.any(Object),
@@ -831,6 +895,7 @@ describe('/session/[id]/info', () => {
     });
 
     it('archives an inactive session and exits via the safe back helper', async () => {
+        mockServerId = 'server-b';
         mockSession = {
             id: 'session-1',
             active: false,
@@ -849,16 +914,58 @@ describe('/session/[id]/info', () => {
         const actions = modalAlertSpy.mock.calls[0][2];
         await actions[1].onPress();
 
-        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: null });
+        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
             router: expect.any(Object),
-            fallbackHref: '/session/session-1',
+            fallbackHref: '/session/session-1?serverId=server-b',
         });
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(2, {
             router: expect.any(Object),
             fallbackHref: '/',
         });
+    });
+
+    it('archives an active session by stopping it first and then archiving it', async () => {
+        mockServerId = 'server-b';
+        mockSession = {
+            id: 'session-1',
+            active: true,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+        };
+
+        const screen = await renderInfoScreen();
+        screen.pressByTestId('sessionInfo.archiveSession');
+
+        expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+        const actions = modalAlertSpy.mock.calls[0][2];
+        await actions[1].onPress();
+
+        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not offer archive for active shared sessions even when the viewer has admin access', async () => {
+        mockServerId = 'server-b';
+        mockSession = {
+            id: 'session-1',
+            active: true,
+            accessLevel: 'admin',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+            archivedAt: null,
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('sessionInfo.archiveSession')).toBeNull();
     });
 });

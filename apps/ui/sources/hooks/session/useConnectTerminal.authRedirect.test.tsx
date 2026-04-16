@@ -241,6 +241,78 @@ describe('useConnectTerminal unauthenticated flow', () => {
         expect(routerReplaceSpy).toHaveBeenCalledWith('/');
     });
 
+    it('does not switch to a different loopback server URL when the active server is already loopback', async () => {
+        routerReplaceSpy.mockClear();
+        setPendingTerminalConnectSpy.mockClear();
+        modalAlertSpy.mockClear();
+        upsertActivateAndSwitchServerSpy.mockClear();
+
+        authCredentials = null;
+        activeServerUrl = 'http://127.0.0.1:43005';
+
+        const { useConnectTerminal } = await import('./useConnectTerminal');
+
+        let hookApi: ReturnType<typeof useConnectTerminal> | null = null;
+        function Probe() {
+            hookApi = useConnectTerminal();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        let result = true;
+        await act(async () => {
+            result = await hookApi!.processAuthUrl('happier://terminal?key=abc123&server=http%3A%2F%2F127.0.0.1%3A3005');
+        });
+
+        expect(result).toBe(false);
+        expect(upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
+        expect(setPendingTerminalConnectSpy).toHaveBeenCalledWith({
+            publicKeyB64Url: 'abc123',
+            serverUrl: 'http://127.0.0.1:43005',
+        });
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/');
+    });
+
+    it('allows loopback server overrides when terminal connect explicitly opts in', async () => {
+        routerReplaceSpy.mockClear();
+        setPendingTerminalConnectSpy.mockClear();
+        modalAlertSpy.mockClear();
+        upsertActivateAndSwitchServerSpy.mockClear();
+
+        authCredentials = null;
+        activeServerUrl = 'http://127.0.0.1:43005';
+
+        const { useConnectTerminal } = await import('./useConnectTerminal');
+
+        let hookApi: ReturnType<typeof useConnectTerminal> | null = null;
+        function Probe() {
+            hookApi = useConnectTerminal({ allowLoopbackServerOverride: true });
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        let result = true;
+        await act(async () => {
+            result = await hookApi!.processAuthUrl('happier://terminal?key=abc123&server=http%3A%2F%2F127.0.0.1%3A3005');
+        });
+
+        expect(result).toBe(false);
+        expect(upsertActivateAndSwitchServerSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                serverUrl: 'http://127.0.0.1:3005',
+                source: 'url',
+                scope: 'device',
+            }),
+        );
+        expect(setPendingTerminalConnectSpy).toHaveBeenCalledWith({
+            publicKeyB64Url: 'abc123',
+            serverUrl: 'http://127.0.0.1:3005',
+        });
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/');
+    });
+
     it('uses the content private key in the v2 response bundle for dataKey credentials', async () => {
         authApproveSpy.mockClear();
         authApproveSpy.mockResolvedValue('approved');

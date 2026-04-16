@@ -702,8 +702,64 @@ describe('useCreateNewSession (worktree gating)', () => {
         expect(detachWorkspaceLocationMock).not.toHaveBeenCalled();
         expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
         expect(clearNewSessionDraftMock).toHaveBeenCalledTimes(1);
-        expect(routerReplace).toHaveBeenCalledWith('/session/session-created', expect.anything());
+        expect(routerReplace).toHaveBeenCalledWith('/session/session-created?serverId=api.happier.dev', expect.anything());
         expect(setIsCreating).not.toHaveBeenCalledWith(false);
+    });
+
+    it('preserves explicit server scope when navigating to a newly created session', async () => {
+        const { useCreateNewSession } = await import('./useCreateNewSession');
+        const typecheck = useCreateNewSession;
+
+        const routerReplace = vi.fn();
+        const params = {
+            router: { push: vi.fn(), replace: routerReplace },
+            selectedMachineId: 'machine-1',
+            selectedPath: '/repo',
+            selectedMachine: { id: 'machine-1', metadata: {} },
+            setIsCreating: vi.fn(),
+            setIsResumeSupportChecking: vi.fn(),
+            settings: {
+                ...testSettingsDefaults,
+                experiments: true,
+                featureToggles: { 'sessions.direct': true },
+            },
+            useProfiles: false,
+            selectedProfileId: null,
+            profileMap: new Map(),
+            recentMachinePaths: [],
+            agentType: 'codex' as const,
+            permissionMode: 'default' as const,
+            modelMode: 'auto' as const,
+            sessionPrompt: 'Ship the scoped follow-up fix',
+            resumeSessionId: '',
+            agentNewSessionOptions: null,
+            machineEnvPresence: {
+                isPreviewEnvSupported: true,
+                isLoading: false,
+                meta: {},
+            } as unknown as Parameters<typeof typecheck>[0]['machineEnvPresence'],
+            secrets: [],
+            secretBindingsByProfileId: {},
+            selectedSecretIdByProfileIdByEnvVarName: {},
+            sessionOnlySecretValueByProfileIdByEnvVarName: {},
+            selectedMachineCapabilities: null,
+            targetServerId: 'server-a',
+            allowedTargetServerIds: ['server-a'],
+        } satisfies Parameters<typeof typecheck>[0];
+
+        const hook = await renderHook(() => useCreateNewSession(params));
+        await act(async () => {
+            await hook.handleCreateSession();
+        });
+
+        expect(routerReplace).toHaveBeenCalledWith('/session/session-created?serverId=server-a', expect.anything());
+        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', {
+            forceRefresh: true,
+            serverId: 'server-a',
+        });
+        expect(ensureSessionVisibleForMessageRouteMock.mock.invocationCallOrder[0]).toBeLessThan(
+            routerReplace.mock.invocationCallOrder[0],
+        );
     });
 
     it('removes the created worktree when spawn fails without linked workspace context', async () => {
@@ -1263,7 +1319,10 @@ describe('useCreateNewSession (worktree gating)', () => {
         expect(spawnedOptions?.workspaceLocationId).toBeUndefined();
         expect(spawnedOptions?.workspaceCheckoutId).toBeUndefined();
         expect(updateSessionDraftMock).not.toHaveBeenCalled();
-        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', { forceRefresh: true });
+        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', {
+            forceRefresh: true,
+            serverId: 'api.happier.dev',
+        });
         expect(routerReplace).not.toHaveBeenCalled();
         expect(disableDraftPersistence).not.toHaveBeenCalled();
         expect(clearNewSessionDraftMock).not.toHaveBeenCalled();
@@ -1388,8 +1447,101 @@ describe('useCreateNewSession (worktree gating)', () => {
         });
         expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
         expect(clearNewSessionDraftMock).toHaveBeenCalledTimes(1);
-        expect(routerReplace).toHaveBeenCalledWith('/session/session-created?recoveryDataId=temp-recovery-1', expect.anything());
-        expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', 'afterCreated failed');
+        expect(routerReplace).toHaveBeenCalledWith(
+            '/session/session-created?serverId=api.happier.dev&recoveryDataId=temp-recovery-1',
+            expect.anything(),
+        );
+        expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', expect.any(String));
+    });
+
+    it('hydrates and routes created-session recovery with explicit server scope when follow-up fails', async () => {
+        const { useCreateNewSession } = await import('./useCreateNewSession');
+        const { Modal } = await import('@/modal');
+
+        for (const key of Object.keys(storedSessionsState.sessions)) {
+            delete storedSessionsState.sessions[key];
+        }
+        ensureSessionVisibleForMessageRouteMock.mockImplementationOnce(async (sessionId?: unknown) => {
+            const hydratedSessionId = String(sessionId ?? '').trim();
+            if (!hydratedSessionId) {
+                return;
+            }
+
+            storedSessionsState.sessions[hydratedSessionId] = {
+                id: hydratedSessionId,
+                createdAt: 1,
+                updatedAt: 2,
+                seq: 0,
+                active: true,
+                activeAt: 2,
+                encryptionMode: 'plain',
+                metadataVersion: 0,
+                metadata: null,
+                agentStateVersion: 1,
+                agentState: null,
+            } as Session;
+        });
+
+        const routerReplace = vi.fn();
+        const disableDraftPersistence = vi.fn();
+        const params = {
+            router: { push: vi.fn(), replace: routerReplace },
+            selectedMachineId: 'machine-1',
+            selectedPath: '/repo',
+            selectedMachine: { id: 'machine-1', metadata: {} },
+            setIsCreating: vi.fn(),
+            setIsResumeSupportChecking: vi.fn(),
+            settings: testSettingsDefaults,
+            useProfiles: false,
+            selectedProfileId: null,
+            profileMap: new Map(),
+            recentMachinePaths: [],
+            agentType: 'codex' as const,
+            permissionMode: 'default' as const,
+            modelMode: 'auto' as const,
+            sessionPrompt: 'Recover this first message',
+            resumeSessionId: '',
+            agentNewSessionOptions: null,
+            machineEnvPresence: {
+                isPreviewEnvSupported: false,
+                isLoading: false,
+                meta: {},
+            } as unknown as Parameters<typeof useCreateNewSession>[0]['machineEnvPresence'],
+            secrets: [],
+            secretBindingsByProfileId: {},
+            selectedSecretIdByProfileIdByEnvVarName: {},
+            sessionOnlySecretValueByProfileIdByEnvVarName: {},
+            selectedMachineCapabilities: null,
+            targetServerId: 'server-a',
+            allowedTargetServerIds: ['server-a'],
+            disableDraftPersistence,
+        } satisfies Parameters<typeof useCreateNewSession>[0];
+
+        const hook = await renderHook(() => useCreateNewSession(params));
+        await act(async () => {
+            await hook.handleCreateSession({
+                initialMessage: 'skip',
+                afterCreated: async () => {
+                    const error = new Error('afterCreated failed');
+                    Object.assign(error, {
+                        recoverableFollowUpPayload: {
+                            draftText: 'Recover this first message',
+                        },
+                    });
+                    throw error;
+                },
+            });
+        });
+
+        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', {
+            forceRefresh: true,
+            serverId: 'server-a',
+        });
+        expect(routerReplace).toHaveBeenCalledWith(
+            '/session/session-created?serverId=server-a',
+            expect.anything(),
+        );
+        expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', expect.any(String));
     });
 
     it('preserves the recoverable created-session payload when afterCreated fails before the created session hydrates locally', async () => {

@@ -12,7 +12,7 @@ import { useAuth } from '@/auth/context/AuthContext';
 import { isPublicRouteForUnauthenticated } from '@/auth/routing/authRouting';
 import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
 import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
-import { normalizeServerUrl, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
+import { isSameServerUrl, normalizeServerUrl, upsertActivateAndSwitchServer } from '@/sync/domains/server/activeServerSwitch';
 import { getPendingTerminalConnect } from '@/sync/domains/pending/pendingTerminalConnect';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Text } from '@/components/ui/text/Text';
@@ -20,6 +20,7 @@ import { bootstrapActiveServerFromWebLocation, readWebServerUrlOverrideFromLocat
 import { buildTerminalConnectWebHref } from '@/utils/path/terminalConnectUrl';
 import { useWebInitialRouteReconcile } from '@/hooks/ui/useWebInitialRouteReconcile';
 import { useHappierVoiceSupport } from '@/hooks/server/useHappierVoiceSupport';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import {
     createFriendsStackScreenOptions,
     createInboxStackScreenOptions,
@@ -31,7 +32,13 @@ import { useNotificationResponseRouting } from '@/activity/notifications/runtime
 
 const bootstrappedWebServerOverride = bootstrapActiveServerFromWebLocation({ scope: 'device' });
 
-function readLegacySessionIdFromWebLocation(): Readonly<{ sessionId: string; cleanedRelativeUrl: string }> | null {
+function readLegacySessionIdFromWebLocation(): Readonly<{
+    sessionId: string;
+    serverId: string | null;
+    messageId: string | null;
+    jumpChildId: string | null;
+    cleanedRelativeUrl: string;
+}> | null {
     if (typeof window === 'undefined') return null;
     if (typeof window.location?.href !== 'string') return null;
 
@@ -43,10 +50,20 @@ function readLegacySessionIdFromWebLocation(): Readonly<{ sessionId: string; cle
         const rawSessionId = (current.searchParams.get('id') ?? '').trim();
         if (!rawSessionId) return null;
 
+        const rawServerId = (current.searchParams.get('serverId') ?? '').trim();
+        const rawMessageId = (current.searchParams.get('messageId') ?? '').trim();
+        const rawJumpChildId = (current.searchParams.get('jumpChildId') ?? '').trim();
+
         current.searchParams.delete('id');
         const search = current.searchParams.toString();
         const cleanedRelativeUrl = `${current.pathname}${search ? `?${search}` : ''}${current.hash ?? ''}`;
-        return { sessionId: rawSessionId, cleanedRelativeUrl };
+        return {
+            sessionId: rawSessionId,
+            serverId: rawServerId || null,
+            messageId: rawMessageId || null,
+            jumpChildId: rawJumpChildId || null,
+            cleanedRelativeUrl,
+        };
     } catch {
         return null;
     }
@@ -75,8 +92,8 @@ export default function RootLayout() {
         if (!desired) return;
 
         const current = normalizeServerUrl(getActiveServerUrl());
-        if (desired === current) {
-            if (bootstrappedWebServerOverride && bootstrappedWebServerOverride.serverUrl === desired) {
+        if (isSameServerUrl(desired, current)) {
+            if (bootstrappedWebServerOverride && isSameServerUrl(bootstrappedWebServerOverride.serverUrl, desired)) {
                 fireAndForget(auth.refreshFromActiveServer(), { tag: 'RootLayout.webServerOverrideBootstrapped.refreshAuth' });
             }
             try {
@@ -122,7 +139,15 @@ export default function RootLayout() {
             // ignore
         }
 
-        router.replace(`/session/${encodeURIComponent(legacy.sessionId)}`);
+        const suffix = legacy.messageId ? `/message/${encodeURIComponent(legacy.messageId)}` : '';
+        router.replace(buildScopedSessionRouteHref({
+            sessionId: legacy.sessionId,
+            serverId: legacy.serverId,
+            suffix,
+            query: {
+                jumpChildId: legacy.jumpChildId,
+            },
+        }));
     }, [auth.isAuthenticated]);
 
     const shouldRedirect = !auth.isAuthenticated && !isPublicRouteForUnauthenticated(segments);

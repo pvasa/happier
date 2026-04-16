@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AppVariant } from '@/sync/runtime/appVariant';
 
-import { buildHappierCliInstallCommand } from './happierCliInstallCommand';
+import { buildHappierCliCommandName, buildHappierCliInstallCommand } from './happierCliInstallCommand';
 
 describe('buildHappierCliInstallCommand', () => {
     it('uses the preview installer command for preview builds', () => {
@@ -25,5 +25,12 @@ describe('buildHappierCliInstallCommand', () => {
         expect(buildHappierCliInstallCommand({ appVariant, distTagOverride: 'next' })).toBe('curl -fsSL https://happier.dev/install | bash -s -- --channel preview');
         expect(buildHappierCliInstallCommand({ appVariant, distTagOverride: 'preview' })).toBe('curl -fsSL https://happier.dev/install | bash -s -- --channel preview');
         expect(buildHappierCliInstallCommand({ appVariant, distTagOverride: null })).toBe('curl -fsSL https://happier.dev/install | bash');
+    });
+
+    it('uses the preview CLI shim for preview-channel manual commands', () => {
+        expect(buildHappierCliCommandName({ appVariant: 'preview' })).toBe('hprev');
+        expect(buildHappierCliCommandName({ appVariant: 'development' })).toBe('hprev');
+        expect(buildHappierCliCommandName({ appVariant: 'production', distTagOverride: 'next' })).toBe('hprev');
+        expect(buildHappierCliCommandName({ appVariant: 'production' })).toBe('happier');
     });
 });

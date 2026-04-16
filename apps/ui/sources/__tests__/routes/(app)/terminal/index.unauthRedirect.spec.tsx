@@ -71,7 +71,7 @@ describe('TerminalScreen unauthenticated redirect', () => {
         expect(replaceMock).toHaveBeenCalledWith('/');
     });
 
-    it('ignores loopback server overrides and keeps the active server when redirecting', async () => {
+    it('honors loopback server overrides when redirecting terminal auth', async () => {
         searchParamsServerValue = 'http://localhost:53288';
 
         const Screen = (await import('@/app/(app)/terminal/index')).default;
@@ -82,7 +82,7 @@ describe('TerminalScreen unauthenticated redirect', () => {
 
         expect(setPendingMock).toHaveBeenCalledWith({
             publicKeyB64Url: 'abc123',
-            serverUrl: 'https://api.happier.dev',
+            serverUrl: 'http://localhost:53288',
         });
         expect(replaceMock).toHaveBeenCalledWith('/');
     });

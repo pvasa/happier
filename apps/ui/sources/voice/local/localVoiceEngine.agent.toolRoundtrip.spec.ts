@@ -198,8 +198,7 @@ describe('local voice engine agent tool roundtrip', () => {
     expect(toolResultsCarrier?.content).toContain('"agentId":"claude"');
     expect(toolResultsCarrier?.content).toContain('"label":"Claude"');
     expect(toolResultsCarrier?.content).toContain('"summary":"Available backends:');
-    expect(toolResultsCarrier?.content).not.toContain('connectedServiceName');
-    expect(toolResultsCarrier?.content).not.toContain('connectedServiceId');
+    expect(toolResultsCarrier?.content).not.toContain('uiConnectedService');
     expect(toolResultsCarrier?.content).not.toContain('flavorAliases');
     expect(toolResultsCarrier?.content).not.toContain('supportsModelSelection');
     expect(toolResultsCarrier?.content.length).toBeLessThan(1200);

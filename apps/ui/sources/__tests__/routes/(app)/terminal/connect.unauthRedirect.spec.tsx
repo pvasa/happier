@@ -9,6 +9,7 @@ import { installTerminalRouteCommonModuleMocks } from './terminalRouteTestHelper
 const replaceMock = vi.fn();
 const setPendingMock = vi.fn((_pending: { publicKeyB64Url: string; serverUrl: string }) => {});
 const upsertActivateAndSwitchServerMock = vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth?: unknown }) => true);
+let activeServerUrl = 'https://api.happier.dev';
 
 installTerminalRouteCommonModuleMocks({
     router: async () =>
@@ -33,7 +34,7 @@ vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerUrl: () => 'https://api.happier.dev',
+    getActiveServerUrl: () => activeServerUrl,
 }));
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
@@ -52,6 +53,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         replaceMock.mockClear();
         setPendingMock.mockClear();
         upsertActivateAndSwitchServerMock.mockClear();
+        activeServerUrl = 'https://api.happier.dev';
         (globalThis as any).window = {
             location: {
                 hash: '#key=abc123&server=https%3A%2F%2Fcompany.example.test',
@@ -75,6 +77,32 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         });
         expect(upsertActivateAndSwitchServerMock).toHaveBeenCalledWith({
             serverUrl: 'https://company.example.test',
+            source: 'url',
+            scope: 'device',
+            refreshAuth: undefined,
+        });
+        expect(replaceMock).toHaveBeenCalledWith('/');
+    });
+
+    it('honors loopback server overrides when redirecting terminal auth', async () => {
+        const Screen = (await import('@/app/(app)/terminal/connect')).default;
+        activeServerUrl = 'http://127.0.0.1:43005';
+        (globalThis as any).window.location = {
+            hash: '#key=abc123&server=http%3A%2F%2F127.0.0.1%3A3005',
+            pathname: '/terminal/connect',
+            search: '',
+            href: 'https://ui.example.test/terminal/connect#key=abc123&server=http%3A%2F%2F127.0.0.1%3A3005',
+        };
+
+        await renderScreen(<Screen />);
+        await act(async () => {});
+
+        expect(setPendingMock).toHaveBeenCalledWith({
+            publicKeyB64Url: 'abc123',
+            serverUrl: 'http://127.0.0.1:3005',
+        });
+        expect(upsertActivateAndSwitchServerMock).toHaveBeenCalledWith({
+            serverUrl: 'http://127.0.0.1:3005',
             source: 'url',
             scope: 'device',
             refreshAuth: undefined,

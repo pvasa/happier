@@ -1,5 +1,6 @@
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storage';
+import type { StorageState } from '@/sync/store/types';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -34,14 +35,14 @@ export function resolveServerIdForSessionIdFromSessionListCache(
     if (!Array.isArray(items)) continue;
     for (const item of items) {
       if (!item || item.type !== 'session') continue;
-      if (normalizeId((item as any)?.session?.id) === sid) return normalizeId(serverId) || null;
+      if (normalizeId(item.session.id) === sid) return normalizeId(serverId) || null;
     }
   }
   return null;
 }
 
 export function resolveServerIdForSessionIdFromLocalCache(sessionId: string): string | null {
-  const state = storage.getState() as any;
+  const state: StorageState = storage.getState();
   return resolveServerIdForSessionIdFromLocalState(
     {
       sessions: state?.sessions ?? null,

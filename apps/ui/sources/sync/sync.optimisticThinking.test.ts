@@ -90,6 +90,8 @@ function createFallbackSafeSessionRpcErrors(): Error[] {
         new RpcError('Method not found', RPC_ERROR_CODES.METHOD_NOT_FOUND),
         new Error('Socket connect timeout'),
         new Error('connect_error: legacy daemon reconnecting'),
+        new Error('read ECONNRESET'),
+        new Error('connect ECONNREFUSED 127.0.0.1:3005'),
     ];
 }
 
@@ -545,6 +547,59 @@ describe('sync.sendMessage optimistic thinking', () => {
             }),
             expect.anything(),
         );
+    });
+
+    it('retries pending message commits with plaintext envelopes for plaintext sessions', async () => {
+        vi.useFakeTimers();
+        try {
+            const sessionId = 's_plain_pending_retry';
+            storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);
+
+            const getSessionEncryption = vi.fn(() => null);
+            const encryption = {
+                getSessionEncryption,
+            } as unknown as Encryption;
+
+            const emitWithAck = vi.fn()
+                .mockImplementationOnce(async () => {
+                    throw new Error('ack timeout');
+                })
+                .mockImplementationOnce(async () => ({
+                    ok: true,
+                    id: 'm_plain_retry_1',
+                    seq: 1,
+                    localId: null,
+                    didWrite: true,
+                })) as any;
+
+            const { sync } = await import('./sync');
+            sync.encryption = encryption as any;
+            vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+            sync.setMessageTransport({
+                emitWithAck,
+                send: vi.fn(),
+            });
+
+            await sync.sendMessage(sessionId, 'hello');
+            expect(storage.getState().sessionPending[sessionId]?.messages?.length ?? 0).toBe(1);
+
+            await vi.advanceTimersByTimeAsync(1_000);
+            await Promise.resolve();
+
+            expect(getSessionEncryption).not.toHaveBeenCalled();
+            expect(emitWithAck).toHaveBeenCalledTimes(2);
+            expect(emitWithAck).toHaveBeenLastCalledWith(
+                'message',
+                expect.objectContaining({
+                    sid: sessionId,
+                    message: expect.objectContaining({ t: 'plain', v: expect.any(Object) }),
+                }),
+                expect.anything(),
+            );
+            expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('includes metaOverrides (e.g. meta.happier) in the outbound rawRecord meta', async () => {

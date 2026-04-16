@@ -6,6 +6,7 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -110,7 +111,7 @@ installSessionShellCommonModuleMocks({
             agentState: {},
         };
 
-        return {
+        return createStorageModuleStub({
             storage: {
                 getState: () => ({
                     sessions: { s1: session },
@@ -158,7 +159,7 @@ installSessionShellCommonModuleMocks({
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
             useAutomations: () => [],
             useMachine: () => null,
-        };
+        });
     },
 });
 
@@ -425,34 +426,32 @@ describe('SessionView (right pane auto-open)', () => {
         await screen.unmount();
     });
 
-    it('fetches pending messages once when the session opens with a pending queue rendered', async () => {
+    it('re-fetches pending messages when the session view remounts with a pending queue rendered', async () => {
         const { PendingMessagesTranscriptBlock } = await import('@/components/sessions/pending/PendingMessagesTranscriptBlock');
         const { SessionView } = await import('./SessionView');
-        const screen = await renderScreen(
-            React.createElement(
-                React.Fragment,
-                null,
-                React.createElement(PendingMessagesTranscriptBlock, {
-                    sessionId: 's1',
-                    pendingMessages: [
-                        {
-                            id: 'p1',
-                            text: 'pending',
-                            displayText: undefined,
-                            createdAt: 1,
-                            updatedAt: 1,
-                            localId: 'p1',
-                            rawRecord: {},
-                        },
-                    ],
-                    discardedMessages: [],
-                }),
-                React.createElement(SessionView, { id: 's1' }),
-            ),
-            {
-                wrapper: AppPaneProviderWrapper,
-            },
+        const tree = React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(PendingMessagesTranscriptBlock, {
+                sessionId: 's1',
+                pendingMessages: [
+                    {
+                        id: 'p1',
+                        text: 'pending',
+                        displayText: undefined,
+                        createdAt: 1,
+                        updatedAt: 1,
+                        localId: 'p1',
+                        rawRecord: {},
+                    },
+                ],
+                discardedMessages: [],
+            }),
+            React.createElement(SessionView, { id: 's1' }),
         );
+        const screen = await renderScreen(tree, {
+            wrapper: AppPaneProviderWrapper,
+        });
 
         // `SessionView` fetches pending messages via `runAfterInteractionsWithFallback`, which schedules
         // a `setTimeout(0)` on web. Wait a tick so the side-effect can run deterministically.
@@ -462,5 +461,17 @@ describe('SessionView (right pane auto-open)', () => {
         expect(fetchPendingMessagesSpy).toHaveBeenCalledWith('s1');
 
         await screen.unmount();
+
+        const remountedScreen = await renderScreen(tree, {
+            wrapper: AppPaneProviderWrapper,
+        });
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+        expect(fetchPendingMessagesSpy).toHaveBeenCalledTimes(2);
+        expect(fetchPendingMessagesSpy).toHaveBeenNthCalledWith(1, 's1');
+        expect(fetchPendingMessagesSpy).toHaveBeenNthCalledWith(2, 's1');
+
+        await remountedScreen.unmount();
     });
 });

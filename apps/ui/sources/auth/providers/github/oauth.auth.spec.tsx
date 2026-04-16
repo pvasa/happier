@@ -16,6 +16,7 @@ import {
     upsertAndActivateServerSpy,
 } from './test/oauthReturnHarness';
 import { renderScreen } from '@/dev/testkit';
+import { t } from '@/text';
 
 
 type FetchResult = {
@@ -61,6 +62,7 @@ afterEach(() => {
 describe('/oauth/[provider] (auth flow)', () => {
     it('uses the pending external auth serverUrl for finalize requests when present', async () => {
         setPendingExternalAuthState({ provider: 'github', secret: OAUTH_SECRET, serverUrl: 'http://api.example.test' });
+        setActiveServerSnapshot({ serverUrl: '' });
         replaceSpy.mockReset();
         loginSpy.mockClear();
         modal.alert.mockClear();
@@ -85,6 +87,76 @@ describe('/oauth/[provider] (auth flow)', () => {
         await runWithOAuthScreen(async () => {
             await flushOAuthEffects();
             expect(fetchMock).toHaveBeenCalled();
+            expect(loginSpy).toHaveBeenCalledWith('tok_1', OAUTH_SECRET);
+            expect(replaceSpy).toHaveBeenCalledWith('/');
+        });
+    });
+
+    it('fails closed when pending external auth serverUrl does not match the active server snapshot', async () => {
+        setPendingExternalAuthState({
+            provider: 'github',
+            secret: OAUTH_SECRET,
+            serverUrl: 'http://api.example.test',
+        });
+        setActiveServerSnapshot({ serverUrl: 'http://other.example.test' });
+        replaceSpy.mockReset();
+        loginSpy.mockClear();
+        modal.alert.mockClear();
+        clearPendingExternalAuthMock.mockClear();
+
+        localSearchParamsMock.mockReturnValue({
+            provider: 'github',
+            flow: 'auth',
+            pending: 'p1',
+        });
+
+        const fetchMock = stubFetch(async (url) => {
+            throw new Error(`Unexpected fetch: ${url}`);
+        });
+
+        await runWithOAuthScreen(async () => {
+            await flushOAuthEffects();
+            expect(fetchMock).not.toHaveBeenCalled();
+            expect(clearPendingExternalAuthMock).toHaveBeenCalled();
+            expect(modal.alert).toHaveBeenCalledWith(t('common.error'), t('errors.oauthStateMismatch'));
+            expect(loginSpy).not.toHaveBeenCalled();
+            expect(replaceSpy).toHaveBeenCalledWith('/');
+        });
+    });
+
+    it('does not fail closed when pending external auth serverUrl is loopback-equivalent to the active server snapshot', async () => {
+        setPendingExternalAuthState({
+            provider: 'github',
+            secret: OAUTH_SECRET,
+            serverUrl: 'http://localhost:3005',
+        });
+        setActiveServerSnapshot({ serverUrl: 'http://127.0.0.1:3005/' });
+        replaceSpy.mockReset();
+        loginSpy.mockClear();
+        upsertAndActivateServerSpy.mockClear();
+        modal.alert.mockClear();
+        modal.prompt.mockReset();
+
+        localSearchParamsMock.mockReturnValue({
+            provider: 'github',
+            flow: 'auth',
+            pending: 'p1',
+        });
+
+        const fetchMock = stubFetch(async (url, init) => {
+            const health = await handleHealthCheck(url);
+            if (health) return health;
+            if (url === 'http://localhost:3005/v1/auth/external/github/finalize') {
+                expect(init?.method).toBe('POST');
+                return { ok: true, body: { success: true, token: 'tok_1' } };
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        });
+
+        await runWithOAuthScreen(async () => {
+            await flushOAuthEffects();
+            expect(fetchMock).toHaveBeenCalled();
+            expect(upsertAndActivateServerSpy).not.toHaveBeenCalled();
             expect(loginSpy).toHaveBeenCalledWith('tok_1', OAUTH_SECRET);
             expect(replaceSpy).toHaveBeenCalledWith('/');
         });
@@ -323,7 +395,7 @@ describe('/oauth/[provider] (auth flow)', () => {
     });
 
     it('includes reset=true in finalize when pending external auth intent=reset', async () => {
-        setActiveServerSnapshot({ serverUrl: 'http://default.example.test' });
+        setActiveServerSnapshot({ serverUrl: '' });
         setPendingExternalAuthState({
             provider: 'github',
             secret: OAUTH_SECRET,

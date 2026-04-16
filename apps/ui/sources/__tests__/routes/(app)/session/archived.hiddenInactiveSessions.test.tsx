@@ -85,10 +85,15 @@ vi.mock('@/sync/domains/state/storage', () => ({
     },
 }));
 
+import { Modal } from '@/modal';
+import { sessionUnarchiveWithServerScope } from '@/sync/ops';
+
 describe('Archived sessions route', () => {
     beforeEach(() => {
         mockNavigateToSession.mockReset();
         capturedSectionListProps = null;
+        (Modal.alert as any).mockReset?.();
+        (sessionUnarchiveWithServerScope as any).mockReset?.();
         mockSessions.hideInactiveSessions = false;
         mockSessions.pinnedSessionKeysV1 = [];
         mockSessions.all = [];
@@ -178,5 +183,76 @@ describe('Archived sessions route', () => {
         const stopPropagation = vi.fn();
         capturedSectionListProps?.onWheel?.({ stopPropagation });
         expect(stopPropagation).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves the owning serverId when opening a hidden inactive session', async () => {
+        mockSessions.hideInactiveSessions = true;
+        mockSessions.all = [
+            {
+                id: 'inactive-1',
+                active: false,
+                archivedAt: null,
+                updatedAt: 10,
+                metadata: { name: 'Inactive Session', path: '/tmp/inactive' },
+                serverId: 'server-1',
+            },
+        ];
+
+        const Screen = (await import('@/app/(app)/session/archived')).default;
+        const screen = await renderScreen(<Screen />);
+        const pressable = screen.root.find((node: any) => typeof node.props?.onPress === 'function');
+
+        pressable.props.onPress();
+
+        expect(mockNavigateToSession).toHaveBeenCalledWith('inactive-1', { serverId: 'server-1' });
+    });
+
+    it('preserves the owning serverId when opening an archived session', async () => {
+        mockSessions.hideInactiveSessions = false;
+        mockSessions.all = [
+            {
+                id: 'archived-1',
+                active: false,
+                archivedAt: 123,
+                updatedAt: 20,
+                metadata: { name: 'Archived Session', path: '/tmp/archived' },
+                serverId: 'server-archived',
+            },
+        ];
+
+        const Screen = (await import('@/app/(app)/session/archived')).default;
+        const screen = await renderScreen(<Screen />);
+        const pressable = screen.root.find((node: any) => typeof node.props?.onPress === 'function');
+
+        pressable.props.onPress();
+
+        expect(mockNavigateToSession).toHaveBeenCalledWith('archived-1', { serverId: 'server-archived' });
+    });
+
+    it('uses the owning serverId when unarchiving an archived session', async () => {
+        mockSessions.hideInactiveSessions = false;
+        mockSessions.all = [
+            {
+                id: 'archived-1',
+                active: false,
+                archivedAt: 123,
+                updatedAt: 20,
+                metadata: { name: 'Archived Session', path: '/tmp/archived' },
+                serverId: 'server-archived',
+            },
+        ];
+
+        const Screen = (await import('@/app/(app)/session/archived')).default;
+        const screen = await renderScreen(<Screen />);
+        const unarchiveButton = screen.root.find((node: any) => node.props?.accessibilityLabel === 'sessionInfo.unarchiveSession');
+
+        unarchiveButton.props.onPress();
+
+        expect(Modal.alert).toHaveBeenCalledTimes(1);
+        const [, , buttons] = (Modal.alert as any).mock.calls[0];
+        const confirm = (buttons as any[]).find((button) => button?.text === 'sessionInfo.unarchiveSession');
+        await confirm.onPress();
+
+        expect(sessionUnarchiveWithServerScope).toHaveBeenCalledWith('archived-1', { serverId: 'server-archived' });
     });
 });

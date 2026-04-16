@@ -10,6 +10,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { Typography } from '@/constants/Typography';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { Modal } from '@/modal';
 import { useIsDataReady, useSession } from '@/sync/domains/state/storage';
@@ -24,9 +25,15 @@ const LOG_TAIL_MAX_BYTES = 200_000;
 
 export default function SessionLogScreen() {
     const { theme } = useUnistyles();
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const params = useLocalSearchParams<{ id: string; serverId?: string }>();
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const { id } = params;
     const sessionId = String(id ?? '').trim();
-    const sessionHydrated = useHydrateSessionForRoute(sessionId, 'SessionLogRoute.ensureSessionVisible');
+    const sessionHydrated = useHydrateSessionForRoute(
+        sessionId,
+        'SessionLogRoute.ensureSessionVisible',
+        routeScope.hydrationOptions,
+    );
     const session = useSession(sessionId);
     const isDataReady = useIsDataReady();
 

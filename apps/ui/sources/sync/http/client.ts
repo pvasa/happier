@@ -331,7 +331,9 @@ export async function serverFetch(
             // The follow-up request (if any) will re-read credentials and may pick up a refreshed token, or allow the
             // UI to present a clean sign-in state for that server scope.
             try {
-                await TokenStorage.invalidateCredentialsTokenForServerUrl(snapshot.serverUrl, usedToken);
+                await TokenStorage.invalidateCredentialsTokenForServerUrl(snapshot.serverUrl, usedToken, {
+                    serverId: snapshot.serverId,
+                });
             } catch {
                 // ignore
             }

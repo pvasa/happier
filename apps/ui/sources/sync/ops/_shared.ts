@@ -57,6 +57,29 @@ export function normalizeSpawnSessionResult(value: unknown): SpawnSessionResult 
         return { type: 'error', errorCode, errorMessage };
     }
 
+    if (value.success === true || value.ok === true) {
+        const nested =
+            isPlainObject(value.result)
+                ? value.result
+                : isPlainObject(value.data)
+                    ? value.data
+                    : null;
+        if (nested) {
+            const normalizedNested = normalizeSpawnSessionResult(nested);
+            if (normalizedNested.type !== 'error' || normalizedNested.errorMessage !== 'Unknown spawn result type') {
+                return normalizedNested;
+            }
+        }
+
+        const sessionId =
+            typeof value.sessionId === 'string'
+                ? value.sessionId
+                : typeof value.sid === 'string'
+                    ? value.sid
+                    : undefined;
+        return { type: 'success', ...(sessionId ? { sessionId } : {}) };
+    }
+
     return {
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,

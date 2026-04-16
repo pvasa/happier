@@ -130,7 +130,7 @@ vi.mock('@/agents/catalog/catalog', () => ({
     getAgentCore: () => ({
         displayNameKey: 'agents.codex',
         toolRendering: { hideUnknownToolsByDefault: false },
-        connectedService: { id: 'codex', name: 'Codex' },
+        uiConnectedService: { serviceId: 'openai-codex', label: 'Codex', connectRoute: null },
         flavorAliases: [],
         availability: { experimental: false },
         model: {

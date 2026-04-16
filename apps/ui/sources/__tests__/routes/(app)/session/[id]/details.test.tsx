@@ -12,6 +12,7 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let mockSessionId = 'session-1';
+let mockServerId: string | undefined;
 let isFocused = true;
 let sessionHydrated = true;
 let mockDetailsParam: string | undefined;
@@ -19,7 +20,7 @@ let mockPathParam: string | undefined;
 let mockShaParam: string | undefined;
 const routerBackSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
-const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
+const ensureSessionVisibleSpy = vi.fn((_sessionId: string, _options?: { serverId?: string }) => Promise.resolve());
 const closeDetailsSpy = vi.fn();
 const openDetailsTabSpy = vi.fn();
 let canGoBack = true;
@@ -49,8 +50,8 @@ let scopeState: MockScopeState = { details: null };
 installSessionRouteCommonModuleMocks({
     router: () => ({
         ...routerMock.module,
-        useLocalSearchParams: () => ({ id: mockSessionId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
-        useGlobalSearchParams: () => ({ id: mockSessionId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
+        useLocalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
+        useGlobalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
         useNavigation: () => ({ canGoBack: () => canGoBack }),
     }),
 });
@@ -126,8 +127,8 @@ vi.mock('@/components/sessions/panes/url/sessionPaneUrlState', () => ({
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string) => {
-        ensureSessionVisibleSpy(sessionId);
+    useHydrateSessionForRoute: (sessionId: string, _tag: string, options?: { serverId?: string }) => {
+        ensureSessionVisibleSpy(sessionId, options);
         return sessionHydrated;
     },
 }));
@@ -151,6 +152,7 @@ describe('/session/[id]/details', () => {
 
     beforeEach(() => {
         mockSessionId = 'session-1';
+        mockServerId = undefined;
         isFocused = true;
         sessionHydrated = true;
         mockDetailsParam = undefined;
@@ -186,8 +188,10 @@ describe('/session/[id]/details', () => {
     });
 
     it('navigates back when there are no details tabs to display', async () => {
+        mockServerId = 'server-b';
         await renderScreen(<Screen />);
-        expect(routerBackSpy).toHaveBeenCalled();
+        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-b');
     });
 
     it('does not redirect away before the session has hydrated', async () => {
@@ -207,9 +211,10 @@ describe('/session/[id]/details', () => {
     });
 
     it('hydrates the session for deep links by requesting session visibility', async () => {
+        mockServerId = 'server-b';
         scopeState = { details: { tabs: [{ key: 'file:README.md' }], activeTabKey: 'file:README.md' } };
         await renderScreen(<Screen />);
-        expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('session-1');
+        expect(ensureSessionVisibleSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
     });
 
     it('passes an onRequestClose that closes the pane and navigates back', async () => {

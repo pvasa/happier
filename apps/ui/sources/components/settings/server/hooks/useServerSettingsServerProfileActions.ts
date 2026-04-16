@@ -22,7 +22,7 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
         let authStatus = params.authStatusByServerId[profile.id] ?? 'unknown';
         if (authStatus === 'unknown') {
             try {
-                const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl);
+                const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
                 authStatus = creds ? 'signedIn' : 'signedOut';
             } catch {
                 authStatus = 'unknown';
@@ -70,7 +70,7 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
         // resurrect an old token unexpectedly (confusing and potentially unsafe).
         // Do this before removing the profile so TokenStorage can still resolve the serverId scope.
         try {
-            await TokenStorage.removeCredentialsForServerUrl(profile.serverUrl);
+            await TokenStorage.removeCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
         } catch {
             // Best-effort only.
         }

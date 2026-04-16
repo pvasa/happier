@@ -11,7 +11,7 @@ import { storage, useSession, useIsDataReady, useLocalSetting, useSetting } from
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId } from '@/utils/sessions/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
-import { sessionArchiveWithServerScope, sessionDelete, sessionRename, sessionStop } from '@/sync/ops';
+import { sessionArchiveWithServerScope, sessionDelete, sessionRename, sessionStopWithServerScope } from '@/sync/ops';
 import { useUnistyles } from 'react-native-unistyles';
 import { layout } from '@/components/ui/layout/layout';
 import { t } from '@/text';
@@ -47,6 +47,7 @@ import {
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { getActionSpec } from '@happier-dev/protocol';
 import { SessionRetentionNotice } from '@/components/sessions/info/SessionRetentionNotice';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import {
     useSessionHandoffSourceReachability,
@@ -94,11 +95,12 @@ function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: 
     );
 }
 
-function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandoff, runtimeAvailability }: Readonly<{
+function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandoff, runtimeAvailability, routeScope }: Readonly<{
     session: Session;
     sessionServerId: string | null;
     sourceMachineIdForHandoff: string | null;
     runtimeAvailability: SessionHandoffRuntimeAvailability;
+    routeScope: ReturnType<typeof createSessionRouteServerScope>;
 }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
@@ -129,10 +131,10 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         () => createDefaultActionExecutor({
             resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
             openSession: (childSessionId) => {
-                router.push((`/session/${childSessionId}`) as any);
+                router.push(routeScope.buildHref(childSessionId) as any);
             },
         }),
-        [router],
+        [routeScope, router],
     );
 
     const forkActionEnabled = React.useMemo(() => {
@@ -245,18 +247,19 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const handleExitAfterSessionMutation = useCallback(() => {
         safeRouterBack({
             router,
-            fallbackHref: `/session/${session.id}`,
+            fallbackHref: routeScope.buildHref(session.id),
         });
         safeRouterBack({
             router,
             fallbackHref: '/',
         });
-    }, [router, session.id]);
+    }, [routeScope, router, session.id]);
 
     const canStopSession = !session.accessLevel;
     const isArchivedSession = session.archivedAt != null;
-    const canArchiveSession = canManageSharing && !session.active && !isArchivedSession;
+    const canArchiveSession = canManageSharing && !isArchivedSession && (!session.active || canStopSession);
     const resolvedServerId = resolveServerIdForSessionIdFromLocalCache(session.id);
+    const scopedMutationServerId = routeScope.serverId ?? sessionServerId ?? resolvedServerId ?? null;
     const isPinnedSession = Boolean(
         resolvedServerId &&
         Array.isArray(pinnedSessionKeysV1) &&
@@ -268,13 +271,14 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             sessionId: session.id,
             hideInactiveSessions,
             isPinned: isPinnedSession,
-            stopSession: async () => await sessionStop(session.id),
-            archiveSession: async () => await sessionArchiveWithServerScope(session.id, { serverId: null }),
+            archiveAfterStop: 'never',
+            stopSession: async () => await sessionStopWithServerScope(session.id, { serverId: scopedMutationServerId }),
+            archiveSession: async () => await sessionArchiveWithServerScope(session.id, { serverId: scopedMutationServerId }),
             stopErrorMessage: t('sessionInfo.failedToStopSession'),
             archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
         });
         handleExitAfterSessionMutation();
-    }, [handleExitAfterSessionMutation, hideInactiveSessions, isPinnedSession, session.id]);
+    }, [handleExitAfterSessionMutation, hideInactiveSessions, isPinnedSession, scopedMutationServerId, session.id]);
     const [stoppingSession, performStop] = useHappyAction(handleStopAndMaybeArchive);
 
     const handleStopSession = useCallback(() => {
@@ -293,13 +297,28 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     }, [performStop]);
 
     const handleArchive = useCallback(async () => {
-        const result = await sessionArchiveWithServerScope(session.id, { serverId: null });
+        if (session.active) {
+            await stopSessionAndMaybeArchive({
+                sessionId: session.id,
+                hideInactiveSessions,
+                isPinned: isPinnedSession,
+                archiveAfterStop: 'always',
+                stopSession: async () => await sessionStopWithServerScope(session.id, { serverId: scopedMutationServerId }),
+                archiveSession: async () => await sessionArchiveWithServerScope(session.id, { serverId: scopedMutationServerId }),
+                stopErrorMessage: t('sessionInfo.failedToStopSession'),
+                archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
+            });
+            handleExitAfterSessionMutation();
+            return;
+        }
+
+        const result = await sessionArchiveWithServerScope(session.id, { serverId: scopedMutationServerId });
         if (!result.success) {
             throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
         }
         clearSessionVisibleWhenInactive(session.id);
         handleExitAfterSessionMutation();
-    }, [handleExitAfterSessionMutation, session.id]);
+    }, [handleExitAfterSessionMutation, hideInactiveSessions, isPinnedSession, scopedMutationServerId, session.active, session.id]);
     const [archivingSession, performArchive] = useHappyAction(handleArchive);
 
     const handleForkAction = useCallback(async () => {
@@ -532,7 +551,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             title={t('runs.title')}
                             subtitle={t('sessionInfo.executionRunsSubtitle')}
                             icon={<Ionicons name="play-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={() => router.push(`/session/${session.id}/runs`)}
+                            onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/runs' }))}
                         />
                     ) : null}
                     {showAutomations ? (
@@ -540,7 +559,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             title={t('sessionInfo.automationsTitle')}
                             subtitle={t('sessionInfo.automationsSubtitle')}
                             icon={<Ionicons name="timer-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={() => router.push(`/session/${session.id}/automations`)}
+                            onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/automations' }))}
                         />
                     ) : null}
                         {!session.active && Boolean(vendorResumeId) && (
@@ -553,11 +572,11 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             />
                         )}
                     <Item
-                        title={t('sessionInfo.viewSessionLogTitle')}
-                        subtitle={t('sessionInfo.viewSessionLogSubtitle')}
-                        icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.blue} />}
-                        onPress={() => router.push(`/session/${session.id}/log`)}
-                    />
+                            title={t('sessionInfo.viewSessionLogTitle')}
+                            subtitle={t('sessionInfo.viewSessionLogSubtitle')}
+                            icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.accent.blue} />}
+                            onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/log' }))}
+                        />
                     {reachableMachineId && (
                         <Item
                             title={t('sessionInfo.viewMachine')}
@@ -579,7 +598,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             title={t('sessionInfo.manageSharing')}
                             subtitle={t('sessionInfo.manageSharingSubtitle')}
                             icon={<Ionicons name="share-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={() => router.push(`/session/${session.id}/sharing`)}
+                            onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/sharing' }))}
                         />
                     )}
                     {sessionStatus.isConnected && canStopSession && (
@@ -831,9 +850,15 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
 
 export default () => {
     const { theme } = useUnistyles();
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const params = useLocalSearchParams<{ id: string; serverId?: string }>();
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const { id } = params;
     const sessionId = String(id ?? '').trim();
-    const sessionHydrated = useHydrateSessionForRoute(sessionId, 'SessionInfoRoute.ensureSessionVisible');
+    const sessionHydrated = useHydrateSessionForRoute(
+        sessionId,
+        'SessionInfoRoute.ensureSessionVisible',
+        routeScope.hydrationOptions,
+    );
     const session = useSession(sessionId);
     const isDataReady = useIsDataReady();
     const sessionServerId = usePreferredServerIdForSession(sessionId);
@@ -884,6 +909,7 @@ export default () => {
                 sessionServerId={sessionServerId}
                 sourceMachineIdForHandoff={sourceMachineIdForHandoff}
                 runtimeAvailability={runtimeAvailability}
+                routeScope={routeScope}
             />
         </View>
     );

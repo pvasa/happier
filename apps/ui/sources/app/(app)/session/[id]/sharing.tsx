@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useSession, useIsDataReady } from '@/sync/domains/state/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
@@ -366,9 +367,15 @@ function SharingManagementContent({ sessionId }: { sessionId: string }) {
 
 export default memo(() => {
     const { theme } = useUnistyles();
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const params = useLocalSearchParams<{ id: string; serverId?: string }>();
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const { id } = params;
     const isDataReady = useIsDataReady();
-    const sessionHydrated = useHydrateSessionForRoute(String(id ?? '').trim(), 'SessionSharingRoute.ensureSessionVisible');
+    const sessionHydrated = useHydrateSessionForRoute(
+        String(id ?? '').trim(),
+        'SessionSharingRoute.ensureSessionVisible',
+        routeScope.hydrationOptions,
+    );
     const headerTitle = t('session.sharing.title');
     const screenOptions = React.useMemo(() => ({ headerTitle }), [headerTitle]);
 

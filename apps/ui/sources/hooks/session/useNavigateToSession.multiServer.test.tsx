@@ -10,6 +10,7 @@ import { installSessionHooksCommonModuleMocks } from './sessionHooksTestHelpers'
 const routerNavigateSpy = vi.fn();
 const setActiveServerAndSwitchSpy = vi.fn(async () => false);
 const refreshFromActiveServerSpy = vi.fn(async () => {});
+const resolveServerIdForSessionIdFromLocalCacheSpy = vi.fn();
 
 installSessionHooksCommonModuleMocks({
     router: async () => {
@@ -29,6 +30,10 @@ vi.mock('@/auth/context/AuthContext', () => ({
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
     setActiveServerAndSwitch: setActiveServerAndSwitchSpy,
+}));
+
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', () => ({
+    resolveServerIdForSessionIdFromLocalCache: (sessionId: string) => resolveServerIdForSessionIdFromLocalCacheSpy(sessionId),
 }));
 
 describe('useNavigateToSession (multi-server)', () => {
@@ -58,7 +63,7 @@ describe('useNavigateToSession (multi-server)', () => {
             refreshAuth: expect.any(Function),
         });
         expect(routerNavigateSpy).toHaveBeenCalledTimes(1);
-        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/sess_123', expect.any(Object));
+        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/sess_123?serverId=other', expect.any(Object));
         expect(routerNavigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
 
@@ -87,5 +92,35 @@ describe('useNavigateToSession (multi-server)', () => {
             refreshAuth: expect.any(Function),
         });
         expect(routerNavigateSpy).toHaveBeenCalledTimes(1);
+        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/sess_456?serverId=same', expect.any(Object));
+    });
+
+    it('falls back to the cached owning serverId when no explicit serverId is provided', async () => {
+        routerNavigateSpy.mockClear();
+        setActiveServerAndSwitchSpy.mockClear();
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReset();
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-cached');
+
+        const { useNavigateToSession } = await import('./useNavigateToSession');
+
+        let navigateToSession: ReturnType<typeof useNavigateToSession> | null = null;
+        function Probe() {
+            navigateToSession = useNavigateToSession();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        await act(async () => {
+            await navigateToSession!('sess_789');
+        });
+
+        expect(resolveServerIdForSessionIdFromLocalCacheSpy).toHaveBeenCalledWith('sess_789');
+        expect(setActiveServerAndSwitchSpy).toHaveBeenCalledWith({
+            serverId: 'server-cached',
+            scope: 'device',
+            refreshAuth: expect.any(Function),
+        });
+        expect(routerNavigateSpy).toHaveBeenCalledWith('/session/sess_789?serverId=server-cached', expect.any(Object));
     });
 });

@@ -224,4 +224,52 @@ describe('setNewSessionPickerReturnParams', () => {
             },
         });
     });
+
+    it('preserves canonical new-session params from the current route when replace fallback is needed', () => {
+        const dispatch = vi.fn();
+        const replace = vi.fn();
+
+        const mode = setNewSessionPickerReturnParams({
+            navigation: {
+                dispatch,
+                getState: () => ({
+                    index: 1,
+                    routes: [
+                        {
+                            key: 'session-route',
+                            name: '(app)/session/[id]',
+                            path: '/session/s1',
+                            params: { id: 's1' },
+                        },
+                        {
+                            key: 'picker-route',
+                            name: '(app)/new/pick/path',
+                            path: '/new/pick/path',
+                            params: {
+                                dataId: 'draft-1',
+                                machineId: 'm1',
+                                selectedId: 'server-a',
+                                spawnServerId: 'server-a',
+                            },
+                        },
+                    ],
+                }),
+            },
+            router: { replace },
+            routeParams: { path: '/repo/selected' },
+            replaceParams: { path: '/repo/selected' },
+        });
+
+        expect(mode).toBe('replace');
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(replace).toHaveBeenCalledWith({
+            pathname: '/new',
+            params: {
+                dataId: 'draft-1',
+                machineId: 'm1',
+                spawnServerId: 'server-a',
+                path: '/repo/selected',
+            },
+        });
+    });
 });

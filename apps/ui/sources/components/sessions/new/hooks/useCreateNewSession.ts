@@ -15,7 +15,7 @@ import type { SecretChoiceByProfileIdByEnvVarName } from '@/utils/secrets/secret
 import { clearNewSessionDraft, loadSessionDrafts, saveSessionDrafts } from '@/sync/domains/state/persistence';
 import { storeTempData } from '@/utils/sessions/tempDataStore';
 import { getBuiltInProfile } from '@/sync/domains/profiles/profileUtils';
-import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
+import { isProfileCompatibleWithBackendTarget, type AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import { resolveEffectiveWindowsRemoteSessionLaunchMode } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode';
@@ -43,6 +43,7 @@ import { delay } from '@/utils/timing/time';
 import { showDaemonUnavailableAlert } from '@/utils/errors/daemonUnavailableAlert';
 import { captureExceptionIfEnabled } from '@/utils/system/sentry';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import type { SessionMcpSelectionV1 } from '@happier-dev/protocol';
 import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import { materializeNewSessionCheckout } from '@/components/sessions/new/modules/materializeNewSessionCheckout';
@@ -202,10 +203,17 @@ export function useCreateNewSession(params: Readonly<{
             }
             applySettings(settingsUpdate);
 
+            const backendTarget: BackendTargetRefV1 = current.backendTarget ?? { kind: 'builtInAgent', agentId: current.agentType };
             let environmentVariables = undefined;
             if (profilesActive && current.selectedProfileId) {
                 const selectedProfile = current.profileMap.get(current.selectedProfileId) || getBuiltInProfile(current.selectedProfileId);
                 if (selectedProfile) {
+                    if (!isProfileCompatibleWithBackendTarget(selectedProfile, backendTarget)) {
+                        Modal.alert(t('common.error'), t('newSession.aiBackendNotCompatibleWithSelectedProfile'));
+                        current.setIsCreating(false);
+                        return;
+                    }
+
                     environmentVariables = transformProfileToEnvironmentVars(selectedProfile);
 
                     const selectedSecretIdByEnvVarName = current.selectedSecretIdByProfileIdByEnvVarName[current.selectedProfileId] ?? {};
@@ -276,7 +284,6 @@ export function useCreateNewSession(params: Readonly<{
                     targetServerId: resolvedTargetServerId,
                 },
             });
-            const backendTarget: BackendTargetRefV1 = current.backendTarget ?? { kind: 'builtInAgent', agentId: current.agentType };
             const connectedServices = (current.agentNewSessionOptions as any)?.connectedServices;
 
             const terminal = resolveTerminalSpawnOptions({
@@ -543,7 +550,11 @@ export function useCreateNewSession(params: Readonly<{
                     }
 
                     try {
-                        await sync.ensureSessionVisibleForMessageRoute(createdSessionId, { forceRefresh: true });
+                        const serverId = String(resolvedTargetServerId ?? '').trim();
+                        await sync.ensureSessionVisibleForMessageRoute(
+                            createdSessionId,
+                            serverId ? { forceRefresh: true, serverId } : { forceRefresh: true },
+                        );
                     } catch {
                         // Best effort only. Navigation is gated on the local session snapshot below.
                     }
@@ -611,9 +622,11 @@ export function useCreateNewSession(params: Readonly<{
                 }
 
                 const recoveryDataId = postSpawnFollowUpError ? buildRecoveryDataIdFromError(postSpawnFollowUpError) : null;
-                const sessionRoute = recoveryDataId
-                    ? `/session/${result.sessionId}?recoveryDataId=${encodeURIComponent(recoveryDataId)}`
-                    : `/session/${result.sessionId}`;
+                const sessionRoute = buildScopedSessionRouteHref({
+                    sessionId: result.sessionId,
+                    serverId: resolvedTargetServerId,
+                    query: recoveryDataId ? { recoveryDataId } : undefined,
+                });
 
                 current.router.replace(sessionRoute, {
                     dangerouslySingular() {

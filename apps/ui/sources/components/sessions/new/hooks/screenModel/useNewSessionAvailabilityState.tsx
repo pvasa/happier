@@ -26,12 +26,14 @@ import {
 } from '@/agents/runtime/cliWarnings';
 import { canAgentResume } from '@/agents/runtime/resumeCapabilities';
 import { isAgentSelectableForNewSession, resolveProfileAvailabilityForNewSession } from '@/components/sessions/new/modules/newSessionAgentSelection';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { resolveTerminalSpawnOptions } from '@/sync/domains/settings/terminalSettings';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
+import { isAgentAuthProbeSafeForBackgroundChecks } from '@happier-dev/agents';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
 
 type ProfileAvailability = Readonly<{ available: boolean; reason?: string }>;
@@ -67,7 +69,25 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     setDismissedCliWarnings: (next: DismissedCliWarnings) => void;
     allProfiles: ReadonlyArray<AIBackendProfile>;
 }>) {
-    const cliAvailability = useCLIDetection(params.selectedMachineId, { autoDetect: false, serverId: params.capabilityServerId });
+    const automaticLoginStatusAgentIds = React.useMemo(() => {
+        const out: AgentId[] = [];
+        for (const agentId of params.enabledAgentIds) {
+            if (!isAgentAuthProbeSafeForBackgroundChecks(agentId)) continue;
+            if (out.includes(agentId)) continue;
+            out.push(agentId);
+        }
+        return out;
+    }, [params.enabledAgentIds]);
+    const automaticLoginStatusAgentIdsKey = React.useMemo(
+        () => stableJsonStringify(automaticLoginStatusAgentIds),
+        [automaticLoginStatusAgentIds],
+    );
+    const cliAvailability = useCLIDetection(params.selectedMachineId, {
+        autoDetect: false,
+        includeLoginStatus: automaticLoginStatusAgentIds.length > 0,
+        includeLoginStatusForAgentIds: automaticLoginStatusAgentIds,
+        serverId: params.capabilityServerId,
+    });
     const { state: selectedMachineCapabilities, refresh: refreshSelectedMachineCapabilities } = useDaemonScopedMachineCapabilitiesCache({
         machineId: params.selectedMachineId,
         serverId: params.capabilityServerId,
@@ -162,10 +182,11 @@ export function useNewSessionAvailabilityState(params: Readonly<{
             agentId,
             detectionTimestamp: cliAvailability.timestamp,
             availabilityById: cliAvailability.available,
+            authStatusById: cliAvailability.authStatus,
             installableDepKeyCountByAgentId,
             selectableWithoutCliByAgentId,
         });
-    }, [cliAvailability.available, cliAvailability.timestamp, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId]);
+    }, [cliAvailability.authStatus, cliAvailability.available, cliAvailability.timestamp, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId]);
 
     const isBackendEntrySelectable = React.useCallback((entry: ResolvedBackendCatalogEntry): boolean => {
         if (entry.family === 'configuredAcpBackend') {
@@ -190,8 +211,8 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         const machineId = String(params.selectedMachineId ?? '').trim();
         if (!machineId) return null;
         const serverId = String(params.capabilityServerId ?? '').trim() || 'active';
-        return `${serverId}:${machineId}`;
-    }, [params.capabilityServerId, params.selectedMachineId]);
+        return `${serverId}:${machineId}:${automaticLoginStatusAgentIdsKey}`;
+    }, [automaticLoginStatusAgentIdsKey, params.capabilityServerId, params.selectedMachineId]);
 
     const initialRefreshHandledKeyRef = React.useRef<string | null>(null);
 
@@ -210,10 +231,13 @@ export function useNewSessionAvailabilityState(params: Readonly<{
 
         return runAfterInteractionsWithFallback(() => {
             // Bypass daemon-side probe caches so newly installed CLIs become selectable immediately.
-            cliAvailability.refresh({ bypassCache: true });
+            cliAvailability.refresh({
+                bypassCache: true,
+                includeLoginStatusForAgentIds: automaticLoginStatusAgentIds,
+            });
             refreshSelectedMachineCapabilities();
         });
-    }, [cliAvailability.refresh, initialRefreshKey, refreshSelectedMachineCapabilities, selectedMachineOnline]);
+    }, [automaticLoginStatusAgentIds, cliAvailability.refresh, initialRefreshKey, refreshSelectedMachineCapabilities, selectedMachineOnline]);
 
     React.useEffect(() => {
         if (!params.selectedMachineId) return;
@@ -286,10 +310,11 @@ export function useNewSessionAvailabilityState(params: Readonly<{
             candidateBackendEntries: getCompatibleProfileBackendEntries(profile),
             detectionTimestamp: cliAvailability.timestamp,
             availabilityById: cliAvailability.available,
+            authStatusById: cliAvailability.authStatus,
             installableDepKeyCountByAgentId,
             selectableWithoutCliByAgentId,
         });
-    }, [cliAvailability.available, cliAvailability.timestamp, getCompatibleProfileBackendEntries, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId]);
+    }, [cliAvailability.authStatus, cliAvailability.available, cliAvailability.timestamp, getCompatibleProfileBackendEntries, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId]);
 
     const profileAvailabilityById = React.useMemo(() => {
         const map = new Map<string, ProfileAvailability>();

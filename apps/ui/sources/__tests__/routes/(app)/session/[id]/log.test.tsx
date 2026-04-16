@@ -28,6 +28,8 @@ const machineGetBugReportLogTailMock = vi.fn(async (_machineId?: string, _params
 let sessionLogPath: string | null = null;
 let sessionMachineId: string | null = null;
 let sessionHydrated = true;
+let mockServerId: string | undefined;
+const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
 
 installSessionRouteCommonModuleMocks({
     reactNative: async () => {
@@ -41,6 +43,19 @@ installSessionRouteCommonModuleMocks({
                         : (spec as Record<string, unknown> & { default?: unknown }).default,
             },
         });
+    },
+    router: async () => {
+        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+        const routerMock = createExpoRouterMock({
+            params: {
+                id: 'session-1',
+                serverId: mockServerId,
+            },
+        });
+        return {
+            ...routerMock.module,
+            useLocalSearchParams: () => ({ id: 'session-1', serverId: mockServerId }),
+        };
     },
     storageModule: async (importOriginal) => {
         const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
@@ -65,7 +80,8 @@ installSessionRouteCommonModuleMocks({
 });
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => sessionHydrated,
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
 }));
 
 vi.mock('@expo/vector-icons', async () => {
@@ -101,12 +117,15 @@ describe('Session log screen', () => {
         sessionLogPath = null;
         sessionMachineId = null;
         sessionHydrated = true;
+        mockServerId = undefined;
+        hydrateSpy.mockClear();
         machineReadSessionLogTailMock.mockClear();
         machineGetBugReportLogTailMock.mockClear();
     });
 
     it('does not fetch log tail until session hydration is ready', async () => {
         sessionHydrated = false;
+        mockServerId = 'server-b';
         sessionLogPath = '/tmp/.happier/logs/session.log';
         sessionMachineId = 'machine-1';
         const { default: SessionLogScreen } = await import('@/app/(app)/session/[id]/log');
@@ -115,6 +134,7 @@ describe('Session log screen', () => {
 
         expect(machineReadSessionLogTailMock).not.toHaveBeenCalled();
         expect(machineGetBugReportLogTailMock).not.toHaveBeenCalled();
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionLogRoute.ensureSessionVisible', { serverId: 'server-b' });
     });
 
     it('does not fetch log tail when log path is unavailable', async () => {

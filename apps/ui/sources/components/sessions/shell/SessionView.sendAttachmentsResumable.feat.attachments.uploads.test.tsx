@@ -318,7 +318,7 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
                 supportsVendorResume: true,
                 experimental: true,
             },
-            connectedService: { name: 'Provider' },
+            uiConnectedService: { serviceId: null, label: 'Provider', connectRoute: null },
         }),
         resolveAgentIdFromFlavor: () => 'codex',
         DEFAULT_AGENT_ID: 'codex',

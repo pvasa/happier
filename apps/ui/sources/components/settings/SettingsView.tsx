@@ -175,7 +175,7 @@ export const SettingsView = React.memo(function SettingsView() {
 
     // Anthropic connection
     const [connectingAnthropic, connectAnthropic] = useHappyAction(async () => {
-        const route = anthropicAgentCore.connectedService.connectRoute;
+        const route = anthropicAgentCore.uiConnectedService.connectRoute;
         if (route) {
             pushRoute(route);
         }
@@ -183,7 +183,7 @@ export const SettingsView = React.memo(function SettingsView() {
 
     // Anthropic disconnection
       const [disconnectingAnthropic, handleDisconnectAnthropic] = useHappyAction(async () => {
-          const serviceName = anthropicAgentCore.connectedService.name;
+          const serviceName = anthropicAgentCore.uiConnectedService.label;
           const confirmed = await Modal.confirm(
               t('modals.disconnectService', { service: serviceName }),
             t('modals.disconnectServiceConfirm', { service: serviceName }),
@@ -302,7 +302,7 @@ export const SettingsView = React.memo(function SettingsView() {
 
                     <ItemGroup title={t('settings.connectedAccounts')}>
                         <Item
-                            title={anthropicAgentCore.connectedService.name}
+                            title={anthropicAgentCore.uiConnectedService.label}
                             subtitle={isAnthropicConnected
                                 ? t('settingsAccount.statusActive')
                                 : t('settings.connectAccount')

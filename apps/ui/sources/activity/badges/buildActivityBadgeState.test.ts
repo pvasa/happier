@@ -132,6 +132,59 @@ describe('buildActivityBadgeState', () => {
         });
     });
 
+    it('counts hydrated pending transcript requests for active sessions before a fresh pending fetch completes', () => {
+        storageState.sessionMessages = {
+            s1: {
+                messages: [
+                    {
+                        kind: 'tool-call',
+                        id: 'm-tool-pending-1',
+                        localId: null,
+                        createdAt: 100,
+                        children: [],
+                        tool: {
+                            id: 'req1',
+                            name: 'Bash',
+                            state: 'running',
+                            input: { command: 'ls' },
+                            createdAt: 100,
+                            permission: {
+                                id: 'req1',
+                                status: 'pending',
+                                kind: 'user_action',
+                            },
+                        },
+                    },
+                ],
+            },
+        };
+
+        const state = buildActivityBadgeState({
+            sessions: [
+                {
+                    id: 's1',
+                    seq: 5,
+                    active: true,
+                    lastViewedSessionSeq: 5,
+                    pendingCount: 0,
+                    metadata: { path: '', host: '' },
+                    agentState: {
+                        controlledByUser: null,
+                        requests: {},
+                        completedRequests: null,
+                    },
+                } as any,
+            ],
+            numericInboxCount: 0,
+            hasNonNumericInboxAttention: false,
+        });
+
+        expect(state).toEqual({
+            count: 1,
+            showNonNumericDot: false,
+        });
+    });
+
     it('shows a non-numeric dot when only dot-only inbox attention exists', () => {
         const state = buildActivityBadgeState({
             sessions: [],

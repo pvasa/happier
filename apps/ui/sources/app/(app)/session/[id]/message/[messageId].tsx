@@ -11,6 +11,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
+import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import {
     createSessionMessageDetailsStyles,
@@ -38,6 +39,7 @@ export const createSessionMessageRouteStyles = (theme: SessionMessageRouteTheme)
 
 type MessageRouteParams = Readonly<{
     id?: string | string[];
+    serverId?: string | string[];
     messageId?: string | string[];
     jumpChildId?: string | string[];
 }>;
@@ -57,6 +59,7 @@ function normalizeRouteParam(value: unknown): string {
 
 export default React.memo(function SessionMessageRoute() {
     const params = useLocalSearchParams<MessageRouteParams>();
+    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
     const sessionId = normalizeRouteParam(params.id);
     const messageId = normalizeRouteParam(params.messageId);
     const jumpChildId = normalizeRouteParam(params.jumpChildId) || null;
@@ -65,10 +68,22 @@ export default React.memo(function SessionMessageRoute() {
         return <SessionInvalidLinkFallback />;
     }
 
-    return <SessionMessageRouteLoaded sessionId={sessionId} messageId={messageId} jumpChildId={jumpChildId} />;
+    return (
+        <SessionMessageRouteLoaded
+            sessionId={sessionId}
+            messageId={messageId}
+            jumpChildId={jumpChildId}
+            routeScope={routeScope}
+        />
+    );
 });
 
-function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string; jumpChildId: string | null }) {
+function SessionMessageRouteLoaded(props: {
+    sessionId: string;
+    messageId: string;
+    jumpChildId: string | null;
+    routeScope: ReturnType<typeof createSessionRouteServerScope>;
+}) {
     const router = useRouter();
     const session = useSession(props.sessionId);
     const { isLoaded: messagesLoaded } = useSessionTranscriptIds(props.sessionId);
@@ -111,18 +126,26 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
 
     // Best-effort hydration for deep links / hard refreshes: sessions list is paginated, and message fetch
     // is guarded when a session isn't known on the active server snapshot yet.
-    useHydrateSessionForRoute(props.sessionId, 'MessageRoute.ensureSessionVisible');
+    const sessionHydratedOrTerminal = useHydrateSessionForRoute(
+        props.sessionId,
+        'MessageRoute.ensureSessionVisible',
+        props.routeScope.hydrationOptions,
+    );
+    const sessionMissingAfterHydration = sessionHydratedOrTerminal && !session;
 
     // Message deep links may target messages older than the initial `/messages` page. If we can't find
     // the message after the initial load, try paging older messages until we either find it or run out.
     React.useEffect(() => {
         let canceled = false;
-        if (!messagesLoaded || message || messageBackfillComplete) return;
+        if (sessionMissingAfterHydration || !messagesLoaded || message || messageBackfillComplete) return;
 
         fireAndForget((async () => {
             try {
                 try {
-                    await sync.ensureSessionVisibleForMessageRoute(props.sessionId);
+                    await sync.ensureSessionVisibleForMessageRoute(
+                        props.sessionId,
+                        props.routeScope.hydrationOptions,
+                    );
                 } catch {
                     // best-effort only
                 }
@@ -161,7 +184,16 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         return () => {
             canceled = true;
         };
-    }, [message, messageBackfillComplete, messagesLoaded, props.messageId, props.sessionId, resolvedMessageId]);
+    }, [
+        message,
+        messageBackfillComplete,
+        messagesLoaded,
+        props.messageId,
+        props.routeScope.hydrationOptions,
+        props.sessionId,
+        resolvedMessageId,
+        sessionMissingAfterHydration,
+    ]);
 
     React.useEffect(() => {
         if (messageBackfillComplete && messagesLoaded && !message) {
@@ -170,10 +202,10 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
                 router.back();
                 return;
             }
-            router.replace(`/session/${encodeURIComponent(props.sessionId)}`);
+            router.replace(props.routeScope.buildHref(props.sessionId));
             return;
         }
-    }, [messageBackfillComplete, messagesLoaded, message, props.sessionId, router]);
+    }, [messageBackfillComplete, messagesLoaded, message, props.routeScope, props.sessionId, router]);
     
     // Configure header for tool messages
     React.useLayoutEffect(() => {
@@ -182,6 +214,10 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         }
     }, [message]);
     
+    if (sessionMissingAfterHydration) {
+        return <SessionInvalidLinkFallback />;
+    }
+
     // Show loader while waiting for session and messages to load
     if (!session || !messagesLoaded) {
         return (

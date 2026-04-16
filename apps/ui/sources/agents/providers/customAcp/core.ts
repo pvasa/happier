@@ -1,5 +1,6 @@
 import type { AgentCoreConfig } from '@/agents/registry/registryCore';
 import { buildCatalogProviderCliUiConfig } from '@/agents/providers/shared/buildCatalogProviderCliUiConfig';
+import { buildAgentConnectedServicesUiConfig } from '@/agents/registry/buildAgentConnectedServicesUiConfig';
 import { buildAgentResumeUiConfig } from '@/agents/registry/buildAgentResumeUiConfig';
 import { buildAgentSessionStorageUiConfig } from '@/agents/registry/buildAgentSessionStorageUiConfig';
 import { buildAgentToolsUiConfig } from '@/agents/registry/buildAgentToolsUiConfig';
@@ -11,11 +12,8 @@ export const CUSTOM_ACP_CORE: AgentCoreConfig = {
     subtitleKey: 'profiles.aiBackend.customAcpSubtitleExperimental',
     permissionModeI18nPrefix: 'agentInput.codexPermissionMode',
     availability: { experimental: true },
-    connectedService: {
-        id: null,
-        name: 'Custom ACP',
-        connectRoute: null,
-    },
+    connectedServices: buildAgentConnectedServicesUiConfig({ agentId: 'customAcp' }),
+    uiConnectedService: { serviceId: null, label: 'Custom ACP', connectRoute: null },
     flavorAliases: ['customAcp', 'custom-acp'],
     cli: buildCatalogProviderCliUiConfig('customAcp'),
     permissions: {
