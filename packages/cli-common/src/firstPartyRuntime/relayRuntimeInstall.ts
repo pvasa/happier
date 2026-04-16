@@ -515,6 +515,12 @@ async function prepareRelayRuntimePayloadForInstall(params: Readonly<{
         const stagedBinDir = join(stagingRoot, 'bin');
         await mkdir(stagedBinDir, { recursive: true });
         await rename(stagedServerBinaryPath, join(stagedBinDir, params.serverBinaryName));
+
+        for (const runtimeSidecarName of ['generated', 'node_modules']) {
+            const stagedSidecarPath = join(stagingRoot, runtimeSidecarName);
+            if (!existsSync(stagedSidecarPath)) continue;
+            await rename(stagedSidecarPath, join(stagedBinDir, runtimeSidecarName));
+        }
     } catch (error) {
         await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
         throw error;

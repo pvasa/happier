@@ -490,7 +490,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   const json = wantsJson(args);
   const op = String(args[0] ?? '').trim();
   if (!op) {
-    throw new Error('Usage: happier relay host <install|status|start|stop|restart|uninstall> [--ssh <user@host>] [--mode user|system] [--channel stable|preview|dev] [--env KEY=VALUE]... [--server-binary <path>] [--json]');
+    throw new Error('Usage: happier relay host <install|status|start|stop|restart|uninstall> [--ssh <user@host>] [--mode user|system] [--channel stable|preview|dev] [--env KEY=VALUE]... [--server-binary <path>] [--yes] [--json]');
   }
 
   let rest = args.slice(1);
@@ -516,6 +516,8 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
   rest = trustedHostKey.rest;
   const port = takeFlagValue(rest, '--port');
   rest = port.rest;
+  const yesFlag = takeFlag(rest, '--yes');
+  rest = yesFlag.rest;
   const jsonFlag = takeFlag(rest, '--json');
   rest = jsonFlag.rest;
 

@@ -491,7 +491,11 @@ function Invoke-PostInstallAction {
     if ([string]::IsNullOrWhiteSpace($invokerName)) { $invokerName = "happier" }
     $helpOutput = ""
     try {
-      $helpOutput = (& $CliPath --help 2>$null | Out-String)
+      if ($requiredSubcommand -eq "relay") {
+        $helpOutput = (& $CliPath relay --help 2>$null | Out-String)
+      } else {
+        $helpOutput = (& $CliPath --help 2>$null | Out-String)
+      }
     } catch {
       $helpOutput = ""
     }

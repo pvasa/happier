@@ -1413,7 +1413,11 @@ run_post_install_action() {
   # We fail fast with a clear message instead of launching an unrelated flow.
   if [[ -n "${required_subcommand}" ]]; then
     local help_output=""
-    help_output="$("${cli_bin}" --help 2>/dev/null || true)"
+    if [[ "${required_subcommand}" == "relay" ]]; then
+      help_output="$("${cli_bin}" relay --help 2>/dev/null || true)"
+    else
+      help_output="$("${cli_bin}" --help 2>/dev/null || true)"
+    fi
     local help_prefix=""
     help_prefix="$(basename "${cli_bin}" 2>/dev/null || true)"
     if [[ -z "${help_prefix}" ]]; then

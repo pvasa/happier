@@ -40,6 +40,14 @@ happier daemon
 EOF
   exit 0
 fi
+if [[ "$1" = "relay" && "$2" = "--help" ]]; then
+  cat <<'EOF'
+happier relay inspect-target [--json]
+happier relay set <relay-url>
+happier relay host <install|status|start|stop|restart|uninstall>
+EOF
+  exit 0
+fi
 if [[ "$1" = "relay" && "$2" = "host" && "$3" = "install" ]]; then
   echo "Relay host installed"
   echo "  http://localhost:53288"
@@ -102,6 +110,14 @@ set -euo pipefail
 if [[ "$1" = "--help" ]]; then
   cat <<'EOF'
 happier relay
+EOF
+  exit 0
+fi
+if [[ "$1" = "relay" && "$2" = "--help" ]]; then
+  cat <<'EOF'
+happier relay inspect-target [--json]
+happier relay set <relay-url>
+happier relay host <install|status|start|stop|restart|uninstall>
 EOF
   exit 0
 fi
@@ -279,7 +295,7 @@ exit 22
   await rm(root, { recursive: true, force: true });
 });
 
-test('install.sh --setup-relay fails fast when the CLI does not advertise relay support', async () => {
+test('install.sh --setup-relay accepts a CLI that advertises relay support through relay --help', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-setup-relay-guard-'));
   const homeDir = join(root, 'home');
   const binDir = join(root, 'bin');
@@ -295,7 +311,8 @@ test('install.sh --setup-relay fails fast when the CLI does not advertise relay 
   await writeFile(curlStubPath, '#!/usr/bin/env bash\necho \"curl should not run\" >&2\nexit 88\n', 'utf8');
   await chmod(curlStubPath, 0o755);
 
-  // CLI is present and can run the command, but it does not advertise relay support in `--help`.
+  // CLI is present and can run the command, but the top-level `--help` output does not list relay.
+  // The installer should still accept it if `relay --help` advertises the relay host surface.
   const cliPath = join(installDir, 'cli', 'current', 'happier');
   await writeFile(
     cliPath,
@@ -305,6 +322,14 @@ if [[ "$1" = "--help" ]]; then
   cat <<'EOF'
 happier auth
 happier daemon
+EOF
+  exit 0
+fi
+if [[ "$1" = "relay" && "$2" = "--help" ]]; then
+  cat <<'EOF'
+happier relay inspect-target [--json]
+happier relay set <relay-url>
+happier relay host <install|status|start|stop|restart|uninstall>
 EOF
   exit 0
 fi
@@ -334,8 +359,8 @@ exit 22
   const res = spawnSync('bash', [installerPath, '--setup-relay'], { env, encoding: 'utf8' });
   const stdout = String(res.stdout ?? '');
   const stderr = String(res.stderr ?? '');
-  assert.notEqual(res.status, 0, `expected setup-relay guard to fail:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
-  assert.match(stderr + stdout, /does not support.*relay/i);
+  assert.equal(res.status, 0, `expected setup-relay to succeed when relay host help is advertised:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
+  assert.match(stdout, /relay invoked/);
 
   await rm(root, { recursive: true, force: true });
 });

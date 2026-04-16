@@ -119,4 +119,29 @@ describe('happier relay host install local server-binary version tracking', () =
             process.exitCode = prevExitCode;
         }
     });
+
+    it('accepts --yes for relay host install as a no-op installer acknowledgement', async () => {
+        const output = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+
+        try {
+            const { commandRegistry } = await import('../commandRegistry');
+
+            await commandRegistry.relay({
+                args: ['relay', 'host', 'install', '--yes', '--json'],
+                rawArgv: ['node', 'hprev', 'relay', 'host', 'install', '--yes', '--json'],
+                terminalRuntime: null,
+            });
+
+            const parsed = JSON.parse(output.logs.join('\n').trim());
+            expect(parsed.ok).toBe(true);
+            expect(parsed.kind).toBe('relay_host_install');
+            expect(resolvedLocalInstallVersion).toBe(mockedPreparedVersionId);
+            expect(process.exitCode).toBe(0);
+        } finally {
+            output.restore();
+            process.exitCode = prevExitCode;
+        }
+    });
 });
