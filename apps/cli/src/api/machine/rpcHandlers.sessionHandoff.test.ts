@@ -2199,12 +2199,14 @@ function createLoopbackMachineTransferChannels() {
         },
       });
 
-      // start() can legitimately acknowledge before workspace export artifacts have been persisted.
-      // Ensure source export has finished before asserting on source_cleanup baseline persistence.
+      // start() can legitimately acknowledge before the durable source-export record includes the
+      // workspace manifest. `source_cleanup` baseline persistence depends on that persisted record,
+      // not just on the manifest file existing on disk.
       await vi.waitFor(async () => {
-        await access(join(activeServerDir, 'session-handoff', started.handoffId, 'provider-bundle.json'));
-        await access(join(activeServerDir, 'session-handoff', started.handoffId, 'workspace-manifest.txt'));
-        await access(join(activeServerDir, 'session-handoff', started.handoffId, 'source-export.json'));
+        const sourceExportStore = createSessionHandoffSourceExportStore({ activeServerDir });
+        const persisted = await sourceExportStore.load(started.handoffId);
+        expect(persisted?.providerBundle).toBeDefined();
+        expect(persisted?.workspaceManifest).toBeDefined();
       }, { timeout: 10_000 });
 
       await commit!({
