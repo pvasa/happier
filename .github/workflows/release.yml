@@ -237,7 +237,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Test + typecheck
         if: inputs.checks_profile != 'none'
@@ -499,7 +501,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Apply version bumps (single commit)
         id: bumps

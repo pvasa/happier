@@ -146,10 +146,9 @@ export class HappierPipeline {
       .withEnvVariable("NPM_CONFIG_REGISTRY", "https://registry.npmjs.org")
       .withMountedCache("/root/.cache/yarn", dag.cacheVolume("happier-yarn-cache"))
       .withMountedCache("/root/.gradle", dag.cacheVolume("happier-gradle-cache"))
-      .withExec(["yarn", "config", "set", "registry", "https://registry.npmjs.org/"])
       .withExec([
-        "sh",
-        "docker/scripts/yarn-install-with-retry.sh",
+        "bash",
+        "scripts/ci/yarn-install-with-retry.sh",
         "--frozen-lockfile",
         "--ignore-engines",
         "--network-timeout",

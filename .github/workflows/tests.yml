@@ -196,7 +196,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile
 
       - name: Install Playwright browsers
         if: github.event_name == 'workflow_call' || steps.changes.outputs.ui_e2e == 'true'
@@ -262,7 +264,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile
 
       - name: Install Playwright browsers
         run: npx playwright install chromium
@@ -309,7 +313,9 @@ jobs:
           # Keep this lane mobile-focused (avoid downloading heavy web-only assets).
           HAPPIER_INSTALL_SCOPE: "ui,protocol,agents,tests"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        run: yarn install --frozen-lockfile
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile
 
       - name: Install Maestro
         run: |
@@ -355,7 +361,9 @@ jobs:
           npm_config_production: "false"
           HAPPIER_INSTALL_SCOPE: "ui,protocol,agents,tests"
           HAPPIER_UI_VENDOR_WEB_ASSETS: "0"
-        run: yarn install --frozen-lockfile
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile
 
       - name: Install Maestro
         run: |
@@ -412,7 +420,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile
 
       - name: Run protocol unit tests
         run: yarn workspace @happier-dev/protocol test
@@ -455,7 +465,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run shared package unit tests
         run: |
@@ -498,7 +510,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run unit tests
         run: yarn --cwd apps/server test:unit
@@ -552,7 +566,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Migrate (Postgres)
         env:
@@ -640,7 +656,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Disable remote logging for CI (avoid hanging test process)
         run: |
@@ -681,7 +699,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run unit tests
         run: yarn --cwd apps/stack test:unit
@@ -714,7 +734,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run release contract tests
         run: |
@@ -755,7 +777,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run unified installer smoke
         env:
@@ -802,7 +826,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run unified installer smoke
         env:
@@ -851,7 +877,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run unified installer smoke
         shell: pwsh
@@ -895,7 +923,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run isolated binary smoke tests
         run: |
@@ -935,7 +965,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run unified Docker release-assets validation
         run: |
@@ -975,7 +1007,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run real systemd self-host E2E
         run: |
@@ -1012,7 +1046,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run real launchd self-host E2E
         run: |
@@ -1049,7 +1085,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run real schtasks self-host E2E
         run: node --test apps/stack/scripts/self_host_schtasks.real.integration.test.mjs
@@ -1088,7 +1126,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run real self-host + daemon E2E
         run: node --test apps/stack/scripts/self_host_daemon.real.integration.test.mjs
@@ -1118,7 +1158,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run governance self-tests
         run: yarn test:wiring:self && yarn test:policy:self
@@ -1200,14 +1242,16 @@ jobs:
           fi
           tmux -V
 
-      - name: Prepare light DB (SQLite) + apply migrations
+      - name: Install dependencies
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: |
-          set -euo pipefail
-          yarn install --frozen-lockfile --ignore-engines
-          yarn --cwd apps/server -s migrate:sqlite:deploy
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
+
+      - name: Prepare light DB (SQLite) + apply migrations
+        run: yarn --cwd apps/server -s migrate:sqlite:deploy
 
       - name: Build CLI
         run: yarn workspace @happier-dev/cli build
@@ -1406,7 +1450,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run core e2e suite
         env:
@@ -1461,7 +1507,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run core e2e suite (slow)
         env:
@@ -1520,7 +1568,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Install provider CLIs
         env:
@@ -1665,7 +1715,9 @@ jobs:
         env:
           YARN_PRODUCTION: "false"
           npm_config_production: "false"
-        run: yarn install --frozen-lockfile --ignore-engines
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
 
       - name: Run stress suite
         env:
