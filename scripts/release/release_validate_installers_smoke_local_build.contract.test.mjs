@@ -43,12 +43,25 @@ test('installers-smoke local-build bootstrap still returns a minisign dir when G
   const repoRoot = join(root, 'repo');
   const scratchDir = join(root, 'scratch');
   const bootstrapDir = join(repoRoot, '.github', 'actions', 'bootstrap-minisign');
+  const pathBinDir = join(root, 'path-bin');
   const minisignDir = join(root, 'bootstrapped-bin');
   const githubPathFile = join(root, 'github-path.txt');
 
   await mkdir(bootstrapDir, { recursive: true });
   await mkdir(scratchDir, { recursive: true });
+  await mkdir(pathBinDir, { recursive: true });
   await mkdir(minisignDir, { recursive: true });
+
+  const bashPath = join(pathBinDir, 'bash');
+  await writeFile(
+    bashPath,
+    `#!/bin/bash
+set -euo pipefail
+exec /bin/bash "$@"
+`,
+    'utf8',
+  );
+  await chmod(bashPath, 0o755);
 
   const minisignPath = join(minisignDir, 'minisign');
   await writeFile(
@@ -86,7 +99,7 @@ fi
     scratchDir,
     baseEnv: {
       ...process.env,
-      PATH: process.env.PATH ?? '',
+      PATH: pathBinDir,
       GITHUB_PATH: githubPathFile,
     },
   });

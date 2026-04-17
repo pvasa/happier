@@ -34,9 +34,7 @@ afterEach(() => {
     vi.clearAllMocks();
 });
 
-function createFakeSsh(scenario: Readonly<{
-    outputs?: readonly Readonly<{ status?: number; stdout?: string; stderr?: string }>[];
-}>): Readonly<{
+function createFakeSsh(): Readonly<{
     binDir: string;
     cleanup: () => void;
     readInvocations: () => string[][];
@@ -45,27 +43,40 @@ function createFakeSsh(scenario: Readonly<{
     const binDir = join(rootDir, 'bin');
     const sshPath = join(binDir, 'ssh');
     const scpPath = join(binDir, 'scp');
-    const statePath = join(rootDir, 'scenario.json');
     const logPath = join(rootDir, 'invocations.log');
 
-    writeFileSync(statePath, JSON.stringify({ outputs: scenario.outputs ?? [] }), 'utf8');
     mkdirSync(binDir, { recursive: true });
     writeFileSync(logPath, '', 'utf8');
     writeFileSync(
         sshPath,
         `#!/usr/bin/env node
-const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync } = require('node:fs');
 
-const statePath = process.env.HAPPIER_FAKE_SSH_STATE_PATH;
 const logPath = process.env.HAPPIER_FAKE_SSH_LOG_PATH;
 const argv = process.argv.slice(2);
 appendFileSync(logPath, JSON.stringify(argv) + '\\n');
-
-const state = JSON.parse(readFileSync(statePath, 'utf8'));
-const outputs = Array.isArray(state.outputs) ? state.outputs : [];
-const next = outputs.length > 0 ? outputs.shift() : { status: 0, stdout: '', stderr: '' };
-state.outputs = outputs;
-writeFileSync(statePath, JSON.stringify(state), 'utf8');
+const remoteCommand = String(argv.at(-1) ?? '');
+const next = (() => {
+    if (remoteCommand.includes('uname -s') && remoteCommand.includes('uname -m')) {
+        return { status: 0, stdout: '{"platform":"linux","arch":"x86_64"}\\n', stderr: '' };
+    }
+    if (remoteCommand.includes('printf') && remoteCommand.includes('$HOME')) {
+        return { status: 0, stdout: '/home/test\\n', stderr: '' };
+    }
+    if (remoteCommand.includes('--property=LoadState,ActiveState')) {
+        return { status: 0, stdout: 'LoadState=not-found\\nActiveState=inactive\\n', stderr: '' };
+    }
+    if (remoteCommand.includes('--property=UnitFileState,ActiveState,SubState')) {
+        return { status: 0, stdout: 'UnitFileState=disabled\\nActiveState=inactive\\nSubState=dead\\n', stderr: '' };
+    }
+    if (remoteCommand.includes('self-host-state.json')) {
+        return { status: 0, stdout: '\\n', stderr: '' };
+    }
+    if (remoteCommand.includes('server.env')) {
+        return { status: 0, stdout: '\\n', stderr: '' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+})();
 
 if (next.stdout) process.stdout.write(String(next.stdout));
 if (next.stderr) process.stderr.write(String(next.stderr));
@@ -101,21 +112,14 @@ process.exit(0);
 
 function withPatchedPath<T>(binDir: string, run: () => Promise<T>): Promise<T> {
     const previousPath = process.env.PATH;
-    const previousStatePath = process.env.HAPPIER_FAKE_SSH_STATE_PATH;
     const previousLogPath = process.env.HAPPIER_FAKE_SSH_LOG_PATH;
     process.env.PATH = `${binDir}:${previousPath ?? ''}`;
-    process.env.HAPPIER_FAKE_SSH_STATE_PATH = join(binDir, '..', 'scenario.json');
     process.env.HAPPIER_FAKE_SSH_LOG_PATH = join(binDir, '..', 'invocations.log');
     return run().finally(() => {
         if (previousPath === undefined) {
             delete process.env.PATH;
         } else {
             process.env.PATH = previousPath;
-        }
-        if (previousStatePath === undefined) {
-            delete process.env.HAPPIER_FAKE_SSH_STATE_PATH;
-        } else {
-            process.env.HAPPIER_FAKE_SSH_STATE_PATH = previousStatePath;
         }
         if (previousLogPath === undefined) {
             delete process.env.HAPPIER_FAKE_SSH_LOG_PATH;
@@ -212,34 +216,7 @@ describe('installOrUpdateRelayRuntimeDefault', () => {
     });
 
     it('avoids piping the remote relay runtime installer over curl and bash', async () => {
-        const fakeSsh = createFakeSsh({
-            outputs: [
-                {
-                    status: 0,
-                    stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n`,
-                },
-                {
-                    status: 0,
-                    stdout: 'yes\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-            ],
-        });
+        const fakeSsh = createFakeSsh();
 
         try {
             await withPatchedPath(fakeSsh.binDir, async () => {
@@ -272,34 +249,7 @@ describe('installOrUpdateRelayRuntimeDefault', () => {
     });
 
     it('does not delegate remote relay runtime installs to `hstack self-host install`', async () => {
-        const fakeSsh = createFakeSsh({
-            outputs: [
-                {
-                    status: 0,
-                    stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n`,
-                },
-                {
-                    status: 0,
-                    stdout: 'yes\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-                {
-                    status: 0,
-                    stdout: '\n',
-                },
-            ],
-        });
+        const fakeSsh = createFakeSsh();
 
         try {
             await withPatchedPath(fakeSsh.binDir, async () => {
@@ -351,26 +301,7 @@ describe('installOrUpdateRelayRuntimeDefault', () => {
 
 describe('readRelayRuntimeStatusDefault', () => {
     it('does not delegate remote relay runtime status reads to `hstack self-host status`', async () => {
-        const fakeSsh = createFakeSsh({
-            outputs: [
-                {
-                    status: 0,
-                    stdout: `${JSON.stringify({ platform: 'linux', arch: 'x86_64' })}\n`,
-                },
-                {
-                    status: 0,
-                    stdout: `${JSON.stringify({ version: '1.2.3' })}\n`,
-                },
-                {
-                    status: 0,
-                    stdout: 'enabled\nactive\nrunning\n',
-                },
-                {
-                    status: 0,
-                    stdout: 'yes\n',
-                },
-            ],
-        });
+        const fakeSsh = createFakeSsh();
 
         try {
             await withPatchedPath(fakeSsh.binDir, async () => {
