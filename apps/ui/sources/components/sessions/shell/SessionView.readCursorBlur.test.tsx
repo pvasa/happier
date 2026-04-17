@@ -230,11 +230,7 @@ vi.mock('@/agents/catalog/catalog', async () => {
     const actual = await vi.importActual<typeof import('@/agents/catalog/catalog')>('@/agents/catalog/catalog');
     return {
         ...actual,
-        AGENT_IDS: ['default'],
-        DEFAULT_AGENT_ID: 'default',
         buildResumeSessionExtrasFromUiState: () => null,
-        getAgentCore: () => ({ title: 'Agent', model: { defaultMode: 'build' } }),
-        resolveAgentIdFromFlavor: () => 'default',
     };
 });
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
@@ -363,6 +359,7 @@ vi.mock('@/sync/domains/models/modelOptions', () => ({
 }));
 vi.mock('@/sync/domains/session/control/localControlSwitch', () => ({
     shouldRenderChatTimelineForSession: () => true,
+    shouldRequestRemoteControl: () => false,
     shouldRequestRemoteControlAfterPendingEnqueue: () => false,
 }));
 vi.mock('@/sync/domains/session/control/controlSwitchUiTimeout', () => ({

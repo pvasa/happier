@@ -450,6 +450,17 @@ describe('UI testkit mock factories', () => {
         expect(mock.useSettingMutable('activeServerId')).toEqual(['stub-value', expect.any(Function)]);
         expect(mock.useArtifacts()).toEqual([]);
         expect(mock.useMachineListByServerId()).toEqual({});
+        expect(mock.useEndpointConnectivity()).toEqual({
+            status: 'idle',
+            reason: null,
+            attempt: 0,
+            nextRetryAt: null,
+            lastConnectedAt: null,
+            lastDisconnectedAt: null,
+            lastErrorMessage: null,
+        });
+        expect(mock.useMachine('machine-1')).toBeNull();
+        expect(mock.useSyncError()).toBeNull();
     });
 
     it('creates a selector-capable storage store mock with getState support', async () => {

@@ -147,7 +147,7 @@ describe('RelayHostEngine (local health control)', () => {
               expect(options?.env?.DBUS_SESSION_BUS_ADDRESS).toBe(`unix:path=${expectedRuntimeDir}/bus`);
               return {
                 status: 0,
-                stdout: 'ActiveState=active\nSubState=running\nUnitFileState=enabled\n',
+                stdout: 'ActiveState=active\nSubState=running\nUnitFileState=enabled\nLoadState=loaded\n',
                 stderr: '',
               };
             }

@@ -55,6 +55,8 @@ else
   echo "Neither sha256sum nor shasum is available to verify minisign bootstrap." >&2
   exit 1
 fi
+actual_sha="${actual_sha//$'\r'/}"
+actual_sha="${actual_sha#\\}"
 
 if [[ "${actual_sha}" != "${expected_sha}" ]]; then
   echo "minisign bootstrap checksum mismatch (expected ${expected_sha}, got ${actual_sha})." >&2

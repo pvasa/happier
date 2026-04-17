@@ -96,7 +96,7 @@ describe('RelayHostEngine (local health)', () => {
           ...actual,
           spawnSync: (cmd: string, args?: readonly string[]) => {
             if (cmd === 'systemctl' && Array.isArray(args) && args.includes('show')) {
-              return { status: 0, stdout: 'ActiveState=active\nSubState=running\nUnitFileState=enabled\n', stderr: '' };
+              return { status: 0, stdout: 'ActiveState=active\nSubState=running\nUnitFileState=enabled\nLoadState=loaded\n', stderr: '' };
             }
             return { status: 0, stdout: '', stderr: '' };
           },

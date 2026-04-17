@@ -29,6 +29,15 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
     // (via `useMemo`/`useEffect`) don't thrash in unit tests unless a caller opts in to custom data.
     const allMachines = [] as ReturnType<StorageModule['useAllMachines']>;
     const allSessions = [] as ReturnType<StorageModule['useAllSessions']>;
+    const endpointConnectivity = {
+        status: 'idle',
+        reason: null,
+        attempt: 0,
+        nextRetryAt: null,
+        lastConnectedAt: null,
+        lastDisconnectedAt: null,
+        lastErrorMessage: null,
+    } satisfies ReturnType<StorageModule['useEndpointConnectivity']>;
     const useSetting = createUseSettingMock();
     const useSettingMutable = createUseSettingMutableMock(useSetting);
     const store = createStorageStoreMock({
@@ -47,6 +56,9 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useSessionMessagesVersion: () => 0,
         useAllMachines: () => allMachines,
         useAllSessions: () => allSessions,
+        useMachine: () => null,
+        useEndpointConnectivity: () => endpointConnectivity,
+        useSyncError: () => null,
         useArtifacts: () => [],
         useMachineListByServerId: () => ({}),
         useMachineListStatusByServerId: () => ({}),
