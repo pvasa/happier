@@ -143,6 +143,7 @@ test('pipeline CLI help reflects the public dev release ring for publish/release
     'release-build-cli-binaries',
     'release-build-hstack-binaries',
     'release-build-server-binaries',
+    'release-prepare-binary-assets',
     'release-publish-manifests',
     'release-build-ui-web-bundle',
   ]) {
@@ -156,6 +157,23 @@ test('pipeline CLI help reflects the public dev release ring for publish/release
     assert.match(help, /stable\|preview\|dev/);
     assert.doesNotMatch(help, /\bpublicdev\b/);
   }
+});
+
+test('pipeline CLI help reflects the current release-validate execution surface', async () => {
+  const help = execFileSync(process.execPath, [pipelineCli, 'help', 'release-validate'], {
+    cwd: repoRoot,
+    env: { ...process.env },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 30_000,
+  });
+
+  assert.match(help, /installers-smoke \(published-channel\|published-tag\)/);
+  assert.match(help, /artifact-verify \(local-build or --product\/--version\)/);
+  assert.match(help, /docker-release-assets \(local-build\|published-channel; published-channel -> local-build upgrade\)/);
+  assert.match(help, /cli-update \(published-channel\|published-tag -> published-channel\|published-tag\|local-build\|local-pack\)/);
+  assert.match(help, /server-upgrade \(dry-run planning only\)/);
+  assert.doesNotMatch(help, /Later phases will add executor wiring/);
 });
 
 test('pipeline help covers every supported subcommand', async () => {

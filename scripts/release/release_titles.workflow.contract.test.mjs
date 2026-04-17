@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getBinaryPublishProductSpec } from '../pipeline/release/publishing/product-specs.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -19,16 +20,13 @@ test('GitHub release titles are prefixed with Happier', async () => {
   const publishUiWeb = await loadFile('scripts/pipeline/release/publish-ui-web.mjs');
   assert.match(publishUiWeb, /Happier UI Web Bundle/);
 
-  const publishServerRuntime = await loadFile('scripts/pipeline/release/publish-server-runtime.mjs');
-  assert.match(publishServerRuntime, /Happier Server/);
+  assert.equal(getBinaryPublishProductSpec('server').releaseTitleBase, 'Happier Server');
 
   const releaseNpm = await loadWorkflow('release-npm.yml');
   assert.match(releaseNpm, /title: Happier CLI v/);
   assert.match(releaseNpm, /title: Happier CLI Stable/);
   assert.match(releaseNpm, /title: Happier CLI Preview/);
-  assert.match(releaseNpm, /title: Happier Stack v/);
-  assert.match(releaseNpm, /title: Happier Stack Stable/);
-  assert.match(releaseNpm, /title: Happier Stack Preview/);
+  assert.equal(getBinaryPublishProductSpec('hstack').releaseTitleBase, 'Happier Stack');
 
   const buildTauri = await loadWorkflow('build-tauri.yml');
   assert.match(buildTauri, /title: Happier UI Desktop Dev/);

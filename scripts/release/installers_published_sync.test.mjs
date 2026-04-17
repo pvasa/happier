@@ -8,26 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const sourceRoot = join(repoRoot, 'scripts', 'release', 'installers');
 const websiteRoot = join(repoRoot, 'apps', 'website', 'public');
-const { INSTALLER_PUBLISH_SPECS } = await import('../pipeline/release/sync-installers.mjs');
-
-function replacePowerShellDefaultChannel(source, channel) {
-  return source.replace(
-    /(\[string\] \$Channel = \$\(if \(\$env:HAPPIER_CHANNEL\) \{ \$env:HAPPIER_CHANNEL \} else \{ ")(stable)(" \}\),)/,
-    `$1${channel}$3`,
-  );
-}
-
-function applyTransform({ source, transform }) {
-  if (transform === 'preview-default-channel') {
-    const shellUpdated = source.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview');
-    return replacePowerShellDefaultChannel(shellUpdated, 'preview');
-  }
-  if (transform === 'publicdev-default-channel') {
-    const shellUpdated = source.replaceAll('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev');
-    return replacePowerShellDefaultChannel(shellUpdated, 'dev');
-  }
-  return source;
-}
+const { INSTALLER_PUBLISH_SPECS, applyInstallerPublishTransform } = await import('../pipeline/release/installers/catalog.mjs');
 
 test('published website installers stay in sync with release-owned installer sources', async () => {
   const forbidden = [
@@ -48,7 +29,7 @@ test('published website installers stay in sync with release-owned installer sou
 
   for (const spec of INSTALLER_PUBLISH_SPECS) {
     const rawSource = await readFile(join(sourceRoot, spec.source), 'utf8');
-    const source = applyTransform({ source: rawSource, transform: spec.transform });
+    const source = applyInstallerPublishTransform(Buffer.from(rawSource, 'utf8'), spec.transform).toString('utf8');
     for (const target of spec.targets) {
       const published = await readFile(join(websiteRoot, target), 'utf8');
       assert.equal(published, source, `${target} is out of sync with scripts/release/installers/${spec.source}`);

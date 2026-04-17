@@ -1,7 +1,8 @@
-import { createReadStream, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync, closeSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, closeSync } from 'node:fs';
 import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, dirname, resolve as resolvePath } from 'node:path';
+import { createHash } from 'node:crypto';
 import { repoRootDir } from '../paths';
 import { reserveAvailablePort } from '../network/reserveAvailablePort';
 import { runLoggedCommand } from './spawnProcess';
@@ -19,6 +20,7 @@ let sharedExportPromise: Promise<string> | null = null;
 let sharedExportDir: string | null = null;
 let sharedExportCacheKey: string | null = null;
 const UI_WEB_EXPORT_MANIFEST_VERSION = 1;
+const UI_WEB_EXPORT_SOURCE_FINGERPRINT_VERSION = 1;
 
 type UiWebRuntimeConfig = Readonly<{
   serverUrl: string;
@@ -174,6 +176,53 @@ function buildExportEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   };
 }
 
+export function resolveUiWebExportSourceFingerprint(): string {
+  const uiWorkspaceDir = resolvePath(repoRootDir(), 'apps', 'ui');
+  const roots = [
+    resolvePath(uiWorkspaceDir, 'app'),
+    resolvePath(uiWorkspaceDir, 'sources'),
+    resolvePath(uiWorkspaceDir, 'assets'),
+    resolvePath(uiWorkspaceDir, 'app.config.ts'),
+    resolvePath(uiWorkspaceDir, 'package.json'),
+    resolvePath(uiWorkspaceDir, 'tsconfig.json'),
+    resolvePath(uiWorkspaceDir, 'metro.config.js'),
+    resolvePath(uiWorkspaceDir, 'babel.config.js'),
+  ];
+  const skipDirNames = new Set(['.expo', '.git', '.project', 'dist', 'node_modules', 'web-build']);
+  const hash = createHash('sha1');
+
+  const appendPathToHash = (targetPath: string): void => {
+    if (!existsSync(targetPath)) {
+      return;
+    }
+
+    const stats = statSync(targetPath);
+    const relativePath = targetPath.slice(uiWorkspaceDir.length + 1);
+    if (stats.isDirectory()) {
+      const dirName = relativePath.split('/').pop() ?? '';
+      if (skipDirNames.has(dirName)) {
+        return;
+      }
+
+      hash.update(`dir:${relativePath}\n`);
+      const entries = readdirSync(targetPath, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name));
+      for (const entry of entries) {
+        appendPathToHash(resolvePath(targetPath, entry.name));
+      }
+      return;
+    }
+
+    hash.update(`file:${relativePath}:${stats.size}:${Math.trunc(stats.mtimeMs)}\n`);
+  };
+
+  for (const root of roots) {
+    appendPathToHash(root);
+  }
+
+  return `${UI_WEB_EXPORT_SOURCE_FINGERPRINT_VERSION}:${hash.digest('hex')}`;
+}
+
 function buildUiWebExportCacheKey(env: NodeJS.ProcessEnv): string {
   const exportEnv = buildExportEnv(env);
   const relevantEntries = Object.entries(exportEnv)
@@ -188,7 +237,10 @@ function buildUiWebExportCacheKey(env: NodeJS.ProcessEnv): string {
     )
     .sort(([left], [right]) => left.localeCompare(right));
 
-  return JSON.stringify(relevantEntries);
+  return JSON.stringify({
+    env: relevantEntries,
+    sourceFingerprint: resolveUiWebExportSourceFingerprint(),
+  });
 }
 
 function readPersistedUiWebExportCacheKey(cacheKeyPath: string): string | null {

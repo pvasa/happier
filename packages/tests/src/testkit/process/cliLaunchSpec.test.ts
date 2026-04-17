@@ -9,6 +9,12 @@ const sharedDepsBuildMock = vi.hoisted(() => ({
     void testDir;
     void env;
   }),
+  ensureCliDistSnapshotEntrypoint: vi.fn(
+    async (
+      _params: { testDir: string; env: NodeJS.ProcessEnv },
+      _options: { repoRoot?: string; snapshotDir: string },
+    ) => resolve(_options.snapshotDir, 'dist', 'index.mjs'),
+  ),
 }));
 
 vi.mock('./cliDist', async () => {
@@ -16,12 +22,52 @@ vi.mock('./cliDist', async () => {
   return {
     ...actual,
     ensureCliSharedDepsBuilt: sharedDepsBuildMock.ensureCliSharedDepsBuilt,
+    ensureCliDistSnapshotEntrypoint: sharedDepsBuildMock.ensureCliDistSnapshotEntrypoint,
   };
 });
 
 import { resolveCliTestLaunchSpec } from './cliLaunchSpec';
 
 describe('resolveCliTestLaunchSpec', () => {
+  it('launches an already-prepared dist snapshot without rebuilding or falling back to source mode', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'happier-cli-launch-spec-prepared-'));
+    const snapshotDir = resolve(repoRoot, 'prepared-snapshot');
+
+    try {
+      mkdirSync(resolve(snapshotDir, 'dist'), { recursive: true });
+      mkdirSync(resolve(snapshotDir, 'node_modules'), { recursive: true });
+      writeFileSync(resolve(snapshotDir, '.cli-dist-snapshot.ready.json'), '{"v":1}\n', 'utf8');
+      writeFileSync(resolve(snapshotDir, 'dist', 'index.mjs'), 'export {};\n', 'utf8');
+
+      sharedDepsBuildMock.ensureCliSharedDepsBuilt.mockClear();
+      sharedDepsBuildMock.ensureCliDistSnapshotEntrypoint.mockClear();
+
+      const spec = await resolveCliTestLaunchSpec(
+        {
+          testDir: resolve(repoRoot, '.project'),
+          env: {
+            ...process.env,
+            HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+          },
+        },
+        {
+          repoRoot,
+          snapshotDir,
+          preparedDistSnapshotOnly: true,
+        },
+      );
+
+      expect(sharedDepsBuildMock.ensureCliSharedDepsBuilt).not.toHaveBeenCalled();
+      expect(sharedDepsBuildMock.ensureCliDistSnapshotEntrypoint).not.toHaveBeenCalled();
+      expect(spec).toEqual({
+        command: process.execPath,
+        args: ['--preserve-symlinks', resolve(snapshotDir, 'dist', 'index.mjs')],
+      });
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('ensures source-entrypoint launches refresh shared deps before snapshotting bundled node_modules', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'happier-cli-launch-spec-'));
     const snapshotDir = resolve(repoRoot, 'snapshot');

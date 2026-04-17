@@ -169,6 +169,7 @@ export function spawnLoggedProcess(params: {
   env?: NodeJS.ProcessEnv;
   stdoutPath: string;
   stderrPath: string;
+  cleanupDescendantsOnExit?: boolean;
 }): SpawnedProcess {
   const child = spawn(params.command, params.args, {
     cwd: params.cwd,
@@ -242,7 +243,7 @@ export function spawnLoggedProcess(params: {
 
   child.once('exit', () => {
     if (descendantPoller) clearInterval(descendantPoller);
-    if (observedDescendantPids.size > 0) {
+    if (params.cleanupDescendantsOnExit !== false && observedDescendantPids.size > 0) {
       void terminateProcessTreeByPid(child.pid ?? 0, {
         graceMs: 0,
         pollMs: 25,

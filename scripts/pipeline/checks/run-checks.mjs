@@ -81,6 +81,29 @@ function run(opts, cmd, args, extra) {
   });
 }
 
+/**
+ * @param {{ dryRun: boolean }} opts
+ * @param {string[]} args
+ * @param {{ env?: Record<string, string> }} [extra]
+ */
+function runReleaseValidate(opts, args, extra) {
+  const commandArgs = ['scripts/pipeline/run.mjs', 'release-validate', ...args];
+  const env = { ...process.env, ...(extra?.env ?? {}) };
+  if (opts.dryRun) {
+    run({ dryRun: true }, process.execPath, commandArgs);
+    const output = execFileSync(process.execPath, [...commandArgs, '--dry-run'], {
+      cwd: process.cwd(),
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 4 * 60 * 60_000,
+    });
+    process.stdout.write(output.endsWith('\n') ? output : `${output}\n`);
+    return;
+  }
+  run(opts, process.execPath, commandArgs, { env });
+}
+
 function main() {
   const { values } = parseArgs({
     options: {
@@ -170,23 +193,25 @@ function main() {
       true,
     );
 
-    if (!dryRun) {
-      if (!commandExists('docker')) {
-        fail("release-assets-e2e requires Docker. Fix: start Docker Desktop (macOS) or install docker engine.");
-      }
-      try {
-        execFileSync('docker', ['info'], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'], timeout: 10_000 });
-      } catch {
-        fail('release-assets-e2e requires Docker to be running. Fix: start Docker Desktop and retry.');
-      }
-    }
-
-    run({ dryRun }, 'bash', [
-      'scripts/release/release-assets-e2e/run.sh',
-      `--mode=${mode}`,
-      `--monorepo=${monorepo}`,
-      withRelayUpgrade ? '--with-relay-upgrade' : '--no-relay-upgrade',
-    ]);
+    runReleaseValidate(
+      { dryRun },
+      [
+        '--suite',
+        'docker-release-assets',
+        '--platform',
+        'linux',
+        '--source',
+        'local-build',
+        '--ref',
+        '.',
+        '--mode',
+        mode,
+        '--monorepo',
+        monorepo,
+        withRelayUpgrade ? '--with-relay-upgrade' : '--no-relay-upgrade',
+      ],
+      {},
+    );
   }
 
   if (plan.runSelfHostSystemd) {

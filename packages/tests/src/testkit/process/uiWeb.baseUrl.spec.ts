@@ -99,7 +99,7 @@ function notOk(): FakeFetchResponse {
   };
 }
 
-function buildUiWebExportCacheKeyLike(env: NodeJS.ProcessEnv): string {
+async function buildUiWebExportCacheKeyLike(env: NodeJS.ProcessEnv): Promise<string> {
   const debug = String(env.EXPO_PUBLIC_DEBUG ?? '1').trim() || '1';
   const exportEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -127,7 +127,11 @@ function buildUiWebExportCacheKeyLike(env: NodeJS.ProcessEnv): string {
     )
     .sort(([left], [right]) => left.localeCompare(right));
 
-  return JSON.stringify(relevantEntries);
+  const { resolveUiWebExportSourceFingerprint } = await import('./uiWebExport');
+  return JSON.stringify({
+    env: relevantEntries,
+    sourceFingerprint: resolveUiWebExportSourceFingerprint(),
+  });
 }
 
 function writeUiWebExportManifestLike(path: string): void {
@@ -273,7 +277,7 @@ describe('startUiWeb baseUrl resolution', () => {
       EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: 'e2e-cache-test',
     };
     await mkdir(dirname(cacheKeyPath), { recursive: true });
-    writeFileSync(cacheKeyPath, JSON.stringify({ cacheKey: buildUiWebExportCacheKeyLike(env) }), 'utf8');
+    writeFileSync(cacheKeyPath, JSON.stringify({ cacheKey: await buildUiWebExportCacheKeyLike(env) }), 'utf8');
     writeUiWebExportManifestLike(manifestPath);
 
     const testDir = await mkdtemp(join(tmpdir(), 'happier-uiweb-'));
@@ -310,7 +314,7 @@ describe('startUiWeb baseUrl resolution', () => {
       EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: 'e2e-cache-test',
     };
     await mkdir(dirname(cacheKeyPath), { recursive: true });
-    writeFileSync(cacheKeyPath, JSON.stringify({ cacheKey: buildUiWebExportCacheKeyLike(env) }), 'utf8');
+    writeFileSync(cacheKeyPath, JSON.stringify({ cacheKey: await buildUiWebExportCacheKeyLike(env) }), 'utf8');
 
     const testDir = await mkdtemp(join(tmpdir(), 'happier-uiweb-'));
     const started = await startUiWeb({ testDir, env });
@@ -355,6 +359,44 @@ describe('startUiWeb baseUrl resolution', () => {
     } finally {
       await startedA.stop();
       await startedB.stop();
+    }
+  });
+
+  it('rebuilds the exported web bundle when UI source files change under the same env', async () => {
+    vi.resetModules();
+    const { startUiWeb } = await import('./uiWeb');
+    const exportNamespace = buildUniqueUiWebExportNamespace('source-change');
+    const markerDir = await mkdtemp(join(resolve(repoRootDir(), 'apps/ui/sources'), 'uiweb-source-change-'));
+    const markerPath = join(markerDir, 'marker.ts');
+
+    const testDirA = await mkdtemp(join(tmpdir(), 'happier-uiweb-'));
+    const testDirB = await mkdtemp(join(tmpdir(), 'happier-uiweb-'));
+
+    const startedA = await startUiWeb({
+      testDir: testDirA,
+      env: {
+        HAPPIER_E2E_UI_WEB_EXPORT_NAMESPACE: exportNamespace,
+        EXPO_PUBLIC_POSTHOG_KEY: 'phc-source-change',
+      },
+    });
+
+    await writeFile(markerPath, `export const marker = ${Date.now()};\n`, 'utf8');
+    vi.resetModules();
+    const { startUiWeb: startUiWebAfterChange } = await import('./uiWeb');
+    const startedB = await startUiWebAfterChange({
+      testDir: testDirB,
+      env: {
+        HAPPIER_E2E_UI_WEB_EXPORT_NAMESPACE: exportNamespace,
+        EXPO_PUBLIC_POSTHOG_KEY: 'phc-source-change',
+      },
+    });
+
+    try {
+      expect(runLoggedCalls).toHaveLength(2);
+    } finally {
+      await startedA.stop();
+      await startedB.stop();
+      await rm(markerDir, { recursive: true, force: true });
     }
   });
 

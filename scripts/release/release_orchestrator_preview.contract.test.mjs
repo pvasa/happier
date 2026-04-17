@@ -74,6 +74,16 @@ test('release workflow publishes server runner only when explicitly requested', 
     /publish_server_runtime:[\s\S]*?allow_stable:\s*\$\{\{\s*inputs\.environment == 'production'\s*\}\}/,
     'server runtime publishing should explicitly unlock stable publishing only for production releases',
   );
+  assert.doesNotMatch(
+    raw,
+    /publish_npm:[\s\S]*?publish_stack:/,
+    'release workflow should not treat stack publishing as a required npm signoff input',
+  );
+  assert.doesNotMatch(
+    raw,
+    /publish_npm:[\s\S]*?needs\.plan\.outputs\.publish_stack/,
+    'release workflow should not depend on stack publication when deciding npm publish eligibility',
+  );
 
   assert.match(
     raw,

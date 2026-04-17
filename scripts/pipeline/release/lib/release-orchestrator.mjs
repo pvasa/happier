@@ -102,7 +102,6 @@ export function computeReleaseExecutionPlan(input) {
   const hasWebsite = hasTarget(targets, 'website');
   const hasDocs = hasTarget(targets, 'docs');
   const hasCli = hasTarget(targets, 'cli');
-  const hasStack = hasTarget(targets, 'stack');
   const hasServerRunner = hasTarget(targets, 'server_runner');
   const supportsHostedDeploys = env === 'preview' || env === 'production';
 
@@ -152,9 +151,10 @@ export function computeReleaseExecutionPlan(input) {
   // `release.yml` routes npm publishing through `release-npm.yml` when any publish_* is true.
   const runPublishNpm = !dryRun && (bumpPlan.publish_cli || bumpPlan.publish_stack || bumpPlan.publish_server);
 
-  // Local parity: publishing CLI/stack via the release orchestrator also publishes their rolling GitHub releases.
+  // Local parity: publishing CLI via the release orchestrator also publishes its rolling GitHub release.
+  // hstack remains available as an explicit dev-helper command, but it is no longer release-signoff output.
   const runPublishCliBinaries = !dryRun && hasCli;
-  const runPublishHstackBinaries = !dryRun && hasStack;
+  const runPublishHstackBinaries = false;
 
   return {
     runBumpVersionsDev,

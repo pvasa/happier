@@ -79,7 +79,7 @@ function resolveRuntimeRootFromScriptPath(pathLike: string): string | null {
   return null;
 }
 
-function resolvePackagedRuntimeProjectRoots(): string[] {
+export function resolvePackagedRuntimeProjectRoots(): string[] {
   const roots: string[] = [];
   const candidateRoots = [
     resolveRuntimeRootFromInstalledShimPath(process.execPath),

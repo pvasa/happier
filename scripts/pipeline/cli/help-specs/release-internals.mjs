@@ -93,6 +93,47 @@ export const COMMAND_HELP_RELEASE_INTERNALS = {
     examples: ['node scripts/pipeline/run.mjs release-sync-installers --check --dry-run'],
   },
 
+  'release-validate': {
+    summary: 'Resolve a release-validation request and dispatch it to the unified validation runner.',
+    usage:
+      'node scripts/pipeline/run.mjs release-validate --suite <suite> [--platform <linux|darwin|win32>] ([--source <kind> --ref <value>] | [--from-source <kind> --from-ref <value> --to-source <kind> --to-ref <value>] | [--product <id> --version <ver>]) [--dry-run]',
+    options: [
+      '--secrets-source <auto|env|keychain>  Wrapper flag.',
+      '--keychain-service <name>         Wrapper flag (default: happier/pipeline).',
+      '--keychain-account <name>         Wrapper flag.',
+      '--dry-run                         Wrapper flag.',
+      '--suite <suite>                   Script flag; installers-smoke|binary-smoke|artifact-verify|docker-release-assets|cli-update|server-upgrade|daemon-continuity|session-continuity.',
+      '--platform <linux|darwin|win32>   Script flag; defaults to the current runner platform.',
+      '--source <kind>                   Script flag; suite-dependent source kind.',
+      '--ref <value>                     Script flag paired with --source.',
+      '--from-source <kind>              Script flag for update/upgrade suites.',
+      '--from-ref <value>                Script flag paired with --from-source.',
+      '--to-source <kind>                Script flag for update/upgrade suites.',
+      '--to-ref <value>                  Script flag paired with --to-source.',
+      '--product <cli|hstack|server>     Script flag for artifact-verify; resolves artifacts/checksums/manifests centrally.',
+      '--version <ver>                   Script flag for artifact-verify product targets.',
+      '--release-channel <stable|preview|dev>  Script flag for artifact-verify product targets (optional; inferred from version when omitted).',
+      '--checksums <path>                Script flag for artifact-verify local-build overrides.',
+      '--public-key <path>               Script flag for artifact-verify local-build overrides.',
+      '--skip-smoke                      Script flag for artifact-verify.',
+      '--mode <local|npm>                Script flag for docker-release-assets checks-profile runs.',
+      '--monorepo <local|github>         Script flag for docker-release-assets checks-profile runs.',
+      '--with-relay-upgrade              Script flag for docker-release-assets checks-profile runs.',
+      '--no-relay-upgrade                Script flag for docker-release-assets checks-profile runs.',
+    ],
+    bullets: [
+      'Executable suites: installers-smoke (published-channel|published-tag), binary-smoke (local-build on linux), artifact-verify (local-build or --product/--version).',
+      'docker-release-assets (local-build|published-channel; published-channel -> local-build upgrade); cli-update (published-channel|published-tag -> published-channel|published-tag|local-build|local-pack).',
+      'daemon-continuity (local-build); session-continuity (local-build); server-upgrade (dry-run planning only).',
+      'Global source kinds are published-channel|published-tag|local-build|local-pack|git-ref-build, but each suite accepts only the kinds documented above.',
+    ],
+    examples: [
+      'node scripts/pipeline/run.mjs release-validate --suite installers-smoke --platform linux --source published-channel --ref preview --dry-run',
+      'node scripts/pipeline/run.mjs release-validate --suite artifact-verify --platform linux --product cli --version 1.2.3-preview.4 --release-channel preview --skip-smoke --dry-run',
+      'node scripts/pipeline/run.mjs release-validate --suite cli-update --platform darwin --from-source published-tag --from-ref cli-preview --to-source local-build --to-ref HEAD --dry-run',
+    ],
+  },
+
   'release-bump-version': {
     summary: 'Bump a single component version in-place (advanced helper).',
     usage:
@@ -167,6 +208,30 @@ export const COMMAND_HELP_RELEASE_INTERNALS = {
     ],
     bullets: ['Ensures Prisma clients are generated before compiling.'],
     examples: ['node scripts/pipeline/run.mjs release-build-server-binaries --channel preview --targets linux-x64'],
+  },
+
+  'release-prepare-binary-assets': {
+    summary: 'Build, manifest, and verify one binary product through the shared release asset pipeline.',
+    usage:
+      `node scripts/pipeline/run.mjs release-prepare-binary-assets --product <cli|server> --channel <${publicReleaseChannelChoices}> --version <ver> --assets-base-url <url> --commit-sha <sha> [--skip-smoke]`,
+    options: [
+      '--deploy-environment <env>        Wrapper flag (default: production).',
+      '--secrets-source <auto|env|keychain>  Wrapper flag.',
+      '--keychain-service <name>         Wrapper flag (default: happier/pipeline).',
+      '--keychain-account <name>         Wrapper flag.',
+      '--dry-run                         Wrapper flag.',
+      '--product <cli|server>            Script flag (required).',
+      `--channel <${publicReleaseChannelChoices}>        Script flag (required).`,
+      '--version <ver>                   Script flag (required).',
+      '--assets-base-url <url>           Script flag (required).',
+      '--commit-sha <sha>                Script flag (required).',
+      '--workflow-run-id <id>            Script flag (optional).',
+      '--skip-smoke                      Script flag.',
+    ],
+    bullets: ['Use this from workflows that need release assets prepared without publishing GitHub releases.'],
+    examples: [
+      'node scripts/pipeline/run.mjs release-prepare-binary-assets --product cli --channel preview --version 1.2.3-preview.4 --assets-base-url https://github.com/happier-dev/happier/releases/download/cli-preview --commit-sha HEAD --skip-smoke',
+    ],
   },
 
   'release-publish-manifests': {

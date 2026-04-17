@@ -15,6 +15,7 @@ export type CliTestLaunchSpec = Readonly<{
 
 type CliLaunchOptions = Parameters<typeof ensureCliDistSnapshotEntrypoint>[1] & {
   preferSourceEntrypoint?: boolean;
+  preparedDistSnapshotOnly?: boolean;
 };
 
 function resolveCliSourceEntrypoint(rootDir: string): string {
@@ -27,6 +28,16 @@ function resolveCliSnapshotSourceEntrypoint(snapshotDir: string): string {
 
 function resolveCliTsconfigPath(snapshotDir: string): string {
   return resolve(snapshotDir, 'tsconfig.json');
+}
+
+function resolvePreparedDistSnapshotEntrypoint(snapshotDir: string): string {
+  const entrypoint = resolve(snapshotDir, 'dist', 'index.mjs');
+  const readyMarker = resolve(snapshotDir, '.cli-dist-snapshot.ready.json');
+  const nodeModulesDir = resolve(snapshotDir, 'node_modules');
+  if (!existsSync(readyMarker) || !existsSync(entrypoint) || !existsSync(nodeModulesDir)) {
+    throw new Error(`Expected an already-prepared CLI dist snapshot at ${snapshotDir}`);
+  }
+  return entrypoint;
 }
 
 function ensureCliSourceSnapshot(
@@ -161,6 +172,13 @@ export async function resolveCliTestLaunchSpec(
   options: CliLaunchOptions,
 ): Promise<CliTestLaunchSpec> {
   const rootDir = options.repoRoot ?? repoRootDir();
+
+  if (options.preparedDistSnapshotOnly) {
+    return {
+      command: process.execPath,
+      args: ['--preserve-symlinks', resolvePreparedDistSnapshotEntrypoint(options.snapshotDir)],
+    };
+  }
 
   if (options.preferSourceEntrypoint || shouldUseCliSourceEntrypoint(params.env)) {
     return await resolveCliSourceLaunchSpec(params, rootDir, options);

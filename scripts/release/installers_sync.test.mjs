@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { INSTALLER_PUBLISH_SPECS, syncInstallers } from '../pipeline/release/sync-installers.mjs';
+import { syncInstallers } from '../pipeline/release/sync-installers.mjs';
+import {
+  INSTALLER_PUBLISH_SPECS,
+  applyInstallerPublishTransform,
+  resolvePublishedInstallerAsset,
+} from '../pipeline/release/installers/catalog.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -40,30 +45,10 @@ function fixtureForSource(name) {
   return `fixture:${name}\n`;
 }
 
-function replacePowerShellDefaultChannel(source, channel) {
-  return source.replace(
-    /(\[string\] \$Channel = \$\(if \(\$env:HAPPIER_CHANNEL\) \{ \$env:HAPPIER_CHANNEL \} else \{ ")(stable)(" \}\),)/,
-    `$1${channel}$3`,
-  );
-}
-
 function expectedFixtureForTarget(target) {
   for (const spec of INSTALLER_PUBLISH_SPECS) {
     if (spec.targets.includes(target)) {
-      const base = fixtureForSource(spec.source);
-      if (spec.transform === 'preview-default-channel') {
-        return replacePowerShellDefaultChannel(
-          base.replace('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-preview'),
-          'preview',
-        );
-      }
-      if (spec.transform === 'publicdev-default-channel') {
-        return replacePowerShellDefaultChannel(
-          base.replace('HAPPIER_CHANNEL:-stable', 'HAPPIER_CHANNEL:-dev'),
-          'dev',
-        );
-      }
-      return base;
+      return applyInstallerPublishTransform(Buffer.from(fixtureForSource(spec.source), 'utf8'), spec.transform).toString('utf8');
     }
   }
   throw new Error(`unknown installer target: ${target}`);
@@ -102,6 +87,21 @@ test('syncInstallers publishes preview and dev shortcut endpoints', () => {
   assert.ok(targets.includes('install-preview.ps1'), 'expected install-preview.ps1 to be published');
   assert.ok(targets.includes('install-dev.ps1'), 'expected install-dev.ps1 to be published');
   assert.ok(!targets.some((target) => target.startsWith('self-host')), 'expected no self-host installer endpoints to be published');
+});
+
+test('installer catalog resolves published installer assets by platform and channel', () => {
+  assert.deepEqual(resolvePublishedInstallerAsset({ platform: 'linux', channel: 'stable' }), {
+    tag: 'cli-stable',
+    installer: 'install.sh',
+  });
+  assert.deepEqual(resolvePublishedInstallerAsset({ platform: 'darwin', channel: 'preview' }), {
+    tag: 'cli-preview',
+    installer: 'install-preview.sh',
+  });
+  assert.deepEqual(resolvePublishedInstallerAsset({ platform: 'win32', channel: 'dev' }), {
+    tag: 'cli-dev',
+    installer: 'install-dev.ps1',
+  });
 });
 
 test('syncInstallers normalizes target file modes even when contents are already in sync', async () => {

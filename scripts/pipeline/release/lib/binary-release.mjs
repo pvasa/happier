@@ -1,15 +1,15 @@
 // @ts-check
 
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadCliCommonDistModule } from '../../../../scripts/ensureCliCommonDistModule.mjs';
 import { listPublicReleaseRingCatalogEntries, normalizePublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { prepareMinisignSecretKeyFile } from './minisign-secret-key.mjs';
 
 const {
   CLI_BINARY_TARGETS,
@@ -35,6 +35,7 @@ export {
   execOrThrow,
   resolveYarnCommand,
 };
+export { prepareMinisignSecretKeyFile } from './minisign-secret-key.mjs';
 
 export const RELEASE_CHANNELS = new Set(listPublicReleaseRingCatalogEntries().map((entry) => entry.id));
 
@@ -281,53 +282,6 @@ export async function maybeSignFile({ path, trustedComment = '' }) {
   return sigPath;
 }
 
-export async function prepareMinisignSecretKeyFile(raw) {
-  const value = String(raw ?? '').trim();
-  if (!value) {
-    throw new Error('[release] MINISIGN_SECRET_KEY is empty');
-  }
-
-  // minisign secret keys are multi-line. When operators try to paste them into dotenv files,
-  // only the first line often survives, leading to confusing minisign errors later.
-  if (value.startsWith('untrusted comment:') && !/[\r\n]/.test(value)) {
-    throw new Error(
-      '[release] MINISIGN_SECRET_KEY looks truncated (dotenv files cannot reliably store multiline minisign keys). ' +
-        'Set MINISIGN_SECRET_KEY to a file path containing the full secret key, or load it via Keychain secrets.',
-    );
-  }
-  const looksLikePath = !value.includes('\n') && !value.includes('\r');
-  if (looksLikePath) {
-    const info = await stat(value).catch(() => null);
-    if (info?.isFile()) {
-      return { path: value, temp: false, cleanupPath: null };
-    }
-
-    // If this looks like a path but doesn't exist, fail fast with guidance instead of writing
-    // an invalid one-line key file and letting minisign error later.
-    if (value.includes('/') || value.includes('\\') || value.endsWith('.key')) {
-      throw new Error(`[release] MINISIGN_SECRET_KEY points to a missing file: ${value}`);
-    }
-    if (value.length < 128) {
-      throw new Error(
-        '[release] MINISIGN_SECRET_KEY looks truncated (dotenv files cannot reliably store multiline minisign keys). ' +
-          'Set MINISIGN_SECRET_KEY to a file path containing the full secret key, or load it via Keychain secrets.',
-      );
-    }
-  }
-  const tempDir = await mkdtemp(join(tmpdir(), 'happier-minisign-key-'));
-  const keyPath = join(tempDir, 'release.key');
-  await writeFile(keyPath, `${value.endsWith('\n') ? value : `${value}\n`}`, 'utf-8');
-  await chmodBestEffort600(keyPath);
-  return { path: keyPath, temp: true, cleanupPath: tempDir };
-}
-
-async function chmodBestEffort600(path) {
-  try {
-    execOrThrow('chmod', ['600', path], { stdio: 'ignore' });
-  } catch {
-    // ignore on platforms where chmod is unavailable
-  }
-}
 
 export function readVersionFromPackageJson(path) {
   const raw = JSON.parse(readFileSync(path, 'utf-8'));

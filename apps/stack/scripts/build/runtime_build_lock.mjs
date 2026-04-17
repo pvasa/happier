@@ -1,4 +1,5 @@
-import { open, readFile, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, unlink } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import { isPidAlive } from '../utils/proc/pids.mjs';
 
@@ -32,6 +33,7 @@ async function removeBuildLock(lockPath) {
 export async function acquireRuntimeBuildLock({ lockPath }) {
   const resolvedLockPath = String(lockPath ?? '').trim();
   if (!resolvedLockPath) throw new Error('Missing runtime build lock path');
+  await mkdir(dirname(resolvedLockPath), { recursive: true });
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {

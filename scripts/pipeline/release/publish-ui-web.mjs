@@ -118,7 +118,7 @@ async function preflightMinisignKey({ dryRun }) {
   if (!keyRaw) {
     fail('[pipeline] MINISIGN_SECRET_KEY is required to publish signed ui-web release artifacts.');
   }
-  const { prepareMinisignSecretKeyFile } = await import('./lib/binary-release.mjs');
+  const { prepareMinisignSecretKeyFile } = await import('./lib/minisign-secret-key.mjs');
   const prepared = await prepareMinisignSecretKeyFile(keyRaw);
   if (prepared.temp) {
     await rm(prepared.cleanupPath ?? prepared.path, { recursive: true, force: true });

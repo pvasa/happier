@@ -93,3 +93,21 @@ test('acquireRuntimeBuildLock fails closed when a live pid owns the lock', async
     await terminateChildProcessAndWait(child);
   }
 });
+
+test('acquireRuntimeBuildLock creates the runtime directory when the lock parent is missing', async (t) => {
+  const rootDir = await mkdtemp(join(tmpdir(), 'happier-runtime-build-lock-parent-'));
+  const lockPath = join(rootDir, 'runtime', 'build.lock');
+
+  t.after(async () => {
+    await rm(rootDir, { recursive: true, force: true });
+  });
+
+  const release = await acquireRuntimeBuildLock({ lockPath });
+  const raw = await readFile(lockPath, 'utf-8');
+  const json = JSON.parse(raw);
+
+  assert.equal(json.pid, process.pid);
+  assert.ok(typeof json.createdAt === 'string' && json.createdAt.length > 0);
+
+  await release();
+});

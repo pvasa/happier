@@ -234,7 +234,7 @@ json_lookup_asset_url() {
   # giant line (which can overflow awk line-length limits on some platforms) and instead parse
   # line-by-line within the assets array. We intentionally return the *last* match to support
   # rolling tags that may contain multiple versions: newest assets are appended later in the JSON.
-  printf '%s' "$json" | awk -v re="$name_regex" '
+  printf '%s' "$json" | tr '{},' '\n\n\n' | awk -v re="$name_regex" '
     BEGIN {
       in_assets = 0
       name = ""
@@ -448,7 +448,7 @@ action_uninstall() {
 
   local binary=""
   binary="$(resolve_installed_binary 2>/dev/null || true)"
-  if [[ -n "${binary}" && "${PRODUCT}" == "cli" ]]; then
+  if [[ -n "${binary}" && "${PRODUCT}" == "cli" ]] && ! daemon_service_operations_are_explicitly_disabled; then
     "${binary}" service uninstall >/dev/null 2>&1 || true
   fi
 
@@ -750,6 +750,28 @@ read_background_service_preflight_json() {
     return
   fi
   read_installed_background_service_inventory_json "${cli_bin}"
+}
+
+daemon_service_operations_are_explicitly_disabled() {
+  if [[ "${WITH_DAEMON_EXPLICIT}" != "1" ]]; then
+    return 1
+  fi
+
+  local daemon_choice
+  daemon_choice="$(normalize_installer_boolean "${WITH_DAEMON}")"
+  [[ "${daemon_choice}" == "0" ]]
+}
+
+should_read_background_service_preflight() {
+  if [[ "${PRODUCT}" != "cli" ]] || [[ "${ACTION}" != "install" ]]; then
+    return 1
+  fi
+
+  if daemon_service_operations_are_explicitly_disabled; then
+    return 1
+  fi
+
+  return 0
 }
 
 background_service_inventory_is_supported() {
@@ -2009,7 +2031,7 @@ append_path_hint
 
 services_json=""
 status_json=""
-if [[ "${PRODUCT}" == "cli" && "${ACTION}" == "install" ]]; then
+if should_read_background_service_preflight; then
   services_json="$(read_background_service_preflight_json "${DISPLAY_SHIM_PATH}")"
   status_json="$(read_background_service_status_json "${DISPLAY_SHIM_PATH}")"
   if [[ "${NONINTERACTIVE}" != "1" ]]; then

@@ -11,7 +11,9 @@ test('tests workflow can smoke-test preview installers when requested', async ()
   const raw = await readFile(join(repoRoot, '.github', 'workflows', 'tests.yml'), 'utf8');
 
   assert.match(raw, /installers_channel:/, 'tests.yml should expose installers_channel input');
-  assert.match(raw, /cli-preview/, 'tests.yml should be able to check cli-preview tag');
-  assert.match(raw, /install-preview\.(sh|ps1)/, 'tests.yml should reference install-preview installers');
+  assert.match(raw, /node scripts\/pipeline\/run\.mjs release-validate/, 'tests.yml should delegate installer smoke to release-validate');
+  assert.match(raw, /--suite installers-smoke/, 'tests.yml should run the installer smoke suite');
+  assert.match(raw, /--ref "\$\{INSTALLERS_CHANNEL\}"|--ref "\$env:INSTALLERS_CHANNEL"/, 'tests.yml should pass the requested installer channel into release-validate');
+  assert.doesNotMatch(raw, /cli-preview/, 'tests.yml should not own rolling release tag names directly');
+  assert.doesNotMatch(raw, /install-preview\.(sh|ps1)/, 'tests.yml should not own installer filename selection directly');
 });
-

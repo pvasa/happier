@@ -176,6 +176,9 @@ if [[ "$1" = "service" && "$2" = "repair" && "$3" = "--yes" ]]; then
   exit 0
 fi
 if [[ "$1" = "service" && "$2" = "repair" && "$3" = "--json" ]]; then
+  if [[ "\${HAPPIER_TEST_LOG_SERVICE_PREFLIGHT:-0}" = "1" ]]; then
+    echo "service repair-json ${version} args=$* home=$HAPPIER_HOME_DIR" >> "${logPath}"
+  fi
   if [[ -n "\${HAPPIER_TEST_SERVICE_REPAIR_JSON:-}" ]]; then
     printf '%s' "\${HAPPIER_TEST_SERVICE_REPAIR_JSON}"
     exit 0
@@ -184,6 +187,9 @@ if [[ "$1" = "service" && "$2" = "repair" && "$3" = "--json" ]]; then
   exit 1
 fi
 if [[ "$1" = "service" && "$2" = "list" && "$3" = "--json" ]]; then
+  if [[ "\${HAPPIER_TEST_LOG_SERVICE_PREFLIGHT:-0}" = "1" ]]; then
+    echo "service list-json ${version} args=$* home=$HAPPIER_HOME_DIR" >> "${logPath}"
+  fi
   if [[ "\${HAPPIER_TEST_UNSUPPORTED_SERVICE_SURFACE:-0}" = "1" ]]; then
     echo "error: unknown option '--json'" >&2
     exit 1
@@ -203,6 +209,9 @@ if [[ "$1" = "service" && "$2" = "list" ]]; then
 fi
 if [[ "$1" = "service" && "$2" = "status" ]]; then
   if [[ "$3" = "--json" ]]; then
+    if [[ "\${HAPPIER_TEST_LOG_SERVICE_PREFLIGHT:-0}" = "1" ]]; then
+      echo "service status-json ${version} args=$* home=$HAPPIER_HOME_DIR" >> "${logPath}"
+    fi
     if [[ -n "\${HAPPIER_TEST_SERVICE_STATUS_JSON:-}" ]]; then
       printf '%s' "\${HAPPIER_TEST_SERVICE_STATUS_JSON}"
       exit 0
@@ -399,6 +408,41 @@ test('install.sh skips daemon service installation by default in noninteractive 
   const scenario = await runInstallerScenario();
   try {
     assert.equal(scenario.log.trim(), '');
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh skips daemon service preflight when daemon setup is explicitly disabled', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_CHANNEL: 'preview',
+    HAPPIER_WITH_DAEMON: '0',
+    HAPPIER_TEST_LOG_SERVICE_PREFLIGHT: '1',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [
+        { mode: 'user', targetMode: 'default-following', releaseChannel: 'preview' },
+      ],
+      actions: [
+        { kind: 'remove-service', service: { mode: 'user', targetMode: 'default-following', releaseChannel: 'preview' } },
+      ],
+      manualWarnings: [],
+    }),
+    HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
+      entries: [
+        { mode: 'user', targetMode: 'default-following', releaseChannel: 'preview' },
+      ],
+    }),
+    HAPPIER_TEST_SERVICE_STATUS_JSON: JSON.stringify({
+      ok: true,
+      daemon: { running: true, pid: 42 },
+      owner: null,
+    }),
+  });
+  try {
+    assert.equal(scenario.log.trim(), '');
+    assert.doesNotMatch(scenario.stdout, /Background Service/);
   } finally {
     await scenario.cleanup();
   }

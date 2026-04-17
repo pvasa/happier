@@ -10,7 +10,7 @@ const repoRoot = resolve(here, '..', '..');
 const runChecks = resolve(repoRoot, 'scripts', 'pipeline', 'checks', 'run-checks.mjs');
 const resolvePlan = resolve(repoRoot, 'scripts', 'pipeline', 'checks', 'resolve-checks-plan.mjs');
 
-test('pipeline checks release-assets profile dry-run includes release-assets-e2e runner', () => {
+test('pipeline checks release-assets profile dry-run routes through the unified release-validation runner', () => {
   const res = spawnSync(process.execPath, [runChecks, '--profile', 'release-assets', '--dry-run'], {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -20,7 +20,11 @@ test('pipeline checks release-assets profile dry-run includes release-assets-e2e
   assert.match(res.stdout ?? '', /- runReleaseAssetsE2e: true/);
   assert.match(
     res.stdout ?? '',
-    /\[dry-run\] bash scripts\/release\/release-assets-e2e\/run\.sh --mode=local --monorepo=local --with-relay-upgrade/,
+    /\[dry-run\] .*scripts\/pipeline\/run\.mjs release-validate --suite docker-release-assets --platform linux --source local-build --ref \. --mode local --monorepo local --with-relay-upgrade/,
+  );
+  assert.match(
+    res.stdout ?? '',
+    /\[pipeline\] exec: node .*"--suite" "docker-release-assets"[\s\S]*?"--mode" "local"[\s\S]*?"--monorepo" "local"[\s\S]*?"--with-relay-upgrade" "--dry-run"/,
   );
 });
 
@@ -33,7 +37,7 @@ test('pipeline checks release-assets-e2e mode/monorepo are configurable via env'
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.match(
     res.stdout ?? '',
-    /\[dry-run\] bash scripts\/release\/release-assets-e2e\/run\.sh --mode=npm --monorepo=github --with-relay-upgrade/,
+    /\[dry-run\] .*scripts\/pipeline\/run\.mjs release-validate --suite docker-release-assets --platform linux --source local-build --ref \. --mode npm --monorepo github --with-relay-upgrade/,
   );
 });
 
@@ -46,7 +50,7 @@ test('pipeline checks release-assets-e2e relay upgrade can be disabled via env',
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.match(
     res.stdout ?? '',
-    /\[dry-run\] bash scripts\/release\/release-assets-e2e\/run\.sh --mode=local --monorepo=local --no-relay-upgrade/,
+    /\[dry-run\] .*scripts\/pipeline\/run\.mjs release-validate --suite docker-release-assets --platform linux --source local-build --ref \. --mode local --monorepo local --no-relay-upgrade/,
   );
 });
 
