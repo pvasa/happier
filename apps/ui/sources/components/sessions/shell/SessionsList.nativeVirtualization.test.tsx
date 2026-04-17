@@ -7,10 +7,11 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-let platformOs: 'ios' | 'android' = 'ios';
+let platformOs: 'ios' | 'android' | 'web' = 'ios';
 let pinnedSessionKeysV1: string[] = [];
 const setPinnedSessionKeysV1 = vi.fn();
 const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
+const routerPushSpy = vi.hoisted(() => vi.fn());
 
 let sessionTagsV1: Record<string, string[]> = {};
 const setSessionTagsV1 = vi.fn();
@@ -197,7 +198,19 @@ vi.mock('@/components/ui/layout/layout', () => ({
 }));
 
 vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
+    DropdownMenu: (props: any) => React.createElement(
+        'DropdownMenu',
+        props,
+        typeof props.trigger === 'function'
+            ? props.trigger({
+                open: Boolean(props.open),
+                toggle: vi.fn(),
+                openMenu: vi.fn(),
+                closeMenu: vi.fn(),
+                selectedItem: null,
+            })
+            : null,
+    ),
 }));
 
 vi.mock('@/sync/domains/session/listing/sessionListOrderingStateV1', () => ({
@@ -269,6 +282,9 @@ installSessionShellCommonModuleMocks({
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
             pathname: '',
+            router: {
+                push: routerPushSpy,
+            },
         }).module;
     },
     text: async () => {
@@ -439,6 +455,36 @@ function expectPresent<T>(value: T | null | undefined, label: string): T {
     return value;
 }
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return style.reduce<Record<string, unknown>>((acc, entry) => ({
+            ...acc,
+            ...flattenStyle(entry),
+        }), {});
+    }
+    if (!style || typeof style !== 'object') {
+        return {};
+    }
+    return style as Record<string, unknown>;
+}
+
+function findChevronOpacityForHeaderPressable(headerPressable: any): unknown {
+    const chevronIcon = headerPressable.findAll((node: any) =>
+        String(node.type) === 'Ionicons'
+        && (node.props?.name === 'chevron-down' || node.props?.name === 'chevron-forward')
+    )[0];
+    return flattenStyle(chevronIcon?.parent?.props?.style).opacity;
+}
+
+function findPressableByAccessibilityLabel(
+    screen: Awaited<ReturnType<typeof renderSessionsList>>,
+    label: string,
+) {
+    return screen.root.findAll((node) =>
+        String(node.type) === 'Pressable' && node.props?.accessibilityLabel === label
+    )[0] ?? null;
+}
+
 describe('SessionsList (native virtualization)', () => {
     beforeEach(() => {
         platformOs = 'ios';
@@ -451,6 +497,7 @@ describe('SessionsList (native virtualization)', () => {
         setWorkspaceLabelsV1.mockClear();
         setCollapsedGroupKeysV1.mockClear();
         useSessionInlineDragSpy.mockClear();
+        routerPushSpy.mockClear();
         mockAllowedServerIds = ['server_a'];
         readMachineTargetForSessionMock.mockReset();
         readMachineTargetForSessionMock.mockImplementation(() => null);
@@ -563,6 +610,203 @@ describe('SessionsList (native virtualization)', () => {
                 serverName: 'Server A',
             },
         ];
+    });
+
+    it('routes the project add action into a prefilled new-session flow', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: '/repo',
+                headerKind: 'project',
+                groupKey: 'server:server_a:active:project:abc',
+                workspaceKey: 'wl_abc',
+                workspaceScopeHint: {
+                    serverId: 'server_a',
+                    machineId: 'machine-target',
+                    rootPath: '/repo',
+                },
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const addButton = expectPresent(
+            findPressableByAccessibilityLabel(screen, 'machine.launchNewSessionInDirectory'),
+            'expected always-visible project add action',
+        );
+
+        await act(async () => {
+            addButton.props.onPress();
+        });
+
+        expect(routerPushSpy).toHaveBeenCalledWith({
+            pathname: '/new',
+            params: {
+                machineId: 'machine-target',
+                directory: '/repo',
+                spawnServerId: 'server_a',
+            },
+        });
+    });
+
+    it('shows project chevrons only on hover unless the group is collapsed, while keeping the add action visible', async () => {
+        platformOs = 'web';
+        const { ProjectGroupHeader } = await import('./SessionsList');
+
+        const screen = await renderScreen(
+            <ProjectGroupHeader
+                item={{
+                    type: 'header',
+                    title: '/repo',
+                    headerKind: 'project',
+                    groupKey: 'server:server_a:active:project:abc',
+                    workspaceKey: 'wl_abc',
+                    workspaceScopeHint: {
+                        serverId: 'server_a',
+                        machineId: 'machine-target',
+                        rootPath: '/repo',
+                    },
+                    serverId: 'server_a',
+                    serverName: 'Server A',
+                } as any}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header"
+            />,
+        );
+
+        const header = screen.root.findAllByType('Pressable')[0];
+        expect(findPressableByAccessibilityLabel(screen as any, 'machine.launchNewSessionInDirectory')).toBeTruthy();
+        expect(findChevronOpacityForHeaderPressable(header)).toBe(0);
+        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(0);
+
+        await act(async () => {
+            header.props.onHoverIn?.();
+        });
+
+        expect(findChevronOpacityForHeaderPressable(screen.root.findAllByType('Pressable')[0])).toBe(1);
+        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
+        const menuTrigger = expectPresent(
+            findPressableByAccessibilityLabel(screen as any, 'common.moreActions'),
+            'expected project menu trigger while hovered',
+        );
+
+        await act(async () => {
+            menuTrigger.props.onHoverIn?.();
+            screen.root.findAllByType('Pressable')[0].props.onHoverOut?.();
+        });
+
+        expect(findPressableByAccessibilityLabel(screen as any, 'common.moreActions')).toBeTruthy();
+        expect(screen.root.findAllByType('DropdownMenu')).toHaveLength(1);
+
+        await act(async () => {
+            menuTrigger.props.onHoverOut?.();
+            screen.root.findAllByType('Pressable')[0].props.onHoverOut?.();
+        });
+
+        expect(findChevronOpacityForHeaderPressable(screen.root.findAllByType('Pressable')[0])).toBe(0);
+
+        const collapsedScreen = await renderScreen(
+            <ProjectGroupHeader
+                item={{
+                    type: 'header',
+                    title: '/repo',
+                    headerKind: 'project',
+                    groupKey: 'server:server_a:active:project:abc',
+                    workspaceKey: 'wl_abc',
+                    workspaceScopeHint: {
+                        serverId: 'server_a',
+                        machineId: 'machine-target',
+                        rootPath: '/repo',
+                    },
+                    serverId: 'server_a',
+                    serverName: 'Server A',
+                } as any}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                collapsed={true}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header-collapsed"
+            />,
+        );
+        const collapsedHeader = collapsedScreen.root.findAllByType('Pressable')[0];
+        expect(findChevronOpacityForHeaderPressable(collapsedHeader)).toBe(1);
+    });
+
+    it('hides expanded section chevrons until hover on web and keeps date headers on the subheader typography tier', async () => {
+        platformOs = 'web';
+        const { CollapsibleSectionHeader, ProjectGroupHeader } = await import('./SessionsList');
+
+        const activeScreen = await renderScreen(
+            <CollapsibleSectionHeader
+                title="Active"
+                headerKind="active"
+                collapsed={false}
+                onPress={vi.fn()}
+                headerTestId="active-header"
+            />,
+        );
+        const projectScreen = await renderScreen(
+            <ProjectGroupHeader
+                item={{
+                    type: 'header',
+                    title: '/repo',
+                    headerKind: 'project',
+                    groupKey: 'server:server_a:active:project:abc',
+                    workspaceKey: 'wl_abc',
+                    workspaceScopeHint: {
+                        serverId: 'server_a',
+                        machineId: 'machine-target',
+                        rootPath: '/repo',
+                    },
+                } as any}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header"
+            />,
+        );
+        const yesterdayScreen = await renderScreen(
+            <CollapsibleSectionHeader
+                title="Yesterday"
+                headerKind="date"
+                collapsed={false}
+                onPress={vi.fn()}
+                headerTestId="yesterday-header"
+            />,
+        );
+
+        const activeHeader = activeScreen.root.findAllByType('Pressable')[0];
+        const projectHeader = projectScreen.root.findAllByType('Pressable')[0];
+        const yesterdayHeader = yesterdayScreen.root.findAllByType('Pressable')[0];
+        expect(findChevronOpacityForHeaderPressable(activeHeader)).toBe(0);
+        expect(findChevronOpacityForHeaderPressable(yesterdayHeader)).toBe(0);
+
+        await act(async () => {
+            yesterdayHeader.props.onHoverIn?.();
+        });
+
+        expect(findChevronOpacityForHeaderPressable(yesterdayScreen.root.findAllByType('Pressable')[0])).toBe(1);
+
+        const activeTextStyle = flattenStyle(activeHeader.findAllByType('Text')[0]?.props?.style);
+        const yesterdayTextStyle = flattenStyle(yesterdayHeader.findAllByType('Text')[0]?.props?.style);
+        const projectTextStyle = flattenStyle(projectHeader.findAllByType('Text')[0]?.props?.style);
+
+        expect(yesterdayTextStyle.fontSize).toBe(projectTextStyle.fontSize);
+        expect(Number(activeTextStyle.fontSize)).toBeGreaterThan(Number(yesterdayTextStyle.fontSize));
     });
 
     it('wires pin toggling via pinnedSessionKeysV1', async () => {

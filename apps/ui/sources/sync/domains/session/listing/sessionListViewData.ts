@@ -18,6 +18,7 @@ export type SessionListViewItem =
         headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'project' | 'pinned';
         groupKey?: string;
         workspaceKey?: string;
+        workspaceScopeHint?: Readonly<{ serverId: string; machineId: string; rootPath: string }> | null;
         serverId?: string;
         serverName?: string;
         subtitle?: string;
@@ -108,6 +109,8 @@ type ProjectGroup = {
     key: string;
     displayPath: string;
     machine: MachineDisplayRenderable;
+    workspaceMachineId: string | null;
+    workspaceRootPath: string;
     latestCreatedAt: number;
     sessions: SessionListRenderableSession[];
 };
@@ -165,12 +168,17 @@ function groupSessionsByProject(params: Readonly<{
                 key,
                 displayPath: pathKey ? formatPathRelativeToHome(pathKey, homeDir ?? undefined) : '',
                 machine: displayMachine,
+                workspaceMachineId: displayMachineId || parts.machineId || null,
+                workspaceRootPath: pathKey,
                 latestCreatedAt: session.createdAt,
                 sessions: [session],
             });
         } else {
             existing.sessions.push(session);
             existing.latestCreatedAt = Math.max(existing.latestCreatedAt, session.createdAt);
+            if (!existing.workspaceMachineId && (displayMachineId || parts.machineId)) {
+                existing.workspaceMachineId = displayMachineId || parts.machineId || null;
+            }
         }
     }
 
@@ -207,6 +215,13 @@ function pushProjectGroupsToList(params: Readonly<{
                 headerKind: 'project',
                 groupKey,
                 workspaceKey,
+                workspaceScopeHint: params.serverScopeMeta.serverId && group.workspaceMachineId && group.workspaceRootPath
+                    ? {
+                        serverId: params.serverScopeMeta.serverId,
+                        machineId: group.workspaceMachineId,
+                        rootPath: group.workspaceRootPath,
+                    }
+                    : null,
                 machine: group.machine,
                 subtitle: group.machine.metadata?.displayName || group.machine.metadata?.host || group.machine.id,
                 ...params.serverScopeMeta,

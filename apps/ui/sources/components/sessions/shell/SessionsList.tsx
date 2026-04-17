@@ -48,15 +48,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     headerSection: {
         backgroundColor: theme.colors.groupped.background,
         paddingHorizontal: 24,
-        paddingTop: 18,
-        paddingBottom: 6,
+        paddingTop: 14,
     },
     headerText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: theme.colors.groupped.sectionTitle,
-        letterSpacing: -0.1,
-        ...Typography.default('semiBold'),
+        fontSize: 13,
+        color: theme.colors.textSecondary,
     },
     groupHeaderSection: {
         backgroundColor: theme.colors.groupped.background,
@@ -68,6 +64,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 12,
         fontWeight: '600',
         color: theme.colors.groupped.sectionTitle,
+        flexShrink: 1,
         ...Typography.default('semiBold'),
     },
     groupHeaderSubtitle: {
@@ -85,10 +82,24 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
         gap: 6,
+        flex: 1,
+        minWidth: 0,
     },
     groupHeaderContent: {
         flex: 1,
         minWidth: 0,
+    },
+    groupHeaderInlineActions: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        gap: 2,
+        flexShrink: 0,
+    },
+    groupHeaderTrailingActions: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        flexShrink: 0,
+        marginLeft: 8,
     },
     groupHeaderActionButton: {
         width: 18,
@@ -109,6 +120,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
         gap: 4,
+        flex: 1,
+        minWidth: 0,
     },
     headerChevron: {
         width: 18,
@@ -297,28 +310,42 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
     );
 });
 
-const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonly<{
+export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonly<{
     item: Extract<SessionListViewItem, { type: 'header' }>;
     hasMultipleMachines: boolean;
     workspaceLabelsV1: Record<string, string>;
     onRenameWorkspace: (workspaceKey: string, currentLabel: string) => void;
     onResetWorkspaceName: (workspaceKey: string) => void;
+    onCreateSession: () => void;
     collapsed: boolean;
     onToggleCollapse: () => void;
+    headerTestId: string;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const { item, hasMultipleMachines, workspaceLabelsV1, onRenameWorkspace, onResetWorkspaceName, collapsed, onToggleCollapse } = props;
+    const {
+        item,
+        hasMultipleMachines,
+        workspaceLabelsV1,
+        onRenameWorkspace,
+        onResetWorkspaceName,
+        onCreateSession,
+        collapsed,
+        onToggleCollapse,
+        headerTestId,
+    } = props;
     const [isRowHovered, setIsRowHovered] = React.useState(false);
     const [isActionsHovered, setIsActionsHovered] = React.useState(false);
     const [menuOpen, setMenuOpen] = React.useState(false);
     const isWeb = Platform.OS === 'web';
-    const showActions = !isWeb || isRowHovered || isActionsHovered || menuOpen;
+    const showHoverActions = !isWeb || isRowHovered || isActionsHovered || menuOpen;
+    const showChevron = !isWeb || collapsed || showHoverActions;
     const workspaceKey = item.workspaceKey ?? '';
     const customLabel = workspaceKey ? workspaceLabelsV1[workspaceKey] : undefined;
     const displayTitle = customLabel || item.title;
     const hasCustomLabel = Boolean(customLabel);
     const actionIconColor = theme.colors.textSecondary;
+    const canCreateSession = typeof onCreateSession === 'function' && Boolean(item.workspaceScopeHint);
 
     const menuItems = React.useMemo((): DropdownMenuItem[] => {
         const items: DropdownMenuItem[] = [
@@ -352,6 +379,7 @@ const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonl
             <Pressable
                 style={styles.groupHeaderRow}
                 onPress={onToggleCollapse}
+                testID={headerTestId}
                 onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
                 onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
             >
@@ -359,53 +387,72 @@ const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonl
                     <View style={styles.groupHeaderTitleRow}>
                         <Text style={styles.groupHeaderTitle} numberOfLines={1}>{displayTitle}</Text>
                         <View
-                            style={[
-                                styles.groupHeaderChevron,
-                                isWeb ? styles.webHoverVisibleChevron : null,
-                            ]}
+                            style={styles.groupHeaderInlineActions}
+                            onPointerEnter={isWeb ? () => setIsActionsHovered(true) : undefined}
+                            onPointerLeave={isWeb ? () => setIsActionsHovered(false) : undefined}
                         >
-                            <Ionicons
-                                name={collapsed ? 'chevron-forward' : 'chevron-down'}
-                                size={12}
-                                color={chevronColor}
-                            />
+                            <View
+                                style={[
+                                    styles.groupHeaderChevron,
+                                    isWeb && !showChevron ? styles.webHoverHiddenChevron : styles.webHoverVisibleChevron,
+                                ]}
+                            >
+                                <Ionicons
+                                    name={collapsed ? 'chevron-forward' : 'chevron-down'}
+                                    size={12}
+                                    color={chevronColor}
+                                />
+                            </View>
+                            {showHoverActions && workspaceKey ? (
+                                <DropdownMenu
+                                    open={menuOpen}
+                                    onOpenChange={setMenuOpen}
+                                    items={menuItems}
+                                    onSelect={handleMenuSelect}
+                                    placement="left"
+                                    variant="slim"
+                                    matchTriggerWidth={false}
+                                    maxWidthCap={220}
+                                    showCategoryTitles={false}
+                                    popoverPortalWebTarget="body"
+                                    trigger={({ toggle }) => (
+                                        <Pressable
+                                            style={styles.groupHeaderActionButton}
+                                            onPress={(event) => {
+                                                (event as any)?.stopPropagation?.();
+                                                toggle();
+                                            }}
+                                            onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
+                                            onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={t('common.moreActions')}
+                                            hitSlop={8}
+                                        >
+                                            <Octicons name="kebab-horizontal" size={12} color={actionIconColor} />
+                                        </Pressable>
+                                    )}
+                                />
+                            ) : null}
                         </View>
                     </View>
                     {hasMultipleMachines && item.subtitle ? (
                         <Text style={styles.groupHeaderSubtitle}>{item.subtitle}</Text>
                     ) : null}
                 </View>
-                <View
-                    onPointerEnter={isWeb ? () => setIsActionsHovered(true) : undefined}
-                    onPointerLeave={isWeb ? () => setIsActionsHovered(false) : undefined}
-                >
-                    {showActions && workspaceKey ? (
-                        <DropdownMenu
-                            open={menuOpen}
-                            onOpenChange={setMenuOpen}
-                            items={menuItems}
-                            onSelect={handleMenuSelect}
-                            placement="left"
-                            variant="slim"
-                            matchTriggerWidth={false}
-                            maxWidthCap={220}
-                            showCategoryTitles={false}
-                            popoverPortalWebTarget="body"
-                            trigger={({ toggle }) => (
-                                <Pressable
-                                    style={styles.groupHeaderActionButton}
-                                    onPress={(event) => {
-                                        (event as any)?.stopPropagation?.();
-                                        toggle();
-                                    }}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={t('common.moreActions')}
-                                    hitSlop={8}
-                                >
-                                    <Octicons name="kebab-horizontal" size={12} color={actionIconColor} />
-                                </Pressable>
-                            )}
-                        />
+                <View style={styles.groupHeaderTrailingActions}>
+                    {canCreateSession ? (
+                        <Pressable
+                            style={styles.groupHeaderActionButton}
+                            onPress={(event) => {
+                                (event as any)?.stopPropagation?.();
+                                onCreateSession();
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('machine.launchNewSessionInDirectory')}
+                            hitSlop={8}
+                        >
+                            <Ionicons name="add" size={14} color={actionIconColor} />
+                        </Pressable>
                     ) : null}
                 </View>
             </Pressable>
@@ -413,27 +460,35 @@ const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonl
     );
 });
 
-const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHeader(props: Readonly<{
+export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHeader(props: Readonly<{
     title: string;
+    headerKind?: Extract<SessionListViewItem, { type: 'header' }>['headerKind'];
     collapsed: boolean;
     onPress: () => void;
+    headerTestId: string;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const isWeb = Platform.OS === 'web';
+    const [isHovered, setIsHovered] = React.useState(false);
     const headerChevronColor = theme.colors.textSecondary;
+    const isPrimaryHeader = props.headerKind === 'active' || props.headerKind === 'inactive';
+    const showChevron = !isWeb || props.collapsed || isHovered;
     return (
         <Pressable
-            style={styles.headerSection}
+            style={isPrimaryHeader ? styles.headerSection : styles.groupHeaderSection}
             onPress={props.onPress}
+            testID={props.headerTestId}
+            onHoverIn={isWeb ? () => setIsHovered(true) : undefined}
+            onHoverOut={isWeb ? () => setIsHovered(false) : undefined}
         >
             <View style={styles.headerRow}>
                 <View style={styles.headerLabelRow}>
-                    <Text style={styles.headerText}>{props.title}</Text>
+                    <Text style={isPrimaryHeader ? styles.headerText : styles.groupHeaderTitle}>{props.title}</Text>
                     <View
                         style={[
                             styles.headerChevron,
-                            isWeb ? styles.webHoverVisibleChevron : null,
+                            isWeb && !showChevron ? styles.webHoverHiddenChevron : styles.webHoverVisibleChevron,
                         ]}
                     >
                         <Ionicons
@@ -664,6 +719,21 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
         setWorkspaceLabelsV1(next);
     }, [workspaceLabelsV1, setWorkspaceLabelsV1]);
 
+    const handleCreateSessionFromProject = React.useCallback((item: Extract<SessionListViewItem, { type: 'header' }>) => {
+        const workspaceScopeHint = item.workspaceScopeHint ?? null;
+        if (!workspaceScopeHint) {
+            return;
+        }
+        router.push({
+            pathname: '/new',
+            params: {
+                machineId: workspaceScopeHint.machineId,
+                directory: workspaceScopeHint.rootPath,
+                ...(workspaceScopeHint.serverId ? { spawnServerId: workspaceScopeHint.serverId } : {}),
+            },
+        } as any);
+    }, [router]);
+
     const handleToggleCollapse = React.useCallback((collapseKey: string) => {
         const current = collapsedGroupKeysV1 ?? {};
         if (current[collapseKey]) {
@@ -701,6 +771,9 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
 
     const collapsedKeys = collapsedGroupKeysV1 ?? {};
     const renderHeaderItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'header' }>) => {
+        const headerTestId = item.headerKind === 'project'
+            ? `session-list-project-header:${item.groupKey ?? item.title}`
+            : `session-list-header:${item.groupKey ?? item.title}`;
         if (item.title && item.headerKind === 'project') {
             const collapseKey = item.groupKey ?? '';
             return (
@@ -710,8 +783,10 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
                     workspaceLabelsV1={workspaceLabelsV1}
                     onRenameWorkspace={handleRenameWorkspace}
                     onResetWorkspaceName={handleResetWorkspaceName}
+                    onCreateSession={() => handleCreateSessionFromProject(item)}
                     collapsed={Boolean(collapsedKeys[collapseKey])}
                     onToggleCollapse={() => handleToggleCollapse(collapseKey)}
+                    headerTestId={headerTestId}
                 />
             );
         }
@@ -728,11 +803,13 @@ export function SessionsList(props: Readonly<{ storageKind?: SessionListStorageF
         return (
             <CollapsibleSectionHeader
                 title={title}
+                headerKind={item.headerKind}
                 collapsed={isCollapsed}
                 onPress={() => handleToggleCollapse(collapseKey)}
+                headerTestId={headerTestId}
             />
         );
-    }, [hasMultipleMachines, workspaceLabelsV1, handleRenameWorkspace, handleResetWorkspaceName, collapsedKeys, handleToggleCollapse]);
+    }, [hasMultipleMachines, workspaceLabelsV1, handleRenameWorkspace, handleResetWorkspaceName, handleCreateSessionFromProject, collapsedKeys, handleToggleCollapse]);
 
     const renderSessionItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'session' }>, index: number) => {
         const groupKeyForAdjacency = String(item.groupKey ?? '').trim();
