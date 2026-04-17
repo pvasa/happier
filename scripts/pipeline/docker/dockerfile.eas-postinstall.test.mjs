@@ -27,6 +27,21 @@ test("Dockerfile deps stages include the root postinstall script (eas-postinstal
   }
 });
 
+test("Dockerfile deps stages copy the shared yarn-install-with-retry helper from scripts/ci", () => {
+  const dockerfilePath = path.join(repoRoot, "Dockerfile");
+  const raw = fs.readFileSync(dockerfilePath, "utf8");
+
+  for (const marker of [
+    "FROM node:${NODE_VERSION}-alpine AS deps-alpine",
+    "FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS deps-alpine-build",
+    "FROM node:${NODE_VERSION} AS deps-debian",
+  ]) {
+    const section = extractStageSection(raw, marker);
+    assert.match(section, /COPY scripts\/ci\/yarn-install-with-retry\.sh \/usr\/local\/bin\/yarn-install-with-retry/);
+    assert.doesNotMatch(section, /COPY docker\/scripts\/yarn-install-with-retry\.sh \/usr\/local\/bin\/yarn-install-with-retry/);
+  }
+});
+
 test("dev-box Dockerfile includes the root postinstall script (eas-postinstall.mjs) so yarn install can run in minimal build contexts", () => {
   const dockerfilePath = path.join(repoRoot, "docker", "dev-box", "Dockerfile");
   const raw = fs.readFileSync(dockerfilePath, "utf8");
