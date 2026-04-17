@@ -25,6 +25,7 @@ on:
         options:
           - stable
           - preview
+          - dev
       providers_preset:
         description: "Providers — Preset (when providers enabled)"
         required: true
