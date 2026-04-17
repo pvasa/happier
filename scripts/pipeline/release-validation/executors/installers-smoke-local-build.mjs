@@ -53,6 +53,10 @@ function resolveSigningEnv({ repoRoot, scratchDir, baseEnv = process.env }) {
     cwd: repoRoot,
     env: {
       ...baseEnv,
+      // The local-build helper needs the bootstrapped bin dir immediately.
+      // Force the script into its stdout-returning mode instead of depending
+      // on GitHub Actions' $GITHUB_PATH side-effect file contract.
+      GITHUB_PATH: '',
       RUNNER_TEMP: scratchDir,
     },
     encoding: 'utf8',
@@ -71,6 +75,8 @@ function resolveSigningEnv({ repoRoot, scratchDir, baseEnv = process.env }) {
     keyPathEntries: [minisignDir],
   };
 }
+
+export const resolveSigningEnvForTests = resolveSigningEnv;
 
 /**
  * @param {{ repoRoot: string; platform: 'linux' | 'darwin' | 'win32'; releaseChannel: 'stable' | 'preview' | 'publicdev' }} params

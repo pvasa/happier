@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { parseTrailingJsonObjectForTests } from '../pipeline/release-validation/executors/installers-smoke-local-build.mjs';
+import {
+  parseTrailingJsonObjectForTests,
+  resolveSigningEnvForTests,
+} from '../pipeline/release-validation/executors/installers-smoke-local-build.mjs';
 
 test('installers-smoke local-build parses the trailing build-cli JSON payload after tool chatter', () => {
   const parsed = parseTrailingJsonObjectForTests(`
@@ -30,4 +36,63 @@ $ node scripts/pipeline/release/build-cli-binaries.mjs --channel preview --targe
     checksums: '/tmp/dist/release-assets/cli/checksums-happier-v1.2.3-preview.4.txt',
     signature: '/tmp/dist/release-assets/cli/checksums-happier-v1.2.3-preview.4.txt.minisig',
   });
+});
+
+test('installers-smoke local-build bootstrap still returns a minisign dir when GITHUB_PATH is set', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-installers-smoke-local-build-test-'));
+  const repoRoot = join(root, 'repo');
+  const scratchDir = join(root, 'scratch');
+  const bootstrapDir = join(repoRoot, '.github', 'actions', 'bootstrap-minisign');
+  const minisignDir = join(root, 'bootstrapped-bin');
+  const githubPathFile = join(root, 'github-path.txt');
+
+  await mkdir(bootstrapDir, { recursive: true });
+  await mkdir(scratchDir, { recursive: true });
+  await mkdir(minisignDir, { recursive: true });
+
+  const minisignPath = join(minisignDir, 'minisign');
+  await writeFile(
+    minisignPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" = "-v" ]]; then
+  exit 0
+fi
+echo "unexpected minisign args: $*" >&2
+exit 1
+`,
+    'utf8',
+  );
+  await chmod(minisignPath, 0o755);
+
+  const bootstrapPath = join(bootstrapDir, 'bootstrap-minisign.sh');
+  await writeFile(
+    bootstrapPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+bin_dir=${JSON.stringify(minisignDir)}
+if [[ -n "\${GITHUB_PATH:-}" ]]; then
+  echo "$bin_dir" >> "$GITHUB_PATH"
+else
+  echo "$bin_dir"
+fi
+`,
+    'utf8',
+  );
+  await chmod(bootstrapPath, 0o755);
+
+  const signing = resolveSigningEnvForTests({
+    repoRoot,
+    scratchDir,
+    baseEnv: {
+      ...process.env,
+      PATH: process.env.PATH ?? '',
+      GITHUB_PATH: githubPathFile,
+    },
+  });
+
+  assert.deepEqual(signing.keyPathEntries, [minisignDir]);
+  assert.match(signing.env.PATH ?? '', new RegExp(`^${minisignDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+
+  await rm(root, { recursive: true, force: true });
 });
