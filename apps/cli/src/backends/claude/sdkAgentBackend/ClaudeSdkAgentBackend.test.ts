@@ -829,16 +829,16 @@ describe('ClaudeSdkAgentBackend', () => {
         const { sessionId } = await backend.startSession();
         await backend.sendPrompt(sessionId, 'this will hang');
         expect(typeof (backend as any).waitForResponseComplete).toBe('function');
-        const pending = (backend as any).waitForResponseComplete();
+        const pending = (backend as any).waitForResponseComplete().then(
+          () => 'resolved',
+          (error: unknown) => `rejected:${error instanceof Error ? error.message : String(error)}`,
+        );
 
         await new Promise((resolve) => setTimeout(resolve, 30));
         await backend.dispose();
 
         const settled = await Promise.race([
-          pending.then(
-            () => 'resolved',
-            (error: unknown) => `rejected:${error instanceof Error ? error.message : String(error)}`,
-          ),
+          pending,
           new Promise<string>((resolve) => setTimeout(() => resolve('timeout'), 300)),
         ]);
         expect(settled).toBe('rejected:Agent disposed');
