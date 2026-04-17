@@ -947,7 +947,7 @@ jobs:
             --ref "."
 
   cli-update-continuity:
-    if: ${{ github.event_name == 'workflow_call' && inputs.run_cli_update_continuity }}
+    if: ${{ inputs.run_cli_update_continuity }}
     name: Release Validation — CLI Update Continuity (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -1006,7 +1006,7 @@ jobs:
           if-no-files-found: ignore
 
   daemon-continuity:
-    if: ${{ github.event_name == 'workflow_call' && inputs.run_daemon_continuity }}
+    if: ${{ inputs.run_daemon_continuity }}
     name: Release Validation — Daemon Continuity (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -1061,7 +1061,7 @@ jobs:
           if-no-files-found: ignore
 
   session-continuity:
-    if: ${{ github.event_name == 'workflow_call' && inputs.run_session_continuity }}
+    if: ${{ inputs.run_session_continuity }}
     name: Release Validation — Session Continuity (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 120

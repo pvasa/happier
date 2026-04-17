@@ -24,14 +24,32 @@ test('tests workflow exposes thin release-validation continuity/update jobs thro
 
   assert.match(
     raw,
+    /cli-update-continuity:\n\s+if:\s+\$\{\{\s*inputs\.run_cli_update_continuity\s*\}\}/,
+    'tests workflow should gate CLI update continuity on the forwarded input only so reusable dispatches do not skip it',
+  );
+
+  assert.match(
+    raw,
     /cli-update-continuity:[\s\S]*?node scripts\/pipeline\/run\.mjs release-validate \\\n[\s\S]*?--suite cli-update \\\n[\s\S]*?--platform linux \\\n[\s\S]*?--from-source published-channel \\\n[\s\S]*?--from-ref "\$\{CLI_UPDATE_FROM_CHANNEL\}" \\\n[\s\S]*?--to-source local-build \\\n[\s\S]*?--to-ref "\."/,
     'tests workflow should run cli-update continuity through the unified release-validation runner',
   );
 
   assert.match(
     raw,
+    /daemon-continuity:\n\s+if:\s+\$\{\{\s*inputs\.run_daemon_continuity\s*\}\}/,
+    'tests workflow should gate daemon continuity on the forwarded input only so reusable dispatches do not skip it',
+  );
+
+  assert.match(
+    raw,
     /daemon-continuity:[\s\S]*?node scripts\/pipeline\/run\.mjs release-validate \\\n[\s\S]*?--suite daemon-continuity \\\n[\s\S]*?--platform linux \\\n[\s\S]*?--source local-build \\\n[\s\S]*?--ref "\."/,
     'tests workflow should run daemon continuity through the unified release-validation runner',
+  );
+
+  assert.match(
+    raw,
+    /session-continuity:\n\s+if:\s+\$\{\{\s*inputs\.run_session_continuity\s*\}\}/,
+    'tests workflow should gate session continuity on the forwarded input only so reusable dispatches do not skip it',
   );
 
   assert.match(
