@@ -3924,7 +3924,7 @@ describe('createOpenCodeServerRuntime', () => {
       },
     });
 
-    await expect(promptPromise).rejects.toBeTruthy();
+    await expect(promptPromise).rejects.toThrow('Model not found');
 
     const errorMessages = session.sendAgentMessage.mock.calls.filter(
       (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'message',

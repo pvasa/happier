@@ -56,6 +56,13 @@ export function buildExecutionRunsGuidanceBlockV1(params: Readonly<{
   lines.push('');
 
   let usedChars = lines.join('\n').length;
+  const tryPush = (line: string): boolean => {
+    const nextLen = usedChars + 1 + line.length;
+    if (nextLen > maxChars) return false;
+    lines.push(line);
+    usedChars = nextLen;
+    return true;
+  };
   let included = 0;
   const includedEntries: ExecutionRunsGuidanceEntryV1[] = [];
 
@@ -82,16 +89,8 @@ export function buildExecutionRunsGuidanceBlockV1(params: Readonly<{
   }
 
   if (remaining > 0) {
-    lines.push(`- (+${remaining} more rules in settings)`);
+    tryPush(`- (+${remaining} more rules in settings)`);
   }
-
-  const tryPush = (line: string): boolean => {
-    const nextLen = usedChars + 1 + line.length;
-    if (nextLen > maxChars) return false;
-    lines.push(line);
-    usedChars = nextLen;
-    return true;
-  };
 
   const exampleToolCalls = (() => {
     const seen = new Set<string>();

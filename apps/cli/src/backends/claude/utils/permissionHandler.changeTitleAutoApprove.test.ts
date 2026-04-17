@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { EnhancedMode } from '../loop';
 import { createPermissionHandlerSessionStub } from './permissionHandler.testkit';
 
-describe('Claude PermissionHandler - title changes', () => {
+describe('Claude PermissionHandler - Happier MCP session-control tools', () => {
   it('auto-allows title changes in default mode without creating a permission request', async () => {
     const { session, client } = createPermissionHandlerSessionStub('change-title-default-auto-approve');
     const { PermissionHandler } = await import('./permissionHandler');
@@ -21,5 +21,45 @@ describe('Claude PermissionHandler - title changes', () => {
 
     expect(result).toMatchObject({ behavior: 'allow' });
     expect(client.agentState.requests['toolu_change_title_default_1']).toBeUndefined();
+  });
+
+  it('publishes Happier execution-run MCP tools as normal permission requests in default mode', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('execution-run-default-permission-request');
+    const { PermissionHandler } = await import('./permissionHandler');
+    const handler = new PermissionHandler(session);
+
+    const mode: EnhancedMode = { permissionMode: 'default' };
+    const signal = new AbortController();
+
+    const pending = handler.handleToolCall(
+      'mcp__happier__execution_run_start',
+      {
+        intent: 'delegate',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral',
+        runClass: 'bounded',
+        ioMode: 'request_response',
+        instructions: 'Reply exactly QA_CODEX_READY.',
+      },
+      mode,
+      { signal: signal.signal, toolUseId: 'toolu_execution_run_default_1' },
+    );
+
+    await Promise.resolve();
+    expect(client.agentState.requests['toolu_execution_run_default_1']).toMatchObject({
+      tool: 'mcp__happier__execution_run_start',
+    });
+
+    const permissionRpc = client.rpcHandlerManager.getHandler('permission');
+    expect(permissionRpc).toBeDefined();
+    await permissionRpc?.({ id: 'toolu_execution_run_default_1', approved: true } as any);
+
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    expect(client.agentState.requests['toolu_execution_run_default_1']).toBeUndefined();
+    expect(client.agentState.completedRequests['toolu_execution_run_default_1']).toMatchObject({
+      status: 'approved',
+      tool: 'mcp__happier__execution_run_start',
+    });
   });
 });

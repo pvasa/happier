@@ -40,6 +40,13 @@ describe('generateHookSettingsFile', () => {
       'mcp__happier__change_title',
       'mcp__happier__session_title_set',
     ]));
+    expect(parsed.permissions?.allow).not.toEqual(expect.arrayContaining([
+      'mcp__happier__execution_run_start',
+      'mcp__happier__execution_run_get',
+      'mcp__happier__execution_run_wait',
+      'mcp__happier__subagents_delegate_start',
+      'mcp__happier__review_start',
+    ]));
   });
 
   it('adds PermissionRequest hook when local permission bridge is enabled', () => {

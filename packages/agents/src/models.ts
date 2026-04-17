@@ -1,5 +1,9 @@
 import type { AgentId } from './types.js';
-import { resolveClaudeEffortLevelsForModelId } from './providers/claude/effort.js';
+import {
+  formatClaudeEffortLevelLabel,
+  resolveClaudeDefaultEffortLevelForModelId,
+  resolveClaudeEffortLevelsForModelId,
+} from './providers/claude/effort.js';
 
 export type AgentModelNonAcpApplyScope = 'spawn_only' | 'next_prompt';
 export type AgentModelOptionValueId = string;
@@ -65,30 +69,30 @@ export type AgentModelConfig = Readonly<{
   staticModels?: readonly AgentModelDescriptor[];
 }>;
 
-function toTitleCase(value: string): string {
-  if (!value) return value;
-  return value.slice(0, 1).toUpperCase() + value.slice(1);
-}
-
 function withClaudeEffortModelOptions(model: AgentModelDescriptor): AgentModelDescriptor {
   const levels = resolveClaudeEffortLevelsForModelId(model.id);
-  if (levels.length === 0) return model;
+  const currentValue = resolveClaudeDefaultEffortLevelForModelId(model.id);
+  if (levels.length === 0 || !currentValue) return model;
 
-  const options = levels.map((level) => ({ value: level, name: toTitleCase(level) }));
+  const options = levels.map((level) => ({ value: level, name: formatClaudeEffortLevelLabel(level) }));
   return {
     ...model,
     modelOptions: [{
       id: 'reasoning_effort',
       name: 'Thinking',
       type: 'select',
-      // Claude defaults to high effort when unset; reflect that as the baseline UI value.
-      currentValue: 'high',
+      currentValue,
       options,
     }],
   };
 }
 
 const CLAUDE_STATIC_MODELS = Object.freeze(([
+  {
+    id: 'claude-opus-4-7',
+    name: 'Opus 4.7',
+    description: 'Newest highest-capability Claude model for the hardest coding and reasoning tasks.',
+  },
   {
     id: 'claude-opus-4-6',
     name: 'Opus 4.6',

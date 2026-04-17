@@ -122,4 +122,60 @@ describe('createOpenCodeServerExecutionRunBackend', () => {
       { type: 'model-output', fullText: 'Hello world' },
     ]));
   });
+
+  it('acks sendPrompt before the OpenCode runtime turn completes', async () => {
+    let activeSessionId: string | null = null;
+    let resolveRuntimePrompt!: () => void;
+    const runtimePrompt = new Promise<void>((resolve) => {
+      resolveRuntimePrompt = resolve;
+    });
+    const beginTurn = vi.fn();
+    const flushTurn = vi.fn();
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+    const sendPrompt = vi.fn(() => runtimePrompt);
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn,
+      flushTurn,
+      startOrLoad,
+      sendPrompt,
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    await expect(backend.startSession()).resolves.toEqual({ sessionId: 'session_server' });
+
+    const sendAck = backend.sendPrompt('session_server', 'Inspect this repo');
+    await expect.poll(() => sendPrompt.mock.calls.length).toBe(1);
+
+    try {
+      await expect(Promise.race([
+        sendAck.then(() => 'resolved' as const),
+        new Promise<'pending'>((resolve) => {
+          const timer = setTimeout(() => resolve('pending'), 25);
+          timer.unref?.();
+        }),
+      ])).resolves.toBe('resolved');
+      expect(flushTurn).not.toHaveBeenCalled();
+    } finally {
+      resolveRuntimePrompt();
+      await sendAck.catch(() => undefined);
+    }
+
+    await backend.waitForResponseComplete?.();
+    expect(flushTurn).toHaveBeenCalledTimes(1);
+  });
 });

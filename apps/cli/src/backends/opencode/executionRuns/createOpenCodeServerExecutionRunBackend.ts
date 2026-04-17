@@ -190,16 +190,21 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
             assistantTextByLocalId.clear();
             toolNameByCallId.clear();
             runtime.beginTurn();
-            const promptWork = runtime.sendPrompt(prompt);
-            inFlightPrompt = promptWork;
+            let runtimePromptWork: Promise<void>;
             try {
-                await promptWork;
-            } finally {
+                runtimePromptWork = Promise.resolve(runtime.sendPrompt(prompt));
+            } catch (error) {
+                runtime.flushTurn();
+                throw error;
+            }
+            const promptWork = runtimePromptWork.finally(() => {
                 runtime.flushTurn();
                 if (inFlightPrompt === promptWork) {
                     inFlightPrompt = null;
                 }
-            }
+            });
+            inFlightPrompt = promptWork;
+            void promptWork.catch(() => undefined);
         },
         async cancel(_sessionId: SessionId): Promise<void> {
             await runtime.cancel();

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { HttpStatusErrorWithCode } from '@/api/client/httpStatusError';
 import type { Credentials } from '@/persistence';
 
 import { forkOpenCodeSessionNative } from './nativeFork';
@@ -59,6 +60,60 @@ describe('forkOpenCodeSessionNative', () => {
 
     expect(out).toEqual({ vendorSessionId: 'ses_child', vendorMessageId: 'msg_local-1' });
     expect(client.sessionFork).toHaveBeenCalledWith({ sessionId: 'ses_parent_vendor', messageId: 'msg_local-1' });
+  });
+
+  it('propagates auth failures while loading the Happy transcript row', async () => {
+    const axios = await import('axios');
+    vi.spyOn(axios.default, 'get').mockResolvedValueOnce({
+      status: 403,
+      data: {},
+    } as any);
+
+    await expect(
+      forkOpenCodeSessionNative({
+        credentials: createCredentials(),
+        parentHappySessionId: 'sess_parent',
+        parentRawSession: { encryptionMode: 'plain' } as any,
+        directory: '/repo',
+        parentOpenCodeSessionId: 'ses_parent_vendor',
+        forkPoint: { type: 'seq', upToSeqInclusive: 10 },
+      }, {
+        createClient: async () => {
+          throw new Error('client should not be created after auth failure');
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 403 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+  });
+
+  it('normalizes OpenCode fork request unauthorized failures to auth status errors', async () => {
+    const client = {
+      sessionFork: vi.fn(async () => {
+        throw new Error('OpenCode HTTP POST http://127.0.0.1:4096/session/ses_parent_vendor/fork?directory=%3Credacted%3E failed: 401 Unauthorized');
+      }),
+      dispose: vi.fn(async () => {}),
+    };
+
+    await expect(
+      forkOpenCodeSessionNative({
+        credentials: createCredentials(),
+        parentHappySessionId: 'sess_parent',
+        parentRawSession: { encryptionMode: 'plain' } as any,
+        directory: '/repo',
+        parentOpenCodeSessionId: 'ses_parent_vendor',
+        forkPoint: { type: 'latest' },
+      }, {
+        createClient: async () => client as any,
+        fetchSingleHappyRow: async () => null,
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 401 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
   });
 
   it('forks after the first user message (inclusive) when upToSeqInclusive is 1', async () => {

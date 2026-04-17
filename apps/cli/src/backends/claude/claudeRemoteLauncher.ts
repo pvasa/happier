@@ -1045,6 +1045,9 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 if (!exitReason && abortController.signal.aborted) {
                     session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
                 }
+                if (!exitReason && session.queue.isClosed()) {
+                    exitReason = 'exit';
+                }
             } catch (e) {
                 const abortError = isAbortError(e);
                 logger.debug('[remote]: launch error', {

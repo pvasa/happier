@@ -121,6 +121,13 @@ function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
 function hookWithTranscript(transcriptPath: string): SessionFoundHookData {
   return { transcript_path: transcriptPath };
 }
@@ -227,6 +234,48 @@ function createRemoteHarness(options?: {
 	      process.env.HAPPIER_CLAUDE_REMOTE_INTERRUPT_THEN_TEARDOWN_GRACE_MS = previousGraceMsEnv;
 	    }
 	  });
+
+  it('exits instead of relaunching when the remote input queue closes during dispatch teardown', async () => {
+    const harness = createRemoteHarness({ sessionId: 'sess_0' });
+    harness.session.queue.push('hello', { permissionMode: 'default', claudeRemoteAgentSdkEnabled: true } as any);
+
+    mockClaudeRemoteDispatch.mockImplementation(async (opts: unknown) => {
+      if (mockClaudeRemoteDispatch.mock.calls.length > 1) {
+        void harness.switchHandlerReady.then((switchHandler) => switchHandler({ to: 'local' }));
+        return;
+      }
+
+      const dispatchOpts = opts as any;
+      await dispatchOpts.nextMessage?.();
+      dispatchOpts.onSessionFound?.('sess_agent_sdk', hookWithTranscript('/tmp/sess_agent_sdk.jsonl'));
+      harness.session.queue.close();
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(harness.session);
+
+    let settled: 'pending' | 'exit' | 'switch' | 'rejected' = 'pending';
+    launcherPromise.then(
+      (value) => {
+        settled = value;
+      },
+      () => {
+        settled = 'rejected';
+      },
+    );
+
+    await sleep(50);
+    const dispatchCallCount = mockClaudeRemoteDispatch.mock.calls.length;
+
+    if (settled === 'pending') {
+      const switchHandler = await harness.switchHandlerReady;
+      await switchHandler({ to: 'local' });
+      await launcherPromise.catch(() => undefined);
+    }
+
+    expect(dispatchCallCount).toBe(1);
+    expect(settled).toBe('exit');
+  });
 
 	  it('interrupts the current turn before switching to local mode when a turn interrupt handler is available', async () => {
     const waitWithin = async <T,>(promise: Promise<T>, label: string, ms: number = 5000): Promise<T> => {

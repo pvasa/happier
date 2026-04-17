@@ -51,6 +51,14 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     await expect(handler.handleToolCall('safe-5', 'happier_action_execute', { actionId: 'session.title.set' })).resolves.toEqual({ decision: 'approved' });
     await expect(handler.handleToolCall('mcp__happier__change_title-1', 'other', {})).resolves.toEqual({ decision: 'approved' });
 
+    const executionRunPending = handler.handleToolCall('execution-run-1', 'mcp__happier__execution_run_start', {
+      intent: 'delegate',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+    });
+    expect(session.agentState.requests['execution-run-1']).toBeTruthy();
+    await session.rpcHandlerManager.handlers.get('permission')?.({ id: 'execution-run-1', approved: true, decision: 'approved' });
+    await expect(executionRunPending).resolves.toEqual({ decision: 'approved' });
+
     const pending = handler.handleToolCall('pending-1', 'think_malware', {});
     expect(session.agentState.requests['pending-1']).toBeTruthy();
     const respond = session.rpcHandlerManager.handlers.get('permission');
@@ -79,6 +87,8 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     expect(handler.getImmediateDecision('spec-search-1', 'action_spec_search', {})).toEqual({ decision: 'approved' });
     expect(handler.getImmediateDecision('spec-search-2', 'mcp__happier__action_spec_search', {})).toEqual({ decision: 'approved' });
     expect(handler.getImmediateDecision('spec-search-3', 'happier_action_spec_search', {})).toEqual({ decision: 'approved' });
+    expect(handler.getImmediateDecision('execution-run-1', 'mcp__happier__execution_run_start', {})).toBeNull();
+    expect(handler.getImmediateDecision('execution-run-2', 'mcp__happier__subagents_delegate_start', {})).toBeNull();
     expect(handler.getImmediateDecision('perm-1', 'bash', { command: 'pwd' })).toBeNull();
   });
 

@@ -35,7 +35,7 @@ function expandHomeDir(value: string): string {
     return resolve(value);
 }
 
-function resolveOverrideCommand(
+export function resolveCodexOverrideCommand(
     processEnv: NodeJS.ProcessEnv,
     overrideEnvVarKeys: readonly string[],
     cwd: string,
@@ -93,7 +93,7 @@ export async function resolveCodexCliInvocation(params: Readonly<{
     const processEnv = params.processEnv ?? process.env;
     const cwd = params.cwd ?? process.cwd();
     const command =
-        resolveOverrideCommand(processEnv, params.overrideEnvVarKeys ?? [], cwd)
+        resolveCodexOverrideCommand(processEnv, params.overrideEnvVarKeys ?? [], cwd)
         ?? requireProviderCliCommand('codex', { processEnv });
 
     if (!isJavaScriptBackedCodexCommand(command)) {

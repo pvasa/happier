@@ -45,6 +45,27 @@ describe('executionRunsGuidanceV1', () => {
 
   it('adds an overflow note when rules exceed the max char budget', () => {
     const entry1 = { id: '1', description: 'Rule one' };
+    const entry2 = { id: '2', description: 'Rule two is intentionally longer than the overflow note' };
+
+    const full = buildExecutionRunsGuidanceBlockV1({ entries: [entry1, entry2], maxChars: 10_000 });
+    const ruleTwoStart = full.text.indexOf('\n- Rule two');
+    expect(ruleTwoStart).toBeGreaterThan(0);
+
+    const overflowNote = '- (+1 more rules in settings)';
+    const capped = buildExecutionRunsGuidanceBlockV1({
+      entries: [entry1, entry2],
+      // Budget that fits the first rule plus the overflow note, but not the second rule.
+      maxChars: ruleTwoStart + 1 + overflowNote.length,
+    });
+
+    expect(capped.includedCount).toBe(1);
+    expect(capped.remainingCount).toBe(1);
+    expect(capped.text).toContain(overflowNote);
+    expect(capped.text.length).toBeLessThanOrEqual(ruleTwoStart + 1 + overflowNote.length);
+  });
+
+  it('omits the rules overflow note when it would exceed the max char budget', () => {
+    const entry1 = { id: '1', description: 'Rule one' };
     const entry2 = { id: '2', description: 'Rule two' };
 
     const full = buildExecutionRunsGuidanceBlockV1({ entries: [entry1, entry2], maxChars: 10_000 });
@@ -53,13 +74,13 @@ describe('executionRunsGuidanceV1', () => {
 
     const capped = buildExecutionRunsGuidanceBlockV1({
       entries: [entry1, entry2],
-      // Budget that fits exactly up to the start of rule two, ensuring rule two does not fit.
       maxChars: ruleTwoStart,
     });
 
     expect(capped.includedCount).toBe(1);
     expect(capped.remainingCount).toBe(1);
-    expect(capped.text).toContain('(+1 more rules in settings)');
+    expect(capped.text).not.toContain('more rules in settings');
+    expect(capped.text.length).toBeLessThanOrEqual(ruleTwoStart);
   });
 
   it('excludes disabled entries', () => {

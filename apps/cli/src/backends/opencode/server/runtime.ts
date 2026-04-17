@@ -2097,7 +2097,7 @@ export function createOpenCodeServerRuntime(params: {
       if (shouldSurfaceOpenCodeErrorDetail(detail)) {
         params.session.sendAgentMessage(provider, { type: 'message', message: detail });
       }
-      rejectTurn(rec.error ?? new Error('OpenCode session error'));
+      rejectTurn(detail ? new Error(detail) : rec.error ?? new Error('OpenCode session error'));
       return;
     }
 

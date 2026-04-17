@@ -1,5 +1,10 @@
 import axios from 'axios';
 
+import {
+  createAuthenticationHttpStatusError,
+  isAuthenticationStatus,
+  readAuthenticationStatus,
+} from '@/api/client/httpStatusError';
 import type { Credentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
@@ -36,6 +41,23 @@ function deriveLegacyOpenCodeMessageIdFromLocalId(localId: string | null): strin
   const normalized = typeof localId === 'string' ? localId.trim() : '';
   if (!normalized) return null;
   return `msg_${normalized}`;
+}
+
+function readOpenCodeHttpAuthStatus(error: unknown): 401 | 403 | null {
+  const directStatus = readAuthenticationStatus(error);
+  if (directStatus) return directStatus;
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const match = /\bfailed:\s*(401|403)\b/u.exec(message);
+  if (!match) return null;
+  const status = Number.parseInt(match[1] ?? '', 10);
+  return isAuthenticationStatus(status) ? status : null;
+}
+
+function throwIfOpenCodeHttpAuthError(error: unknown): void {
+  const status = readOpenCodeHttpAuthStatus(error);
+  if (!status) return;
+  const message = error instanceof Error ? error.message : `Unauthorized (${status})`;
+  throw createAuthenticationHttpStatusError(status, message);
 }
 
 function extractHappyUserTextFromDecrypted(value: unknown): string | null {
@@ -76,8 +98,8 @@ async function fetchSingleHappyTranscriptRow(params: {
     validateStatus: () => true,
   });
 
-  if (response.status === 401 || response.status === 403) {
-    throw new Error(`Unauthorized (${response.status})`);
+  if (isAuthenticationStatus(response.status)) {
+    throw createAuthenticationHttpStatusError(response.status, `Unauthorized (${response.status})`);
   }
   if (response.status !== 200) {
     throw new Error(`Unexpected status from /v1/sessions/:id/messages: ${response.status}`);
@@ -182,7 +204,10 @@ export async function forkOpenCodeSessionNative(params: {
       token: params.credentials.token,
       sessionId: params.parentHappySessionId,
       beforeSeq,
-    }).catch(() => null);
+    }).catch((error) => {
+      throwIfOpenCodeHttpAuthError(error);
+      return null;
+    });
     if (!row) return null;
 
     resolved = resolveOpenCodeForkMessageIdFromHappyRow({
@@ -218,7 +243,10 @@ export async function forkOpenCodeSessionNative(params: {
       } else {
         const vendorMessageId = resolved.messageId;
         if (typeof client.sessionMessagesList !== 'function') return null;
-        const raw = await client.sessionMessagesList({ sessionId: parentOpenCodeSessionId }).catch(() => ([] as unknown[]));
+        const raw = await client.sessionMessagesList({ sessionId: parentOpenCodeSessionId }).catch((error) => {
+          throwIfOpenCodeHttpAuthError(error);
+          return [] as unknown[];
+        });
         const items = Array.isArray(raw) ? raw : [];
         const ids: string[] = [];
         for (const row of items) {
@@ -231,7 +259,10 @@ export async function forkOpenCodeSessionNative(params: {
       }
     } else if (resolved?.source === 'agent') {
       const vendorMessageId = resolved.messageId;
-      const raw = await client.sessionMessagesList({ sessionId: parentOpenCodeSessionId }).catch(() => ([] as unknown[]));
+      const raw = await client.sessionMessagesList({ sessionId: parentOpenCodeSessionId }).catch((error) => {
+        throwIfOpenCodeHttpAuthError(error);
+        return [] as unknown[];
+      });
       const items = Array.isArray(raw) ? raw : [];
       const ids: string[] = [];
       for (const row of items) {
@@ -251,7 +282,8 @@ export async function forkOpenCodeSessionNative(params: {
         });
         const vendorSessionId = typeof (forked as any)?.id === 'string' ? String((forked as any).id).trim() : '';
         return vendorSessionId ? { vendorSessionId } : null;
-      } catch {
+      } catch (error) {
+        throwIfOpenCodeHttpAuthError(error);
         return null;
       }
     };
@@ -261,7 +293,10 @@ export async function forkOpenCodeSessionNative(params: {
       const userText = typeof resolved.userText === 'string' ? resolved.userText.trim() : '';
       const happyCreatedAtMs = typeof resolved.happyCreatedAtMs === 'number' ? resolved.happyCreatedAtMs : 0;
       if (userText && typeof client.sessionMessagesList === 'function') {
-        const raw = await client.sessionMessagesList({ sessionId: parentOpenCodeSessionId }).catch(() => ([] as unknown[]));
+        const raw = await client.sessionMessagesList({ sessionId: parentOpenCodeSessionId }).catch((error) => {
+          throwIfOpenCodeHttpAuthError(error);
+          return [] as unknown[];
+        });
         const allItems = Array.isArray(raw) ? raw : [];
         const items = extractOpenCodeTextHistoryItems(allItems).filter((item) => item.role === 'user');
         let bestMessageId: string | null = null;

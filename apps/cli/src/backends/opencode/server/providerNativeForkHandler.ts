@@ -1,4 +1,5 @@
 import type { ProviderNativeForkHandler } from '@/backends/forking/providerNativeForkHandler';
+import { isAuthenticationError } from '@/api/client/httpStatusError';
 
 import {
   applyOpenCodeSessionAffinityMetadata,
@@ -23,7 +24,10 @@ export const openCodeProviderNativeForkHandler: ProviderNativeForkHandler = asyn
     forkPoint: params.forkPoint.type === 'seq'
       ? { type: 'seq', upToSeqInclusive: params.targetSeqInclusive }
       : { type: 'latest' },
-  }).catch(() => null);
+  }).catch((error) => {
+    if (isAuthenticationError(error)) throw error;
+    return null;
+  });
   const vendorSessionId = typeof forked?.vendorSessionId === 'string' ? forked.vendorSessionId.trim() : '';
   if (!vendorSessionId) return null;
 

@@ -17,10 +17,19 @@ describe('agent model config', () => {
     const claudeModels = getAgentStaticModels('claude');
     const geminiModels = getAgentStaticModels('gemini');
 
-    expect(claude.staticModels?.find((model) => model.id === 'claude-opus-4-6')).toMatchObject({
-      id: 'claude-opus-4-6',
-      name: 'Opus 4.6',
+    expect(claude.staticModels?.find((model) => model.id === 'claude-opus-4-7')).toMatchObject({
+      id: 'claude-opus-4-7',
+      name: 'Opus 4.7',
       description: expect.any(String),
+      modelOptions: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'reasoning_effort',
+          currentValue: 'xhigh',
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'xhigh' }),
+          ]),
+        }),
+      ]),
     });
     expect(gemini.staticModels?.find((model) => model.id === 'gemini-3.1-pro-preview')).toMatchObject({
       id: 'gemini-3.1-pro-preview',
@@ -30,8 +39,8 @@ describe('agent model config', () => {
     expect(claude.staticModels?.map((model) => model.id)).toEqual(claude.allowedModes);
     expect(gemini.staticModels?.map((model) => model.id)).toEqual(gemini.allowedModes);
     expect(claudeModels[0]).toMatchObject({
-      id: 'claude-opus-4-6',
-      name: 'Opus 4.6',
+      id: 'claude-opus-4-7',
+      name: 'Opus 4.7',
       description: expect.any(String),
     });
     expect(geminiModels[0]?.name).toBe('Gemini 2.5 Pro');

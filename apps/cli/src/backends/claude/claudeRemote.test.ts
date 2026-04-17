@@ -231,6 +231,25 @@ describe('claudeRemote', () => {
     expect(call?.options?.extraArgs).toEqual(['--effort', 'medium']);
   });
 
+  it('injects --effort high for Opus 4.7 because xhigh is the model default', async () => {
+    mockQuery.mockReturnValue(messageStream(resultMessage()));
+
+    const { claudeRemote } = await import('./claudeRemote');
+
+    await claudeRemote(
+      createBaseOptions({
+        nextMessage: async () => ({
+          message: 'hello',
+          mode: defaultMode({ model: 'claude-opus-4-7', reasoningEffort: 'high' }),
+        }),
+      }),
+    );
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as QueryCall | undefined;
+    expect(call?.options?.extraArgs).toEqual(['--effort', 'high']);
+  });
+
   it('injects Claude Code experimental Agent Teams env var when enabled on the mode', async () => {
     mockQuery.mockReturnValue(messageStream(resultMessage()));
 

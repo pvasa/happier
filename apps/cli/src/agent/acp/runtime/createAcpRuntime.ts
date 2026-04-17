@@ -18,6 +18,7 @@ import { importAcpReplaySidechainV1 } from '@/agent/acp/history/importAcpReplayS
 import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
 import type { AcpRuntimeSessionClient } from '@/agent/acp/sessionClient';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
+import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import { getAgentModelConfig, type AgentId } from '@happier-dev/agents';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
@@ -340,7 +341,20 @@ export function createAcpRuntime(params: {
         // Best-effort: materialize a bounded number of pending messages per wake to avoid tight loops.
         for (let i = 0; i < maxPopPerWake; i += 1) {
           if (controller.signal.aborted) break;
-          const did = await params.pendingQueue!.popPendingMessage().catch(() => false);
+          let did = false;
+          try {
+            did = await params.pendingQueue!.popPendingMessage();
+          } catch (error) {
+            const terminalAuthStatus = readAuthenticationStatus(error);
+            if (terminalAuthStatus !== null) {
+              logger.debug('[ACP] Stopping pending pump after terminal auth failure', {
+                status: terminalAuthStatus,
+              });
+              stopPendingPump();
+              break;
+            }
+            did = false;
+          }
           if (!did) break;
         }
       };
