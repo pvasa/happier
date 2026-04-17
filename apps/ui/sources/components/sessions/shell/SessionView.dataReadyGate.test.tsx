@@ -2,7 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
@@ -48,6 +48,25 @@ const themeColors = {
     shadow: { color: '#000', opacity: 0.2 },
 } as const;
 
+const routerPushSpy = vi.fn();
+let endpointConnectivityStatus: 'idle' | 'offline' | 'connecting' | 'online' | 'auth_failed' | 'shutting_down' = 'online';
+let syncErrorState: {
+    message: string;
+    retryable: boolean;
+    kind: 'auth' | 'config' | 'network' | 'server' | 'unknown';
+    at: number;
+    serverId?: string;
+} | null = null;
+let sessionState: any = {
+    id: 's1',
+    seq: 1,
+    presence: 'online',
+    active: true,
+    accessLevel: 'edit',
+    metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
+    agentState: {},
+};
+
 installSessionShellCommonModuleMocks({
     reactNative: async () =>
         createReactNativeWebMock({
@@ -79,39 +98,40 @@ installSessionShellCommonModuleMocks({
         createExpoRouterMock({
             pathname: '/session/s1',
             router: {
-                push: vi.fn(),
+                push: routerPushSpy,
                 back: vi.fn(),
                 replace: vi.fn(),
                 setParams: vi.fn(),
             },
         }).module,
     storage: async () => {
-        const session: any = {
-            id: 's1',
-            seq: 1,
-            presence: 'online',
-            active: true,
-            accessLevel: 'edit',
-            metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
-            agentState: {},
-        };
-
         return {
             storage: {
                 getState: () => ({
-                    sessions: { s1: session },
+                    sessions: sessionState ? { s1: sessionState } : {},
                     settings: {},
                     sessionListViewDataByServerId: {},
                 }),
             } as any,
-            useSession: () => session,
+            useSession: () => sessionState,
             useIsDataReady: () => false,
             useRealtimeStatus: () => 'connected',
+            useEndpointConnectivity: () => ({
+                status: endpointConnectivityStatus,
+                reason: null,
+                attempt: 0,
+                nextRetryAt: null,
+                lastConnectedAt: null,
+                lastDisconnectedAt: null,
+                lastErrorMessage: null,
+            }),
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
+            useSessionMessagesVersion: () => 0,
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
             useSessionReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
+            useSyncError: () => syncErrorState,
             useLocalSetting: <K extends keyof LocalSettings>(key: K) => localSettingsDefaults[key],
             useLocalSettingMutable: <K extends keyof LocalSettings>(key: K) => [
                 localSettingsDefaults[key],
@@ -233,6 +253,18 @@ vi.mock('@/sync/sync', () => ({
 
 describe('SessionView (data ready gating)', () => {
     afterEach(() => {
+        routerPushSpy.mockClear();
+        endpointConnectivityStatus = 'online';
+        syncErrorState = null;
+        sessionState = {
+            id: 's1',
+            seq: 1,
+            presence: 'online',
+            active: true,
+            accessLevel: 'edit',
+            metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
+            agentState: {},
+        };
         vi.resetModules();
         standardCleanup();
     });
@@ -248,5 +280,83 @@ describe('SessionView (data ready gating)', () => {
 
         expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1);
         expect(screen.findAllByTestId('session-header-action-menu-trigger')).toHaveLength(1);
+    });
+
+    it('surfaces auth sync errors as a restore-account action instead of generic retry', async () => {
+        syncErrorState = {
+            message: 'Authentication required',
+            retryable: false,
+            kind: 'auth',
+            at: 123,
+        };
+        const { SessionView } = await import('./SessionView');
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView id="s1" />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findByTestId('session-auth-sync-error')).toBeTruthy();
+        expect(screen.findByTestId('session-auth-sync-error-restore')).toBeTruthy();
+        expect(screen.findByTestId('session-auth-sync-error-retry')).toBeNull();
+
+        await pressTestInstanceAsync(
+            screen.findByTestId('session-auth-sync-error-restore'),
+            'session auth sync error restore action',
+        );
+
+        expect(routerPushSpy).toHaveBeenCalledWith('/restore');
+    });
+
+    it('ignores auth sync errors that belong to a different scoped server', async () => {
+        syncErrorState = {
+            message: 'Authentication required',
+            retryable: false,
+            kind: 'auth',
+            at: 123,
+            serverId: 'server-b',
+        };
+        const { SessionView } = await import('./SessionView');
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView id="s1" routeServerId="server-a" />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1);
+        expect(screen.findByTestId('session-auth-sync-error')).toBeNull();
+    });
+
+    it('surfaces endpoint auth_failed as a restore-account action even when syncError is clear', async () => {
+        endpointConnectivityStatus = 'auth_failed';
+        const { SessionView } = await import('./SessionView');
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView id="s1" />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findByTestId('session-composer-input')).toBeTruthy();
+        expect(screen.findByTestId('session-auth-sync-error')).toBeTruthy();
+        expect(screen.findByTestId('session-auth-sync-error-restore')).toBeTruthy();
+    });
+
+    it('shows the auth recovery surface instead of the deleted shell when auth fails and the session is missing', async () => {
+        endpointConnectivityStatus = 'auth_failed';
+        sessionState = null;
+        const { SessionView } = await import('./SessionView');
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView id="s1" />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findByTestId('session-auth-required-fallback')).toBeTruthy();
+        expect(screen.findByTestId('session-auth-sync-error-restore')).toBeTruthy();
+        expect(screen.getTextContent()).not.toContain('errors.sessionDeleted');
     });
 });

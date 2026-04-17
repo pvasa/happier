@@ -285,6 +285,219 @@ describe('createManagedEndpointSupervisor', () => {
     vi.useRealTimers();
   });
 
+  it('can move directly to auth_failed from an externally reported probe result', async () => {
+    const probeReadiness = vi.fn<() => Promise<ReadinessProbeResult>>().mockResolvedValue({ status: 'ready' });
+    const supervisor = createManagedEndpointSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness,
+      initialFastRetryDelayMs: 1,
+      backoffMinMs: 10,
+      backoffMaxMs: 10,
+      jitterRatio: 0,
+    });
+
+    await supervisor.start();
+    supervisor.reportProbeResult({ status: 'auth_failed', statusCode: 403, errorMessage: 'forbidden' });
+
+    expect(supervisor.getState()).toEqual(
+      expect.objectContaining({
+        phase: 'auth_failed',
+        reason: 'auth_invalid',
+        lastErrorMessage: 'forbidden',
+        lastProbe: { status: 'auth_failed', statusCode: 403, errorMessage: 'forbidden' },
+      }),
+    );
+  });
+
+  it('uses externally reported retry_later probe results to schedule the next probe', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const probeReadiness = vi.fn<() => Promise<ReadinessProbeResult>>().mockResolvedValue({ status: 'ready' });
+    const supervisor = createManagedEndpointSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness,
+      initialFastRetryDelayMs: 1,
+      backoffMinMs: 10,
+      backoffMaxMs: 10,
+      jitterRatio: 0,
+    });
+
+    await supervisor.start();
+    supervisor.reportProbeResult({ status: 'retry_later', retryAfterMs: 50, errorMessage: 'busy' });
+
+    expect(supervisor.getState()).toEqual(
+      expect.objectContaining({
+        phase: 'offline',
+        reason: 'probe_failed',
+        nextRetryAt: 50,
+        lastErrorMessage: 'busy',
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(probeReadiness).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it('transitions from offline to auth_failed when auth is externally reported', async () => {
+    vi.useFakeTimers();
+    const probeReadiness = vi
+      .fn<() => Promise<ReadinessProbeResult>>()
+      .mockResolvedValueOnce({ status: 'server_unreachable', errorMessage: 'offline' })
+      .mockResolvedValue({ status: 'ready' });
+    const phases: string[] = [];
+    const supervisor = createManagedEndpointSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness,
+      initialFastRetryDelayMs: 10,
+      maxFastRetries: 0,
+      backoffMinMs: 10,
+      backoffMaxMs: 10,
+      jitterRatio: 0,
+      onStateChange: (state) => {
+        phases.push(state.phase);
+      },
+    });
+
+    await supervisor.start();
+    expect(supervisor.getState()).toEqual(expect.objectContaining({ phase: 'offline', attempt: 1 }));
+
+    supervisor.reportProbeResult({ status: 'auth_failed', statusCode: 403, errorMessage: 'forbidden' });
+
+    expect(supervisor.getState()).toEqual(
+      expect.objectContaining({
+        phase: 'auth_failed',
+        reason: 'auth_invalid',
+        nextRetryAt: null,
+        lastErrorMessage: 'forbidden',
+        lastProbe: { status: 'auth_failed', statusCode: 403, errorMessage: 'forbidden' },
+      }),
+    );
+    expect(phases).toContain('auth_failed');
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(probeReadiness).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('refreshes offline retry scheduling from externally reported retry_later results', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const probeReadiness = vi
+      .fn<() => Promise<ReadinessProbeResult>>()
+      .mockResolvedValueOnce({ status: 'server_unreachable', errorMessage: 'offline' })
+      .mockResolvedValue({ status: 'ready' });
+    const supervisor = createManagedEndpointSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness,
+      initialFastRetryDelayMs: 10,
+      maxFastRetries: 0,
+      backoffMinMs: 10,
+      backoffMaxMs: 10,
+      jitterRatio: 0,
+    });
+
+    await supervisor.start();
+
+    vi.setSystemTime(5);
+    supervisor.reportProbeResult({ status: 'retry_later', retryAfterMs: 50, errorMessage: 'busy' });
+
+    expect(supervisor.getState()).toEqual(
+      expect.objectContaining({
+        phase: 'offline',
+        reason: 'probe_failed',
+        attempt: 2,
+        nextRetryAt: 55,
+        lastErrorMessage: 'busy',
+        lastProbe: { status: 'retry_later', retryAfterMs: 50, errorMessage: 'busy' },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(probeReadiness).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(probeReadiness).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it('refreshes offline retry scheduling from externally reported server_unreachable results', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const probeReadiness = vi
+      .fn<() => Promise<ReadinessProbeResult>>()
+      .mockResolvedValueOnce({ status: 'server_unreachable', errorMessage: 'offline' })
+      .mockResolvedValue({ status: 'ready' });
+    const supervisor = createManagedEndpointSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness,
+      initialFastRetryDelayMs: 10,
+      maxFastRetries: 0,
+      backoffMinMs: 25,
+      backoffMaxMs: 25,
+      jitterRatio: 0,
+    });
+
+    await supervisor.start();
+
+    vi.setSystemTime(5);
+    supervisor.reportProbeResult({ status: 'server_unreachable', errorMessage: 'network down' });
+
+    expect(supervisor.getState()).toEqual(
+      expect.objectContaining({
+        phase: 'offline',
+        reason: 'server_unreachable',
+        attempt: 2,
+        nextRetryAt: 30,
+        lastErrorMessage: 'network down',
+        lastProbe: { status: 'server_unreachable', errorMessage: 'network down' },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(24);
+    expect(probeReadiness).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(probeReadiness).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it('ignores stale externally reported retryable probe results after auth_failed', async () => {
+    vi.useFakeTimers();
+    const probeReadiness = vi.fn<() => Promise<ReadinessProbeResult>>().mockResolvedValue({ status: 'ready' });
+    const supervisor = createManagedEndpointSupervisor({
+      ...DEFAULT_MANAGED_CONNECTION_POLICY,
+      probeReadiness,
+      initialFastRetryDelayMs: 1,
+      backoffMinMs: 10,
+      backoffMaxMs: 10,
+      jitterRatio: 0,
+    });
+
+    await supervisor.start();
+    supervisor.reportProbeResult({ status: 'auth_failed', statusCode: 403, errorMessage: 'forbidden' });
+    supervisor.reportProbeResult({ status: 'retry_later', retryAfterMs: 50, errorMessage: 'busy' });
+
+    expect(supervisor.getState()).toEqual(
+      expect.objectContaining({
+        phase: 'auth_failed',
+        reason: 'auth_invalid',
+        nextRetryAt: null,
+        lastErrorMessage: 'forbidden',
+        lastProbe: { status: 'auth_failed', statusCode: 403, errorMessage: 'forbidden' },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(probeReadiness).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
   it('cancels scheduled retries on stop', async () => {
     vi.useFakeTimers();
     const probeReadiness = vi.fn<() => Promise<ReadinessProbeResult>>().mockResolvedValue({ status: 'server_unreachable' });

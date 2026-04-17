@@ -52,6 +52,8 @@ import { registerMachinePromptRegistriesRpcHandlers } from './rpcHandlers.prompt
 import { registerMachinePromptRegistryTransferRpcHandlers } from './rpcHandlers.promptRegistryTransfers';
 import { runReplaySummaryForDialog } from '@/session/replay/summary/runReplaySummaryForDialog';
 import { configuration } from '@/configuration';
+import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import { resolveFilesystemPolicyDefaultDirectory } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { isAcpForkEligibleForProvider } from '@/agent/acp/acpForkEligibility';
 import { resolveReplaySeedDraft } from '@/session/replay/resolveReplaySeedDraft';
 import type {
@@ -70,6 +72,7 @@ import { dispatchProviderNativeFork } from '@/session/fork/providerNativeForkDis
 import { createPromptAssetAdapterRegistry } from '@/promptAssets/createPromptAssetAdapterRegistry';
 import { createPromptRegistryAdapterRegistry } from '@/promptRegistries/createPromptRegistryAdapterRegistry';
 import { normalizeSpawnSessionDirectory } from '@/rpc/handlers/spawnSessionOptionsContract';
+import { isAuthenticationError } from '@/api/client/httpStatusError';
 
 export type MachineRpcHandlers = {
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
@@ -89,7 +92,9 @@ export type MachineRpcHandlerDeps = Readonly<{
   runReplaySummaryForDialog?: typeof runReplaySummaryForDialog;
   promptAssetsHomedir?: () => string;
   promptAssetsHappierHomeDir?: () => string;
-  }>;
+  machineRpcWorkingDirectory?: string;
+  filesystemAccessPolicy?: FilesystemAccessPolicy;
+}>;
 
 async function fetchForkChildSessionOrThrow(params: Readonly<{
   token: string;
@@ -107,6 +112,7 @@ async function fetchForkChildSessionOrThrow(params: Readonly<{
       if (raw) return raw;
       lastError = new Error('Session fetch returned empty response');
     } catch (error) {
+      if (isAuthenticationError(error)) throw error;
       lastError = error;
     }
     if (index < attempts - 1 && delayMs > 0) {
@@ -168,6 +174,15 @@ export function registerMachineRpcHandlers(params: Readonly<{
   const { rpcHandlerManager, handlers } = params;
   const { spawnSession, stopSession, requestShutdown } = handlers;
   const memoryWorker = handlers.memory ?? null;
+  const accessPolicy = params.deps?.filesystemAccessPolicy;
+  const machineRpcWorkingDirectory = params.deps?.machineRpcWorkingDirectory;
+  const effectiveMachineRpcWorkingDirectory =
+    machineRpcWorkingDirectory && accessPolicy
+      ? resolveFilesystemPolicyDefaultDirectory({
+        defaultDirectory: machineRpcWorkingDirectory,
+        accessPolicy,
+      })
+      : machineRpcWorkingDirectory;
 
   // Register spawn session handler
   rpcHandlerManager.registerHandler(RPC_METHODS.SPAWN_HAPPY_SESSION, async (params: any) => {
@@ -392,7 +407,13 @@ export function registerMachineRpcHandlers(params: Readonly<{
     });
   }
 
-  registerMachineTerminalRpcHandlers({ rpcHandlerManager });
+  registerMachineTerminalRpcHandlers({
+    rpcHandlerManager,
+    deps: {
+      ...(effectiveMachineRpcWorkingDirectory ? { workingDirectory: effectiveMachineRpcWorkingDirectory } : {}),
+      ...(accessPolicy ? { accessPolicy } : {}),
+    },
+  });
   registerMachineMcpServersRpcHandlers({ rpcHandlerManager });
   const promptAssetAdapterRegistry = createPromptAssetAdapterRegistry({
     homedir: params.deps?.promptAssetsHomedir,
@@ -562,6 +583,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
           },
         });
       } catch (error) {
+        if (isAuthenticationError(error)) throw error;
         logger.debug('[API MACHINE] Failed to create replay-seeded session', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -635,6 +657,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
     try {
       parentSession = await fetchSessionByIdCompat({ token: credentials.token, sessionId: parentSessionId });
     } catch (error) {
+      if (isAuthenticationError(error)) throw error;
       return {
         ok: false,
         errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
@@ -710,7 +733,10 @@ export function registerMachineRpcHandlers(params: Readonly<{
         parentSessionId,
         parentRawSession: parentSession,
         targetSeqInclusive,
-      }).catch(() => null)
+      }).catch((error) => {
+        if (isAuthenticationError(error)) throw error;
+        return null;
+      })
       : null;
 
     const effectiveCutoffSeqInclusive =
@@ -789,6 +815,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
                 maxAttempts: 6,
               });
             } catch (error) {
+              if (isAuthenticationError(error)) throw error;
               await cleanupForkChildBestEffort(stopSession, childSessionId);
               await archiveSessionBestEffort(credentials.token, childSessionId);
               return {
@@ -801,6 +828,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
           }
         }
       } catch (error) {
+        if (isAuthenticationError(error)) throw error;
         if (requestedStrategy === 'provider_native') {
           return {
             ok: false,
@@ -897,6 +925,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
                         maxAttempts: 6,
                       });
                   } catch (error) {
+                    if (isAuthenticationError(error)) throw error;
                     await cleanupForkChildBestEffort(stopSession, childSessionId);
                     await archiveSessionBestEffort(credentials.token, childSessionId);
                     return {
@@ -913,7 +942,8 @@ export function registerMachineRpcHandlers(params: Readonly<{
             await created.backend.dispose().catch(() => {});
           }
         }
-      } catch {
+      } catch (error) {
+        if (isAuthenticationError(error)) throw error;
         // Ignore and fall back to replay fork below.
       }
     }
@@ -998,6 +1028,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
           },
         });
       } catch (error) {
+        if (isAuthenticationError(error)) throw error;
         logger.debug('[API MACHINE] Failed to create fork session for replay', {
           error: error instanceof Error ? error.message : String(error),
         });

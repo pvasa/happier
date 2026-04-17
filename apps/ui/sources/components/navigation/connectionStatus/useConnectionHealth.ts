@@ -3,6 +3,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { useActiveSelectionMachineGroups } from '@/components/settings/server/hooks/useActiveSelectionMachineGroups';
 import { getActiveServerSnapshot, listServerProfiles } from '@/sync/domains/server/serverProfiles';
+import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import {
     useAllMachines,
     useMachineListByServerId,
@@ -62,12 +63,16 @@ export function useConnectionHealth() {
             serverSelectionActiveTargetId,
         },
     });
+    const activeSyncError = React.useMemo(() => {
+        return selectSyncErrorForServer(syncError, activeServerSnapshot.serverId);
+    }, [activeServerSnapshot.serverId, syncError]);
 
     const health = React.useMemo(() => {
         return resolveConnectionHealth({
             socketStatus: socketStatus.status,
             endpointStatus: endpointConnectivity.status,
-            hasSyncError: Boolean(syncError),
+            hasSyncError: Boolean(activeSyncError),
+            syncErrorKind: activeSyncError?.kind,
             machineGroups: activeSelectionMachineGroups.visibleMachineGroups.map((group) => {
                 if (group.status === 'loading' || group.status === 'signedOut') {
                     return {
@@ -87,7 +92,7 @@ export function useConnectionHealth() {
                 };
             }),
         });
-    }, [activeSelectionMachineGroups.visibleMachineGroups, endpointConnectivity.status, socketStatus.status, syncError]);
+    }, [activeSelectionMachineGroups.visibleMachineGroups, activeSyncError, endpointConnectivity.status, socketStatus.status]);
 
     const presentation = React.useMemo(() => {
         return resolveConnectionHealthPresentation(health, {

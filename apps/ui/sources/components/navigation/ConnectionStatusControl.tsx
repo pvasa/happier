@@ -24,6 +24,7 @@ import { ConnectionTargetList } from '@/components/navigation/connection/Connect
 import { promptSignedOutServerSwitchConfirmation } from '@/components/settings/server/modals/ServerSwitchAuthPrompt';
 import { Text } from '@/components/ui/text/Text';
 import { useConnectionHealth } from '@/components/navigation/connectionStatus/useConnectionHealth';
+import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 
 type Variant = 'sidebar' | 'header';
 
@@ -140,6 +141,9 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
             return '';
         }
     }, [open]);
+    const activeSyncError = React.useMemo(() => {
+        return selectSyncErrorForServer(syncError, activeServerId);
+    }, [activeServerId, syncError]);
 
     const activeServerLabel = React.useMemo(() => {
         const active = servers.find((server) => server.id === activeServerId);
@@ -370,17 +374,17 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                         <Text style={styles.popoverValue}>{formatTime(lastSyncAt)}</Text>
                                     </View>
 
-                                    {syncError?.nextRetryAt ? (
+                                    {activeSyncError?.nextRetryAt ? (
                                         <View style={styles.popoverRow}>
                                             <Text style={styles.popoverLabel}>{t('connectionStatus.labels.nextRetry')}</Text>
-                                            <Text style={styles.popoverValue}>{formatTime(syncError.nextRetryAt)}</Text>
+                                            <Text style={styles.popoverValue}>{formatTime(activeSyncError.nextRetryAt)}</Text>
                                         </View>
                                     ) : null}
 
-                                    {syncError ? (
+                                    {activeSyncError ? (
                                         <View style={styles.popoverRow}>
                                             <Text style={styles.popoverLabel}>{t('connectionStatus.labels.lastError')}</Text>
-                                            <Text style={styles.popoverValue} numberOfLines={3}>{syncError.message}</Text>
+                                            <Text style={styles.popoverValue} numberOfLines={3}>{activeSyncError.message}</Text>
                                         </View>
                                     ) : null}
 

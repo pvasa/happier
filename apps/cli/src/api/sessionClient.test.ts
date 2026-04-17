@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ReadinessProbeResult } from '@happier-dev/connection-supervisor';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { ApiSessionClient } from './session/sessionClient';
@@ -12,6 +13,7 @@ import {
 } from '@/testkit/backends/apiSessionSocketHarness';
 import { createMockSession, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { HttpStatusError } from './client/httpStatusError';
 
 // Use vi.hoisted to ensure mock function is available when vi.mock factory runs
 const { mockIo } = vi.hoisted(() => ({
@@ -59,18 +61,28 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
         } | null = null;
 
         return {
-        start: async () => {
-            params.onStateChange?.({ phase: 'connecting' });
-            transport = params.createTransport() as typeof transport;
-            params.onStateChange?.({ phase: 'online' });
-            await params.onConnected?.();
-        },
-        stop: async () => {
-            await transport?.disconnect?.();
-            await transport?.destroy?.();
-            params.onStateChange?.({ phase: 'offline' });
-        },
-    };
+            getState: () => ({
+                phase: 'online',
+                reason: null,
+                attempt: 0,
+                nextRetryAt: null,
+                lastConnectedAt: Date.now(),
+                lastDisconnectedAt: null,
+                lastErrorMessage: null,
+            }),
+            reportProbeResult: vi.fn(),
+            start: async () => {
+                params.onStateChange?.({ phase: 'connecting' });
+                transport = params.createTransport() as typeof transport;
+                params.onStateChange?.({ phase: 'online' });
+                await params.onConnected?.();
+            },
+            stop: async () => {
+                await transport?.disconnect?.();
+                await transport?.destroy?.();
+                params.onStateChange?.({ phase: 'offline' });
+            },
+        };
     },
 }));
 
@@ -438,6 +450,24 @@ describe('ApiSessionClient connection handling', () => {
         const client = new ApiSessionClient(token, session);
         createdClients.push(client);
         return client;
+    };
+    const overrideSessionSupervisor = (client: ApiSessionClient, reportProbeResult: ReturnType<typeof vi.fn>): void => {
+        Object.defineProperty(client, 'sessionConnectionSupervisor', {
+            configurable: true,
+            value: {
+                stop: vi.fn(async () => {}),
+                getState: () => ({
+                    phase: 'online',
+                    reason: null,
+                    attempt: 0,
+                    nextRetryAt: null,
+                    lastConnectedAt: Date.now(),
+                    lastDisconnectedAt: null,
+                    lastErrorMessage: null,
+                }),
+                reportProbeResult,
+            },
+        });
     };
 
     beforeEach(() => {
@@ -884,6 +914,45 @@ describe('ApiSessionClient connection handling', () => {
         } finally {
             fetchSpy.mockRestore();
         }
+    });
+
+    it.each([401, 403] as const)('reports session snapshot refresh auth status %i to the session supervisor', async (status) => {
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const reportProbeResult = vi.fn();
+        const client = createClient('fake-token', mockSession);
+        overrideSessionSupervisor(client, reportProbeResult);
+        vi.spyOn(axios, 'get').mockResolvedValueOnce({
+            status,
+            data: { error: 'not-authenticated' },
+        });
+
+        await (client as any).syncSessionSnapshotFromServer({ reason: 'connect' });
+
+        expect(reportProbeResult).toHaveBeenCalledWith({
+            status: 'auth_failed',
+            statusCode: status,
+            errorMessage: expect.any(String),
+        } satisfies ReadinessProbeResult);
+    });
+
+    it('reports retryable session snapshot refresh failures to the session supervisor', async () => {
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const reportProbeResult = vi.fn();
+        const client = createClient('fake-token', mockSession);
+        overrideSessionSupervisor(client, reportProbeResult);
+        vi.spyOn(axios, 'get').mockResolvedValueOnce({
+            status: 503,
+            data: { error: 'busy' },
+        });
+
+        await (client as any).syncSessionSnapshotFromServer({ reason: 'connect' });
+
+        expect(reportProbeResult).toHaveBeenCalledWith({
+            status: 'retry_later',
+            errorMessage: expect.any(String),
+        } satisfies ReadinessProbeResult);
     });
 
     it('ensureMetadataSnapshot waits for a decrypted snapshot when starting with metadataVersion=-1', async () => {
@@ -1343,6 +1412,40 @@ describe('ApiSessionClient connection handling', () => {
         expect(getSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ params: { limit: 25 } }));
 
         getSpy.mockRestore();
+    });
+
+    it('reports ACP import transcript auth failures to the session supervisor', async () => {
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const authError = new HttpStatusError(401, 'expired token');
+        const reportProbeResult = vi.fn();
+        const client = createClient('fake-token', mockSession);
+        overrideSessionSupervisor(client, reportProbeResult);
+        vi.spyOn(axios, 'get').mockRejectedValueOnce(authError);
+
+        await expect(client.fetchRecentTranscriptTextItemsForAcpImport({ take: 10 })).rejects.toBe(authError);
+        expect(reportProbeResult).toHaveBeenCalledWith({
+            status: 'auth_failed',
+            statusCode: 401,
+            errorMessage: 'expired token',
+        });
+    });
+
+    it('reports permission intent transcript auth failures to the session supervisor', async () => {
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const authError = new HttpStatusError(403, 'forbidden');
+        const reportProbeResult = vi.fn();
+        const client = createClient('fake-token', mockSession);
+        overrideSessionSupervisor(client, reportProbeResult);
+        vi.spyOn(axios, 'get').mockRejectedValueOnce(authError);
+
+        await expect(client.fetchLatestUserPermissionIntentFromTranscript({ take: 10 })).rejects.toBe(authError);
+        expect(reportProbeResult).toHaveBeenCalledWith({
+            status: 'auth_failed',
+            statusCode: 403,
+            errorMessage: 'forbidden',
+        });
     });
 
     it('normalizes outbound ACP permission-request toolName to V2 canonical keys (supports TodoWrite)', async () => {

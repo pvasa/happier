@@ -21,7 +21,9 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { config } from '@/config';
 import { isStackContext } from '@/sync/domains/server/serverContext';
 import { isUsingCustomServer } from '@/sync/domains/server/serverConfig';
+import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { resolveVisibleAppEnvironmentBadge } from '@/sync/runtime/appVariant';
+import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { Text } from '@/components/ui/text/Text';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -221,6 +223,9 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
     const headerHeight = useHeaderHeight();
     const socketStatus = useSocketStatus();
     const syncError = useSyncError();
+    const activeSyncError = React.useMemo(() => {
+        return selectSyncErrorForServer(syncError, getActiveServerId());
+    }, [syncError]);
     const popoverBoundaryRef = React.useRef<any>(null);
     const friendRequests = useFriendRequests();
     const inboxHasContent = useInboxHasContent();
@@ -483,14 +488,14 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
                     </View>
 
                 </View>
-                {(syncError || socketStatus.status === 'error' || socketStatus.status === 'disconnected') && (
+                {(activeSyncError || socketStatus.status === 'error' || socketStatus.status === 'disconnected') && (
                     <View style={styles.banner}>
                         <Text style={styles.bannerText} numberOfLines={2}>
-                            {syncError?.message
+                            {activeSyncError?.message
                                 ?? socketStatus.lastError
                                 ?? (socketStatus.status === 'disconnected' ? t('status.disconnected') : t('status.error'))}
                         </Text>
-                        {syncError?.kind === 'auth' ? (
+                        {activeSyncError?.kind === 'auth' ? (
                             <Pressable
                                 onPress={() => {
                                     const result = runGuardedNavigation(() => router.push('/restore'));
@@ -503,7 +508,7 @@ export const SidebarView = React.memo((props: SidebarViewProps) => {
                             >
                                 <Text style={styles.bannerButtonText}>{t('connect.restoreAccount')}</Text>
                             </Pressable>
-                        ) : syncError?.retryable !== false ? (
+                        ) : activeSyncError?.retryable !== false ? (
                             <Pressable
                                 onPress={() => sync.retryNow()}
                                 style={styles.bannerButton}

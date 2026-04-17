@@ -19,6 +19,7 @@ export interface ManagedEndpointSupervisor {
   stop(): Promise<void>;
   invalidate(): void;
   reportFailure(report: ManagedEndpointFailureReport): void;
+  reportProbeResult?(probe: Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>>): void;
   waitUntilOnline(params?: Readonly<{ timeoutMs?: number }>): Promise<void>;
   getState(): ManagedEndpointSupervisorState;
   subscribe(listener: (state: ManagedEndpointSupervisorState) => void): () => void;

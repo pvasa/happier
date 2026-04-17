@@ -196,6 +196,31 @@ describe('pendingQueueV2 optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
     });
 
+    it.each([401, 403] as const)('surfaces enqueue auth status %s as not_authenticated', async (status) => {
+        const sessionId = `s_test_request_auth_${status}`;
+        storage.getState().applySessions([buildSession({ sessionId })]);
+        const encryption = await createPendingQueueEncryption({ sessionId, seedByte: 8 });
+
+        await expect(
+            enqueuePendingMessageV2({
+                sessionId,
+                text: 'hello',
+                encryption,
+                request: async () => new Response(null, { status }),
+            }),
+        ).rejects.toMatchObject({
+            name: 'HappyError',
+            canTryAgain: false,
+            kind: 'auth',
+            code: 'not_authenticated',
+            status,
+        });
+
+        const pendingState = storage.getState().sessionPending[sessionId];
+        expect(pendingState?.messages ?? []).toEqual([]);
+        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+    });
+
     it('sends plaintext pending payloads when session encryptionMode is plain', async () => {
         const sessionId = 's_test_plain_send';
         storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);

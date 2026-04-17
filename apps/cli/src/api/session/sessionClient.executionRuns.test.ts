@@ -15,6 +15,7 @@ const sessionSocketStubState = vi.hoisted(() => ({
     sendExecutionRunMessage: vi.fn(),
     stopExecutionRun: vi.fn(),
     executeExecutionRunAction: vi.fn(),
+    waitForExecutionRun: vi.fn(),
   },
 }));
 
@@ -75,6 +76,7 @@ vi.mock('@/session/services/executionRuns', () => ({
   sendExecutionRunMessage: (...args: unknown[]) => sessionSocketStubState.executionRunServiceMocks.sendExecutionRunMessage(...args),
   stopExecutionRun: (...args: unknown[]) => sessionSocketStubState.executionRunServiceMocks.stopExecutionRun(...args),
   executeExecutionRunAction: (...args: unknown[]) => sessionSocketStubState.executionRunServiceMocks.executeExecutionRunAction(...args),
+  waitForExecutionRun: (...args: unknown[]) => sessionSocketStubState.executionRunServiceMocks.waitForExecutionRun(...args),
 }));
 
 vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', () => ({
@@ -142,6 +144,8 @@ describe('ApiSessionClient execution-run backend wiring', () => {
     await client.executionRuns.send({ runId: 'run_1', message: 'hello' });
     await client.executionRuns.stop({ runId: 'run_1' });
     await client.executionRuns.action({ runId: 'run_1', actionId: 'review.apply' });
+    expect(typeof (client.executionRuns as any).wait).toBe('function');
+    await (client.executionRuns as any).wait({ runId: 'run_1', timeoutSeconds: 2, pollIntervalMs: 10 });
 
     expect(sessionSocketStubState.executionRunServiceMocks.startExecutionRun).toHaveBeenCalledWith(expect.objectContaining({
       token: 'tok',
@@ -198,6 +202,18 @@ describe('ApiSessionClient execution-run backend wiring', () => {
       sessionId: 's1',
       mode: 'plain',
       request: { runId: 'run_1', actionId: 'review.apply' },
+      ctx: expect.objectContaining({
+        encryptionVariant: 'dataKey',
+        encryptionKey: expect.any(Uint8Array),
+      }),
+    }));
+    expect(sessionSocketStubState.executionRunServiceMocks.waitForExecutionRun).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'tok',
+      sessionId: 's1',
+      mode: 'plain',
+      runId: 'run_1',
+      timeoutMs: 2_000,
+      pollIntervalMs: 10,
       ctx: expect.objectContaining({
         encryptionVariant: 'dataKey',
         encryptionKey: expect.any(Uint8Array),

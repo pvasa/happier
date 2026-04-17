@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { HttpStatusError } from '@/api/client/httpStatusError';
 import { startOfflineReconnection, printOfflineWarning, connectionState, isNetworkError, NETWORK_ERROR_CODES } from './serverConnectionErrors';
 
 // Mock axios - only isAxiosError needed for error type detection
@@ -321,9 +322,7 @@ describe('startOfflineReconnection', () => {
             let attemptCount = 0;
             const onReconnectedImpl = async () => {
                 attemptCount++;
-                const err = new Error('Auth failed') as any;
-                err.response = { status: 401 };
-                throw err;
+                throw new HttpStatusError(403, 'Auth failed');
             };
 
             const { handle, onNotify } = createTestHandle({

@@ -8,10 +8,17 @@ import {
   DaemonTerminalStreamReadRequestSchema,
   type DaemonTerminalErrorCode,
 } from '@happier-dev/protocol';
-import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
+import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
-import { validatePath } from '@/rpc/handlers/pathSecurity';
+import {
+  authorizeFilesystemPath,
+} from '@/rpc/handlers/fileSystem/accessPolicy/filesystemPathAuthorization';
+import {
+  type FilesystemAccessPolicy,
+  resolveFilesystemPolicyDefaultDirectory,
+  resolveFilesystemAccessPolicy,
+} from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { resolveMachineRpcWorkingDirectory } from './resolveMachineRpcWorkingDirectory';
 import { readDaemonTerminalPtyConfig } from '@/daemon/terminalPty/terminalPtyConfig';
 import { createTerminalPtySessionManager, type TerminalPtySessionManager } from '@/daemon/terminalPty/terminalPtySessionManager';
@@ -27,16 +34,22 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     env?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     workingDirectory?: string;
+    accessPolicy?: FilesystemAccessPolicy;
     sessionManager?: TerminalPtySessionManager;
   }>;
 }>): void {
   const { rpcHandlerManager } = params;
   const env = params.deps?.env ?? process.env;
+  const platform = params.deps?.platform ?? process.platform;
 
   const config = readDaemonTerminalPtyConfig(env);
+  const accessPolicy = params.deps?.accessPolicy ?? resolveFilesystemAccessPolicy({ env, platform });
   const workingDirectory =
     params.deps?.workingDirectory
-    ?? resolveMachineRpcWorkingDirectory({ env });
+    ?? resolveFilesystemPolicyDefaultDirectory({
+      defaultDirectory: resolveMachineRpcWorkingDirectory({ env, platform }),
+      accessPolicy,
+    });
 
   let sessionManager: TerminalPtySessionManager | null = params.deps?.sessionManager ?? null;
   const getSessionManager = (): TerminalPtySessionManager => {
@@ -45,20 +58,25 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       ptyProvider: createNodePtyProvider(),
       config: config.sessionManager,
       env,
-      platform: params.deps?.platform,
+      platform,
     });
     return sessionManager;
   };
 
   const resolveCwd = (cwdInput: unknown): { ok: true; cwd: string } | ReturnType<typeof err> => {
     const raw = typeof cwdInput === 'string' && cwdInput.trim().length > 0 ? cwdInput.trim() : workingDirectory;
-    const expanded = expandHomeDirPath(raw, env);
+    const expanded = expandHomeDirPath(raw, env, platform);
 
-    const validation = validatePath(expanded, workingDirectory);
+    const validation = authorizeFilesystemPath({
+      targetPath: expanded,
+      defaultDirectory: workingDirectory,
+      accessPolicy,
+      platform,
+    });
     if (!validation.valid) {
       return err('terminal_cwd_denied');
     }
-    return { ok: true, cwd: validation.resolvedPath ?? expanded };
+    return { ok: true, cwd: validation.resolvedPath };
   };
 
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_TERMINAL_ENSURE, async (raw: unknown) => {

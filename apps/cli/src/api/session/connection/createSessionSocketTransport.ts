@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
 
+import { createAuthenticationHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
 import type { ClientToServerEvents, ServerToClientEvents } from '@/api/types';
 import { createSocketTransportAdapter } from '@/api/connection/createSocketTransportAdapter';
 import { configuration } from '@/configuration';
@@ -32,6 +33,10 @@ async function ensureSessionSocketAccessKeyBinding(params: Readonly<{
     if (existing.status === 200 && existing.data?.accessKey) {
         return;
     }
+    const existingStatus = existing.status;
+    if (isAuthenticationStatus(existingStatus)) {
+        throw createAuthenticationHttpStatusError(existingStatus, 'Authentication failed while binding the session socket');
+    }
     if (existing.status !== 200) {
         throw new Error(`Unexpected status from ${accessKeyUrl}: ${existing.status}`);
     }
@@ -39,6 +44,10 @@ async function ensureSessionSocketAccessKeyBinding(params: Readonly<{
     const created = await axios.post(accessKeyUrl, {
         data: `session-socket-binding:${randomUUID()}`,
     }, requestConfig);
+    const createdStatus = created.status;
+    if (isAuthenticationStatus(createdStatus)) {
+        throw createAuthenticationHttpStatusError(createdStatus, 'Authentication failed while binding the session socket');
+    }
     if (created.status === 200 || created.status === 409) {
         return;
     }

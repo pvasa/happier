@@ -1,41 +1,44 @@
 import { homedir as osHomedir } from 'node:os';
-import { isAbsolute, resolve } from 'node:path';
-
-import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
+import { posix, win32 } from 'node:path';
 
 type Deps = Readonly<{
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   cwd: () => string;
+  platform: NodeJS.Platform;
 }>;
 
+function pathApi(platform: NodeJS.Platform) {
+  return platform === 'win32' ? win32 : posix;
+}
+
 /**
- * Machine/daemon RPC handlers (filesystem + SCM) need a stable working directory root.
+ * Machine/daemon RPC handlers need a stable default directory for relative paths.
  *
- * We default to the user's home directory so multi-repo workflows work even when the daemon
- * is started from an arbitrary cwd.
- *
- * Override via `HAPPIER_MACHINE_RPC_WORKING_DIRECTORY` for tighter or custom scoping.
+ * Filesystem authorization is resolved separately by the filesystem access policy. Do not use
+ * `HAPPIER_MACHINE_RPC_WORKING_DIRECTORY` here; that env var is an explicit restriction policy,
+ * not the default relative-path base.
  */
 export function resolveMachineRpcWorkingDirectory(overrides?: Partial<Deps>): string {
   const env = overrides?.env ?? process.env;
   const cwd = overrides?.cwd ?? process.cwd;
   const fallbackHomedir = overrides?.homedir ?? osHomedir;
+  const platform = overrides?.platform ?? process.platform;
+  const api = pathApi(platform);
 
-  const explicit = expandHomeDirPath(String(env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY ?? '').trim(), env);
-  const envHomeRaw = process.platform === 'win32'
+  const envHomeRaw = platform === 'win32'
     ? (env.USERPROFILE || env.HOME)
     : env.HOME;
   const envHomeDir = typeof envHomeRaw === 'string' ? envHomeRaw.trim() : '';
-  const candidates = [explicit || null, envHomeDir || fallbackHomedir(), cwd()];
+  const candidates = [envHomeDir || fallbackHomedir(), cwd()];
 
   for (const candidate of candidates) {
     if (!candidate) continue;
     const value = String(candidate).trim();
     if (!value) continue;
-    if (!isAbsolute(value)) continue;
-    return resolve(value);
+    if (!api.isAbsolute(value)) continue;
+    return api.resolve(value);
   }
 
-  return resolve(cwd());
+  return api.resolve(cwd());
 }

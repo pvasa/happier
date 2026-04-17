@@ -14,6 +14,16 @@ function readProbeErrorMessage(probe: ReadinessProbeResult | undefined, fallback
   return probe.errorMessage ?? fallback;
 }
 
+function classifyTransportError(
+  config: ManagedConnectionSupervisorConfig,
+  error: unknown,
+): Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>> {
+  return config.classifyTransportErrorToProbeResult?.(error) ?? {
+    status: 'server_unreachable',
+    errorMessage: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function initialState(): ManagedConnectionState {
   return {
     phase: 'idle',
@@ -139,6 +149,11 @@ export function createManagedConnectionSupervisor(
         if (localGeneration !== generation || isStopped) return;
         const errorMessage = error instanceof Error ? error.message : String(error);
         if (state.phase === 'connecting' && currentTransport === transport && transport.isConnected() !== true) {
+          const classifiedProbe = config.classifyTransportErrorToProbeResult?.(error) ?? null;
+          if (classifiedProbe) {
+            reportProbeResult(classifiedProbe);
+            return;
+          }
           const nextAttempt = Math.max(1, state.attempt + 1);
           const delayMs =
             nextAttempt <= maxFastRetries
@@ -175,10 +190,39 @@ export function createManagedConnectionSupervisor(
       await transport.connect();
     } catch (error) {
       if (localGeneration !== generation || isStopped) return;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const nextAttempt = Math.max(1, state.attempt + 1);
-      const delayMs =
-        nextAttempt <= maxFastRetries
+      await applyExternallyReportedProbeResult(classifyTransportError(config, error));
+    }
+  }
+
+  async function applyExternallyReportedProbeResult(
+    probe: Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>>,
+  ): Promise<void> {
+    if (isStopped) return;
+    if (state.phase !== 'online' && state.phase !== 'connecting' && state.phase !== 'offline') return;
+    const localGeneration = ++generation;
+    clearRetryTimer();
+    await cleanupTransport({ intentional: true });
+    if (isStopped || localGeneration !== generation) {
+      return;
+    }
+
+    if (probe.status === 'auth_failed') {
+      publish({
+        ...state,
+        phase: 'auth_failed',
+        reason: deriveManagedConnectionReason({ probe }),
+        nextRetryAt: null,
+        lastErrorMessage: readProbeErrorMessage(probe, state.lastErrorMessage),
+      });
+      void config.onAuthFailed?.({ state, probe });
+      return;
+    }
+
+    const nextAttempt = Math.max(1, state.attempt + 1);
+    const delayMs =
+      probe.status === 'retry_later' && typeof probe.retryAfterMs === 'number' && Number.isFinite(probe.retryAfterMs)
+        ? Math.max(1, probe.retryAfterMs)
+        : nextAttempt <= maxFastRetries
           ? Math.max(0, config.initialFastRetryDelayMs)
           : computeManagedConnectionBackoffMs({
               attempt: nextAttempt,
@@ -186,11 +230,12 @@ export function createManagedConnectionSupervisor(
               maxMs: config.backoffMaxMs,
               jitterRatio: config.jitterRatio,
             });
-      scheduleReconnect(nextAttempt, delayMs, {
-        status: 'server_unreachable',
-        errorMessage,
-      });
-    }
+
+    scheduleReconnect(nextAttempt, delayMs, probe);
+  }
+
+  function reportProbeResult(probe: Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>>): void {
+    void applyExternallyReportedProbeResult(probe);
   }
 
   async function runProbeAndReconnect(attempt: number): Promise<void> {
@@ -255,6 +300,7 @@ export function createManagedConnectionSupervisor(
   }
 
   async function handleDisconnect(event: TransportDisconnectEvent): Promise<void> {
+    const disconnectGeneration = generation;
     const attempt = reconnectAttempt + 1;
     reconnectAttempt = attempt;
     const now = Date.now();
@@ -268,7 +314,7 @@ export function createManagedConnectionSupervisor(
       lastErrorMessage: event.error instanceof Error ? event.error.message : event.error ? String(event.error) : null,
     });
     await config.onDisconnected?.({ state, event });
-    if (event.intentional || isStopped) {
+    if (event.intentional || isStopped || disconnectGeneration !== generation || state.phase === 'auth_failed') {
       return;
     }
 
@@ -329,6 +375,7 @@ export function createManagedConnectionSupervisor(
       });
       await cleanupTransport({ intentional: true });
     },
+    reportProbeResult,
     getState(): ManagedConnectionState {
       return state;
     },

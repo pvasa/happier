@@ -59,12 +59,17 @@ describe('modelOptions', () => {
         const values = options.map((o) => o.value);
         expect(values[0]).toBe('default');
         expect(values.length).toBeGreaterThan(1);
-        expect(options.find((option) => option.value === 'claude-opus-4-6')).toMatchObject({
-            value: 'claude-opus-4-6',
-            label: 'Opus 4.6',
+        expect(options.find((option) => option.value === 'claude-opus-4-7')).toMatchObject({
+            value: 'claude-opus-4-7',
+            label: 'Opus 4.7',
             description: expect.any(String),
             modelOptions: expect.arrayContaining([
-                expect.objectContaining({ id: 'reasoning_effort' }),
+                expect.objectContaining({
+                    id: 'reasoning_effort',
+                    options: expect.arrayContaining([
+                        expect.objectContaining({ value: 'xhigh' }),
+                    ]),
+                }),
             ]),
         });
     });

@@ -10,6 +10,7 @@ import axios from 'axios';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { sealEncryptedDataKeyEnvelopeV1, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 import { encrypt, encodeBase64 } from '@/api/encryption';
+import type { HttpStatusErrorWithCode } from '@/api/client/httpStatusError';
 import { collectBugReportMachineDiagnosticsSnapshot } from '@/diagnostics/bugReportMachineDiagnostics';
 import { removeExecutionRunMarker, writeExecutionRunMarker } from '@/daemon/executionRunRegistry';
 import { registerMachineRpcHandlers } from './rpcHandlers';
@@ -1262,6 +1263,159 @@ describe('registerMachineRpcHandlers', () => {
       {},
       expect.any(Object),
     );
+  });
+
+  it('propagates replay session creation auth failures from continue-with-replay RPC', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_new' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_prev',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: JSON.stringify({ path: '/repo', flavor: 'claude' }),
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } } },
+          ],
+        },
+      } as any);
+    vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 401, data: {} } as any);
+
+    await expect(
+      handler!({
+        directory: '/repo',
+        agent: 'claude',
+        approvedNewDirectoryCreation: true,
+        replay: {
+          previousSessionId: 'sess_prev',
+          strategy: 'recent_messages',
+          recentMessagesCount: 1,
+          maxSeedChars: 400,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 401 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+
+    expect(spawnSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-auth replay session creation failures generic for continue-with-replay RPC', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_new' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get(RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_prev',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: JSON.stringify({ path: '/repo', flavor: 'claude' }),
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } } },
+          ],
+        },
+      } as any);
+    vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 500, data: {} } as any);
+
+    const result = await handler!({
+      directory: '/repo',
+      agent: 'claude',
+      approvedNewDirectoryCreation: true,
+      replay: {
+        previousSessionId: 'sess_prev',
+        strategy: 'recent_messages',
+        recentMessagesCount: 1,
+        maxSeedChars: 400,
+      },
+    });
+
+    expect(result).toMatchObject({
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+      errorMessage: 'Failed to create a new session for replay',
+    });
+    expect(spawnSession).not.toHaveBeenCalled();
   });
 
   it('continues a session with a generous default replay recentMessagesCount when not provided', async () => {
@@ -2593,6 +2747,317 @@ describe('registerMachineRpcHandlers', () => {
     expect(updated.replaySeedV1).toBeUndefined();
   });
 
+  it('propagates ACP child session fetch auth failures instead of returning a generic fork error', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'op_parent',
+      opencodeBackendMode: 'acp',
+    });
+
+    const getSpy = vi.spyOn(axios, 'get');
+    getSpy
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 4,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({ status: 403, data: {} } as any);
+
+    const backend = {
+      loadSession: vi.fn(async () => ({ sessionId: 'op_parent' })),
+      forkSession: vi.fn(async () => ({ sessionId: 'op_forked' })),
+      dispose: vi.fn(async () => {}),
+    };
+
+    createCatalogAcpBackendMock.mockResolvedValueOnce({ backend } as any);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'acp_fork_latest',
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 403 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+
+    expect(getSpy).toHaveBeenCalledTimes(2);
+    expect(updateSessionMetadataWithRetryMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates ACP child metadata update auth failures instead of returning a generic fork error', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    const stopSession = vi.fn(async () => true);
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'op_parent',
+      opencodeBackendMode: 'acp',
+    });
+    const childMetadataPlain = JSON.stringify({ path: '/repo', flavor: 'opencode' });
+    const authError = Object.assign(new Error('invalid token'), {
+      data: {
+        statusCode: 401,
+        error: 'invalid-token',
+      },
+    });
+
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 4,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_child',
+            seq: 0,
+            createdAt: 10,
+            updatedAt: 10,
+            active: true,
+            activeAt: 10,
+            encryptionMode: 'plain',
+            metadata: childMetadataPlain,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any);
+
+    const backend = {
+      loadSession: vi.fn(async () => ({ sessionId: 'op_parent' })),
+      forkSession: vi.fn(async () => ({ sessionId: 'op_forked' })),
+      dispose: vi.fn(async () => {}),
+    };
+
+    createCatalogAcpBackendMock.mockResolvedValueOnce({ backend } as any);
+    updateSessionMetadataWithRetryMock.mockRejectedValueOnce(authError);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'acp_fork_latest',
+      }),
+    ).rejects.toBe(authError);
+
+    expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
+    expect(stopSession).not.toHaveBeenCalled();
+  });
+
+  it('propagates ACP fork auth failures instead of falling back to replay', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_replay_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'op_parent',
+      opencodeBackendMode: 'acp',
+    });
+
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 2,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 2,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello' } } } },
+          ],
+        },
+      } as any);
+    vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        session: {
+          id: 'sess_replay_seed',
+          seq: 0,
+          createdAt: 10,
+          updatedAt: 11,
+          active: false,
+          activeAt: 0,
+          encryptionMode: 'plain',
+          metadata: JSON.stringify({ path: '/repo', flavor: 'opencode' }),
+          metadataVersion: 0,
+          agentState: null,
+          agentStateVersion: 0,
+          dataEncryptionKey: null,
+        },
+      },
+    } as any);
+
+    const authError = {
+      name: 'HttpStatusError',
+      response: { status: 401 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>;
+    const backend = {
+      loadSession: vi.fn(async () => {
+        throw authError;
+      }),
+      forkSession: vi.fn(async () => ({ sessionId: 'op_forked' })),
+      dispose: vi.fn(async () => {}),
+    };
+
+    createCatalogAcpBackendMock.mockResolvedValueOnce({ backend } as any);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'auto',
+      }),
+    ).rejects.toMatchObject(authError);
+
+    expect(spawnSession).not.toHaveBeenCalled();
+  });
+
   it('shapes OpenCode ACP fork continuation through provider metadata when latest fork uses ACP session/fork', async () => {
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {
@@ -3296,6 +3761,178 @@ describe('registerMachineRpcHandlers', () => {
     });
   });
 
+  it('propagates provider-native child session fetch auth failures instead of retrying to a generic fork error', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    forkOpenCodeSessionNativeMock.mockResolvedValueOnce({ vendorSessionId: 'op_ses_forked' });
+
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'op_ses_parent',
+      opencodeBackendMode: 'server',
+    });
+
+    const getSpy = vi.spyOn(axios, 'get');
+    getSpy
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 5,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({ status: 401, data: {} } as any);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'provider_native',
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 401 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+
+    expect(getSpy).toHaveBeenCalledTimes(2);
+    expect(updateSessionMetadataWithRetryMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates provider-native child metadata update auth failures instead of returning a generic fork error', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    const stopSession = vi.fn(async () => true);
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    forkOpenCodeSessionNativeMock.mockResolvedValueOnce({ vendorSessionId: 'op_ses_forked' });
+
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'op_ses_parent',
+      opencodeBackendMode: 'server',
+    });
+    const childMetadataPlain = JSON.stringify({ path: '/repo', flavor: 'opencode' });
+    const authError = Object.assign(new Error('invalid token'), {
+      data: {
+        statusCode: 401,
+        error: 'invalid-token',
+      },
+    });
+
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 5,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_child',
+            seq: 0,
+            createdAt: 10,
+            updatedAt: 10,
+            active: true,
+            activeAt: 10,
+            encryptionMode: 'plain',
+            metadata: childMetadataPlain,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any);
+    updateSessionMetadataWithRetryMock.mockRejectedValueOnce(authError);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'provider_native',
+      }),
+    ).rejects.toBe(authError);
+
+    expect(updateSessionMetadataWithRetryMock).toHaveBeenCalledTimes(1);
+    expect(stopSession).not.toHaveBeenCalled();
+  });
+
   it('forks a Codex app-server session via provider-native conversation fork', async () => {
     const registered = new Map<string, (params: any) => Promise<any>>();
     const rpcHandlerManager = {
@@ -3855,6 +4492,331 @@ describe('registerMachineRpcHandlers', () => {
     const updated = updater({ path: '/repo', flavor: 'opencode' });
     expect(updated.forkV1).toMatchObject({ parentCutoffSeqInclusive: 2, strategy: 'provider_native' });
     expect(updated.replaySeedV1).toBeUndefined();
+  });
+
+  it('propagates fork cutoff auth failures instead of falling back to a default cutoff', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    forkOpenCodeSessionNativeMock.mockResolvedValueOnce({ vendorSessionId: 'op_ses_forked' });
+
+    const parentMetadataPlain = JSON.stringify({
+      path: '/repo',
+      flavor: 'opencode',
+      opencodeSessionId: 'op_ses_parent',
+      opencodeBackendMode: 'server',
+    });
+    const childMetadataPlain = JSON.stringify({ path: '/repo', flavor: 'opencode' });
+
+    const getSpy = vi.spyOn(axios, 'get');
+    getSpy
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 5,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 7,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 401,
+        data: {},
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_child',
+            seq: 0,
+            createdAt: 10,
+            updatedAt: 10,
+            active: true,
+            activeAt: 10,
+            encryptionMode: 'plain',
+            metadata: childMetadataPlain,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'seq', upToSeqInclusive: 3 },
+        strategy: 'auto',
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 401 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+
+    expect(spawnSession).not.toHaveBeenCalled();
+    expect(forkOpenCodeSessionNativeMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates parent session fetch auth failures from fork RPC', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({ status: 403, data: {} } as any);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'replay',
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 403 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+
+    expect(spawnSession).not.toHaveBeenCalled();
+  });
+
+  it('propagates replay session creation auth failures from fork RPC', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    const parentMetadataPlain = JSON.stringify({ path: '/repo', flavor: 'claude' });
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello fork' } } } },
+          ],
+        },
+      } as any);
+    vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 401, data: {} } as any);
+
+    await expect(
+      handler!({
+        v: 1,
+        parentSessionId: 'sess_parent',
+        forkPoint: { type: 'latest' },
+        strategy: 'replay',
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      response: { status: 401 },
+      code: 'not_authenticated',
+    } satisfies Partial<HttpStatusErrorWithCode>);
+
+    expect(spawnSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-auth replay session creation failures generic for fork RPC', async () => {
+    const registered = new Map<string, (params: any) => Promise<any>>();
+    const rpcHandlerManager = {
+      registerHandler: (method: string, handler: (params: any) => Promise<any>) => {
+        registered.set(method, handler);
+      },
+    } as any;
+
+    const spawnSession = vi.fn(async (_opts: any) => ({ type: 'success', sessionId: 'sess_child' } as const));
+    registerMachineRpcHandlers({
+      rpcHandlerManager,
+      handlers: {
+        spawnSession,
+        stopSession: async () => true,
+        requestShutdown: () => {},
+      },
+    });
+
+    const handler = registered.get((RPC_METHODS as any).SESSION_FORK);
+    expect(handler).toBeDefined();
+
+    readCredentialsMock.mockResolvedValueOnce({
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    });
+
+    const parentMetadataPlain = JSON.stringify({ path: '/repo', flavor: 'claude' });
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          session: {
+            id: 'sess_parent',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadata: parentMetadataPlain,
+            metadataVersion: 0,
+            agentState: null,
+            agentStateVersion: 0,
+            dataEncryptionKey: null,
+          },
+        },
+      } as any)
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          messages: [
+            { seq: 1, createdAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hello fork' } } } },
+          ],
+        },
+      } as any);
+    vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 500, data: {} } as any);
+
+    const result = await handler!({
+      v: 1,
+      parentSessionId: 'sess_parent',
+      forkPoint: { type: 'latest' },
+      strategy: 'replay',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+      errorMessage: 'Failed to create fork session',
+    });
+    expect(spawnSession).not.toHaveBeenCalled();
   });
 
   it('does not apply branch-and-edit exclusive cutoff when forking from the first user message', async () => {

@@ -17,6 +17,8 @@ import {
     setServerReachabilityNetworkAllowed,
     stopServerReachabilitySupervisors,
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
+import { assertEndpointAuthenticatedWithProbe } from '@/sync/runtime/connectivity/assertEndpointAuthenticatedWithProbe';
+import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
 import { applyInitialAppStateConnectivityGate } from '@/sync/runtime/connectivity/appStateConnectivityGate';
 import { loadSyncTuning, type SyncTuning } from '@/sync/runtime/syncTuning';
 import {
@@ -242,6 +244,33 @@ function isFallbackSafeSessionUserMessageRpcError(error: unknown): boolean {
         || normalizedMessage.includes('econnreset')
         || normalizedMessage.includes('econnrefused')
     );
+}
+
+async function assertActiveEndpointAuthenticated(options?: Readonly<{ forceProbe?: boolean }>): Promise<void> {
+    const activeServer = getActiveServerSnapshot();
+    await assertEndpointAuthenticatedWithProbe({
+        serverId: activeServer.serverId,
+        serverUrl: activeServer.serverUrl,
+        forceProbe: options?.forceProbe === true,
+    });
+}
+
+function recordTerminalAuthSyncError(
+    error: unknown,
+    options?: Readonly<{
+        serverId?: string | null;
+    }>,
+): void {
+    const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
+    const scopedServerId = String(options?.serverId ?? '').trim();
+    const serverId = scopedServerId || activeServerId;
+    storage.getState().setSyncError({
+        message: error instanceof Error ? error.message : 'Authentication required',
+        retryable: false,
+        kind: 'auth',
+        at: Date.now(),
+        ...(serverId ? { serverId } : {}),
+    });
 }
 
 function canUseSessionUserMessageRuntimeRpc(session: Readonly<{
@@ -916,6 +945,10 @@ class Sync {
                     }
                     return true;
                 } catch (err) {
+                    if (isTerminalAuthError(err)) {
+                        recordTerminalAuthSyncError(err, { serverId: scopedServerId });
+                        return true;
+                    }
                     log.log(`⚠️ ensureSessionVisibleForMessageRoute failed for ${normalized}: ${err instanceof Error ? err.message : 'unknown error'}`);
                     return false;
                 }
@@ -1086,15 +1119,24 @@ class Sync {
                 permissionMode: permissionMode || 'default'
             };
 
-            const rawAck = await socketEmitWithAckFallback<MessageAckResponse>({
-                emitWithAck: (event, payload, opts) =>
-                    this.messageTransport.emitWithAck<MessageAckResponse>(event, payload, opts),
-                send: (event, payload) => this.messageTransport.send(event, payload),
-                event: 'message',
-                payload,
-                timeoutMs: this.syncTuning.socketAckTimeoutMs,
-                onNoAck: () => this.schedulePendingMessageCommitRetry({ sessionId, localId }),
-            });
+            const rawAck = await (async () => {
+                try {
+                    await assertActiveEndpointAuthenticated();
+                    return await socketEmitWithAckFallback<MessageAckResponse>({
+                        emitWithAck: (event, payload, opts) =>
+                            this.messageTransport.emitWithAck<MessageAckResponse>(event, payload, opts),
+                        send: (event, payload) => this.messageTransport.send(event, payload),
+                        event: 'message',
+                        payload,
+                        timeoutMs: this.syncTuning.socketAckTimeoutMs,
+                        onNoAck: () => this.schedulePendingMessageCommitRetry({ sessionId, localId }),
+                        beforeFallback: () => assertActiveEndpointAuthenticated({ forceProbe: true }),
+                    });
+                } catch (error) {
+                    storage.getState().removePendingMessage(sessionId, localId);
+                    throw error;
+                }
+            })();
 
             if (!rawAck) {
                 storage.getState().clearSessionOptimisticThinking(sessionId);
@@ -1168,6 +1210,9 @@ class Sync {
             // when the session enters a permission/action-required gate, when the session is marked thinking by live
             // activity updates, or when the optimistic timeout expires.
         } catch (e) {
+            if (isTerminalAuthError(e)) {
+                recordTerminalAuthSyncError(e);
+            }
             storage.getState().clearSessionOptimisticThinking(sessionId);
             throw e;
         }
@@ -1234,6 +1279,7 @@ class Sync {
                 permissionMode: permissionMode || 'default',
             };
 
+            await assertActiveEndpointAuthenticated();
             const rawAck = await socketEmitWithAckFallback<MessageAckResponse>({
                 emitWithAck: (event, payload, opts) =>
                     this.messageTransport.emitWithAck<MessageAckResponse>(event, payload, opts),
@@ -1242,6 +1288,7 @@ class Sync {
                 payload,
                 timeoutMs: this.syncTuning.socketAckTimeoutMs,
                 onNoAck: () => this.schedulePendingMessageCommitRetry({ sessionId, localId }),
+                beforeFallback: () => assertActiveEndpointAuthenticated({ forceProbe: true }),
             });
 
             if (!rawAck) {
@@ -1305,108 +1352,131 @@ class Sync {
 
             // Same policy as sendMessage(): keep optimistic thinking until lifecycle clears.
         } catch (e) {
+            if (isTerminalAuthError(e)) {
+                recordTerminalAuthSyncError(e);
+            }
             storage.getState().clearSessionOptimisticThinking(sessionId);
             throw e;
         }
     }
 
-	    private schedulePendingMessageCommitRetry(params: { sessionId: string; localId: string }): void {
-	        const key = `${params.sessionId}:${params.localId}`;
-	        if (this.pendingMessageCommitRetryTimers.has(key)) {
-	            return;
-	        }
+    private schedulePendingMessageCommitRetry(params: { sessionId: string; localId: string }): void {
+        const key = `${params.sessionId}:${params.localId}`;
+        if (this.pendingMessageCommitRetryTimers.has(key)) {
+            return;
+        }
 
-	        const run = async (attempt: number): Promise<void> => {
-	            const pendingState = storage.getState().sessionPending[params.sessionId];
-	            const pending = pendingState?.messages?.find((m) => m.id === params.localId) ?? null;
-	            if (!pending) {
-	                const existing = this.pendingMessageCommitRetryTimers.get(key);
-	                if (existing) {
-	                    clearTimeout(existing);
-	                }
-	                this.pendingMessageCommitRetryTimers.delete(key);
-	                return;
-	            }
+        const clearRetry = (): void => {
+            const existing = this.pendingMessageCommitRetryTimers.get(key);
+            if (existing) {
+                clearTimeout(existing);
+            }
+            this.pendingMessageCommitRetryTimers.delete(key);
+        };
 
-	            const scheduleRetryWithBackoff = () => {
-	                // If the session isn't available (e.g. session list was cleared or the app is mid-rehydrate),
-	                // don't leave this retry stuck. Ask for a sessions refresh and reschedule with backoff.
-	                fireAndForget(this.fetchSessions(), { tag: 'Sync.pendingMessageCommitRetry.fetchSessions' });
+        const run = async (attempt: number): Promise<void> => {
+            const pendingState = storage.getState().sessionPending[params.sessionId];
+            const pending = pendingState?.messages?.find((m) => m.id === params.localId) ?? null;
+            if (!pending) {
+                clearRetry();
+                return;
+            }
 
-	                const nextAttempt = attempt + 1;
-	                if (nextAttempt >= 6) {
-	                    const existing = this.pendingMessageCommitRetryTimers.get(key);
-	                    if (existing) {
-	                        clearTimeout(existing);
-	                    }
-	                    this.pendingMessageCommitRetryTimers.delete(key);
-	                    return;
-	                }
+            const scheduleRetryWithBackoff = () => {
+                // If the session isn't available (e.g. session list was cleared or the app is mid-rehydrate),
+                // don't leave this retry stuck. Ask for a sessions refresh and reschedule with backoff.
+                fireAndForget(this.fetchSessions(), { tag: 'Sync.pendingMessageCommitRetry.fetchSessions' });
 
-	                const baseDelayMs = Math.min(30_000, 1_000 * Math.pow(2, nextAttempt));
-	                const jitterMs = Math.floor(Math.random() * 250);
-	                const timeout = setTimeout(() => {
-	                    fireAndForget(run(nextAttempt), { tag: `Sync.pendingMessageCommitRetry:${key}` });
-	                }, baseDelayMs + jitterMs);
-	                this.pendingMessageCommitRetryTimers.set(key, timeout);
-	            };
+                const nextAttempt = attempt + 1;
+                if (nextAttempt >= 6) {
+                    clearRetry();
+                    return;
+                }
 
-	            const session = storage.getState().sessions[params.sessionId] ?? null;
-	            if (!session) {
-	                scheduleRetryWithBackoff();
-	                return;
-	            }
+                const baseDelayMs = Math.min(30_000, 1_000 * Math.pow(2, nextAttempt));
+                const jitterMs = Math.floor(Math.random() * 250);
+                const timeout = setTimeout(() => {
+                    fireAndForget(run(nextAttempt), { tag: `Sync.pendingMessageCommitRetry:${key}` });
+                }, baseDelayMs + jitterMs);
+                this.pendingMessageCommitRetryTimers.set(key, timeout);
+            };
 
-	            const sessionEncryptionMode: 'e2ee' | 'plain' = session.encryptionMode === 'plain' ? 'plain' : 'e2ee';
-	            const parsed = RawRecordSchema.safeParse(pending.rawRecord);
-	            const rawRecord: RawRecord = parsed.success ? parsed.data : {
-	                role: 'user',
-	                content: { type: 'text', text: pending.text },
-	                meta: {},
-	            };
+            const session = storage.getState().sessions[params.sessionId] ?? null;
+            if (!session) {
+                scheduleRetryWithBackoff();
+                return;
+            }
 
-	            const messagePayload =
-	                sessionEncryptionMode === 'plain'
-	                    ? { t: 'plain' as const, v: rawRecord }
-	                    : await (async () => {
-	                        const sessionEncryption = this.encryption.getSessionEncryption(params.sessionId);
-	                        if (!sessionEncryption) {
-	                            scheduleRetryWithBackoff();
-	                            return null;
-	                        }
-	                        return await sessionEncryption.encryptRawRecord(rawRecord);
-	                    })();
-	            if (!messagePayload) {
-	                return;
-	            }
+            const sessionEncryptionMode: 'e2ee' | 'plain' = session.encryptionMode === 'plain' ? 'plain' : 'e2ee';
+            const parsed = RawRecordSchema.safeParse(pending.rawRecord);
+            const rawRecord: RawRecord = parsed.success ? parsed.data : {
+                role: 'user',
+                content: { type: 'text', text: pending.text },
+                meta: {},
+            };
 
-	            const payload = {
-	                sid: params.sessionId,
-	                message: messagePayload,
-	                localId: params.localId,
-	                sentFrom: 'retry',
-	                permissionMode: 'default',
-	            };
+            const messagePayload =
+                sessionEncryptionMode === 'plain'
+                    ? { t: 'plain' as const, v: rawRecord }
+                    : await (async () => {
+                        const sessionEncryption = this.encryption.getSessionEncryption(params.sessionId);
+                        if (!sessionEncryption) {
+                            scheduleRetryWithBackoff();
+                            return null;
+                        }
+                        return await sessionEncryption.encryptRawRecord(rawRecord);
+                    })();
+            if (!messagePayload) {
+                return;
+            }
 
+            const payload = {
+                sid: params.sessionId,
+                message: messagePayload,
+                localId: params.localId,
+                sentFrom: 'retry',
+                permissionMode: 'default',
+            };
+
+            let terminalAuthFailure = false;
             const rawAck = await (async () => {
                 try {
+                    await assertActiveEndpointAuthenticated();
                     return await this.messageTransport.emitWithAck<MessageAckResponse>('message', payload, {
                         timeoutMs: this.syncTuning.socketAckTimeoutMs,
                     });
-                } catch {
+                } catch (error) {
+                    let terminalError = error;
+                    if (!isTerminalAuthError(terminalError)) {
+                        try {
+                            await assertActiveEndpointAuthenticated({ forceProbe: true });
+                        } catch (probeError) {
+                            terminalError = probeError;
+                        }
+                    }
+                    if (isTerminalAuthError(terminalError)) {
+                        terminalAuthFailure = true;
+                        recordTerminalAuthSyncError(terminalError);
+                        storage.getState().removePendingMessage(params.sessionId, params.localId);
+                        storage.getState().clearSessionOptimisticThinking(params.sessionId);
+                        clearRetry();
+                    }
                     return null;
                 }
             })();
+            if (terminalAuthFailure) {
+                return;
+            }
 
             const ack = rawAck ? MessageAckResponseSchema.safeParse(rawAck) : null;
 
-	            if (ack?.success && ack.data.ok === true) {
-	                storage.getState().removePendingMessage(params.sessionId, params.localId);
-	                const committed = normalizeRawMessage(ack.data.id, params.localId, pending.createdAt, rawRecord, { seq: ack.data.seq });
-	                if (committed) {
-	                    this.applyMessages(params.sessionId, [committed]);
-	                }
-	                this.markSessionMaterializedMaxSeq(params.sessionId, ack.data.seq);
+            if (ack?.success && ack.data.ok === true) {
+                storage.getState().removePendingMessage(params.sessionId, params.localId);
+                const committed = normalizeRawMessage(ack.data.id, params.localId, pending.createdAt, rawRecord, { seq: ack.data.seq });
+                if (committed) {
+                    this.applyMessages(params.sessionId, [committed]);
+                }
+                this.markSessionMaterializedMaxSeq(params.sessionId, ack.data.seq);
 
                 const currentSession = storage.getState().sessions[params.sessionId];
                 if (currentSession) {
@@ -1419,31 +1489,19 @@ class Sync {
                     ]);
                 }
 
-                const existing = this.pendingMessageCommitRetryTimers.get(key);
-                if (existing) {
-                    clearTimeout(existing);
-                }
-                this.pendingMessageCommitRetryTimers.delete(key);
+                clearRetry();
                 return;
             }
 
             if (ack?.success && ack.data.ok === false) {
                 storage.getState().removePendingMessage(params.sessionId, params.localId);
-                const existing = this.pendingMessageCommitRetryTimers.get(key);
-                if (existing) {
-                    clearTimeout(existing);
-                }
-                this.pendingMessageCommitRetryTimers.delete(key);
+                clearRetry();
                 return;
             }
 
             const nextAttempt = attempt + 1;
             if (nextAttempt >= 6) {
-                const existing = this.pendingMessageCommitRetryTimers.get(key);
-                if (existing) {
-                    clearTimeout(existing);
-                }
-                this.pendingMessageCommitRetryTimers.delete(key);
+                clearRetry();
                 return;
             }
 

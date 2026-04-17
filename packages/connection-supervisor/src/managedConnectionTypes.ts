@@ -88,6 +88,7 @@ export interface ManagedConnectionSupervisorConfig extends ManagedConnectionTimi
   probeBeforeInitialConnect?: boolean;
   createTransport: () => ManagedConnectionTransport;
   probeReadiness: () => Promise<ReadinessProbeResult>;
+  classifyTransportErrorToProbeResult?: (error: unknown) => Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>> | null;
   onStateChange?: (state: ManagedConnectionState) => void;
   onConnected?: (ctx: ManagedConnectionContext) => Promise<void> | void;
   onDisconnected?: (ctx: ManagedConnectionDisconnectContext) => Promise<void> | void;
@@ -98,5 +99,6 @@ export interface ManagedConnectionSupervisorConfig extends ManagedConnectionTimi
 export interface ManagedConnectionSupervisor {
   start(): Promise<void>;
   stop(): Promise<void>;
+  reportProbeResult?(probe: Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>>): void;
   getState(): ManagedConnectionState;
 }

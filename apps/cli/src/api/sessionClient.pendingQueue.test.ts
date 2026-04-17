@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ApiSessionClient } from './session/sessionClient';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from './encryption';
 import { createMockSession } from '@/testkit/backends/sessionFixtures';
+import { HttpStatusError } from './client/httpStatusError';
 import {
     bindApiSessionSocketPairMock,
     createApiSessionSocketStub,
@@ -157,6 +158,79 @@ describe('ApiSessionClient pending queue materialization', () => {
                 'Content-Type': 'application/json',
             }),
         });
+    });
+
+    it('popPendingMessage rethrows terminal auth failures from the HTTP fallback instead of collapsing them to false', async () => {
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => {
+                throw new Error('timeout');
+            },
+        });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        vi.spyOn(axios, 'post').mockRejectedValueOnce(new HttpStatusError(401, 'Authentication failed'));
+
+        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {} });
+
+        await expect(client.popPendingMessage()).rejects.toMatchObject({
+            name: 'HttpStatusError',
+            response: { status: 401 },
+        });
+    });
+
+    it('reports terminal auth failures from pending materialization into the session supervisor state', async () => {
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => {
+                throw new HttpStatusError(401, 'Authentication failed');
+            },
+        });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {} });
+
+        await expect(client.popPendingMessage()).rejects.toMatchObject({
+            name: 'HttpStatusError',
+            response: { status: 401 },
+        });
+
+        await vi.waitFor(() => {
+            expect((client as any).currentConnectionState.phase).toBe('auth_failed');
+        });
+    });
+
+    it('popPendingMessage fails fast when the session supervisor is already auth_failed', async () => {
+        const sessionSocket = createApiSessionSocketStub({ connected: false });
+        const userSocket = createApiSessionSocketStub();
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const postSpy = vi.spyOn(axios, 'post');
+
+        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {} });
+        (client as any).sessionConnectionSupervisor.reportProbeResult?.({
+            status: 'auth_failed',
+            statusCode: 401,
+            errorMessage: 'expired token',
+        });
+
+        await vi.waitFor(() => {
+            expect((client as any).currentConnectionState.phase).toBe('auth_failed');
+        });
+
+        await expect(client.popPendingMessage()).rejects.toMatchObject({
+            name: 'HttpStatusError',
+            response: { status: 401 },
+        });
+        expect(postSpy).not.toHaveBeenCalled();
     });
 
     it('waitForMetadataUpdate resolves when pending-changed update arrives', async () => {

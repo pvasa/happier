@@ -7,6 +7,7 @@ import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { resolveSentFrom } from '@/sync/domains/messages/sentFrom';
 import { buildSendMessageMeta } from '@/sync/domains/messages/buildSendMessageMeta';
+import { throwAuthenticationResponseErrorIfNeeded } from '@/sync/runtime/connectivity/authErrors';
 import { SessionStoredMessageContentSchema, type SessionStoredMessageContent } from '@happier-dev/protocol';
 import { t } from '@/text';
 
@@ -27,6 +28,12 @@ type PendingRow = {
 type PendingDecryptFailure = Readonly<{
     kind: 'decrypt_failed';
 }>;
+
+function assertPendingResponseOk(response: Response, message: string): void {
+    if (response.ok) return;
+    throwAuthenticationResponseErrorIfNeeded(response.status);
+    throw new Error(`${message} (${response.status})`);
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -190,6 +197,7 @@ export async function fetchAndApplyPendingMessagesV2(params: {
 
     const response = await request(`/v2/sessions/${sessionId}/pending?includeDiscarded=1`, { method: 'GET' });
     if (!response.ok) {
+        throwAuthenticationResponseErrorIfNeeded(response.status);
         storage.getState().applyPendingLoaded(sessionId);
         storage.getState().applyDiscardedPendingMessages(sessionId, []);
         return;
@@ -350,7 +358,7 @@ export async function enqueuePendingMessageV2(params: {
                 body: JSON.stringify(writeBody),
             });
             if (!response.ok) {
-                throw new Error(`Failed to enqueue pending message (${response.status})`);
+                assertPendingResponseOk(response, 'Failed to enqueue pending message');
             }
         });
         storage.getState().clearSessionOptimisticThinking(sessionId);
@@ -436,7 +444,7 @@ export async function updatePendingMessageV2(params: {
         body: JSON.stringify(writeBody),
     });
     if (!response.ok) {
-        throw new Error(`Failed to update pending message (${response.status})`);
+        assertPendingResponseOk(response, 'Failed to update pending message');
     }
 
 	    storage.getState().upsertPendingMessage(sessionId, {
@@ -458,7 +466,7 @@ export async function deletePendingMessageV2(params: {
 
     const response = await request(`/v2/sessions/${sessionId}/pending/${pendingId}`, { method: 'DELETE' });
     if (!response.ok) {
-        throw new Error(`Failed to delete pending message (${response.status})`);
+        assertPendingResponseOk(response, 'Failed to delete pending message');
     }
     storage.getState().removePendingMessage(sessionId, pendingId);
 }
@@ -478,7 +486,7 @@ export async function discardPendingMessageV2(params: {
         body: JSON.stringify({ reason }),
     });
     if (!response.ok) {
-        throw new Error(`Failed to discard pending message (${response.status})`);
+        assertPendingResponseOk(response, 'Failed to discard pending message');
     }
     await fetchAndApplyPendingMessagesV2({ sessionId, encryption, request });
 }
@@ -493,7 +501,7 @@ export async function restoreDiscardedPendingMessageV2(params: {
 
     const response = await request(`/v2/sessions/${sessionId}/pending/${pendingId}/restore`, { method: 'POST' });
     if (!response.ok) {
-        throw new Error(`Failed to restore discarded message (${response.status})`);
+        assertPendingResponseOk(response, 'Failed to restore discarded message');
     }
     await fetchAndApplyPendingMessagesV2({ sessionId, encryption, request });
 }
@@ -508,7 +516,7 @@ export async function deleteDiscardedPendingMessageV2(params: {
 
     const response = await request(`/v2/sessions/${sessionId}/pending/${pendingId}`, { method: 'DELETE' });
     if (!response.ok) {
-        throw new Error(`Failed to delete discarded message (${response.status})`);
+        assertPendingResponseOk(response, 'Failed to delete discarded message');
     }
     await fetchAndApplyPendingMessagesV2({ sessionId, encryption, request });
 }
@@ -527,7 +535,7 @@ export async function reorderPendingMessagesV2(params: {
         body: JSON.stringify({ orderedLocalIds }),
     });
     if (!response.ok) {
-        throw new Error(`Failed to reorder pending messages (${response.status})`);
+        assertPendingResponseOk(response, 'Failed to reorder pending messages');
     }
     await fetchAndApplyPendingMessagesV2({ sessionId, encryption, request });
 }

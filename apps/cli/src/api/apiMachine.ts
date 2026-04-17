@@ -11,14 +11,21 @@ import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers'
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import { registerFileSystemHandlers } from '@/rpc/handlers/fileSystem';
 import { registerMachineFileBrowserHandlers } from '@/rpc/handlers/machineFileBrowser/registerMachineFileBrowserHandlers';
+import {
+    resolveFilesystemAccessPolicy,
+    type FilesystemAccessPolicy,
+} from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { MachineTransferReceiveEnvelope, MachineTransferSendEnvelope } from '@happier-dev/protocol';
-import { fetchChanges } from './changes';
+import { fetchChanges, fetchChangesAccountId } from './changes';
 import { readLastChangesCursor, writeLastChangesCursor } from '@/persistence';
 import { resolveLoopbackHttpUrl } from './client/loopbackUrl';
+import { createAuthenticationHttpStatusError, isAuthenticationError, isAuthenticationStatus } from './client/httpStatusError';
+import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
+import { handleRequestAuthenticationFailure } from '@/api/connection/requestSupervision/reportRequestOutcomeToSupervisor';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from './machine/socketTypes';
 import { registerMachineRpcHandlers, type MachineRpcHandlerDeps, type MachineRpcHandlers } from './machine/rpcHandlers';
@@ -45,6 +52,8 @@ export class ApiMachineClient {
     private machineTransferListeners = new Set<(payload: MachineTransferReceiveEnvelope) => void>();
     private connectionStateListeners = new Set<(state: ManagedConnectionState) => void>();
     private connectionSupervisor: ManagedConnectionSupervisor | null = null;
+    private readonly machineRpcWorkingDirectory: string;
+    private readonly filesystemAccessPolicy: FilesystemAccessPolicy;
     private readonly ownershipMetadata: Readonly<{
         runtimeId?: string;
         cliVersion?: string;
@@ -117,9 +126,13 @@ export class ApiMachineClient {
         });
 
         const machineRpcWorkingDirectory = resolveMachineRpcWorkingDirectory();
+        const filesystemAccessPolicy = resolveFilesystemAccessPolicy();
+        this.machineRpcWorkingDirectory = machineRpcWorkingDirectory;
+        this.filesystemAccessPolicy = filesystemAccessPolicy;
         let additionalAllowedReadDirs: string[] = [];
         let additionalAllowedWriteDirs: string[] = [];
         registerSessionHandlers(this.rpcHandlerManager, machineRpcWorkingDirectory, {
+            accessPolicy: filesystemAccessPolicy,
             setAdditionalAllowedReadDirs: (dirs) => {
                 additionalAllowedReadDirs = dirs;
             },
@@ -128,13 +141,19 @@ export class ApiMachineClient {
             },
         });
         registerFileSystemHandlers(this.rpcHandlerManager, machineRpcWorkingDirectory, {
+            accessPolicy: filesystemAccessPolicy,
             getAdditionalAllowedReadDirs: () => additionalAllowedReadDirs,
             getAdditionalAllowedWriteDirs: () => additionalAllowedWriteDirs,
         });
-        registerMachineFileBrowserHandlers({ rpcHandlerManager: this.rpcHandlerManager });
+        registerMachineFileBrowserHandlers({
+            rpcHandlerManager: this.rpcHandlerManager,
+            accessPolicy: filesystemAccessPolicy,
+        });
         // SCM must be machine-scoped so the UI can view diffs/logs and perform staging/commit operations
         // even when no session is currently active.
-        registerScmHandlers(this.rpcHandlerManager, machineRpcWorkingDirectory);
+        registerScmHandlers(this.rpcHandlerManager, machineRpcWorkingDirectory, {
+            accessPolicy: filesystemAccessPolicy,
+        });
     }
 
     setRPCHandlers({
@@ -159,7 +178,11 @@ export class ApiMachineClient {
                 ...(machineTransferChannel ? { machineTransferChannel } : {}),
                 ...(directPeerTransfer ? { directPeerTransfer } : {}),
             },
-            deps,
+            deps: {
+                ...deps,
+                machineRpcWorkingDirectory: this.machineRpcWorkingDirectory,
+                filesystemAccessPolicy: this.filesystemAccessPolicy,
+            },
         });
     }
 
@@ -474,30 +497,39 @@ export class ApiMachineClient {
 
     private async getAccountId(): Promise<string | null> {
         if (this.accountIdPromise) {
-            return await this.accountIdPromise.catch(() => null);
+            return await this.accountIdPromise.catch((error) => {
+                if (isAuthenticationError(error)) {
+                    if (this.connectionSupervisor) {
+                        return null;
+                    }
+                    throw error;
+                }
+                return null;
+            });
         }
 
-        const p = (async () => {
-            const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
-            const response = await axios.get(`${serverUrl}/v1/account/profile`, {
-                headers: {
-                    Authorization: `Bearer ${this.token}`,
-                    'Content-Type': 'application/json',
-                },
-                timeout: 15_000,
-            });
-            const id = (response?.data as any)?.id;
-            if (typeof id !== 'string' || id.length === 0) {
-                throw new Error('Invalid /v1/account/profile response');
-            }
-            return id;
-        })();
+        const request = () => fetchChangesAccountId({ token: this.token });
+        const supervisor = this.connectionSupervisor;
+        const p = supervisor
+            ? runSupervisedRequest({
+                supervisor,
+                requireAuth: true,
+                requireOnline: false,
+                request,
+            })
+            : request();
 
         this.accountIdPromise = p;
         try {
             return await p;
-        } catch {
+        } catch (error) {
             this.accountIdPromise = null;
+            if (isAuthenticationError(error)) {
+                if (supervisor) {
+                    return null;
+                }
+                throw error;
+            }
             return null;
         }
     }
@@ -505,14 +537,32 @@ export class ApiMachineClient {
     private async refreshMachineFromServer(): Promise<void> {
         try {
             const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
-            const response = await axios.get(`${serverUrl}/v1/machines/${this.machine.id}`, {
-                headers: {
-                    Authorization: `Bearer ${this.token}`,
-                    'Content-Type': 'application/json',
-                },
-                timeout: 15_000,
-                validateStatus: () => true,
-            });
+            const request = async () => {
+                const response = await axios.get(`${serverUrl}/v1/machines/${this.machine.id}`, {
+                    headers: {
+                        Authorization: `Bearer ${this.token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    timeout: 15_000,
+                    validateStatus: () => true,
+                });
+                if (isAuthenticationStatus(response.status)) {
+                    throw createAuthenticationHttpStatusError(
+                        response.status,
+                        `Authentication failed while refreshing machine snapshot (${response.status})`,
+                    );
+                }
+                return response;
+            };
+            const response = this.connectionSupervisor
+                ? await runSupervisedRequest({
+                    supervisor: this.connectionSupervisor,
+                    requireAuth: true,
+                    requireOnline: false,
+                    request,
+                    readStatusCode: (result) => result.status,
+                })
+                : await request();
 
             if (response.status !== 200) {
                 return;
@@ -576,6 +626,14 @@ export class ApiMachineClient {
                 return;
             }
             if (result.status !== 'ok') {
+                if (handleRequestAuthenticationFailure({
+                    supervisor: this.connectionSupervisor,
+                    error: result.error,
+                    hadAuth: true,
+                })) {
+                    return;
+                }
+
                 // Backwards compatibility: old servers may not support /v2/changes yet (e.g. 404).
                 // On reconnect, fall back to a snapshot refresh.
                 if (opts.reason === 'reconnect') {

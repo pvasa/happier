@@ -10,6 +10,8 @@ vi.mock('../client/loopbackUrl', () => ({
 
 import axios from 'axios';
 
+import { HttpStatusError } from '@/api/client/httpStatusError';
+
 import { catchUpSessionMessagesAfterSeq } from './sessionMessageCatchUp';
 
 describe('sessionMessageCatchUp (plaintext envelopes)', () => {
@@ -44,5 +46,46 @@ describe('sessionMessageCatchUp (plaintext envelopes)', () => {
     expect(updates[0]?.body?.message?.sidechainId).toBeNull();
     expect(updates[0]?.body?.message?.createdAt).toBe(123);
     expect(updates[0]?.body?.message?.updatedAt).toBe(123);
+  });
+
+  it('throws terminal auth responses instead of treating them as empty catch-up', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 401,
+      data: { messages: [] },
+    } as any);
+
+    await expect(
+      catchUpSessionMessagesAfterSeq({
+        token: 'expired',
+        sessionId: 's1',
+        afterSeq: 10,
+        onUpdate: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      code: 'not_authenticated',
+      response: { status: 401 },
+    } satisfies Partial<HttpStatusError & { code: string }>);
+  });
+
+  it('normalizes axios-style rejected auth errors into the canonical auth carrier', async () => {
+    vi.spyOn(axios, 'get').mockRejectedValueOnce({
+      response: {
+        status: 403,
+      },
+    });
+
+    await expect(
+      catchUpSessionMessagesAfterSeq({
+        token: 'expired',
+        sessionId: 's1',
+        afterSeq: 10,
+        onUpdate: vi.fn(),
+      }),
+    ).rejects.toMatchObject({
+      name: 'HttpStatusError',
+      code: 'not_authenticated',
+      response: { status: 403 },
+    } satisfies Partial<HttpStatusError & { code: string }>);
   });
 });

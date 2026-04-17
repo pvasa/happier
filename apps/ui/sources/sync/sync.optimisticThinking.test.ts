@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ManagedEndpointSupervisor } from '@happier-dev/connection-supervisor';
+
+type EndpointSupervisorLookup = typeof import('@/sync/runtime/connectivity/endpointSupervisorPool').getEndpointSupervisorForServer;
+type EndpointSupervisorAcquire = typeof import('@/sync/runtime/connectivity/endpointSupervisorPool').acquireEndpointSupervisor;
+type AssertServerReachabilityAuthenticated = typeof import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool').assertServerReachabilityAuthenticated;
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
@@ -36,6 +41,29 @@ vi.mock('react-native', async () => {
     );
 });
 
+const getEndpointSupervisorForServerMock = vi.hoisted(() => vi.fn<EndpointSupervisorLookup>(() => null));
+const acquireEndpointSupervisorMock = vi.hoisted(() => vi.fn<EndpointSupervisorAcquire>());
+vi.mock('@/sync/runtime/connectivity/endpointSupervisorPool', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/runtime/connectivity/endpointSupervisorPool')>();
+    return {
+        ...actual,
+        getEndpointSupervisorForServer: (...args: Parameters<typeof actual.getEndpointSupervisorForServer>) =>
+            getEndpointSupervisorForServerMock(...args),
+        acquireEndpointSupervisor: (...args: Parameters<typeof actual.acquireEndpointSupervisor>) =>
+            acquireEndpointSupervisorMock(...args),
+    };
+});
+
+const assertServerReachabilityAuthenticatedMock = vi.hoisted(() => vi.fn<AssertServerReachabilityAuthenticated>());
+vi.mock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool')>();
+    return {
+        ...actual,
+        assertServerReachabilityAuthenticated: (...args: Parameters<typeof actual.assertServerReachabilityAuthenticated>) =>
+            assertServerReachabilityAuthenticatedMock(...args),
+    };
+});
+
 vi.mock('@/log', () => ({
     log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -54,6 +82,7 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { storage } from './domains/state/storage';
 import type { Session } from './domains/state/storageTypes';
 import { apiSocket } from '@/sync/api/session/apiSocket';
+import { HappyError } from '@/utils/errors/errors';
 import { RPC_ERROR_CODES, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 
@@ -95,11 +124,114 @@ function createFallbackSafeSessionRpcErrors(): Error[] {
     ];
 }
 
+function createAuthFailedEndpointSupervisor(): ManagedEndpointSupervisor {
+    return {
+        start: async () => {},
+        stop: async () => {},
+        invalidate: vi.fn(),
+        reportFailure: vi.fn(),
+        waitUntilOnline: async () => {},
+        getState: () => ({
+            phase: 'auth_failed',
+            reason: 'auth_invalid',
+            attempt: 1,
+            nextRetryAt: null,
+            lastConnectedAt: Date.now(),
+            lastDisconnectedAt: Date.now(),
+            lastErrorMessage: 'expired token',
+            lastProbe: {
+                status: 'auth_failed',
+                statusCode: 401,
+                errorMessage: 'expired token',
+            },
+        }),
+        subscribe: () => vi.fn(),
+    };
+}
+
+function createAuthProbeEndpointSupervisor(): ManagedEndpointSupervisor {
+    let phase: 'online' | 'connecting' | 'auth_failed' = 'online';
+    let lastProbe: ReturnType<ManagedEndpointSupervisor['getState']>['lastProbe'] = { status: 'ready' };
+    const listeners = new Set<(state: ReturnType<ManagedEndpointSupervisor['getState']>) => void>();
+    const readState = (): ReturnType<ManagedEndpointSupervisor['getState']> => ({
+        phase,
+        reason: phase === 'auth_failed' ? 'auth_invalid' : phase === 'online' ? 'initial_connect' : 'initial_connect',
+        attempt: phase === 'auth_failed' ? 2 : 1,
+        nextRetryAt: null,
+        lastConnectedAt: Date.now(),
+        lastDisconnectedAt: phase === 'auth_failed' ? Date.now() : null,
+        lastErrorMessage: phase === 'auth_failed' ? 'expired token' : null,
+        lastProbe,
+    });
+    const publish = () => {
+        const state = readState();
+        listeners.forEach((listener) => listener(state));
+    };
+
+    return {
+        start: async () => {},
+        stop: async () => {},
+        invalidate: vi.fn(() => {
+            phase = 'connecting';
+            publish();
+            phase = 'auth_failed';
+            lastProbe = {
+                status: 'auth_failed',
+                statusCode: 401,
+                errorMessage: 'expired token',
+            };
+            publish();
+        }),
+        reportFailure: vi.fn(),
+        waitUntilOnline: async () => {},
+        getState: readState,
+        subscribe: (listener) => {
+            listeners.add(listener);
+            listener(readState());
+            return () => listeners.delete(listener);
+        },
+    };
+}
+
+function createReadyEndpointSupervisor(): ManagedEndpointSupervisor {
+    const readState = (): ReturnType<ManagedEndpointSupervisor['getState']> => ({
+        phase: 'online',
+        reason: 'initial_connect',
+        attempt: 1,
+        nextRetryAt: null,
+        lastConnectedAt: Date.now(),
+        lastDisconnectedAt: null,
+        lastErrorMessage: null,
+        lastProbe: { status: 'ready' },
+    });
+
+    return {
+        start: async () => {},
+        stop: async () => {},
+        invalidate: vi.fn(),
+        reportFailure: vi.fn(),
+        waitUntilOnline: async () => {},
+        getState: readState,
+        subscribe: (listener) => {
+            listener(readState());
+            return vi.fn();
+        },
+    };
+}
+
 describe('sync.sendMessage optimistic thinking', () => {
     beforeEach(() => {
         storage.setState(initialStorageState, true);
         kvStore.clear();
         appStateAddListener.mockClear();
+        getEndpointSupervisorForServerMock.mockReset();
+        getEndpointSupervisorForServerMock.mockReturnValue(null);
+        acquireEndpointSupervisorMock.mockReset();
+        acquireEndpointSupervisorMock.mockResolvedValue({
+            supervisor: createReadyEndpointSupervisor(),
+            release: vi.fn(async () => {}),
+        });
+        assertServerReachabilityAuthenticatedMock.mockReset();
     });
 
     afterEach(() => {
@@ -189,6 +321,170 @@ describe('sync.sendMessage optimistic thinking', () => {
             expect.anything(),
         );
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).not.toBeNull();
+    });
+
+    it('removes the local pending row when socket fallback sees an auth-failed endpoint', async () => {
+        const sessionId = 's_stale_auth_no_ack';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+
+        getEndpointSupervisorForServerMock.mockReturnValue(createAuthFailedEndpointSupervisor());
+
+        const send = vi.fn();
+        sync.setMessageTransport({
+            emitWithAck: vi.fn(async () => {
+                throw new Error('operation has timed out');
+            }),
+            send,
+        });
+
+        await expect(sync.sendMessage(sessionId, 'stale auth send')).rejects.toMatchObject({
+            name: 'HappyError',
+            canTryAgain: false,
+            kind: 'auth',
+            code: 'not_authenticated',
+        });
+
+        expect(send).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+        expect(storage.getState().syncError).toMatchObject({
+            kind: 'auth',
+            retryable: false,
+            message: 'Authentication required',
+        });
+    });
+
+    it('forces endpoint auth convergence before user no-ack fallback restores the draft', async () => {
+        const sessionId = 's_stale_auth_probe_no_ack';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+
+        const supervisor = createAuthProbeEndpointSupervisor();
+        getEndpointSupervisorForServerMock.mockReturnValue(supervisor);
+
+        const send = vi.fn();
+        sync.setMessageTransport({
+            emitWithAck: vi.fn(async () => {
+                throw new Error('operation has timed out');
+            }),
+            send,
+        });
+
+        await expect(sync.sendMessage(sessionId, 'stale auth send')).rejects.toMatchObject({
+            name: 'HappyError',
+            canTryAgain: false,
+            kind: 'auth',
+            code: 'not_authenticated',
+        });
+
+        expect(supervisor.invalidate).toHaveBeenCalledTimes(1);
+        expect(send).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+        expect(storage.getState().syncError).toMatchObject({
+            kind: 'auth',
+            retryable: false,
+            message: 'Authentication required',
+        });
+    });
+
+    it('acquires an endpoint supervisor before probing auth for user no-ack fallback', async () => {
+        const sessionId = 's_stale_auth_probe_no_existing_supervisor';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+
+        const supervisor = createAuthProbeEndpointSupervisor();
+        acquireEndpointSupervisorMock.mockResolvedValue({
+            supervisor,
+            release: vi.fn(async () => {}),
+        });
+
+        const send = vi.fn();
+        sync.setMessageTransport({
+            emitWithAck: vi.fn(async () => {
+                throw new Error('operation has timed out');
+            }),
+            send,
+        });
+
+        await expect(sync.sendMessage(sessionId, 'stale auth send')).rejects.toMatchObject({
+            name: 'HappyError',
+            canTryAgain: false,
+            kind: 'auth',
+            code: 'not_authenticated',
+        });
+
+        expect(acquireEndpointSupervisorMock).toHaveBeenCalledTimes(1);
+        expect(supervisor.invalidate).toHaveBeenCalledTimes(1);
+        expect(send).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        expect(storage.getState().syncError).toMatchObject({
+            kind: 'auth',
+            retryable: false,
+        });
+    });
+
+    it('uses server reachability auth state before user no-ack fallback restores the draft', async () => {
+        const sessionId = 's_stale_auth_reachability_no_ack';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+
+        assertServerReachabilityAuthenticatedMock.mockImplementation(() => {
+            throw new HappyError('Authentication required', false, {
+                kind: 'auth',
+                code: 'not_authenticated',
+                status: 401,
+            });
+        });
+
+        const send = vi.fn();
+        sync.setMessageTransport({
+            emitWithAck: vi.fn(async () => {
+                throw new Error('operation has timed out');
+            }),
+            send,
+        });
+
+        await expect(sync.sendMessage(sessionId, 'stale auth send')).rejects.toMatchObject({
+            name: 'HappyError',
+            canTryAgain: false,
+            kind: 'auth',
+            code: 'not_authenticated',
+        });
+
+        expect(assertServerReachabilityAuthenticatedMock).toHaveBeenCalled();
+        expect(acquireEndpointSupervisorMock).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+        expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+        expect(storage.getState().syncError).toMatchObject({
+            kind: 'auth',
+            retryable: false,
+        });
     });
 
     it('prefers session runtime RPC for active sessions so steering-capable agents receive the user message directly', async () => {
@@ -507,6 +803,214 @@ describe('sync.sendMessage optimistic thinking', () => {
 
         expect((sync as any).pendingMessageCommitRetryTimers.has(`${sessionId}:p-retry`)).toBe(true);
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+    });
+
+    it('removes only the retried local pending row when retry discovers terminal auth', async () => {
+        vi.useFakeTimers();
+        try {
+            const sessionId = 's_pending_retry_auth';
+            storage.getState().applySessions([createSession({ sessionId })]);
+
+            const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+            await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+            const retryRawRecord = {
+                role: 'user',
+                content: { type: 'text', text: 'retry me' },
+                meta: {},
+            } as const;
+            const persistedRawRecord = {
+                role: 'user',
+                content: { type: 'text', text: 'keep me' },
+                meta: {},
+            } as const;
+
+            storage.getState().upsertPendingMessage(sessionId, {
+                id: 'p-retry-auth',
+                localId: 'p-retry-auth',
+                createdAt: 111,
+                updatedAt: 111,
+                text: 'retry me',
+                rawRecord: retryRawRecord,
+            });
+            storage.getState().upsertPendingMessage(sessionId, {
+                id: 'p-persisted',
+                localId: 'p-persisted',
+                createdAt: 222,
+                updatedAt: 222,
+                text: 'keep me',
+                rawRecord: persistedRawRecord,
+            });
+
+            const emitWithAck = vi.fn()
+                .mockResolvedValueOnce(null)
+                .mockRejectedValueOnce(new HappyError('Authentication required', false, {
+                    kind: 'auth',
+                    code: 'not_authenticated',
+                    status: 401,
+                }));
+
+            const { sync } = await import('./sync');
+            sync.encryption = encryption;
+            sync.setMessageTransport({
+                emitWithAck: emitWithAck as any,
+                send: vi.fn(),
+            });
+
+            await sync.sendPendingMessageNow(sessionId, {
+                localId: 'p-retry-auth',
+                createdAt: 111,
+                rawRecord: retryRawRecord,
+                text: 'retry me',
+            });
+            storage.getState().markSessionOptimisticThinking(sessionId);
+
+            await vi.advanceTimersByTimeAsync(1_000);
+            await Promise.resolve();
+
+            expect(emitWithAck).toHaveBeenCalledTimes(2);
+            expect((sync as any).pendingMessageCommitRetryTimers.has(`${sessionId}:p-retry-auth`)).toBe(false);
+            expect(storage.getState().sessionPending[sessionId]?.messages.map((message) => message.id)).toEqual(['p-persisted']);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+            expect(storage.getState().syncError).toMatchObject({
+                kind: 'auth',
+                retryable: false,
+                message: 'Authentication required',
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('forces endpoint auth convergence before a pending retry keeps backing off on timeout', async () => {
+        vi.useFakeTimers();
+        try {
+            const sessionId = 's_pending_retry_probe_auth';
+            storage.getState().applySessions([createSession({ sessionId })]);
+
+            const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+            await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+            const initialSupervisor = createReadyEndpointSupervisor();
+            const retrySupervisor = createAuthProbeEndpointSupervisor();
+            getEndpointSupervisorForServerMock
+                .mockReturnValueOnce(initialSupervisor)
+                .mockReturnValueOnce(initialSupervisor)
+                .mockReturnValue(retrySupervisor);
+
+            const emitWithAck = vi.fn()
+                .mockResolvedValueOnce(null)
+                .mockRejectedValueOnce(new Error('ack timeout'));
+
+            const { sync } = await import('./sync');
+            sync.encryption = encryption;
+            vi.spyOn(apiSocket, 'sessionRPC').mockRejectedValue(createRpcMethodNotAvailableError());
+            sync.setMessageTransport({
+                emitWithAck: emitWithAck as any,
+                send: vi.fn(),
+            });
+
+            await sync.sendMessage(sessionId, 'retry me');
+            storage.getState().markSessionOptimisticThinking(sessionId);
+
+            await vi.advanceTimersByTimeAsync(1_000);
+            await Promise.resolve();
+
+            expect(emitWithAck).toHaveBeenCalledTimes(2);
+            expect(retrySupervisor.invalidate).toHaveBeenCalledTimes(1);
+            const retryKeys = Array.from((sync as any).pendingMessageCommitRetryTimers.keys()) as string[];
+            expect(retryKeys.some((key) => key.startsWith(`${sessionId}:`))).toBe(false);
+            expect(storage.getState().sessionPending[sessionId]?.messages ?? []).toEqual([]);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+            expect(storage.getState().syncError).toMatchObject({
+                kind: 'auth',
+                retryable: false,
+                message: 'Authentication required',
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('forces endpoint auth convergence before retrying a pending local row again', async () => {
+        vi.useFakeTimers();
+        try {
+            const sessionId = 's_pending_retry_auth_probe';
+            storage.getState().applySessions([createSession({ sessionId })]);
+
+            const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+            await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+            const retryRawRecord = {
+                role: 'user',
+                content: { type: 'text', text: 'retry me' },
+                meta: {},
+            } as const;
+            const persistedRawRecord = {
+                role: 'user',
+                content: { type: 'text', text: 'keep me' },
+                meta: {},
+            } as const;
+
+            storage.getState().upsertPendingMessage(sessionId, {
+                id: 'p-retry-auth-probe',
+                localId: 'p-retry-auth-probe',
+                createdAt: 111,
+                updatedAt: 111,
+                text: 'retry me',
+                rawRecord: retryRawRecord,
+            });
+            storage.getState().upsertPendingMessage(sessionId, {
+                id: 'p-persisted',
+                localId: 'p-persisted',
+                createdAt: 222,
+                updatedAt: 222,
+                text: 'keep me',
+                rawRecord: persistedRawRecord,
+            });
+
+            const initialSupervisor = createReadyEndpointSupervisor();
+            const supervisor = createAuthProbeEndpointSupervisor();
+            getEndpointSupervisorForServerMock
+                .mockReturnValueOnce(initialSupervisor)
+                .mockReturnValueOnce(initialSupervisor)
+                .mockReturnValue(supervisor);
+
+            const emitWithAck = vi.fn()
+                .mockResolvedValueOnce(null)
+                .mockRejectedValueOnce(new Error('operation has timed out'));
+
+            const { sync } = await import('./sync');
+            sync.encryption = encryption;
+            sync.setMessageTransport({
+                emitWithAck: emitWithAck as any,
+                send: vi.fn(),
+            });
+
+            await sync.sendPendingMessageNow(sessionId, {
+                localId: 'p-retry-auth-probe',
+                createdAt: 111,
+                rawRecord: retryRawRecord,
+                text: 'retry me',
+            });
+            storage.getState().markSessionOptimisticThinking(sessionId);
+
+            await vi.advanceTimersByTimeAsync(1_000);
+            await Promise.resolve();
+
+            expect(emitWithAck).toHaveBeenCalledTimes(2);
+            expect(supervisor.invalidate).toHaveBeenCalledTimes(1);
+            expect((sync as any).pendingMessageCommitRetryTimers.has(`${sessionId}:p-retry-auth-probe`)).toBe(false);
+            expect(storage.getState().sessionPending[sessionId]?.messages.map((message) => message.id)).toEqual(['p-persisted']);
+            expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
+            expect(storage.getState().syncError).toMatchObject({
+                kind: 'auth',
+                retryable: false,
+                message: 'Authentication required',
+            });
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('sends plaintext message envelopes when session encryptionMode is plain', async () => {

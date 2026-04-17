@@ -1,9 +1,11 @@
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
 
 import {
+    reportServerAuthFailed,
     reportServerUnreachable,
     waitForServerReachable,
 } from './serverReachabilitySupervisorPool';
+import { isAuthenticationResponseStatus } from './authErrors';
 import { readServerReachabilityWaitTimeoutMs } from './serverReachabilityTuning';
 
 function tryParseUrl(raw: string, base?: string): URL | null {
@@ -86,7 +88,11 @@ export async function runtimeFetchWithServerReachability(params: Readonly<{
     });
 
     try {
-        return await runtimeFetch(params.url, params.init);
+        const response = await runtimeFetch(params.url, params.init);
+        if (hasAuth && isAuthenticationResponseStatus(response.status)) {
+            reportServerAuthFailed(params.serverUrl, response.status);
+        }
+        return response;
     } catch (error) {
         reportServerUnreachable(params.serverUrl, error);
         throw error;

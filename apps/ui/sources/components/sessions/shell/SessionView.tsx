@@ -28,7 +28,7 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAutomations, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionReviewCommentsDrafts, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings } from '@/sync/domains/state/storage';
+import { storage, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionReviewCommentsDrafts, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
@@ -137,8 +137,98 @@ import type { SessionParticipantTarget } from '@/sync/domains/session/participan
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 import { isHiddenSystemSession } from '@happier-dev/protocol';
+import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
+import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOptimisticAcpConfigOptionOverrides';
 
+type SessionAuthSurfaceState = Readonly<{
+    message: string;
+}>;
+
+function resolveSessionAuthSurfaceState(params: Readonly<{
+    endpointStatus: unknown;
+    syncError: {
+        message: string;
+        kind: 'auth' | 'config' | 'network' | 'server' | 'unknown';
+    } | null;
+}>): SessionAuthSurfaceState | null {
+    if (params.syncError?.kind === 'auth') {
+        return { message: params.syncError.message };
+    }
+    if (params.endpointStatus === 'auth_failed') {
+        return { message: createNotAuthenticatedError().message };
+    }
+    return null;
+}
+
+function SessionAuthRecoveryBanner({ message }: Readonly<{ message: string }>) {
+    const { theme } = useUnistyles();
+    const router = useRouter();
+
+    return (
+        <View
+            testID="session-auth-sync-error"
+            style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                backgroundColor: theme.colors.box.warning.background,
+                borderWidth: 1,
+                borderColor: theme.colors.box.warning.border,
+                borderRadius: 10,
+                gap: 8,
+            }}
+        >
+            <Ionicons name="warning-outline" size={16} color={theme.colors.box.warning.text} />
+            <View style={{ flexBasis: 0, flexGrow: 1 }}>
+                <Text style={{ fontSize: 13, color: theme.colors.box.warning.text, fontWeight: '700' }}>
+                    {t('connect.restoreAccount')}
+                </Text>
+                <Text style={{ fontSize: 12, color: theme.colors.box.warning.text, lineHeight: 16 }}>
+                    {message}
+                </Text>
+            </View>
+            <Pressable
+                testID="session-auth-sync-error-restore"
+                accessibilityRole="button"
+                accessibilityLabel={t('connect.restoreAccount')}
+                onPress={() => router.push('/restore')}
+                style={({ pressed }) => ({
+                    flexShrink: 0,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    backgroundColor: theme.colors.box.warning.text,
+                    opacity: pressed ? 0.7 : 1,
+                })}
+            >
+                <Text style={{ fontSize: 12, color: theme.colors.box.warning.background, fontWeight: '700' }}>
+                    {t('connect.restoreAccount')}
+                </Text>
+            </Pressable>
+        </View>
+    );
+}
+
+function SessionAuthRecoveryFallback({ message }: Readonly<{ message: string }>) {
+    return (
+        <View
+            testID="session-auth-required-fallback"
+            style={{
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+                paddingHorizontal: 24,
+            }}
+        >
+            <View style={{ width: '100%', maxWidth: 420 }}>
+                <SessionAuthRecoveryBanner message={message} />
+            </View>
+        </View>
+    );
+}
 
 export const SessionView = React.memo((props: {
     id: string;
@@ -176,6 +266,19 @@ export const SessionView = React.memo((props: {
     const voiceSnap = useVoiceSessionSnapshot();
     const hasAuthCredentials = Boolean(auth.credentials);
     const isFocused = useSessionScreenIsFocused();
+    const endpointConnectivity =
+        typeof useEndpointConnectivity === 'function'
+            ? useEndpointConnectivity()
+            : {
+                status: 'idle' as const,
+                reason: null,
+                attempt: 0,
+                nextRetryAt: null,
+                lastConnectedAt: null,
+                lastDisconnectedAt: null,
+                lastErrorMessage: null,
+            };
+    const syncError = useSyncError();
     const sessionEncryptionMode: 'e2ee' | 'plain' = (session?.encryptionMode ?? 'e2ee');
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
@@ -183,6 +286,15 @@ export const SessionView = React.memo((props: {
         (props.routeServerId ?? '').trim()
         || resolveServerIdForSessionIdFromLocalCache(sessionId)
         || getActiveServerSnapshot().serverId;
+    const scopedSyncError = React.useMemo(() => {
+        return selectSyncErrorForServer(syncError, currentSessionRouteServerId);
+    }, [currentSessionRouteServerId, syncError]);
+    const authSurfaceState = React.useMemo(() => {
+        return resolveSessionAuthSurfaceState({
+            endpointStatus: endpointConnectivity.status,
+            syncError: scopedSyncError,
+        });
+    }, [endpointConnectivity.status, scopedSyncError]);
     const buildCurrentSessionHref = React.useCallback((suffix = '') => {
         return buildScopedSessionRouteHref({
             sessionId,
@@ -455,7 +567,9 @@ export const SessionView = React.memo((props: {
 
             {/* Content based on state */}
             <View style={{ flex: 1, paddingTop: showTopHeader ? safeArea.top + headerHeight : 0 }}>
-                {!isDataReady && !session ? (
+                {!session && authSurfaceState ? (
+                    <SessionAuthRecoveryFallback message={authSurfaceState.message} />
+                ) : !isDataReady && !session ? (
                     // Loading state
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <ActivityIndicator size="small" color={theme.colors.textSecondary} />
@@ -470,6 +584,7 @@ export const SessionView = React.memo((props: {
                   ) : (
                       // Normal session view
                        <SessionViewLoaded
+                           authSurfaceState={authSurfaceState}
                            key={sessionId}
                            sessionId={sessionId}
                            routeServerId={currentSessionRouteServerId}
@@ -494,6 +609,7 @@ export const SessionView = React.memo((props: {
 
 
 function SessionViewLoaded({
+    authSurfaceState,
     committedMessages,
     sessionId,
     routeServerId,
@@ -509,6 +625,7 @@ function SessionViewLoaded({
     pendingMessages,
     directSessionRuntime,
 }: {
+    authSurfaceState: SessionAuthSurfaceState | null;
     committedMessages: readonly Message[];
     sessionId: string;
     routeServerId?: string | null;
@@ -1409,6 +1526,11 @@ function SessionViewLoaded({
     const input = shouldShowInput ? (
         <View>
             {voiceEnabled && voiceProviderId !== 'off' && !isHiddenSystemSessionSession ? <VoiceSurface variant="session" sessionId={sessionId} /> : null}
+            {authSurfaceState ? (
+                <View style={{ marginTop: 8, marginHorizontal: 8 }}>
+                    <SessionAuthRecoveryBanner message={authSurfaceState.message} />
+                </View>
+            ) : null}
             {pendingQueueResumeFailed ? (
                 <View
                     testID="session-pendingQueue-resumeFailed"

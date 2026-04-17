@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { fetchChanges } from './changes';
+import { HttpStatusError } from './client/httpStatusError';
 
 vi.mock('axios');
 
@@ -39,5 +40,22 @@ describe('fetchChanges', () => {
 
     const result = await fetchChanges({ token: 't', after: 0 });
     expect(result.status).toBe('error');
+  });
+
+  it.each([401, 403] as const)('returns canonical not_authenticated error for auth status %i', async (status) => {
+    (axios.get as any).mockResolvedValue({
+      status,
+      data: { error: 'not-authenticated' },
+    });
+
+    const result = await fetchChanges({ token: 't', after: 0 });
+
+    expect(result.status).toBe('error');
+    if (result.status !== 'error') throw new Error('expected error');
+    expect(result.error).toBeInstanceOf(HttpStatusError);
+    expect(result.error).toMatchObject({
+      code: 'not_authenticated',
+      response: { status },
+    });
   });
 });

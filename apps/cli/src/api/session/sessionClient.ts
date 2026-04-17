@@ -42,6 +42,7 @@ import {
 import { waitForTranscriptEncryptedMessageByLocalId } from './transcriptMessageLookup';
 import { catchUpSessionMessagesAfterSeq } from './sessionMessageCatchUp';
 import { isV2ChangesSyncEnabled, runSessionChangesSyncOnConnect } from './sessionChangesSyncOnConnect';
+import { fetchChangesAccountId } from '../changes';
 import { handleSessionNewMessageUpdate } from './sessionNewMessageUpdate';
 import { handleSessionStateUpdate } from './sessionStateUpdateHandling';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
@@ -53,10 +54,12 @@ import {
     DEFAULT_MANAGED_CONNECTION_POLICY,
     type ManagedConnectionState,
     type ManagedConnectionSupervisor,
+    type ReadinessProbeResult,
 } from '@happier-dev/connection-supervisor';
 import { createLoopbackReadinessProbe } from '@/api/connection/createLoopbackReadinessProbe';
 import { createSessionSocketTransport } from './connection/createSessionSocketTransport';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
+import { isAuthenticationError, readAuthenticationStatus } from '@/api/client/httpStatusError';
 import {
     executeExecutionRunAction,
     getExecutionRun,
@@ -64,8 +67,10 @@ import {
     sendExecutionRunMessage,
     startExecutionRun,
     stopExecutionRun,
+    waitForExecutionRun,
 } from '@/session/services/executionRuns';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
+import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 
 function serializeUnknownErrorForLog(error: unknown): Record<string, unknown> {
     if (error instanceof Error) {
@@ -92,6 +97,23 @@ function resolveSessionSocketMachineIdForBootstrap(metadata: Metadata | null): s
     }
     const machineId = metadata.machineId.trim();
     return machineId.length > 0 ? machineId : undefined;
+}
+
+function readUnknownRecordProperty(value: unknown, key: string): unknown {
+    if (!value || typeof value !== 'object') return undefined;
+    return (value as Record<string, unknown>)[key];
+}
+
+export function classifySessionTransportErrorToProbeResult(
+    error: unknown,
+): Exclude<ReadinessProbeResult, Readonly<{ status: 'ready' }>> | null {
+    const statusCode = readAuthenticationStatus(error);
+    if (!statusCode) return null;
+    return {
+        status: 'auth_failed',
+        statusCode,
+        errorMessage: error instanceof Error ? error.message : 'Authentication failed',
+    };
 }
 
 export class ApiSessionClient extends EventEmitter {
@@ -189,6 +211,30 @@ export class ApiSessionClient extends EventEmitter {
                 ...this.getExecutionRunServiceContext(),
                 request,
             }),
+        wait: async (request: unknown) => {
+            const rawTimeoutSeconds = readUnknownRecordProperty(request, 'timeoutSeconds');
+            const timeoutSeconds =
+                typeof rawTimeoutSeconds === 'number' && Number.isFinite(rawTimeoutSeconds) && rawTimeoutSeconds > 0
+                    ? Math.min(3600, rawTimeoutSeconds)
+                    : 300;
+
+            const rawPollIntervalMs = readUnknownRecordProperty(request, 'pollIntervalMs');
+            const requestPollIntervalMs =
+                typeof rawPollIntervalMs === 'number' && Number.isFinite(rawPollIntervalMs) && rawPollIntervalMs > 0
+                    ? Math.min(60_000, rawPollIntervalMs)
+                    : null;
+            const envPollIntervalRaw = (process.env.HAPPIER_SESSION_RUN_WAIT_POLL_INTERVAL_MS ?? '').trim();
+            const envPollIntervalParsed = envPollIntervalRaw ? Number.parseInt(envPollIntervalRaw, 10) : NaN;
+            const envPollIntervalMs =
+                Number.isFinite(envPollIntervalParsed) && envPollIntervalParsed > 0 ? Math.min(60_000, envPollIntervalParsed) : 1_000;
+
+            return await waitForExecutionRun({
+                ...this.getExecutionRunServiceContext(),
+                runId: String(readUnknownRecordProperty(request, 'runId') ?? ''),
+                timeoutMs: Math.max(1, Math.floor(timeoutSeconds * 1000)),
+                pollIntervalMs: requestPollIntervalMs ?? envPollIntervalMs,
+            });
+        },
     } as const;
 
     /**
@@ -410,6 +456,7 @@ export class ApiSessionClient extends EventEmitter {
                 this.installSessionSocketEventHandlers(socket);
                 return transport;
             },
+            classifyTransportErrorToProbeResult: classifySessionTransportErrorToProbeResult,
             probeReadiness: createLoopbackReadinessProbe({
                 serverUrl: configuration.apiServerUrl,
                 token: this.token,
@@ -496,7 +543,7 @@ export class ApiSessionClient extends EventEmitter {
 
         const p = (async () => {
             try {
-                const update = await fetchSessionSnapshotUpdateFromServer({
+                const request = () => fetchSessionSnapshotUpdateFromServer({
                     token: this.token,
                     sessionId: this.sessionId,
                     encryptionKey: this.encryptionKey,
@@ -506,6 +553,15 @@ export class ApiSessionClient extends EventEmitter {
                     currentMetadata: this.metadata,
                     currentAgentState: this.agentState,
                 });
+                const supervisor = this.sessionConnectionSupervisor;
+                const update = supervisor
+                    ? await runSupervisedRequest({
+                        supervisor,
+                        requireAuth: true,
+                        requireOnline: false,
+                        request,
+                    })
+                    : await request();
 
                 if (this.closed) return;
 
@@ -774,43 +830,61 @@ export class ApiSessionClient extends EventEmitter {
         if (this.accountIdPromise) {
             try {
                 return await this.accountIdPromise;
-            } catch {
+            } catch (error) {
                 this.accountIdPromise = null;
+                if (isAuthenticationError(error)) {
+                    if (this.sessionConnectionSupervisor) {
+                        return null;
+                    }
+                    throw error;
+                }
                 return null;
             }
         }
 
-        const p = (async () => {
-            const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
-            const response = await axios.get(`${serverUrl}/v1/account/profile`, {
-                headers: {
-                    Authorization: `Bearer ${this.token}`,
-                    'Content-Type': 'application/json',
-                },
-                timeout: 15_000,
-            });
-            const id = (response?.data as any)?.id;
-            if (typeof id !== 'string' || id.length === 0) {
-                throw new Error('Invalid /v1/account/profile response');
-            }
-            return id;
-        })();
+        const request = () => fetchChangesAccountId({ token: this.token });
+        const supervisor = this.sessionConnectionSupervisor;
+        const p = supervisor
+            ? runSupervisedRequest({
+                supervisor,
+                requireAuth: true,
+                requireOnline: false,
+                request,
+            })
+            : request();
 
         this.accountIdPromise = p;
         try {
             return await p;
-        } catch {
+        } catch (error) {
             this.accountIdPromise = null;
+            if (isAuthenticationError(error)) {
+                if (supervisor) {
+                    return null;
+                }
+                throw error;
+            }
             return null;
         }
     }
 
     private async catchUpSessionMessages(afterSeq: number): Promise<void> {
-        await catchUpSessionMessagesAfterSeq({
+        const request = () => catchUpSessionMessagesAfterSeq({
             token: this.token,
             sessionId: this.sessionId,
             afterSeq,
             onUpdate: (update) => this.handleUpdate(update, { source: 'session-scoped' }),
+        });
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            await request();
+            return;
+        }
+        await runSupervisedRequest({
+            supervisor,
+            requireAuth: true,
+            requireOnline: false,
+            request,
         });
     }
 
@@ -826,6 +900,7 @@ export class ApiSessionClient extends EventEmitter {
         if (this.closed) return;
         if (this.startupMessageCatchUpRetryTimer) return;
         if (!this.shouldRunStartupTranscriptCatchUp()) return;
+        if (this.currentConnectionState?.phase === 'auth_failed') return;
 
         const delayMs = ApiSessionClient.STARTUP_MESSAGE_CATCH_UP_RETRY_DELAYS_MS[this.startupMessageCatchUpRetryIndex];
         if (typeof delayMs !== 'number') return;
@@ -847,10 +922,17 @@ export class ApiSessionClient extends EventEmitter {
             });
             void this.catchUpSessionMessages(this.startupMessageCatchUpInitialAfterSeq)
                 .catch((error) => {
+                    if (isAuthenticationError(error)) {
+                        logger.debug('[API] Startup transcript catch-up retry failed with terminal auth', { error });
+                        return false;
+                    }
                     logger.debug('[API] Startup transcript catch-up retry failed (non-fatal)', { error });
+                    return true;
                 })
-                .finally(() => {
-                    this.scheduleNextStartupMessageCatchUpRetry();
+                .then((shouldContinue) => {
+                    if (shouldContinue !== false) {
+                        this.scheduleNextStartupMessageCatchUpRetry();
+                    }
                 });
         }, delayMs);
         this.startupMessageCatchUpRetryTimer.unref?.();
@@ -875,6 +957,7 @@ export class ApiSessionClient extends EventEmitter {
             getAccountId: () => this.getAccountId(),
             catchUpSessionMessages: (afterSeq) => this.catchUpSessionMessages(afterSeq),
             syncSessionSnapshotFromServer: (syncOpts) => this.syncSessionSnapshotFromServer(syncOpts),
+            connectionSupervisor: this.sessionConnectionSupervisor,
             onDebug: (message, data) => logger.debug(message, data),
         });
 
@@ -975,10 +1058,17 @@ export class ApiSessionClient extends EventEmitter {
             this.startupMessageCatchUpInitialAfterSeq = this.lastObservedMessageSeq;
             void this.catchUpSessionMessages(this.startupMessageCatchUpInitialAfterSeq)
                 .catch((error) => {
+                    if (isAuthenticationError(error)) {
+                        logger.debug('[API] Initial transcript catch-up failed with terminal auth', { error });
+                        return false;
+                    }
                     logger.debug('[API] Initial transcript catch-up failed (non-fatal)', { error });
+                    return true;
                 })
-                .finally(() => {
-                    this.scheduleNextStartupMessageCatchUpRetry();
+                .then((shouldContinue) => {
+                    if (shouldContinue !== false) {
+                        this.scheduleNextStartupMessageCatchUpRetry();
+                    }
                 });
         }
     }
@@ -1718,22 +1808,42 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async fetchRecentTranscriptTextItemsForAcpImport(opts?: { take?: number }): Promise<Array<{ role: 'user' | 'agent'; text: string }>> {
-        return fetchRecentTranscriptTextItemsForAcpImportFromServer({
+        const request = () => fetchRecentTranscriptTextItemsForAcpImportFromServer({
             token: this.token,
             sessionId: this.sessionId,
             encryptionKey: this.encryptionKey,
             encryptionVariant: this.encryptionVariant,
             take: opts?.take,
         });
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            return request();
+        }
+        return runSupervisedRequest({
+            supervisor,
+            requireAuth: true,
+            requireOnline: false,
+            request,
+        });
     }
 
     async fetchLatestUserPermissionIntentFromTranscript(opts?: { take?: number }): Promise<{ intent: import('../types').PermissionMode; updatedAt: number } | null> {
-        return fetchLatestUserPermissionIntentFromEncryptedTranscript({
+        const request = () => fetchLatestUserPermissionIntentFromEncryptedTranscript({
             token: this.token,
             sessionId: this.sessionId,
             encryptionKey: this.encryptionKey,
             encryptionVariant: this.encryptionVariant,
             take: opts?.take,
+        });
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            return request();
+        }
+        return runSupervisedRequest({
+            supervisor,
+            requireAuth: true,
+            requireOnline: false,
+            request,
         });
     }
 
@@ -1985,9 +2095,19 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async listPendingMessageQueueV2LocalIds(): Promise<string[]> {
-        return listPendingQueueV2LocalIdsFromServer({
+        const request = () => listPendingQueueV2LocalIdsFromServer({
             token: this.token,
             sessionId: this.sessionId,
+        });
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            return request();
+        }
+        return runSupervisedRequest({
+            supervisor,
+            requireAuth: true,
+            requireOnline: false,
+            request,
         });
     }
 
@@ -2003,11 +2123,21 @@ export class ApiSessionClient extends EventEmitter {
     async discardPendingMessageQueueV2All(opts: { reason: 'switch_to_local' | 'manual' }): Promise<number> {
         const localIds = await this.listPendingMessageQueueV2LocalIds();
         if (localIds.length === 0) return 0;
-        return discardPendingQueueV2Messages({
+        const request = () => discardPendingQueueV2Messages({
             token: this.token,
             sessionId: this.sessionId,
             localIds,
             reason: opts.reason,
+        });
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            return request();
+        }
+        return runSupervisedRequest({
+            supervisor,
+            requireAuth: true,
+            requireOnline: false,
+            request,
         });
     }
 
@@ -2088,12 +2218,29 @@ export class ApiSessionClient extends EventEmitter {
      * - removes it from the pending queue.
      */
     async popPendingMessage(): Promise<boolean> {
-        const materializeResult = await materializeNextPendingQueueV2Message({
-            token: this.token,
-            sessionId: this.sessionId,
-            socket: this.socket,
-        });
-        if (!materializeResult || !materializeResult.didMaterialize) {
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) {
+            return false;
+        }
+        let materializeResult;
+        try {
+            materializeResult = await runSupervisedRequest({
+                supervisor,
+                requireAuth: true,
+                requireOnline: false,
+                request: async () => materializeNextPendingQueueV2Message({
+                    token: this.token,
+                    sessionId: this.sessionId,
+                    socket: this.socket,
+                }),
+            });
+        } catch (error) {
+            if (isAuthenticationError(error)) {
+                throw error;
+            }
+            return false;
+        }
+        if (!materializeResult.didMaterialize) {
             return false;
         }
 
