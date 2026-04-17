@@ -409,12 +409,16 @@ describe('registerCommonHandlers capabilities', () => {
         const startedTaskId = String((startResult.result as { taskId?: unknown }).taskId ?? '');
         expect(startedTaskId).toMatch(/^system-task:/u);
 
+        const expectedStepIds = [
+            'relay.status.inspect',
+            'relay.status.health',
+        ];
         let payload: {
             events: Array<{ stepId?: string }>;
             pendingPrompt: unknown;
             result: null | { ok: boolean; data?: Record<string, unknown> };
         } | null = null;
-        for (let attempt = 0; attempt < 5; attempt += 1) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
             const pollResult = await call<CapabilitiesInvokeResponse, CapabilitiesInvokeRequest>(RPC_METHODS.CAPABILITIES_INVOKE, {
                 id: 'tool.systemTasks',
                 method: 'poll',
@@ -430,19 +434,18 @@ describe('registerCommonHandlers capabilities', () => {
                 pendingPrompt: unknown;
                 result: null | { ok: boolean; data?: Record<string, unknown> };
             };
-            if (payload.result) {
+            const observedStepIds = payload.events.map((event) => event.stepId);
+            const hasExpectedSteps = expectedStepIds.every((stepId) => observedStepIds.includes(stepId));
+            if (payload.result && hasExpectedSteps) {
                 break;
             }
-            await new Promise((resolve) => setTimeout(resolve, 25));
+            await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
         expect(payload).not.toBeNull();
         if (!payload) return;
         expect(payload.pendingPrompt).toBeNull();
-        expect(payload.events.map((event) => event.stepId)).toEqual([
-            'relay.status.inspect',
-            'relay.status.health',
-        ]);
+        expect(payload.events.map((event) => event.stepId)).toEqual(expectedStepIds);
         expect(payload.result?.ok).toBe(true);
     });
 });
