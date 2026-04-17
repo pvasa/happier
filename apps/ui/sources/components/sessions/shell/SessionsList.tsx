@@ -124,13 +124,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     headerChevron: {
-        width: 18,
+        width: 16,
         alignItems: 'center' as const,
         justifyContent: 'center' as const,
         color: theme.colors.textSecondary,
     },
     groupHeaderChevron: {
-        width: 18,
+        width: 16,
         alignItems: 'center' as const,
         justifyContent: 'center' as const,
         color: theme.colors.textSecondary,
@@ -493,7 +493,7 @@ export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHe
                     >
                         <Ionicons
                             name={props.collapsed ? 'chevron-forward' : 'chevron-down'}
-                            size={14}
+                            size={12}
                             color={headerChevronColor}
                         />
                     </View>
