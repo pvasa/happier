@@ -124,7 +124,8 @@ describe('modelOptions', () => {
         });
     });
 
-    it('preserves catalog model options and appends missing catalog models for freeform session lists', () => {
+    it('ignores stale dynamic session model rows for static-only providers and uses the static catalog', () => {
+        const staticClaudeValues = getModelOptionsForAgentType('claude').map((option) => option.value);
         const out = getModelOptionsForSession(
             'claude',
             withMetadata({
@@ -141,18 +142,15 @@ describe('modelOptions', () => {
             }),
         );
 
+        expect(out.map((option) => option.value)).toEqual(staticClaudeValues);
         expect(out.find((option) => option.value === 'claude-opus-4-6')).toMatchObject({
+            label: 'Opus 4.6',
             modelOptions: expect.arrayContaining([
                 expect.objectContaining({ id: 'reasoning_effort' }),
             ]),
         });
-        expect(out.find((option) => option.value === 'claude-opus-4-7')).toMatchObject({
-            value: 'claude-opus-4-7',
-            label: 'Opus 4.7',
-            description: expect.any(String),
-            modelOptions: expect.arrayContaining([
-                expect.objectContaining({ id: 'reasoning_effort' }),
-            ]),
+        expect(out.find((option) => option.value === 'claude-sonnet-4-6')).toMatchObject({
+            label: 'Sonnet 4.6',
         });
     });
 
@@ -197,7 +195,8 @@ describe('modelOptions', () => {
         expect(out.some((option) => option.value === 'claude-custom-model')).toBe(true);
     });
 
-    it('appends custom metadata override models after the catalog so list order stays stable', () => {
+    it('appends custom metadata override models after the static catalog for static-only providers', () => {
+        const staticClaudeValues = getModelOptionsForAgentType('claude').map((option) => option.value);
         const out = getModelOptionsForSession(
             'claude',
             withMetadata({
@@ -215,18 +214,13 @@ describe('modelOptions', () => {
         );
 
         expect(out.map((option) => option.value)).toEqual([
-            'default',
-            'claude-sonnet-4-6',
-            'claude-opus-4-7',
-            'claude-opus-4-6',
-            'claude-haiku-4-5',
-            'claude-opus-4-5',
-            'claude-sonnet-4-5',
+            ...staticClaudeValues,
             'claude-custom-model',
         ]);
     });
 
-    it('derives selectable ids from the same merged existing-session model list for freeform providers', () => {
+    it('derives selectable ids from the same static-only session model policy for freeform providers', () => {
+        const staticClaudeValues = getModelOptionsForAgentType('claude').map((option) => option.value);
         const metadata = withMetadata({
             sessionModelsV1: {
                 v: 1,
@@ -241,13 +235,7 @@ describe('modelOptions', () => {
         });
 
         expect(getSelectableModelIdsForSession('claude', metadata)).toEqual([
-            'default',
-            'claude-sonnet-4-6',
-            'claude-opus-4-7',
-            'claude-opus-4-6',
-            'claude-haiku-4-5',
-            'claude-opus-4-5',
-            'claude-sonnet-4-5',
+            ...staticClaudeValues,
             'claude-custom-model',
         ]);
     });
@@ -306,6 +294,23 @@ describe('modelOptions', () => {
                         updatedAt: 1,
                         currentModelId: 'model-a',
                         availableModels: [{ id: 'model-a', name: 'Model A' }],
+                    },
+                }),
+            ),
+        ).toBe(false);
+    });
+
+    it('does not treat static-only provider metadata as dynamic list support', () => {
+        expect(
+            hasDynamicModelListForSession(
+                'claude',
+                withMetadata({
+                    sessionModelsV1: {
+                        v: 1,
+                        provider: 'claude',
+                        updatedAt: 1,
+                        currentModelId: 'claude-haiku-4-5',
+                        availableModels: [{ id: 'haiku', name: 'Haiku' }],
                     },
                 }),
             ),

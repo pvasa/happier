@@ -112,6 +112,10 @@ function readSelectedModelOverrideId(metadata: Metadata | null | undefined): str
     return typeof metadataModelOverrideRaw?.modelId === 'string' ? metadataModelOverrideRaw.modelId.trim() : '';
 }
 
+function supportsDynamicSessionModelList(agentType: AgentType): boolean {
+    return getAgentCore(agentType).model.dynamicProbe !== 'static-only';
+}
+
 export function getModelOptionsForPreflightModelList(list: PreflightModelList): readonly ModelOption[] {
     const dynamic = (list.availableModels ?? [])
         .filter((m) => m && typeof m.id === 'string' && typeof m.name === 'string')
@@ -131,6 +135,9 @@ export function getModelOptionsForPreflightModelList(list: PreflightModelList): 
 }
 
 export function hasDynamicModelListForSession(agentType: AgentType, metadata: Metadata | null | undefined): boolean {
+    if (!supportsDynamicSessionModelList(agentType)) {
+        return false;
+    }
     const state = readSessionModelListState(metadata);
     return Boolean(
         state &&
@@ -227,7 +234,7 @@ export function getModelOptionsForAgentTypeOrPreflight(params: {
 function resolveModelOptionsForSession(agentType: AgentType, metadata: Metadata | null | undefined): readonly ModelOption[] {
     const supportsFreeform = supportsFreeformModelSelectionForSession(agentType, metadata);
     const selectedModelId = readSelectedModelOverrideId(metadata);
-    const state = readSessionModelListState(metadata);
+    const state = supportsDynamicSessionModelList(agentType) ? readSessionModelListState(metadata) : null;
     if (state && state.provider === agentType && Array.isArray(state.availableModels) && state.availableModels.length > 0) {
         const catalogOptions = getModelOptionsForAgentType(agentType);
 
