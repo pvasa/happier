@@ -318,6 +318,16 @@ for ((i=1; i<=$#; i++)); do
   fi
 done
 url="\${@: -1}"
+if [[ -n "\${HAPPIER_TEST_CURL_FAIL_ONCE_MATCH:-}" ]] && [[ "$url" == *"\${HAPPIER_TEST_CURL_FAIL_ONCE_MATCH}"* ]]; then
+  marker="${root}/curl-fail-once.marker"
+  if [[ ! -f "$marker" ]]; then
+    : > "$marker"
+    if [[ -n "\${HAPPIER_TEST_CURL_FAIL_ONCE_STDERR:-}" ]]; then
+      printf '%s\\n' "\${HAPPIER_TEST_CURL_FAIL_ONCE_STDERR}" >&2
+    fi
+    exit "\${HAPPIER_TEST_CURL_FAIL_ONCE_EXIT_CODE:-56}"
+  fi
+fi
 if [[ -n "$out" ]]; then
   case "$url" in
     *${artifactV123.artifactName}) cp ${JSON.stringify(artifactV123.tarPath)} "$out" ;;
@@ -459,6 +469,21 @@ test('install.sh prints download and extraction progress so large installs do no
     assert.match(scenario.stdout, /- \[✓\] Downloading minisign signature/);
     assert.match(scenario.stdout, /- \[\.\.\] Extracting payload/);
     assert.match(scenario.stdout, /- \[✓\] Extracting payload/);
+  } finally {
+    await scenario.cleanup();
+  }
+});
+
+test('install.sh retries transient minisign signature downloads before failing the install', async () => {
+  const scenario = await runInstallerScenario({
+    HAPPIER_TEST_CURL_FAIL_ONCE_MATCH: '.minisig',
+    HAPPIER_TEST_CURL_FAIL_ONCE_STDERR: 'curl: (56) The requested URL returned error: 618',
+    HAPPIER_TEST_CURL_FAIL_ONCE_EXIT_CODE: '56',
+  });
+  try {
+    assert.match(scenario.stdout, /- \[\.\.\] Downloading minisign signature/);
+    assert.match(scenario.stdout, /- \[✓\] Downloading minisign signature/);
+    assert.match(scenario.stdout, /Signature verified\./);
   } finally {
     await scenario.cleanup();
   }

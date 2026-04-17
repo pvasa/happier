@@ -321,6 +321,25 @@ resolve_release_asset_source() {
   json_lookup_asset_url "${release_json}" "${name_regex}"
 }
 
+download_release_asset_with_retry() {
+  local output_path="$1"
+  local source="$2"
+  local attempts="${HAPPIER_INSTALLER_DOWNLOAD_RETRY_ATTEMPTS:-3}"
+  local retry_delay="${HAPPIER_INSTALLER_DOWNLOAD_RETRY_DELAY_SECONDS:-2}"
+  local attempt=1
+  while true; do
+    rm -f "${output_path}"
+    if curl_auth -o "${output_path}" "${source}"; then
+      return 0
+    fi
+    if [[ "${attempt}" -ge "${attempts}" ]]; then
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep "${retry_delay}"
+  done
+}
+
 stage_release_asset() {
   local label="$1"
   local output_path="$2"
@@ -329,7 +348,7 @@ stage_release_asset() {
     run_installer_step "${label}" cp "${source}" "${output_path}"
     return
   fi
-  run_installer_step "${label}" curl_auth -o "${output_path}" "${source}"
+  run_installer_step "${label}" download_release_asset_with_retry "${output_path}" "${source}"
 }
 
 resolve_exe_name() {
