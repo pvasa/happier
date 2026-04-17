@@ -456,6 +456,8 @@ export async function writeSettings(settings: Settings): Promise<void> {
 export async function updateSettings(
   updater: (current: Settings) => Settings | Promise<Settings>
 ): Promise<Settings> {
+  const { findHappyProcessByPid } = await import('@/daemon/doctor');
+
   // Timing constants
   const LOCK_RETRY_INTERVAL_MS = 100;  // How long to wait between lock attempts
   const MAX_LOCK_ATTEMPTS = 50;        // Maximum number of attempts (5 seconds total)
@@ -506,9 +508,17 @@ export async function updateSettings(
 
         try {
           const ownerPid = parseSettingsLockOwnerPid(await readFile(lockFile, 'utf8'));
-          if (ownerPid !== null && !isSettingsLockOwnerAlive(ownerPid)) {
-            await unlink(lockFile).catch(() => { });
-            continue;
+          if (ownerPid !== null) {
+            if (!isSettingsLockOwnerAlive(ownerPid)) {
+              await unlink(lockFile).catch(() => { });
+              continue;
+            }
+
+            const ownerProcess = await findHappyProcessByPid(ownerPid).catch(() => null);
+            if (!ownerProcess) {
+              await unlink(lockFile).catch(() => { });
+              continue;
+            }
           }
 
           const stats = await stat(lockFile);

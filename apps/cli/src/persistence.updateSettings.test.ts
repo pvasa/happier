@@ -156,4 +156,35 @@ describe('updateSettings', () => {
     expect(existsSync(lockFile)).toBe(false);
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
+
+  it('breaks a settings lock whose live owner pid no longer belongs to a Happier process', async () => {
+    const { configuration } = await import('@/configuration');
+    const { updateSettings } = await import('@/persistence');
+
+    const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    const helperPid = helper.pid;
+    expect(typeof helperPid).toBe('number');
+
+    const lockFile = `${configuration.settingsFile}.lock`;
+    await writeFile(lockFile, `${helperPid}\n`, 'utf8');
+
+    try {
+      const startedAt = Date.now();
+      const updated = await updateSettings((current) => ({
+        ...current,
+        onboardingCompleted: true,
+      }));
+
+      expect(updated.onboardingCompleted).toBe(true);
+      expect(existsSync(lockFile)).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+    } finally {
+      helper.kill('SIGTERM');
+      await new Promise<void>((resolve) => {
+        helper.once('exit', () => resolve());
+      });
+    }
+  });
 });
