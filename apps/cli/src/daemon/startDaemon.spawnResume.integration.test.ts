@@ -466,17 +466,28 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         throw new Error('Expected spawnSession to be registered');
       }
 
-      await spawnSession({
+      const spawnResult = await spawnSession({
         directory: '/tmp',
         backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
         token: 't',
       });
 
-      const firstCall = spawnHappyCLI.mock.calls[0];
-      if (!firstCall) {
-        throw new Error('Expected spawnHappyCLI to be called');
+      expect(spawnResult.type).toBe('success');
+
+      const directLaunchCall = spawnHappyCLI.mock.calls[0];
+      const wrappedLaunchCall = spawnChildProcess.mock.calls[0] as unknown;
+      const wrappedLaunchOptions =
+        Array.isArray(wrappedLaunchCall) && wrappedLaunchCall.length >= 3
+          ? (wrappedLaunchCall[2] as { env?: Record<string, string> } | undefined)
+          : undefined;
+      const launchedEnv = directLaunchCall
+        ? (directLaunchCall[1] as { env?: Record<string, string> } | undefined)?.env
+        : wrappedLaunchOptions?.env;
+
+      if (!launchedEnv) {
+        throw new Error('Expected daemon session spawn to capture the launched child environment');
       }
-      const launchedEnv = (firstCall[1] as { env?: Record<string, string> } | undefined)?.env;
+
       expect(launchedEnv?.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-config');
 
       const trackedSessions = trackedSessionCapture.current;
