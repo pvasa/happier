@@ -212,6 +212,7 @@ describe('createOpenCodeTuiSupervisor', () => {
   it('wraps Windows shell shims before attaching', async () => {
     const proc = createSpawnedProcessHarness();
     const spawnProcess = vi.fn(() => proc.child as any);
+    const isolatedHome = await mkdtemp(join(tmpdir(), 'happier-opencode-supervisor-home-'));
     resolveWindowsCommandInvocationMock.mockReturnValueOnce({
       command: 'C:\\Windows\\System32\\cmd.exe',
       args: ['/d', '/s', '/c', '"C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD attach http://127.0.0.1:4096 --dir C:\\workspace --session session-2"'],
@@ -219,7 +220,13 @@ describe('createOpenCodeTuiSupervisor', () => {
     });
     const supervisor = createOpenCodeTuiSupervisor({
       spawnProcess,
-      env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } as NodeJS.ProcessEnv,
+      env: {
+        ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+        PATH: '',
+        PATHEXT: '.CMD;.EXE',
+        HOME: isolatedHome,
+        USERPROFILE: isolatedHome,
+      } as NodeJS.ProcessEnv,
       command: 'C:\\Users\\natan\\AppData\\Roaming\\npm\\opencode.CMD',
     });
 

@@ -72,9 +72,17 @@ export function createOpenCodeTuiSupervisor(params?: Readonly<{
 }>): OpenCodeTuiSupervisor {
   const spawnProcess = params?.spawnProcess ?? spawn;
   const env = params?.env ?? process.env;
-  const launch = resolveOpenCodeCliLaunchSpec(env);
-  const command = params?.command ?? launch.command;
-  const commandArgs = params?.commandArgs ?? launch.args;
+  const commandOverride = params?.command;
+  let command: string;
+  let commandArgs: readonly string[];
+  if (commandOverride) {
+    command = commandOverride;
+    commandArgs = params?.commandArgs ?? [];
+  } else {
+    const launch = resolveOpenCodeCliLaunchSpec(env);
+    command = launch.command;
+    commandArgs = params?.commandArgs ?? launch.args;
+  }
   let proc: SpawnedProcess | null = null;
 
   const clearProc = (): void => {
