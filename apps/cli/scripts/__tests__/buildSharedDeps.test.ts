@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
 import { createTempDirSync, removeTempDirSync } from '../../src/testkit/fs/tempDir';
+import { resolveBundledWorkspaceDependencyBuildOrder } from '../../../../scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs';
 import {
   execYarn,
   resolveTscBin,
@@ -76,6 +77,72 @@ describe('buildSharedDeps', () => {
       command: process.execPath,
       args: ['/somewhere/lib/node_modules/yarn/bin/yarn.js'],
     });
+  });
+
+  it('orders bundled workspace builds so internal workspace dependencies compile first', () => {
+    const repoRoot = createTempDirSync('happier-cli-build-shared-order-');
+    try {
+      mkdirSync(resolve(repoRoot, 'apps', 'cli'), { recursive: true });
+      writeFileSync(
+        resolve(repoRoot, 'apps', 'cli', 'package.json'),
+        JSON.stringify(
+          {
+            bundledDependencies: [
+              '@happier-dev/cli-common',
+              '@happier-dev/release-runtime',
+              '@happier-dev/agents',
+              '@happier-dev/protocol',
+            ],
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+
+      const packageJsonByWorkspace: Record<string, Record<string, unknown>> = {
+        protocol: {
+          name: '@happier-dev/protocol',
+        },
+        agents: {
+          name: '@happier-dev/agents',
+          dependencies: {
+            '@happier-dev/protocol': '0.0.0',
+          },
+        },
+        'release-runtime': {
+          name: '@happier-dev/release-runtime',
+        },
+        'cli-common': {
+          name: '@happier-dev/cli-common',
+          dependencies: {
+            '@happier-dev/agents': '0.0.0',
+            '@happier-dev/release-runtime': '0.0.0',
+          },
+        },
+      };
+
+      for (const [workspaceName, packageJson] of Object.entries(packageJsonByWorkspace)) {
+        mkdirSync(resolve(repoRoot, 'packages', workspaceName), { recursive: true });
+        writeFileSync(
+          resolve(repoRoot, 'packages', workspaceName, 'package.json'),
+          JSON.stringify(packageJson, null, 2),
+          'utf8',
+        );
+        writeFileSync(resolve(repoRoot, 'packages', workspaceName, 'tsconfig.json'), '{}\n', 'utf8');
+      }
+
+      const ordered = resolveBundledWorkspaceDependencyBuildOrder({
+        repoRoot,
+        hostPackageDir: resolve(repoRoot, 'apps', 'cli'),
+      });
+
+      expect(ordered.indexOf('protocol')).toBeLessThan(ordered.indexOf('agents'));
+      expect(ordered.indexOf('agents')).toBeLessThan(ordered.indexOf('cli-common'));
+      expect(ordered.indexOf('release-runtime')).toBeLessThan(ordered.indexOf('cli-common'));
+    } finally {
+      removeTempDirSync(repoRoot);
+    }
   });
 
   it('runs yarn.cmd through cmd.exe on Windows to avoid spawn EINVAL', () => {

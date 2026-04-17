@@ -129,7 +129,7 @@ type ProcessInspectionResult =
 function looksLikeDaemonCommand(command: string): boolean {
   const normalized = command.replaceAll('\\', '/');
   const hasStartSync = normalized.includes('daemon start-sync');
-  const hasCliEntrypoint =
+  const hasCliDistEntrypoint =
     normalized.includes('apps/cli/dist/index.mjs') ||
     normalized.includes('apps/cli/dist/index.js') ||
     (normalized.includes('apps/cli') && normalized.includes('dist/index.mjs')) ||
@@ -137,7 +137,20 @@ function looksLikeDaemonCommand(command: string): boolean {
     normalized.includes('dist/index.mjs') ||
     normalized.includes('dist/index.js') ||
     normalized.includes('happier') && normalized.includes('daemon start-sync') && normalized.includes('dist/index');
-  return hasStartSync && hasCliEntrypoint;
+  const hasCliSourceSnapshotEntrypoint =
+    normalized.includes('tsx') &&
+    normalized.includes('src/index.ts') &&
+    (
+      normalized.includes('apps/cli') ||
+      normalized.includes('@happier-dev/cli') ||
+      normalized.includes('/cli-dist-snapshot/src/index.ts') ||
+      normalized.includes('/cli-dist/src/index.ts') ||
+      (
+        (normalized.includes('/.project/logs/e2e/') || normalized.includes('/.project/tmp/')) &&
+        /\/cli-[^/\s]+\/src\/index\.ts(?:\s|$)/.test(normalized)
+      )
+    );
+  return hasStartSync && (hasCliDistEntrypoint || hasCliSourceSnapshotEntrypoint);
 }
 
 function looksLikeTestDaemonLeaseCommand(command: string): boolean {

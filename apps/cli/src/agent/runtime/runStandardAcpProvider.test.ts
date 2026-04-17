@@ -619,6 +619,7 @@ describe('runStandardAcpProvider', () => {
 
   it('invokes kill handler lifecycle without archiving the session', async () => {
     const harness = createHarness();
+    harness.opts.startedBy = 'daemon';
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     harness.deps.runPermissionModePromptLoopFn = async () => {
       expect(harness.metrics.killHandler).toBeTypeOf('function');

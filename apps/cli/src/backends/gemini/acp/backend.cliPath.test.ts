@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -9,10 +9,12 @@ import { writeExecutableShim } from '@/testkit/fs/executableShim';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 
 const envKeys = [
+  'HOME',
   'PATH',
   'HAPPIER_HOME_DIR',
   'HAPPIER_GEMINI_PATH',
   'HAPPIER_JS_RUNTIME_PATH',
+  'USERPROFILE',
 ] as const;
 
 const tempDirs = new Set<string>();
@@ -29,6 +31,18 @@ async function createFakeBin(name: string): Promise<{ dir: string; binPath: stri
   });
   return { dir, binPath };
 }
+
+async function createEmptyHomeDir(): Promise<string> {
+  const dir = await createTempDir('happier-gemini-home-');
+  tempDirs.add(dir);
+  return dir;
+}
+
+beforeEach(async () => {
+  const homeDir = await createEmptyHomeDir();
+  process.env.HOME = homeDir;
+  process.env.USERPROFILE = homeDir;
+});
 
 afterEach(async () => {
   envScope.restore();

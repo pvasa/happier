@@ -163,7 +163,11 @@ describe('createAcpRuntime (transcript streaming vNext)', () => {
   it('flushes the active assistant segment before forwarding a permission request', async () => {
     const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_main' });
     const durableCalls: Array<{ body: ACPMessageData; meta?: Record<string, unknown> }> = [];
+    const forwardedBodies: ACPMessageData[] = [];
     const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        forwardedBodies.push(body);
+      },
       sendAgentMessageCommitted: async (_provider, body, opts) => {
         durableCalls.push({ body, meta: opts.meta });
       },
@@ -192,8 +196,14 @@ describe('createAcpRuntime (transcript streaming vNext)', () => {
       payload: { toolName: 'Write', input: { path: '/tmp/note.txt' } },
     } satisfies AgentMessage);
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(forwardedBodies).toContainEqual(
+        expect.objectContaining({
+          type: 'permission-request',
+          toolName: 'Write',
+        }),
+      );
+    });
 
     expect(durableCalls.length).toBeGreaterThanOrEqual(2);
     expect(durableCalls[durableCalls.length - 1]).toMatchObject({

@@ -98,3 +98,10 @@ jobs:
       registries: dockerhub,ghcr
       build_relay: true
       build_dev_box: true
+
+  release_verify:
+    name: Release Verification (dev)
+    needs: [cli, hstack, server_runtime, ui_web, ui_mobile, ui_desktop, docker]
+    uses: ./.github/workflows/release-verify.yml
+    with:
+      channel: dev

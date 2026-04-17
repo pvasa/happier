@@ -40,6 +40,7 @@ describe('resolveDaemonTakeoverDecision', () => {
         expect(resolveDaemonTakeoverDecision({
             ownership: buildEvaluation('none'),
             takeoverRequested: false,
+            startupSource: 'manual',
         })).toEqual({ kind: 'ok' });
     });
 
@@ -47,6 +48,7 @@ describe('resolveDaemonTakeoverDecision', () => {
         expect(resolveDaemonTakeoverDecision({
             ownership: buildEvaluation('compatible', buildOwner()),
             takeoverRequested: true,
+            startupSource: 'manual',
         })).toEqual({ kind: 'ok' });
     });
 
@@ -57,11 +59,31 @@ describe('resolveDaemonTakeoverDecision', () => {
                 startupSource: 'manual',
             })),
             takeoverRequested: true,
+            startupSource: 'manual',
         })).toEqual({
             kind: 'manual-owner-takeover',
             owner: buildOwner({
                 serviceManaged: false,
                 startupSource: 'manual',
+            }),
+        });
+    });
+
+    it('allows replacing a stale manual relay runtime without an explicit takeover flag', () => {
+        expect(resolveDaemonTakeoverDecision({
+            ownership: buildEvaluation('conflict', buildOwner({
+                serviceManaged: false,
+                startupSource: 'manual',
+                versionMatches: false,
+            })),
+            takeoverRequested: false,
+            startupSource: 'manual',
+        })).toEqual({
+            kind: 'manual-owner-replace',
+            owner: buildOwner({
+                serviceManaged: false,
+                startupSource: 'manual',
+                versionMatches: false,
             }),
         });
     });
@@ -73,11 +95,31 @@ describe('resolveDaemonTakeoverDecision', () => {
                 startupSource: 'background-service',
             })),
             takeoverRequested: true,
+            startupSource: 'background-service',
         })).toEqual({
             kind: 'conflict',
             owner: buildOwner({
                 serviceManaged: true,
                 startupSource: 'background-service',
+            }),
+        });
+    });
+
+    it('keeps manual owner conflicts closed for background-service startup without explicit takeover', () => {
+        expect(resolveDaemonTakeoverDecision({
+            ownership: buildEvaluation('conflict', buildOwner({
+                serviceManaged: false,
+                startupSource: 'manual',
+                versionMatches: false,
+            })),
+            takeoverRequested: false,
+            startupSource: 'background-service',
+        })).toEqual({
+            kind: 'conflict',
+            owner: buildOwner({
+                serviceManaged: false,
+                startupSource: 'manual',
+                versionMatches: false,
             }),
         });
     });

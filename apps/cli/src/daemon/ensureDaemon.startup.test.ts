@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./controlClient', () => ({
-  isDaemonRunningCurrentlyInstalledHappyVersion: vi.fn(),
-}));
+vi.mock('./controlClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./controlClient')>();
+  return {
+    ...actual,
+    inspectDaemonRunningStateAndCleanupStaleState: vi.fn(async () => ({ status: 'not-running' as const })),
+    isDaemonRunningCurrentlyInstalledHappyVersion: vi.fn(),
+  };
+});
 
 vi.mock('@/daemon/runtime/spawnDetachedDaemonStartSync', () => ({
   spawnDetachedDaemonStartSync: vi.fn(),

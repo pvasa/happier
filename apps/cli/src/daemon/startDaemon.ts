@@ -247,6 +247,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
     const takeoverDecision = resolveDaemonTakeoverDecision({
       ownership,
       takeoverRequested,
+      startupSource,
     });
     if (takeoverDecision.kind === 'conflict') {
       const error = new DaemonOwnershipConflictError({
@@ -276,15 +277,20 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       throw error;
     }
 
-    if (takeoverDecision.kind === 'manual-owner-takeover') {
+    if (takeoverDecision.kind === 'manual-owner-takeover' || takeoverDecision.kind === 'manual-owner-replace') {
       const takeoverNotice = buildDaemonTakeoverNotice({ action: 'start-sync' });
-      logger.warn('[DAEMON RUN] Relay takeover requested; replacing the current manual relay runtime', {
-        runtimeId,
-        ownerCliVersion: takeoverDecision.owner.state.startedWithCliVersion,
-        ownerReleaseChannel: takeoverDecision.owner.state.startedWithPublicReleaseChannel,
-        title: takeoverNotice.title,
-        lines: takeoverNotice.lines,
-      });
+      logger.warn(
+        takeoverDecision.kind === 'manual-owner-takeover'
+          ? '[DAEMON RUN] Relay takeover requested; replacing the current manual relay runtime'
+          : '[DAEMON RUN] Replacing the current stale manual relay runtime before startup',
+        {
+          runtimeId,
+          ownerCliVersion: takeoverDecision.owner.state.startedWithCliVersion,
+          ownerReleaseChannel: takeoverDecision.owner.state.startedWithPublicReleaseChannel,
+          title: takeoverNotice.title,
+          lines: takeoverNotice.lines,
+        },
+      );
       await stopDaemon();
     }
 

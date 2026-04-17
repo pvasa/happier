@@ -57,21 +57,6 @@ function isManualOrLegacyManualOwner(serviceManaged: boolean | null | undefined)
   return serviceManaged !== true;
 }
 
-function canImplicitlyReplaceConflictingManualOwner(
-  ownership: Awaited<ReturnType<typeof evaluateCurrentDaemonOwner>>,
-): boolean {
-  if (ownership.kind !== 'conflict') {
-    return false;
-  }
-  if (!isManualOrLegacyManualOwner(ownership.owner.serviceManaged)) {
-    return false;
-  }
-
-  // Manual relay runtimes that only drifted by CLI version or public release channel should
-  // be allowed through so the inner startDaemon() replacement path can stop and replace them.
-  return !ownership.owner.versionMatches || !ownership.owner.releaseChannelMatches;
-}
-
 export async function handleDaemonCliCommand(context: CommandContext): Promise<void> {
   const args = context.args;
   const daemonSubcommand = args[1];
@@ -142,15 +127,16 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       }
       process.exit(0);
     }
-    const takeoverAllowed = takeoverRequested
-      && ownership.kind === 'conflict'
-      && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
-    const implicitReplaceAllowed = canImplicitlyReplaceConflictingManualOwner(ownership);
+    const takeoverDecision = resolveDaemonTakeoverDecision({
+      ownership,
+      takeoverRequested,
+      startupSource,
+    });
 
-    if (ownership.kind === 'conflict' && !takeoverAllowed && !implicitReplaceAllowed) {
+    if (takeoverDecision.kind === 'conflict') {
       const message = renderDaemonOwnerConflict({
         intent: 'daemon-start',
-        owner: ownership.owner,
+        owner: takeoverDecision.owner,
       });
       if (jsonRequested) {
         printDaemonJson({
@@ -193,7 +179,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       }
     }
 
-    if (takeoverAllowed && !jsonRequested) {
+    if (takeoverDecision.kind === 'manual-owner-takeover' && !jsonRequested) {
       console.error('Taking over the current manual relay runtime before starting a new relay...');
     }
 
@@ -290,15 +276,16 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       console.log(`  Relay ID: ${configuration.activeServerId}`);
       process.exit(0);
     }
-    const takeoverAllowed = takeoverRequested
-      && ownership.kind === 'conflict'
-      && isManualOrLegacyManualOwner(ownership.owner.serviceManaged);
-    const implicitReplaceAllowed = canImplicitlyReplaceConflictingManualOwner(ownership);
+    const takeoverDecision = resolveDaemonTakeoverDecision({
+      ownership,
+      takeoverRequested,
+      startupSource,
+    });
 
-    if (ownership.kind === 'conflict' && !takeoverAllowed && !implicitReplaceAllowed) {
+    if (takeoverDecision.kind === 'conflict') {
       const message = renderDaemonOwnerConflict({
         intent: 'daemon-start-sync',
-        owner: ownership.owner,
+        owner: takeoverDecision.owner,
       });
       console.error(message.title);
       for (const line of message.lines) {
@@ -325,7 +312,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       }
     }
 
-    if (takeoverAllowed) {
+    if (takeoverDecision.kind === 'manual-owner-takeover') {
       console.error('Taking over the current manual relay runtime before starting a new relay...');
     }
 

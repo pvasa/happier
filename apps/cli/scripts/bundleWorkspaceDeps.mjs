@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 
 import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolveWorkspaceDependencyBuildOrder } from '../../../scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs';
 import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,10 +27,18 @@ function findRepoRoot(startDir) {
 async function loadCliCommonWorkspacesModule(repoRoot) {
   const modulePath = resolve(repoRoot, 'packages', 'cli-common', 'dist', 'workspaces', 'index.js');
   if (!existsSync(modulePath)) {
-    execYarn(['-s', 'workspace', '@happier-dev/cli-common', 'build'], {
-      cwd: repoRoot,
-      stdio: 'inherit',
-    });
+    for (const workspaceName of resolveWorkspaceDependencyBuildOrder({
+      repoRoot,
+      seedPackageNames: ['@happier-dev/cli-common'],
+    })) {
+      execYarn(['-s', 'workspace', `@happier-dev/${workspaceName}`, 'build'], {
+        cwd: repoRoot,
+        stdio: 'inherit',
+      });
+      if (workspaceName === 'cli-common' && existsSync(modulePath)) {
+        break;
+      }
+    }
   }
 
   if (!existsSync(modulePath)) {

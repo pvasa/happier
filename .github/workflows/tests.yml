@@ -105,6 +105,18 @@ on:
         required: false
         default: true
         type: boolean
+      run_cli_update_continuity:
+        required: false
+        default: false
+        type: boolean
+      run_daemon_continuity:
+        required: false
+        default: false
+        type: boolean
+      run_session_continuity:
+        required: false
+        default: false
+        type: boolean
       run_release_assets_docker:
         required: false
         default: false
@@ -933,6 +945,175 @@ jobs:
             --platform linux \
             --source local-build \
             --ref "."
+
+  cli-update-continuity:
+    if: ${{ github.event_name == 'workflow_call' && inputs.run_cli_update_continuity }}
+    name: Release Validation — CLI Update Continuity (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CLI_UPDATE_FROM_CHANNEL: ${{ inputs.installers_channel }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install Sapling
+        run: |
+          bash scripts/ci/install_sapling_ubuntu22.sh
+
+      - name: Verify Sapling CLI
+        run: sl --version
+
+      - name: Install dependencies
+        env:
+          YARN_PRODUCTION: "false"
+          npm_config_production: "false"
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
+
+      - name: Run unified CLI update continuity validation
+        env:
+          CI: "1"
+        run: |
+          set -euo pipefail
+          node scripts/pipeline/run.mjs release-validate \
+            --suite cli-update \
+            --platform linux \
+            --from-source published-channel \
+            --from-ref "${CLI_UPDATE_FROM_CHANNEL}" \
+            --to-source local-build \
+            --to-ref "."
+
+      - name: Upload CLI update continuity artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-update-continuity-artifacts
+          path: .project/logs/e2e
+          if-no-files-found: ignore
+
+  daemon-continuity:
+    if: ${{ github.event_name == 'workflow_call' && inputs.run_daemon_continuity }}
+    name: Release Validation — Daemon Continuity (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install Sapling
+        run: |
+          bash scripts/ci/install_sapling_ubuntu22.sh
+
+      - name: Verify Sapling CLI
+        run: sl --version
+
+      - name: Install dependencies
+        env:
+          YARN_PRODUCTION: "false"
+          npm_config_production: "false"
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
+
+      - name: Run unified daemon continuity validation
+        env:
+          CI: "1"
+        run: |
+          set -euo pipefail
+          node scripts/pipeline/run.mjs release-validate \
+            --suite daemon-continuity \
+            --platform linux \
+            --source local-build \
+            --ref "."
+
+      - name: Upload daemon continuity artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-continuity-artifacts
+          path: .project/logs/e2e
+          if-no-files-found: ignore
+
+  session-continuity:
+    if: ${{ github.event_name == 'workflow_call' && inputs.run_session_continuity }}
+    name: Release Validation — Session Continuity (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+
+      - name: Install Sapling
+        run: |
+          bash scripts/ci/install_sapling_ubuntu22.sh
+
+      - name: Verify Sapling CLI
+        run: sl --version
+
+      - name: Install dependencies
+        env:
+          YARN_PRODUCTION: "false"
+          npm_config_production: "false"
+        uses: ./.github/actions/install-yarn-dependencies
+        with:
+          args: --frozen-lockfile --ignore-engines
+
+      - name: Run unified session continuity validation
+        env:
+          CI: "1"
+        run: |
+          set -euo pipefail
+          node scripts/pipeline/run.mjs release-validate \
+            --suite session-continuity \
+            --platform linux \
+            --source local-build \
+            --ref "."
+
+      - name: Upload session continuity artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-continuity-artifacts
+          path: .project/logs/e2e
+          if-no-files-found: ignore
 
   release-assets-docker:
     if: ${{ github.event_name == 'workflow_call' && inputs.run_release_assets_docker }}

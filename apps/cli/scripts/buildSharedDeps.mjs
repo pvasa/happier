@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { syncBundledWorkspacePackages } from '../../../scripts/workspaces/syncBundledWorkspacePackages.mjs';
+import { resolveBundledWorkspaceDependencyBuildOrder } from '../../../scripts/workspaces/resolveWorkspaceDependencyBuildOrder.mjs';
 import {
   execYarn as execYarnCommand,
   resolveYarnInvocation as resolveYarnCommandInvocation,
@@ -46,9 +47,15 @@ async function loadCliCommonWorkspacesModule() {
   const modulePath = resolve(repoRoot, 'packages', 'cli-common', 'dist', 'workspaces', 'index.js');
 
   if (!existsSync(modulePath)) {
-    // `build:shared` is invoked by tests/e2e harnesses that may not have pre-built workspace packages.
-    // Ensure `@happier-dev/cli-common` is compiled before importing its build helpers.
-    execYarn(['-s', 'workspace', '@happier-dev/cli-common', 'build'], { cwd: repoRoot, stdio: 'inherit' });
+    for (const workspaceName of resolveCliBundledWorkspacePackageNames()) {
+      execYarn(['-s', 'workspace', `@happier-dev/${workspaceName}`, 'build'], {
+        cwd: repoRoot,
+        stdio: 'inherit',
+      });
+      if (workspaceName === 'cli-common' && existsSync(modulePath)) {
+        break;
+      }
+    }
   }
 
   if (!existsSync(modulePath)) {
@@ -64,50 +71,12 @@ const {
   vendorBundledPackageRuntimeDependencies,
 } = await loadCliCommonWorkspacesModule();
 const CLI_BUNDLED_HOST_APPS = ['cli'];
-const CLI_SHARED_WORKSPACE_BUILD_ORDER = [
-  'agents',
-  'cli-common',
-  'connection-supervisor',
-  'protocol',
-  'transfers',
-  'release-runtime',
-];
-
-function resolveBundledWorkspacePackageNameFromSrcDir(srcDir) {
-  const normalized = String(srcDir ?? '');
-  const marker = `${resolve(repoRoot, 'packages')}/`;
-  if (!normalized.startsWith(marker)) return null;
-  const rest = normalized.slice(marker.length);
-  const name = rest.split('/')[0] ?? '';
-  return name.trim() || null;
-}
-
 function resolveCliBundledWorkspacePackageNames({ exists = existsSync } = {}) {
-  const bundles = resolveWorkspaceBundlesFromPackageJson({
+  return resolveBundledWorkspaceDependencyBuildOrder({
     repoRoot,
     hostPackageDir: resolve(repoRoot, 'apps', 'cli'),
-  });
-
-  const names = [];
-  for (const bundle of bundles) {
-    const name = resolveBundledWorkspacePackageNameFromSrcDir(bundle.srcDir);
-    if (name) names.push(name);
-  }
-
-  // Keep a stable, intention-revealing build order while still deriving the set from the actual bundles.
-  const derived = Array.from(new Set(names));
-  const indexByName = new Map(CLI_SHARED_WORKSPACE_BUILD_ORDER.map((name, index) => [name, index]));
-  derived.sort((left, right) => {
-    const li = indexByName.get(left);
-    const ri = indexByName.get(right);
-    if (li == null && ri == null) return left.localeCompare(right);
-    if (li == null) return 1;
-    if (ri == null) return -1;
-    return li - ri;
-  });
-
-  // Only build packages that look like real repo workspaces.
-  return derived.filter((name) => exists(resolve(repoRoot, 'packages', name, 'tsconfig.json')));
+    existsSync: exists,
+  }).filter((workspaceName) => exists(resolve(repoRoot, 'packages', workspaceName, 'tsconfig.json')));
 }
 
 export function resolveTscBin({ exists } = {}) {

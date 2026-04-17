@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 LOG_PATH="${YARN_INSTALL_LOG_PATH:-${TMPDIR:-/tmp}/yarn-install.log}"
 MAX_ATTEMPTS="${YARN_INSTALL_MAX_ATTEMPTS:-3}"
@@ -7,7 +7,7 @@ SLEEP_SECONDS="${YARN_INSTALL_RETRY_SLEEP_SECONDS:-5}"
 DEFAULT_REGISTRY="${YARN_INSTALL_REGISTRY:-https://registry.npmjs.org}"
 
 is_transient_yarn_error() {
-    local log_path="$1"
+    log_path="$1"
     # Retry only when the failure is very likely transient (registry/network throttling).
     # Do not retry on lockfile/schema/package errors.
     grep -Eq 'Request failed "(5[0-9]{2}|429)' "$log_path" && return 0
@@ -17,7 +17,7 @@ is_transient_yarn_error() {
 }
 
 configure_registry() {
-    local current_registry="${npm_config_registry:-}"
+    current_registry="${npm_config_registry:-}"
     if [ -z "$current_registry" ] || [ "$current_registry" = "https://registry.yarnpkg.com" ] || [ "$current_registry" = "https://registry.yarnpkg.com/" ]; then
         npm_config_registry="${DEFAULT_REGISTRY}"
     fi

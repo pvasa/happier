@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const testDir = dirname(fileURLToPath(import.meta.url));
+const cliDir = resolve(testDir, '..', '..');
 
 describe('apps/cli package publish contract', () => {
   it('declares npm bin entrypoints for the published CLI', () => {
-    const cliPackageJsonPath = resolve(process.cwd(), 'package.json');
+    const cliPackageJsonPath = resolve(cliDir, 'package.json');
     const cliPackageJson = JSON.parse(readFileSync(cliPackageJsonPath, 'utf8')) as {
       bin?: unknown;
     };
@@ -17,7 +21,7 @@ describe('apps/cli package publish contract', () => {
   });
 
   it('bundles internal workspaces and relies on protocol to declare its runtime deps', () => {
-    const cliPackageJsonPath = resolve(process.cwd(), 'package.json');
+    const cliPackageJsonPath = resolve(cliDir, 'package.json');
     const cliPackageJson = JSON.parse(readFileSync(cliPackageJsonPath, 'utf8')) as {
       bundledDependencies?: unknown;
       dependencies?: Record<string, string> | undefined;
@@ -37,7 +41,7 @@ describe('apps/cli package publish contract', () => {
 
     // External runtime deps used by protocol should be declared on protocol itself
     // (and vendored into the bundled protocol package during `prepack`).
-    const protocolPackageJsonPath = resolve(process.cwd(), '..', '..', 'packages', 'protocol', 'package.json');
+    const protocolPackageJsonPath = resolve(cliDir, '..', '..', 'packages', 'protocol', 'package.json');
     const protocolPackageJson = JSON.parse(readFileSync(protocolPackageJsonPath, 'utf8')) as {
       dependencies?: Record<string, string> | undefined;
     };
@@ -53,8 +57,8 @@ describe('apps/cli package publish contract', () => {
   });
 
   it('explicitly includes generated dist outputs in npm publish inputs', () => {
-    const cliPackageJsonPath = resolve(process.cwd(), 'package.json');
-    const cliNpmIgnorePath = resolve(process.cwd(), '.npmignore');
+    const cliPackageJsonPath = resolve(cliDir, 'package.json');
+    const cliNpmIgnorePath = resolve(cliDir, '.npmignore');
     const cliPackageJson = JSON.parse(readFileSync(cliPackageJsonPath, 'utf8')) as {
       files?: unknown;
     };

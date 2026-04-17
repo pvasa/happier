@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -20,8 +20,8 @@ function createFakeYarnWorkspace({ installBody }) {
 
   writeExecutable(
     path.join(binDir, 'yarn'),
-    `#!/usr/bin/env bash
-set -euo pipefail
+    `#!/bin/sh
+set -eu
 state_file="\${FAKE_YARN_STATE_FILE:?}"
 printf '%s\\n' "$*" >> "$state_file"
 if [ "$#" -ge 3 ] && [ "$1" = "config" ] && [ "$2" = "set" ] && [ "$3" = "registry" ]; then
@@ -117,4 +117,36 @@ test('yarn-install-with-retry does not retry non-transient failures', () => {
     'expected non-transient failures to stop after the first install attempt',
   );
   assert.match(res.stderr, /non-transient error/i, 'expected stderr to explain that the failure was not retried');
+});
+
+test('yarn-install-with-retry executes directly without bash on PATH for alpine docker stages', () => {
+  const root = createFakeYarnWorkspace({
+    installBody: '  exit 0',
+  });
+  const stateFile = path.join(root, 'state.log');
+  const installedScriptPath = path.join(root, 'yarn-install-with-retry');
+  copyFileSync(scriptPath, installedScriptPath);
+  chmodSync(installedScriptPath, 0o755);
+
+  const res = spawnSync(installedScriptPath, ['--frozen-lockfile'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${path.join(root, 'bin')}:/usr/bin:/usr/sbin:/sbin`,
+      FAKE_YARN_STATE_FILE: stateFile,
+      YARN_INSTALL_RETRY_SLEEP_SECONDS: '0',
+    },
+  });
+
+  assert.equal(res.status, 0, `expected direct-exec install helper to avoid requiring bash on PATH, stderr:\n${res.stderr}`);
+  const stateLines = readFileSync(stateFile, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  assert.deepEqual(
+    stateLines,
+    ['config set registry https://registry.npmjs.org/', 'install --frozen-lockfile'],
+    'expected the shared helper to run successfully when directly executed in alpine-like environments without bash',
+  );
 });

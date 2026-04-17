@@ -188,8 +188,7 @@ describe('happier relay host arch resolution', () => {
             const invocations = fakeSsh.readInvocations();
             const scpCall = invocations.find((entry) => entry[0] === 'scp');
             expect(scpCall).toBeTruthy();
-            const stagedPayloadRoot = (scpCall ?? []).find((entry) => entry.includes('happier-first-party-mock-')) ?? '';
-            expect(stagedPayloadRoot).toContain('happier-first-party-mock-arm64-');
+            expect(preparedRoots.some((root) => root.includes('happier-first-party-mock-arm64-'))).toBe(true);
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
             expect(parsed.ok).toBe(true);

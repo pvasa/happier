@@ -10,7 +10,12 @@ import { loadFiles, initFilesLocalFromEnv, initFilesS3FromEnv } from '@/storage/
 import { db, getDbProviderFromEnv, initDbMysql, initDbPostgres, initDbPglite, initDbSqlite, shutdownDbPglite } from '@/storage/db';
 import { log } from '@/utils/logging/log';
 import { awaitShutdown, onShutdown } from '@/utils/process/shutdown';
-import { applyLightDefaultEnv, ensureHandyMasterSecret, resolveLightSqliteDatabaseUrl } from '@/flavors/light/env';
+import {
+    applyLightDefaultEnv,
+    applyPackagedLightRuntimeSqliteDefaults,
+    ensureHandyMasterSecret,
+    resolveLightSqliteDatabaseUrl,
+} from '@/flavors/light/env';
 import { applySqliteMigrationsIfNeeded } from '@/flavors/light/sqliteMigrations';
 import {
     getFilesBackendFromEnv,
@@ -67,6 +72,7 @@ export async function startServer(flavor: ServerFlavor): Promise<void> {
     const shouldApplyLocalDefaults = filesBackend === 'local' || dbProvider === 'pglite' || dbProvider === 'sqlite';
     if (shouldApplyLocalDefaults) {
         applyLightDefaultEnv(process.env);
+        applyPackagedLightRuntimeSqliteDefaults(process.env);
         await ensureHandyMasterSecret(process.env);
     }
 

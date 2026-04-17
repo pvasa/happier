@@ -6,12 +6,16 @@ const {
   readFileSync,
   writeFileSync,
   approveTerminalAuthRequest,
+  installRemoteFirstPartyComponentMock,
+  createRelayHostEngineMock,
 } = vi.hoisted(() => ({
   spawnSync: vi.fn(),
   mkdirSync: vi.fn(),
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   approveTerminalAuthRequest: vi.fn(async () => undefined),
+  installRemoteFirstPartyComponentMock: vi.fn(),
+  createRelayHostEngineMock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -31,6 +35,30 @@ vi.mock('node:fs', async (importOriginal) => {
 vi.mock('@/auth/terminalAuthApproval', () => ({
   approveTerminalAuthRequest,
 }));
+
+vi.mock('@happier-dev/cli-common/systemTasks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@happier-dev/cli-common/systemTasks')>();
+  return {
+    ...actual,
+    installRemoteFirstPartyComponent: installRemoteFirstPartyComponentMock,
+  };
+});
+
+vi.mock('@happier-dev/cli-common/relayHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@happier-dev/cli-common/relayHost')>();
+  return {
+    ...actual,
+    createRelayHostEngine: (...args: Parameters<typeof actual.createRelayHostEngine>) => {
+      createRelayHostEngineMock(...args);
+      return {
+        installOrUpdate: vi.fn(async () => ({
+          relayUrl: 'http://127.0.0.1:3000',
+          mode: 'user' as const,
+        })),
+      };
+    },
+  };
+});
 
 vi.mock('@/configuration', () => ({
   configuration: {
@@ -54,6 +82,11 @@ const MISMATCHED_TRUSTED_HOST_KEY = 'example.test ssh-ed25519 AAAAC3NzaC1lZDI1NT
 describe('createLiveRemoteSshBootstrapTaskKind', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installRemoteFirstPartyComponentMock.mockResolvedValue({
+      binaryPath: '$HOME/.happier/cli-preview/current/happier',
+      versionId: 'mock-version',
+      source: 'https://example.test/happier.tgz',
+    });
     readFileSync.mockImplementation(() => {
       throw new Error('missing known_hosts');
     });
@@ -235,8 +268,18 @@ describe('createLiveRemoteSshBootstrapTaskKind', () => {
       .filter(([command]) => command === 'ssh')
       .map(([, args]) => String((args as readonly string[]).at(-1) ?? ''));
 
-    expect(sshRemoteCommands.some((command) => command.includes('self __install-payload'))).toBe(true);
     expect(sshRemoteCommands.join('\n')).not.toContain('curl -fsSL https://happier.dev/install');
+    expect(installRemoteFirstPartyComponentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        componentId: 'happier-cli',
+        channel: 'preview',
+        knownHostsMode: 'system',
+        ssh: expect.objectContaining({
+          target: 'dev@example.test',
+        }),
+      }),
+      expect.any(Object),
+    );
     expect(approveTerminalAuthRequest).toHaveBeenCalledWith({ publicKey: 'pub-key' });
   });
 
