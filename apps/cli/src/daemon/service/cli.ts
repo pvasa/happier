@@ -951,6 +951,7 @@ export async function resolveDaemonServiceListEntries(
   }
 
   const expectedDefaultRuntimeTarget = await resolveDaemonServiceInstallRuntimeTarget({
+    allowBootstrap: false,
     currentExecPath: runtime.nodePath,
     targetMode: 'default-following',
     processEnv: {

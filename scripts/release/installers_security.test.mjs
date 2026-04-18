@@ -39,6 +39,9 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /&\s+\$exe\.FullName\s+--version\s+\*>\s+\$null/);
   assert.match(installPs1, /winget\s+install\s+--id\s+jedisct1\.minisign\s+--accept-source-agreements\s+--accept-package-agreements/i);
   assert.match(installPs1, /Downloaded minisign binary is not compatible with this system/);
+  assert.match(installPs1, /\$env:LOCALAPPDATA\)\s*\{\s*\$pathEntries \+= Join-Path \$env:LOCALAPPDATA "Microsoft\\WinGet\\Links"/);
+  assert.match(installPs1, /\$pathEntries \+= Join-Path \$env:LOCALAPPDATA "Microsoft\\WinGet\\Packages"/);
+  assert.match(installPs1, /\$trimmedEntry -match '\[\\\\\/\]WinGet\[\\\\\/\]Packages\$'/);
   assert.match(installPs1, /\[Environment\]::GetEnvironmentVariable\("Path", \[EnvironmentVariableTarget\]::User\)/);
   assert.match(installPs1, /\[Environment\]::GetEnvironmentVariable\("Path", \[EnvironmentVariableTarget\]::Machine\)/);
   assert.match(installPs1, /function Invoke-NativeCommandCapturingOutput/);
@@ -46,6 +49,10 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /\$ErrorActionPreference = "Continue"/);
   assert.match(installPs1, /\$ErrorActionPreference = \$previousErrorActionPreference/);
   assert.match(installPs1, /Invoke-NativeCommandCapturingOutput\s+\{/);
+  assert.match(
+    installPs1,
+    /\$wingetInstallResult\.ExitCode -ne 0 -and \$wingetInstallResult\.Output[\s\S]*?\$wingetMinisign = Resolve-MinisignExecutablePath[\s\S]*?if \(\$wingetMinisign\) \{[\s\S]*?if \(\$wingetInstallResult\.ExitCode -ne 0\) \{[\s\S]*?throw "winget install failed\."/,
+  );
   assert.match(installPs1, /minisign is not available and could not be installed automatically/);
   assert.match(installPs1, /Payload promotion failed, falling back to direct binary copy\./);
   assert.doesNotMatch(installPs1, /\$promotionOutput = & \$binary self __install-payload .*2>&1 \| Out-String/);

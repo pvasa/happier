@@ -1,10 +1,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+
+const { ensureJavaScriptRuntimeExecutableMock } = vi.hoisted(() => ({
+  ensureJavaScriptRuntimeExecutableMock: vi.fn(async () => '/managed/node'),
+}));
 
 describe('resolveDaemonServiceListEntries', () => {
   const envScope = createEnvKeyScope([
@@ -12,6 +16,15 @@ describe('resolveDaemonServiceListEntries', () => {
     'HAPPIER_ACTIVE_SERVER_ID',
     'HAPPIER_PUBLIC_RELEASE_CHANNEL',
   ]);
+
+  afterEach(() => {
+    envScope.restore();
+    vi.doUnmock('@/runtime/js/ensureJavaScriptRuntimeExecutable');
+    vi.doUnmock('./discoverInstalledDaemonServiceEntries');
+    ensureJavaScriptRuntimeExecutableMock.mockReset();
+    ensureJavaScriptRuntimeExecutableMock.mockResolvedValue('/managed/node');
+    vi.resetModules();
+  });
 
   it('matches a default-following systemd unit installed through the managed default shim', async () => {
     await withTempDir('happier-daemon-service-list-managed-default-shim-', async (userHomeDir) => {
@@ -146,78 +159,84 @@ describe('resolveDaemonServiceListEntries', () => {
     });
   });
 
-  it('reports when a Windows default-following scheduled task exists but its wrapper file is missing', async () => {
-    const userHomeDir = 'C:\\Users\\tester';
-    const happierHomeDir = 'C:\\Users\\tester\\.happier';
-    const expectedWrapperPath = 'C:\\Users\\tester\\.happier\\services\\happier-daemon.default.ps1';
+  it('does not bootstrap the managed js runtime when a Windows default-following scheduled task wrapper is missing', async () => {
+    await withTempDir('happier-daemon-service-list-windows-wrapper-missing-', async (hostHomeDir) => {
+      const userHomeDir = 'C:\\Users\\tester';
+      const happierHomeDir = 'C:\\Users\\tester\\.happier';
+      const expectedWrapperPath = 'C:\\Users\\tester\\.happier\\services\\happier-daemon.default.ps1';
 
-    envScope.patch({
-      HAPPIER_HOME_DIR: happierHomeDir,
-      HAPPIER_ACTIVE_SERVER_ID: 'default',
-      HAPPIER_PUBLIC_RELEASE_CHANNEL: 'preview',
-    });
-    vi.resetModules();
-    vi.doMock('./discoverInstalledDaemonServiceEntries', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('./discoverInstalledDaemonServiceEntries')>();
-      return {
-        ...actual,
-        discoverInstalledDaemonServiceEntries: async () => [{
-          serverId: 'default',
-          name: 'Default background service',
-          installed: true,
-          path: expectedWrapperPath,
-          platform: 'win32',
-          mode: 'user',
-          happierHomeDir,
-          releaseChannel: 'preview',
-          label: 'Happier\\happier-daemon.default',
-          targetMode: 'default-following',
-        }],
-      };
-    });
+      envScope.patch({
+        HAPPIER_HOME_DIR: join(hostHomeDir, '.happier'),
+        HAPPIER_ACTIVE_SERVER_ID: 'default',
+        HAPPIER_PUBLIC_RELEASE_CHANNEL: 'preview',
+      });
+      vi.resetModules();
+      vi.doMock('@/runtime/js/ensureJavaScriptRuntimeExecutable', () => ({
+        ensureJavaScriptRuntimeExecutable: ensureJavaScriptRuntimeExecutableMock,
+      }));
+      vi.doMock('./discoverInstalledDaemonServiceEntries', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('./discoverInstalledDaemonServiceEntries')>();
+        return {
+          ...actual,
+          discoverInstalledDaemonServiceEntries: async () => [{
+            serverId: 'default',
+            name: 'Default background service',
+            installed: true,
+            path: expectedWrapperPath,
+            platform: 'win32',
+            mode: 'user',
+            happierHomeDir,
+            releaseChannel: 'preview',
+            label: 'Happier\\happier-daemon.default',
+            targetMode: 'default-following',
+          }],
+        };
+      });
 
-    const [{ planDaemonServiceInstall }, { resolveDaemonServiceListEntries }] = await Promise.all([
-      import('./plan'),
-      import('./cli'),
-    ]);
+      const [{ planDaemonServiceInstall }, { resolveDaemonServiceListEntries }] = await Promise.all([
+        import('./plan'),
+        import('./cli'),
+      ]);
 
       const runtime = {
         platform: 'win32' as const,
         channel: 'preview' as const,
-      targetMode: 'default-following' as const,
-      instanceId: 'default',
-      uid: null,
+        targetMode: 'default-following' as const,
+        instanceId: 'default',
+        uid: null,
         userHomeDir,
         happierHomeDir,
         serverUrl: 'http://127.0.0.1:3005',
-      webappUrl: 'http://127.0.0.1:3005',
-      publicServerUrl: 'http://127.0.0.1:3005',
-      nodePath: 'C:\\Program Files\\nodejs\\node.exe',
-      entryPath: 'C:\\Users\\tester\\.happier\\cli-preview\\current\\package-dist\\index.mjs',
-    };
+        webappUrl: 'http://127.0.0.1:3005',
+        publicServerUrl: 'http://127.0.0.1:3005',
+        nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+        entryPath: 'C:\\Users\\tester\\.happier\\cli-preview\\current\\package-dist\\index.mjs',
+      };
 
-    const expectedPlan = planDaemonServiceInstall({
-      platform: 'win32',
-      mode: 'user',
-      channel: runtime.channel,
-      targetMode: 'default-following',
-      instanceId: runtime.instanceId,
-      userHomeDir: runtime.userHomeDir,
-      happierHomeDir: runtime.happierHomeDir,
-      serverUrl: runtime.serverUrl,
-      webappUrl: runtime.webappUrl,
-      publicServerUrl: runtime.publicServerUrl,
-      nodePath: runtime.nodePath,
-      entryPath: runtime.entryPath,
-      uid: undefined,
+      const expectedPlan = planDaemonServiceInstall({
+        platform: 'win32',
+        mode: 'user',
+        channel: runtime.channel,
+        targetMode: 'default-following',
+        instanceId: runtime.instanceId,
+        userHomeDir: runtime.userHomeDir,
+        happierHomeDir: runtime.happierHomeDir,
+        serverUrl: runtime.serverUrl,
+        webappUrl: runtime.webappUrl,
+        publicServerUrl: runtime.publicServerUrl,
+        nodePath: runtime.nodePath,
+        entryPath: runtime.entryPath,
+        uid: undefined,
+      });
+
+      const expectedServicePath = expectedPlan.files[0]?.path ?? '';
+      expect(expectedServicePath).toBe(expectedWrapperPath);
+
+      const entries = await resolveDaemonServiceListEntries(runtime, { mode: 'user' });
+      const defaultEntry = entries.find((entry) => entry.path === expectedServicePath) ?? null;
+      expect(defaultEntry).not.toBeNull();
+      expect(defaultEntry?.installedDefinitionMatchesExpected).toBe(false);
+      expect(ensureJavaScriptRuntimeExecutableMock).not.toHaveBeenCalled();
     });
-
-    const expectedServicePath = expectedPlan.files[0]?.path ?? '';
-    expect(expectedServicePath).toBe(expectedWrapperPath);
-
-    const entries = await resolveDaemonServiceListEntries(runtime, { mode: 'user' });
-    const defaultEntry = entries.find((entry) => entry.path === expectedServicePath) ?? null;
-    expect(defaultEntry).not.toBeNull();
-    expect(defaultEntry?.installedDefinitionMatchesExpected).toBe(false);
   });
 });

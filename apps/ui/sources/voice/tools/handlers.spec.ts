@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
 import { useVoiceActivityStore } from '@/voice/activity/voiceActivityStore';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 
@@ -187,6 +188,7 @@ function createBaseState(): any {
 }
 
 let state: any = createBaseState();
+const readMockStorageState = () => ({ ...state, applySettingsLocal });
 
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
@@ -265,6 +267,7 @@ vi.mock('expo-router', async () => {
 describe('voice tool handlers', () => {
   beforeEach(() => {
     state = createBaseState();
+    registerStorageStateReader(readMockStorageState);
     trackPermissionResponse.mockReset();
     sendMessage.mockReset();
     ensureSessionVisibleForMessageRoute.mockReset();
@@ -703,7 +706,7 @@ describe('voice tool handlers', () => {
     expect(trackPermissionResponse).not.toHaveBeenCalled();
   });
 
-  it('falls back to the unique synced session with a pending permission request when the resolved session has none', async () => {
+  it('answers a transcript-backed permission request in the resolved session', async () => {
     state.sessions.sys_voice.agentState.requests = {};
     state.sessions.s1.agentState.requests = {};
     state.sessions.s2.agentState.requests = {};
@@ -730,7 +733,7 @@ describe('voice tool handlers', () => {
     sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
-    const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 'sys_voice') });
+    const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
     const result = await tools.processPermissionRequest({ decision: 'allow' });
 
@@ -1000,7 +1003,7 @@ describe('voice tool handlers', () => {
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'permission_request_not_found' });
   });
 
-  it('falls back to the unique synced session with a pending user-action request when the resolved session has none', async () => {
+  it('answers a transcript-backed user-action request in the resolved session', async () => {
     state.sessions.sys_voice.agentState.requests = {};
     state.sessions.s1.agentState.requests = {};
     state.sessions.s2.agentState.requests = {};
@@ -1027,7 +1030,7 @@ describe('voice tool handlers', () => {
     sessionRpcWithServerScope.mockResolvedValue({ ok: true });
 
     const { createVoiceToolHandlers } = await import('./handlers');
-    const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 'sys_voice') });
+    const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
     const result = await (tools as any).answerUserActionRequest({
       answers: [{ question: 'Continue?', answer: 'Yes' }],

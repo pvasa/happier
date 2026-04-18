@@ -579,7 +579,25 @@ function Resolve-MinisignExecutablePath {
     return $command.Source
   }
 
-  foreach ($pathEntry in $AdditionalPathEntries) {
+  $pathEntries = @()
+  if ($env:Path) {
+    $pathEntries += $env:Path -split ';'
+  }
+  $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+  if ($userPath) {
+    $pathEntries += $userPath -split ';'
+  }
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
+  if ($machinePath) {
+    $pathEntries += $machinePath -split ';'
+  }
+  if ($env:LOCALAPPDATA) {
+    $pathEntries += Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"
+    $pathEntries += Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages"
+  }
+  $pathEntries += $AdditionalPathEntries
+
+  foreach ($pathEntry in $pathEntries) {
     $trimmedEntry = [string]$pathEntry
     if (-not $trimmedEntry) {
       continue
@@ -588,6 +606,13 @@ function Resolve-MinisignExecutablePath {
     $candidate = Join-Path $trimmedEntry.Trim() "minisign.exe"
     if (Test-Path $candidate) {
       return $candidate
+    }
+
+    if ($trimmedEntry -match '[\\/]WinGet[\\/]Packages$' -and (Test-Path $trimmedEntry)) {
+      $nestedCandidate = Get-ChildItem -Path $trimmedEntry.Trim() -Filter "minisign.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($nestedCandidate) {
+        return $nestedCandidate.FullName
+      }
     }
   }
 
@@ -654,24 +679,15 @@ function Ensure-Minisign {
       $wingetInstallResult = Invoke-NativeCommandCapturingOutput {
         winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements
       }
-      if ($wingetInstallResult.ExitCode -ne 0) {
-        if ($wingetInstallResult.Output) {
-          Write-Warning $wingetInstallResult.Output.Trim()
-        }
-        throw "winget install failed."
+      if ($wingetInstallResult.ExitCode -ne 0 -and $wingetInstallResult.Output) {
+        Write-Warning $wingetInstallResult.Output.Trim()
       }
-      $pathEntries = @()
-      $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
-      if ($userPath) {
-        $pathEntries += $userPath -split ';'
-      }
-      $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
-      if ($machinePath) {
-        $pathEntries += $machinePath -split ';'
-      }
-      $wingetMinisign = Resolve-MinisignExecutablePath -AdditionalPathEntries $pathEntries
+      $wingetMinisign = Resolve-MinisignExecutablePath
       if ($wingetMinisign) {
         return $wingetMinisign
+      }
+      if ($wingetInstallResult.ExitCode -ne 0) {
+        throw "winget install failed."
       }
     }
     catch {}
