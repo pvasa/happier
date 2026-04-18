@@ -444,13 +444,15 @@ function Invoke-PostInstallAction {
   $setupRelayDefaultArgs = @()
   if ($SetupRelay -and -not $Run) {
     $Run = "setup-relay"
-    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
   }
   if (-not $Run) {
     return
   }
 
   $runValue = $Run.Trim().ToLowerInvariant()
+  if ($runValue -eq "setup-relay" -and $setupRelayDefaultArgs.Count -eq 0) {
+    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
+  }
   $requiredSubcommand = $null
   $argsToPass = @()
   switch ($runValue) {
@@ -566,7 +568,89 @@ function Copy-OrDownloadInstallerAsset {
     Copy-Item -Path $Source -Destination $DestinationPath -Force
     return
   }
-  Invoke-WebRequest -Uri $Source -Headers $GitHubHeaders -OutFile $DestinationPath
+  Invoke-InstallerWebRequestWithRetry -Uri $Source -Headers $GitHubHeaders -OutFile $DestinationPath
+}
+
+function Test-InstallerTransientWebException {
+  param (
+    [Parameter(Mandatory = $true)] [System.Management.Automation.ErrorRecord] $ErrorRecord
+  )
+
+  $retryableStatusCodes = @(502, 503, 504)
+  $exception = $ErrorRecord.Exception
+  $statusCode = $null
+  if ($exception -and $exception.Response -and $exception.Response.StatusCode) {
+    try {
+      $statusCode = [int]$exception.Response.StatusCode
+    }
+    catch {
+      $statusCode = $null
+    }
+  }
+  if ($null -ne $statusCode -and $retryableStatusCodes -contains $statusCode) {
+    return $true
+  }
+
+  $message = if ($exception) { [string]$exception.Message } else { [string]$ErrorRecord }
+  foreach ($code in $retryableStatusCodes) {
+    if ($message -match "(^|\\D)$code(\\D|$)") {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Invoke-InstallerWebRequestWithRetry {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Uri,
+    [hashtable] $Headers,
+    [string] $OutFile
+  )
+
+  $retryDelaysMs = @(250, 1000)
+  for ($attempt = 0; $attempt -le $retryDelaysMs.Length; $attempt += 1) {
+    try {
+      $params = @{ Uri = $Uri }
+      if ($Headers) {
+        $params.Headers = $Headers
+      }
+      if ($OutFile) {
+        $params.OutFile = $OutFile
+      }
+      return Invoke-WebRequest @params
+    }
+    catch {
+      if ($attempt -ge $retryDelaysMs.Length -or -not (Test-InstallerTransientWebException -ErrorRecord $_)) {
+        throw
+      }
+      Start-Sleep -Milliseconds $retryDelaysMs[$attempt]
+    }
+  }
+}
+
+function Invoke-InstallerRestMethodWithRetry {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Uri,
+    [hashtable] $Headers
+  )
+
+  $retryDelaysMs = @(250, 1000)
+  for ($attempt = 0; $attempt -le $retryDelaysMs.Length; $attempt += 1) {
+    try {
+      $params = @{ Uri = $Uri }
+      if ($Headers) {
+        $params.Headers = $Headers
+      }
+      return Invoke-RestMethod @params
+    }
+    catch {
+      if ($attempt -ge $retryDelaysMs.Length -or -not (Test-InstallerTransientWebException -ErrorRecord $_)) {
+        throw
+      }
+      Start-Sleep -Milliseconds $retryDelaysMs[$attempt]
+    }
+  }
 }
 
 function Resolve-MinisignExecutablePath {
@@ -656,7 +740,7 @@ function Ensure-Minisign {
   $asset = "minisign-$minisignVersion-win64.zip"
   $expectedSha = "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479"
   $zipPath = Join-Path $TempRoot $asset
-  Invoke-WebRequest -Uri "https://github.com/jedisct1/minisign/releases/download/$minisignVersion/$asset" -OutFile $zipPath
+  Invoke-InstallerWebRequestWithRetry -Uri "https://github.com/jedisct1/minisign/releases/download/$minisignVersion/$asset" -OutFile $zipPath
   $actualSha = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actualSha -ne $expectedSha) {
     throw "minisign bootstrap checksum mismatch (expected $expectedSha, got $actualSha)."
@@ -708,14 +792,14 @@ function Resolve-MinisignPublicKey {
   if (-not $MinisignPubKeyUrl) {
     throw "HAPPIER_MINISIGN_PUBKEY_URL is empty; cannot fetch minisign public key."
   }
-  Invoke-WebRequest -Uri $MinisignPubKeyUrl -OutFile $TargetPath
+  Invoke-InstallerWebRequestWithRetry -Uri $MinisignPubKeyUrl -OutFile $TargetPath
 }
 
 $tag = if ($Channel -eq "preview") { "cli-preview" } elseif ($Channel -eq "publicdev") { "cli-dev" } else { "cli-stable" }
 if (-not $ReleaseAssetsDir) {
   Write-Host "Fetching $tag release metadata..."
   try {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $GitHubHeaders
+    $release = Invoke-InstallerRestMethodWithRetry -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $GitHubHeaders
   }
   catch {
     if ($Channel -eq "stable") {
