@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -261,6 +261,94 @@ describe('resolveCliTestLaunchSpec', () => {
       expect(spec.args).toContain(resolve(snapshotDir, 'src', 'index.ts'));
       expect(lstatSync(resolve(snapshotDir, 'node_modules')).isSymbolicLink()).toBe(true);
       expect(existsSync(resolve(snapshotDir, 'scripts', 'claude_launcher_runtime.cjs'))).toBe(true);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs incomplete existing snapshot node_modules for source-entrypoint launches', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'happier-cli-launch-spec-repair-'));
+    const snapshotDir = resolve(repoRoot, 'snapshot');
+
+    try {
+      mkdirSync(resolve(repoRoot, 'apps', 'cli', 'src'), { recursive: true });
+      mkdirSync(resolve(repoRoot, 'apps', 'cli', 'scripts'), { recursive: true });
+      mkdirSync(resolve(repoRoot, 'apps', 'cli', 'tools'), { recursive: true });
+      mkdirSync(resolve(repoRoot, 'apps', 'cli', 'bin'), { recursive: true });
+      mkdirSync(resolve(repoRoot, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents', 'dist'), { recursive: true });
+      mkdirSync(resolve(repoRoot, 'packages', 'agents', 'dist'), { recursive: true });
+      mkdirSync(resolve(repoRoot, 'node_modules', 'zod'), { recursive: true });
+
+      writeFileSync(resolve(repoRoot, 'package.json'), JSON.stringify({ name: 'repo', private: true }), 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }), 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tsconfig.json'), '{}', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'src', 'index.ts'), 'export const ok = true;\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'scripts', 'claude_launcher_runtime.cjs'), 'module.exports = {};\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'tools', 'launch-helper.txt'), 'tools\n', 'utf8');
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'bin', 'launch-helper.txt'), 'bin\n', 'utf8');
+      writeFileSync(
+        resolve(repoRoot, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents', 'package.json'),
+        JSON.stringify({
+          name: '@happier-dev/agents',
+          version: '0.0.0',
+          type: 'module',
+          main: './dist/index.js',
+          exports: { '.': { default: './dist/index.js' } },
+          dependencies: { zod: '4.3.6' },
+        }, null, 2),
+        'utf8',
+      );
+      writeFileSync(resolve(repoRoot, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents', 'dist', 'index.js'), 'export {};\n', 'utf8');
+      writeFileSync(
+        resolve(repoRoot, 'packages', 'agents', 'package.json'),
+        JSON.stringify({
+          name: '@happier-dev/agents',
+          version: '0.0.0',
+          type: 'module',
+          main: './dist/index.js',
+          exports: { '.': { default: './dist/index.js' } },
+          dependencies: { zod: '4.3.6' },
+        }, null, 2),
+        'utf8',
+      );
+      writeFileSync(resolve(repoRoot, 'packages', 'agents', 'dist', 'index.js'), 'export {};\n', 'utf8');
+      writeFileSync(
+        resolve(repoRoot, 'node_modules', 'zod', 'package.json'),
+        JSON.stringify({ name: 'zod', version: '4.3.6', main: 'index.js' }, null, 2),
+        'utf8',
+      );
+      writeFileSync(resolve(repoRoot, 'node_modules', 'zod', 'index.js'), 'export const repaired = "root";\n', 'utf8');
+
+      mkdirSync(resolve(snapshotDir, 'node_modules', '@happier-dev', 'agents', 'node_modules', 'zod', 'v4'), { recursive: true });
+      writeFileSync(
+        resolve(snapshotDir, 'node_modules', '@happier-dev', 'agents', 'node_modules', 'zod', 'v4', 'index.js'),
+        'export const partial = true;\n',
+        'utf8',
+      );
+
+      const spec = await resolveCliTestLaunchSpec(
+        {
+          testDir: resolve(repoRoot, '.project'),
+          env: {
+            ...process.env,
+            HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+            HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE: 'copy',
+          },
+        },
+        {
+          repoRoot,
+          snapshotDir,
+        },
+      );
+
+      expect(spec.command).toBe(process.execPath);
+      expect(spec.args).toContain(resolve(snapshotDir, 'src', 'index.ts'));
+      expect(readFileSync(resolve(snapshotDir, 'node_modules', '@happier-dev', 'agents', 'node_modules', 'zod', 'index.js'), 'utf8')).toContain(
+        'repaired',
+      );
+      expect(readFileSync(resolve(snapshotDir, 'node_modules', '@happier-dev', 'agents', 'node_modules', 'zod', 'package.json'), 'utf8')).toContain(
+        '"name": "zod"',
+      );
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

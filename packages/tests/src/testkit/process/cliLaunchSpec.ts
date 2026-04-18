@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { repoRootDir } from '../paths';
@@ -86,7 +86,16 @@ function ensureCliSourceSnapshot(
     ensureSymlinkNodeModules();
   }
 
-  if (!existsSync(snapshotNodeModulesDir) && snapshotNodeModulesMode !== 'symlink') {
+  const snapshotNodeModulesIsSymlink = (() => {
+    if (!existsSync(snapshotNodeModulesDir)) return false;
+    try {
+      return lstatSync(snapshotNodeModulesDir).isSymbolicLink();
+    } catch {
+      return false;
+    }
+  })();
+
+  if (!snapshotNodeModulesIsSymlink && snapshotNodeModulesMode !== 'symlink') {
     ensureCliDistSnapshotNodeModules({
       snapshotDir,
       snapshotDistDir: resolve(snapshotDir, 'dist'),

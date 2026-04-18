@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -6,10 +6,14 @@ import { execFileSync } from 'node:child_process';
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
-import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
+import type { StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
-import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
+import {
+  gotoDomContentLoadedWithPathFallback,
+  gotoDomContentLoadedWithRetries,
+  normalizeLoopbackBaseUrl,
+} from '../../src/testkit/uiE2e/pageNavigation';
 import { createSessionFromNewSessionComposer } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
@@ -40,6 +44,16 @@ async function waitForLatestMachineId(params: { suiteDir: string; timeoutMs?: nu
     }
   }
   return readLatestMachineIdFromServerLightDb({ suiteDir: params.suiteDir });
+}
+
+async function createAccountWithoutDaemon(params: Readonly<{
+  page: Page;
+  uiBaseUrl: string;
+}>): Promise<void> {
+  await gotoDomContentLoadedWithPathFallback(params.page, `${params.uiBaseUrl}/`, '/', 120_000);
+  await expect(params.page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
+  await params.page.getByTestId('welcome-create-account').click();
+  await expect(params.page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
 }
 
 test.describe('ui e2e: server retention visibility', () => {
@@ -108,56 +122,45 @@ test.describe('ui e2e: server retention visibility', () => {
     await server?.stop().catch(() => {});
   });
 
-  test('shows server retention in server settings and session info for the active server', async ({ page }) => {
-    test.setTimeout(540_000);
-    if (!server || !secondaryServer || !uiBaseUrl) throw new Error('missing server/ui fixtures');
+  test.afterEach(async () => {
+    await daemon?.stop().catch(() => {});
+    daemon = null;
+  });
+
+  test('shows retention in server settings for the active server', async ({ page }) => {
+    test.setTimeout(240_000);
+    if (!uiBaseUrl) throw new Error('missing ui fixtures');
 
     await page.setViewportSize({ width: 1440, height: 900 });
-    await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-    await expect(page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await createAccountWithoutDaemon({ page, uiBaseUrl });
+    await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/server`, '/server', 120_000);
+    await expect(page.getByTestId('server-retention-summary')).toContainText('30', { timeout: 120_000 });
+    await expect(page.getByTestId('server-retention-row-accountChanges')).toContainText('45', { timeout: 60_000 });
+  });
 
-    const testDir = resolve(join(suiteDir, 't1-retention-visibility'));
+  test('shows session info retention for an active-server session', async ({ page }) => {
+    test.setTimeout(300_000);
+    if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const testDir = resolve(join(suiteDir, 't2-session-info-retention'));
     await mkdir(testDir, { recursive: true });
 
-    const cliLogin: StartedCliTerminalConnect = await startCliAuthLoginForTerminalConnect({
+    daemon = await authenticateAndStartDaemon({
+      page,
       testDir,
       cliHomeDir,
       serverUrl: server.baseUrl,
-      webappUrl: uiBaseUrl,
-      env: {
-        ...process.env,
+      uiBaseUrl,
+      extraEnv: {
         HOME: cliHomeDir,
-        CI: '1',
-        HAPPIER_DISABLE_CAFFEINATE: '1',
-        HAPPIER_VARIANT: 'dev',
-      },
-    });
-
-    await page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId('terminal-connect-approve').click();
-    await cliLogin.waitForSuccess();
-    await cliLogin.stop().catch(() => {});
-
-    daemon = await startTestDaemon({
-      testDir,
-      happyHomeDir: cliHomeDir,
-      env: {
-        ...process.env,
-        HOME: cliHomeDir,
-        CI: '1',
-        HAPPIER_HOME_DIR: cliHomeDir,
-        HAPPIER_SERVER_URL: server.baseUrl,
-        HAPPIER_WEBAPP_URL: uiBaseUrl,
-        HAPPIER_DISABLE_CAFFEINATE: '1',
-        HAPPIER_VARIANT: 'dev',
         HAPPIER_CLAUDE_PATH: fakeClaudeFixturePath(),
         HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
         HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID: `fake-claude-invocation-${run.runId}`,
       },
     });
+    await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/`, '/');
 
     const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
     const sessionId = await createSessionFromNewSessionComposer({
@@ -167,19 +170,27 @@ test.describe('ui e2e: server retention visibility', () => {
       prompt: `retention visibility ${run.runId}`,
     });
 
-    await page.goto(`${uiBaseUrl}/server`, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('server-retention-summary')).toContainText('30', { timeout: 120_000 });
-    await expect(page.getByTestId('server-retention-row-accountChanges')).toContainText('45', { timeout: 60_000 });
-
-    await page.goto(`${uiBaseUrl}/session/${sessionId}/info`, { waitUntil: 'domcontentloaded' });
+    await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/session/${sessionId}/info`, `/session/${sessionId}/info`, 120_000);
     await expect(page.getByTestId('session-info-screen')).toHaveCount(1, { timeout: 60_000 });
     await expect(page.getByTestId('session-retention-notice')).toContainText('30', { timeout: 60_000 });
+  });
 
-    await page.goto(`${uiBaseUrl}/server`, { waitUntil: 'domcontentloaded' });
-    await page.getByText('Add server', { exact: true }).click();
-    await page.getByPlaceholder('https://example.com').fill(secondaryServer.baseUrl);
-    await page.getByPlaceholder('Server name').fill('Retention B');
-    await page.getByRole('button', { name: 'Add and use' }).click();
+  test('shows retention for a newly added active relay after switching', async ({ page }) => {
+    test.setTimeout(300_000);
+    if (!secondaryServer || !uiBaseUrl) throw new Error('missing server/ui fixtures');
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await createAccountWithoutDaemon({ page, uiBaseUrl });
+
+    await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/server`, '/server', 120_000);
+    await page.getByTestId('server-settings-add-server-toggle').click();
+    await page.getByTestId('server-settings-add-url-input').fill(secondaryServer.baseUrl);
+    await page.getByTestId('server-settings-add-name-input').fill('Retention B');
+    await page.getByTestId('server-settings-add-confirm').click();
+    await expect(page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
+    await page.getByTestId('welcome-create-account').click();
+    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/server`, '/server', 120_000);
 
     await expect(page.getByTestId('server-retention-summary')).toContainText('60', { timeout: 120_000 });
     await expect(page.getByTestId('server-retention-row-accountChanges')).toContainText('90', { timeout: 60_000 });

@@ -1,9 +1,10 @@
 import { expect, type Page } from '@playwright/test';
 
 import { startTestDaemon, type StartedDaemon } from '../daemon/daemon';
+import { approveTerminalConnect } from './approveTerminalConnect';
 import { startCliAuthLoginForTerminalConnect } from './cliTerminalConnect';
 import { acknowledgeTerminalConnectSuccessIfPresent } from './acknowledgeTerminalConnectSuccessIfPresent';
-import { gotoDomContentLoadedWithRetries } from './pageNavigation';
+import { gotoDomContentLoadedWithPathFallback, gotoDomContentLoadedWithRetries } from './pageNavigation';
 
 export async function authenticateAndStartDaemon(params: Readonly<{
   page: Page;
@@ -38,11 +39,8 @@ export async function authenticateAndStartDaemon(params: Readonly<{
   });
 
   try {
-    await gotoDomContentLoadedWithRetries(params.page, cliLogin.connectUrl, 90_000);
-    const approveCount = await params.page.getByTestId('terminal-connect-approve').count();
-    if (approveCount > 0) {
-      await params.page.getByTestId('terminal-connect-approve').click();
-    }
+    await gotoDomContentLoadedWithPathFallback(params.page, cliLogin.connectUrl, '/terminal/connect', 90_000);
+    await approveTerminalConnect({ page: params.page });
     await cliLogin.waitForSuccess();
     await acknowledgeTerminalConnectSuccessIfPresent(params.page);
   } finally {

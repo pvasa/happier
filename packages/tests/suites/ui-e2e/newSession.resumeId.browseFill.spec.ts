@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
@@ -18,6 +19,34 @@ function jsonlLine(value: unknown): string {
 
 function responseItemLine(params: { timestamp: string; payload: Record<string, unknown> }): string {
   return jsonlLine({ type: 'response_item', timestamp: params.timestamp, payload: params.payload });
+}
+
+function resolveServerLightSqliteDbPath(params: { suiteDir: string }): string {
+  return resolve(join(params.suiteDir, 'server-light-data', 'happier-server-light.sqlite'));
+}
+
+function readLatestMachineIdFromServerLightDb(params: { suiteDir: string }): string {
+  const dbPath = resolveServerLightSqliteDbPath({ suiteDir: params.suiteDir });
+  const raw = execFileSync('sqlite3', ['-json', dbPath, 'select id from Machine order by createdAt desc limit 1;'], {
+    encoding: 'utf8',
+  });
+  const parsed = JSON.parse(raw) as Array<{ id?: unknown }>;
+  const id = parsed?.[0]?.id;
+  if (typeof id === 'string' && id.trim()) return id.trim();
+  throw new Error(`Failed to read machine id from server light sqlite db: ${dbPath}`);
+}
+
+async function waitForLatestMachineId(params: { suiteDir: string; timeoutMs?: number }): Promise<string> {
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      return readLatestMachineIdFromServerLightDb({ suiteDir: params.suiteDir });
+    } catch {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+    }
+  }
+  return readLatestMachineIdFromServerLightDb({ suiteDir: params.suiteDir });
 }
 
 async function enableEnhancedSessionWizardInSettings(page: Page, baseUrl: string) {
@@ -153,6 +182,7 @@ test.describe('ui e2e: /new resume id browse fills from direct sessions', () => 
         HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
       },
     });
+    const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
 
     await enableEnhancedSessionWizardInSettings(page, uiBaseUrl);
 
@@ -165,11 +195,11 @@ test.describe('ui e2e: /new resume id browse fills from direct sessions', () => 
     await expect(page.getByTestId('new-session-agent:codex')).toHaveCount(1, { timeout: 120_000 });
     await page.getByTestId('new-session-agent:codex').click();
 
-    // Pick the first machine (if not already selected) so the browse modal is scoped.
+    // Scope the browse modal to the daemon-backed machine that just connected.
     await expect(page.getByTestId('agent-input-machine-chip')).toHaveCount(1, { timeout: 60_000 });
     await openNewSessionMachineSelection({ page, uiBaseUrl });
-    await expect(page.locator('[data-testid^="new-session-machine:"]').first()).toHaveCount(1, { timeout: 120_000 });
-    await page.locator('[data-testid^="new-session-machine:"]').first().click();
+    await expect(page.getByTestId(`new-session-machine:${machineId}`)).not.toHaveCount(0, { timeout: 120_000 });
+    await page.getByTestId(`new-session-machine:${machineId}`).first().click();
     await page.waitForURL((url: URL) => url.pathname.endsWith('/new'), { timeout: 60_000 });
 
     // Open the resume chip popover and browse sessions.

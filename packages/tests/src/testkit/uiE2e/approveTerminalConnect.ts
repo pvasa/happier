@@ -23,9 +23,15 @@ async function maybeDismissWebModal(params: Readonly<{ page: Page; timeoutMs: nu
 }
 
 export async function approveTerminalConnect(params: Readonly<{ page: Page }>): Promise<void> {
-  const approve = params.page.getByTestId('terminal-connect-approve');
-  await expect(approve).toHaveCount(1, { timeout: 60_000 });
-  await approve.click();
+  const approveByTestId = params.page.getByTestId('terminal-connect-approve');
+  if ((await approveByTestId.count()) > 0) {
+    await expect(approveByTestId).toHaveCount(1, { timeout: 60_000 });
+    await approveByTestId.click();
+  } else {
+    const approveByRole = params.page.getByRole('button', { name: 'Accept Connection' });
+    await expect(approveByRole).toHaveCount(1, { timeout: 60_000 });
+    await approveByRole.click();
+  }
 
   // Terminal connect can succeed with a web modal (OK button) that must be dismissed before
   // continuing to drive the UI.
