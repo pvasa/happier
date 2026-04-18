@@ -8,6 +8,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 const MAX_REDIRECTS = 5;
+const DOWNLOAD_RETRY_DELAYS_MS = [250, 1_000] as const;
 
 function normalizeExpectedSha256(digest: string | null | undefined): string | null {
   const raw = typeof digest === 'string' ? digest.trim() : '';
@@ -75,26 +76,49 @@ export async function downloadGitHubReleaseAsset(params: Readonly<{
   await mkdir(dirname(destinationPath), { recursive: true });
   const tempPath = `${destinationPath}.download`;
 
-  try {
-    const response = await openGitHubReleaseAssetResponse(url, headers);
-    const hash = createHash('sha256');
-    const hashTap = new Transform({
-      transform(chunk, _encoding, callback) {
-        hash.update(chunk);
-        callback(null, chunk);
-      },
-    });
-    await pipeline(response, hashTap, createWriteStream(tempPath));
-    if (expectedSha256) {
-      const actualSha256 = hash.digest('hex');
-      if (actualSha256 !== expectedSha256) {
-        throw new Error('[github-release] checksum verification failed');
+  const maxAttempts = DOWNLOAD_RETRY_DELAYS_MS.length + 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await openGitHubReleaseAssetResponse(url, headers);
+      const hash = createHash('sha256');
+      const hashTap = new Transform({
+        transform(chunk, _encoding, callback) {
+          hash.update(chunk);
+          callback(null, chunk);
+        },
+      });
+      await pipeline(response, hashTap, createWriteStream(tempPath));
+      if (expectedSha256) {
+        const actualSha256 = hash.digest('hex');
+        if (actualSha256 !== expectedSha256) {
+          throw new Error('[github-release] checksum verification failed');
+        }
       }
+      await rename(tempPath, destinationPath);
+      return;
+    } catch (error) {
+      await rm(tempPath, { force: true }).catch(() => undefined);
+      const retryDelayMs = DOWNLOAD_RETRY_DELAYS_MS[attempt - 1] ?? null;
+      if (!isRetryableDownloadError(error) || retryDelayMs === null) {
+        if (error instanceof Error) throw error;
+        throw new Error(String(error));
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
-    await rename(tempPath, destinationPath);
-  } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => undefined);
-    if (error instanceof Error) throw error;
-    throw new Error(String(error));
   }
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^\[github-release\] failed to download asset \((502|503|504)\)$/.test(message)) {
+    return true;
+  }
+  if (error && typeof error === 'object') {
+    const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : '';
+    if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EPIPE') {
+      return true;
+    }
+  }
+  return false;
 }

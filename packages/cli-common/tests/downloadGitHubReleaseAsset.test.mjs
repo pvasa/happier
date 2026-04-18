@@ -44,3 +44,38 @@ test('downloadGitHubReleaseAsset downloads assets without relying on fetch', asy
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test('downloadGitHubReleaseAsset retries transient 504 responses', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'happy-download-release-retry-'));
+  const destinationPath = join(tmp, 'asset.bin');
+  let requestCount = 0;
+  const server = createServer((req, res) => {
+    requestCount += 1;
+    assert.equal(req.headers.accept, 'application/octet-stream');
+    if (requestCount === 1) {
+      res.writeHead(504, { 'content-type': 'text/plain' });
+      res.end('gateway timeout');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/octet-stream' });
+    res.end('retried download');
+  });
+
+  try {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+
+    await downloadGitHubReleaseAsset({
+      url: `http://127.0.0.1:${port}/asset.bin`,
+      destinationPath,
+      digest: `sha256:${sha256Hex('retried download')}`,
+      userAgent: 'happier-cli-test',
+    });
+
+    assert.equal(await readFile(destinationPath, 'utf8'), 'retried download');
+    assert.equal(requestCount, 2);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
