@@ -195,7 +195,8 @@ describe('PathPickerScreen', () => {
                 }),
             }),
         }));
-        expect(routerMock.back).toHaveBeenCalled();
+        expect(navigationMock.goBack).toHaveBeenCalled();
+        expect(routerMock.back).not.toHaveBeenCalled();
     });
 
     it('falls back to router params update when there is no previous route', async () => {
