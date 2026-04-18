@@ -38,6 +38,7 @@ describe('happier session send (integration)', () => {
   let sessionDataEncryptionKeyBase64 = '';
   let visibleMessageByLocalId: { id: string; localId: string; seq: number; createdAt: number; updatedAt: number; content: any } | null = null;
   let transcriptLookupRequests = 0;
+  let transcriptAfterSeqRequests: Array<number | null> = [];
   let transcriptMessages: Array<Record<string, unknown>> = [];
   let lastActiveSessionRpcLocalId: string | null = null;
   let stageCommittedUserMessageInTranscript = false;
@@ -93,6 +94,7 @@ describe('happier session send (integration)', () => {
     sessionDataEncryptionKeyBase64 = dataEncryptionKeyBase64;
     visibleMessageByLocalId = null;
     transcriptLookupRequests = 0;
+    transcriptAfterSeqRequests = [];
     transcriptMessages = [];
     lastActiveSessionRpcLocalId = null;
     stageCommittedUserMessageInTranscript = false;
@@ -147,9 +149,33 @@ describe('happier session send (integration)', () => {
       }
 
       if (req.method === 'GET' && url.pathname === `/v1/sessions/${sessionId}/messages`) {
+        const afterSeqRaw = url.searchParams.get('afterSeq');
+        const limitRaw = url.searchParams.get('limit');
+        transcriptAfterSeqRequests.push(
+          typeof afterSeqRaw === 'string' && afterSeqRaw.trim().length > 0
+            ? Number.parseInt(afterSeqRaw, 10)
+            : null,
+        );
+        const afterSeq =
+          typeof afterSeqRaw === 'string' && afterSeqRaw.trim().length > 0
+            ? Number.parseInt(afterSeqRaw, 10)
+            : null;
+        const limit =
+          typeof limitRaw === 'string' && limitRaw.trim().length > 0
+            ? Number.parseInt(limitRaw, 10)
+            : null;
+        const filteredMessages = Number.isFinite(afterSeq)
+          ? transcriptMessages.filter((message) => {
+              const seq = typeof (message as { seq?: unknown }).seq === 'number' ? Number((message as { seq?: unknown }).seq) : NaN;
+              return Number.isFinite(seq) && seq > Number(afterSeq);
+            })
+          : transcriptMessages;
+        const limitedMessages = Number.isFinite(limit) && limit! >= 0
+          ? filteredMessages.slice(0, limit!)
+          : filteredMessages;
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({ messages: transcriptMessages }));
+        res.end(JSON.stringify({ messages: limitedMessages }));
         return;
       }
 
@@ -531,7 +557,7 @@ describe('happier session send (integration)', () => {
       });
 
       const parsed = output.json();
-      expect(parsed.ok).toBe(true);
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
       expect(parsed.kind).toBe('session_send');
       expect(parsed.data?.sessionId).toBe(sessionId);
       expect(receivedMessages).toHaveLength(0);
@@ -982,6 +1008,155 @@ describe('happier session send (integration)', () => {
       expect(parsed.kind).toBe('session_send');
       expect(parsed.data?.waited).toBe(true);
       expect(transcriptLookupRequests).toBeGreaterThan(0);
+    } finally {
+      if (releaseLookupTimer) clearTimeout(releaseLookupTimer);
+      output.restore();
+    }
+  });
+
+  it('ignores older unresolved turns when waiting for the current send to reach ready', async () => {
+    const { handleSessionCommand } = await import('./index');
+    const { encodeBase64: encodeBase64Session, encryptWithDataKey, decodeBase64, decryptWithDataKey } = await import('@/api/encryption');
+
+    const sessionId = 'sess_integration_send_123';
+    const machineKeySeed = new Uint8Array(32).fill(8);
+    const idleAgentStateCiphertext = encodeBase64Session(
+      encryptWithDataKey({ controlledByUser: false, requests: {} }, dek!),
+      'base64',
+    );
+
+    sessionActive = true;
+    sessionActiveAt = 2;
+    sessionAgentStateCiphertext = idleAgentStateCiphertext;
+
+    const rpcSocket = createApiSessionSocketStub({
+      emit: (event: string, args: unknown[]) => {
+        const [data, cb] = args as [any, ((answer: any) => void) | undefined];
+        if (event === SOCKET_RPC_EVENTS.CALL) {
+          expect(String(data.method ?? '')).toBe(`${sessionId}:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`);
+          const decrypted = decryptWithDataKey(
+            decodeBase64(String(data.params ?? ''), 'base64'),
+            dek!,
+          ) as any;
+          lastActiveSessionRpcLocalId = typeof decrypted?.localId === 'string' ? decrypted.localId : null;
+          cb?.({ ok: true, result: encodeBase64Session(encryptWithDataKey({ ok: true }, dek!), 'base64') });
+          return;
+        }
+        throw new Error(`Unexpected socket event: ${event}`);
+      },
+    });
+    const waitSocket = createApiSessionSocketStub({
+      onConnect: (connectedSocket) => {
+        setTimeout(() => {
+          connectedSocket.trigger('update', {
+            id: 'u_ready_current_turn',
+            seq: 4,
+            createdAt: Date.now(),
+            body: {
+              t: 'new-message',
+              sid: sessionId,
+              message: {
+                id: 'msg-current-turn-ready',
+                seq: 4,
+                localId: null,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                content: {
+                  t: 'plain',
+                  v: {
+                    role: 'agent',
+                    content: {
+                      id: 'ready_evt_send_wait_current_turn',
+                      type: 'event',
+                      data: { type: 'ready' },
+                    },
+                  },
+                },
+              },
+            },
+          });
+        }, 700);
+      },
+    });
+    bindApiSessionSocketSequenceMock(mockIo, [rpcSocket, waitSocket]);
+
+    const output = captureConsoleJsonOutput();
+    let releaseLookupTimer: NodeJS.Timeout | null = null;
+    try {
+      releaseLookupTimer = setTimeout(() => {
+        if (!lastActiveSessionRpcLocalId) {
+          return;
+        }
+        visibleMessageByLocalId = {
+          id: 'msg-current-turn-user',
+          seq: 3,
+          localId: lastActiveSessionRpcLocalId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          content: { t: 'encrypted', c: 'ciphertext' },
+        };
+        transcriptMessages = [
+          {
+            id: 'msg-old-user',
+            seq: 1,
+            createdAt: Date.now() - 2_000,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'Older unresolved prompt' },
+              },
+            },
+          },
+          {
+            id: 'msg-old-agent',
+            seq: 2,
+            createdAt: Date.now() - 1_500,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'agent',
+                content: { type: 'text', text: 'Older assistant reply without lifecycle markers' },
+              },
+            },
+          },
+          {
+            id: 'msg-current-turn-user',
+            seq: 3,
+            localId: lastActiveSessionRpcLocalId,
+            createdAt: Date.now() - 1_000,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'Wait only for the current send' },
+              },
+            },
+          },
+        ];
+      }, 40);
+
+      await handleSessionCommand(
+        ['send', sessionId, 'Wait only for the current send', '--wait', '--timeout', '1', '--json'],
+        {
+          readCredentialsFn: async () => ({
+            token: 'token_test',
+            encryption: {
+              type: 'dataKey',
+              publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+              machineKey: machineKeySeed,
+            },
+          }),
+        },
+      );
+
+      const parsed = output.json();
+      if (parsed.ok !== true) {
+        throw new Error(`Unexpected session_send envelope: ${JSON.stringify(parsed)}`);
+      }
+      expect(parsed.kind).toBe('session_send');
+      expect(parsed.data?.waited).toBe(true);
+      expect(transcriptAfterSeqRequests.some((value) => typeof value === 'number' && value >= 0)).toBe(true);
     } finally {
       if (releaseLookupTimer) clearTimeout(releaseLookupTimer);
       output.restore();
