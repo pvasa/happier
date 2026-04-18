@@ -462,6 +462,7 @@ export async function updateSettings(
   const LOCK_RETRY_INTERVAL_MS = 100;  // How long to wait between lock attempts
   const MAX_LOCK_ATTEMPTS = 50;        // Maximum number of attempts (5 seconds total)
   const STALE_LOCK_TIMEOUT_MS = 10000; // Consider lock stale after 10 seconds
+  const EMPTY_LOCK_GRACE_MS = 1000;    // Break empty locks quickly when a process dies before writing its pid
 
   await ensureHappyHomeDirExists();
 
@@ -507,7 +508,8 @@ export async function updateSettings(
         await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_INTERVAL_MS));
 
         try {
-          const ownerPid = parseSettingsLockOwnerPid(await readFile(lockFile, 'utf8'));
+          const lockContents = await readFile(lockFile, 'utf8');
+          const ownerPid = parseSettingsLockOwnerPid(lockContents);
           if (ownerPid !== null) {
             if (!isSettingsLockOwnerAlive(ownerPid)) {
               await unlink(lockFile).catch(() => { });
@@ -522,6 +524,11 @@ export async function updateSettings(
           }
 
           const stats = await stat(lockFile);
+          if (lockContents.trim().length === 0 && Date.now() - stats.mtimeMs > EMPTY_LOCK_GRACE_MS) {
+            await unlink(lockFile).catch(() => { });
+            continue;
+          }
+
           if (Date.now() - stats.mtimeMs > STALE_LOCK_TIMEOUT_MS) {
             await unlink(lockFile).catch(() => { });
           }

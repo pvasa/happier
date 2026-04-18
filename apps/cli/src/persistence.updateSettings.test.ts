@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/env/envSnapshot';
@@ -186,5 +186,26 @@ describe('updateSettings', () => {
         helper.once('exit', () => resolve());
       });
     }
+  });
+
+  it('breaks an empty settings lock left behind before the owner pid was written', async () => {
+    const { configuration } = await import('@/configuration');
+    const { updateSettings } = await import('@/persistence');
+
+    const lockFile = `${configuration.settingsFile}.lock`;
+    await writeFile(lockFile, '', 'utf8');
+
+    const staleTime = new Date(Date.now() - 5_000);
+    await utimes(lockFile, staleTime, staleTime);
+
+    const startedAt = Date.now();
+    const updated = await updateSettings((current) => ({
+      ...current,
+      onboardingCompleted: true,
+    }));
+
+    expect(updated.onboardingCompleted).toBe(true);
+    expect(existsSync(lockFile)).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 });
