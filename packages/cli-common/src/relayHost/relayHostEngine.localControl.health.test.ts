@@ -33,7 +33,7 @@ describe('RelayHostEngine (local health control)', () => {
             if (cmd === 'powershell.exe') {
               return {
                 status: 0,
-                stdout: '{"exists":true,"enabled":true,"active":true,"stateLabel":"Running"}',
+                stdout: '{"exists":true,"enabled":true,"active":false,"stateLabel":"En cours","stateValue":4}',
                 stderr: '',
               };
             }
