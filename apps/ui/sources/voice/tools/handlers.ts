@@ -1,6 +1,7 @@
 import type { ActionId } from '@happier-dev/protocol';
 import { getActionSpec, listActionSpecs } from '@happier-dev/protocol';
 
+import type { Message } from '@/sync/domains/messages/messageTypes';
 import { sync } from '@/sync/sync';
 import { storage } from '@/sync/domains/state/storage';
 import { trackPermissionResponse } from '@/track';
@@ -79,6 +80,11 @@ function getPendingSessionRequests(session: unknown): Array<Readonly<{
   return out;
 }
 
+function getStoredSessionMessages(sessionId: string): ReadonlyArray<Message> | undefined {
+  const messages = (storage.getState() as any)?.sessionMessages?.[sessionId]?.messages;
+  return Array.isArray(messages) ? (messages as ReadonlyArray<Message>) : undefined;
+}
+
 function getPendingRequestsForSession(sessionId: string, session: unknown): Array<Readonly<{
   requestId: string;
   toolName: string;
@@ -97,14 +103,14 @@ function getPendingRequestsForSession(sessionId: string, session: unknown): Arra
 
   const permissionRequests = (() => {
     try {
-      return listPendingPermissionRequests(candidateSession);
+      return listPendingPermissionRequests(candidateSession, getStoredSessionMessages(sessionId));
     } catch {
       return [];
     }
   })();
   const userActionRequests = (() => {
     try {
-      return listPendingUserActionRequests(candidateSession);
+      return listPendingUserActionRequests(candidateSession, getStoredSessionMessages(sessionId));
     } catch {
       return [];
     }
@@ -207,6 +213,7 @@ export function createVoiceToolHandlers(
   };
 
   const resolvePendingRequestRecord = (
+    sessionId: string,
     session: unknown,
     kind: AgentRequestKind,
     requestId: string,
@@ -215,9 +222,10 @@ export function createVoiceToolHandlers(
       ? session as Parameters<typeof listPendingPermissionRequests>[0]
       : null;
     if (!candidateSession) return null;
+    const messages = getStoredSessionMessages(sessionId);
     const requests = kind === 'user_action'
-      ? listPendingUserActionRequests(candidateSession)
-      : listPendingPermissionRequests(candidateSession);
+      ? listPendingUserActionRequests(candidateSession, messages)
+      : listPendingPermissionRequests(candidateSession, messages);
     return requests.find((request) => request.id === requestId) ?? null;
   };
 
@@ -506,7 +514,7 @@ export function createVoiceToolHandlers(
     const hasUpdatedPermissions = Object.prototype.hasOwnProperty.call(data, 'updatedPermissions');
     const requestId = selected.requestId;
     const session = ((storage.getState() as any)?.sessions ?? {})?.[sessionId] ?? null;
-    const requestRecord = resolvePendingRequestRecord(session, 'user_action', requestId);
+    const requestRecord = resolvePendingRequestRecord(sessionId, session, 'user_action', requestId);
     const directDecision =
       decision === 'approve'
         ? 'allow'
