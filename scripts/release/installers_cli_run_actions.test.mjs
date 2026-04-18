@@ -85,7 +85,7 @@ exit 22
   await rm(root, { recursive: true, force: true });
 });
 
-test('install.sh --setup-relay forwards default relay host flags to the CLI', async () => {
+test('install.sh --run setup-relay forwards relay host flags to the installed CLI', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-setup-relay-'));
   const homeDir = join(root, 'home');
   const binDir = join(root, 'bin');
@@ -135,6 +135,10 @@ if [[ "$1" = "relay" && "$2" = "host" && "$3" = "install" ]]; then
     echo "missing --channel preview" >&2
     exit 25
   fi
+  if [[ " $* " != *" --preserve-active-server "* ]]; then
+    echo "missing --preserve-active-server" >&2
+    exit 26
+  fi
   echo "ok"
   exit 0
 fi
@@ -158,10 +162,14 @@ exit 22
     HAPPIER_CHANNEL: 'preview',
   };
 
-  const res = spawnSync('bash', [installerPath, '--setup-relay'], { env, encoding: 'utf8' });
+  const res = spawnSync(
+    'bash',
+    [installerPath, '--run', 'setup-relay', '--', '--mode', 'user', '--yes', '--channel', 'preview', '--preserve-active-server'],
+    { env, encoding: 'utf8' },
+  );
   const stdout = String(res.stdout ?? '');
   const stderr = String(res.stderr ?? '');
-  assert.equal(res.status, 0, `expected setup-relay to succeed:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
+  assert.equal(res.status, 0, `expected run setup-relay to succeed:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
   assert.match(stdout, /ok/);
 
   await rm(root, { recursive: true, force: true });
@@ -295,7 +303,7 @@ exit 22
   await rm(root, { recursive: true, force: true });
 });
 
-test('install.sh --setup-relay accepts a CLI that advertises relay support through relay --help', async () => {
+test('install.sh --run setup-relay accepts a CLI that advertises relay support through relay --help', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-installer-cli-setup-relay-guard-'));
   const homeDir = join(root, 'home');
   const binDir = join(root, 'bin');
@@ -356,10 +364,14 @@ exit 22
     HAPPIER_NONINTERACTIVE: '1',
   };
 
-  const res = spawnSync('bash', [installerPath, '--setup-relay'], { env, encoding: 'utf8' });
+  const res = spawnSync(
+    'bash',
+    [installerPath, '--run', 'setup-relay', '--', '--mode', 'user', '--yes', '--preserve-active-server'],
+    { env, encoding: 'utf8' },
+  );
   const stdout = String(res.stdout ?? '');
   const stderr = String(res.stderr ?? '');
-  assert.equal(res.status, 0, `expected setup-relay to succeed when relay host help is advertised:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
+  assert.equal(res.status, 0, `expected run setup-relay to succeed when relay host help is advertised:\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}\n`);
   assert.match(stdout, /relay invoked/);
 
   await rm(root, { recursive: true, force: true });

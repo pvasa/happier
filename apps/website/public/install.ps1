@@ -444,7 +444,7 @@ function Invoke-PostInstallAction {
   $setupRelayDefaultArgs = @()
   if ($SetupRelay -and -not $Run) {
     $Run = "setup-relay"
-    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }))
+    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
   }
   if (-not $Run) {
     return
@@ -508,7 +508,7 @@ function Invoke-PostInstallAction {
   Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs $argsToPass -HomeDir $DaemonServiceStateHomeDir
 }
 
-if (($SetupRelay -or $Run) -and ($existing = Resolve-InstalledCliInvoker)) {
+if ($Run -and -not $SetupRelay -and ($existing = Resolve-InstalledCliInvoker)) {
   Invoke-PostInstallAction -CliPath $existing
   exit 0
 }

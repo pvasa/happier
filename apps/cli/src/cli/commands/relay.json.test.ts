@@ -618,6 +618,71 @@ describe('happier relay --json', () => {
         await removeTempDir(payloadRoot);
     });
 
+    it('preserves the active server profile when relay host install uses --preserve-active-server', async () => {
+        const payloadRoot = await createTempDir('happier-first-party-payload-preserve-active-profile-');
+        writeFileSync(join(payloadRoot, 'happier-server'), '#!/usr/bin/env bash\necho stub\n', 'utf8');
+        chmodSync(join(payloadRoot, 'happier-server'), 0o755);
+
+        envScope.patch({
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_ROOT: undefined,
+            HAPPIER_TEST_FIRST_PARTY_PAYLOAD_VERSION_ID: undefined,
+        });
+
+        const relayUrl = 'http://127.0.0.1:3005';
+        vi.resetModules();
+        const { getActiveServerProfile, listServerProfiles } = await import('@/server/serverProfiles');
+        const activeBeforeInstall = await getActiveServerProfile();
+        vi.doMock('@happier-dev/cli-common/relayHost', () => ({
+            createRelayHostEngine: () => ({
+                readStatus: async () => ({
+                    installed: true,
+                    version: '0.2.4',
+                    service: { active: true, enabled: true },
+                    baseUrl: relayUrl,
+                    healthy: true,
+                }),
+                installOrUpdate: async () => ({
+                    relayUrl,
+                    mode: 'user',
+                }),
+                control: async () => undefined,
+            }),
+        }));
+
+        const { commandRegistry: freshCommandRegistry } = await import('@/cli/commandRegistry');
+
+        const installOutput = captureConsoleLogAndMuteStdout();
+        const prevExitCode = process.exitCode;
+        process.exitCode = undefined;
+        try {
+            await freshCommandRegistry.relay({
+                args: ['relay', 'host', 'install', '--server-binary', join(payloadRoot, 'happier-server'), '--preserve-active-server', '--json'],
+                rawArgv: ['node', 'happier', 'relay', 'host', 'install', '--server-binary', join(payloadRoot, 'happier-server'), '--preserve-active-server', '--json'],
+                terminalRuntime: null,
+            });
+
+            const installParsed = JSON.parse(installOutput.logs.join('\n').trim());
+            expect(installParsed.ok).toBe(true);
+            expect(installParsed.kind).toBe('relay_host_install');
+            expect(installParsed.data?.relayUrl).toBe(relayUrl);
+            expect(process.exitCode).toBe(0);
+        } finally {
+            installOutput.restore();
+            process.exitCode = prevExitCode;
+        }
+
+        const activeAfterInstall = await getActiveServerProfile();
+        expect(activeAfterInstall.id).toBe(activeBeforeInstall.id);
+        expect(activeAfterInstall.serverUrl).toBe(activeBeforeInstall.serverUrl);
+
+        const profiles = await listServerProfiles();
+        expect(profiles.some((profile) => profile.id !== activeBeforeInstall.id && profile.serverUrl === relayUrl)).toBe(true);
+
+        vi.unmock('@happier-dev/cli-common/relayHost');
+        vi.resetModules();
+        await removeTempDir(payloadRoot);
+    });
+
     it('preserves the authenticated public relay profile when local relay install runs through a tunnel', async () => {
         const payloadRoot = await createTempDir('happier-first-party-payload-local-profile-tunnel-');
         writeFileSync(join(payloadRoot, 'happier-server'), '#!/usr/bin/env bash\necho stub\n', 'utf8');

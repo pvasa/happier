@@ -14,6 +14,7 @@ NO_PATH_UPDATE="${HAPPIER_NO_PATH_UPDATE:-0}"
 NONINTERACTIVE="${HAPPIER_NONINTERACTIVE:-0}"
 ACTION="${HAPPIER_INSTALLER_ACTION:-install}" # install|reinstall|version|check|uninstall|restart
 RUN_ACTION="${HAPPIER_INSTALLER_RUN_ACTION:-}"
+SETUP_RELAY_SHORTCUT="0"
 DEBUG_MODE="${HAPPIER_INSTALLER_DEBUG:-0}"
 VERBOSE_MODE="${HAPPIER_INSTALLER_VERBOSE:-0}"
 PURGE_INSTALL_DIR="${HAPPIER_INSTALLER_PURGE:-0}"
@@ -1349,7 +1350,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --setup-relay)
       RUN_ACTION="setup-relay"
-      RUN_ACTION_DEFAULT_ARGS=(--mode user --yes --channel "$(display_channel_label "${CHANNEL}")")
+      SETUP_RELAY_SHORTCUT="1"
+      RUN_ACTION_DEFAULT_ARGS=(--mode user --yes --channel "$(display_channel_label "${CHANNEL}")" --preserve-active-server)
       shift 1
       ;;
     --check)
@@ -1563,7 +1565,7 @@ if [[ -n "${RUN_ACTION}" ]]; then
     exit 1
   fi
   INSTALLED_CLI_BIN="$(resolve_installed_cli_invoker_for_channel "${CHANNEL}" 2>/dev/null || true)"
-  if [[ -n "${INSTALLED_CLI_BIN}" ]]; then
+  if [[ -n "${INSTALLED_CLI_BIN}" && ! ( "${SETUP_RELAY_SHORTCUT}" == "1" && "${RUN_ACTION}" == "setup-relay" ) ]]; then
     run_post_install_action "${INSTALLED_CLI_BIN}"
     exit $?
   fi
