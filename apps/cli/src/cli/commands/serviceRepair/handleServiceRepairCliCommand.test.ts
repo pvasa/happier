@@ -217,6 +217,7 @@ describe('handleServiceRepairCliCommand', () => {
 
         expect(output.json()).toEqual(expect.objectContaining({
           ok: true,
+          defaultFollowingMatchesSelectedReleaseChannel: null,
           daemonStatus: expect.objectContaining({
             daemon: expect.objectContaining({
               running: true,
@@ -235,6 +236,36 @@ describe('handleServiceRepairCliCommand', () => {
         output.restore();
       }
     });
+  });
+
+  it('emits default-following channel matching in json preflight output', async () => {
+    resolveDaemonServiceListEntriesMock.mockImplementation(async (_runtime: unknown, _options?: unknown) => [{
+      serverId: 'default',
+      name: 'Default background service',
+      installed: true,
+      path: '/tmp/user/.config/systemd/user/happier-daemon.default.service',
+      platform: 'linux',
+      mode: 'user',
+      happierHomeDir: '/tmp/user/.happier',
+      releaseChannel: 'stable',
+      label: 'happier-daemon.default',
+      targetMode: 'default-following',
+    }]);
+
+    const { handleServiceRepairCliCommand } = await import('./handleServiceRepairCliCommand');
+    const output = captureConsoleJsonOutput<{ defaultFollowingMatchesSelectedReleaseChannel: boolean | null }>();
+    try {
+      await handleServiceRepairCliCommand({
+        argv: ['repair', '--json'],
+        commandPath: 'happier doctor',
+      });
+    } finally {
+      output.restore();
+    }
+
+    expect(output.json()).toEqual(expect.objectContaining({
+      defaultFollowingMatchesSelectedReleaseChannel: true,
+    }));
   });
 
   it('renders doctor repair preflight with automatic startup, current daemon status, and local relays', async () => {

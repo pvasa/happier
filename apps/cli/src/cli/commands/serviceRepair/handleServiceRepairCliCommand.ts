@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { evaluateCurrentDaemonOwner } from '@/daemon/ownership/evaluateCurrentDaemonOwner';
 import { renderDaemonServiceRepairOwnershipNote } from '@/daemon/ownership/evaluateServiceLifecycleOwnership';
 import { applyBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
+import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
 import { assertDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
 import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServiceInventoryEntries } from '@/daemon/service/cli';
@@ -75,6 +76,27 @@ function resolveCurrentPublicReleaseChannelLabel(): string | null {
     return null;
   }
   return value === 'publicdev' ? 'dev' : value;
+}
+
+function formatPublicReleaseChannelLabel(value: string | null | undefined): string | null {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'publicdev') return 'dev';
+  return normalized;
+}
+
+function resolveDefaultFollowingMatchesSelectedReleaseChannel(params: Readonly<{
+  plan: BackgroundServiceRepairPlan;
+  selectedReleaseChannelLabel: string | null;
+}>): boolean | null {
+  const selected = formatPublicReleaseChannelLabel(params.selectedReleaseChannelLabel);
+  if (!selected) return null;
+  const candidates = params.plan.existingServices
+    .filter((service) => service.targetMode === 'default-following')
+    .map((service) => formatPublicReleaseChannelLabel(service.releaseChannel))
+    .filter((value): value is string => Boolean(value));
+  if (candidates.length === 0) return null;
+  return candidates.some((candidate) => candidate === selected);
 }
 
 function buildDoctorRepairJsonSnapshot(snapshot: DoctorSnapshot | null): Readonly<{
@@ -157,12 +179,17 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   const repairSnapshotJson = buildDoctorRepairJsonSnapshot(snapshot);
   const currentCliReleaseChannel = resolveCurrentPublicReleaseChannelLabel();
   const currentCliVersion = String(configuration.currentCliVersion ?? '').trim() || null;
+  const defaultFollowingMatchesSelectedReleaseChannel = resolveDefaultFollowingMatchesSelectedReleaseChannel({
+    plan,
+    selectedReleaseChannelLabel: currentCliReleaseChannel,
+  });
 
   if (parsed.asJson) {
     if (!parsed.execute) {
       console.log(JSON.stringify({
         ok: true,
         executed: false,
+        defaultFollowingMatchesSelectedReleaseChannel,
         existingServices: plan.existingServices,
         actions: plan.actions,
         manualWarnings: plan.manualWarnings,
@@ -192,6 +219,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     console.log(JSON.stringify({
       ok: true,
       executed: true,
+      defaultFollowingMatchesSelectedReleaseChannel,
       executedActions: result.executedActions,
       manualWarnings: plan.manualWarnings,
       warning: ownershipWarningText,
