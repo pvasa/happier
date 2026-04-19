@@ -419,6 +419,20 @@ printf '%s' '${releaseJson}'
     HAPPIER_GITHUB_TOKEN: '',
     GITHUB_TOKEN: '',
     HAPPIER_TEST_LOG: logPath,
+    // Fail closed against ambient `HAPPIER_TEST_*` leaking in from other contract tests.
+    HAPPIER_TEST_LOG_SERVICE_PREFLIGHT: '',
+    HAPPIER_TEST_UNSUPPORTED_SERVICE_SURFACE: '',
+    HAPPIER_TEST_UNSUPPORTED_DOCTOR_REPAIR: '',
+    HAPPIER_TEST_UNSUPPORTED_DOCTOR_REPAIR_REPORT_ONLY: '',
+    HAPPIER_TEST_DOCTOR_REPAIR_REPORT_ONLY_TEXT: '',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: '',
+    HAPPIER_TEST_SERVICE_REPAIR_FAIL: '',
+    HAPPIER_TEST_SERVICE_LIST_JSON: '',
+    HAPPIER_TEST_SERVICE_LIST_TEXT: '',
+    HAPPIER_TEST_SERVICE_STATUS_JSON: '',
+    HAPPIER_TEST_SERVICE_STATUS_TEXT: '',
+    HAPPIER_TEST_RELAY_INSTALL_HELP_NO_PRESERVE_ACTIVE_SERVER: '',
+    HAPPIER_TEST_RELAY_INSTALL_UNSUPPORTED_PRESERVE_ACTIVE_SERVER: '',
     ...installerEnvOverrides,
   };
 
@@ -932,6 +946,13 @@ test('install.sh fails closed and prints sudo repair guidance when noninteractiv
 test('install.sh does not attempt tty prompting for daemon opt-in when no controlling tty is available', async () => {
   const scenario = await runInstallerScenario({
     HAPPIER_NONINTERACTIVE: '',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [],
+      actions: [],
+      manualWarnings: [],
+    }),
   });
   try {
     assert.match(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
@@ -945,6 +966,15 @@ test('install.sh keeps existing background services unchanged when no controllin
   const scenario = await runInstallerScenario({
     HAPPIER_NONINTERACTIVE: '',
     HAPPIER_WITH_DAEMON: '1',
+    HAPPIER_TEST_SERVICE_REPAIR_JSON: JSON.stringify({
+      ok: true,
+      executed: false,
+      existingServices: [
+        { mode: 'user', targetMode: 'default-following', releaseChannel: 'stable' },
+      ],
+      actions: [],
+      manualWarnings: [],
+    }),
     HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
       entries: [
         { mode: 'user', targetMode: 'default-following' },

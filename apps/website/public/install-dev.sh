@@ -820,16 +820,40 @@ read_installed_background_service_inventory_json() {
   invoke_installer_command_with_daemon_service_context "${cli_bin}" service list --json 2>/dev/null || true
 }
 
+doctor_repair_preflight_looks_like_plain_doctor_report() {
+  local output="${1:-}"
+  printf '%s' "${output}" | grep -Eq 'Happier CLI Doctor'
+}
+
 read_background_service_preflight_json() {
   local cli_bin="$1"
   local repair_json=""
+  local repair_status=0
+
   DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="0"
-  repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --json 2>/dev/null || true)"
+  set +e
+  repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --json 2>/dev/null)"
+  repair_status=$?
+  set -e
+
+  if doctor_repair_preflight_looks_like_plain_doctor_report "${repair_json}"; then
+    read_installed_background_service_inventory_json "${cli_bin}"
+    return
+  fi
+
   if background_service_inventory_json_is_supported "${repair_json}"; then
     DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="1"
     printf '%s' "${repair_json}"
     return
   fi
+
+  # If the CLI printed anything (even if it is not valid JSON) or failed with an option parsing
+  # error, we still treat `doctor repair` as potentially supported for `--yes` execution and
+  # `--report-only` summaries. We'll fall back to `service list --json` for inventory parsing.
+  if [[ -n "${repair_json}" ]] || [[ "${repair_status}" != "0" ]]; then
+    DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="1"
+  fi
+
   read_installed_background_service_inventory_json "${cli_bin}"
 }
 
@@ -880,6 +904,9 @@ run_background_service_install_compatibly() {
 
 run_background_service_repair_if_supported() {
   local cli_bin="$1"
+  if [[ "${DOCTOR_REPAIR_PREFLIGHT_SUPPORTED:-0}" != "1" ]]; then
+    return 2
+  fi
   local tmp_output=""
   tmp_output="$(mktemp)"
   if invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --yes >"${tmp_output}" 2>&1; then
@@ -930,8 +957,19 @@ background_service_inventory_json_is_supported() {
   if [[ -z "${services_json}" ]]; then
     return 1
   fi
-  printf '%s' "${services_json}" | grep -Eq '^[[:space:]]*{' || return 1
-  printf '%s' "${services_json}" | grep -Eq '"(entries|services|existingServices)"[[:space:]]*:'
+
+  # Fail closed: the preflight must be a single JSON object emitted on stdout.
+  # Older CLIs can interpret `doctor repair ...` as `doctor ...` and print a large
+  # report that includes JSON fragments; don't treat that as supported.
+  local trimmed=""
+  trimmed="$(trim_installer_text "${services_json}")"
+  if [[ -z "${trimmed}" ]]; then
+    return 1
+  fi
+  [[ "${trimmed}" == \{* ]] || return 1
+  [[ "${trimmed}" == *\} ]] || return 1
+
+  printf '%s' "${trimmed}" | grep -Eq '"(entries|services|existingServices)"[[:space:]]*:'
 }
 
 background_service_inventory_is_empty() {
@@ -941,7 +979,12 @@ background_service_inventory_is_empty() {
 
 background_service_inventory_json_is_empty() {
   local services_json="$1"
-  [[ -z "${services_json}" ]] || printf '%s' "${services_json}" | grep -Eq '"(entries|services|existingServices)"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]'
+  if [[ -z "${services_json}" ]]; then
+    return 0
+  fi
+  local trimmed=""
+  trimmed="$(trim_installer_text "${services_json}")"
+  [[ -z "${trimmed}" ]] || printf '%s' "${trimmed}" | grep -Eq '"(entries|services|existingServices)"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]'
 }
 
 background_service_inventory_has_default_following() {
@@ -2152,7 +2195,10 @@ append_path_hint
 
 	services_json=""
 	if should_read_background_service_preflight; then
-	  services_json="$(read_background_service_preflight_json "${DISPLAY_SHIM_PATH}")"
+	  tmp_services_json="$(mktemp)"
+	  read_background_service_preflight_json "${DISPLAY_SHIM_PATH}" >"${tmp_services_json}" 2>/dev/null || true
+	  services_json="$(cat "${tmp_services_json}" 2>/dev/null || true)"
+	  rm -f "${tmp_services_json}" >/dev/null 2>&1 || true
 	  # `doctor repair --json` preflight can include additional inventory such as daemon status.
 	  if background_service_inventory_is_supported "${services_json}"; then
 	    DAEMON_RUNNING_FROM_PREFLIGHT="0"
@@ -2208,24 +2254,26 @@ if [[ "${PRODUCT}" == "cli" && "${WITH_DAEMON}" == "1" ]]; then
         ;;
       *)
         if [[ "${NONINTERACTIVE}" == "1" ]]; then
-          if run_background_service_repair_if_supported "${DISPLAY_SHIM_PATH}"; then
-            info "Repairing automatic startup (best-effort)..."
+          if background_service_repair_requires_sudo "${services_json}"; then
+            echo "Warning: system background services require sudo to repair or switch:" >&2
+            echo "  ${repair_command}" >&2
             echo
+            skip_background_service_install="1"
           else
-            repair_status=$?
-            if [[ "${repair_status}" == "2" ]]; then
-              skip_background_service_install="0"
-            elif background_service_repair_requires_sudo "${services_json}"; then
-              echo "Warning: system background services require sudo to repair or switch:" >&2
-              echo "  ${repair_command}" >&2
-              echo
-              skip_background_service_install="1"
-            else
+            if run_background_service_repair_if_supported "${DISPLAY_SHIM_PATH}"; then
               info "Repairing automatic startup (best-effort)..."
-              echo "Warning: background service repair failed. You can retry manually:" >&2
-              echo "  ${repair_command}" >&2
               echo
-              skip_background_service_install="1"
+            else
+              repair_status=$?
+              if [[ "${repair_status}" == "2" ]]; then
+                skip_background_service_install="0"
+              else
+                info "Repairing automatic startup (best-effort)..."
+                echo "Warning: background service repair failed. You can retry manually:" >&2
+                echo "  ${repair_command}" >&2
+                echo
+                skip_background_service_install="1"
+              fi
             fi
           fi
         fi
