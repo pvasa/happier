@@ -14,6 +14,10 @@ test('installers perform installed-service preflight before interactive backgrou
   assert.ok(bashSource.includes('service list --json'), 'expected bash installer to preflight installed background services');
   assert.ok(bashSource.includes('doctor repair --json'), 'expected bash installer to prefer aggregated doctor repair preflight when available');
   assert.ok(bashSource.includes('daemonRunning'), 'expected bash installer to consume aggregated daemon status from doctor repair preflight');
+  assert.ok(
+    bashSource.includes('defaultFollowingMatchesSelectedReleaseChannel'),
+    'expected bash installer to consume aggregated default-following channel matching from doctor repair preflight when available',
+  );
   assert.ok(bashSource.includes('doctor repair --report-only'), 'expected bash installer to delegate interactive post-install reporting to doctor repair');
   assert.ok(bashSource.includes('run_background_service_repair_if_supported'), 'expected bash installer replace-existing path to route through the repair compatibility helper');
   assert.ok(bashSource.includes('background_service_inventory_has_default_following'), 'expected bash installer to distinguish singleton default services from add-another flows');
@@ -86,12 +90,22 @@ test('installers prefer doctor repair --report-only for interactive post-install
   assert.ok(bashSource.includes('doctor repair --report-only'), 'expected bash installer to prefer doctor repair --report-only for post-install summaries');
   assert.doesNotMatch(
     bashSource,
+    /report_text=.*doctor repair --report-only|doctor repair --report-only.*report_text=/,
+    'expected bash installer to stream doctor repair --report-only directly (preserving colors) rather than capturing output',
+  );
+  assert.doesNotMatch(
+    bashSource,
     /print_installed_background_service_summary|Installed background services:|Local relays:/,
     'expected bash installer to avoid shell-owned post-install summary rendering',
   );
   assert.ok(
     powershellSource.includes('@("doctor", "repair", "--report-only")'),
     'expected PowerShell installer to prefer doctor repair --report-only for post-install summaries',
+  );
+  assert.doesNotMatch(
+    powershellSource,
+    /Get-BackgroundServiceReportText|Invoke-NativeCommandCapturingOutput[\s\S]{0,1200}@\(\"doctor\",\s*\"repair\",\s*\"--report-only\"\)/,
+    'expected PowerShell installer to stream doctor repair --report-only directly (preserving colors) rather than capturing output',
   );
   assert.doesNotMatch(
     powershellSource,
@@ -105,7 +119,7 @@ test('PowerShell installer attempts doctor repair --report-only even before any 
 
   assert.match(
     powershellSource,
-    /if \(\$shouldInspectBackgroundServices -and \$Noninteractive -ne "1"\) \{[\s\S]*\$backgroundServiceReportText = Get-BackgroundServiceReportText -CliPath \$invoker[\s\S]*if \(-not \[string\]::IsNullOrWhiteSpace\(\$backgroundServiceReportText\)\) \{/,
+    /\$shouldInspectBackgroundServices[\s\S]*\$backgroundServiceInventory = Get-InstalledBackgroundServiceInventory[\s\S]*\$backgroundServiceInventory\.RepairSupported[\s\S]*@\(\"doctor\",\s*\"repair\",\s*\"--report-only\"\)/,
     'expected PowerShell installer to try doctor repair --report-only for interactive installs even when no background service is installed yet',
   );
 });

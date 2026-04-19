@@ -442,23 +442,6 @@ function Get-InstalledBackgroundServiceInventory {
   }
 }
 
-function Get-BackgroundServiceReportText {
-  param (
-    [Parameter(Mandatory = $true)] [string] $CliPath
-  )
-
-  $reportResult = Invoke-NativeCommandCapturingOutput {
-    Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--report-only") -HomeDir $DaemonServiceStateHomeDir
-  }
-  if ($reportResult.ExitCode -eq 0) {
-    return [string]$reportResult.Output
-  }
-  if (Test-InstallerCommandLooksUnsupported -Output $reportResult.Output) {
-    return ""
-  }
-  return ""
-}
-
 function Test-BackgroundServiceInventoryHasDefaultFollowing {
   param (
     [Parameter(Mandatory = $true)] [object[]] $Entries
@@ -1165,10 +1148,13 @@ try {
   if ($shouldInspectBackgroundServices) {
     $backgroundServiceInventory = Get-InstalledBackgroundServiceInventory -CliPath $invoker
   }
-  if ($shouldInspectBackgroundServices -and $Noninteractive -ne "1") {
-    $backgroundServiceReportText = Get-BackgroundServiceReportText -CliPath $invoker
-    if (-not [string]::IsNullOrWhiteSpace($backgroundServiceReportText)) {
-      Write-Host $backgroundServiceReportText.TrimEnd()
+  if ($shouldInspectBackgroundServices -and $Noninteractive -ne "1" -and $backgroundServiceInventory.RepairSupported) {
+    # Stream directly so ANSI colors/formatting are preserved.
+    try {
+      Invoke-InstallerCommandWithDaemonServiceContext -CliPath $invoker -CommandArgs @("doctor", "repair", "--report-only") -HomeDir $DaemonServiceStateHomeDir
+    }
+    catch {
+      # ignore: report-only output is best-effort and should never block installs/updates
     }
   }
 

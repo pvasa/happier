@@ -823,16 +823,24 @@ read_installed_background_service_inventory_json() {
 read_background_service_preflight_json() {
   local cli_bin="$1"
   local repair_json=""
+  DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="0"
   repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --json 2>/dev/null || true)"
   if background_service_inventory_json_is_supported "${repair_json}"; then
+    DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="1"
     printf '%s' "${repair_json}"
     return
   fi
   read_installed_background_service_inventory_json "${cli_bin}"
 }
 
-read_background_service_report_text() {
+print_background_service_report_text_if_supported() {
   local cli_bin="$1"
+
+  if [[ "${DOCTOR_REPAIR_PREFLIGHT_SUPPORTED:-0}" != "1" ]]; then
+    return
+  fi
+
+  # Stream output directly so ANSI colors/formatting are preserved.
   invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --report-only 2>/dev/null || true
 }
 
@@ -972,6 +980,18 @@ background_service_inventory_default_following_channel() {
 
 background_service_inventory_has_matching_default_following() {
   local services_json="$1"
+
+  # Prefer the explicit boolean computed by `doctor repair --json` when available, as
+  # parsing nested JSON reliably in pure shell is brittle.
+  local repair_match=""
+  repair_match="$(json_first_boolean_value "${services_json}" 'defaultFollowingMatchesSelectedReleaseChannel')"
+  if [[ "${repair_match}" == "true" ]]; then
+    return 0
+  fi
+  if [[ "${repair_match}" == "false" ]]; then
+    return 1
+  fi
+
   local current_channel_label=""
   current_channel_label="$(display_channel_label "${CHANNEL}")"
   local default_channel_label=""
@@ -2141,10 +2161,7 @@ append_path_hint
 	    fi
 	  fi
 	  if [[ "${NONINTERACTIVE}" != "1" ]]; then
-	    report_text="$(read_background_service_report_text "${DISPLAY_SHIM_PATH}")"
-	    if [[ -n "${report_text}" ]]; then
-	      printf '%s\n' "${report_text}"
-	    fi
+	    print_background_service_report_text_if_supported "${DISPLAY_SHIM_PATH}"
     fi
   fi
 
