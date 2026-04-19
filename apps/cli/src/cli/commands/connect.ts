@@ -250,7 +250,7 @@ async function handleConnectVendor(target: CloudConnectTarget, options: ConnectP
       randomBytes: (length) => randomBytes(length),
     });
 
-    console.log(`🚀 Registering ${target.displayName} credential with server (${record.serviceId}/${options.profileId})`);
+    console.log(`🚀 Registering ${target.displayName} credential with relay (${record.serviceId}/${options.profileId})`);
     await api.registerConnectedServiceCredentialSealed({
       serviceId: record.serviceId,
       profileId: options.profileId,
@@ -265,7 +265,7 @@ async function handleConnectVendor(target: CloudConnectTarget, options: ConnectP
       },
     });
 
-    console.log(`✅ ${target.displayName} credential registered with server`);
+    console.log(`✅ ${target.displayName} credential registered with relay`);
     if (postConnectPayload !== null) {
       target.postConnect?.(postConnectPayload);
     }

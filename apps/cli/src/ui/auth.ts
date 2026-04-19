@@ -70,41 +70,41 @@ function printServerUrlReachabilityHint(serverUrl: string): void {
     }
 
     if (isInsecureRemoteHttpServerUrl(serverUrl)) {
-        console.log('Warning: your server URL uses HTTP on a non-local host.');
+        console.log('Warning: your relay URL uses HTTP on a non-local host.');
         console.log('This is insecure, and many web flows require HTTPS. Prefer an https:// URL (Tailscale Serve or a reverse proxy).');
         console.log('');
         return;
     }
 
     if (isLoopbackServerHost(serverUrl) && url?.protocol !== 'https:') {
-        console.log('Note: your server URL is a localhost/loopback URL.');
+        console.log('Note: your relay URL is a localhost/loopback URL.');
         console.log('This will work only on this same machine.');
-        console.log('For remote/phone access, use an HTTPS URL (Tailscale Serve or a reverse proxy) as your server URL.');
+        console.log('For remote/phone access, use an HTTPS URL (Tailscale Serve or a reverse proxy) as your relay URL.');
         console.log('');
         return;
     }
 
     if (isLocalishServerUrl(serverUrl) && url?.protocol !== 'https:') {
-        console.log('Note: your server URL looks like a LAN-only URL.');
+        console.log('Note: your relay URL looks like a LAN-only URL.');
         console.log('This will work only when your phone/laptop are on the same LAN/VPN.');
-        console.log('For remote/phone access, use an HTTPS URL (Tailscale Serve or a reverse proxy) as your server URL.');
+        console.log('For remote/phone access, use an HTTPS URL (Tailscale Serve or a reverse proxy) as your relay URL.');
         console.log('');
     }
 }
 
 function printMobileLinkMissingServerUrlHint(params: Readonly<{ serverUrl: string; kind: 'terminalConnect' | 'configureServer' }>): void {
     // eslint-disable-next-line no-console
-    console.log('Note: this mobile link does not include a server URL.');
+    console.log('Note: this mobile link does not include a relay URL.');
     if (isLoopbackServerHost(params.serverUrl)) {
         // eslint-disable-next-line no-console
-        console.log('Your server URL is set to localhost, which is only reachable on this machine.');
+        console.log('Your relay URL is set to localhost, which is only reachable on this machine.');
         // eslint-disable-next-line no-console
-        console.log('On your phone, open Happier → Settings → Servers and add a URL your phone can reach (LAN IP/VPN/Tailscale).');
+        console.log('On your phone, open Happier → Settings → Relays and add a URL your phone can reach (LAN IP/VPN/Tailscale).');
         // eslint-disable-next-line no-console
         console.log('Tip (recommended): set HAPPIER_PUBLIC_SERVER_URL to a shareable https:// URL so future QR codes include it automatically.');
     } else {
         // eslint-disable-next-line no-console
-        console.log('Your phone will use its currently configured server (Happier → Settings → Servers).');
+        console.log('Your phone will use its currently configured relay (Happier → Settings → Relays).');
     }
     // eslint-disable-next-line no-console
     console.log('');
@@ -261,7 +261,7 @@ async function doBothAuth(params: Readonly<{ keypair: tweetnacl.BoxKeyPair; clai
     const terminalMobileEmbedsServerUrl = terminalLinks.mobileUrl.includes('server=');
 
     console.log('\nAuthenticate this machine\n');
-    console.log(`This terminal is connected to: ${configuration.serverUrl}`);
+    console.log(`Relay URL: ${configuration.serverUrl}`);
     if (configuration.apiServerUrl !== configuration.serverUrl) {
         console.log(`API URL: ${configuration.apiServerUrl}`);
     }
@@ -272,11 +272,11 @@ async function doBothAuth(params: Readonly<{ keypair: tweetnacl.BoxKeyPair; clai
     console.log('');
     console.log('Before you continue:');
     if (terminalMobileEmbedsServerUrl) {
-        console.log('- Make sure your phone/browser can reach the server URL embedded in the QR/deep link');
-        console.log('- The app/web UI may prompt you to switch servers automatically (because the link includes server=...)');
+        console.log('- Make sure your phone/browser can reach the relay URL embedded in the QR/deep link');
+        console.log('- The app/web UI may prompt you to switch relays automatically (because the link includes server=...)');
     } else {
-        console.log('- Make sure your phone is already configured to the right server (Happier → Settings → Servers)');
-        console.log('- Tip: set HAPPIER_PUBLIC_SERVER_URL to embed a shareable server URL in future QR codes');
+        console.log('- Make sure your phone is already configured to the right relay (Happier → Settings → Relays)');
+        console.log('- Tip: set HAPPIER_PUBLIC_SERVER_URL to embed a shareable relay URL in future QR codes');
     }
     console.log('- Sign in (or create an account)');
     console.log('- If you already have a Happier account on another device, sign in with that same account');
@@ -293,7 +293,7 @@ async function doBothAuth(params: Readonly<{ keypair: tweetnacl.BoxKeyPair; clai
             webappUrl: configuration.webappUrl,
             serverUrl: configuration.serverUrl,
         });
-        console.log('Optional — Configure server in app/web (advanced)');
+        console.log('Optional — Configure relay in app/web (advanced)');
         console.log('Web (prefill + confirm):');
         console.log(configureLinks.webUrl);
         console.log('Mobile deep link:');
@@ -393,7 +393,7 @@ async function doMobileAuth(params: Readonly<{ keypair: tweetnacl.BoxKeyPair; cl
         console.clear();
     }
     console.log('\nMobile Authentication\n');
-    console.log(`This terminal is connected to: ${configuration.serverUrl}`);
+    console.log(`Relay URL: ${configuration.serverUrl}`);
     if (configuration.apiServerUrl !== configuration.serverUrl) {
         console.log(`API URL: ${configuration.apiServerUrl}`);
     }
@@ -417,7 +417,7 @@ async function doMobileAuth(params: Readonly<{ keypair: tweetnacl.BoxKeyPair; cl
             webappUrl: configuration.webappUrl,
             serverUrl: configuration.serverUrl,
         });
-        console.log('Optional — Configure server in app/web (advanced)');
+        console.log('Optional — Configure relay in app/web (advanced)');
         console.log('Web (prefill + confirm):');
         console.log(configureLinks.webUrl);
         console.log('Mobile deep link:');
@@ -612,7 +612,7 @@ async function waitForAuthentication(params: Readonly<{ keypair: tweetnacl.BoxKe
                             }
 
                             if (typeof claimData.token !== 'string' || typeof claimData.response !== 'string') {
-                                console.log('\n\nUnexpected response from server. Please try again.');
+                                console.log('\n\nUnexpected response from the relay. Please try again.');
                                 return null;
                             }
 

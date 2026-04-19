@@ -143,7 +143,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--mode', 'system', '--yes'],
       commandPath: 'happier service',
-    })).rejects.toThrow('Root privileges are required for system mode background service repair');
+    })).rejects.toThrow('Root privileges are required for system mode automatic startup repair');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
@@ -154,7 +154,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--mode', 'system', '--yes', '--json'],
       commandPath: 'happier service',
-    })).rejects.toThrow('Root privileges are required for system mode background service repair');
+    })).rejects.toThrow('Root privileges are required for system mode automatic startup repair');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
@@ -394,7 +394,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--yes', '--json'],
       commandPath: 'happier service',
-    })).rejects.toThrow('Root privileges are required to apply system mode background service repair actions');
+    })).rejects.toThrow('Root privileges are required to apply system mode automatic startup repair actions');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });
@@ -521,7 +521,7 @@ describe('handleServiceRepairCliCommand', () => {
     await expect(handleServiceRepairCliCommand({
       argv: ['repair', '--mode', 'system', '--yes', '--json'],
       commandPath: 'happier service',
-    })).rejects.toThrow('System mode background service repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)');
+    })).rejects.toThrow('System mode automatic startup repair requires --system-user (or SUDO_USER / HAPPIER_DAEMON_SERVICE_SYSTEM_USER)');
 
     expect(applyBackgroundServiceRepairPlanMock).not.toHaveBeenCalled();
   });

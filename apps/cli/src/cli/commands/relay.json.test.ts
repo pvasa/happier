@@ -534,7 +534,7 @@ describe('happier relay --json', () => {
             expect(parsed.ok).toBe(false);
             expect(parsed.kind).toBe('relay_host');
             expect(parsed.error?.code).toBe('unknown_error');
-            expect(String(parsed.error?.message ?? '')).toContain('server binary not found');
+            expect(String(parsed.error?.message ?? '')).toContain('relay binary not found');
             expect(process.exitCode).toBe(2);
         } finally {
             output.restore();

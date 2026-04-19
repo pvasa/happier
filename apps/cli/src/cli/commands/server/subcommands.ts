@@ -127,14 +127,14 @@ async function cmdList(args: string[]): Promise<void> {
     return;
   }
   if (profiles.length === 0) {
-    console.log(chalk.gray('(no server profiles configured)'));
+    console.log(chalk.gray('(no relay profiles configured)'));
     return;
   }
 
   for (const p of profiles.sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))) {
     const marker = p.id === active.id ? chalk.green('✓') : ' ';
     console.log(`${marker} ${chalk.bold(p.name)} (${p.id})`);
-    console.log(`    ${chalk.gray('server:')} ${p.serverUrl}`);
+    console.log(`    ${chalk.gray('relay:')} ${p.serverUrl}`);
     if (p.localServerUrl && p.localServerUrl !== p.serverUrl) {
       console.log(`    ${chalk.gray('local:')} ${p.localServerUrl}`);
     }
@@ -152,10 +152,10 @@ async function cmdCurrent(args: string[]): Promise<void> {
     });
     return;
   }
-  console.log(chalk.bold('Active server'));
+  console.log(chalk.bold('Active relay profile'));
   console.log(`${chalk.gray('name:')}   ${active.name}`);
   console.log(`${chalk.gray('id:')}     ${active.id}`);
-  console.log(`${chalk.gray('server:')} ${active.serverUrl}`);
+  console.log(`${chalk.gray('relay:')}  ${active.serverUrl}`);
   if (active.localServerUrl && active.localServerUrl !== active.serverUrl) {
     console.log(`${chalk.gray('local:')} ${active.localServerUrl}`);
   }
@@ -191,14 +191,14 @@ async function cmdAdd(args: string[]): Promise<void> {
       throw new Error(
         [
           'Non-interactive mode: missing required arguments for `happier server add`.',
-          'Provide: --name <name> --server-url <canonical-url> [--local-server-url <url>] [--webapp-url <url>] [--use].',
+          'Provide: --name <name> --server-url <relay-url> [--local-server-url <url>] [--webapp-url <url>] [--use].',
           'Optional actions: --start-daemon, --install-service.',
         ].join(' '),
       );
     }
   } else {
     if (!serverUrlRaw) {
-      serverUrlRaw = (await promptInput('Server URL (https://...): ')).trim();
+      serverUrlRaw = (await promptInput('Relay URL (https://...): ')).trim();
     }
 
     if (!localServerUrlRaw && !publicServerUrlRaw) {
@@ -218,12 +218,14 @@ async function cmdAdd(args: string[]): Promise<void> {
           }
 
           const canonicalPrompt = inferredCanonical
-            ? `Canonical (shareable) server URL (https://...) [${inferredCanonical}]: `
-            : 'Canonical (shareable) server URL (https://...): ';
+            ? `Canonical (shareable) relay URL (https://...) [${inferredCanonical}]: `
+            : 'Canonical (shareable) relay URL (https://...): ';
           const canonicalAnswer = (await promptInput(canonicalPrompt)).trim();
           const canonical = canonicalAnswer || inferredCanonical;
           if (!canonical) {
-            throw new Error('Missing canonical server URL. Provide a public HTTPS URL, or run `happier server add --local-server-url <url> --server-url <canonical>`.');
+            throw new Error(
+              'Missing canonical relay URL. Provide a public HTTPS URL, or run `happier server add --local-server-url <url> --server-url <canonical>`.',
+            );
           }
           serverUrlRaw = canonical;
         }
@@ -233,11 +235,11 @@ async function cmdAdd(args: string[]): Promise<void> {
     const serverUrlForDefaults = normalizeUrlOrThrow(serverUrlRaw, '--server-url');
     if (!name) {
       const defaultName = defaultNameFromUrl(serverUrlForDefaults);
-      const answer = await promptInput(`Server profile name [${defaultName}]: `);
+      const answer = await promptInput(`Relay profile name [${defaultName}]: `);
       name = answer.trim() || defaultName;
     }
     if (!hasUse && !hasNoUse) {
-      const answer = await promptInput('Use this server as active now? [Y/n]: ');
+      const answer = await promptInput('Use this relay as active now? [Y/n]: ');
       shouldUse = parseYesNoWithDefault(answer, true);
     } else if (hasNoUse) {
       shouldUse = false;
@@ -312,10 +314,10 @@ async function cmdAdd(args: string[]): Promise<void> {
   }
 
   if (shouldUse) reloadConfiguration();
-  console.log(chalk.green(`✓ Saved server profile: ${created.name} (${created.id})`));
+  console.log(chalk.green(`✓ Saved relay profile: ${created.name} (${created.id})`));
   const prefix = `happier --server ${created.id}`;
   if (shouldUse) {
-    console.log(chalk.gray(`  Active server is now: ${created.serverUrl}`));
+    console.log(chalk.gray(`  Active relay is now: ${created.serverUrl}`));
     if (created.localServerUrl && created.localServerUrl !== created.serverUrl) {
       console.log(chalk.gray(`  Local API URL: ${created.localServerUrl}`));
     }
@@ -325,7 +327,7 @@ async function cmdAdd(args: string[]): Promise<void> {
     console.log('');
     console.log(chalk.bold('Next steps (optional)'));
     console.log(chalk.gray(`  Start daemon: ${prefix} daemon start`));
-    console.log(chalk.gray(`  Install background service: ${prefix} service install`));
+    console.log(chalk.gray(`  Enable automatic startup: ${prefix} service install`));
   }
 
   if (installService) {
@@ -345,14 +347,14 @@ async function cmdAdd(args: string[]): Promise<void> {
 async function cmdUse(args: string[]): Promise<void> {
   const json = wantsJson(args);
   const identifier = String(args[0] ?? '').trim();
-  if (!identifier) throw new Error('Missing server id/name');
+  if (!identifier) throw new Error('Missing relay profile id/name');
   const active = await useServerProfile(identifier);
   reloadConfiguration();
   if (json) {
     printJsonEnvelope({ ok: true, kind: 'server_use', data: { active: summarizeProfile(active) } });
     return;
   }
-  console.log(chalk.green(`✓ Active server: ${active.name} (${active.id})`));
+  console.log(chalk.green(`✓ Active relay: ${active.name} (${active.id})`));
   console.log(chalk.gray(`  ${active.serverUrl}`));
 
   await runServerSelectionBackgroundServiceFollowUp({
@@ -364,7 +366,7 @@ async function cmdUse(args: string[]): Promise<void> {
 async function cmdRemove(args: string[]): Promise<void> {
   const json = wantsJson(args);
   const identifier = String(args[0] ?? '').trim();
-  if (!identifier) throw new Error('Missing server id/name');
+  if (!identifier) throw new Error('Missing relay profile id/name');
   const force = args.includes('--force');
   const out = await removeServerProfile(identifier, { force });
   reloadConfiguration();
@@ -376,8 +378,8 @@ async function cmdRemove(args: string[]): Promise<void> {
     });
     return;
   }
-  console.log(chalk.green(`✓ Removed server profile: ${out.removed.name} (${out.removed.id})`));
-  console.log(chalk.gray(`  Active server: ${out.active.name} (${out.active.id})`));
+  console.log(chalk.green(`✓ Removed relay profile: ${out.removed.name} (${out.removed.id})`));
+  console.log(chalk.gray(`  Active relay: ${out.active.name} (${out.active.id})`));
 }
 
 async function cmdTest(args: string[]): Promise<void> {
@@ -398,13 +400,13 @@ async function cmdTest(args: string[]): Promise<void> {
     return;
   }
   if (!result.ok) {
-    console.error(chalk.red(`✗ Server test failed: ${profile.serverUrl}`));
+    console.error(chalk.red(`✗ Relay test failed: ${profile.serverUrl}`));
     console.error(chalk.gray(`  url: ${result.url}`));
     if (result.status) console.error(chalk.gray(`  status: ${result.status}`));
     console.error(chalk.gray(`  error: ${result.error}`));
     process.exit(1);
   }
-  console.log(chalk.green(`✓ Server reachable: ${profile.serverUrl}`));
+  console.log(chalk.green(`✓ Relay reachable: ${profile.serverUrl}`));
   console.log(chalk.gray(`  url: ${result.url}`));
   if (result.version) console.log(chalk.gray(`  version: ${result.version}`));
 }
@@ -476,7 +478,7 @@ async function cmdSet(args: string[]): Promise<void> {
     printJsonEnvelope({ ok: true, kind: 'server_set', data: { active: summarizeProfile(created) } });
     return;
   }
-  console.log(chalk.green(`✓ Active server: ${created.name} (${created.id})`));
+  console.log(chalk.green(`✓ Active relay: ${created.name} (${created.id})`));
   console.log(chalk.gray(`  ${created.serverUrl}`));
 
   await runServerSelectionBackgroundServiceFollowUp({

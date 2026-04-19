@@ -95,7 +95,7 @@ async function cmdInspectTarget(args: string[]): Promise<void> {
 
   console.log(chalk.bold('Resolved relay target'));
   console.log(chalk.gray(`  ${payload.active.name} (${payload.active.id})`));
-  console.log(chalk.gray(`  server: ${payload.active.serverUrl}`));
+  console.log(chalk.gray(`  relay: ${payload.active.serverUrl}`));
   if (payload.active.localServerUrl && payload.active.localServerUrl !== payload.active.serverUrl) {
     console.log(chalk.gray(`  local: ${payload.active.localServerUrl}`));
   }
@@ -109,7 +109,7 @@ async function cmdSet(args: string[]): Promise<void> {
     || argvValue(args, '--relay-url')
     || firstPositionalArg(args);
   if (!serverUrlRaw) {
-    throw new Error('Usage: happier relay set <server-url> [--use] [--json] [--server-url <url>] [--webapp-url <url>] [--local-server-url <url>]');
+    throw new Error('Usage: happier relay set <relay-url> [--use] [--json] [--server-url <url>] [--webapp-url <url>] [--local-server-url <url>]');
   }
 
   const serverUrl = normalizeUrlOrThrow(serverUrlRaw, 'relay url');

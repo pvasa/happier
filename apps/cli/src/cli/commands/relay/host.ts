@@ -255,14 +255,14 @@ function resolveLocalServerPayloadOverrideFromBinaryPath(serverBinaryPath: strin
 }> {
   const binaryPath = String(serverBinaryPath ?? '').trim();
   if (!binaryPath || !existsSync(binaryPath)) {
-    throw new Error(`server binary not found: ${binaryPath || '(empty)'}`);
+    throw new Error(`relay binary not found: ${binaryPath || '(empty)'}`);
   }
   const binaryDir = dirname(binaryPath);
   const payloadRoot = basename(binaryDir) === 'bin'
     ? dirname(binaryDir)
     : binaryDir;
   if (!existsSync(payloadRoot) || !lstatSync(payloadRoot).isDirectory()) {
-    throw new Error(`server payload root not found: ${payloadRoot}`);
+    throw new Error(`relay payload root not found: ${payloadRoot}`);
   }
   return {
     payloadRoot,
@@ -685,7 +685,7 @@ export async function runRelayHostSubcommand(args: string[]): Promise<void> {
           try {
             const serverBinaryPath = selfHostRelayBinaryOverride || resolveLocalServerBinaryFromPayloadRoot(prepared.payloadRoot);
             if (!serverBinaryPath) {
-              throw new Error('Unable to resolve happier-server binary from prepared payload.');
+              throw new Error('Unable to resolve relay binary (happier-server) from prepared payload.');
             }
 
             const engine = createLocalRelayHostEngine({

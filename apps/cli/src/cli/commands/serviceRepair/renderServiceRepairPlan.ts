@@ -49,7 +49,7 @@ export function renderServiceRepairPlan(params: Readonly<{
       if (action.kind === 'remove-service') {
         return `${index + 1}. Remove ${action.service.label} (${action.service.mode}, ${action.service.releaseChannel}, ${action.service.targetMode})`;
       }
-      return `${index + 1}. Install one default background service on ${action.releaseChannel} (${action.mode})`;
+      return `${index + 1}. Enable automatic startup on ${action.releaseChannel} (${action.mode})`;
     }),
     '',
     `Run ${params.commandPath} repair --yes to apply these actions non-interactively.`,

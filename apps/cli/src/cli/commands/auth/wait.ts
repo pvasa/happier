@@ -116,7 +116,7 @@ export async function handleAuthWait(argsRaw: string[]): Promise<void> {
       const token = String(claimData.token ?? '');
       const responseB64 = String(claimData.response ?? '');
       if (!token || !responseB64) {
-        console.error('Unexpected response from server.');
+        console.error('Unexpected response from the relay.');
         process.exit(1);
       }
 

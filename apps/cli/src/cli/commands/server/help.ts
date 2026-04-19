@@ -4,7 +4,7 @@ import { configuration } from '@/configuration';
 
 export function showServerHelp(): void {
   console.log(`
-${chalk.bold('happier server')} - Manage Happier server profiles
+${chalk.bold('happier server')} - Manage relay profiles
 
 ${chalk.bold('Usage:')}
   happier server list
@@ -17,8 +17,8 @@ ${chalk.bold('Usage:')}
 
 ${chalk.bold('Notes:')}
   • Profiles are stored in ${configuration.settingsFile}
-  • Credentials are stored per-server under ${configuration.serversDir}
-  • Public server URL is used for QR codes/deep links (defaults to server URL)
+  • Credentials are stored per relay profile under ${configuration.serversDir}
+  • Public relay URL is used for QR codes/deep links (defaults to relay URL)
   • Env vars override for one run: HAPPIER_SERVER_URL / HAPPIER_PUBLIC_SERVER_URL / HAPPIER_WEBAPP_URL
 `);
 }

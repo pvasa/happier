@@ -27,9 +27,9 @@ export async function handleAuthLogout(args: string[]): Promise<void> {
   }
 
   if (logoutAll) {
-    console.log(chalk.blue('This will log you out of Happier on all servers and remove local data'));
+    console.log(chalk.blue('This will log you out of Happier on all relays and remove local data'));
   } else {
-    console.log(chalk.blue(`This will log you out of Happier for server: ${targetServerId}`));
+    console.log(chalk.blue(`This will log you out of Happier for relay: ${targetServerId}`));
   }
   console.log(chalk.yellow('⚠️  You will need to re-authenticate to use Happier again'));
 
