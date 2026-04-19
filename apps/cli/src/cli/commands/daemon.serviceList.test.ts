@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import type { SpawnSyncReturns } from 'node:child_process';
 
 import { describe, expect, it, vi } from 'vitest';
-import { renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
+import { buildLaunchdPlistXml, renderSystemdServiceUnit, renderWindowsScheduledTaskWrapperPs1 } from '@happier-dev/cli-common/service';
 
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
@@ -213,6 +213,7 @@ describe('happier daemon service list', () => {
               HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
               HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
               HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+              HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: join(homeDir, '.happier'),
             },
             wantedBy: 'default.target',
           }),
@@ -246,6 +247,120 @@ describe('happier daemon service list', () => {
             }),
           ]));
         } finally {
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('includes configured and running CLI versions in JSON inventory when they can be resolved', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-cli-versions-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+          processEnv: {
+            ...process.env,
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+          },
+        });
+        const paths = resolveDaemonServicePaths(runtime);
+        fs.mkdirSync(dirname(paths.unitPath), { recursive: true });
+        fs.writeFileSync(
+          paths.unitPath,
+          renderSystemdServiceUnit({
+            description: 'Happier Daemon',
+            execStart: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+            env: {
+              HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+              HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+              HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+              HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: join(homeDir, '.happier'),
+            },
+            wantedBy: 'default.target',
+          }),
+          'utf-8',
+        );
+
+        const managedCliPath = join(homeDir, '.happier', 'cli', 'current', 'happier');
+        fs.mkdirSync(dirname(managedCliPath), { recursive: true });
+        fs.writeFileSync(
+          managedCliPath,
+          '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${1:-}" == "--version" ]]; then\n  echo "0.0.0-configured"\n  exit 0\nfi\nexit 0\n',
+          'utf-8',
+        );
+        fs.chmodSync(managedCliPath, 0o755);
+
+        const { writeDaemonState } = await import('@/persistence');
+        writeDaemonState({
+          pid: process.pid,
+          httpPort: 43118,
+          startedAt: Date.now(),
+          startedWithCliVersion: '0.0.0-running',
+          startedWithPublicReleaseChannel: 'stable',
+          startupSource: 'background-service',
+          serviceLabel: resolveDaemonServiceLaunchdLabel(runtime.instanceId, runtime.channel, runtime.targetMode),
+        });
+
+        const childProcess = await import('node:child_process');
+        const spawnSyncMock = vi.mocked(childProcess.spawnSync);
+        spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
+          const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
+          if (cmd === managedCliPath && argv[0] === '--version') {
+            return {
+              pid: 0,
+              output: [],
+              stdout: '0.0.0-configured\n',
+              stderr: '',
+              status: 0,
+              signal: null,
+              error: undefined,
+            } as unknown as SpawnSyncReturns<string>;
+          }
+          return {
+            pid: 0,
+            output: [],
+            stdout: '',
+            stderr: '',
+            status: 3,
+            signal: null,
+            error: undefined,
+          } as unknown as SpawnSyncReturns<string>;
+        }) as unknown as typeof childProcess.spawnSync);
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            label?: string;
+            running?: boolean;
+            configuredCliVersion?: string | null;
+            runningCliVersion?: string | null;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              label: paths.unitName.replace(/\.service$/i, ''),
+              running: true,
+              configuredCliVersion: '0.0.0-configured',
+              runningCliVersion: '0.0.0-running',
+            }),
+          ]));
+        } finally {
+          spawnSyncMock.mockReset();
           output.restore();
         }
       },
@@ -330,6 +445,277 @@ describe('happier daemon service list', () => {
           expect(output.json().services).toEqual(expect.arrayContaining([
             expect.objectContaining({
               label: paths.unitName.replace(/\.service$/i, ''),
+              running: true,
+            }),
+          ]));
+        } finally {
+          spawnSyncMock.mockReset();
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('marks an active launch agent as running in JSON inventory even when daemon state is missing', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-running-launchctl-active-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+          processEnv: {
+            ...process.env,
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+          },
+        });
+        const paths = resolveDaemonServicePaths(runtime);
+        fs.mkdirSync(dirname(paths.installedPath), { recursive: true });
+        fs.writeFileSync(
+          paths.installedPath,
+          buildLaunchdPlistXml({
+            label: paths.label,
+            programArgs: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+            env: {
+              HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+              HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+              HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            },
+            stdoutPath: join(homeDir, '.happier', 'logs', 'daemon-service.out.log'),
+            stderrPath: join(homeDir, '.happier', 'logs', 'daemon-service.err.log'),
+            workingDirectory: homeDir,
+          }),
+          'utf-8',
+        );
+
+        const childProcess = await import('node:child_process');
+        const spawnSyncMock = vi.mocked(childProcess.spawnSync);
+        spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
+          const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
+          if (cmd === 'launchctl' && argv[0] === 'print' && argv[1] === `gui/${runtime.uid ?? 0}/${paths.label}`) {
+            return {
+              pid: 0,
+              output: [],
+              stdout: 'state = running\n',
+              stderr: '',
+              status: 0,
+              signal: null,
+              error: undefined,
+            } as unknown as SpawnSyncReturns<string>;
+          }
+          return {
+            pid: 0,
+            output: [],
+            stdout: '',
+            stderr: '',
+            status: 1,
+            signal: null,
+            error: undefined,
+          } as unknown as SpawnSyncReturns<string>;
+        }) as unknown as typeof childProcess.spawnSync);
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            label?: string;
+            running?: boolean;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              label: paths.label,
+              running: true,
+            }),
+          ]));
+        } finally {
+          spawnSyncMock.mockReset();
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('does not mark a loaded but not running launch agent as running in JSON inventory', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-launchctl-not-running-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+          processEnv: {
+            ...process.env,
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'darwin',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+          },
+        });
+        const paths = resolveDaemonServicePaths(runtime);
+        fs.mkdirSync(dirname(paths.installedPath), { recursive: true });
+        fs.writeFileSync(
+          paths.installedPath,
+          buildLaunchdPlistXml({
+            label: paths.label,
+            programArgs: ['/Users/tester/.happier/cli/current/happier', 'daemon', 'start-sync'],
+            env: {
+              HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+              HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+              HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+            },
+            stdoutPath: join(homeDir, '.happier', 'logs', 'daemon-service.out.log'),
+            stderrPath: join(homeDir, '.happier', 'logs', 'daemon-service.err.log'),
+            workingDirectory: homeDir,
+          }),
+          'utf-8',
+        );
+
+        const childProcess = await import('node:child_process');
+        const spawnSyncMock = vi.mocked(childProcess.spawnSync);
+        spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
+          const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
+          if (cmd === 'launchctl' && argv[0] === 'print' && argv[1] === `gui/${runtime.uid ?? 0}/${paths.label}`) {
+            return {
+              pid: 0,
+              output: [],
+              stdout: 'state = not running\n',
+              stderr: '',
+              status: 0,
+              signal: null,
+              error: undefined,
+            } as unknown as SpawnSyncReturns<string>;
+          }
+          return {
+            pid: 0,
+            output: [],
+            stdout: '',
+            stderr: '',
+            status: 1,
+            signal: null,
+            error: undefined,
+          } as unknown as SpawnSyncReturns<string>;
+        }) as unknown as typeof childProcess.spawnSync);
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            label?: string;
+            running?: boolean;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              label: paths.label,
+              running: false,
+            }),
+          ]));
+        } finally {
+          spawnSyncMock.mockReset();
+          output.restore();
+        }
+      },
+    );
+  });
+
+  it('marks an active Windows scheduled task as running in JSON inventory even when daemon state is missing', async () => {
+    await withConfiguredDaemonTestHome(
+      {
+        prefix: 'happier-service-list-running-schtasks-active-',
+        env: {
+          HAPPIER_DAEMON_SERVICE_PLATFORM: 'win32',
+          HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: '',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+        },
+      },
+      async ({ homeDir }) => {
+        process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = homeDir;
+        process.env.HAPPIER_DAEMON_SERVICE_CHANNEL = 'stable';
+        await writeDaemonSettingsFixture(homeDir);
+
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({
+          processEnv: {
+            ...process.env,
+            HAPPIER_DAEMON_SERVICE_PLATFORM: 'win32',
+            HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: homeDir,
+            HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
+          },
+        });
+        const paths = resolveDaemonServicePaths(runtime);
+        fs.mkdirSync(dirname(paths.installedPath), { recursive: true });
+        writeValidWindowsDaemonServiceDefinition({
+          path: paths.installedPath,
+          workingDirectory: join(homeDir, '.happier'),
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        });
+
+        const childProcess = await import('node:child_process');
+        const spawnSyncMock = vi.mocked(childProcess.spawnSync);
+        spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
+          const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
+          if (
+            cmd === 'schtasks'
+            && argv[0] === '/Query'
+            && argv[1] === '/TN'
+            && argv[2] === paths.taskName
+            && argv[3] === '/FO'
+            && argv[4] === 'LIST'
+            && argv[5] === '/V'
+          ) {
+            return {
+              pid: 0,
+              output: [],
+              stdout: 'Status: Running\nScheduled Task State: Enabled\n',
+              stderr: '',
+              status: 0,
+              signal: null,
+              error: undefined,
+            } as unknown as SpawnSyncReturns<string>;
+          }
+          return {
+            pid: 0,
+            output: [],
+            stdout: '',
+            stderr: '',
+            status: 1,
+            signal: null,
+            error: undefined,
+          } as unknown as SpawnSyncReturns<string>;
+        }) as unknown as typeof childProcess.spawnSync);
+
+        const output = captureStdoutJsonOutput<{
+          services?: Array<{
+            label?: string;
+            running?: boolean;
+          }>;
+        }>();
+        try {
+          await handleServiceCliCommand({ args: ['service', 'list', '--json'], rawArgv: [], terminalRuntime: null });
+
+          expect(output.json().services).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              label: paths.taskName,
               running: true,
             }),
           ]));

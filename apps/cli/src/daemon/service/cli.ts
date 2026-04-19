@@ -817,11 +817,17 @@ export type DaemonServiceListEntry = Readonly<{
 
 export type DaemonServiceInventoryEntry = Readonly<{
   serviceType: 'daemon';
+  serverId: string;
+  name: string;
+  path: string;
+  mode?: DaemonServiceMode;
   label: string;
   ring: PublicReleaseRingId;
   targetMode: DaemonServiceTargetMode;
   installed: boolean;
   running: boolean;
+  configuredCliVersion: string | null;
+  runningCliVersion: string | null;
 }>;
 
 export function resolveDaemonServiceInstallationSnapshotFromEnv(options: Readonly<{
@@ -1004,30 +1010,130 @@ export async function resolveDaemonServiceListEntries(
 }
 
 function mapDaemonServiceListEntriesToInventory(
-  entries: readonly DaemonServiceListEntry[],
-  options: Readonly<{ activeServiceLabel?: string | null }> = {},
+    entries: readonly DaemonServiceListEntry[],
+    options: Readonly<{
+      activeServiceLabel?: string | null;
+      activeOwnerCliVersion?: string | null;
+  }> = {},
 ): readonly DaemonServiceInventoryEntry[] {
   const activeServiceLabel = String(options.activeServiceLabel ?? '').trim();
-  return entries.map((entry) => ({
-    serviceType: 'daemon',
-    label: entry.label,
-    ring: entry.releaseChannel,
-    targetMode: entry.targetMode,
-    installed: entry.installed,
-    running: (() => {
-      if (activeServiceLabel.length > 0) {
-        if (
-          entry.label === activeServiceLabel
-          || resolveDaemonServiceLaunchdLabel(entry.serverId, entry.releaseChannel, entry.targetMode) === activeServiceLabel
-        ) {
-          return true;
+  const activeOwnerCliVersion = String(options.activeOwnerCliVersion ?? '').trim() || null;
+  const configuredCliVersionByBinaryPathCache = new Map<string, string | null>();
+  const runningStateTimeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_LIST_IS_ACTIVE_TIMEOUT_MS', 2000);
+
+  const resolveInventoryLabelForEntry = (entry: DaemonServiceListEntry): string => {
+    const explicitLabel = String(entry.label ?? '').trim();
+    if (explicitLabel) {
+      return explicitLabel;
+    }
+    return resolveDaemonServiceLaunchdLabel(entry.serverId, entry.releaseChannel, entry.targetMode);
+  };
+
+  const resolveOwnerComparableLabelsForEntry = (entry: DaemonServiceListEntry): readonly string[] => {
+    const labels = new Set<string>();
+    const explicitLabel = String(entry.label ?? '').trim();
+    if (explicitLabel) {
+      labels.add(explicitLabel);
+    }
+    labels.add(resolveDaemonServiceLaunchdLabel(entry.serverId, entry.releaseChannel, entry.targetMode));
+    return [...labels];
+  };
+
+  const isEntryCurrentActiveOwner = (entry: DaemonServiceListEntry): boolean => {
+    if (activeServiceLabel.length === 0) {
+      return false;
+    }
+    return resolveOwnerComparableLabelsForEntry(entry).includes(activeServiceLabel);
+  };
+
+  const resolveConfiguredCliVersionForEntry = (entry: DaemonServiceListEntry): string | null => {
+    const installedPath = String(entry.path ?? '').trim();
+    const derivedHappierHomeDir = (() => {
+      if (!installedPath) {
+        return '';
+      }
+      if (entry.platform === 'linux' && (entry.mode ?? 'user') === 'user') {
+        const marker = `${String.raw`/.config/systemd/user/`}`;
+        const index = installedPath.indexOf(marker);
+        if (index > 0) {
+          return join(installedPath.slice(0, index), '.happier');
         }
       }
-
-      if (!entry.installed || entry.platform !== 'linux') {
-        return false;
+      if (entry.platform === 'darwin') {
+        const marker = `${String.raw`/Library/LaunchAgents/`}`;
+        const index = installedPath.indexOf(marker);
+        if (index > 0) {
+          return join(installedPath.slice(0, index), '.happier');
+        }
       }
+      if (entry.platform === 'win32') {
+        const normalizedPath = installedPath.replaceAll('/', '\\');
+        const marker = '\\services\\';
+        const lowerPath = normalizedPath.toLowerCase();
+        const index = lowerPath.lastIndexOf(marker.toLowerCase());
+        if (index > 0) {
+          return normalizedPath.slice(0, index);
+        }
+      }
+      return '';
+    })();
+    const happierHomeDir = String(entry.happierHomeDir ?? '').trim() || derivedHappierHomeDir;
+    if (!happierHomeDir) {
+      return null;
+    }
 
+    const installRoot = entry.releaseChannel === 'preview'
+      ? 'cli-preview'
+      : entry.releaseChannel === 'publicdev'
+        ? 'cli-dev'
+        : 'cli';
+    const binaryName = entry.platform === 'win32' ? 'happier.exe' : 'happier';
+    const binaryPath = join(happierHomeDir, installRoot, 'current', binaryName);
+
+    if (configuredCliVersionByBinaryPathCache.has(binaryPath)) {
+      return configuredCliVersionByBinaryPathCache.get(binaryPath) ?? null;
+    }
+    if (!fs.existsSync(binaryPath)) {
+      configuredCliVersionByBinaryPathCache.set(binaryPath, null);
+      return null;
+    }
+
+    try {
+      const versionTimeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_VERSION_TIMEOUT_MS', 2000);
+      let res = spawnSync(binaryPath, ['--version'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: versionTimeoutMs,
+        env: buildServiceCommandEnv({ cmd: binaryPath, args: ['--version'], env: process.env }),
+      });
+      if (res.status !== 0 && entry.platform !== 'win32') {
+        res = spawnSync('bash', [binaryPath, '--version'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: versionTimeoutMs,
+          env: buildServiceCommandEnv({ cmd: 'bash', args: [binaryPath, '--version'], env: process.env }),
+        });
+      }
+      const version = String(res.stdout ?? '').trim().split(/\r?\n/u)[0]?.trim() || null;
+      const normalizedVersion = res.status === 0 && version ? version : null;
+      configuredCliVersionByBinaryPathCache.set(binaryPath, normalizedVersion);
+      return normalizedVersion;
+    } catch {
+      configuredCliVersionByBinaryPathCache.set(binaryPath, null);
+      return null;
+    }
+  };
+
+  const resolveRunningStateForEntry = (entry: DaemonServiceListEntry): boolean => {
+    if (isEntryCurrentActiveOwner(entry)) {
+      return true;
+    }
+
+    if (!entry.installed) {
+      return false;
+    }
+
+    if (entry.platform === 'linux') {
       const unitName = basename(String(entry.path ?? '').trim());
       if (!unitName || unitName === '.' || unitName === '..') {
         return false;
@@ -1037,12 +1143,10 @@ function mapDaemonServiceListEntriesToInventory(
         ? ['is-active', unitName]
         : ['--user', 'is-active', unitName];
 
-      const timeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_LIST_IS_ACTIVE_TIMEOUT_MS', 2000);
-
       try {
         const res = spawnSync('systemctl', args, {
           stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: timeoutMs,
+          timeout: runningStateTimeoutMs,
           env: buildServiceCommandEnv({ cmd: 'systemctl', args, env: process.env }),
         });
 
@@ -1056,6 +1160,84 @@ function mapDaemonServiceListEntriesToInventory(
       } catch {
         return false;
       }
+    }
+
+    if (entry.platform === 'darwin') {
+      const uid = process.getuid?.();
+      if (typeof uid !== 'number' || uid < 0) {
+        return false;
+      }
+      const label = resolveInventoryLabelForEntry(entry);
+      if (!label) {
+        return false;
+      }
+      const args = ['print', `gui/${uid}/${label}`];
+      try {
+        const res = spawnSync('launchctl', args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: runningStateTimeoutMs,
+          env: buildServiceCommandEnv({ cmd: 'launchctl', args, env: process.env }),
+        });
+        if ((res.status ?? 1) !== 0) {
+          return false;
+        }
+        const out = `${res.stdout ? String(res.stdout) : ''}${res.stderr ? String(res.stderr) : ''}`
+          .trim()
+          .toLowerCase();
+        return /(^|\n)\s*state\s*=\s*running(\r?\n|$)/u.test(out);
+      } catch {
+        return false;
+      }
+    }
+
+    if (entry.platform === 'win32') {
+      const taskName = resolveWindowsDaemonTaskName({
+        instanceId: entry.serverId,
+        channel: entry.releaseChannel,
+        targetMode: entry.targetMode,
+      });
+      const args = ['/Query', '/TN', taskName, '/FO', 'LIST', '/V'];
+      try {
+        const res = spawnSync('schtasks', args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: runningStateTimeoutMs,
+          env: buildServiceCommandEnv({ cmd: 'schtasks', args, env: process.env }),
+        });
+        const out = `${res.stdout ? String(res.stdout) : ''}${res.stderr ? String(res.stderr) : ''}`
+          .trim()
+          .toLowerCase();
+        if ((res.status ?? 1) !== 0 || !out) {
+          return false;
+        }
+        return /(^|\n)\s*status:\s*running(\r?\n|$)/u.test(out);
+      } catch {
+        return false;
+      }
+    }
+
+    return false;
+  };
+
+  return entries.map((entry) => ({
+    serviceType: 'daemon',
+    serverId: entry.serverId,
+    name: entry.name,
+    path: entry.path,
+    mode: entry.mode,
+    label: entry.label,
+    ring: entry.releaseChannel,
+    targetMode: entry.targetMode,
+    installed: entry.installed,
+    running: resolveRunningStateForEntry(entry),
+    configuredCliVersion: resolveConfiguredCliVersionForEntry(entry),
+    runningCliVersion: (() => {
+      if (!activeOwnerCliVersion || activeServiceLabel.length === 0) {
+        return null;
+      }
+      if (isEntryCurrentActiveOwner(entry)) {
+        return activeOwnerCliVersion;
+      }
+      return null;
     })(),
   }));
 }
@@ -1124,10 +1306,13 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
     const activeServiceLabel = ownership.kind !== 'none' && ownership.owner.serviceManaged === true
       ? ownership.owner.state.serviceLabel
       : null;
+    const activeOwnerCliVersion = ownership.kind !== 'none' && ownership.owner.serviceManaged === true
+      ? ownership.owner.state.startedWithCliVersion
+      : null;
     if (flags.json) {
       printJson({
         entries,
-        services: mapDaemonServiceListEntriesToInventory(entries, { activeServiceLabel }),
+        services: mapDaemonServiceListEntriesToInventory(entries, { activeServiceLabel, activeOwnerCliVersion }),
       });
       return;
     }
@@ -1797,7 +1982,14 @@ export async function runDaemonServiceCliCommand(params: Readonly<{ argv: readon
         platform: runtime.platform,
         installed,
         installedPath: paths.installedPath,
-        services,
+        services: mapDaemonServiceListEntriesToInventory(services, {
+          activeServiceLabel: ownership.kind !== 'none' && ownership.owner.serviceManaged === true
+            ? ownership.owner.state.serviceLabel
+            : null,
+          activeOwnerCliVersion: ownership.kind !== 'none' && ownership.owner.serviceManaged === true
+            ? ownership.owner.state.startedWithCliVersion
+            : null,
+        }),
         daemon: pid ? { pid, running: pidAlive, startedAt: state?.startedAt ?? null } : { pid: null, running: false, startedAt: null },
         owner,
         system: { ok: systemStatus.ok, output: systemStatus.out },

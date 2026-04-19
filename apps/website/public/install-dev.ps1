@@ -177,6 +177,31 @@ function Get-InstallerDisplayChannelLabel {
   return $Value
 }
 
+function Write-InstallerBullet {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Text,
+    [ConsoleColor] $Color
+  )
+
+  if ($PSBoundParameters.ContainsKey('Color')) {
+    Write-Host "  • $Text" -ForegroundColor $Color
+    return
+  }
+
+  Write-Host "  • $Text"
+}
+
+function Write-InstallerDetailBullet {
+  param (
+    [Parameter(Mandatory = $true)] [string] $Label,
+    [Parameter(Mandatory = $true)] [string] $Value
+  )
+
+  Write-Host "    • " -NoNewline
+  Write-Host "$Label:" -NoNewline -ForegroundColor White
+  Write-Host " $Value"
+}
+
 function Read-BackgroundServicePromptChoice {
   param (
     [Parameter(Mandatory = $true)] [string] $DefaultChoice,
@@ -262,6 +287,11 @@ function Resolve-WithDaemonPreference {
     }
     return $defaultChoice
   }
+
+  if ($hasExistingServices -and (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries)) {
+    return "0"
+  }
+
   return Read-BackgroundServicePromptChoice -DefaultChoice $defaultChoice -HasExistingServices $hasExistingServices
 }
 
@@ -338,20 +368,18 @@ function Get-InstalledBackgroundServiceInventory {
       return @{
         Supported = $false
         Entries = @()
+        Services = @()
       }
     }
     $payload = $raw | ConvertFrom-Json
     $propertyNames = @($payload.PSObject.Properties.Name)
-    if ($propertyNames -contains 'entries') {
+    $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } else { @() }
+    $services = if ($propertyNames -contains 'services') { @($payload.services) } else { @() }
+    if ($entries.Count -gt 0 -or $services.Count -gt 0) {
       return @{
         Supported = $true
-        Entries = @($payload.entries)
-      }
-    }
-    if ($propertyNames -contains 'services') {
-      return @{
-        Supported = $true
-        Entries = @($payload.services)
+        Entries = $entries
+        Services = $services
       }
     }
   }
@@ -359,12 +387,14 @@ function Get-InstalledBackgroundServiceInventory {
     return @{
       Supported = $false
       Entries = @()
+      Services = @()
     }
   }
 
   return @{
     Supported = $false
     Entries = @()
+    Services = @()
   }
 }
 
@@ -374,6 +404,32 @@ function Test-BackgroundServiceInventoryHasDefaultFollowing {
   )
 
   return @($Entries | Where-Object { $_.targetMode -eq 'default-following' }).Count -gt 0
+}
+
+function Get-BackgroundServiceDefaultFollowingChannel {
+  param (
+    [Parameter(Mandatory = $true)] [object[]] $Entries
+  )
+
+  $entry = @($Entries | Where-Object { $_.targetMode -eq 'default-following' } | Select-Object -First 1)
+  if ($entry.Count -eq 0 -or -not $entry[0].releaseChannel) {
+    return ""
+  }
+
+  return Get-InstallerDisplayChannelLabel -Value ([string]$entry[0].releaseChannel)
+}
+
+function Test-BackgroundServiceInventoryHasMatchingDefaultFollowing {
+  param (
+    [Parameter(Mandatory = $true)] [object[]] $Entries
+  )
+
+  $defaultChannel = Get-BackgroundServiceDefaultFollowingChannel -Entries $Entries
+  if (-not $defaultChannel) {
+    return $false
+  }
+
+  return $defaultChannel -eq (Get-InstallerDisplayChannelLabel -Value $Channel)
 }
 
 function Show-InstalledBackgroundServiceSummary {
@@ -389,7 +445,15 @@ function Show-InstalledBackgroundServiceSummary {
   Write-Host ""
   Write-Host "Background Service"
   Write-Host "  Installed services:"
-  foreach ($entry in @($Entries)) {
+  $displayInventory = Get-InstalledBackgroundServiceInventory -CliPath $CliPath
+  $displayEntries = if ($displayInventory.Supported -and $displayInventory.Services.Count -gt 0) {
+    @($displayInventory.Services)
+  }
+  else {
+    @($Entries)
+  }
+
+  foreach ($entry in $displayEntries) {
     $serviceName = if ($entry.name) {
       [string]$entry.name
     }
@@ -403,24 +467,43 @@ function Show-InstalledBackgroundServiceSummary {
       'Background service'
     }
 
-    Write-Host "  • $serviceName"
-    if ($entry.releaseChannel) {
-      Write-Host "    Release channel: $(Get-InstallerDisplayChannelLabel -Value ([string]$entry.releaseChannel))"
+    Write-InstallerBullet -Text $serviceName
+    $serviceChannel = if ($entry.releaseChannel) {
+      [string]$entry.releaseChannel
+    }
+    elseif ($entry.ring) {
+      [string]$entry.ring
+    }
+    else {
+      ""
+    }
+    if ($serviceChannel) {
+      Write-InstallerDetailBullet -Label "Release channel" -Value "$(Get-InstallerDisplayChannelLabel -Value $serviceChannel)"
     }
     if ($entry.serverId) {
-      Write-Host "    Relay profile: $([string]$entry.serverId)"
+      Write-InstallerDetailBullet -Label "Relay profile" -Value "$([string]$entry.serverId)"
     }
     if ($entry.mode) {
-      Write-Host "    Service scope: $([string]$entry.mode)"
+      Write-InstallerDetailBullet -Label "Service scope" -Value "$([string]$entry.mode)"
     }
     if ($entry.targetMode -eq 'default-following') {
-      Write-Host "    Startup mode: follows the selected release channel"
+      Write-InstallerDetailBullet -Label "Startup mode" -Value "follows the selected release channel"
     }
     elseif ($entry.targetMode -eq 'pinned') {
-      Write-Host "    Startup mode: pinned to this release channel"
+      Write-InstallerDetailBullet -Label "Startup mode" -Value "pinned to this release channel"
+    }
+    if ($null -ne $entry.running) {
+      $runningNow = if ($entry.running -eq $true) { 'yes' } else { 'no' }
+      Write-InstallerDetailBullet -Label "Running now" -Value $runningNow
+    }
+    if ($entry.configuredCliVersion) {
+      Write-InstallerDetailBullet -Label "Configured CLI version" -Value "$([string]$entry.configuredCliVersion)"
+    }
+    if ($entry.runningCliVersion) {
+      Write-InstallerDetailBullet -Label "Running CLI version" -Value "$([string]$entry.runningCliVersion)"
     }
     if ($entry.path) {
-      Write-Host "    Installed at: $([string]$entry.path)"
+      Write-InstallerDetailBullet -Label "Installed at" -Value "$([string]$entry.path)"
     }
   }
 
@@ -436,15 +519,15 @@ function Show-InstalledBackgroundServiceSummary {
   }
 
   if ($null -ne $status -and $null -ne $status.daemon) {
-    Write-Host "  Current relay owner:"
+    Write-Host "  Current relay status:"
     if ($status.daemon.running -eq $true -and $null -ne $status.daemon.pid) {
-      Write-Host "  • Running now: yes (pid $($status.daemon.pid))"
+      Write-InstallerBullet -Text "Running now: yes (pid $($status.daemon.pid))"
     }
     elseif ($status.daemon.running -eq $true) {
-      Write-Host "  • Running now: yes"
+      Write-InstallerBullet -Text "Running now: yes"
     }
     else {
-      Write-Host "  • Running now: no"
+      Write-InstallerBullet -Text "Running now: no"
     }
 
     if ($null -ne $status.owner) {
@@ -457,12 +540,12 @@ function Show-InstalledBackgroundServiceSummary {
       else {
         'another relay owner'
       }
-      Write-Host "  • Started by: $ownerLabel"
+      Write-InstallerBullet -Text "Started by: $ownerLabel"
 
       if ($status.owner.startedWithPublicReleaseChannel -or $status.owner.startedWithCliVersion) {
-        $ownerChannel = if ($status.owner.startedWithPublicReleaseChannel) { [string]$status.owner.startedWithPublicReleaseChannel } else { 'unknown' }
+        $ownerChannel = if ($status.owner.startedWithPublicReleaseChannel) { Get-InstallerDisplayChannelLabel -Value ([string]$status.owner.startedWithPublicReleaseChannel) } else { 'unknown' }
         $ownerVersion = if ($status.owner.startedWithCliVersion) { [string]$status.owner.startedWithCliVersion } else { 'unknown' }
-        Write-Host "  • Running CLI: $ownerChannel • $ownerVersion"
+        Write-InstallerBullet -Text "Running CLI: $ownerChannel • $ownerVersion"
       }
 
       if ($status.owner.currentInvocationMatches -eq $false) {
@@ -475,7 +558,7 @@ function Show-InstalledBackgroundServiceSummary {
         }
 
         if ($status.owner.serviceManaged -eq $true) {
-          if ((Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) -and $ownerChannelLabel -and $ownerChannelLabel -eq $channelLabel) {
+          if ((Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) -and $ownerChannelLabel -and $ownerChannelLabel -eq $channelLabel) {
             Write-Host "The running background service is already on the $channelLabel channel. Restart it only if you want this new install to take over immediately." -ForegroundColor Yellow
           }
           else {
@@ -495,25 +578,19 @@ function Show-InstalledBackgroundServiceSummary {
   Write-Host ""
   Write-Host "  Automatic startup:"
 
-  if (Test-BackgroundServiceInventoryHasDefaultFollowing -Entries $Entries) {
-    $defaultEntry = @($Entries | Where-Object { $_.targetMode -eq 'default-following' } | Select-Object -First 1)
-    $defaultChannel = if ($defaultEntry.releaseChannel) {
-      Get-InstallerDisplayChannelLabel -Value ([string]$defaultEntry.releaseChannel)
+  $defaultChannel = Get-BackgroundServiceDefaultFollowingChannel -Entries $Entries
+  if ($defaultChannel) {
+    if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) {
+      Write-InstallerBullet -Text "Automatic startup is already set to use the $defaultChannel channel." -Color Cyan
     }
     else {
-      ""
-    }
-    if ($defaultChannel) {
-      Write-Host "  • Automatic startup already follows the selected $defaultChannel release channel." -ForegroundColor Cyan
-    }
-    else {
-      Write-Host "  • Automatic startup already follows the selected release channel." -ForegroundColor Cyan
+      Write-InstallerBullet -Text "Automatic startup is currently set to use the $defaultChannel channel." -Color Cyan
     }
     return
   }
 
-  Write-Host "  • Automatic startup is still controlled by the background services listed above." -ForegroundColor Cyan
-  Write-Host "  • Installing this CLI does not change automatic startup by itself." -ForegroundColor Cyan
+  Write-InstallerBullet -Text "Automatic startup is still controlled by the background services listed above." -Color Cyan
+  Write-InstallerBullet -Text "Installing this CLI does not change automatic startup by itself." -Color Cyan
 }
 
 function Resolve-ExistingBackgroundServiceInstallStrategy {
@@ -527,6 +604,10 @@ function Resolve-ExistingBackgroundServiceInstallStrategy {
 
   if ($Entries.Count -eq 0) {
     return ""
+  }
+
+  if (Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries $Entries) {
+    return "skip"
   }
 
   $replacePrompt = "Use this installation for automatic startup?"

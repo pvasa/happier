@@ -91,19 +91,30 @@ test('installers use structured background-service copy before asking whether to
     bashSource.includes('Installed services:') && bashSource.includes('Automatic startup:'),
     'expected bash installer to split installed services from automatic startup guidance',
   );
+  assert.ok(bashSource.includes('Current relay status:'), 'expected bash installer to show current relay status with the service summary');
   assert.ok(
     bashSource.includes('Update automatic startup for the') && bashSource.includes('Use this installation for automatic startup?'),
     'expected bash installer prompts to ask only the next relevant automatic-startup decision',
   );
+  assert.match(
+    bashSource,
+    /if \[\[ "\$\{has_existing_services\}" == "1" \]\] && background_service_inventory_has_matching_default_following "\$\{services_json\}"; then[\s\S]*echo "0"/,
+    'expected bash installer to suppress automatic-startup prompts when the current default-following service already matches the selected channel',
+  );
 
   assert.ok(powershellSource.includes('Installed services:'), 'expected PowerShell installer to show installed background services before prompting');
   assert.ok(
-    powershellSource.includes('Current relay owner:') && powershellSource.includes('Automatic startup:'),
-    'expected PowerShell installer to split installed services, relay owner, and automatic startup guidance',
+    powershellSource.includes('Current relay status:') && powershellSource.includes('Automatic startup:'),
+    'expected PowerShell installer to split installed services, relay status, and automatic startup guidance',
   );
   assert.ok(
     powershellSource.includes('Update automatic startup for the') && powershellSource.includes('Use this installation for automatic startup?'),
     'expected PowerShell installer prompts to ask only the next relevant automatic-startup decision',
+  );
+  assert.match(
+    powershellSource,
+    /if \(\$hasExistingServices -and \(Test-BackgroundServiceInventoryHasMatchingDefaultFollowing -Entries \$Entries\)\) \{\s*return "0"\s*\}/,
+    'expected PowerShell installer to suppress automatic-startup prompts when the current default-following service already matches the selected channel',
   );
 });
 

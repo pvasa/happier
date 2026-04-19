@@ -524,6 +524,56 @@ test('install.sh renders installed services, current relay owner, and automatic 
       '  installed: /tmp/com.happier.cli.daemon.default.plist\n' +
       'company (company, stable, user)\n' +
       '  installed: /tmp/com.happier.cli.daemon.env_9675c02.plist',
+    HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
+      entries: [
+        {
+          name: 'Default background service',
+          serverId: 'default',
+          mode: 'user',
+          path: '/tmp/com.happier.cli.daemon.default.plist',
+          targetMode: 'default-following',
+          releaseChannel: 'stable',
+        },
+        {
+          name: 'company',
+          serverId: 'company',
+          mode: 'user',
+          path: '/tmp/com.happier.cli.daemon.env_9675c02.plist',
+          targetMode: 'pinned',
+          releaseChannel: 'stable',
+        },
+      ],
+      services: [
+        {
+          serviceType: 'daemon',
+          label: 'com.happier.cli.daemon.default',
+          serverId: 'default',
+          name: 'Default background service',
+          ring: 'stable',
+          mode: 'user',
+          targetMode: 'default-following',
+          installed: true,
+          running: false,
+          configuredCliVersion: '0.2.5-stable.100',
+          runningCliVersion: null,
+          path: '/tmp/com.happier.cli.daemon.default.plist',
+        },
+        {
+          serviceType: 'daemon',
+          label: 'com.happier.cli.daemon.env_9675c02',
+          serverId: 'company',
+          name: 'company',
+          ring: 'stable',
+          mode: 'user',
+          targetMode: 'pinned',
+          installed: true,
+          running: false,
+          configuredCliVersion: '0.2.4-stable.99',
+          runningCliVersion: null,
+          path: '/tmp/com.happier.cli.daemon.env_9675c02.plist',
+        },
+      ],
+    }),
     HAPPIER_TEST_SERVICE_STATUS_JSON: JSON.stringify({
       ok: true,
       daemon: { running: true, pid: 28768 },
@@ -546,14 +596,15 @@ test('install.sh renders installed services, current relay owner, and automatic 
     assert.match(scenario.stdout, /Release channel: stable/);
     assert.match(scenario.stdout, /Relay profile: default/);
     assert.match(scenario.stdout, /Service scope: user/);
-    assert.match(scenario.stdout, /Current relay owner:/);
+    assert.match(scenario.stdout, /Configured CLI version: 0\.2\.5-stable\.100/);
+    assert.match(scenario.stdout, /Current relay status:/);
     assert.match(scenario.stdout, /Running now: yes \(pid 28768\)/);
     assert.match(scenario.stdout, /Started by: manual relay runtime/);
     assert.match(scenario.stdout, /Running CLI: unknown • 0\.2\.1-preview\.1775503793\.4227/);
     assert.match(scenario.stdout, /The current relay is running manually, not from automatic startup/);
     assert.doesNotMatch(scenario.stdout, /gui\/501\/com\.happier\.cli\.daemon\.default/);
     assert.match(scenario.stdout, /Automatic startup:/);
-    assert.match(scenario.stdout, /Automatic startup already follows the selected release channel/);
+    assert.match(scenario.stdout, /Automatic startup is already set to use the stable channel/);
     assert.doesNotMatch(scenario.stdout, /cleanup step/);
     assert.doesNotMatch(scenario.stdout, /Update background service startup after installing the stable release-channel CLI\?/);
   } finally {
@@ -596,7 +647,7 @@ test('install.sh explains same-channel default background services as an immedia
   });
   try {
     assert.match(scenario.stdout, /Automatic startup:/);
-    assert.match(scenario.stdout, /Automatic startup already follows the selected stable release channel/);
+    assert.match(scenario.stdout, /Automatic startup is already set to use the stable channel/);
     assert.match(scenario.stdout, /The running background service is already on the stable channel/);
     assert.match(scenario.stdout, /Restart it only if you want this new install to take over immediately/);
     assert.doesNotMatch(scenario.stdout, /Automatic startup still follows the current managed default release-channel/);
@@ -605,6 +656,16 @@ test('install.sh explains same-channel default background services as an immedia
   } finally {
     await scenario.cleanup();
   }
+});
+
+test('install.sh does not prompt for automatic-startup changes when the current default service already matches the selected release channel', async () => {
+  const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
+  const raw = await readFile(path, 'utf8');
+
+  assert.match(
+    raw,
+    /if \[\[ "\$\{NONINTERACTIVE\}" == "1" \]\]; then[\s\S]*fi[\s\S]*if \[\[ "\$\{has_existing_services\}" == "1" \]\] && background_service_inventory_has_matching_default_following "\$\{services_json\}"; then[\s\S]*echo "0"[\s\S]*return[\s\S]*fi[\s\S]*prompt_for_daemon_install_choice/,
+  );
 });
 
 test('install.sh does not invent a relay owner summary when the status payload reports owner:null', async () => {
