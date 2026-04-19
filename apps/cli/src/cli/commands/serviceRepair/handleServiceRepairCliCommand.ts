@@ -5,7 +5,7 @@ import { renderDaemonServiceRepairOwnershipNote } from '@/daemon/ownership/evalu
 import { applyBackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
 import { assertDaemonServiceModeSupported } from '@/daemon/service/assertDaemonServiceModeSupported';
-import { resolveDaemonServiceCliRuntimeFromEnv } from '@/daemon/service/cli';
+import { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServiceInventoryEntries } from '@/daemon/service/cli';
 import { buildDoctorSnapshot, type DoctorSnapshot } from '@/ui/doctorSnapshot';
 import { configuration } from '@/configuration';
 
@@ -135,7 +135,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   });
   assertDaemonServiceModeSupported(runtime.platform, parsed.mode);
   if (parsed.modeExplicit && parsed.mode === 'system' && runtime.platform === 'linux' && runtime.uid !== 0) {
-    throw new Error('Root privileges are required for system mode background service repair');
+    throw new Error('Root privileges are required for system mode automatic startup repair');
   }
   const requiresRootForPlan = runtime.platform === 'linux'
     && runtime.uid !== 0
@@ -149,10 +149,16 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     ? `${ownershipNote.title} ${ownershipNote.lines.join(' ')}`.trim()
     : undefined;
   const snapshot = await buildDoctorSnapshot().catch(() => null);
+  const serviceInventory = await resolveDaemonServiceInventoryEntries({
+    runtime,
+    includeAllModes: runtime.platform === 'linux',
+    systemUser,
+  }).catch(() => []);
+  const repairSnapshotJson = buildDoctorRepairJsonSnapshot(snapshot);
+  const currentCliReleaseChannel = resolveCurrentPublicReleaseChannelLabel();
+  const currentCliVersion = String(configuration.currentCliVersion ?? '').trim() || null;
 
   if (parsed.asJson) {
-    const snapshotJson = buildDoctorRepairJsonSnapshot(snapshot);
-
     if (!parsed.execute) {
       console.log(JSON.stringify({
         ok: true,
@@ -161,13 +167,13 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
         actions: plan.actions,
         manualWarnings: plan.manualWarnings,
         warning: ownershipWarningText,
-        ...snapshotJson,
+        ...repairSnapshotJson,
       }, null, 2));
       return;
     }
 
     if (requiresRootForPlan) {
-      throw new Error('Root privileges are required to apply system mode background service repair actions');
+      throw new Error('Root privileges are required to apply system mode automatic startup repair actions');
     }
     assertRepairPlanSystemUserAvailable({
       plan,
@@ -189,7 +195,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       executedActions: result.executedActions,
       manualWarnings: plan.manualWarnings,
       warning: ownershipWarningText,
-      ...snapshotJson,
+      ...repairSnapshotJson,
     }, null, 2));
     return;
   }
@@ -199,6 +205,10 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       plan,
       commandPath: params.commandPath,
       snapshot,
+      serviceInventory,
+      daemonCurrentInvocationMatches: repairSnapshotJson.daemonCurrentInvocationMatches,
+      currentCliReleaseChannel,
+      currentCliVersion,
     }));
     if (parsed.reportOnly) {
       return;
@@ -213,7 +223,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       return;
     }
 
-    const answer = await promptInput('Apply these recommended background service repair actions now? [Y/n]: ');
+    const answer = await promptInput('Apply these recommended automatic startup repair actions now? [Y/n]: ');
     const normalizedAnswer = String(answer ?? '').trim().toLowerCase();
     if (normalizedAnswer !== '' && normalizedAnswer !== 'y' && normalizedAnswer !== 'yes') {
       return;
@@ -221,7 +231,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   }
 
   if (requiresRootForPlan) {
-    throw new Error('Root privileges are required to apply system mode background service repair actions');
+    throw new Error('Root privileges are required to apply system mode automatic startup repair actions');
   }
   assertRepairPlanSystemUserAvailable({
     plan,
@@ -237,7 +247,7 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     nodePath: runtime.nodePath,
     entryPath: runtime.entryPath,
   });
-  console.log(chalk.green('✓'), `Applied ${result.executedActions.length} background service repair action(s).`);
+  console.log(chalk.green('✓'), `Applied ${result.executedActions.length} automatic startup repair action(s).`);
   if (ownershipNote) {
     console.log(ownershipNote.title);
     for (const line of ownershipNote.lines) {

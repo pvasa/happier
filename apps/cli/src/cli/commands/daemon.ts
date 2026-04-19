@@ -122,8 +122,8 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
         });
       } else {
         console.log('Daemon already running');
-        console.log(`  Server: ${configuration.serverUrl}`);
-        console.log(`  Server ID: ${configuration.activeServerId}`);
+        console.log(`  Relay URL: ${configuration.serverUrl}`);
+        console.log(`  Relay profile: ${configuration.activeServerId}`);
       }
       process.exit(0);
     }
@@ -221,8 +221,8 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
         });
       } else {
         console.log('Daemon started successfully');
-        console.log(`  Server: ${configuration.serverUrl}`);
-        console.log(`  Server ID: ${configuration.activeServerId}`);
+        console.log(`  Relay URL: ${configuration.serverUrl}`);
+        console.log(`  Relay profile: ${configuration.activeServerId}`);
         if (account) console.log(`  Account: ${account}`);
       }
     } else {
@@ -239,8 +239,8 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
           });
         } else {
           console.log('Daemon is still starting in the background');
-          console.log(`  Server: ${configuration.serverUrl}`);
-          console.log(`  Server ID: ${configuration.activeServerId}`);
+          console.log(`  Relay URL: ${configuration.serverUrl}`);
+          console.log(`  Relay profile: ${configuration.activeServerId}`);
           if (latestDaemonLog?.path) {
             console.log(`  Latest daemon log: ${latestDaemonLog.path}`);
           }
@@ -272,8 +272,8 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
     const startupSource = resolveDaemonStartupSourceFromEnv(process.env);
     if (ownership.kind === 'compatible') {
       console.log(chalk.green('Daemon already running'));
-      console.log(`  Server: ${configuration.serverUrl}`);
-      console.log(`  Server ID: ${configuration.activeServerId}`);
+      console.log(`  Relay URL: ${configuration.serverUrl}`);
+      console.log(`  Relay profile: ${configuration.activeServerId}`);
       process.exit(0);
     }
     const takeoverDecision = resolveDaemonTakeoverDecision({
@@ -397,8 +397,8 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
 
     if (started) {
       console.log('Daemon restarted successfully');
-      console.log(`  Server: ${configuration.serverUrl}`);
-      console.log(`  Server ID: ${configuration.activeServerId}`);
+      console.log(`  Relay URL: ${configuration.serverUrl}`);
+      console.log(`  Relay profile: ${configuration.activeServerId}`);
       process.exit(0);
     }
 
@@ -485,7 +485,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       for (const entry of statuses) {
         const state = entry.daemon.running ? `running (pid ${entry.daemon.pid ?? '—'})` : 'not running';
         console.log(`${entry.name} (${entry.serverId})`);
-        if (entry.serverUrl) console.log(`  Server: ${entry.serverUrl}`);
+        if (entry.serverUrl) console.log(`  Relay URL: ${entry.serverUrl}`);
         console.log(`  Daemon: ${state}`);
         if (entry.daemon.staleStateFile) console.log(`  Note: stale state file: ${entry.daemonStatePath}`);
         console.log('');
@@ -534,15 +534,15 @@ ${chalk.bold('Usage:')}
   happier daemon restart [--takeover]  Restart the daemon (stop → start)
   happier daemon stop               Stop a manual daemon (sessions stay alive; use happier service stop for installed background services)
   happier daemon stop --kill-sessions  Stop a manual daemon and its tracked sessions
-  happier daemon stop --all         Stop daemons for all configured servers
+  happier daemon stop --all         Stop daemons for all configured relays
   happier daemon restart [--takeover]  Restart the daemon
   happier daemon restart --kill-sessions  Restart the daemon and its tracked sessions
   happier daemon start-sync [--takeover]  Start the daemon synchronously
   happier daemon status             Show daemon status
-  happier daemon status --all       Show daemon status for all configured servers
+  happier daemon status --all       Show daemon status for all configured relays
   happier daemon list               List active sessions
-  happier daemon install            Install the background service (legacy alias)
-  happier daemon uninstall          Uninstall the background service (legacy alias)
+  happier daemon install            Enable automatic startup (legacy alias)
+  happier daemon uninstall          Disable automatic startup (legacy alias)
 	  happier service                   Manage automatic startup
 	  happier service list              List installed background services
 	  happier doctor repair             Preview or apply recommended automatic startup repair actions
@@ -550,7 +550,7 @@ ${chalk.bold('Usage:')}
 	  happier daemon service list       Legacy alias for service list
 	  happier daemon service repair     Legacy alias for service repair
 
-  Prefix with --server/--server-url to target a specific server profile for this invocation.
+  Prefix with --server/--server-url to target a specific relay profile for this invocation.
   Example: happier --server company service install
 
   For installed background services, use happier service start|stop|restart.

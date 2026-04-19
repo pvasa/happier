@@ -9,10 +9,11 @@ const {
   applyBackgroundServiceRepairPlanMock,
   buildDoctorSnapshotMock,
   isInteractiveTerminalMock,
-  promptInputMock,
-  resolveDaemonServiceCliRuntimeFromEnvMock,
-  resolveDaemonServiceListEntriesMock,
-} = vi.hoisted(() => ({
+	  promptInputMock,
+	  resolveDaemonServiceCliRuntimeFromEnvMock,
+	  resolveDaemonServiceInventoryEntriesMock,
+	  resolveDaemonServiceListEntriesMock,
+	} = vi.hoisted(() => ({
   applyBackgroundServiceRepairPlanMock: vi.fn(async (_plan: unknown, _runtime: unknown) => ({ executedActions: [] })),
   buildDoctorSnapshotMock: vi.fn(async () => ({
     capturedAt: '2026-04-19T00:00:00.000Z',
@@ -78,8 +79,8 @@ const {
     },
   })),
   isInteractiveTerminalMock: vi.fn(() => false),
-  promptInputMock: vi.fn<(prompt: string) => Promise<string>>(async (_prompt: string) => ''),
-  resolveDaemonServiceCliRuntimeFromEnvMock: vi.fn((_params?: unknown) => ({
+	  promptInputMock: vi.fn<(prompt: string) => Promise<string>>(async (_prompt: string) => ''),
+	  resolveDaemonServiceCliRuntimeFromEnvMock: vi.fn((_params?: unknown) => ({
     platform: 'linux',
     channel: 'stable',
     targetMode: 'default-following',
@@ -92,14 +93,16 @@ const {
     webappUrl: 'https://app.example.test',
     nodePath: '/usr/bin/node',
     entryPath: '/opt/happier/index.mjs',
-  })),
-  resolveDaemonServiceListEntriesMock: vi.fn<(_runtime: unknown, _options?: unknown) => Promise<DaemonServiceListEntry[]>>(async (_runtime: unknown, _options?: unknown) => []),
-}));
+	  })),
+	  resolveDaemonServiceInventoryEntriesMock: vi.fn(async (_params?: unknown) => []),
+	  resolveDaemonServiceListEntriesMock: vi.fn<(_runtime: unknown, _options?: unknown) => Promise<DaemonServiceListEntry[]>>(async (_runtime: unknown, _options?: unknown) => []),
+	}));
 
 vi.mock('@/daemon/service/cli', () => ({
-  resolveDaemonServiceCliRuntimeFromEnv: (params?: unknown) => resolveDaemonServiceCliRuntimeFromEnvMock(params),
-  resolveDaemonServiceListEntries: (runtime: unknown, options?: unknown) => resolveDaemonServiceListEntriesMock(runtime, options),
-}));
+	  resolveDaemonServiceCliRuntimeFromEnv: (params?: unknown) => resolveDaemonServiceCliRuntimeFromEnvMock(params),
+	  resolveDaemonServiceInventoryEntries: (params?: unknown) => resolveDaemonServiceInventoryEntriesMock(params),
+	  resolveDaemonServiceListEntries: (runtime: unknown, options?: unknown) => resolveDaemonServiceListEntriesMock(runtime, options),
+	}));
 
 vi.mock('@/diagnostics/backgroundServiceRepair', () => ({
   applyBackgroundServiceRepairPlan: (plan: unknown, runtime: unknown) => applyBackgroundServiceRepairPlanMock(plan, runtime),
@@ -244,7 +247,8 @@ describe('handleServiceRepairCliCommand', () => {
       });
 
       expect(output.text()).toContain('Automatic startup:');
-      expect(output.text()).toContain('Running daemon (selected relay):');
+      expect(output.text()).toContain('Daemon:');
+      expect(output.text()).toContain('relay profile: cloud');
       expect(output.text()).toContain('Running now:');
       expect(output.text()).toContain('pid 4321');
       expect(output.text()).toContain('Local relay installs:');
@@ -284,7 +288,7 @@ describe('handleServiceRepairCliCommand', () => {
       });
 
       expect(output.text()).toContain('Automatic startup:');
-      expect(output.text()).toContain('Background service repair');
+      expect(output.text()).toContain('Automatic startup repair');
       expect(promptInputMock).not.toHaveBeenCalled();
     } finally {
       output.restore();

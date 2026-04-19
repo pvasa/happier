@@ -1,5 +1,6 @@
 import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import type { DoctorSnapshot } from '@/ui/doctorSnapshot';
+import type { DaemonServiceInventoryEntry } from '@/daemon/service/cli';
 
 import { renderServiceRepairRuntimeSummary } from './renderServiceRepairRuntimeSummary';
 
@@ -7,10 +8,18 @@ export function renderServiceRepairPlan(params: Readonly<{
   plan: BackgroundServiceRepairPlan;
   commandPath: string;
   snapshot?: DoctorSnapshot | null;
+  serviceInventory?: readonly DaemonServiceInventoryEntry[];
+  daemonCurrentInvocationMatches?: boolean | null;
+  currentCliReleaseChannel?: string | null;
+  currentCliVersion?: string | null;
 }>): string {
   const summaryLines = renderServiceRepairRuntimeSummary({
     plan: params.plan,
     snapshot: params.snapshot ?? null,
+    serviceInventory: params.serviceInventory,
+    daemonCurrentInvocationMatches: params.daemonCurrentInvocationMatches,
+    currentCliReleaseChannel: params.currentCliReleaseChannel,
+    currentCliVersion: params.currentCliVersion,
   });
   const warningLines = params.plan.manualWarnings.length > 0
     ? [
@@ -25,8 +34,8 @@ export function renderServiceRepairPlan(params: Readonly<{
       ...summaryLines,
       '',
       params.plan.manualWarnings.length > 0
-        ? 'No automatic background service repair actions are available.'
-        : 'No background service repair actions are needed.',
+        ? 'No automatic startup repair actions are available.'
+        : 'No automatic startup repair actions are needed.',
       ...warningLines,
     ].join('\n');
   }
@@ -34,7 +43,7 @@ export function renderServiceRepairPlan(params: Readonly<{
   return [
     ...summaryLines,
     '',
-    `Background service repair (${params.plan.actions.length})`,
+    `Automatic startup repair (${params.plan.actions.length})`,
     '',
     ...params.plan.actions.map((action, index) => {
       if (action.kind === 'remove-service') {

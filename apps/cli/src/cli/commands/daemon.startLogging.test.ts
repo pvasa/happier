@@ -140,8 +140,8 @@ describe('happier daemon start output', () => {
       const stdout = await runDaemonStartAndCapture(0);
 
       expect(stdout).toContain('Daemon started successfully');
-      expect(stdout).toContain('Server: http://localhost:4321');
-      expect(stdout).toContain('Server ID: env_test');
+      expect(stdout).toContain('Relay URL: http://localhost:4321');
+      expect(stdout).toContain('Relay profile: env_test');
       expect(stdout).toContain('Account: account-123');
     } finally {
       envScope.restore();
@@ -264,7 +264,7 @@ describe('happier daemon start output', () => {
       const stdout = await runDaemonStartAndCapture(0);
 
       expect(stdout).toContain('Daemon is still starting in the background');
-      expect(stdout).toContain('Server:');
+      expect(stdout).toContain('Relay URL:');
       expect(stdout).toContain('/tmp/happier-daemon.log');
     } finally {
       envScope.restore();

@@ -34,7 +34,7 @@ describe('renderServiceRepairPlan', () => {
       },
     });
 
-    expect(rendered).toContain('No automatic background service repair actions are available.');
+    expect(rendered).toContain('No automatic startup repair actions are available.');
     expect(rendered).toContain('Manual cleanup required:');
     expect(rendered).toContain('happier-daemon.preview.default.service');
   });
@@ -126,7 +126,8 @@ describe('renderServiceRepairPlan', () => {
 
     expect(rendered).toContain('Automatic startup:');
     expect(rendered).toContain('Default background service');
-    expect(rendered).toContain('Running daemon (selected relay):');
+    expect(rendered).toContain('Daemon:');
+    expect(rendered).toContain('relay profile: cloud');
     expect(rendered).toContain('Running now:');
     expect(rendered).toContain('pid 4321');
     expect(rendered).toContain('Started by: manual daemon start');
