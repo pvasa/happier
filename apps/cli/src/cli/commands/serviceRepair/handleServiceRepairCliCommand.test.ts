@@ -319,7 +319,7 @@ describe('handleServiceRepairCliCommand', () => {
       });
 
       expect(output.text()).toContain('Automatic startup:');
-      expect(output.text()).toContain('Automatic startup repair');
+      expect(output.text()).not.toContain('Automatic startup repair');
       expect(promptInputMock).not.toHaveBeenCalled();
     } finally {
       output.restore();

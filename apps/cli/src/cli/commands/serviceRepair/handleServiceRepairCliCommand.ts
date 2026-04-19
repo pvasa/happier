@@ -13,6 +13,7 @@ import { configuration } from '@/configuration';
 import { isInteractiveTerminal, promptInput } from '../server/commandUtilities';
 import { assertRepairPlanSystemUserAvailable, resolveBackgroundServiceRepairSystemUser } from './repairSystemUser';
 import { renderServiceRepairPlan } from './renderServiceRepairPlan';
+import { renderServiceRepairRuntimeSummary } from './renderServiceRepairRuntimeSummary';
 
 function resolveModeFromText(raw: string, source: string): 'user' | 'system' {
   const value = String(raw ?? '').trim().toLowerCase();
@@ -229,6 +230,18 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
   }
 
   if (!parsed.execute) {
+    if (parsed.reportOnly) {
+      console.log(renderServiceRepairRuntimeSummary({
+        plan,
+        snapshot,
+        serviceInventory,
+        daemonCurrentInvocationMatches: repairSnapshotJson.daemonCurrentInvocationMatches,
+        currentCliReleaseChannel,
+        currentCliVersion,
+      }).join('\n'));
+      return;
+    }
+
     console.log(renderServiceRepairPlan({
       plan,
       commandPath: params.commandPath,
@@ -238,9 +251,6 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
       currentCliReleaseChannel,
       currentCliVersion,
     }));
-    if (parsed.reportOnly) {
-      return;
-    }
     if (ownershipNote) {
       console.log(ownershipNote.title);
       for (const line of ownershipNote.lines) {
