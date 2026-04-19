@@ -1963,16 +1963,14 @@ run_post_install_action() {
   fi
 
   local -a args=()
-  local -a default_args=()
   if [[ ${#RUN_ACTION_DEFAULT_ARGS[@]} -gt 0 ]]; then
     if [[ "${op}" == "setup-relay" ]]; then
       while IFS= read -r arg; do
-        default_args+=("${arg}")
+        args+=("${arg}")
       done < <(filter_supported_setup_relay_default_args "${cli_bin}")
     else
-      default_args=("${RUN_ACTION_DEFAULT_ARGS[@]}")
+      args+=("${RUN_ACTION_DEFAULT_ARGS[@]}")
     fi
-    args+=("${default_args[@]}")
   fi
   if [[ ${#RUN_ACTION_ARGS[@]} -gt 0 ]]; then
     args+=("${RUN_ACTION_ARGS[@]}")

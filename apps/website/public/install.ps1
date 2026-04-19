@@ -865,7 +865,7 @@ function Invoke-PostInstallAction {
     [Parameter(Mandatory = $true)] [string] $CliPath
   )
 
-  $setupRelayDefaultArgs = @()
+  $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
   if ($SetupRelay -and -not $Run) {
     $Run = "setup-relay"
   }
@@ -875,6 +875,9 @@ function Invoke-PostInstallAction {
 
   $runValue = $Run.Trim().ToLowerInvariant()
   if ($runValue -eq "setup-relay" -and $setupRelayDefaultArgs.Count -eq 0) {
+    $setupRelayDefaultArgs = @("--mode", "user", "--yes", "--channel", $(if ($Channel -eq "publicdev") { "dev" } else { $Channel }), "--preserve-active-server")
+  }
+  if ($runValue -eq "setup-relay") {
     $setupRelayDefaultArgs = Get-SupportedSetupRelayDefaultArgs -CliPath $CliPath
   }
   $requiredSubcommand = $null
