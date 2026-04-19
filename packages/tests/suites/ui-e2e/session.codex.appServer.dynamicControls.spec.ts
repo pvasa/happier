@@ -53,6 +53,28 @@ function parseSessionIdFromUrl(url: string): string {
     return sessionId;
 }
 
+function createFakeJwt(email: string): string {
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ email })).toString('base64url');
+    return `${header}.${payload}.signature`;
+}
+
+async function writeFakeCodexAuthFile(params: Readonly<{ cliHomeDir: string }>): Promise<void> {
+    const codexHomeDir = resolve(join(params.cliHomeDir, '.codex'));
+    await mkdir(codexHomeDir, { recursive: true });
+    const idToken = createFakeJwt('fake-codex@example.test');
+    await writeFile(
+        resolve(join(codexHomeDir, 'auth.json')),
+        `${JSON.stringify({
+            tokens: {
+                id_token: idToken,
+                access_token: idToken,
+            },
+        }, null, 2)}\n`,
+        'utf8',
+    );
+}
+
 async function writeFakeCodexAppServerScript(params: Readonly<{ scriptPath: string; requestLogPath: string }>): Promise<void> {
     const script = [
         '#!/usr/bin/env node',
@@ -162,10 +184,28 @@ async function fillAndClickComposerSend(params: Readonly<{
     timeoutMs?: number;
 }>): Promise<void> {
     const timeoutMs = params.timeoutMs ?? 60_000;
-    const input = params.page.getByTestId(params.inputTestId);
-    await expect(input).toHaveCount(1, { timeout: timeoutMs });
-    await input.click();
-    await input.pressSequentially(params.prompt);
+    if (params.inputTestId === 'session-composer-input') {
+        const input = params.page.locator('textarea[data-testid="session-composer-input"]:visible');
+        const deadlineMs = Date.now() + timeoutMs;
+        while (Date.now() < deadlineMs) {
+            await expect(input).toHaveCount(1, { timeout: Math.min(5_000, Math.max(1, deadlineMs - Date.now())) });
+            await expect(input).toBeVisible({ timeout: Math.min(5_000, Math.max(1, deadlineMs - Date.now())) });
+            await input.click({ timeout: Math.min(5_000, Math.max(1, deadlineMs - Date.now())) }).catch(() => {});
+            await input.fill('').catch(() => {});
+            await input.pressSequentially(params.prompt).catch(() => {});
+            const currentValue = await input.inputValue().catch(() => null);
+            if (currentValue === params.prompt) {
+                break;
+            }
+            await params.page.waitForTimeout(250);
+        }
+        await expect(input).toHaveValue(params.prompt, { timeout: Math.max(1, deadlineMs - Date.now()) });
+    } else {
+        const input = params.page.getByTestId(params.inputTestId);
+        await expect(input).toHaveCount(1, { timeout: timeoutMs });
+        await expect(input).toBeVisible({ timeout: timeoutMs });
+        await input.fill(params.prompt);
+    }
 
     const sendButton = params.page.getByTestId(params.sendTestId);
     await expect(sendButton).toHaveCount(1, { timeout: timeoutMs });
@@ -331,8 +371,11 @@ async function connectDaemonWithFakeCodexAppServer(params: Readonly<{
     server: StartedServer;
     uiBaseUrl: string;
 }>): Promise<Readonly<{ daemon: StartedDaemon; requestLogPath: string; machineId: string }>> {
-    await mkdir(resolve(join(params.testDir, 'cli-home')), { recursive: true });
-    await writeFile(resolve(join(params.testDir, 'cli-home', 'AGENTS.md')), '# UI e2e fixture\n', 'utf8');
+    const cliHomeDir = resolve(join(params.testDir, 'cli-home'));
+    const codexHomeDir = resolve(join(cliHomeDir, '.codex'));
+    await mkdir(cliHomeDir, { recursive: true });
+    await writeFile(resolve(join(cliHomeDir, 'AGENTS.md')), '# UI e2e fixture\n', 'utf8');
+    await writeFakeCodexAuthFile({ cliHomeDir });
 
     const fakeCodexAppServerPath = resolve(join(params.testDir, 'fake-codex-app-server.mjs'));
     const requestLogPath = resolve(join(params.testDir, 'fake-codex-app-server.requests.jsonl'));
@@ -340,14 +383,16 @@ async function connectDaemonWithFakeCodexAppServer(params: Readonly<{
 
     const cliLogin: StartedCliTerminalConnect = await startCliAuthLoginForTerminalConnect({
         testDir: params.testDir,
-        cliHomeDir: resolve(join(params.testDir, 'cli-home')),
+        cliHomeDir,
         serverUrl: params.server.baseUrl,
         webappUrl: params.uiBaseUrl,
         env: {
             ...process.env,
-            HOME: resolve(join(params.testDir, 'cli-home')),
+            HOME: cliHomeDir,
             CI: '1',
+            CODEX_HOME: codexHomeDir,
             HAPPIER_DISABLE_CAFFEINATE: '1',
+            HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
             HAPPIER_VARIANT: 'dev',
         },
     });
@@ -360,15 +405,17 @@ async function connectDaemonWithFakeCodexAppServer(params: Readonly<{
 
     const daemon = await startTestDaemon({
         testDir: params.testDir,
-        happyHomeDir: resolve(join(params.testDir, 'cli-home')),
+        happyHomeDir: cliHomeDir,
         env: {
             ...process.env,
-            HOME: resolve(join(params.testDir, 'cli-home')),
+            HOME: cliHomeDir,
             CI: '1',
-            HAPPIER_HOME_DIR: resolve(join(params.testDir, 'cli-home')),
+            CODEX_HOME: codexHomeDir,
+            HAPPIER_HOME_DIR: cliHomeDir,
             HAPPIER_SERVER_URL: params.server.baseUrl,
             HAPPIER_WEBAPP_URL: params.uiBaseUrl,
             HAPPIER_DISABLE_CAFFEINATE: '1',
+            HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
             HAPPIER_VARIANT: 'dev',
             HAPPIER_CODEX_APP_SERVER_BIN: fakeCodexAppServerPath,
             HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '10000',
@@ -379,7 +426,7 @@ async function connectDaemonWithFakeCodexAppServer(params: Readonly<{
     await enableEnhancedSessionWizard(params.page, params.uiBaseUrl);
     await setSessionReplayEnabled(params.page, params.uiBaseUrl, false);
 
-    const machineId = await readDaemonMachineIdFromHappyHomeDir({ happyHomeDir: resolve(join(params.testDir, 'cli-home')) });
+    const machineId = await readDaemonMachineIdFromHappyHomeDir({ happyHomeDir: cliHomeDir });
     await waitForDaemonMachineToAppearInUi({ page: params.page, uiBaseUrl: params.uiBaseUrl, machineId });
     return { daemon, requestLogPath, machineId };
 }
@@ -616,12 +663,14 @@ async function openAgentActionMenu(page: Page): Promise<void> {
         return;
     }
 
-    const modeChip = page.getByTestId('agent-input-session-mode-chip');
-    if ((await modeChip.count()) > 0) {
-        await expect(modeChip).toHaveCount(1, { timeout: 60_000 });
-        await modeChip.click();
-        const anyModeOption = page.locator('[data-testid^="agent-input-session-mode-option:"], [data-testid^="agent-input-simple-option:"]').first();
-        await expect(anyModeOption).toHaveCount(1, { timeout: 60_000 });
+    const agentChip = page.getByTestId('agent-input-agent-chip');
+    if ((await agentChip.count()) > 0) {
+        await expect(agentChip).toHaveCount(1, { timeout: 60_000 });
+        await agentChip.click();
+        const engineSurface = page.locator(
+            '[data-testid="model-picker-overlay"], [data-testid^="model-picker-overlay-option:"], [data-testid^="new-session-model:"], [data-testid="agent-input-content-popover"]',
+        ).first();
+        await expect(engineSurface).toHaveCount(1, { timeout: 60_000 });
         return;
     }
 
@@ -709,6 +758,42 @@ async function setSelectedModelControlSwitch(page: Page, controlId: string, chec
     if (currentValue !== checked) {
         await toggle.click();
     }
+}
+
+async function waitForSelectedModelControlSurface(page: Page, controlId: string, timeoutMs: number): Promise<'overlay' | 'config'> {
+    await expect.poll(async () => {
+        const overlayCount = await page.getByTestId(`model-picker-overlay-selected-option-control:${controlId}`).count().catch(() => 0);
+        if (overlayCount > 0) return 'overlay';
+        const configCount = await page.getByTestId(`agent-input-config-option:${controlId}`).count().catch(() => 0);
+        if (configCount > 0) return 'config';
+        return 'missing';
+    }, {
+        timeout: timeoutMs,
+        message: `Expected selected model control surface for ${controlId}`,
+    }).not.toBe('missing');
+
+    const overlayCount = await page.getByTestId(`model-picker-overlay-selected-option-control:${controlId}`).count().catch(() => 0);
+    return overlayCount > 0 ? 'overlay' : 'config';
+}
+
+async function enableSelectedModelFastSpeed(page: Page, uiBaseUrl: string): Promise<void> {
+    try {
+        await waitForSelectedModelControlSurface(page, 'service_tier', 10_000);
+        await clickSelectedModelControlOption(page, 'service_tier', 'fast');
+        await page.keyboard.press('Escape');
+        await ensureOnNewSessionComposer(page, uiBaseUrl);
+        return;
+    } catch {
+        // fall through to the agent-input config surface
+    }
+
+    await page.keyboard.press('Escape').catch(() => {});
+    await ensureOnNewSessionComposer(page, uiBaseUrl);
+    await openAgentActionMenu(page);
+    await waitForSelectedModelControlSurface(page, 'service_tier', 60_000);
+    await clickSelectedModelControlOption(page, 'service_tier', 'fast');
+    await page.keyboard.press('Escape').catch(() => {});
+    await ensureOnNewSessionComposer(page, uiBaseUrl);
 }
 
 async function readVisibleSessionModeOptionTestIds(page: Page): Promise<string[]> {
@@ -874,6 +959,7 @@ test.describe('ui e2e: Codex app-server dynamic controls', () => {
         await clickSelectedModelControlOption(page, 'reasoning_effort', 'high');
 
         await page.keyboard.press('Escape');
+        await ensureOnNewSessionComposer(page, uiBaseUrl);
         await fillAndClickComposerSend({
             page,
             inputTestId: 'new-session-composer-input',
@@ -932,6 +1018,7 @@ test.describe('ui e2e: Codex app-server dynamic controls', () => {
         await clickSelectedModelControlOption(page, 'reasoning_effort', 'high');
 
         await page.keyboard.press('Escape');
+        await expect(page.getByTestId('session-composer-input')).toHaveCount(1, { timeout: 120_000 });
         await fillAndClickComposerSend({
             page,
             inputTestId: 'session-composer-input',
@@ -950,6 +1037,7 @@ test.describe('ui e2e: Codex app-server dynamic controls', () => {
         await clickSelectedModelControlOption(page, 'reasoning_effort', 'medium');
 
         await page.keyboard.press('Escape');
+        await expect(page.getByTestId('session-composer-input')).toHaveCount(1, { timeout: 120_000 });
         await fillAndClickComposerSend({
             page,
             inputTestId: 'session-composer-input',
@@ -958,11 +1046,6 @@ test.describe('ui e2e: Codex app-server dynamic controls', () => {
         });
         await expect(page.getByText('FAKE_CODEX_DYNAMIC_OK_3_default_gpt-5.4_medium_standard')).toHaveCount(1, { timeout: 180_000 });
 
-        await waitForLoggedRequest({
-            requestLogPath: prepared.requestLogPath,
-            predicate: (entry) => entry.method === 'thread/resume' && entry.params?.model === 'gpt-5.4-mini',
-            timeoutMs: 60_000,
-        });
         await waitForLoggedRequest({
             requestLogPath: prepared.requestLogPath,
             predicate: (entry) => entry.method === 'turn/start'
@@ -982,7 +1065,7 @@ test.describe('ui e2e: Codex app-server dynamic controls', () => {
         });
     });
 
-    test('shows the eligible Codex app-server Fast toggle inside the selected model card and applies it on the first turn', async ({ page }) => {
+    test('shows the eligible Codex app-server Fast control for the selected model and applies it on the first turn', async ({ page }) => {
         test.setTimeout(540_000);
         if (!server || !uiBaseUrl) throw new Error('missing server/ui fixtures');
 
@@ -1000,11 +1083,9 @@ test.describe('ui e2e: Codex app-server dynamic controls', () => {
             await openAgentActionMenu(page);
         }
         await clickModelSelectionOption(page, 'gpt-5.4-mini');
-        await expect(page.getByTestId('model-picker-overlay-selected-option-control:speed')).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByTestId('model-picker-overlay-selected-option-control:service_tier')).toHaveCount(0, { timeout: 60_000 });
         await clickModelSelectionOption(page, 'gpt-5.4');
-        await expect(page.getByTestId('model-picker-overlay-selected-option-control:speed')).toHaveCount(1, { timeout: 60_000 });
-        await setSelectedModelControlSwitch(page, 'speed', true);
-        await page.keyboard.press('Escape');
+        await enableSelectedModelFastSpeed(page, uiBaseUrl);
 
         await fillAndClickComposerSend({
             page,

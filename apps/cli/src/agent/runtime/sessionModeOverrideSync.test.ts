@@ -45,12 +45,24 @@ describe('createSessionModeOverrideSynchronizer', () => {
     expect(setSessionMode).toHaveBeenCalledWith('plan');
   });
 
-  it('treats modeId="default" as a clear-override marker (no runtime call, no retry)', async () => {
+  it('treats modeId="default" as a clear-override marker when the provider has no real default option', async () => {
     const setSessionMode = vi.fn(async (_modeId: string) => {});
 
     const sync = createSessionModeOverrideSynchronizer({
       session: {
-        getMetadataSnapshot: () => ({ acpSessionModeOverrideV1: { v: 1, updatedAt: 22, modeId: 'default' } } as any),
+        getMetadataSnapshot: () => ({
+          sessionModesV1: {
+            v: 1,
+            provider: 'opencode',
+            updatedAt: 1,
+            currentModeId: 'build',
+            availableModes: [
+              { id: 'build', name: 'Build' },
+              { id: 'plan', name: 'Plan' },
+            ],
+          },
+          acpSessionModeOverrideV1: { v: 1, updatedAt: 22, modeId: 'default' },
+        } as any),
       },
       runtime: { setSessionMode },
       isStarted: () => true,
@@ -64,6 +76,34 @@ describe('createSessionModeOverrideSynchronizer', () => {
     sync.syncFromMetadata();
     await Promise.resolve();
     expect(setSessionMode).not.toHaveBeenCalled();
+  });
+
+  it('applies modeId="default" when the provider exposes it as a real session mode option', async () => {
+    const setSessionMode = vi.fn(async (_modeId: string) => {});
+
+    const sync = createSessionModeOverrideSynchronizer({
+      session: {
+        getMetadataSnapshot: () => ({
+          sessionModesV1: {
+            v: 1,
+            provider: 'codex',
+            updatedAt: 1,
+            currentModeId: 'plan',
+            availableModes: [
+              { id: 'default', name: 'Default' },
+              { id: 'plan', name: 'Plan' },
+            ],
+          },
+          acpSessionModeOverrideV1: { v: 1, updatedAt: 23, modeId: 'default' },
+        } as any),
+      },
+      runtime: { setSessionMode },
+      isStarted: () => true,
+    });
+
+    sync.syncFromMetadata();
+    await Promise.resolve();
+    expect(setSessionMode).toHaveBeenCalledWith('default');
   });
 
   it('retries the same override when runtime apply fails', async () => {
