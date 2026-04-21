@@ -511,7 +511,8 @@ export class PermissionHandler {
         if (this.pendingRequests.size === 0) return;
 
         const effectiveMode = resolveClaudeSdkPermissionModeFromEnhancedMode({ permissionMode: mode });
-        if (effectiveMode !== 'bypassPermissions' && effectiveMode !== 'acceptEdits') return;
+        const isEditAutoApproveMode = effectiveMode === 'acceptEdits' || effectiveMode === 'auto';
+        if (effectiveMode !== 'bypassPermissions' && !isEditAutoApproveMode) return;
 
         const idsToApprove: string[] = [];
         for (const [id, pending] of this.pendingRequests.entries()) {
@@ -634,7 +635,7 @@ export class PermissionHandler {
             return { behavior: 'allow', updatedInput: rewrittenInput as Record<string, unknown> };
         }
 
-        if (effectiveMode === 'acceptEdits' && descriptor.edit) {
+        if ((effectiveMode === 'acceptEdits' || effectiveMode === 'auto') && descriptor.edit) {
             return { behavior: 'allow', updatedInput: rewrittenInput as Record<string, unknown> };
         }
 

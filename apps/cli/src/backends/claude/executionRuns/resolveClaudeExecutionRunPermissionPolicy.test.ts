@@ -15,6 +15,7 @@ describe('resolveClaudeExecutionRunPermissionPolicy', () => {
     expect(resolveClaudeExecutionRunPermissionPolicy('yolo')).toBe('workspace_write');
     expect(resolveClaudeExecutionRunPermissionPolicy('acceptEdits')).toBe('workspace_write');
     expect(resolveClaudeExecutionRunPermissionPolicy('bypassPermissions')).toBe('workspace_write');
+    expect(resolveClaudeExecutionRunPermissionPolicy('auto')).toBe('workspace_write');
   });
 
   it('defaults to read_only for empty/unknown values', () => {

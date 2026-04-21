@@ -45,6 +45,7 @@ describe('DeferredApiSessionClient', () => {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(),
@@ -93,6 +94,7 @@ describe('DeferredApiSessionClient', () => {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(() => {
         calls.push('codex');
       }),
@@ -136,6 +138,7 @@ describe('DeferredApiSessionClient', () => {
       }),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(async () => {
@@ -179,6 +182,7 @@ describe('DeferredApiSessionClient', () => {
       }),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(async () => {
@@ -205,6 +209,7 @@ describe('DeferredApiSessionClient', () => {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(),
@@ -278,6 +283,7 @@ describe('DeferredApiSessionClient', () => {
       sendAgentMessage: vi.fn(() => {
         calls.push('agent');
       }),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(() => {
@@ -336,6 +342,7 @@ describe('DeferredApiSessionClient', () => {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(),
@@ -385,6 +392,7 @@ describe('DeferredApiSessionClient', () => {
       }),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(),
@@ -427,6 +435,7 @@ describe('DeferredApiSessionClient', () => {
       }),
       sendClaudeSessionMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      sendAgentMessageCommitted: vi.fn(async () => {}),
       sendCodexMessage: vi.fn(),
       sendUserTextMessage: vi.fn(),
       updateMetadata: vi.fn(),
@@ -467,5 +476,93 @@ describe('DeferredApiSessionClient', () => {
 
     await expect(promise).resolves.toBeUndefined();
     expect(deferred.getBufferStats().entryCount).toBe(0);
+  });
+
+  describe('sendAgentMessageCommitted forwarding', () => {
+    function createRealTarget(overrides?: Partial<Record<string, any>>) {
+      return {
+        sessionId: 'sess_sac',
+        rpcHandlerManager: { registerHandler: vi.fn(), invokeLocal: vi.fn(async () => ({})) },
+        sendSessionEvent: vi.fn(),
+        sendClaudeSessionMessage: vi.fn(),
+        sendAgentMessage: vi.fn(),
+        sendAgentMessageCommitted: vi.fn(async () => {}),
+        sendCodexMessage: vi.fn(),
+        sendUserTextMessage: vi.fn(),
+        updateMetadata: vi.fn(),
+        updateAgentState: vi.fn(),
+        keepAlive: vi.fn(),
+        getMetadataSnapshot: vi.fn(() => createMetadataStub()),
+        waitForMetadataUpdate: vi.fn(async () => true),
+        popPendingMessage: vi.fn(async () => true),
+        peekPendingMessageQueueV2Count: vi.fn(async () => 0),
+        discardPendingMessageQueueV2All: vi.fn(async () => 0),
+        discardCommittedMessageLocalIds: vi.fn(async () => 0),
+        sendSessionDeath: vi.fn(),
+        flush: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+        ...overrides,
+      };
+    }
+
+    it('delegates sendAgentMessageCommitted to the attached target', async () => {
+      const deferred = new DeferredApiSessionClient({
+        placeholderSessionId: 'PID-sac',
+        limits: { maxEntries: 10, maxBytes: 10_000 },
+      });
+      const real = createRealTarget();
+      await deferred.attach(real as any);
+
+      await deferred.sendAgentMessageCommitted(
+        'claude',
+        { type: 'message', message: 'hello' },
+        { localId: 'local-1' },
+      );
+
+      expect(real.sendAgentMessageCommitted).toHaveBeenCalledTimes(1);
+      expect(real.sendAgentMessageCommitted).toHaveBeenCalledWith(
+        'claude',
+        { type: 'message', message: 'hello' },
+        { localId: 'local-1' },
+      );
+    });
+
+    it('buffers sendAgentMessageCommitted calls made before attach and flushes them in order', async () => {
+      const deferred = new DeferredApiSessionClient({
+        placeholderSessionId: 'PID-sac',
+        limits: { maxEntries: 10, maxBytes: 10_000 },
+      });
+      const order: string[] = [];
+      const real = createRealTarget({
+        sendAgentMessageCommitted: vi.fn(async (_p: unknown, _b: unknown, opts: { localId: string }) => {
+          order.push(opts.localId);
+        }),
+      });
+
+      const p1 = deferred.sendAgentMessageCommitted('claude', { type: 'message', message: 'a' }, { localId: 'first' });
+      const p2 = deferred.sendAgentMessageCommitted('claude', { type: 'message', message: 'b' }, { localId: 'second' });
+
+      expect(order).toEqual([]);
+      await deferred.attach(real as any);
+      await Promise.all([p1, p2]);
+
+      expect(order).toEqual(['first', 'second']);
+    });
+
+    it('resolves buffered sendAgentMessageCommitted promises when the client is cancelled before attach', async () => {
+      const deferred = new DeferredApiSessionClient({
+        placeholderSessionId: 'PID-sac',
+        limits: { maxEntries: 10, maxBytes: 10_000 },
+      });
+
+      const promise = deferred.sendAgentMessageCommitted(
+        'claude',
+        { type: 'message', message: 'x' },
+        { localId: 'abc' },
+      );
+      deferred.cancel();
+
+      await expect(promise).resolves.toBeUndefined();
+    });
   });
 });

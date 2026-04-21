@@ -295,6 +295,7 @@ export async function claudeLocalLauncher(
                     }),
                     happierMcpConfigJson: baseMcpConfigJson,
                     hookSettingsPath: session.hookSettingsPath,
+                    hookPluginDir: session.hookPluginDir,
                 });
 
                 // Consume one-time Claude flags after spawn

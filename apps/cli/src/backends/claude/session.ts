@@ -79,8 +79,14 @@ export class Session {
     readonly queue: MessageQueue2<EnhancedMode>;
     claudeArgs?: string[];  // Made mutable to allow filtering
     readonly _onModeChange: (mode: 'local' | 'remote') => void;
-    /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+    /** Path to temporary settings file with non-hook config (required for session tracking) */
     readonly hookSettingsPath: string;
+    /**
+     * Optional plugin-dir path carrying the session's hooks. When present, spawned
+     * Claude CLI gets `--plugin-dir <path>` so hooks register via the additive plugin
+     * channel (resilient to other wrappers in PATH that inject their own `--settings`).
+     */
+    readonly hookPluginDir: string | null;
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     readonly jsRuntime: JsRuntime;
     /** How this session was started (affects TTY/UI behavior). */
@@ -143,8 +149,10 @@ export class Session {
         claudeArgs?: string[],
         messageQueue: MessageQueue2<EnhancedMode>,
         onModeChange: (mode: 'local' | 'remote') => void,
-        /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+        /** Path to temporary settings file with non-hook config (required for session tracking) */
         hookSettingsPath: string,
+        /** Optional plugin dir carrying hooks; see field docstring above. */
+        hookPluginDir?: string | null,
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
         startedBy?: 'daemon' | 'terminal',
@@ -162,6 +170,7 @@ export class Session {
         this.claudeArgs = opts.claudeArgs;
         this._onModeChange = opts.onModeChange;
         this.hookSettingsPath = opts.hookSettingsPath;
+        this.hookPluginDir = opts.hookPluginDir ?? null;
         this.jsRuntime = opts.jsRuntime ?? 'node';
         this.startedBy = opts.startedBy ?? 'terminal';
         this.defaultSystemPromptText =

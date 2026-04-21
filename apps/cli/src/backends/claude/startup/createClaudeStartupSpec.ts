@@ -11,13 +11,16 @@ export type ClaudeStartupArtifacts = {
   deferredSession: DeferredApiSessionClient;
   hookServer: HookServer | null;
   hookSettingsPath: string | null;
+  hookPluginDir: string | null;
   exitCode: number | null;
 };
 
 type CreateClaudeStartupSpecDeps = Readonly<{
   startHookServer: () => Promise<HookServer>;
   generateHookSettingsFile: (port: number) => Promise<string> | string;
+  generateHookPluginDir: (port: number) => Promise<string | null> | string | null;
   cleanupHookSettingsFile: (path: string) => void;
+  cleanupHookPluginDir: (path: string | null | undefined) => void;
   registerRpcHandlers: (args: { artifacts: ClaudeStartupArtifacts }) => void;
   initializeSessionInBackground: (args: { artifacts: ClaudeStartupArtifacts; signal: AbortSignal }) => Promise<void>;
   spawnLoop: (args: { artifacts: ClaudeStartupArtifacts; signal: AbortSignal }) => Promise<number>;
@@ -30,7 +33,9 @@ const defaultDeps: CreateClaudeStartupSpecDeps = {
   generateHookSettingsFile: () => {
     throw new Error('generateHookSettingsFile not wired');
   },
+  generateHookPluginDir: () => null,
   cleanupHookSettingsFile: () => {},
+  cleanupHookPluginDir: () => {},
   registerRpcHandlers: () => {},
   initializeSessionInBackground: async () => {},
   spawnLoop: async () => 0,
@@ -44,6 +49,7 @@ export function createClaudeStartupSpec(params: { deps?: Partial<CreateClaudeSta
     createClaudeStartHookServerTask({
       startHookServer: deps.startHookServer,
       generateHookSettingsFile: deps.generateHookSettingsFile,
+      generateHookPluginDir: deps.generateHookPluginDir,
     }),
     createClaudeInitializeSessionInBackgroundTask({ initializeSessionInBackground: deps.initializeSessionInBackground }),
   ];
@@ -64,6 +70,7 @@ export function createClaudeStartupSpec(params: { deps?: Partial<CreateClaudeSta
         deferredSession,
         hookServer: null,
         hookSettingsPath: null,
+        hookPluginDir: null,
         exitCode: null,
       };
     },

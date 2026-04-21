@@ -67,7 +67,6 @@ export function parsePermissionModeAlias(raw: string): PermissionMode | null {
         case 'ask':
         case 'prompt':
         case 'normal':
-        case 'auto':
             return 'default';
 
         // claude canonical tokens in case-insensitive form
@@ -82,13 +81,14 @@ export function parsePermissionModeAlias(raw: string): PermissionMode | null {
         case 'ro':
             return 'read-only';
 
-        // safe-yolo intent (workspace-write with approval)
+        // safe-yolo intent (workspace-write with approval; Claude SDK's "auto" mode is the same shape)
         case 'safe':
         case 'safe-yolo':
         case 'safeyolo':
         case 'workspace-write':
         case 'workspace':
         case 'auto-edit':
+        case 'auto':
             return 'safe-yolo';
 
         // yolo intent (full access / bypass prompts)

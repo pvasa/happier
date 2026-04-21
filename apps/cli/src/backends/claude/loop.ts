@@ -70,8 +70,15 @@ interface LoopOptions {
     claudeArgs?: string[]
     messageQueue: MessageQueue2<EnhancedMode>
     onSessionReady?: (session: Session) => void
-    /** Path to temporary settings file with SessionStart hook (required for session tracking) */
+    /** Path to temporary settings file with non-hook config (required for session tracking) */
     hookSettingsPath: string
+    /**
+     * Optional path to a Happier-generated plugin dir carrying the session's hooks.
+     * Threaded through so the spawned CLI registers hooks via `--plugin-dir`, which
+     * is additive across wrappers — `--settings` hooks are non-composable and get
+     * silently dropped when a PATH-resident wrapper prepends its own overlay.
+     */
+    hookPluginDir?: string | null
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
     startedBy?: 'daemon' | 'terminal'
@@ -95,6 +102,7 @@ export async function loop(opts: LoopOptions): Promise<number> {
         messageQueue: opts.messageQueue,
         onModeChange: opts.onModeChange,
         hookSettingsPath: opts.hookSettingsPath,
+        hookPluginDir: opts.hookPluginDir ?? null,
         jsRuntime: opts.jsRuntime,
         startedBy: opts.startedBy ?? 'terminal',
         defaultSystemPromptText: opts.defaultSystemPromptText,

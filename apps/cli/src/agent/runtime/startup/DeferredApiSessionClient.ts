@@ -13,6 +13,11 @@ export type DeferredApiSessionTarget = Readonly<{
   sendSessionEvent: (event: unknown, id?: string) => void;
   sendClaudeSessionMessage: (message: unknown, meta?: unknown) => void;
   sendAgentMessage: (provider: unknown, body: unknown, opts?: unknown) => void;
+  sendAgentMessageCommitted: (
+    provider: unknown,
+    body: unknown,
+    opts: { localId: string; meta?: Record<string, unknown> },
+  ) => Promise<void>;
   sendCodexMessage: (body: unknown) => void;
   sendUserTextMessage: (text: string, opts?: { localId?: string; meta?: Record<string, unknown> }) => void;
   updateMetadata: (updater: (metadata: Metadata) => Metadata) => void | Promise<void>;
@@ -113,6 +118,33 @@ export class DeferredApiSessionClient {
       return;
     }
     this.pushBufferedCall((t) => t.sendAgentMessage(_provider, _body, _opts), { hint: 'sendAgentMessage' });
+  }
+
+  sendAgentMessageCommitted(
+    _provider: unknown,
+    _body: unknown,
+    _opts: { localId: string; meta?: Record<string, unknown> },
+  ): Promise<void> {
+    const target = this.target;
+    if (target && !this.flushInFlight) {
+      return target.sendAgentMessageCommitted(_provider, _body, _opts);
+    }
+
+    const deferred = createDeferredPromise<void>();
+    if (this.cancelled) {
+      deferred.resolve();
+      return deferred.promise;
+    }
+
+    this.pushBufferedCall(
+      async (t) => {
+        await t.sendAgentMessageCommitted(_provider, _body, _opts);
+        deferred.resolve();
+      },
+      { hint: 'sendAgentMessageCommitted' },
+      { onDrop: () => deferred.resolve() },
+    );
+    return deferred.promise;
   }
 
   sendCodexMessage(_body: unknown): void {

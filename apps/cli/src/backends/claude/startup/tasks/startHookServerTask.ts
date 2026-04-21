@@ -6,6 +6,7 @@ type HookServer = Readonly<{ port: number; stop: () => void }>;
 export function createClaudeStartHookServerTask(params: {
   startHookServer: () => Promise<HookServer>;
   generateHookSettingsFile: (port: number) => Promise<string> | string;
+  generateHookPluginDir: (port: number) => Promise<string | null> | string | null;
 }): StartupTask<ClaudeStartupArtifacts> {
   return {
     id: 'claude.start_hook_server',
@@ -14,6 +15,7 @@ export function createClaudeStartHookServerTask(params: {
       const hookServer = await params.startHookServer();
       artifacts.hookServer = hookServer;
       artifacts.hookSettingsPath = await params.generateHookSettingsFile(hookServer.port);
+      artifacts.hookPluginDir = await params.generateHookPluginDir(hookServer.port);
     },
   };
 }

@@ -23,6 +23,7 @@ import {
     isClaudeLocalPermissionBridgeAgentStateRequest,
 } from '@happier-dev/agents';
 import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
+import { withAskUserQuestionUiFreeformDefault } from './askUserQuestionFreeformDefault';
 
 type PendingPermissionRequest = {
     id: string;
@@ -464,6 +465,8 @@ export class ClaudeLocalPermissionBridge {
         const resolvedMode = typeof payload.mode === 'string'
             ? (normalizePermissionModeToIntent(payload.mode) ?? payload.mode)
             : undefined;
+        const resolvedToolName = pending?.toolName ?? existingRequest?.toolName ?? 'unknown_tool';
+        const resolvedToolInput = pending?.toolInput ?? existingRequest?.toolInput ?? {};
 
         const updatedPermissions = payload.updatedPermissions;
         const hookResponse: PermissionHookResponse = payload.approved
@@ -474,6 +477,21 @@ export class ClaudeLocalPermissionBridge {
                     hookEventName: 'PermissionRequest',
                     decision: {
                         behavior: 'allow',
+                        ...(
+                            (resolvedToolName === 'AskUserQuestion' || resolvedToolName === 'ask_user_question')
+                            && payload.answers
+                            && typeof payload.answers === 'object'
+                            && !Array.isArray(payload.answers)
+                                ? {
+                                    updatedInput: {
+                                        ...(resolvedToolInput && typeof resolvedToolInput === 'object' && !Array.isArray(resolvedToolInput)
+                                            ? resolvedToolInput as Record<string, unknown>
+                                            : {}),
+                                        answers: payload.answers,
+                                    },
+                                }
+                                : {}
+                        ),
                         ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
                     },
                 },
@@ -495,8 +513,8 @@ export class ClaudeLocalPermissionBridge {
 
         this.completeRequest({
             requestId,
-            toolName: pending?.toolName ?? existingRequest?.toolName ?? 'unknown_tool',
-            toolInput: pending?.toolInput ?? existingRequest?.toolInput ?? {},
+            toolName: resolvedToolName,
+            toolInput: resolvedToolInput,
             createdAt: pending?.createdAt ?? existingRequest?.createdAt ?? Date.now(),
             status: payload.approved ? 'approved' : 'denied',
             reason: payload.reason,
@@ -706,6 +724,7 @@ export class ClaudeLocalPermissionBridge {
             }
         }
 
+                const uiToolInput = withAskUserQuestionUiFreeformDefault(params.toolName, params.toolInput);
                 updateAgentStateBestEffort(
                     this.session.client,
                     (currentState) => {
@@ -714,7 +733,7 @@ export class ClaudeLocalPermissionBridge {
                         entry.tool = params.toolName;
                         entry.kind = resolveAgentRequestKind(params.toolName);
                         (entry as AgentStateRequestEntry & { source?: string }).source = CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE;
-                        entry.arguments = params.toolInput;
+                        entry.arguments = uiToolInput;
                         entry.createdAt = params.createdAt;
                         if (Array.isArray(params.permissionSuggestions) && params.permissionSuggestions.length > 0) {
                             entry.permissionSuggestions = params.permissionSuggestions;

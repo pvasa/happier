@@ -18,8 +18,11 @@ import { getEnvironmentInfo } from '@/ui/doctor';
 import { configuration } from '@/configuration';
 import { initialMachineMetadata } from '@/daemon/startDaemon';
 import { startHookServer } from '@/backends/claude/utils/startHookServer';
-import { cleanupHookSettingsFile } from '@/backends/claude/utils/generateHookSettings';
-import { generateHookSettingsFileWithEnsuredRuntime } from '@/backends/claude/utils/generateHookSettingsFileWithEnsuredRuntime';
+import { cleanupHookPluginDir, cleanupHookSettingsFile } from '@/backends/claude/utils/generateHookSettings';
+import {
+    generateHookPluginDirWithEnsuredRuntime,
+    generateHookSettingsFileWithEnsuredRuntime,
+} from '@/backends/claude/utils/generateHookSettingsFileWithEnsuredRuntime';
 import { registerKillSessionHandler } from '@/rpc/handlers/killSession';
 import { projectPath } from '../../projectPath';
 import { resolve } from 'node:path';
@@ -512,12 +515,25 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     const hookServer = await startHookServer(hookServerOptions);
     logger.debug(`[START] Hook server started on port ${hookServer.port}`);
 
-    // Generate hook settings file for Claude
-        const hookSettingsPath = await generateHookSettingsFileWithEnsuredRuntime(hookServer.port, {
-            enableLocalPermissionBridge: true,
-            permissionHookSecret,
-        });
-        logger.debug(`[START] Generated hook settings file: ${hookSettingsPath}`);
+    // Generate hook artifacts for Claude:
+    //  - settings file carries non-hook config (permissions.allow for mcp__happier__change_title*)
+    //  - plugin dir carries SessionStart + PermissionRequest hooks via --plugin-dir
+    // Split because Claude Code's --settings is non-composable for hooks (first --settings wins
+    // when multiple wrappers inject their own), whereas --plugin-dir is additive.
+    const hookSettingsPath = await generateHookSettingsFileWithEnsuredRuntime(hookServer.port, {
+        enableLocalPermissionBridge: true,
+        permissionHookSecret,
+    });
+    logger.debug(`[START] Generated hook settings file: ${hookSettingsPath}`);
+    const hookPluginDir = await generateHookPluginDirWithEnsuredRuntime(hookServer.port, {
+        enableLocalPermissionBridge: true,
+        permissionHookSecret,
+    });
+    if (hookPluginDir) {
+        logger.debug(`[START] Generated hook plugin dir: ${hookPluginDir}`);
+    } else {
+        logger.debug('[START] Hook plugin dir generation skipped (HAPPIER_CLAUDE_HOOKS_DISABLED)');
+    }
 
     // Print log file path
     const logPath = logger.logFilePath;
@@ -787,9 +803,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             // Stop caffeinate
             stopCaffeinate();
 
-            // Stop Hook server and cleanup settings file
+            // Stop Hook server and cleanup settings file + plugin dir
             hookServer.stop();
             cleanupHookSettingsFile(hookSettingsPath);
+            cleanupHookPluginDir(hookPluginDir);
 
             logger.debug('[START] Cleanup complete');
         } catch (error) {
@@ -874,6 +891,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 	        },
                     claudeArgs: options.claudeArgs,
                     hookSettingsPath,
+                    hookPluginDir,
                     jsRuntime: options.jsRuntime,
                     defaultSystemPromptText,
                 });
@@ -903,10 +921,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     stopCaffeinate();
     logger.debug('Stopped sleep prevention');
 
-    // Stop Hook server and cleanup settings file
+    // Stop Hook server and cleanup settings file + plugin dir
     hookServer.stop();
     cleanupHookSettingsFile(hookSettingsPath);
-    logger.debug('Stopped Hook server and cleaned up settings file');
+    cleanupHookPluginDir(hookPluginDir);
+    logger.debug('Stopped Hook server and cleaned up settings file + plugin dir');
 
     // Exit with the code from Claude
     process.exit(exitCode);
@@ -1033,7 +1052,14 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         permissionHookSecret,
                     });
                 },
+                generateHookPluginDir: async (port) => {
+                    return await generateHookPluginDirWithEnsuredRuntime(port, {
+                        enableLocalPermissionBridge: true,
+                        permissionHookSecret,
+                    });
+                },
             cleanupHookSettingsFile,
+            cleanupHookPluginDir,
             initializeSessionInBackground: async ({ artifacts, signal }) => {
                 if (signal.aborted) return;
 
@@ -1385,6 +1411,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                 if (!hookSettingsPath) {
                     throw new Error('Claude startup prerequisites missing');
                 }
+                const hookPluginDir = artifacts.hookPluginDir;
 
                     const localSettings = await readSettings();
                     const resolvedMcp = await resolveRunnerMcpServers({
@@ -1463,6 +1490,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         session: artifacts.deferredSession,
                         claudeArgs: options.claudeArgs,
                         hookSettingsPath,
+                        hookPluginDir,
                         jsRuntime: options.jsRuntime,
                         defaultSystemPromptText,
                         pushSender: null,
@@ -1515,6 +1543,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                 if (coordinator.artifacts.hookSettingsPath) {
                     cleanupHookSettingsFile(coordinator.artifacts.hookSettingsPath);
                 }
+                cleanupHookPluginDir(coordinator.artifacts.hookPluginDir);
             } catch {
                 // ignore
             }
@@ -1562,6 +1591,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
         if (coordinator.artifacts.hookSettingsPath) {
             cleanupHookSettingsFile(coordinator.artifacts.hookSettingsPath);
         }
+        cleanupHookPluginDir(coordinator.artifacts.hookPluginDir);
     } catch {
         // ignore
     }

@@ -570,7 +570,12 @@ export async function claudeRemoteAgentSdk(opts: {
             resume: startFrom ?? undefined,
             ...(startFrom && resumeSessionAt ? { resumeSessionAt } : {}),
             settingSources,
-            permissionMode: mappedPermissionMode,
+            // When the resolved mode is 'default', omit `permissionMode` so the Agent SDK falls
+            // back to the user's `permissions.defaultMode` from `.claude/settings.json`. Settings
+            // are already being loaded via `settingSources` above, so a user-configured
+            // defaultMode (e.g. "acceptEdits") takes effect for Happier sessions that don't
+            // explicitly pick a mode. Non-'default' modes still win as before.
+            ...(mappedPermissionMode !== 'default' ? { permissionMode: mappedPermissionMode } : {}),
             allowDangerouslySkipPermissions: true,
             ...(resolvedEffort ? { effort: resolvedEffort } : {}),
             model: argOverrides.model ?? mode.model,
@@ -832,6 +837,10 @@ export async function claudeRemoteAgentSdk(opts: {
             { sessionId: string; parentToolUseId: string | null; text: string; thinking: string; lastUuid: string | null }
         >();
         let didPublishAssistantTextThisTurn = false;
+        // Per-sidechain record of which scopes published assistant text this turn, so the result
+        // fallback can skip re-emission for any scope that already reached the wire via any channel
+        // (streamed deltas, full-message emit, stream-event buffer flush). Root is keyed as null.
+        const sidechainsWithPublishedAssistantTextThisTurn = new Set<string | null>();
         const turnDiagnostics = {
             streamEventCount: 0,
             assistantMessageCount: 0,
@@ -894,10 +903,11 @@ export async function claudeRemoteAgentSdk(opts: {
             return typeof msg.result === 'string' && msg.result.trim().length > 0 ? msg.result : null;
         };
 
-        const markAssistantTextPublished = (text: string | null | undefined) => {
+        const markAssistantTextPublished = (text: string | null | undefined, sidechainId: string | null) => {
             if (typeof text !== 'string' || text.trim().length === 0) return;
             didPublishAssistantTextThisTurn = true;
             turnDiagnostics.didPublishAssistantTextThisTurn = true;
+            sidechainsWithPublishedAssistantTextThisTurn.add(sidechainId);
         };
 
         const resolveAssistantSegmentFlushSummary = (
@@ -943,7 +953,7 @@ export async function claudeRemoteAgentSdk(opts: {
                     content,
                 },
             } as any, params.defaultUuid ? { defaultUuid: params.defaultUuid } : undefined);
-            markAssistantTextPublished(params.assistantText);
+            markAssistantTextPublished(params.assistantText, params.parentToolUseId);
         };
 
         const maybeEmitResultAssistantFallback = (message: unknown, resultText: string | null): boolean => {
@@ -951,6 +961,15 @@ export async function claudeRemoteAgentSdk(opts: {
                 return false;
             }
             const sidechainId = normalizeSidechainIdForStream(message);
+            // Belt-and-suspenders: if assistant text already reached the wire for THIS scope
+            // (root or sidechain) via any channel this turn (streamed deltas, full-message emit,
+            // buffered stream-event flush), re-emitting from the result message would duplicate
+            // the message AND write a synthetic uuid that later poisons `claudeLastAssistantUuid`
+            // resume anchors. Durable flushing is the preferred signal; this guard catches any
+            // other delivery path.
+            if (sidechainsWithPublishedAssistantTextThisTurn.has(sidechainId)) {
+                return false;
+            }
             const assistantFlush = resolveAssistantSegmentFlushSummary(lastTurnFlushSummary, sidechainId);
             if (sidechainId === null) {
                 if (assistantFlush?.didDurablyFlush === true) {
@@ -1019,7 +1038,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	                // content. Stream-event buffering exists only to support legacy flows (no streamed writer) and to
 	                // help with tool-block reconstruction. Never emit buffered assistant content in writer mode.
 	                if (streamedTranscriptWriter) {
-	                    markAssistantTextPublished(pendingAssistantText);
+	                    markAssistantTextPublished(pendingAssistantText, pending.parentToolUseId);
 	                    return;
 	                }
 	
@@ -1034,7 +1053,7 @@ export async function claudeRemoteAgentSdk(opts: {
                     incomingAssistantText === pendingAssistantText &&
                     incomingThinkingText === pendingThinkingText
                 ) {
-                    markAssistantTextPublished(pendingAssistantText);
+                    markAssistantTextPublished(pendingAssistantText, pending.parentToolUseId);
                     return;
                 }
 
@@ -1210,6 +1229,7 @@ export async function claudeRemoteAgentSdk(opts: {
                         }
 
                         didPublishAssistantTextThisTurn = false;
+                        sidechainsWithPublishedAssistantTextThisTurn.clear();
                         messages.push({
                             type: 'user',
                             session_id: '',
@@ -1570,9 +1590,12 @@ export async function claudeRemoteAgentSdk(opts: {
                         stripAssistantText,
                         stripThinkingText,
                     });
-                    markAssistantTextPublished(assistantText);
+                    markAssistantTextPublished(assistantText, sidechainId);
                 } else if (incomingMessageType === 'assistant') {
-                    markAssistantTextPublished(extractAssistantText(deduped));
+                    markAssistantTextPublished(
+                        extractAssistantText(deduped),
+                        normalizeSidechainIdForStream(deduped),
+                    );
                 }
 
                 emitMessage(messageToEmit);

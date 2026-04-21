@@ -1,9 +1,9 @@
 import { join, resolve, sep } from 'node:path';
 
-import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
+import { getReleaseRingPublicLabel, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 
 function resolvePublicReleaseRingSuffix(ring: PublicReleaseRingId): 'stable' | 'preview' | 'dev' {
-  return ring === 'publicdev' ? 'dev' : ring;
+  return getReleaseRingPublicLabel(ring);
 }
 
 export function resolveSessionAttachBaseDir(happyHomeDir: string, publicReleaseRing: PublicReleaseRingId = 'stable'): string {

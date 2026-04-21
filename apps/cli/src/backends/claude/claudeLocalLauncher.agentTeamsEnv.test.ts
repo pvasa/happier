@@ -49,6 +49,7 @@ function createSessionStub(): Session {
     sendSessionEvent: vi.fn(),
     sendClaudeSessionMessage: vi.fn(),
     sendAgentMessage: vi.fn(),
+    sendAgentMessageCommitted: vi.fn(async () => {}),
     updateMetadata: vi.fn(),
     updateAgentState: vi.fn(),
     keepAlive: vi.fn(),

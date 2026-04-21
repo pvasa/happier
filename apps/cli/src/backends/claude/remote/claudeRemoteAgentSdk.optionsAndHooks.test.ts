@@ -481,7 +481,11 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         expect(assistantMessagesWithText).toHaveLength(0);
     });
 
-    it('emits result assistant text when the streamed transcript writer did not durably flush the turn', async () => {
+    it('does not re-emit result assistant text when assistant text was already published this turn (even without durable flush)', async () => {
+        // Regression: when the streamed transcript writer cannot durably commit (e.g. the session
+        // client is missing `sendAgentMessageCommitted`) but the streamed deltas still reached the
+        // UI, the old fallback re-emitted the result text — producing duplicate assistant messages
+        // AND a synthetic uuid that later poisoned `claudeLastAssistantUuid` resume anchors.
         const assistantText = 'hello from stream events';
         const resultText = 'hello from result fallback';
         const emittedMessages: any[] = [];
@@ -489,7 +493,10 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         const streamedTranscriptWriter = {
             appendAssistantDelta: vi.fn(async () => {}),
             appendThinkingDelta: vi.fn(async () => {}),
-            overrideAssistantText: vi.fn(() => true),
+            // The streamed writer advertises the text as already overridden (typical when deltas
+            // are live-streamed) but `flushAll` reports no durable commit — this mirrors the
+            // production case where `sendAgentMessageCommitted` was unavailable.
+            overrideAssistantText: vi.fn(() => false),
             overrideThinkingText: vi.fn(() => false),
             flushAll: vi.fn(async () => ({
                 assistant: { sawText: true, didDurablyFlush: false },
@@ -509,6 +516,9 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
                         event: { type: 'content_block_start', content_block: { type: 'text', text: assistantText } },
                     } as any;
 
+                    // Full assistant message carrying the same text reaches the UI — this is the
+                    // path that calls `markAssistantTextPublished(text, sidechainId=null)` in
+                    // production. The fallback must observe this and skip re-emission.
                     yield {
                         type: 'assistant',
                         session_id: '',
@@ -560,7 +570,10 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
                     .map((block) => block.text),
             );
 
-        expect(assistantTexts).toContain(resultText);
+        // Streamed deltas still reach the UI (assistantText). The result text must NOT be
+        // re-emitted as a fallback; that would duplicate what the user already saw.
+        expect(assistantTexts).toContain(assistantText);
+        expect(assistantTexts).not.toContain(resultText);
     });
 
     it('does not emit result assistant text when the streamed transcript writer durably flushed the turn', async () => {
@@ -971,6 +984,9 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
 
         expect(capturedOptions).toBeTruthy();
         expect(capturedOptions.settingSources).toEqual(['user', 'project', 'local']);
+        // When Happier resolves to 'default', we omit permissionMode from the Agent SDK options
+        // so the SDK honors the user's `permissions.defaultMode` from .claude/settings.json.
+        expect(capturedOptions).not.toHaveProperty('permissionMode');
     });
 
     it('forwards settingSources when explicitly set on the mode', async () => {
@@ -1505,6 +1521,58 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         expect((await runOnce({ permissionMode: 'default' }))?.allowDangerouslySkipPermissions).toBe(true);
         expect((await runOnce({ permissionMode: 'bypassPermissions' }))?.allowDangerouslySkipPermissions).toBe(true);
         expect((await runOnce({ permissionMode: 'default', agentModeId: 'plan' }))?.allowDangerouslySkipPermissions).toBe(true);
+    });
+
+    it('omits permissionMode when Happier resolves to default, but passes it for non-default modes', async () => {
+        let capturedOptions: any = null;
+
+        const createQuery = vi.fn((_params: any) => {
+            capturedOptions = _params.options;
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { type: 'result' } as any;
+                },
+                close: vi.fn(),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        const runOnce = async (modeOverrides: any) => {
+            capturedOptions = null;
+            let didSendFirst = false;
+            const nextMessage = vi.fn(async () => {
+                if (didSendFirst) return null;
+                didSendFirst = true;
+                return { message: 'hello', mode: makeMode(modeOverrides) };
+            });
+            await claudeRemoteAgentSdk({
+                sessionId: null,
+                transcriptPath: null,
+                path: '/tmp',
+                claudeArgs: [],
+                claudeExecutablePath: '/tmp/claude',
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+                isAborted: () => false,
+                nextMessage,
+                onReady: () => {},
+                onSessionFound: () => {},
+                onMessage: () => {},
+                createQuery,
+            } as any);
+            return capturedOptions;
+        };
+
+        // Default → no permissionMode key → SDK reads settings.json defaultMode
+        expect(await runOnce({ permissionMode: 'default' })).not.toHaveProperty('permissionMode');
+        // agentModeId === 'plan' still resolves to 'plan' (non-default), so it IS passed
+        expect((await runOnce({ permissionMode: 'default', agentModeId: 'plan' }))?.permissionMode).toBe('plan');
+        // Non-default explicit modes still forwarded
+        expect((await runOnce({ permissionMode: 'bypassPermissions' }))?.permissionMode).toBe('bypassPermissions');
+        expect((await runOnce({ permissionMode: 'acceptEdits' }))?.permissionMode).toBe('acceptEdits');
     });
 
     it('prefers CLI model overrides over mode.model', async () => {

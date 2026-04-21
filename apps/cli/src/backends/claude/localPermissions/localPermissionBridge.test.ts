@@ -466,6 +466,13 @@ describe('ClaudeLocalPermissionBridge', () => {
     expect(client.agentState.requests.toolu_ask_1).toMatchObject({
       tool: 'AskUserQuestion',
     });
+    // Freeform escape hatch: agent-state copy of the request exposes
+    // `freeform: {}` on every question so the mobile UI surfaces its own
+    // localized text-input fallback (mirrors Claude's native "Other" in CLI).
+    // Happier's bridge synthesizes this because Claude's AskUserQuestion tool
+    // schema has no freeform field of its own.
+    const publishedArguments = (client.agentState.requests.toolu_ask_1 as any)?.arguments;
+    expect(publishedArguments?.questions?.[0]?.freeform).toEqual({});
     expect(client.agentState.completedRequests.toolu_ask_1).toBeUndefined();
 
     const permissionHandler = client.rpcHandlerManager.getHandler('permission');
@@ -481,7 +488,23 @@ describe('ClaudeLocalPermissionBridge', () => {
       suppressOutput: true,
       hookSpecificOutput: {
         hookEventName: 'PermissionRequest',
-        decision: { behavior: 'allow' },
+        decision: {
+          behavior: 'allow',
+          updatedInput: {
+            questions: [
+              {
+                header: 'File write',
+                question: 'May I create the file /tmp/qa.txt?',
+                multiSelect: false,
+                options: [
+                  { label: 'Yes, go ahead', description: 'Create the file' },
+                  { label: `No, don't create it`, description: 'Skip file creation' },
+                ],
+              },
+            ],
+            answers: { 'May I create the file /tmp/qa.txt?': 'Yes, go ahead' },
+          },
+        },
       },
     });
     expect(client.agentState.completedRequests.toolu_ask_1).toMatchObject({

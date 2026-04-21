@@ -373,23 +373,14 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         (logMessage, meta) => session.client.sendClaudeSessionMessage(logMessage, meta)
     );
 
-    const streamedTranscriptWriter: StreamedTranscriptWriter = (() => {
-        const client: any = session.client as any;
-        const sendAgentMessageCommitted =
-            typeof client?.sendAgentMessageCommitted === 'function'
-                ? (provider: any, body: any, opts: any) => client.sendAgentMessageCommitted(provider, body, opts)
-                : async () => {
-                      throw new Error('sendAgentMessageCommitted is unavailable');
-                  };
-
-        return createStreamedTranscriptWriter({
-            provider: 'claude' as any,
-            session: {
-                sendAgentMessage: (provider, body, opts) => session.client.sendAgentMessage(provider, body, opts),
-                sendAgentMessageCommitted,
-            },
-        });
-    })();
+    const streamedTranscriptWriter: StreamedTranscriptWriter = createStreamedTranscriptWriter({
+        provider: 'claude' as any,
+        session: {
+            sendAgentMessage: (provider, body, opts) => session.client.sendAgentMessage(provider, body, opts),
+            sendAgentMessageCommitted: (provider, body, opts) =>
+                session.client.sendAgentMessageCommitted(provider, body, opts),
+        },
+    });
 
     const taskOutputCollector = new ClaudeRemoteTaskOutputCollector();
     const subagentFileCollector = new ClaudeRemoteSubagentFileCollector({

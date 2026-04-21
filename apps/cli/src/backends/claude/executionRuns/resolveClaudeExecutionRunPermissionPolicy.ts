@@ -25,7 +25,8 @@ export function resolveClaudeExecutionRunPermissionPolicy(raw: string): ClaudeSd
     mode === 'yolo' ||
     mode === 'acceptEdits' ||
     mode === 'bypassPermissions' ||
-    mode === 'workspace-write'
+    mode === 'workspace-write' ||
+    mode === 'auto'
   ) {
     return 'workspace_write';
   }

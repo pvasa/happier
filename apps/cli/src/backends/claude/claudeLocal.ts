@@ -49,8 +49,16 @@ export async function claudeLocal(opts: {
     envOverlay?: Record<string, string>,
     /** Optional MCP config JSON to inject into the Claude Code CLI invocation (e.g. Happier MCP). */
     happierMcpConfigJson?: string,
-    /** Path to temporary settings file with SessionStart hook (optional - for session tracking) */
+    /** Path to temporary settings file with non-hook config (optional - for session tracking) */
     hookSettingsPath?: string
+    /**
+     * Optional path to a Happier-generated plugin directory containing `hooks/hooks.json`.
+     * When set, Claude is launched with `--plugin-dir <path>` so SessionStart and
+     * PermissionRequest hooks register via the additive plugin channel. The `--settings`
+     * slot is non-composable and can be claimed by a PATH-resident wrapper (e.g. cmux),
+     * silently dropping hooks; --plugin-dir sidesteps that.
+     */
+    hookPluginDir?: string | null
     /** Effective session prompt text for new sessions; falls back to Claude-specific provider behavior blocks. */
     systemPromptText?: string | null,
 }) {
@@ -300,7 +308,16 @@ export async function claudeLocal(opts: {
             // Claude Code merges multiple `--mcp-config` sources additively and uses last-write-wins on collisions.
             // Appending here means we do not need to parse/merge user JSON and Happier wins on collisions.
             //
-            // `--settings` is also treated as an additive overlay by Claude Code (validated via real CLI runs).
+            // `--settings` is treated as a single overlay for the hooks field: when more than one
+            // --settings flag is passed, only the first wins and the rest are silently dropped.
+            // Any PATH-resident wrapper that prepends its own --settings (cmux's claude wrapper is
+            // our in-the-wild case) therefore silently discards Happier's hook block. We carry
+            // non-hook config (permissions.allow) in --settings and move hooks to --plugin-dir,
+            // which is additive across multiple invocations so wrappers and Happier coexist.
+            if (opts.hookPluginDir) {
+                flagArgs.push('--plugin-dir', opts.hookPluginDir);
+                logger.debug(`[ClaudeLocal] Using hook plugin dir: ${opts.hookPluginDir}`);
+            }
             if (opts.hookSettingsPath) {
                 flagArgs.push('--settings', opts.hookSettingsPath);
                 logger.debug(`[ClaudeLocal] Using hook settings: ${opts.hookSettingsPath}`);

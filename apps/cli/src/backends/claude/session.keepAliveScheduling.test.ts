@@ -13,6 +13,7 @@ function createSessionClientStub(overrides?: Partial<SessionClientPort>): Sessio
     sendSessionEvent: vi.fn(),
     sendClaudeSessionMessage: vi.fn(),
     sendAgentMessage: vi.fn(),
+    sendAgentMessageCommitted: vi.fn(async () => {}),
     keepAlive: vi.fn(),
     getMetadataSnapshot: () => null,
     waitForMetadataUpdate: vi.fn(async () => false),

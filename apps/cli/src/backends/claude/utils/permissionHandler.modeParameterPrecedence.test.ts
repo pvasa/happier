@@ -141,7 +141,7 @@ describe('PermissionHandler (mode parameter precedence)', () => {
     ).resolves.toMatchObject({ behavior: 'allow' });
   });
 
-  it('auto-allows edit tools when mode.permissionMode is safe-yolo (mapped to acceptEdits)', async () => {
+  it('auto-allows edit tools when mode.permissionMode is safe-yolo (mapped to auto)', async () => {
     const { session } = createPermissionHandlerSessionStub();
     const { PermissionHandler } = await import('./permissionHandler');
     const handler = new PermissionHandler(session);

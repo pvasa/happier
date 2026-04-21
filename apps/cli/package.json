@@ -134,7 +134,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.14.1",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.34",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@fastify/swagger": "9.7.0",
     "@happier-dev/agents": "0.0.0",
     "@happier-dev/cli-common": "0.0.0",

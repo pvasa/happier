@@ -138,6 +138,7 @@ function createLocalHarness(options?: { metadataSnapshot?: MetadataSnapshot }): 
     },
     sendClaudeSessionMessage: vi.fn(),
     sendAgentMessage: vi.fn(),
+    sendAgentMessageCommitted: vi.fn(async () => {}),
     sendSessionEvent,
     peekPendingMessageQueueV2Count: vi.fn().mockResolvedValue(0),
     discardPendingMessageQueueV2All: vi.fn().mockResolvedValue(0),

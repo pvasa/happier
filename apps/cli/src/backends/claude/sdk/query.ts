@@ -331,7 +331,10 @@ export function query(config: {
 	    if (continueConversation) args.push('--continue')
 	    if (resume) args.push('--resume', resume)
 	    if (strictMcpConfig) args.push('--strict-mcp-config')
-	    if (permissionMode) args.push('--permission-mode', permissionMode)
+	    // Omit `--permission-mode default` so the Claude CLI honors the user's
+	    // `permissions.defaultMode` from `.claude/settings.json` (user/project/local).
+	    // Any non-'default' mode still wins, overriding settings.json as before.
+	    if (permissionMode && permissionMode !== 'default') args.push('--permission-mode', permissionMode)
 	    if (settingsPath) args.push('--settings', settingsPath)
 
 	    if (fallbackModel) {

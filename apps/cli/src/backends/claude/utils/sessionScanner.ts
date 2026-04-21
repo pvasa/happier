@@ -294,6 +294,10 @@ export async function createSessionScanner(opts: {
                     continue;
                 }
                 processedMessageKeys.add(key);
+                if (isInformationalSystemMessage(file)) {
+                    skipped++;
+                    continue;
+                }
                 logger.debug(`[SESSION_SCANNER] Sending new message: type=${file.type}, uuid=${file.type === 'summary' ? file.leafUuid : file.uuid}`);
                 try {
                     const action = rewriteTaskNotificationToToolResult(file);
@@ -443,6 +447,13 @@ function messageKey(message: RawJSONLines): string {
     } else {
         throw Error() // Impossible
     }
+}
+
+// Claude Code `system` lines are out-of-band side-channels (init, stop-hook summaries, inactivity
+// recaps, etc.) — none of them are agent transcript content. Drop them wholesale; if a future
+// subtype ever needs to render, opt it in explicitly rather than leak informational messages.
+function isInformationalSystemMessage(message: RawJSONLines): boolean {
+    return message.type === 'system';
 }
 
 /**

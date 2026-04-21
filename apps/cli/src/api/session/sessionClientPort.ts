@@ -10,6 +10,7 @@ export interface SessionClientPort {
   sendSessionEvent(event: SessionEventMessage, id?: string): void;
   sendClaudeSessionMessage(message: RawJSONLines, meta?: Record<string, unknown>): void;
   sendAgentMessage(provider: ACPProvider, body: ACPMessageData, opts?: { localId?: string; meta?: Record<string, unknown> }): void;
+  sendAgentMessageCommitted(provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }): Promise<void>;
 
   updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
   updateAgentState(updater: (state: AgentState) => AgentState): void | Promise<void>;

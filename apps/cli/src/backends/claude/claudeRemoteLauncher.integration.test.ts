@@ -145,6 +145,7 @@ function createRemoteHarness(options?: {
   const client: SessionClientStub = {
     sessionId: 'happy_sess_1',
     sendAgentMessage: vi.fn(),
+    sendAgentMessageCommitted: vi.fn(async () => {}),
     keepAlive: vi.fn(),
     updateMetadata: vi.fn((updater: (current: Metadata) => Metadata) => {
       if (!options?.applyMetadataUpdates) return undefined;
