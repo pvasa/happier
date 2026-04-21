@@ -828,15 +828,26 @@ doctor_repair_preflight_looks_like_plain_doctor_report() {
 read_background_service_preflight_json() {
   local cli_bin="$1"
   local repair_json=""
+  local repair_error=""
   local repair_status=0
+  local repair_error_path=""
 
   DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="0"
+  repair_error_path="$(mktemp)"
   set +e
-  repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --json 2>/dev/null)"
+  repair_json="$(invoke_installer_command_with_daemon_service_context "${cli_bin}" doctor repair --json 2>"${repair_error_path}")"
   repair_status=$?
   set -e
+  repair_error="$(cat "${repair_error_path}" 2>/dev/null || true)"
+  rm -f "${repair_error_path}" >/dev/null 2>&1 || true
 
-  if doctor_repair_preflight_looks_like_plain_doctor_report "${repair_json}"; then
+  if doctor_repair_preflight_looks_like_plain_doctor_report "${repair_json}" \
+    || doctor_repair_preflight_looks_like_plain_doctor_report "${repair_error}"; then
+    read_installed_background_service_inventory_json "${cli_bin}"
+    return
+  fi
+
+  if installer_command_failure_looks_unsupported "${repair_error}"; then
     read_installed_background_service_inventory_json "${cli_bin}"
     return
   fi
@@ -845,13 +856,6 @@ read_background_service_preflight_json() {
     DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="1"
     printf '%s' "${repair_json}"
     return
-  fi
-
-  # If the CLI printed anything (even if it is not valid JSON) or failed with an option parsing
-  # error, we still treat `doctor repair` as potentially supported for `--yes` execution and
-  # `--report-only` summaries. We'll fall back to `service list --json` for inventory parsing.
-  if [[ -n "${repair_json}" ]] || [[ "${repair_status}" != "0" ]]; then
-    DOCTOR_REPAIR_PREFLIGHT_SUPPORTED="1"
   fi
 
   read_installed_background_service_inventory_json "${cli_bin}"

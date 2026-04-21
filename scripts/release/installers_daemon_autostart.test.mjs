@@ -841,7 +841,7 @@ test('install.sh falls back to service list JSON when doctor repair --json retur
     }),
   });
   try {
-    assert.match(scenario.log, /doctor repair 1\.2\.4 args=doctor repair --yes/);
+    assert.doesNotMatch(scenario.log, /doctor repair 1\.2\.4 args=doctor repair --yes/);
     assert.match(scenario.log, /service install 1\.2\.4 args=service install --yes/);
   } finally {
     await scenario.cleanup();
@@ -851,7 +851,9 @@ test('install.sh falls back to service list JSON when doctor repair --json retur
 test('install.sh skips doctor repair execution when the installed CLI only supports legacy service commands', async () => {
   const scenario = await runInstallerScenario({
     HAPPIER_CHANNEL: 'preview',
+    HAPPIER_NONINTERACTIVE: '',
     HAPPIER_TEST_UNSUPPORTED_DOCTOR_REPAIR: '1',
+    HAPPIER_TEST_DOCTOR_REPAIR_REPORT_ONLY_TEXT: '🩺 Happier CLI Doctor',
     HAPPIER_TEST_SERVICE_LIST_JSON: JSON.stringify({
       entries: [
         { mode: 'user', targetMode: 'default-following', releaseChannel: 'preview' },
@@ -859,8 +861,10 @@ test('install.sh skips doctor repair execution when the installed CLI only suppo
     }),
   });
   try {
-    assert.match(scenario.log, /service install 1\.2\.4 args=service install --yes/);
+    assert.equal(scenario.log.trim(), '');
     assert.doesNotMatch(scenario.log, /doctor repair 1\.2\.4 args=doctor repair --yes/);
+    assert.doesNotMatch(scenario.log, /doctor repair-report-only 1\.2\.4 args=doctor repair --report-only/);
+    assert.doesNotMatch(scenario.stdout, /Happier CLI Doctor/);
   } finally {
     await scenario.cleanup();
   }
