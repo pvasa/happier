@@ -198,7 +198,7 @@ function Write-InstallerDetailBullet {
   )
 
   Write-Host "    • " -NoNewline -ForegroundColor DarkGray
-  Write-Host "$Label:" -NoNewline -ForegroundColor Gray
+  Write-Host ("{0}:" -f $Label) -NoNewline -ForegroundColor Gray
   Write-Host " $Value"
 }
 
