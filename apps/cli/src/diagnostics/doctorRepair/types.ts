@@ -56,6 +56,13 @@ export type CurrentCliInfo = Readonly<{
 }>;
 
 export type AutomaticStartupEntry = Readonly<{
+  /**
+   * The `serverId` field on the installed service definition. For
+   * `targetMode: 'default-following'` this is a SENTINEL ('default' or a
+   * legacy env_* label) — it doesn't equal the real profile id of whatever
+   * daemon the service is currently managing. Do NOT compare this directly
+   * with a `RunningDaemonEntry.serverId`; use `managedServerIds` below.
+   */
   serverId: string;
   /** Canonical name — never "Default background service". */
   name: string;
@@ -73,6 +80,19 @@ export type AutomaticStartupEntry = Readonly<{
   installedDefinitionMatchesExpected: boolean | null;
   /** True when the label/filename matches the legacy per-channel-scoped convention. */
   isLegacyChannelScoped: boolean;
+  /**
+   * The set of REAL profile serverIds this service actually manages right now.
+   *
+   * - `targetMode: 'default-following'` → `[currentActiveServerId]`
+   *   (the default-following service tracks whichever profile is active).
+   * - `targetMode: 'pinned'`            → `[serverId]`
+   *   (pinned services hard-code their target profile).
+   *
+   * Use this, not `serverId`, when asking "is this service managing that
+   * running daemon?". Optional for backwards-compat with test fixtures;
+   * live builder always populates it.
+   */
+  managedServerIds?: readonly string[];
 }>;
 
 export type RunningDaemonEntry = Readonly<{
@@ -84,6 +104,17 @@ export type RunningDaemonEntry = Readonly<{
   startedWithCliVersion: string | null;
   matchesCurrentCli: boolean | null;
   staleStateFile: boolean;
+  /**
+   * The relay URL the daemon's active server profile points at (looked up
+   * from settings when the entry is built). Shown in the row's sub-line so
+   * users can tell which relay the daemon is talking to — useful when the
+   * daemon's CLI channel differs from the relay's channel (e.g. a preview
+   * CLI daemon connected to the dev local relay).
+   *
+   * Optional so existing test fixtures compile without churn; the live
+   * builder always populates it (or sets to null when not resolvable).
+   */
+  relayUrl?: string | null;
 }>;
 
 export type LocalRelayEntry = Readonly<{

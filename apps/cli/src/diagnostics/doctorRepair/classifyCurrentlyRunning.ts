@@ -34,23 +34,36 @@ function resolveRecoveryStrategy(params: Readonly<{
   automaticStartup: readonly AutomaticStartupEntry[];
   currentCliReleaseChannel: PublicReleaseRingLabel;
   driftKind: 'version-only' | 'cross-channel';
+  isOnActiveProfile: boolean;
 }>): Pick<RunningDaemonCliMismatch, 'recoveryStrategy' | 'serviceManagerName'> {
-  // Cross-channel daemon: takeover preserves the daemon's own recorded
-  // channel, so it can't "upgrade" the daemon to the current CLI's channel.
-  // Stop is the honest action — the user then decides whether to start a
-  // fresh daemon on the current channel.
-  if (params.driftKind === 'cross-channel') {
-    return { recoveryStrategy: 'daemon-stop', serviceManagerName: null };
-  }
-  const manager = params.automaticStartup.find((e) =>
-    e.serverId === params.daemon.serverId
-    && e.releaseChannel === params.currentCliReleaseChannel
-    && !e.isForeignHome,
-  );
+  // Prefer a manager service when one exists for this profile on the current
+  // channel — restarting it converges the daemon cleanly whether the drift is
+  // version-only or cross-channel (the service template bakes in the CURRENT
+  // CLI, so kickstarting it replaces the old daemon with a current-CLI one).
+  //
+  // We use `managedServerIds` — the REAL profile ids this service manages —
+  // not `serverId` directly. For default-following services the bare
+  // `serverId` field is a sentinel ('default') that never matches a real
+  // daemon, so a direct compare misses the exact case we care about.
+  const manager = params.automaticStartup.find((e) => {
+    if (e.releaseChannel !== params.currentCliReleaseChannel) return false;
+    if (e.isForeignHome) return false;
+    return (e.managedServerIds ?? [e.serverId]).includes(params.daemon.serverId);
+  });
   if (manager) {
     return { recoveryStrategy: 'service-restart', serviceManagerName: manager.name };
   }
-  return { recoveryStrategy: 'daemon-takeover', serviceManagerName: null };
+  // Version-only drift with no manager → direct daemon takeover with the
+  // current CLI (same channel). Same action when a cross-channel daemon is
+  // sitting on the ACTIVE profile — takeover stops the old daemon and starts
+  // a fresh one with the current CLI, which lands the profile on the current
+  // channel. That's exactly what the user wants in both cases.
+  if (params.driftKind === 'version-only' || params.isOnActiveProfile) {
+    return { recoveryStrategy: 'daemon-takeover', serviceManagerName: null };
+  }
+  // Cross-channel daemon on a profile we don't care about right now — stop
+  // is the honest action; the user decides whether to start something here.
+  return { recoveryStrategy: 'daemon-stop', serviceManagerName: null };
 }
 
 export function classifyCurrentlyRunning(params: Readonly<{
@@ -58,6 +71,13 @@ export function classifyCurrentlyRunning(params: Readonly<{
   automaticStartup: readonly AutomaticStartupEntry[];
   currentCliReleaseChannel: PublicReleaseRingLabel;
   currentCliVersion: string;
+  /**
+   * The current CLI's active profile (serverId). Used to distinguish
+   * "daemon on the slot we care about" (takeover candidate) from
+   * "daemon on a profile unrelated to us" (informational orphan), which
+   * the cross-channel-daemon branch needs to decide correctly.
+   */
+  currentServerId: string;
   platform: NodeJS.Platform;
   uid: number | null;
 }>): readonly RepairFinding[] {
@@ -88,16 +108,22 @@ export function classifyCurrentlyRunning(params: Readonly<{
     if (daemon.matchesCurrentCli !== false) continue;
     const driftKind = resolveDriftKind(daemon, params.currentCliReleaseChannel);
 
-    // Cross-channel with NO current-CLI service on the same serverId →
-    // don't recommend replace. The user has this daemon for a reason.
-    // Emit an informational finding; the renderer lists it calmly.
+    // Cross-channel daemon: decide orphan-vs-takeover using TWO signals.
+    //  1) Is there a current-channel service configured for this daemon's
+    //     serverId? (Means we'd restart that service.)
+    //  2) Is this daemon on the CLI's *active* profile? (Means the user
+    //     cares about this slot right now, so it's a takeover candidate,
+    //     not an orphan — even if no service is configured for it yet.)
+    // Only when BOTH are false is this genuinely an orphan on an unrelated
+    // profile that the user keeps running intentionally.
     if (driftKind === 'cross-channel') {
       const sameProfileService = params.automaticStartup.find((e) =>
         e.serverId === daemon.serverId
         && e.releaseChannel === params.currentCliReleaseChannel
         && !e.isForeignHome,
       );
-      if (!sameProfileService) {
+      const isOnActiveProfile = daemon.serverId === params.currentServerId;
+      if (!sameProfileService && !isOnActiveProfile) {
         const orphan: OrphanDaemonOnOtherChannel = {
           kind: 'orphan_daemon_on_other_channel',
           severity: 'info',
@@ -108,8 +134,11 @@ export function classifyCurrentlyRunning(params: Readonly<{
         findings.push(orphan);
         continue;
       }
-      // Same serverId, different channel → genuine replace candidate. Falls
-      // through to the standard mismatch finding with recoveryStrategy below.
+      // Either a current-channel service exists for this serverId, OR the
+      // daemon is on the active profile — both mean the user wants a fresh
+      // daemon started by the current CLI here. Fall through to the standard
+      // mismatch path so recoveryStrategy picks the right fix (service-restart
+      // when a manager service exists; daemon-takeover otherwise).
     }
 
     const { recoveryStrategy, serviceManagerName } = resolveRecoveryStrategy({
@@ -117,6 +146,7 @@ export function classifyCurrentlyRunning(params: Readonly<{
       automaticStartup: params.automaticStartup,
       currentCliReleaseChannel: params.currentCliReleaseChannel,
       driftKind,
+      isOnActiveProfile: daemon.serverId === params.currentServerId,
     });
     const mismatch: RunningDaemonCliMismatch = {
       kind: 'running_daemon_cli_mismatch',
@@ -144,7 +174,10 @@ export function classifyCurrentlyRunning(params: Readonly<{
     if (service.isForeignHome) continue;
     if (service.releaseChannel !== params.currentCliReleaseChannel) continue;
     if (service.running === true) continue;
-    const hasDaemonOnSameProfile = params.running.some((d) => d.serverId === service.serverId);
+    // Use the service's REAL managed profile ids; `serverId` is a sentinel
+    // for default-following services and never matches a running daemon.
+    const managed = service.managedServerIds ?? [service.serverId];
+    const hasDaemonOnSameProfile = params.running.some((d) => managed.includes(d.serverId));
     if (hasDaemonOnSameProfile) continue;
 
     const label = deriveServiceLabel(service);
@@ -210,9 +243,11 @@ function findConflictingDaemonPid(
   service: AutomaticStartupEntry,
   running: readonly RunningDaemonEntry[],
 ): number | null {
-  // If a manual daemon owns the SAME serverId the service targets, that's
-  // almost certainly the conflict. Preferred signal over log-line parsing.
-  const match = running.find((d) => d.serverId === service.serverId && d.startedBy === 'manual');
+  // If a manual daemon owns a profile this service actually manages, that's
+  // almost certainly the conflict. Use `managedServerIds` — `serverId` is a
+  // sentinel for default-following services.
+  const managed = service.managedServerIds ?? [service.serverId];
+  const match = running.find((d) => managed.includes(d.serverId) && d.startedBy === 'manual');
   return match?.pid ?? null;
 }
 
@@ -222,5 +257,7 @@ function resolveConflictingServerId(
   pid: number,
 ): string {
   const match = running.find((d) => d.pid === pid);
-  return match?.serverId ?? service.serverId;
+  if (match?.serverId) return match.serverId;
+  const managed = service.managedServerIds ?? [service.serverId];
+  return managed[0] ?? service.serverId;
 }

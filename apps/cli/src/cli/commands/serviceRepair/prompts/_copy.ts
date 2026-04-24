@@ -10,6 +10,8 @@
 
 import chalk from 'chalk';
 
+import { cleanRelayRuntimeVersion } from '@/ui/format/styles';
+
 import type {
   AuthExpiredForActiveProfile,
   AuthMissingForProfile,
@@ -40,7 +42,7 @@ import type {
 } from '@/diagnostics/doctorRepair';
 
 export const CLEAN_STATE_HEADER = '✔  Your Happier installation looks good.';
-export const MISMATCHED_STATE_HEADER = chalk.yellow.bold('Your Happier setup needs a small update:');
+export const MISMATCHED_STATE_HEADER = chalk.yellow.bold('Your Happier setup might need some attention:');
 
 /**
  * Short, one-line headline per finding kind. Used in the summary block under
@@ -100,11 +102,13 @@ export function findingHeadline(finding: RepairFinding): string {
       const descriptor = runningChannel && runningVersion
         ? `${runningChannel} • ${runningVersion}`
         : 'an older CLI version';
-      // Cross-channel orphan: the daemon is on a different release channel
-      // than the current CLI. Restarting can't "upgrade" the channel, so the
-      // wording avoids suggesting a version upgrade.
+      // Cross-channel: the daemon is on a DIFFERENT release channel than the
+      // current CLI. The classifier only emits this when the daemon is on a
+      // profile we actually care about (the active one, or one a configured
+      // current-channel service targets), so the right framing is "take over
+      // and run on the current channel," not "unrelated."
       if (finding.driftKind === 'cross-channel') {
-        return `A daemon is running on a different release channel (${descriptor}) than this CLI`;
+        return `A ${runningChannel ?? 'different-channel'} daemon (${descriptor}) is holding your active profile — take over with ${finding.currentCliReleaseChannel}?`;
       }
       if (finding.daemon.startedBy === 'automatic-startup') {
         return `A running background service is older than this CLI (${descriptor})`;
@@ -350,22 +354,26 @@ export function copyRunningDaemonCliMismatch(
   const runningChannel = daemon.startedWithReleaseChannel ?? currentCliReleaseChannel;
   const runningVersion = daemon.startedWithCliVersion ?? '(unknown)';
 
-  // Cross-channel: the correct action is to replace — stop the old daemon
-  // and start a fresh one using this CLI, which re-uses the active relay
-  // profile but with the current channel.
+  // Cross-channel: the classifier only emits this when the daemon is on a
+  // profile we care about (active, or one a current-channel service targets).
+  // Correct action: take over with the current CLI so the same profile is
+  // served by a current-channel daemon. We default to YES because the user
+  // just invoked `doctor repair` — they WANT the current CLI to take over.
   if (finding.driftKind === 'cross-channel') {
+    // Describe the action the dispatched command will actually perform:
+    // - `service-restart` → restart the installed background service with
+    //   --takeover (replaces the manual daemon AND registers the service)
+    // - `daemon-takeover` → direct `daemon restart --takeover` (no service)
+    const verbLine = finding.recoveryStrategy === 'service-restart'
+      ? `restarts the installed background service with takeover, replacing pid ${daemon.pid} with a fresh ${currentCliReleaseChannel} • ${currentCliVersion} daemon`
+      : `stops pid ${daemon.pid} and starts a fresh ${currentCliReleaseChannel} • ${currentCliVersion} daemon on the same relay`;
     return {
       body: [
-        `A daemon on the ${runningChannel} channel is running, but this CLI is on ${currentCliReleaseChannel}.`,
-        '',
-        `   Currently running: ${runningChannel} • ${runningVersion}  (pid ${daemon.pid})`,
-        `   This CLI is on:    ${currentCliReleaseChannel} • ${currentCliVersion}`,
-        '',
-        `Replacing stops the ${runningChannel} daemon and starts a ${currentCliReleaseChannel} daemon on the same relay profile.`,
-        `Declining keeps the ${runningChannel} daemon running — use \`h${runningChannel}\` for ${runningChannel}-channel work.`,
+        `  ${chalk.yellow.bold('●')} ${chalk.yellow.bold(`${runningChannel} daemon (${runningVersion}) holding this profile — take over with ${currentCliReleaseChannel}?`)}`,
+        `  ${chalk.gray(verbLine)}`,
       ],
-      question: `Replace the ${runningChannel} daemon with a ${currentCliReleaseChannel} daemon?`,
-      default: 'no',
+      question: 'Take over now?',
+      default: 'yes',
     };
   }
 
@@ -682,40 +690,46 @@ export function copyMultiStackDetectedInformational(finding: MultiStackDetectedI
 
 export function copyBackgroundServiceNotRunning(finding: BackgroundServiceNotRunning): FindingPromptCopy {
   const { entry } = finding;
-  const target = entry.relayUrl ? ` on ${entry.relayUrl}` : '';
+  const relay = entry.relayUrl ? ` \u00b7 ${entry.relayUrl}` : '';
+  const cfgVersion = entry.configuredCliVersion ? ` \u00b7 CLI ${entry.configuredCliVersion}` : '';
   return {
     body: [
-      `Your ${entry.releaseChannel} background service is configured to auto-start on boot, but it\u2019s currently stopped.`,
-      '',
-      `   ${entry.name}${target}`,
-      `   ${entry.mode} scope \u2022 configured CLI ${entry.configuredCliVersion ?? '(unknown)'}`,
-      '',
-      'Starting it now spawns the daemon and registers this machine with its server.',
-      'If it fails to start (e.g. port conflict, auth missing), run `happier doctor` for a deeper diagnosis.',
+      `${chalk.yellow.bold('\u25cf')} ${chalk.yellow.bold(`${entry.releaseChannel} background service is configured but stopped`)}`,
+      `  ${chalk.gray(`${entry.name} \u00b7 ${entry.mode} scope${cfgVersion}${relay}`)}`,
     ],
-    question: `Start the ${entry.releaseChannel} background service now?`,
+    question: `Start it now?`,
     default: 'yes',
   };
 }
 
 export function copyOrphanDaemonOnOtherChannel(finding: OrphanDaemonOnOtherChannel): readonly string[] {
+  // Informational only \u2014 the classifier emits this ONLY for daemons on a
+  // server profile that isn't the current CLI's active profile AND has no
+  // current-channel service targeting it. In that case the daemon is
+  // presumed intentional (separate stack) and we just surface the fact.
+  const dotGlyph = chalk.gray('\u00b7');
+  const mute = (s: string) => chalk.gray(s);
   const channel = finding.daemon.startedWithReleaseChannel ?? 'unknown';
-  const version = finding.daemon.startedWithCliVersion ?? '(unknown)';
-  const descriptor = `${channel} \u2022 ${version}`;
+  const version = finding.daemon.startedWithCliVersion ?? 'unknown version';
   return [
-    `A ${channel} daemon (${descriptor}) is running on a profile unrelated to this ${finding.currentCliReleaseChannel} CLI.`,
-    `Nothing to do \u2014 use \`h${channel}\` for ${channel}-channel work, and \`h${finding.currentCliReleaseChannel}\` here for ${finding.currentCliReleaseChannel}.`,
+    `  ${dotGlyph} ${mute(`${channel} daemon (${version}) is running on an unrelated server profile \u00b7 use \`h${channel}\` to work with it`)}`,
   ];
 }
 
 export function copyLocalRelayOffChannelLeftovers(finding: LocalRelayOffChannelLeftovers): readonly string[] {
-  const extras = finding.leftovers.map((e) => `   \u2022 ${e.releaseChannel} \u2022 ${e.version ?? '(unknown)'} on ${e.relayUrl ?? '(unknown)'}`);
-  return [
-    `You have local relays installed for release channels other than this CLI's (${finding.currentChannelEntry.releaseChannel}):`,
-    ...extras,
-    `Each runs as its own background service. To remove one, run:`,
-    `   happier relay host uninstall --channel <stable|preview|dev>`,
-  ];
+  // Compact informational. One line per leftover relay + one line for the
+  // remove-command hint. All muted \u2014 these are FYI, not action items.
+  const dotGlyph = chalk.gray('\u25cb');
+  const mute = (s: string) => chalk.gray(s);
+  const cmd = (s: string) => chalk.cyan(s);
+  const lines: string[] = [];
+  for (const e of finding.leftovers) {
+    const version = cleanRelayRuntimeVersion(e.version);
+    const url = e.relayUrl ?? 'unknown URL';
+    lines.push(`  ${dotGlyph} ${mute(`${e.releaseChannel} local relay \u00b7 ${version} \u00b7 ${url}`)}`);
+  }
+  lines.push(`  ${dotGlyph} ${mute(`remove any: ${cmd('happier relay host uninstall --channel <stable|preview|dev>')}`)}`);
+  return lines;
 }
 
 export function copyBackgroundServiceCrashLooping(finding: BackgroundServiceCrashLooping): FindingPromptCopy {

@@ -1,5 +1,5 @@
 import type { DoctorRepairReport } from '@/diagnostics/doctorRepair';
-import { bold, muted } from '@/ui/format/styles';
+import { code, muted, severity } from '@/ui/format/styles';
 
 import { findingHeadline, MISMATCHED_STATE_HEADER } from './prompts/_copy';
 import { renderCleanStateSummary } from './renderCleanStateSummary';
@@ -68,7 +68,7 @@ export function renderDoctorRepairReport(
 
   if (opts.includeInteractiveFooter) {
     out.push('');
-    out.push(`${muted('To handle these interactively:')} ${bold('happier doctor repair')}`);
+    out.push(`${severity.info('To handle these interactively:')} ${code('happier doctor repair')}`);
   }
 
   return out;

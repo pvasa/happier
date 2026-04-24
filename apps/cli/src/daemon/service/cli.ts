@@ -13,6 +13,8 @@ import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
 import { defaultNameFromUrl, defaultWebappUrlFromServerUrl } from '@/cli/commands/server/commandUtilities';
 import { applyDaemonServiceInstallPlan, runDaemonServiceCommands } from './apply';
 import { buildServiceCommandEnv } from '@happier-dev/cli-common/service';
+
+import { resolveCliVersionFromBinary } from './resolveCliVersionFromBinary';
 import {
   describeDaemonServiceInstallConflict,
   installDaemonService,
@@ -1099,35 +1101,14 @@ function mapDaemonServiceListEntriesToInventory(
     if (configuredCliVersionByBinaryPathCache.has(binaryPath)) {
       return configuredCliVersionByBinaryPathCache.get(binaryPath) ?? null;
     }
-    if (!fs.existsSync(binaryPath)) {
-      configuredCliVersionByBinaryPathCache.set(binaryPath, null);
-      return null;
-    }
-
-    try {
-      const versionTimeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_VERSION_TIMEOUT_MS', 2000);
-      let res = spawnSync(binaryPath, ['--version'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: versionTimeoutMs,
-        env: buildServiceCommandEnv({ cmd: binaryPath, args: ['--version'], env: process.env }),
-      });
-      if (res.status !== 0 && entry.platform !== 'win32') {
-        res = spawnSync('bash', [binaryPath, '--version'], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: versionTimeoutMs,
-          env: buildServiceCommandEnv({ cmd: 'bash', args: [binaryPath, '--version'], env: process.env }),
-        });
-      }
-      const version = String(res.stdout ?? '').trim().split(/\r?\n/u)[0]?.trim() || null;
-      const normalizedVersion = res.status === 0 && version ? version : null;
-      configuredCliVersionByBinaryPathCache.set(binaryPath, normalizedVersion);
-      return normalizedVersion;
-    } catch {
-      configuredCliVersionByBinaryPathCache.set(binaryPath, null);
-      return null;
-    }
+    const versionTimeoutMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_VERSION_TIMEOUT_MS', 2000);
+    const version = resolveCliVersionFromBinary({
+      binaryPath,
+      platform: entry.platform,
+      timeoutMs: versionTimeoutMs,
+    });
+    configuredCliVersionByBinaryPathCache.set(binaryPath, version);
+    return version;
   };
 
   const resolveRunningStateForEntry = (entry: DaemonServiceListEntry): boolean => {

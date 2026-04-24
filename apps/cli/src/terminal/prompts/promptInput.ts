@@ -32,9 +32,18 @@ export async function promptInput(prompt: string): Promise<string> {
     if (ttyHandle) {
       const input = ttyHandle.createReadStream();
       const output = ttyHandle.createWriteStream();
-      const rl = createInterface({ input, output, terminal: true });
+      // `terminal: false` — FileHandle-backed streams on /dev/tty don't expose
+      // the TTY setRawMode API, so readline can't actually switch to raw mode.
+      // If we let readline believe it's in terminal mode anyway, it emits its
+      // own character echo while the kernel (canonical mode) ALSO echoes each
+      // keystroke → you see "yy" on screen. With `terminal: false`, readline
+      // operates in line-mode and the kernel handles echo cleanly.
+      const rl = createInterface({ input, output, terminal: false });
       try {
-        return await new Promise<string>((resolve) => rl.question(prompt, resolve));
+        output.write(prompt);
+        return await new Promise<string>((resolve) => {
+          rl.once('line', (line) => resolve(line));
+        });
       } finally {
         rl.close();
         input.destroy();

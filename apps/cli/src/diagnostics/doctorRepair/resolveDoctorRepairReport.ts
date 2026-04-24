@@ -4,7 +4,10 @@ import {
   type PublicReleaseRingLabel,
 } from '@happier-dev/release-runtime/releaseRings';
 
+import { dirname, join } from 'node:path';
+
 import { configuration } from '@/configuration';
+import { resolveCliVersionFromBinary } from '@/daemon/service/resolveCliVersionFromBinary';
 import type { BackgroundServiceRepairPlan } from '@/diagnostics/backgroundServiceRepair';
 import { resolveBackgroundServiceRepairPlanForCurrentRuntime } from '@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime';
 import type { DaemonServiceMode } from '@/daemon/service/plan';
@@ -112,10 +115,18 @@ function buildCurrentCliInfo(
 ): CurrentCliInfo {
   const ringId = (runtime.channel ?? configuration.publicReleaseRing ?? 'stable') as PublicReleaseRingId;
   const releaseChannel = getReleaseRingPublicLabel(ringId);
-  const version = String(configuration.currentCliVersion ?? '').trim() || '(unknown)';
   // best-effort: pull binary path from snapshot if present
   const snapshotDaemon = snapshot?.daemonStatus?.daemon ?? null;
   const binaryPath = runtime.entryPath || (snapshotDaemon as { binaryPath?: string } | null)?.binaryPath || null;
+  // Prefer the version from the INSTALLED CLI's package.json (the binary
+  // launchd will actually run) over the bundled `configuration.currentCliVersion`.
+  // When the user is invoking from a local-dev build, the two can disagree
+  // (e.g. repo package.json = `0.2.5`, installed package.json = `0.2.5-dev.15.1`),
+  // and the installed one is what matters for version-stale comparisons and
+  // for the user's mental model of "what did I just install?".
+  const installedVersion = readInstalledCliVersion(binaryPath, runtime.platform);
+  const version = installedVersion
+    ?? (String(configuration.currentCliVersion ?? '').trim() || '(unknown)');
 
   const shim: CurrentCliInfo['shim'] = releaseChannel === 'stable'
     ? 'happier'
@@ -131,6 +142,30 @@ function buildCurrentCliInfo(
     pathWinnerShim: null,
     pathWinnerResolvesToThisBinary: null,
   };
+}
+
+/**
+ * Resolve the version of the CLI actually installed at `entryPath` by
+ * spawning the installed shim with `--version`. Uses the same helper that
+ * fills `configuredCliVersion` on background-service inventory rows — one
+ * code path for "ask the installed CLI which version it is", no parallel
+ * package.json / symlink parsers to keep in sync.
+ *
+ * Why this matters: in local-dev invocations (`node apps/cli/bin/happier.mjs`),
+ * `configuration.currentCliVersion` is the REPO package.json's version (e.g.
+ * `0.2.5`), but the INSTALLED CLI at `~/.happier/cli-dev/current/...` can be
+ * something like `0.2.5-dev.15.1`. For "did the user install a new CLI?" we
+ * want the installed version, not the loaded-from-repo bundled constant.
+ *
+ * `entryPath` is the Node entrypoint path (`<installRoot>/current/package-dist/index.mjs`).
+ * The shim we invoke sits two directories up: `<installRoot>/current/happier`
+ * on unix, `<installRoot>\current\happier.exe` on Windows.
+ */
+function readInstalledCliVersion(entryPath: string | null, platform: NodeJS.Platform): string | null {
+  if (!entryPath) return null;
+  const currentDir = dirname(dirname(entryPath));
+  const shim = platform === 'win32' ? 'happier.exe' : 'happier';
+  return resolveCliVersionFromBinary({ binaryPath: join(currentDir, shim), platform });
 }
 
 function buildAutomaticStartupEntries(params: Readonly<{
@@ -182,11 +217,23 @@ function buildAutomaticStartupEntries(params: Readonly<{
     happierHomeByPath.set(s.path, s.happierHomeDir ?? null);
   }
 
+  // For default-following services, resolve `managedServerIds` and the
+  // effective relay URL from the currently-active profile — the service's
+  // own `serverId` field is a sentinel ('default') that doesn't reflect
+  // reality, and `relayUrl` isn't stored in the plist for default-following.
+  const activeServerId = String(configuration.activeServerId ?? '').trim() || null;
+  const activeRelayUrl = String(configuration.serverUrl ?? '').trim() || null;
+
   return params.inventory.map((e): AutomaticStartupEntry => {
     const ringId = e.ring as PublicReleaseRingId;
     const releaseChannel = getReleaseRingPublicLabel(ringId);
     const home = normalizeHome(happierHomeByPath.get(e.path) ?? null);
     const isForeignHome = currentHome !== null && home !== null && currentHome !== home;
+    const managedServerIds: readonly string[] = e.targetMode === 'default-following'
+      ? (activeServerId ? [activeServerId] : [])
+      : [e.serverId];
+    const relayUrl = e.relayUrl
+      ?? (e.targetMode === 'default-following' ? activeRelayUrl : null);
     return {
       serverId: e.serverId,
       name: e.name,
@@ -194,7 +241,7 @@ function buildAutomaticStartupEntries(params: Readonly<{
       ringId,
       mode: (e.mode ?? 'user'),
       targetMode: e.targetMode,
-      relayUrl: e.relayUrl ?? null,
+      relayUrl,
       running: typeof e.running === 'boolean' ? e.running : null,
       configuredCliVersion: e.configuredCliVersion ?? null,
       runningCliVersion: e.runningCliVersion ?? null,
@@ -203,6 +250,7 @@ function buildAutomaticStartupEntries(params: Readonly<{
       isForeignHome,
       installedDefinitionMatchesExpected: matchesExpected.get(e.path) ?? null,
       isLegacyChannelScoped: legacyPaths.has(e.path),
+      managedServerIds,
     };
   });
 }
@@ -246,6 +294,14 @@ function buildCurrentlyRunningEntries(params: Readonly<{
       ? 'manual'
       : 'unknown';
   const serverId = String((params.snapshot?.daemonStatus?.server as { activeServerId?: string })?.activeServerId ?? 'default').trim() || 'default';
+  // Resolve the relay URL the daemon is connected to. If the daemon is on
+  // the currently-active profile we can read the URL straight off
+  // `configuration` (already loaded). Otherwise fall back to deriving it
+  // from loopback-style serverIds (`127.0.0.1-<port>`) — the common shape
+  // for local relay profiles.
+  const relayUrl = serverId === configuration.activeServerId
+    ? (configuration.serverUrl ?? null)
+    : (relayUrlFromLoopbackServerId(serverId) ?? null);
   return [{
     serverId,
     pid: daemon.pid ?? 0,
@@ -255,7 +311,14 @@ function buildCurrentlyRunningEntries(params: Readonly<{
     startedWithCliVersion: daemon.startedWithCliVersion ?? null,
     matchesCurrentCli: matches,
     staleStateFile: false,
+    relayUrl,
   }];
+}
+
+function relayUrlFromLoopbackServerId(serverId: string): string | null {
+  const match = String(serverId ?? '').match(/^(?:127\.0\.0\.1|localhost)-(\d+)(?:-\d+)?$/);
+  if (!match) return null;
+  return `http://127.0.0.1:${match[1]}`;
 }
 
 function buildLocalRelayEntries(snapshot: DoctorSnapshot | null): readonly LocalRelayEntry[] {

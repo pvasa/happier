@@ -74,6 +74,7 @@ export async function buildDoctorRepairReport(params: Readonly<{
     automaticStartup: params.automaticStartup,
     currentCliReleaseChannel: params.currentCli.releaseChannel,
     currentCliVersion: params.currentCli.version,
+    currentServerId: params.currentServerId,
     platform: params.platform,
     uid: params.uid,
   });

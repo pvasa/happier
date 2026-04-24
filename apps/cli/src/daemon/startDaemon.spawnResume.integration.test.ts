@@ -960,7 +960,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   });
 
-  it('fails fast for macOS background-service spawns targeting protected home directories', async () => {
+  it('allows macOS background-service spawns targeting Documents', async () => {
     if (!ORIGINAL_PLATFORM_DESCRIPTOR) {
       throw new Error('Expected process.platform to be configurable for this test');
     }
@@ -992,13 +992,14 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         codexBackendMode: 'acp',
       });
 
-      expect(result).toEqual({
-        type: 'error',
-        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
-        errorMessage: expect.stringContaining('background-service'),
-      });
-      expect(String(result.errorMessage)).toContain('/Users/tester/Documents/project');
-      expect(spawnHappyCLI).not.toHaveBeenCalled();
+      expect(result).toEqual({ type: 'success', sessionId: 'sess_plain' });
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
+      const firstCall = spawnHappyCLI.mock.calls[0];
+      if (!firstCall) {
+        throw new Error('Expected spawnHappyCLI to be called');
+      }
+      const opts = firstCall[1] as { cwd?: string } | undefined;
+      expect(opts?.cwd).toBe('/Users/tester/Documents/project');
 
       harness.requestShutdown('happier-cli');
       await run;

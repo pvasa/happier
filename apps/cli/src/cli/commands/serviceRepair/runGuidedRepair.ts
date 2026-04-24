@@ -4,7 +4,7 @@ import type { RepairFinding } from '@/diagnostics/doctorRepair';
 
 import { promptConfirmYesNo } from '@/terminal/prompts/promptConfirmYesNo';
 import { promptMultipleChoice } from '@/terminal/prompts/promptMultipleChoice';
-import { bold, muted, success, warning } from '@/ui/format/styles';
+import { bold, code, glyph, muted, severity, success, warning } from '@/ui/format/styles';
 import { buildHappyCliSubprocessLaunchSpec } from '@/utils/spawnHappyCLI';
 
 import {
@@ -79,6 +79,7 @@ export async function runGuidedRepair(params: Readonly<{
 }>): Promise<boolean> {
   let acceptedAutomaticStartup = false;
   let recommendationsHeaderPrinted = false;
+  let anyFindingRendered = false;
   // Print the "Recommendations" header once, just before we start walking
   // actionable findings — it visually separates the report sections above
   // (Current CLI / Background services / Local relays / Authentication) from
@@ -90,27 +91,39 @@ export async function runGuidedRepair(params: Readonly<{
     console.log('');
     console.log(bold('Recommendations'));
   };
+  // Blank line BETWEEN successive findings (but not before the first one, so
+  // the header and first recommendation sit together). Call once at the top
+  // of every finding's render block.
+  const separateFromPreviousFinding = () => {
+    if (anyFindingRendered) console.log('');
+    anyFindingRendered = true;
+  };
 
   for (const finding of params.findings) {
-    printRecommendationsHeaderOnce();
-    // Top-level stack decision — if accepted (switch/replace/parallel), it
-    // preempts subsequent drift fixes for the same stack. We still return
-    // `true` only when an automatic-startup finding was accepted.
+    // Do NOT print the Recommendations header at the top of every iteration —
+    // some findings (auth, informational) produce no output, and printing the
+    // header unconditionally leaves a dangling "Recommendations\n" with
+    // nothing under it when every finding falls through. Each branch that
+    // actually emits content calls `printRecommendationsHeaderOnce()` right
+    // before its first console.log.
     if (finding.kind === 'channel_switch_recommended') {
+      printRecommendationsHeaderOnce();
+      separateFromPreviousFinding();
       const choice = await promptChannelSwitch(finding);
       const ok = await dispatchChannelSwitch(choice, finding, params.currentCli);
       if (ok) {
-        console.log(success(' ✔ done. Re-run `happier doctor repair` to verify.'));
+        console.log(`  ${glyph.success()} done. Re-run ${code('happier doctor repair')} to verify.`);
         return false;          // stop the walk — the rest would be stale
       }
       if (choice === 'keep') continue;  // user declined — fall through to other findings
-      console.log(warning(' ⚠ that action failed — you can retry manually.'));
+      console.log(`  ${glyph.error()} ${severity.error('failed')} — you can retry manually`);
       continue;
     }
 
     if (finding.kind === 'automatic_startup_foreign_home') {
+      printRecommendationsHeaderOnce();
+      separateFromPreviousFinding();
       const lines = copyForeignHome(finding);
-      console.log('');
       for (const line of lines) console.log(line);
       continue;
     }
@@ -119,13 +132,18 @@ export async function runGuidedRepair(params: Readonly<{
     // "start the daemon which will register". Offer to run it automatically
     // instead of asking the user to copy-paste a command.
     if (finding.kind === 'machine_not_registered_for_profile') {
-      console.log('');
+      printRecommendationsHeaderOnce();
+      separateFromPreviousFinding();
       const lines = guidanceLinesFor(finding);
       if (lines) for (const line of lines) console.log(line);
-      const yes = await promptConfirmYesNo(bold('Start the daemon now to register this machine?'), { default: 'yes' });
+      const yes = await promptConfirmYesNo(`  ${bold('Start the daemon now to register this machine?')}`, { default: 'yes' });
       if (yes) {
         const ok = runCliCommand(['daemon', 'start']);
-        console.log(ok ? success(' ✔ done.') : warning(' ⚠ daemon start failed — you can retry manually.'));
+        if (ok) {
+          console.log(`  ${glyph.success()} done.`);
+        } else {
+          console.log(`  ${glyph.error()} ${severity.error('failed')} — retry: ${code('happier daemon start')}`);
+        }
       }
       continue;
     }
@@ -133,7 +151,8 @@ export async function runGuidedRepair(params: Readonly<{
     // Informational / manual-guidance findings: print the copy, no prompt.
     const guidance = guidanceLinesFor(finding);
     if (guidance) {
-      console.log('');
+      printRecommendationsHeaderOnce();
+      separateFromPreviousFinding();
       for (const line of guidance) console.log(line);
       continue;
     }
@@ -141,10 +160,13 @@ export async function runGuidedRepair(params: Readonly<{
     const copy = copyForFinding(finding, params.currentCli);
     if (!copy) continue;
 
-    console.log('');
+    printRecommendationsHeaderOnce();
+    separateFromPreviousFinding();
     for (const line of copy.body) console.log(line);
 
-    const answer = await promptConfirmYesNo(bold(copy.question), { default: copy.default });
+    // Indent the Y/n prompt 2 cols to align with the body's indentation so
+    // the prompt visually belongs to the finding above it.
+    const answer = await promptConfirmYesNo(`  ${bold(copy.question)}`, { default: copy.default });
     if (!answer) continue;
 
     if (finding.kind.startsWith('automatic_startup_')) {
@@ -152,10 +174,17 @@ export async function runGuidedRepair(params: Readonly<{
       continue;
     }
     // Non-automatic-startup findings: dispatch by spawning the current CLI
-    // with the right subcommand. No ask-then-print — if the user said yes we
-    // actually run it here.
+    // with the right subcommand. The sub-CLI's output streams to stdout via
+    // `stdio: 'inherit'`; our `✓/✗` result prints immediately after with no
+    // blank line, so it reads as the conclusion of the action, not a
+    // detached status update.
     const ok = dispatchFindingAction(finding);
-    console.log(ok ? success(' ✔ done.') : warning(' ⚠ that command failed — you can retry manually.'));
+    if (ok) {
+      console.log(`  ${glyph.success()} done.`);
+    } else {
+      const hint = retryHintFor(finding);
+      console.log(`  ${glyph.error()} ${severity.error('failed')} — ${hint}`);
+    }
   }
 
   return acceptedAutomaticStartup;
@@ -183,7 +212,11 @@ function guidanceLinesFor(finding: RepairFinding): readonly string[] | null {
     case 'orphan_daemon_on_other_channel':
       return copyOrphanDaemonOnOtherChannel(finding);
     case 'local_relay_off_channel_leftovers':
-      return copyLocalRelayOffChannelLeftovers(finding);
+      // Already shown in the `Local relays` section above — repeating the
+      // same list as a recommendation is noise. The top-of-report bullet
+      // ("You have N local relays installed for other release channels")
+      // remains, so the user still sees the fact, just not duplicated.
+      return null;
     default:
       return null;
   }
@@ -272,7 +305,14 @@ function dispatchFindingAction(finding: RepairFinding): boolean {
       //     channels, so we just stop. User decides whether to start a
       //     current-channel daemon afterwards.
       if (finding.recoveryStrategy === 'service-restart') {
-        return runCliCommand(['service', 'restart']);
+        // Always pass --takeover here: by construction, this branch fires
+        // because a different-CLI / different-channel daemon is holding the
+        // same profile as the current-channel service. Without --takeover
+        // the service-restart refuses and we leave the user in exactly the
+        // confusing state they ran repair to fix. `service restart --takeover`
+        // is safe to run when no manual conflict exists — it's a no-op in
+        // that case.
+        return runCliCommand(['service', 'restart', '--takeover']);
       }
       if (finding.recoveryStrategy === 'daemon-stop') {
         // Cross-channel replace: stop the old-channel daemon, then start a
@@ -307,10 +347,11 @@ function dispatchFindingAction(finding: RepairFinding): boolean {
     case 'local_relay_version_stale':
       return runCliCommand(['relay', 'host', 'install', '--channel', finding.entry.releaseChannel, '--yes']);
     case 'background_service_not_running':
-      // Start the configured-but-stopped service. `service start` handles
-      // bootstrap (launchctl bootstrap / systemctl enable+start / Windows task
-      // start) and registers the daemon against the service's profile.
-      return runCliCommand(['service', 'start']);
+      // `--takeover` is always safe here — it's a no-op when no conflict
+      // exists, and it prevents `service start` from printing "A manually
+      // started daemon is running" and exiting 0 on the rare case where a
+      // manual daemon appeared between inventory snapshot and dispatch.
+      return runCliCommand(['service', 'start', '--takeover']);
     case 'background_service_crash_looping': {
       // If a conflicting manual daemon was identified, stop it first — that
       // usually unblocks the crash loop (the service's next respawn, now
@@ -339,4 +380,35 @@ function cliSelfUpdateArgs(channel: 'stable' | 'preview' | 'dev'): string[] {
   if (channel === 'preview') return ['self', 'update', '--preview'];
   if (channel === 'dev') return ['self', 'update', '--dev'];
   return ['self', 'update'];
+}
+
+/**
+ * One-line actionable retry hint per finding kind. Shown after a dispatched
+ * action exits non-zero so the user knows what to do next, tailored to the
+ * actual thing that broke instead of a generic "retry manually."
+ */
+function retryHintFor(finding: RepairFinding): string {
+  switch (finding.kind) {
+    case 'running_daemon_cli_mismatch':
+      if (finding.recoveryStrategy === 'service-restart') {
+        return `see message above · retry: ${code('happier service restart --takeover')}`;
+      }
+      if (finding.recoveryStrategy === 'daemon-takeover') {
+        return `see message above · retry: ${code('happier daemon restart --takeover')}`;
+      }
+      return `see message above · retry: ${code('happier daemon stop')} then ${code('happier daemon start')}`;
+    case 'running_daemon_duplicate_profile':
+      return `see message above · retry: ${code('happier daemon stop --server-id <id> --pid <pid>')}`;
+    case 'background_service_not_running':
+      return `see message above · retry: ${code('happier service start --takeover')}`;
+    case 'background_service_crash_looping':
+      return `see message above · inspect logs under ${code('~/.happier/logs/')}`;
+    case 'local_relay_lane_missing':
+    case 'local_relay_version_stale':
+      return `see message above · retry: ${code('happier relay host install')}`;
+    case 'cli_self_update_available':
+      return `see message above · retry: ${code('happier self update')}`;
+    default:
+      return 'see message above — you can retry manually';
+  }
 }

@@ -1,57 +1,74 @@
-import { bold, muted, statusGlyph, subLineArrow } from '@/ui/format/styles';
+import { code, glyph, sectionHeader, severity } from '@/ui/format/styles';
 import type { AuthProfileSnapshot } from '@/diagnostics/doctorRepair';
 
 const SECTION_HEADER = 'Authentication';
 
 /**
- * Card-style `Authentication` section — mirrors `Background services` and
- * `Local relays` so the report feels coherent. One card per configured
- * server profile, with a secondary `↳` line when the profile needs action.
+ * `Authentication` section.
  *
- * Status taxonomy per profile:
- *   - `hasCredentials` + `machineRegistered` + not expired → signed in
- *   - `hasCredentials` + expired                           → session expired
- *   - `hasCredentials` + !machineRegistered                → machine not registered
- *   - !hasCredentials                                      → not signed in
+ * Principle: the active profile is what 99% of `doctor repair` runs care about;
+ * everything else is noise until a finding touches it. So we render the active
+ * profile in detail, collapse signed-in inactive profiles into a summary
+ * counter, and promote "needs action" inactive profiles (expired, not signed
+ * in, machine not registered) back to visible cards — because those CAN block
+ * a user who switches profiles soon.
  *
- * The active profile's name is bolded so the user can tell at a glance which
- * one the current CLI is talking to.
+ * Line anatomy per profile:
+ *   [glyph] [name] [active/inactive marker]  —  on <url>  —  <status>
+ *     → <one-line remedy, only when action is needed>
  */
 export function renderAuthentication(profiles: readonly AuthProfileSnapshot[], hasAny: boolean): string[] {
   if (!hasAny) {
     return [
-      bold(SECTION_HEADER),
-      `  ${muted('No server profiles configured.')}`,
-      `    ${subLineArrow()} ${muted('sign in:')} ${bold('happier auth')}`,
+      sectionHeader(SECTION_HEADER),
+      `  ${glyph.info()} ${severity.info('No server profiles configured.')}`,
+      `    ${glyph.arrow()} sign in: ${code('happier auth')}`,
     ];
   }
   if (profiles.length === 0) return [];
 
-  // Order: active first, then alphabetical by name.
-  const sorted = [...profiles].sort((a, b) => {
-    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-    return a.serverName.localeCompare(b.serverName);
-  });
+  const active = profiles.find((p) => p.isActive) ?? null;
+  const others = profiles.filter((p) => !p.isActive);
+  const othersNeedingAction = others.filter((p) => statusFor(p) !== 'signed-in');
+  const othersSignedIn = others.length - othersNeedingAction.length;
 
-  const lines: string[] = [bold(SECTION_HEADER)];
-  for (const p of sorted) {
-    const status = statusFor(p);
-    const glyphKind = glyphKindFor(status, p.reachability);
-    const nameDisplay = p.isActive ? bold(p.serverName) : p.serverName;
-    const activeMarker = p.isActive ? ` ${muted('(active)')}` : '';
-    const url = muted(`on ${p.serverUrl}`);
-    const statusWord = statusWordFor(status, p.reachability);
-    // "signed in" (definitively verified) stays full-color; anything else —
-    // including signed-in-but-unreachable — is muted, signaling lower
-    // confidence.
-    const statusRendered = status === 'signed-in' && p.reachability !== 'unreachable'
-      ? statusWord
-      : muted(statusWord);
-    lines.push(`  ${statusGlyph(glyphKind)} ${nameDisplay}${activeMarker}  ${muted('—')}  ${url}  ${muted('—')}  ${statusRendered}`);
-    const subLine = subLineFor(p, status);
-    if (subLine) lines.push(`    ${subLineArrow()} ${muted(subLine)}`);
+  // Collect rows as blocks (multi-line when a remedy/sub-line is included,
+  // single-line otherwise). Only separate with a blank line when at least
+  // one of the two neighbouring blocks is multi-line — stacking single
+  // lines keeps the list feeling cohesive.
+  const blocks: string[][] = [];
+  if (active) blocks.push(renderProfileBlock(active));
+  for (const p of othersNeedingAction) blocks.push(renderProfileBlock(p));
+  if (othersSignedIn > 0) {
+    const word = othersSignedIn === 1 ? 'profile' : 'profiles';
+    blocks.push([`  ${glyph.info()} ${severity.info(`${othersSignedIn} other ${word} signed in · run ${code('happier server list')} to see all`)}`]);
+  }
+  const lines: string[] = [sectionHeader(SECTION_HEADER)];
+  for (let i = 0; i < blocks.length; i += 1) {
+    const prev = blocks[i - 1];
+    const curr = blocks[i];
+    if (i > 0 && ((prev?.length ?? 0) > 1 || curr.length > 1)) {
+      lines.push('');
+    }
+    lines.push(...curr);
   }
   return lines;
+}
+
+function renderProfileBlock(p: AuthProfileSnapshot): string[] {
+  const status = statusFor(p);
+  const g = glyphForStatus(status, p.reachability);
+  const marker = p.isActive ? ' (active)' : '';
+  const nameDisplay = p.isActive ? severity.action(p.serverName + marker) : p.serverName;
+  const statusWord = statusWordFor(status, p.reachability);
+  const statusRendered = status === 'signed-in' && p.reachability !== 'unreachable'
+    ? severity.success(statusWord)
+    : severity.info(statusWord);
+  const primary = `  ${g} ${nameDisplay}  ${severity.info('—')}  ${severity.info(`on ${p.serverUrl}`)}  ${severity.info('—')}  ${statusRendered}`;
+
+  const remedy = remedyFor(p, status);
+  if (!remedy) return [primary];
+  return [primary, `    ${glyph.arrow()} ${remedy}`];
 }
 
 type ProfileStatus = 'signed-in' | 'expired' | 'not-registered' | 'not-signed-in';
@@ -63,13 +80,12 @@ function statusFor(p: AuthProfileSnapshot): ProfileStatus {
   return 'signed-in';
 }
 
-function glyphKindFor(status: ProfileStatus, reachability: AuthProfileSnapshot['reachability']): 'running' | 'drifted' | 'stopped' {
-  // Unreachable live-check for a profile that looks signed-in offline: show
-  // the yellow "drifted" glyph so users know we couldn't confirm.
-  if (status === 'signed-in' && reachability === 'unreachable') return 'drifted';
-  if (status === 'signed-in') return 'running';
-  if (status === 'expired') return 'drifted';
-  return 'stopped';
+function glyphForStatus(status: ProfileStatus, reachability: AuthProfileSnapshot['reachability']): string {
+  if (status === 'signed-in' && reachability === 'unreachable') return glyph.action();
+  if (status === 'signed-in') return glyph.success();
+  if (status === 'expired') return glyph.action();
+  if (status === 'not-registered') return glyph.action();
+  return glyph.info();
 }
 
 function statusWordFor(status: ProfileStatus, reachability: AuthProfileSnapshot['reachability']): string {
@@ -84,14 +100,14 @@ function statusWordFor(status: ProfileStatus, reachability: AuthProfileSnapshot[
   }
 }
 
-function subLineFor(p: AuthProfileSnapshot, status: ProfileStatus): string | null {
+function remedyFor(p: AuthProfileSnapshot, status: ProfileStatus): string | null {
   if (status === 'signed-in' && p.reachability === 'unreachable') {
-    return 'the server didn\u2019t respond — credential state couldn\u2019t be verified';
+    return severity.info('server didn’t respond — credential state couldn’t be verified');
   }
   switch (status) {
     case 'signed-in': return null;
-    case 'expired': return `re-sign in: happier auth --server ${p.serverId}`;
-    case 'not-registered': return 'start the daemon to register: happier daemon start';
-    case 'not-signed-in': return `sign in: happier auth --server ${p.serverId}`;
+    case 'expired': return `re-sign in: ${code(`happier auth --server ${p.serverId}`)}`;
+    case 'not-registered': return `register: ${code('happier daemon start')}`;
+    case 'not-signed-in': return `sign in: ${code(`happier auth --server ${p.serverId}`)}`;
   }
 }
