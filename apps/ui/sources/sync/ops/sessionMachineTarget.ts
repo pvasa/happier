@@ -70,6 +70,7 @@ export function resolveMachineTargetForSessionFromState(
   });
   return resolveSessionMachineRpcTarget({
     sessionId,
+    sessionActive: session?.active === true,
     sessionMachineId: normalizeNonEmptyString(metadata?.machineId),
     sessionHostHint: normalizeNonEmptyString(metadata?.host),
     sessionPath: normalizeNonEmptyString(metadata?.path),

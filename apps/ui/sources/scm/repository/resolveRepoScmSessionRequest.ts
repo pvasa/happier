@@ -32,13 +32,21 @@ export function resolveRepoScmSessionRequest(input: Readonly<{
     }
 
     const workspaceContext = readSessionWorkspaceContext(state, sessionId);
-    const repoPath = workspaceContext.projectPath ?? workspaceContext.workspacePath;
-    const normalizedRepoPath = normalizeNonEmptyString(repoPath);
+    const machineTarget = readMachineTargetForSession(sessionId);
+    const sessionWorkspacePath = normalizeNonEmptyString(workspaceContext.workspacePath);
+    const projectPath = normalizeNonEmptyString(workspaceContext.projectPath);
+    const normalizedRepoPath =
+        normalizeNonEmptyString(machineTarget?.basePath)
+        ?? (
+            session.active === true
+                ? sessionWorkspacePath ?? projectPath
+                : projectPath ?? sessionWorkspacePath
+        );
     if (!normalizedRepoPath) {
         return null;
     }
 
-    const reachableMachineId = readMachineTargetForSession(sessionId)?.machineId ?? null;
+    const reachableMachineId = machineTarget?.machineId ?? null;
     const sessionMachineId = normalizeNonEmptyString(session.metadata?.machineId);
     const projectMachineId = normalizeNonEmptyString(workspaceContext.projectMachineId);
     const machineId =

@@ -69,6 +69,7 @@ export function applyReachableTargetsToSessionListRenderables(
             const project = params.getProjectForSession?.(sessionId) ?? null;
             const target = resolveSessionMachineRpcTarget({
                 sessionId,
+                sessionActive: sessionRecord.active === true,
                 sessionMachineId: normalizeNonEmptyString(metadata?.machineId),
                 sessionHostHint: normalizeNonEmptyString(metadata?.host),
                 sessionPath: normalizeNonEmptyString(metadata?.path),

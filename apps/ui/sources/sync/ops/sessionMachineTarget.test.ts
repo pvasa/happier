@@ -32,6 +32,35 @@ describe('sessionMachineTarget', () => {
         });
     });
 
+    it('uses an active worktree session path instead of the linked project path', async () => {
+        const { readMachineTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: true,
+                    metadata: {
+                        machineId: 'm1',
+                        path: '/workspace/repo/.dev/worktree/gentle-meadow',
+                    },
+                },
+            },
+            getProjectForSession: (sessionId: string) =>
+                sessionId === 's1'
+                    ? {
+                        key: {
+                            machineId: 'm1',
+                            path: '/workspace/repo',
+                        },
+                    }
+                    : null,
+        });
+
+        expect(readMachineTargetForSession('s1')).toEqual({
+            machineId: 'm1',
+            basePath: '/workspace/repo/.dev/worktree/gentle-meadow',
+        });
+    });
+
     it('falls back to project key metadata for inactive sessions', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({

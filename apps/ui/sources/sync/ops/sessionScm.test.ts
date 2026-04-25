@@ -95,6 +95,52 @@ describe('sessionScm', () => {
         expect(sessionRpcMock).not.toHaveBeenCalled();
     });
 
+    it('uses the active session worktree path for machine RPC even when the project points at the main repo', async () => {
+        getStateMock.mockReturnValue({
+            settings: {
+                scmGitRepoPreferredBackend: 'git',
+            },
+            sessions: {
+                'session-1': {
+                    active: true,
+                    metadata: {
+                        path: '/workspace/repo/.dev/worktree/gentle-meadow',
+                        machineId: 'machine-1',
+                    },
+                },
+            },
+            getProjectForSession: (sessionId: string) =>
+                sessionId === 'session-1'
+                    ? {
+                        key: {
+                            machineId: 'machine-1',
+                            path: '/workspace/repo',
+                        },
+                    }
+                    : null,
+        });
+        machineRpcMock.mockResolvedValue({
+            success: true,
+            snapshot: undefined,
+        });
+
+        const { sessionScmStatusSnapshot } = await import('./sessionScm');
+        const response = await sessionScmStatusSnapshot('session-1', {});
+
+        expect(response.success).toBe(true);
+        expect(machineRpcMock).toHaveBeenCalledWith(
+            'machine-1',
+            RPC_METHODS.SCM_STATUS_SNAPSHOT,
+            {
+                cwd: '/workspace/repo/.dev/worktree/gentle-meadow',
+            },
+            {
+                timeoutMs: 30000,
+            },
+        );
+        expect(sessionRpcMock).not.toHaveBeenCalled();
+    });
+
     it('applies sapling backend preference when configured (machine RPC)', async () => {
         getStateMock.mockReturnValue({
             settings: {
