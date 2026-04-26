@@ -361,7 +361,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     title: {
         flexGrow: 1,
-        color: theme.colors.text,
+        color: theme.colors.textSecondary,
         fontSize: 13,
         ...Typography.default('semiBold'),
     },

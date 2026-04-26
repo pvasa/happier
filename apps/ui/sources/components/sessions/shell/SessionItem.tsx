@@ -126,9 +126,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         position: 'absolute',
         top: -4,
         right: -6,
-        minWidth: 18,
-        height: 18,
-        paddingHorizontal: 6,
+        minWidth: 15,
+        height: 15,
+        paddingHorizontal: 2,
         borderRadius: 999,
         alignItems: 'center',
         justifyContent: 'center',
@@ -139,12 +139,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     pendingCountContainerCompact: {
         top: -3,
         right: -5,
-        minWidth: 16,
-        height: 16,
+        minWidth: 14,
+        height: 14,
         paddingHorizontal: 5,
     },
     pendingCountText: {
-        fontSize: 11,
+        fontSize: 9,
         color: theme.colors.textSecondary,
         ...Typography.default('semiBold'),
     },
@@ -152,8 +152,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         position: 'absolute',
         bottom: -2,
         right: -2,
-        width: 18,
-        height: 18,
+        width: 16,
+        height: 16,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -161,7 +161,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.textSecondary,
     },
     draftIconContainerCompact: {
-        width: 16,
+        width: 14,
         height: 16,
         bottom: -1,
         right: -1,
@@ -818,7 +818,7 @@ export const SessionItem = React.memo(
                         ) : null}
                         {'draft' in resolvedSession && resolvedSession.draft ? (
                             <View style={[styles.draftIconContainer, compact ? styles.draftIconContainerCompact : null]}>
-                                <Ionicons name="create-outline" size={compact ? 11 : 12} style={styles.draftIconOverlay} />
+                                <Ionicons name="create-outline" size={compact ? 10 : 11} style={styles.draftIconOverlay} />
                             </View>
                         ) : null}
                     </View>

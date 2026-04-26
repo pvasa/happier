@@ -1073,7 +1073,7 @@ describe('reachable target session display helpers', () => {
         expect(getSessionSubtitle(session)).toBe('~/workspace/live');
     });
 
-    it('uses the reachable target machine and base path for session avatar ids when metadata is stale after handoff', async () => {
+    it('includes the session id with the reachable target for session avatar ids', async () => {
         const { getSessionAvatarId } = await import('./sessionUtils');
 
         const session = createBaseSession({
@@ -1111,6 +1111,31 @@ describe('reachable target session display helpers', () => {
                 }
                 : null;
 
-        expect(getSessionAvatarId(session)).toBe('machine-target:/Users/test/workspace/live');
+        expect(getSessionAvatarId(session)).toBe('session-1:machine-target:/Users/test/workspace/live');
+    });
+
+    it('keeps avatar ids distinct for separate sessions in the same reachable target', async () => {
+        const { getSessionAvatarId } = await import('./sessionUtils');
+
+        const first = createBaseSession({
+            id: 'session-1',
+            metadata: {
+                machineId: 'machine-target',
+                path: '/Users/test/workspace/live',
+                homeDir: '/Users/test',
+                host: 'target.local',
+            } as Session['metadata'],
+        });
+        const second = createBaseSession({
+            id: 'session-2',
+            metadata: {
+                machineId: 'machine-target',
+                path: '/Users/test/workspace/live',
+                homeDir: '/Users/test',
+                host: 'target.local',
+            } as Session['metadata'],
+        });
+
+        expect(getSessionAvatarId(second)).not.toBe(getSessionAvatarId(first));
     });
 });
