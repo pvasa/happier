@@ -283,17 +283,24 @@ export async function handleServiceRepairCliCommand(params: Readonly<{
     nodePath: runtime.nodePath,
     entryPath: runtime.entryPath,
   });
-  console.log(chalk.green('✓'), `Applied ${result.executedActions.length} automatic startup repair action(s).`);
+  // Only print this summary when something was actually applied. A zero
+  // count is misleading after an interactive walk where dispatched actions
+  // (service restart, daemon takeover, etc.) ran outside the plan path.
+  if (result.executedActions.length > 0) {
+    console.log(chalk.green('✓'), `Applied ${result.executedActions.length} automatic startup repair action(s).`);
+  }
 
-  // --yes applies only findings with `autoApplyWithoutPrompt=true`. Anything
-  // the user would normally be prompted about (manual-daemon takeovers, local
-  // relay updates, opt-in automatic-startup missing, etc.) is listed but not
-  // applied. In non-interactive contexts (installer `curl | bash`) the user
-  // would otherwise have no idea those exist; surface them here.
-  const unappliedFindings = report.findings.filter((f) => f.autoApplyWithoutPrompt === false);
-  if (unappliedFindings.length > 0) {
-    console.log('');
-    const noun = unappliedFindings.length === 1 ? 'finding needs' : 'findings need';
-    console.log(chalk.yellow(`${unappliedFindings.length} ${noun} interactive confirmation — run \`happier doctor repair\` to address ${unappliedFindings.length === 1 ? 'it' : 'them'}.`));
+  // Only meaningful in `--yes` (non-interactive) mode: list findings that
+  // need the user to be prompted but couldn't be (because --yes applies
+  // only `autoApplyWithoutPrompt=true` findings). In interactive mode the
+  // user just walked through every finding via the guided walk, so this
+  // message would lie ("run `happier doctor repair`" — they just did).
+  if (parsed.execute) {
+    const unappliedFindings = report.findings.filter((f) => f.autoApplyWithoutPrompt === false);
+    if (unappliedFindings.length > 0) {
+      console.log('');
+      const noun = unappliedFindings.length === 1 ? 'finding needs' : 'findings need';
+      console.log(chalk.yellow(`${unappliedFindings.length} ${noun} interactive confirmation — run \`happier doctor repair\` to address ${unappliedFindings.length === 1 ? 'it' : 'them'}.`));
+    }
   }
 }

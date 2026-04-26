@@ -109,11 +109,35 @@ export async function buildDoctorRepairReport(params: Readonly<{
   );
   const suppressWithinStackDrift = hasChannelSwitchFinding;
 
+  // Cross-classifier dedup: `automatic_startup_version_stale` and
+  // `running_daemon_cli_mismatch` describe the same physical situation
+  // when both fire on the same managed slot — service entry says "running
+  // version != current" AND daemon reports "started with version != current".
+  //
+  // The mismatch finding is the one that actually dispatches an action
+  // (`service restart --takeover`); the version_stale finding sets a flag
+  // that runs through `applyBackgroundServiceRepairPlan`, which has no
+  // restart action in its vocabulary. Keeping both creates two prompts with
+  // identical copy where the second one does the work.
+  //
+  // Suppress version_stale when a service-restart-strategy mismatch finding
+  // covers the same slot, so the user is asked once and the action runs.
+  const cliMismatchProfileSet = new Set(
+    currentlyRunningFindings
+      .filter((f) => f.kind === 'running_daemon_cli_mismatch')
+      .map((f) => (f as Extract<RepairFinding, { kind: 'running_daemon_cli_mismatch' }>).daemon.serverId),
+  );
+  const dedupedAutomaticStartup = automaticStartupFindings.filter((f) => {
+    if (f.kind !== 'automatic_startup_version_stale') return true;
+    const managed = f.entry.managedServerIds ?? [f.entry.serverId];
+    return !managed.some((id) => cliMismatchProfileSet.has(id));
+  });
+
   const findings: RepairFinding[] = [
     ...stackFindings,
     ...authFindings,
     ...cliSelfUpdateFindings,
-    ...(suppressWithinStackDrift ? [] : automaticStartupFindings),
+    ...(suppressWithinStackDrift ? [] : dedupedAutomaticStartup),
     ...(suppressWithinStackDrift ? [] : currentlyRunningFindings),
     ...(suppressWithinStackDrift ? [] : localRelayFindings),
   ].sort(compareFindingByOrder);

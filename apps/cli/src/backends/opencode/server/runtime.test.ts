@@ -5844,4 +5844,53 @@ describe('createOpenCodeServerRuntime', () => {
 
     expect(outcome).toBe('rejected');
   });
+
+  it('does not emit an extra turn_aborted when explicit cancel produces a session.error event', async () => {
+    const client = createFakeClient();
+    client.sessionAbort = vi.fn(async () => {
+      await client.__emit({
+        directory: '/tmp',
+        payload: {
+          type: 'session.error',
+          properties: {
+            sessionID: 'ses_1',
+            error: {
+              name: 'AbortError',
+              message: 'The operation was aborted.',
+            },
+          },
+        },
+      });
+    });
+
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime(
+      {
+        directory: '/tmp',
+        session,
+        messageBuffer: new MessageBuffer(),
+        mcpServers: {},
+        permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+        onThinkingChange: vi.fn(),
+      },
+      {
+        createClient: async () => client as any,
+      },
+    );
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'hello', localId: 'local-cancel-session-error' });
+    await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+
+    await runtime.cancel();
+
+    await expect(promptPromise).rejects.toBeTruthy();
+
+    const turnAbortedMessages = session.sendAgentMessage.mock.calls.filter(
+      (c: any[]) => c?.[0] === 'opencode' && c?.[1]?.type === 'turn_aborted',
+    );
+    expect(turnAbortedMessages).toHaveLength(0);
+  });
 });

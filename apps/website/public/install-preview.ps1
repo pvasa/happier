@@ -110,6 +110,40 @@ function Resolve-InstalledCliInvoker {
   return $null
 }
 
+function Resolve-TarExecutablePath {
+  $cmd = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+    return $cmd.Source
+  }
+
+  $pathEntries = @()
+  foreach ($rawPath in @(
+      $env:Path,
+      [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User),
+      [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
+    )) {
+    if ($rawPath) {
+      $pathEntries += $rawPath -split ';'
+    }
+  }
+  if ($env:WINDIR) {
+    $pathEntries += Join-Path $env:WINDIR "System32"
+  }
+
+  foreach ($entry in $pathEntries) {
+    $trimmedEntry = ([string]$entry).Trim()
+    if (-not $trimmedEntry) {
+      continue
+    }
+    $candidate = Join-Path $trimmedEntry "tar.exe"
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  throw "Failed to locate tar.exe. Ensure Windows System32 is available or install tar before retrying."
+}
+
 function Show-PathReloadGuidance {
   param (
     [Parameter(Mandatory = $true)] [string] $ShimName,
@@ -363,60 +397,40 @@ function Get-InstalledBackgroundServiceInventory {
   )
 
   try {
-    $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
-    if (-not $raw) {
-      throw "missing doctor repair preflight payload"
+    $doctorPreflightResult = Invoke-NativeCommandCapturingOutput {
+      Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("doctor", "repair", "--json") -HomeDir $DaemonServiceStateHomeDir
     }
-    $payload = $raw | ConvertFrom-Json
-    $propertyNames = @($payload.PSObject.Properties.Name)
-    $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
-    $services = if ($propertyNames -contains 'services') { @($payload.services) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
-    if ($entries.Count -gt 0 -or $services.Count -gt 0 -or $propertyNames -contains 'existingServices' -or $propertyNames -contains 'entries' -or $propertyNames -contains 'services') {
-      return @{
-        Supported = $true
-        RepairSupported = $true
-        Entries = $entries
-        Services = $services
-        DaemonStatus = if ($propertyNames -contains 'daemonStatus') { $payload.daemonStatus } else { $null }
-        DaemonRunning = if ($propertyNames -contains 'daemonRunning') { $payload.daemonRunning } else { $null }
-        Relays = if ($propertyNames -contains 'relays') { @($payload.relays) } else { @() }
-        Payload = $payload
-      }
-    }
-  }
-  catch {
-    try {
-      $raw = Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $DaemonServiceStateHomeDir | Out-String
-      if (-not $raw) {
-        return @{
-          Supported = $false
-          RepairSupported = $false
-          Entries = @()
-          Services = @()
-          DaemonStatus = $null
-          DaemonRunning = $null
-          Relays = @()
-          Payload = $null
-        }
-      }
-      $payload = $raw | ConvertFrom-Json
+    if ($doctorPreflightResult.ExitCode -eq 0 -and $doctorPreflightResult.Output) {
+      $payload = $doctorPreflightResult.Output | ConvertFrom-Json
       $propertyNames = @($payload.PSObject.Properties.Name)
-      $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } else { @() }
-      $services = if ($propertyNames -contains 'services') { @($payload.services) } else { @() }
-      if ($entries.Count -gt 0 -or $services.Count -gt 0 -or $propertyNames -contains 'entries' -or $propertyNames -contains 'services') {
+      $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
+      $services = if ($propertyNames -contains 'services') { @($payload.services) } elseif ($propertyNames -contains 'existingServices') { @($payload.existingServices) } else { @() }
+      if ($entries.Count -gt 0 -or $services.Count -gt 0 -or $propertyNames -contains 'existingServices' -or $propertyNames -contains 'entries' -or $propertyNames -contains 'services') {
         return @{
           Supported = $true
-          RepairSupported = $false
+          RepairSupported = $true
           Entries = $entries
           Services = $services
-          DaemonStatus = $null
-          DaemonRunning = $null
-          Relays = @()
+          DaemonStatus = if ($propertyNames -contains 'daemonStatus') { $payload.daemonStatus } else { $null }
+          DaemonRunning = if ($propertyNames -contains 'daemonRunning') { $payload.daemonRunning } else { $null }
+          Relays = if ($propertyNames -contains 'relays') { @($payload.relays) } else { @() }
           Payload = $payload
         }
       }
     }
-    catch {
+    elseif (-not (Test-InstallerCommandLooksUnsupported -Output $doctorPreflightResult.Output)) {
+      Write-Warning "Automatic startup inspection failed; continuing without blocking install. You can retry manually: `"$CliPath doctor repair`""
+    }
+  }
+  catch {
+    Write-Warning "Automatic startup inspection failed; continuing without blocking install. You can retry manually: `"$CliPath doctor repair`""
+  }
+
+  try {
+    $serviceListResult = Invoke-NativeCommandCapturingOutput {
+      Invoke-InstallerCommandWithDaemonServiceContext -CliPath $CliPath -CommandArgs @("service", "list", "--json") -HomeDir $DaemonServiceStateHomeDir
+    }
+    if ($serviceListResult.ExitCode -ne 0 -or -not $serviceListResult.Output) {
       return @{
         Supported = $false
         RepairSupported = $false
@@ -427,6 +441,34 @@ function Get-InstalledBackgroundServiceInventory {
         Relays = @()
         Payload = $null
       }
+    }
+    $payload = $serviceListResult.Output | ConvertFrom-Json
+    $propertyNames = @($payload.PSObject.Properties.Name)
+    $entries = if ($propertyNames -contains 'entries') { @($payload.entries) } else { @() }
+    $services = if ($propertyNames -contains 'services') { @($payload.services) } else { @() }
+    if ($entries.Count -gt 0 -or $services.Count -gt 0 -or $propertyNames -contains 'entries' -or $propertyNames -contains 'services') {
+      return @{
+        Supported = $true
+        RepairSupported = $false
+        Entries = $entries
+        Services = $services
+        DaemonStatus = $null
+        DaemonRunning = $null
+        Relays = @()
+        Payload = $payload
+      }
+    }
+  }
+  catch {
+    return @{
+      Supported = $false
+      RepairSupported = $false
+      Entries = @()
+      Services = @()
+      DaemonStatus = $null
+      DaemonRunning = $null
+      Relays = @()
+      Payload = $null
     }
   }
 
@@ -1061,7 +1103,8 @@ try {
 
   $extractDir = Join-Path $tmpDir.FullName "extract"
   New-Item -ItemType Directory -Path $extractDir | Out-Null
-  tar -xzf $archivePath -C $extractDir
+  $tarPath = Resolve-TarExecutablePath
+  & $tarPath -xzf $archivePath -C $extractDir
   $version = $assetName -replace '^happier-v', '' -replace '-windows-x64\.tar\.gz$', ''
   if (-not $version -or $version -eq $assetName) {
     throw "Failed to infer release version from asset name: $assetName"
@@ -1123,7 +1166,17 @@ try {
   }
   $updatedPathEntries = @($BinDir) + $pathEntries
   [Environment]::SetEnvironmentVariable("Path", ($updatedPathEntries -join ';'), [EnvironmentVariableTarget]::User)
-  $env:Path = ($updatedPathEntries -join ';')
+  $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
+  $machinePathEntries = @()
+  if ($machinePath) {
+    $machinePathEntries = @(
+      $machinePath -split ';' |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and $updatedPathEntries -notcontains $_ }
+    )
+  }
+  $processPathEntries = @($updatedPathEntries) + @($machinePathEntries)
+  $env:Path = ($processPathEntries -join ';')
   if ($pathEntries.Length -eq 0 -or $userPath -notmatch [Regex]::Escape($BinDir)) {
     Write-Host "Added $BinDir to user PATH."
     Show-PathReloadGuidance -ShimName (Resolve-CliShimName) -BinDir $BinDir

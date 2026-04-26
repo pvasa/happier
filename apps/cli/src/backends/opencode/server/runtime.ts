@@ -178,6 +178,7 @@ export function createOpenCodeServerRuntime(params: {
   let userMessageIdCounter = 0;
   const observedRemoteTextMessageIds = new Set<string>();
   let liveHistorySyncPromise: Promise<void> | null = null;
+  let suppressSessionErrorAbortNotificationForSessionId: string | null = null;
   let queuedLiveHistorySyncAllowAssistantReplies = false;
   const turnChangeCollector = new TurnChangeSetCollector({
     provider,
@@ -2089,12 +2090,15 @@ export function createOpenCodeServerRuntime(params: {
       if (!rec) return;
       const sessionID = normalizeString(rec.sessionID);
       if (!sessionID || sessionID !== sessionId) return;
+      const isExpectedExplicitCancelError = suppressSessionErrorAbortNotificationForSessionId === sessionID;
       setThinking(false);
       void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'session_error' }).finally(() => {
-        params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+        if (!isExpectedExplicitCancelError) {
+          params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+        }
       });
       const detail = extractOpenCodeErrorText(rec.error);
-      if (shouldSurfaceOpenCodeErrorDetail(detail)) {
+      if (!isExpectedExplicitCancelError && shouldSurfaceOpenCodeErrorDetail(detail)) {
         params.session.sendAgentMessage(provider, { type: 'message', message: detail });
       }
       rejectTurn(detail ? new Error(detail) : rec.error ?? new Error('OpenCode session error'));
@@ -2156,6 +2160,7 @@ export function createOpenCodeServerRuntime(params: {
     isTurnInFlight: () => turnInFlight,
 
     beginTurn(): void {
+      suppressSessionErrorAbortNotificationForSessionId = null;
       turnInFlight = true;
       pendingTurnToolForwardingWork = new Set<Promise<void>>();
       turnPromptActive = false;
@@ -2472,6 +2477,7 @@ export function createOpenCodeServerRuntime(params: {
     async cancel(): Promise<void> {
       if (!sessionId) return;
       const c = await ensureClient();
+      suppressSessionErrorAbortNotificationForSessionId = sessionId;
       const abortPromise = c.sessionAbort({ sessionId });
 
       const outcome = await Promise.race([
@@ -2500,6 +2506,7 @@ export function createOpenCodeServerRuntime(params: {
       selectedModel = null;
       currentContextWindowTokens = null;
       omitCustomMessageIdForResumedSession = false;
+      suppressSessionErrorAbortNotificationForSessionId = null;
       for (const key of Object.keys(configOverrides)) delete configOverrides[key];
       ensuredMcpServersForDirectory = false;
       if (ensuredMcpServerNames.size > 0) {
