@@ -770,8 +770,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
             trimStringValue(invocation.name) ??
             trimStringValue(invocation.toolName) ??
             trimStringValue(invocation.tool_name) ??
-            (meta ? trimStringValue(meta.tool_title) ?? trimStringValue(meta.toolTitle) : null) ??
-            toolFromMessage;
+            toolFromMessage ??
+            (meta ? trimStringValue(meta.tool_title) ?? trimStringValue(meta.toolTitle) : null);
 
         const metaToolParams = meta ? (meta.tool_params ?? meta.toolParams ?? null) : null;
         const input = invocation.arguments ?? invocation.input ?? invocation.args ?? metaToolParams ?? {};

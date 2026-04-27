@@ -152,6 +152,15 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 20);',
         '            continue;',
         '        }',
+        '        if (text === "bridge-mcp-elicitation-display-title-with-message-tool") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: 0, method: "mcpServer/elicitation/request", params: { threadId: msg.params?.threadId ?? null, turnId: turnId, serverName: "happier", mode: "form", _meta: { tool_title: "Change Chat Title", tool_description: "Change the title of the current chat session", tool_params: { title: "New Title" } }, message: "Allow the happier MCP server to run tool \\"change_title\\"?", requestedSchema: { type: "object", properties: {} } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 20);',
+        '            continue;',
+        '        }',
         '        if (text === "bridge-mcp-elicitation-unidentified") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ id: 0, method: "mcpServer/elicitation/request", params: { threadId: msg.params?.threadId ?? null, turnId: turnId, serverName: "happier", mode: "form", requestedSchema: { type: "object", properties: {} } } }) + "\\n");',
@@ -1319,6 +1328,46 @@ describe('createCodexAppServerRuntime', () => {
 
         await runtime.startOrLoad({});
         await runtime.sendPrompt('bridge-mcp-elicitation-meta-tool-title');
+
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 0,
+                    params: null,
+                    result: { action: 'accept', content: {} },
+                    error: null,
+                }),
+            ]),
+        );
+
+        expect(permissionHandler.handleToolCall).toHaveBeenCalledWith(
+            '0',
+            'mcp__happier__change_title',
+            { title: 'New Title' },
+        );
+    });
+
+    it('prefers the elicitation message tool id over a display-only _meta.tool_title label', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-bridge-mcp-elicitation-display-title-message-tool-');
+
+        const permissionHandler = {
+            handleToolCall: vi.fn().mockResolvedValueOnce({ decision: 'approved' }),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendAgentMessageCommitted: vi.fn(async () => {}),
+                sendCodexMessage: vi.fn(),
+            } as any,
+            permissionHandler: permissionHandler as any,
+        } as any);
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-mcp-elicitation-display-title-with-message-tool');
 
         await new Promise((resolve) => setTimeout(resolve, 30));
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
