@@ -34,7 +34,10 @@ export type MeshGradientDepthField = Readonly<{
     transparentColor: string;
 }>;
 
+export type MeshGradientPatternVariant = 'organic' | 'columns' | 'rows' | 'diagonal' | 'oval' | 'waves' | 'softNoise';
+
 export type MeshGradientAvatarModel = Readonly<{
+    patternVariant: MeshGradientPatternVariant;
     baseGradient: Readonly<{
         startX: number;
         startY: number;

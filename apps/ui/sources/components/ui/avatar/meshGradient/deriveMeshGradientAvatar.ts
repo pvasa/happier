@@ -1,8 +1,10 @@
 import { createSeededRandom, hashStringToPositiveInt, pickSeeded } from '../avatarHash';
+import { pickMeshGradientPatternVariant } from './meshGradientPatternVariant';
 import type {
     MeshGradientAvatarModel,
     MeshGradientColorField,
     MeshGradientDepthField,
+    MeshGradientPatternVariant,
     MeshGradientThemeInput,
     MeshGradientWaveField,
 } from './meshGradientTypes';
@@ -14,6 +16,7 @@ type DeriveMeshGradientAvatarParams = Readonly<{
     size: number;
     monochrome: boolean;
     theme: MeshGradientThemeInput;
+    patternVariant?: MeshGradientPatternVariant;
 }>;
 
 const COLOR_FIELD_MIN_COUNT = 8;
@@ -63,6 +66,7 @@ const PRIMARY_PALETTE_ROLES: readonly PhotoGradientPaletteRole[] = [
     'sage',
     'forest',
 ];
+const STRUCTURED_VISIBLE_PALETTE_ROLE_COUNT = 5;
 
 function clampColorChannel(value: number): number {
     return Math.max(0, Math.min(255, Math.round(value)));
@@ -255,6 +259,31 @@ function orderPaletteRoles(
     return [...ordered, ...remaining];
 }
 
+function isSaturatedAnchorPaletteRole(role: PhotoGradientPaletteRole): boolean {
+    return WARM_ANCHOR_PALETTE_ROLES.includes(role) || COOL_ANCHOR_PALETTE_ROLES.includes(role);
+}
+
+function varyStructuredVisiblePaletteRoles(
+    roles: readonly PhotoGradientPaletteRole[],
+    seed: number,
+): PhotoGradientPaletteRole[] {
+    const visible = roles.slice(0, STRUCTURED_VISIBLE_PALETTE_ROLE_COUNT);
+    const remaining = roles.slice(STRUCTURED_VISIBLE_PALETTE_ROLE_COUNT);
+    const random = createSeededRandom(hashStringToPositiveInt(`mesh-visible-palette:${seed}`));
+
+    for (let index = visible.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(random() * (index + 1));
+        [visible[index], visible[swapIndex]] = [visible[swapIndex], visible[index]];
+    }
+
+    const firstSaturatedIndex = visible.findIndex(isSaturatedAnchorPaletteRole);
+    if (firstSaturatedIndex > 0) {
+        [visible[0], visible[firstSaturatedIndex]] = [visible[firstSaturatedIndex], visible[0]];
+    }
+
+    return [...visible, ...remaining];
+}
+
 function shuffleAnchors(random: () => number): Array<readonly [number, number]> {
     const anchors = [...COLOR_FIELD_ANCHORS];
     for (let index = anchors.length - 1; index > 0; index -= 1) {
@@ -308,10 +337,12 @@ function buildPhotoGradientPaletteRoles(
     };
 }
 
-function buildPalette(theme: MeshGradientThemeInput, random: () => number, monochrome: boolean): string[] {
-    const roles = buildPhotoGradientPaletteRoles(theme, isDarkThemeInput(theme));
+function buildPalette(theme: MeshGradientThemeInput, random: () => number, monochrome: boolean, seed: number): string[] {
+    const isDarkTheme = isDarkThemeInput(theme);
+    const roles = buildPhotoGradientPaletteRoles(theme, isDarkTheme);
     const family = pickSeeded(PHOTO_GRADIENT_PALETTE_ROLE_FAMILIES, random);
-    const palette = uniqueColors(orderPaletteRoles(family, random).map((role) => roles[role]));
+    const orderedRoles = orderPaletteRoles(family, random);
+    const palette = uniqueColors(varyStructuredVisiblePaletteRoles(orderedRoles, seed).map((role) => roles[role]));
     return monochrome ? palette.map(toNeutralColor) : palette;
 }
 
@@ -356,7 +387,7 @@ function createWaveField(
 export function deriveMeshGradientAvatar(params: DeriveMeshGradientAvatarParams): MeshGradientAvatarModel {
     const seed = hashStringToPositiveInt(params.id);
     const random = createSeededRandom(seed);
-    const palette = buildPalette(params.theme, random, params.monochrome);
+    const palette = buildPalette(params.theme, random, params.monochrome, seed);
     const startColor = pickSeeded(palette, random);
     const endColor = pickSeeded(palette, random);
     const depthSourceColor = pickSeeded(palette, random);
@@ -365,6 +396,7 @@ export function deriveMeshGradientAvatar(params: DeriveMeshGradientAvatarParams)
     const anchors = shuffleAnchors(random);
 
     return {
+        patternVariant: params.patternVariant ?? pickMeshGradientPatternVariant(seed),
         baseGradient: {
             startX: random() * params.size,
             startY: random() * params.size,

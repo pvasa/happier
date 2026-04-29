@@ -30,6 +30,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [tmuxIsolated, setTmuxIsolated] = useSettingMutable('sessionTmuxIsolated');
     const [tmuxTmpDir, setTmuxTmpDir] = useSettingMutable('sessionTmuxTmpDir');
     const [windowsRemoteSessionLaunchMode, setWindowsRemoteSessionLaunchMode] = useSettingMutable('sessionWindowsRemoteSessionLaunchMode');
+    const [windowsTerminalWindowName, setWindowsTerminalWindowName] = useSettingMutable('sessionWindowsTerminalWindowName');
 
     const [messageSendMode, setMessageSendMode] = useSettingMutable('sessionMessageSendMode');
     const [busySteerSendPolicy, setBusySteerSendPolicy] = useSettingMutable('sessionBusySteerSendPolicy');
@@ -606,6 +607,24 @@ export default React.memo(function SessionSettingsScreen() {
                     connectToTrigger
                     variant="default"
                 />
+                <View style={[styles.inputContainer, { paddingTop: 0, paddingBottom: 16 }]}>
+                    <Text style={styles.fieldLabel}>
+                        {t('settingsSession.windows.windowNameTitle')}
+                    </Text>
+                    <TextInput
+                        testID="settings-session-windows-terminal-window-name-input"
+                        style={styles.textInput}
+                        placeholder={t('settingsSession.windows.windowNamePlaceholder')}
+                        placeholderTextColor={theme.colors.input.placeholder}
+                        value={windowsTerminalWindowName ?? ''}
+                        onChangeText={setWindowsTerminalWindowName}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                    />
+                    <Text style={styles.fieldLabelMuted}>
+                        {t('settingsSession.windows.windowNameHint')}
+                    </Text>
+                </View>
             </ItemGroup>
 
             <ItemGroup title={t('settingsSession.terminalConnect.title')} style={styles.sectionSpacerTop}>

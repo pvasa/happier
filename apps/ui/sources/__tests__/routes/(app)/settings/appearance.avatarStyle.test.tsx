@@ -29,7 +29,7 @@ beforeEach(() => {
     sessionSettingsEntryState.settingsState = {
         sessionsRightPaneDefaultOpen: false,
         uiMultiPanePanelsEnabled: false,
-        avatarStyle: 'brutalist',
+        avatarStyle: 'meshGradientColumns',
         showFlavorIcons: true,
         preferredLanguage: null,
         themePreference: 'adaptive',
@@ -46,18 +46,25 @@ afterEach(() => {
 });
 
 describe('Appearance settings avatar style', () => {
-    it('cycles from brutalist to mesh gradient through the avatar style row', async () => {
+    it('renders avatar style selection as a dropdown with preview icons', async () => {
         const { default: AppearanceSettingsScreen } = await import('@/app/(app)/settings/appearance');
         const screen = await renderSettingsView(React.createElement(AppearanceSettingsScreen), {
             flushOptions: { cycles: 0 },
         });
 
-        const avatarStyleRow = screen.findByProps({ testID: 'settings-appearance-avatarStyle-cycle' });
+        const avatarStyleDropdown = screen.findByProps({ selectedId: 'meshGradientColumns' });
 
         await act(async () => {
-            avatarStyleRow.props.onPress();
+            avatarStyleDropdown.props.onSelect('meshGradientRows');
         });
 
-        expect(sessionSettingsEntryState.settingsState.avatarStyle).toBe('meshGradient');
+        expect(sessionSettingsEntryState.settingsState.avatarStyle).toBe('meshGradientRows');
+        const items = avatarStyleDropdown.props.items as ReadonlyArray<Readonly<{ id: string; icon?: React.ReactNode }>>;
+        expect(items.some((item) => item.id === 'meshGradientRows' && item.icon)).toBe(true);
+        expect(items.some((item) => item.id === 'meshGradientColumns' && item.icon)).toBe(true);
+        expect(items.some((item) => item.id === 'meshGradientDiagonal' && item.icon)).toBe(true);
+        expect(items.some((item) => item.id === 'photoGradientRows' && item.icon)).toBe(true);
+        expect(items.some((item) => item.id === 'photoGradientDiagonal' && item.icon)).toBe(true);
+        expect(items.some((item) => item.id === 'photoGradientMeshGrid' && item.icon)).toBe(true);
     });
 });

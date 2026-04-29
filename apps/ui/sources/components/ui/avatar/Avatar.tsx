@@ -41,7 +41,7 @@ const styles = StyleSheet.create((theme) => ({
     unreadBadge: {
         position: 'absolute',
         top: -2,
-        right: -2,
+        left: -2,
         backgroundColor: theme.colors.textLink,
         borderRadius: 100,
         borderWidth: 1.5,
@@ -102,7 +102,8 @@ export const Avatar = React.memo((props: AvatarProps) => {
         return imageElement;
     }
 
-    const AvatarComponent = getGeneratedAvatarComponentForStyle(normalizeAvatarStyleId(avatarStyle));
+    const displayAvatarStyle = normalizeAvatarStyleId(avatarStyle);
+    const AvatarComponent = getGeneratedAvatarComponentForStyle(displayAvatarStyle);
 
     const iconAgentId = agentId ?? DEFAULT_AGENT_ID;
     const { circleSize, iconSize } = getAgentAvatarOverlaySizes(iconAgentId, size);
@@ -110,7 +111,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
     if (showFlavorIcons || hasUnreadMessages) {
         return (
             <View style={[styles.container, { width: size, height: size }]}>
-                <AvatarComponent {...avatarProps} size={size} />
+                <AvatarComponent {...avatarProps} size={size} styleId={displayAvatarStyle} />
                 {showFlavorIcons && (
                     <View style={[styles.flavorIcon, {
                         width: circleSize,
@@ -127,5 +128,5 @@ export const Avatar = React.memo((props: AvatarProps) => {
     }
 
     // Return avatar without wrapper when not showing flavor icons
-    return <AvatarComponent {...avatarProps} size={size} />;
+    return <AvatarComponent {...avatarProps} size={size} styleId={displayAvatarStyle} />;
 });

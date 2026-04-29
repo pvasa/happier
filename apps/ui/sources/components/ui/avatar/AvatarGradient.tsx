@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Image } from "expo-image";
+import { useUnistyles } from 'react-native-unistyles';
 import { hashStringToPositiveInt } from './avatarHash';
 
 // Array of all 100 gradient images
@@ -116,6 +117,7 @@ interface AvatarGradientProps {
 
 export const AvatarGradient = React.memo((props: AvatarGradientProps) => {
     const { id, square, size = 48, monochrome } = props;
+    const { theme } = useUnistyles();
     
     const imageIndex = hashStringToPositiveInt(id) % 100;
     const gradientImage = gradientImages[imageIndex];
@@ -129,8 +131,7 @@ export const AvatarGradient = React.memo((props: AvatarGradientProps) => {
                 borderRadius: square ? 0 : size / 2,
             }}
             contentFit="cover"
-            // Apply grayscale tint for monochrome mode
-            // tintColor={monochrome ? '#808080' : undefined}
+            tintColor={monochrome ? theme.colors.textSecondary : undefined}
         />
     );
 });

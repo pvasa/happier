@@ -6,9 +6,11 @@ import { AvatarBrutalist } from './AvatarBrutalist';
 import { AvatarGradient } from './AvatarGradient';
 import { AvatarSkia } from './AvatarSkia';
 import { AvatarMeshGradient } from './meshGradient/AvatarMeshGradient';
+import { AvatarPhotoGradient } from './photoGradient/AvatarPhotoGradient';
 
 export type GeneratedAvatarProps = Readonly<{
     id: string;
+    styleId?: AvatarStyleId;
     title?: boolean;
     square?: boolean;
     size?: number;
@@ -20,6 +22,22 @@ const GENERATED_AVATAR_COMPONENTS = {
     gradient: AvatarGradient,
     brutalist: AvatarBrutalist,
     meshGradient: AvatarMeshGradient,
+    meshGradientOrganic: AvatarMeshGradient,
+    meshGradientRows: AvatarMeshGradient,
+    meshGradientColumns: AvatarMeshGradient,
+    meshGradientDiagonal: AvatarMeshGradient,
+    meshGradientOval: AvatarMeshGradient,
+    meshGradientWaves: AvatarMeshGradient,
+    meshGradientSoftNoise: AvatarMeshGradient,
+    photoGradient: AvatarPhotoGradient,
+    photoGradientRows: AvatarPhotoGradient,
+    photoGradientColumns: AvatarPhotoGradient,
+    photoGradientDiagonal: AvatarPhotoGradient,
+    photoGradientWaves: AvatarPhotoGradient,
+    photoGradientOval: AvatarPhotoGradient,
+    photoGradientValueNoise: AvatarPhotoGradient,
+    photoGradientVoronoi: AvatarPhotoGradient,
+    photoGradientMeshGrid: AvatarPhotoGradient,
 } satisfies Record<AvatarStyleId, React.ComponentType<GeneratedAvatarProps>>;
 
 export function getGeneratedAvatarComponentForStyle(

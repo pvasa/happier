@@ -16,10 +16,26 @@ import { darkTheme, lightTheme } from '@/theme';
 import { t, getLanguageNativeName, SUPPORTED_LANGUAGES } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import {
-    getAvatarStyleOption,
-    getNextAvatarStyleId,
+    AVATAR_STYLE_OPTIONS,
+    isAvatarStyleId,
     normalizeAvatarStyleId,
 } from '@/components/ui/avatar/avatarStyleOptions';
+import { getGeneratedAvatarComponentForStyle } from '@/components/ui/avatar/avatarComponentRegistry';
+import type { AvatarStyleId } from '@/sync/domains/settings/registry/account/avatarStyleSetting';
+
+function AvatarStylePreviewIcon(props: Readonly<{ styleId: AvatarStyleId }>) {
+    const AvatarStyleComponent = getGeneratedAvatarComponentForStyle(props.styleId);
+
+    return (
+        <View style={{ width: 34, height: 34, alignItems: 'center', justifyContent: 'center' }}>
+            <AvatarStyleComponent
+                id={`settings-avatar-style-preview-${props.styleId}`}
+                styleId={props.styleId}
+                size={28}
+            />
+        </View>
+    );
+}
 
 export default React.memo(function AppearanceSettingsScreen() {
     const { theme } = useUnistyles();
@@ -38,6 +54,7 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
     const [openItemDensityMenu, setOpenItemDensityMenu] = React.useState(false);
     const [openDetailsTabsMenu, setOpenDetailsTabsMenu] = React.useState(false);
+    const [openAvatarStyleMenu, setOpenAvatarStyleMenu] = React.useState(false);
 
     const uiFontScalePresets = React.useMemo(() => {
         return {
@@ -68,6 +85,14 @@ export default React.memo(function AppearanceSettingsScreen() {
             { id: 'preview', title: t('settingsAppearance.detailsPaneTabsBehaviorOptions.preview') },
             { id: 'persistent', title: t('settingsAppearance.detailsPaneTabsBehaviorOptions.persistent') },
         ];
+    }, []);
+
+    const avatarStyleMenuItems = React.useMemo(() => {
+        return AVATAR_STYLE_OPTIONS.map((option) => ({
+            id: option.id,
+            title: t(option.labelKey),
+            icon: <AvatarStylePreviewIcon styleId={option.id} />,
+        }));
     }, []);
 
     const itemDensityMenuItems = React.useMemo(() => {
@@ -112,7 +137,6 @@ export default React.memo(function AppearanceSettingsScreen() {
 
     // Ensure we have a valid style for display, defaulting to gradient for unknown values
     const displayStyle = normalizeAvatarStyleId(avatarStyle);
-    const avatarStyleOption = getAvatarStyleOption(displayStyle);
     
     // Language display
     const getLanguageDisplayText = () => {
@@ -299,14 +323,27 @@ export default React.memo(function AppearanceSettingsScreen() {
 
             {/* Style */}
             <ItemGroup title={t('settingsAppearance.avatarStyle')}>
-                <Item
-                    testID="settings-appearance-avatarStyle-cycle"
-                    title={t('settingsAppearance.avatarStyle')}
-                    subtitle={t('settingsAppearance.avatarStyleDescription')}
-                    icon={<Ionicons name="person-circle-outline" size={29} color={theme.colors.accent.indigo} />}
-                    detail={t(avatarStyleOption.labelKey)}
-                    onPress={() => {
-                        setAvatarStyle(getNextAvatarStyleId(displayStyle));
+                <DropdownMenu
+                    open={openAvatarStyleMenu}
+                    onOpenChange={setOpenAvatarStyleMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={displayStyle}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    itemTrigger={{
+                        title: t('settingsAppearance.avatarStyle'),
+                        subtitle: t('settingsAppearance.avatarStyleDescription'),
+                        icon: <AvatarStylePreviewIcon styleId={displayStyle} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-appearance-avatarStyle-select' },
+                    }}
+                    items={avatarStyleMenuItems}
+                    onSelect={(itemId) => {
+                        if (!isAvatarStyleId(itemId)) return;
+                        setAvatarStyle(itemId);
                     }}
                 />
                 <Item

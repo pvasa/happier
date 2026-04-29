@@ -135,6 +135,46 @@ describe('deriveMeshGradientAvatar', () => {
         expect(second.colorFields).not.toEqual(first.colorFields);
     });
 
+    it('assigns deterministic pattern variants across session identities', () => {
+        const sampleIds = Array.from({ length: 24 }, (_, index) => `session-pattern-${index}`);
+        const variants = new Set(sampleIds.map((id) => deriveMeshGradientAvatar({
+            id,
+            size: 48,
+            monochrome: false,
+            theme: themeInput,
+        }).patternVariant));
+        const repeated = deriveMeshGradientAvatar({
+            id: 'session-pattern-7',
+            size: 48,
+            monochrome: false,
+            theme: themeInput,
+        });
+
+        expect(repeated.patternVariant).toBe(deriveMeshGradientAvatar({
+            id: 'session-pattern-7',
+            size: 48,
+            monochrome: false,
+            theme: themeInput,
+        }).patternVariant);
+        expect(variants).toEqual(new Set(['organic', 'columns', 'rows', 'diagonal', 'oval', 'waves', 'softNoise']));
+    });
+
+    it('honors an explicit pattern variant when a user selects one', () => {
+        const deriveWithVariant = deriveMeshGradientAvatar as (
+            params: Parameters<typeof deriveMeshGradientAvatar>[0] & { patternVariant: 'rows' }
+        ) => ReturnType<typeof deriveMeshGradientAvatar>;
+
+        const model = deriveWithVariant({
+            id: 'session-explicit-pattern',
+            size: 48,
+            monochrome: false,
+            theme: themeInput,
+            patternVariant: 'rows',
+        });
+
+        expect(model.patternVariant).toBe('rows');
+    });
+
     it('uses neutral colors when monochrome is requested', () => {
         const model = deriveMeshGradientAvatar({
             id: 'session-1',
@@ -219,7 +259,7 @@ describe('deriveMeshGradientAvatar', () => {
         }
     });
 
-    it('balances warm and cool anchors before muted supporting tones in the visible fields', () => {
+    it('keeps several saturated warm anchors in the visible structured fields', () => {
         const sampleIds = ['session-1', 'session-2', 'session-3', 'Greeting', 'Greeting:1', 'Greeting:2'];
         for (const id of sampleIds) {
             const model = deriveMeshGradientAvatar({
@@ -228,17 +268,17 @@ describe('deriveMeshGradientAvatar', () => {
                 monochrome: false,
                 theme: themeInput,
             });
-            const leadingColors = model.colorFields.slice(0, 2).map((field) => field.color);
-            const visibleColors = model.colorFields.slice(0, 4).map((field) => field.color);
+            const visibleColors = model.colorFields.slice(0, 5).map((field) => field.color);
 
-            expect(leadingColors.some(isCoolAnchorColor)).toBe(true);
-            expect(leadingColors.some(isWarmAnchorColor)).toBe(true);
-            expect(visibleColors.filter(isMutedSupportingColor).length).toBeLessThanOrEqual(1);
+            expect(visibleColors.filter(isWarmAnchorColor).length).toBeGreaterThanOrEqual(2);
+            expect(visibleColors.some(isCoolAnchorColor)).toBe(true);
+            expect(visibleColors.filter(isMutedSupportingColor).length).toBeLessThanOrEqual(2);
         }
     });
 
-    it('biases the visible composition warmer than cooler', () => {
-        const sampleIds = ['session-1', 'session-2', 'session-3', 'Greeting', 'Greeting:1', 'Greeting:2'];
+    it('varies the first visible column family without losing warm saturation', () => {
+        const sampleIds = ['session-1', 'session-2', 'session-3', 'Greeting', 'Greeting:1', 'Greeting:2', 'Test M', 'Markdown', 'Trigger', 'Structure', 'Plan', 'leeroy', 'patio'];
+        const firstFamilies = new Set<string>();
         for (const id of sampleIds) {
             const model = deriveMeshGradientAvatar({
                 id,
@@ -246,13 +286,15 @@ describe('deriveMeshGradientAvatar', () => {
                 monochrome: false,
                 theme: themeInput,
             });
-            const visibleColors = model.colorFields.slice(0, 4).map((field) => field.color);
+            const visibleColors = model.colorFields.slice(0, 5).map((field) => field.color);
             const warmFieldCount = visibleColors.filter(isWarmAnchorColor).length;
             const coolFieldCount = visibleColors.filter(isCoolAnchorColor).length;
 
-            expect(isWarmAnchorColor(visibleColors[0])).toBe(true);
-            expect(warmFieldCount).toBeGreaterThanOrEqual(coolFieldCount);
+            firstFamilies.add(colorFamily(visibleColors[0]));
+            expect(warmFieldCount).toBeGreaterThanOrEqual(2);
+            expect(coolFieldCount).toBeGreaterThanOrEqual(1);
         }
+        expect(firstFamilies.size).toBeGreaterThanOrEqual(2);
     });
 
     it('avoids leading red-blue contrast pairs that feel less harmonious than the PhotoGradient references', () => {
