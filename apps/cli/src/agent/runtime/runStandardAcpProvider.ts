@@ -349,6 +349,11 @@ export async function runStandardAcpProvider(
   const cleanupOnce = async () => {
     if (cleanupRan) return;
     cleanupRan = true;
+    try {
+      await permissionHandler.abortPendingRequestsAndFlush('Session ended');
+    } catch (error) {
+      logger.debug(`${config.uiLogPrefix} Failed to clean up pending permissions during session cleanup (non-fatal)`, error);
+    }
     await cleanupBackendRunResourcesFn({
       keepAliveInterval,
       reconnectionHandle,
