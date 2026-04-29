@@ -759,6 +759,8 @@ export const SessionItem = React.memo(
             && contextMenuItems.length > 0
             && (nativeInlineDragEnabled !== true || showReorderHandle);
 
+        const shouldRenderAvatarMonochrome = resolvedSession.active !== true || !sessionStatus.isConnected;
+
         const itemContent = (
             <Pressable
                 testID={`session-list-item-${resolvedSession.id}`}
@@ -800,7 +802,7 @@ export const SessionItem = React.memo(
                         <Avatar
                             id={avatarId}
                             size={compact ? AVATAR_SIZE_COMPACT : AVATAR_SIZE_DEFAULT}
-                            monochrome={!sessionStatus.isConnected}
+                            monochrome={shouldRenderAvatarMonochrome}
                             flavor={resolvedSession.metadata?.flavor}
                             hasUnreadMessages={hasUnreadMessages}
                         />

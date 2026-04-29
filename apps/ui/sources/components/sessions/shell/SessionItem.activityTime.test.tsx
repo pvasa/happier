@@ -9,6 +9,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
 const useSessionSpy = vi.hoisted(() => vi.fn(() => null));
 const useSessionListRenderableSpy = vi.hoisted(() => vi.fn(() => null));
+const AvatarMock = 'Avatar' as unknown as React.ComponentType<{ monochrome?: boolean }>;
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -310,5 +311,29 @@ describe('SessionItem activity time', () => {
         expect(useSessionListRenderableSpy).toHaveBeenCalledWith('sess_row_state');
         expect(useSessionSpy).not.toHaveBeenCalled();
         expect(useProfileSpy).not.toHaveBeenCalled();
+    });
+
+    it('renders inactive online session avatars in monochrome', async () => {
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={{
+                    ...createSession('sess_inactive_online'),
+                    active: false,
+                    presence: 'online',
+                }}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        expect(screen.findAllByType(AvatarMock)[0].props.monochrome).toBe(true);
     });
 });
