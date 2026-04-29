@@ -125,10 +125,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     pendingCountContainer: {
         position: 'absolute',
         top: -4,
-        right: -6,
+        right: -3,
         minWidth: 15,
         height: 15,
-        paddingHorizontal: 2,
         borderRadius: 999,
         alignItems: 'center',
         justifyContent: 'center',
@@ -138,13 +137,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     pendingCountContainerCompact: {
         top: -3,
-        right: -5,
+        right: -3,
         minWidth: 14,
         height: 14,
-        paddingHorizontal: 5,
     },
     pendingCountText: {
-        fontSize: 9,
+        fontSize: 8,
         color: theme.colors.textSecondary,
         ...Typography.default('semiBold'),
     },

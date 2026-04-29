@@ -271,10 +271,11 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                             hitSlop={6}
                         >
                             {probe.phase === 'idle' ? (
-                                <Ionicons name="refresh-outline" size={18} style={styles.refreshIcon as any} />
+                                <Ionicons name="refresh-outline" size={18} color={theme.colors.textSecondary} />
                             ) : (
                                 <ActivityIndicator
                                     size="small"
+                                    color={theme.colors.textSecondary}
                                     accessibilityLabel={probe.phase === 'loading'
                                         ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
                                         : (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y'))}
@@ -285,6 +286,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                         <View style={styles.refreshIconButton}>
                             <ActivityIndicator
                                 size="small"
+                                color={theme.colors.textSecondary}
                                 accessibilityLabel={probe.phase === 'loading'
                                     ? (probe.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
                                     : (probe.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y'))}
@@ -351,6 +353,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                                                                 <Ionicons
                                                                     name="checkmark-outline"
                                                                     size={14}
+                                                                    color={theme.colors.text}
                                                                     style={styles.optionCardIndicatorIcon}
                                                                 />
                                                             ) : null}
@@ -408,6 +411,7 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                                         <Ionicons
                                             name="checkmark-outline"
                                             size={14}
+                                            color={theme.colors.text}
                                             style={styles.optionCardIndicatorIcon}
                                         />
                                     ) : null}
@@ -473,9 +477,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 0,
         paddingBottom: 0,
         gap: 0,
-    },
-    refreshIcon: {
-        color: theme.colors.textSecondary,
     },
     refreshIconButton: {
         minWidth: 28,
@@ -546,7 +547,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         justifyContent: 'flex-start',
     },
     optionCardIndicatorIcon: {
-        color: theme.colors.text,
         height: 12,
     },
     optionCardDescription: {
