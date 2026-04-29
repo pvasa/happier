@@ -24,6 +24,10 @@ import {
     handleNewMessageSocketUpdate,
 } from '@/sync/engine/sessions/syncSessions';
 import {
+    handleTranscriptStreamSegmentEphemeralUpdate,
+    type TranscriptStreamSegmentSessionMessageEncryption,
+} from '@/sync/engine/sessions/handleTranscriptStreamSegmentEphemeralUpdate';
+import {
     buildMachineFromMachineActivityEphemeralUpdate,
     buildUpdatedMachineFromSocketUpdate,
 } from '@/sync/engine/machines/syncMachines';
@@ -41,6 +45,7 @@ import {
 import { applyAutomationSocketUpdate } from '@/sync/engine/automations/automationSocketApply';
 import { normalizeRelationshipUpdatedUpdateBody } from '@/sync/engine/social/relationshipUpdate';
 import { parseEphemeralUpdate, parseUpdateContainer } from './socketParse';
+import type { DirectSessionTranscriptUpdatedEphemeralUpdate } from './socketParse';
 import { FeedBodySchema } from '@/sync/domains/social/feedTypes';
 export { parseEphemeralUpdate, parseUpdateContainer } from './socketParse';
 
@@ -654,11 +659,23 @@ export function handleEphemeralSocketUpdate(params: {
     update: unknown;
     addActivityUpdate: (update: ApiEphemeralActivityUpdate) => void;
     addMachineActivityUpdate: (update: MachineActivityUpdate) => void;
-}): void {
-    const { update, addActivityUpdate, addMachineActivityUpdate } = params;
+    getSessionEncryption: (sessionId: string) => TranscriptStreamSegmentSessionMessageEncryption | null;
+    getSession: (sessionId: string) => Session | undefined;
+    applyMessages: (sessionId: string, messages: NormalizedMessage[]) => void;
+    updateDirectSessionTranscript?: (update: DirectSessionTranscriptUpdatedEphemeralUpdate) => Promise<void> | void;
+}): Promise<void> {
+    const {
+        update,
+        addActivityUpdate,
+        addMachineActivityUpdate,
+        getSessionEncryption,
+        getSession,
+        applyMessages,
+        updateDirectSessionTranscript,
+    } = params;
 
     const updateData = parseEphemeralUpdate(update);
-    if (!updateData) return;
+    if (!updateData) return Promise.resolve();
 
     // Process activity updates through smart debounce accumulator
     if (updateData.type === 'activity') {
@@ -668,7 +685,27 @@ export function handleEphemeralSocketUpdate(params: {
         addMachineActivityUpdate({ id: updateData.id, active: updateData.active, activeAt: updateData.activeAt });
     } else if (updateData.type === 'execution-run-updated') {
         notifyExecutionRunActivity(updateData.sessionId);
+    } else if (updateData.type === 'direct-session-transcript-delta') {
+        return Promise.resolve(updateDirectSessionTranscript?.(updateData));
+    } else if (updateData.type === 'transcript-stream-segment') {
+        const currentApplyHandlers = socketMessageApplyHandlers;
+        socketMessageApplyHandlers = {
+            applyMessages,
+            ...(currentApplyHandlers?.onNormalizedMessagesApplied
+                ? { onNormalizedMessagesApplied: currentApplyHandlers.onNormalizedMessagesApplied }
+                : {}),
+            ...(currentApplyHandlers?.markSessionMaterializedMaxSeq
+                ? { markSessionMaterializedMaxSeq: currentApplyHandlers.markSessionMaterializedMaxSeq }
+                : {}),
+        };
+        return handleTranscriptStreamSegmentEphemeralUpdate({
+            update: updateData,
+            getSessionEncryption,
+            getSession,
+            applyMessages: (sessionId, messages) => socketMessageApplyCoalescer.enqueue(sessionId, messages),
+        });
     }
 
     // daemon-status ephemeral updates are deprecated, machine status is handled via machine-activity
+    return Promise.resolve();
 }

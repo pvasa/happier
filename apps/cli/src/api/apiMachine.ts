@@ -19,7 +19,11 @@ import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import type { MachineTransferReceiveEnvelope, MachineTransferSendEnvelope } from '@happier-dev/protocol';
+import type {
+    DirectSessionTranscriptDeltaEphemeral,
+    MachineTransferReceiveEnvelope,
+    MachineTransferSendEnvelope,
+} from '@happier-dev/protocol';
 import { fetchChanges, fetchChangesAccountId } from './changes';
 import { readLastChangesCursor, writeLastChangesCursor } from '@/persistence';
 import { resolveLoopbackHttpUrl } from './client/loopbackUrl';
@@ -182,6 +186,9 @@ export class ApiMachineClient {
                 ...deps,
                 machineRpcWorkingDirectory: this.machineRpcWorkingDirectory,
                 filesystemAccessPolicy: this.filesystemAccessPolicy,
+                emitDirectSessionTranscriptUpdate:
+                    deps?.emitDirectSessionTranscriptUpdate
+                    ?? ((payload) => this.emitDirectSessionTranscriptUpdate(payload)),
             },
         });
     }
@@ -211,6 +218,11 @@ export class ApiMachineClient {
     sendMachineTransferEnvelope(payload: MachineTransferSendEnvelope): void {
         if (!this.socket) return;
         this.socket.emit(SOCKET_RPC_EVENTS.MACHINE_TRANSFER_ENVELOPE, payload);
+    }
+
+    emitDirectSessionTranscriptUpdate(payload: DirectSessionTranscriptDeltaEphemeral): void {
+        if (!this.socket) return;
+        this.socket.emit('direct-session-transcript-delta', payload);
     }
 
     private dispatchUpdate(update: Update): boolean {

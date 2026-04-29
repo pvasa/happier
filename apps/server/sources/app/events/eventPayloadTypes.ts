@@ -1,6 +1,6 @@
 import { Socket } from "socket.io";
 import type { LinkedProvider } from "@/app/auth/providers/linkedProviders";
-import type { ExecutionRunPublicState } from "@happier-dev/protocol";
+import type { DirectSessionTranscriptDeltaEphemeral, ExecutionRunPublicState, SessionStoredMessageContent } from "@happier-dev/protocol";
 
 // === CONNECTION TYPES ===
 
@@ -264,6 +264,16 @@ export type EphemeralEvent = {
     sessionId: string;
     run: ExecutionRunPublicState;
 } | {
+    type: 'transcript-stream-segment';
+    sessionId: string;
+    message: {
+        localId: string;
+        sidechainId?: string | null;
+        content: SessionStoredMessageContent;
+        createdAt: number;
+        updatedAt: number;
+    };
+} | DirectSessionTranscriptDeltaEphemeral | {
     type: 'machine-activity';
     id: string;
     active: boolean;

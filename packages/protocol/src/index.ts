@@ -469,6 +469,7 @@ export {
 
 export {
   EphemeralUpdateSchema,
+  DirectSessionTranscriptDeltaEphemeralSchema,
   MessageAckResponseSchema,
   SessionBroadcastBodySchema,
   SessionBroadcastContainerSchema,
@@ -477,6 +478,7 @@ export {
   UpdateMetadataAckResponseSchema,
   UpdateStateAckResponseSchema,
   type EphemeralUpdate,
+  type DirectSessionTranscriptDeltaEphemeral,
   type MessageAckResponse,
   type SessionBroadcastBody,
   type SessionBroadcastContainer,
@@ -652,6 +654,12 @@ export {
   WindowsRemoteSessionLaunchModeSchema,
   type WindowsRemoteSessionLaunchMode,
 } from './sessionMetadata/windowsRemoteSessionLaunchMode.js';
+
+export {
+  DEFAULT_WINDOWS_TERMINAL_WINDOW_NAME,
+  normalizeWindowsTerminalWindowName,
+  WindowsTerminalWindowNameSchema,
+} from './sessionMetadata/windowsTerminalWindowName.js';
 
 export {
   SESSION_PERMISSION_MODES,
@@ -1038,6 +1046,12 @@ export {
   DirectSessionLinkEnsureRequestSchema,
   DirectSessionLinkEnsureResponseSchema,
   DirectSessionActivityV1Schema,
+  DirectSessionAttachRequestSchema,
+  DirectSessionAttachResponseSchema,
+  DirectSessionDetachRequestSchema,
+  DirectSessionDetachResponseSchema,
+  DirectSessionFollowPolicySetRequestSchema,
+  DirectSessionFollowPolicySetResponseSchema,
   DirectSessionStatusGetRequestSchema,
   DirectSessionStatusGetResponseSchema,
   DirectTranscriptRawMessageV1Schema,
@@ -1057,6 +1071,12 @@ export {
   type DirectSessionLinkEnsureRequest,
   type DirectSessionLinkEnsureResponse,
   type DirectSessionActivityV1,
+  type DirectSessionAttachRequest,
+  type DirectSessionAttachResponse,
+  type DirectSessionDetachRequest,
+  type DirectSessionDetachResponse,
+  type DirectSessionFollowPolicySetRequest,
+  type DirectSessionFollowPolicySetResponse,
   type DirectSessionStatusGetRequest,
   type DirectSessionStatusGetResponse,
   type DirectTranscriptRawMessageV1,
@@ -1069,6 +1089,21 @@ export {
   type DirectSessionTakeoverPersistRequest,
   type DirectSessionTakeoverPersistResponse,
 } from './directSessions/daemonRpcV1.js';
+
+export {
+  applyObservedProgressToDirectSessionAttentionV1,
+  buildDirectSessionAttentionV1,
+  buildDirectSessionFollowPolicyV1,
+  deriveDirectSessionAttentionHasUnread,
+  deriveDirectSessionObservedProgress,
+  markDirectSessionAttentionViewedV1,
+  readDirectSessionAttentionV1,
+  readDirectSessionFollowPolicyV1,
+  type DirectSessionAttentionV1,
+  type DirectSessionFollowPolicy,
+  type DirectSessionFollowPolicyV1,
+  type DirectSessionObservedProgress,
+} from './directSessions/linkedSessionMetadata.js';
 
 export {
   SessionHandoffAbortRequestSchema,

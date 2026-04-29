@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { resumeSession } from '@/sync/ops';
 import { type AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
@@ -2959,6 +2960,74 @@ class Sync {
           this.directSessionTailCursorBySessionId.set(sessionId, tail.nextCursor ?? null);
       }
 
+      private async applyDirectSessionTranscriptItems(
+          sessionId: string,
+          items: ReadonlyArray<DirectTranscriptRawMessageV1>,
+          options?: Readonly<{
+              nextCursor?: string | null;
+          }>,
+      ): Promise<void> {
+          const session = storage.getState().sessions[sessionId] ?? null;
+          if (!readDirectSessionLink(session?.metadata)) {
+              return;
+          }
+
+          const normalizedMessages = normalizeDirectTranscriptMessages(items);
+          if (normalizedMessages.length > 0) {
+              this.applyMessages(sessionId, normalizedMessages, { notifyVoice: false });
+          }
+
+          if (Object.prototype.hasOwnProperty.call(options ?? {}, 'nextCursor')) {
+              this.directSessionTailCursorBySessionId.set(sessionId, options?.nextCursor ?? null);
+          }
+      }
+
+      private resolveDirectSessionTranscriptDeltaCursor(ephemeralUpdate: Readonly<{
+          nextCursor?: string | null;
+          tailCursor?: string | null;
+      }>): string | null | undefined {
+          if (typeof ephemeralUpdate.nextCursor === 'string' || ephemeralUpdate.nextCursor === null) {
+              return ephemeralUpdate.nextCursor;
+          }
+          if (typeof ephemeralUpdate.tailCursor === 'string' || ephemeralUpdate.tailCursor === null) {
+              return ephemeralUpdate.tailCursor;
+          }
+          return undefined;
+      }
+
+      private async handleDirectSessionTranscriptEphemeralUpdate(ephemeralUpdate: Readonly<{
+          sessionId: string;
+          items: ReadonlyArray<DirectTranscriptRawMessageV1>;
+          nextCursor?: string | null;
+          tailCursor?: string | null;
+          truncated?: boolean;
+      }>): Promise<void> {
+          const session = storage.getState().sessions[ephemeralUpdate.sessionId] ?? null;
+          const directSessionLink = readDirectSessionLink(session?.metadata);
+          if (!directSessionLink) {
+              return;
+          }
+
+          if (ephemeralUpdate.truncated === true) {
+              this.directSessionOlderCursorBySessionId.delete(ephemeralUpdate.sessionId);
+              this.directSessionHasMoreOlderBySessionId.delete(ephemeralUpdate.sessionId);
+              this.directSessionTailCursorBySessionId.delete(ephemeralUpdate.sessionId);
+              await this.fetchDirectSessionMessages(ephemeralUpdate.sessionId, directSessionLink);
+              return;
+          }
+
+          await this.applyDirectSessionTranscriptItems(
+              ephemeralUpdate.sessionId,
+              ephemeralUpdate.items,
+              {
+                  ...(Object.prototype.hasOwnProperty.call(ephemeralUpdate, 'nextCursor')
+                      || Object.prototype.hasOwnProperty.call(ephemeralUpdate, 'tailCursor')
+                      ? { nextCursor: this.resolveDirectSessionTranscriptDeltaCursor(ephemeralUpdate) }
+                      : {}),
+              },
+          );
+      }
+
       private async loadOlderMessagesForChain(params: Readonly<{
           sessionId: string;
           scope: SessionMessagesScope;
@@ -3560,7 +3629,10 @@ class Sync {
     }
 
     private handleEphemeralUpdate = (update: unknown) => {
-        handleEphemeralSocketUpdate({
+        const getSessionEncryption = this.encryption
+            ? this.encryption.getSessionEncryption.bind(this.encryption)
+            : (() => null);
+        fireAndForget(handleEphemeralSocketUpdate({
             update,
             addActivityUpdate: (ephemeralUpdate) => {
                 this.activityAccumulator.addUpdate(ephemeralUpdate);
@@ -3568,7 +3640,11 @@ class Sync {
             addMachineActivityUpdate: (machineUpdate) => {
                 this.machineActivityAccumulator.addUpdate(machineUpdate);
             },
-        });
+            getSessionEncryption,
+            getSession: (sessionId) => storage.getState().sessions[sessionId],
+            applyMessages: (sessionId, messages) => this.applyMessages(sessionId, messages, { notifyVoice: false }),
+            updateDirectSessionTranscript: (ephemeralUpdate) => this.handleDirectSessionTranscriptEphemeralUpdate(ephemeralUpdate),
+        }), { tag: 'Sync.handleEphemeralUpdate' });
     }
 
     //

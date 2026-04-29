@@ -1,8 +1,12 @@
 import { logger } from '@/ui/logger';
 
-import type { ACPMessageData, ACPProvider } from '../sessionMessageTypes';
+import type { ACPProvider } from '../sessionMessageTypes';
 import type { StreamedTranscriptWriterSession } from './types';
 import type { StreamedTranscriptSegmentRuntime, StreamedTranscriptSegmentState } from './segmentRuntime';
+import {
+  buildStreamedTranscriptSegmentSnapshotBody,
+  buildStreamedTranscriptSegmentSnapshotMeta,
+} from './buildStreamedTranscriptSegmentSnapshot';
 
 function serializeCommitErrorForLog(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
@@ -25,43 +29,6 @@ function serializeCommitErrorForLog(error: unknown): Record<string, unknown> {
   return { message: String(error) };
 }
 
-function buildDurableSnapshotBody(segment: StreamedTranscriptSegmentRuntime): ACPMessageData {
-  return segment.kind === 'assistant'
-    ? {
-        type: 'message',
-        message: segment.accumulatedText,
-        ...(segment.sidechainId ? { sidechainId: segment.sidechainId } : {}),
-      }
-    : {
-        type: 'thinking',
-        text: segment.accumulatedText,
-        ...(segment.sidechainId ? { sidechainId: segment.sidechainId } : {}),
-      };
-}
-
-function buildDurableSnapshotMeta(params: {
-  segment: StreamedTranscriptSegmentRuntime;
-  state: StreamedTranscriptSegmentState;
-  interruptedReason?: string;
-  nowMs: number;
-}): Record<string, unknown> {
-  const { segment, state, interruptedReason, nowMs } = params;
-
-  return {
-    happierStreamSegmentV1: {
-      v: 1,
-      segmentKind: segment.kind,
-      segmentLocalId: segment.segmentLocalId,
-      segmentState: state,
-      startedAtMs: segment.startedAtMs,
-      updatedAtMs: nowMs,
-      ...(state === 'interrupted' && typeof interruptedReason === 'string' && interruptedReason
-        ? { interruptedReason }
-        : {}),
-    },
-  };
-}
-
 export function commitStreamedTranscriptSegmentSnapshot(params: {
   provider: ACPProvider;
   session: StreamedTranscriptWriterSession;
@@ -80,10 +47,11 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
 
   const nowMs = Date.now();
   const commitVersion = segment.textVersion;
+  const commitText = segment.accumulatedText;
   const commitTextLen = segment.accumulatedText.length;
   const durableLocalId = segment.segmentLocalId;
-  const body = buildDurableSnapshotBody(segment);
-  const meta = buildDurableSnapshotMeta({ segment, state, interruptedReason, nowMs });
+  const body = buildStreamedTranscriptSegmentSnapshotBody(segment);
+  const meta = buildStreamedTranscriptSegmentSnapshotMeta({ segment, state, interruptedReason, nowMs });
 
   let committedSnapshotPromise: Promise<void>;
   try {
@@ -98,6 +66,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   void committedSnapshotPromise
     .then(() => {
       segment.didWriteDurable = true;
+      segment.lastDurableText = commitText;
       segment.lastCheckpointAtMs = Date.now();
       segment.lastCheckpointTextLen = commitTextLen;
       segment.lastCommittedTextVersion = commitVersion;

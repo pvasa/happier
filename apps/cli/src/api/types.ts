@@ -156,6 +156,16 @@ export interface ClientToServerEvents {
     sid: string;
     run: ExecutionRunPublicState;
   }) => void
+  'transcript-stream-segment': (data: {
+    sid: string;
+    message: {
+      localId: string;
+      sidechainId?: string | null;
+      content: string | SessionMessageContent;
+      createdAt: number;
+      updatedAt: number;
+    };
+  }) => void
   'update-metadata': (data: { sid: string, expectedVersion: number, metadata: string }, cb: (answer: UpdateMetadataAckResponse) => void) => void,
   'update-state': (data: {
     sid: string,
@@ -350,6 +360,12 @@ export type DirectSessionMetadataV1 = {
   remoteSessionId: string,
   source: DirectSessionsSource,
   linkedAtMs: number,
+  lastKnownActivityAtMs?: number,
+  followPolicyV1?: {
+    v: 1,
+    policy: 'attached_only' | 'background_follow',
+    updatedAtMs?: number,
+  },
   codexBackendMode?: 'mcp' | 'acp' | 'appServer',
   agentRuntimeDescriptorV1?: unknown,
 };
@@ -408,6 +424,13 @@ export type Metadata = {
   opencodeServerBaseUrl?: string,
   opencodeServerBaseUrlExplicit?: true,
   directSessionV1?: DirectSessionMetadataV1,
+  directSessionAttentionV1?: {
+    v: 1,
+    observedProgressToken?: string,
+    viewedProgressToken?: string,
+    observedAtMs?: number,
+    viewedAtMs?: number,
+  },
   externalHistoryImportV1?: ExternalHistoryImportMetadataV1,
   handoffV1?: SessionHandoffMetadataV1,
   auggieSessionId?: string, // Auggie ACP session ID (opaque)

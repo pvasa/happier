@@ -57,6 +57,7 @@ import { resolveFilesystemPolicyDefaultDirectory } from '@/rpc/handlers/fileSyst
 import { isAcpForkEligibleForProvider } from '@/agent/acp/acpForkEligibility';
 import { resolveReplaySeedDraft } from '@/session/replay/resolveReplaySeedDraft';
 import type {
+  DirectSessionTranscriptDeltaEphemeral,
   MachineTransferReceiveEnvelope,
   MachineTransferSendEnvelope,
   TransferEndpointCandidate,
@@ -94,6 +95,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   promptAssetsHappierHomeDir?: () => string;
   machineRpcWorkingDirectory?: string;
   filesystemAccessPolicy?: FilesystemAccessPolicy;
+  emitDirectSessionTranscriptUpdate?: (payload: DirectSessionTranscriptDeltaEphemeral) => void;
 }>;
 
 async function fetchForkChildSessionOrThrow(params: Readonly<{
@@ -445,6 +447,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
     rpcHandlerManager,
     spawnSession,
     stopSession,
+    emitDirectSessionTranscriptUpdate: params.deps?.emitDirectSessionTranscriptUpdate,
   });
   registerMachineSessionHandoffRpcHandlers({
     rpcHandlerManager,
