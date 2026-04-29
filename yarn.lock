@@ -1338,32 +1338,33 @@
   resolved "https://registry.npmjs.org/@electric-sql/pglite/-/pglite-0.3.15.tgz"
   integrity sha512-Cj++n1Mekf9ETfdc16TlDi+cDDQF0W7EcbyRHYOAeZdsAe8M/FJg18itDTSwyHfar2WIezawM9o0EKaRGVKygQ==
 
-"@elevenlabs/client@0.12.2":
-  version "0.12.2"
-  resolved "https://registry.npmjs.org/@elevenlabs/client/-/client-0.12.2.tgz"
-  integrity sha512-QWllhDndFfKmftlktNoa35+AF3gOCbSHowYhR42ZHb5u32lFbMPbh2BALCrpFa3edqCHSXtzG6zzLSAGjkhvHQ==
+"@elevenlabs/client@1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@elevenlabs/client/-/client-1.3.1.tgz#4bee92a46accad4ce38768f2a9739bbddb128460"
+  integrity sha512-bQUxA/X7TZRSSZ6UM6a6A+1qQy5Wh7vMn+zbZP6Yl1WrupxHL4M0XMnl/n9+fsol1Ib4tN/2Nhx1E5JDS7QdKw==
   dependencies:
-    "@elevenlabs/types" "0.4.0"
+    "@elevenlabs/types" "0.9.1"
     livekit-client "^2.11.4"
 
-"@elevenlabs/react-native@^0.5.7":
-  version "0.5.8"
-  resolved "https://registry.npmjs.org/@elevenlabs/react-native/-/react-native-0.5.8.tgz"
-  integrity sha512-nrumWFAgu8rQIwt19mSTFSbz3VnxFDRCm2jjtY1p+Cn1i+ldXGpqJov2LQf/JAgBd1gtquuurv0dgDDwlLgHhg==
+"@elevenlabs/react-native@1.1.3":
+  version "1.1.3"
+  resolved "https://registry.yarnpkg.com/@elevenlabs/react-native/-/react-native-1.1.3.tgz#adb0d65ea68b2c97f2f388e3c5936b8f8d11a6dc"
+  integrity sha512-VBca2Mk8OT3xBetq8lPxgWNT5+MGiMf407rT+OsHyAmfQ+uACqbc+thTfyQox6u/nJh6FuqeHxZz11/XsKx3Gw==
   dependencies:
-    "@elevenlabs/types" "0.4.0"
+    "@elevenlabs/client" "1.3.1"
+    "@elevenlabs/react" "1.2.1"
 
-"@elevenlabs/react@^0.12.3":
-  version "0.12.3"
-  resolved "https://registry.npmjs.org/@elevenlabs/react/-/react-0.12.3.tgz"
-  integrity sha512-fQJlabwuvQziBCCNcxlXZt5GVxcPHjwb46NtSEbLJY0zaOUtWJynRX4kPfbz7ChqnMe7FAHYnrq2XsaSzpQXLQ==
+"@elevenlabs/react@1.2.1":
+  version "1.2.1"
+  resolved "https://registry.yarnpkg.com/@elevenlabs/react/-/react-1.2.1.tgz#2209800ecdebd2293afeb2366bb047af9af3df40"
+  integrity sha512-7cx+WGsbrNlKDtMuafFGMjCwg0h4rqtV4JKoIEHSJ32F2kcyCU5/MgA+01dP1cA1LrLYY9lO/kkghPAxsQYUug==
   dependencies:
-    "@elevenlabs/client" "0.12.2"
+    "@elevenlabs/client" "1.3.1"
 
-"@elevenlabs/types@0.4.0":
-  version "0.4.0"
-  resolved "https://registry.npmjs.org/@elevenlabs/types/-/types-0.4.0.tgz"
-  integrity sha512-6CQb4r9DjepILhLybDxW0h8rvbsR8jPAp74HvFGYuvYdXcQRTkYTD9BQ4PV6VcuC1iqx0UljzJj8js3ADQ8EXw==
+"@elevenlabs/types@0.9.1":
+  version "0.9.1"
+  resolved "https://registry.yarnpkg.com/@elevenlabs/types/-/types-0.9.1.tgz#1a066569bf3c2808165e6ab68057d9712de86db4"
+  integrity sha512-lkWAMaFJLsGNWcblryBRHbtozMh7wHy0YsqURLwQwjhpvycuFN5qUa94CZtVU01jFwrfr5h1ca24+nYEkKf0Ew==
 
 "@emnapi/core@^1.7.1":
   version "1.8.1"
@@ -3121,10 +3122,10 @@
   resolved "https://registry.npmjs.org/@livekit/mutex/-/mutex-1.1.1.tgz"
   integrity sha512-EsshAucklmpuUAfkABPxJNhzj9v2sG7JuzFDL4ML1oJQSV14sqrpTYnsaOudMAw9yOaW53NU3QQTlUQoRs4czw==
 
-"@livekit/protocol@1.42.2":
-  version "1.42.2"
-  resolved "https://registry.npmjs.org/@livekit/protocol/-/protocol-1.42.2.tgz"
-  integrity sha512-0jeCwoMJKcwsZICg5S6RZM4xhJoF78qMvQELjACJQn6/VB+jmiySQKOSELTXvPBVafHfEbMlqxUw2UR1jTXs2g==
+"@livekit/protocol@1.45.3":
+  version "1.45.3"
+  resolved "https://registry.yarnpkg.com/@livekit/protocol/-/protocol-1.45.3.tgz#1f0b8d45057c6d76aa4966e356a2d3d29048c2f4"
+  integrity sha512-WmMxBTsy4dRBqcrswFwUUlgq3Z0nnhOqKR6tX749Rb/PcB1yBMUtrHxZvcsS6qi3/5+86zHeVG+exmu1sZqfJg==
   dependencies:
     "@bufbuild/protobuf" "^1.10.0"
 
@@ -12339,21 +12340,20 @@ lines-and-columns@^1.1.6:
   resolved "https://registry.npmjs.org/lines-and-columns/-/lines-and-columns-1.2.4.tgz"
   integrity sha512-7ylylesZQ/PV29jhEDl3Ufjo6ZX7gCqJr5F7PKrqc93v7fzSymt1BpwEU8nAUXs8qzzvqhbjhK5QZg6Mt/HkBg==
 
-livekit-client@^2.11.4, livekit-client@^2.15.4:
-  version "2.17.0"
-  resolved "https://registry.npmjs.org/livekit-client/-/livekit-client-2.17.0.tgz"
-  integrity sha512-BD1QUS44ancVTBdnAher0aO7DV5holFYH2lYradYT/HgXtn6R8xPyvtDAH3UH40jGcesDo9fEopCFwEdOgrIhg==
+livekit-client@2.18.7, livekit-client@^2.11.4:
+  version "2.18.7"
+  resolved "https://registry.yarnpkg.com/livekit-client/-/livekit-client-2.18.7.tgz#68c8ac69673e17fb244ce6692df2cab1b24eff46"
+  integrity sha512-8mMNfJ9sPTWT9W5CsV23yJhut4vtw0M4c/AR5diRvLn6XsUDij7Odr6GrI9Oj5/T5vDis4y2JTumMiTweGlqMA==
   dependencies:
     "@livekit/mutex" "1.1.1"
-    "@livekit/protocol" "1.42.2"
+    "@livekit/protocol" "1.45.3"
     events "^3.3.0"
     jose "^6.1.0"
     loglevel "^1.9.2"
     sdp-transform "^2.15.0"
-    ts-debounce "^4.0.0"
     tslib "2.8.1"
     typed-emitter "^2.1.0"
-    webrtc-adapter "^9.0.1"
+    webrtc-adapter "9.0.5"
 
 locate-path@^3.0.0:
   version "3.0.0"
@@ -15765,6 +15765,11 @@ remark@^15.0.1:
     remark-stringify "^11.0.0"
     unified "^11.0.0"
 
+remend@^1.3.0:
+  version "1.3.0"
+  resolved "https://registry.yarnpkg.com/remend/-/remend-1.3.0.tgz#81eca27ec38731dc2ff789b44d5e9c8539f36d4e"
+  integrity sha512-iIhggPkhW3hFImKtB10w0dz4EZbs28mV/dmbcYVonWEJ6UGHHpP+bFZnTh6GNWJONg5m+U56JrL+8IxZRdgWjw==
+
 require-directory@^2.1.1:
   version "2.1.1"
   resolved "https://registry.npmjs.org/require-directory/-/require-directory-2.1.1.tgz"
@@ -17302,11 +17307,6 @@ ts-algebra@^2.0.0:
   resolved "https://registry.yarnpkg.com/ts-algebra/-/ts-algebra-2.0.0.tgz#4e3e0953878f26518fce7f6bb115064a65388b7a"
   integrity sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==
 
-ts-debounce@^4.0.0:
-  version "4.0.0"
-  resolved "https://registry.npmjs.org/ts-debounce/-/ts-debounce-4.0.0.tgz"
-  integrity sha512-+1iDGY6NmOGidq7i7xZGA4cm8DAa6fqdYcvO5Z6yBevH++Bdo9Qt/mN0TzHUgcCcKv1gmh9+W5dHqz8pMWbCbg==
-
 ts-dedent@^2.2.0:
   version "2.2.0"
   resolved "https://registry.npmjs.org/ts-dedent/-/ts-dedent-2.2.0.tgz"
@@ -17989,10 +17989,10 @@ webidl-conversions@^7.0.0:
   resolved "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-7.0.0.tgz"
   integrity sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g==
 
-webrtc-adapter@^9.0.1:
-  version "9.0.3"
-  resolved "https://registry.npmjs.org/webrtc-adapter/-/webrtc-adapter-9.0.3.tgz"
-  integrity sha512-5fALBcroIl31OeXAdd1YUntxiZl1eHlZZWzNg3U4Fn+J9/cGL3eT80YlrsWGvj2ojuz1rZr2OXkgCzIxAZ7vRQ==
+webrtc-adapter@9.0.5:
+  version "9.0.5"
+  resolved "https://registry.yarnpkg.com/webrtc-adapter/-/webrtc-adapter-9.0.5.tgz#fb036c3db06e1a0d86c264da649e130187783b3f"
+  integrity sha512-U9vjByy/sK2OMXu5mmfuZFKTMIUQe34c0JXRO+oDrxJTsntdYT2iIFwYMOV7HhMTuktcZLGf2W1N/OcSf9ssWg==
   dependencies:
     sdp "^3.2.0"
 
