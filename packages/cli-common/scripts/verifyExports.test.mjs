@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 import { collectMissingExportTargets } from './verifyExports.mjs';
@@ -21,10 +21,57 @@ describe('cli-common build export verification', () => {
     });
   });
 
-  it('runs export verification as part of the package build', () => {
+  it('runs staged export verification as part of the package build', async () => {
     const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
 
-    expect(packageJson.scripts.build).toContain('verifyExports.mjs');
+    expect(packageJson.scripts.build).toBe('node scripts/build.mjs');
+
+    const { buildCliCommonDist } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-staged-build-'));
+
+    try {
+      mkdirSync(join(fixtureDir, 'dist'), { recursive: true });
+      writeFileSync(join(fixtureDir, 'dist', 'index.js'), 'export const oldValue = true;\n', 'utf8');
+      writeFileSync(join(fixtureDir, 'dist', 'index.d.ts'), 'export declare const oldValue: boolean;\n', 'utf8');
+      writeFileSync(join(fixtureDir, 'package.json'), JSON.stringify({
+        name: '@happier-dev/cli-common-fixture',
+        exports: {
+          '.': {
+            default: './dist/index.js',
+            types: './dist/index.d.ts',
+          },
+        },
+      }, null, 2), 'utf8');
+      writeFileSync(join(fixtureDir, 'tsconfig.json'), JSON.stringify({
+        extends: './tsconfig.base.json',
+        compilerOptions: {
+          outDir: 'dist',
+          tsBuildInfoFile: 'dist/.tsbuildinfo',
+        },
+      }, null, 2), 'utf8');
+
+      await buildCliCommonDist({
+        packageDir: fixtureDir,
+        buildId: 'test-build',
+        lockPath: join(fixtureDir, 'build.lock'),
+        runCommandImpl: (_cmd, args) => {
+          const oldDistDuringBuild = readFileSync(join(fixtureDir, 'dist', 'index.js'), 'utf8');
+          expect(oldDistDuringBuild).toContain('oldValue');
+
+          const tsconfigPath = args.at(-1);
+          const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
+          const outDir = tsconfig.compilerOptions.outDir;
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(outDir, 'index.js'), 'export const newValue = true;\n', 'utf8');
+          writeFileSync(join(outDir, 'index.d.ts'), 'export declare const newValue: boolean;\n', 'utf8');
+          return { status: 0 };
+        },
+      });
+
+      expect(readFileSync(join(fixtureDir, 'dist', 'index.js'), 'utf8')).toContain('newValue');
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
   });
 
   it('detects missing files for declared export targets', () => {
