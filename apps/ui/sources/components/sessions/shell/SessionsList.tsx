@@ -67,6 +67,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
         ...Typography.default('semiBold'),
     },
+    groupHeaderPathTitleWeb: {
+        writingDirection: 'rtl' as const,
+        textAlign: 'left' as const,
+    },
+    groupHeaderPathTitleTextWeb: {
+        writingDirection: 'ltr' as const,
+        unicodeBidi: 'isolate' as const,
+    },
     groupHeaderSubtitle: {
         fontSize: 11,
         color: theme.colors.textSecondary,
@@ -344,7 +352,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const customLabel = workspaceKey ? workspaceLabelsV1[workspaceKey] : undefined;
     const displayTitle = customLabel || item.title;
     const hasCustomLabel = Boolean(customLabel);
-    const titleEllipsizeMode = hasCustomLabel ? 'tail' : 'head';
+    const shouldUseStartEllipsis = !hasCustomLabel && isWeb;
+    const nativeEllipsizeMode = !isWeb && !hasCustomLabel ? 'head' : 'tail';
     const actionIconColor = theme.colors.textSecondary;
     const canCreateSession = typeof onCreateSession === 'function' && Boolean(item.workspaceScopeHint);
 
@@ -387,11 +396,17 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                 <View style={styles.groupHeaderContent}>
                     <View style={styles.groupHeaderTitleRow}>
                         <Text
-                            style={styles.groupHeaderTitle}
+                            style={shouldUseStartEllipsis
+                                ? [styles.groupHeaderTitle, styles.groupHeaderPathTitleWeb]
+                                : styles.groupHeaderTitle}
                             numberOfLines={1}
-                            ellipsizeMode={titleEllipsizeMode}
+                            ellipsizeMode={shouldUseStartEllipsis ? undefined : nativeEllipsizeMode}
                         >
-                            {displayTitle}
+                            {shouldUseStartEllipsis ? (
+                                <Text style={styles.groupHeaderPathTitleTextWeb}>
+                                    {displayTitle}
+                                </Text>
+                            ) : displayTitle}
                         </Text>
                         <View
                             style={styles.groupHeaderInlineActions}

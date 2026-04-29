@@ -893,8 +893,62 @@ describe('SessionsList (native virtualization)', () => {
         expect(item.props.subtitleOverride).toBe('Rebound workstation · /Volumes/target/repo');
     });
 
-    it('preserves the project folder name when truncating workspace path headers', async () => {
+    it('uses start-side overflow ellipsis for workspace path headers on web without reordering the path', async () => {
         platformOs = 'web';
+        const { ProjectGroupHeader } = await import('./SessionsList');
+        const workspacePath = '~/Documents/Development/happier/remote-dev';
+        const projectHeaderItem = {
+            type: 'header',
+            title: workspacePath,
+            headerKind: 'project',
+            groupKey: 'server:server_a:active:project:abc',
+            workspaceKey: 'wl_abc',
+            workspaceScopeHint: {
+                serverId: 'server_a',
+                machineId: 'machine-target',
+                rootPath: '/Users/test/Documents/Development/happier/remote-dev',
+            },
+            serverId: 'server_a',
+            serverName: 'Server A',
+        } satisfies Extract<SessionListViewItem, { type: 'header' }>;
+
+        const screen = await renderScreen(
+            <ProjectGroupHeader
+                item={projectHeaderItem}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header"
+            />,
+        );
+
+        const outerTitle = screen.root.findAll((node) =>
+            String(node.type) === 'Text'
+            && node.props.numberOfLines === 1,
+        )[0];
+        const innerTitle = screen.root.findAll((node) =>
+            String(node.type) === 'Text'
+            && node.props.children === workspacePath,
+        )[0];
+
+        expect(outerTitle).toBeTruthy();
+        expect(innerTitle).toBeTruthy();
+        expect(flattenStyle(outerTitle?.props.style)).toMatchObject({
+            writingDirection: 'rtl',
+            textAlign: 'left',
+        });
+        expect(flattenStyle(innerTitle?.props.style)).toMatchObject({
+            writingDirection: 'ltr',
+            unicodeBidi: 'isolate',
+        });
+    });
+
+    it('uses native head ellipsis for workspace path headers outside web', async () => {
+        platformOs = 'ios';
         const { ProjectGroupHeader } = await import('./SessionsList');
         const workspacePath = '~/Documents/Development/happier/remote-dev';
         const projectHeaderItem = {
@@ -931,6 +985,7 @@ describe('SessionsList (native virtualization)', () => {
             && node.props.children === workspacePath
             && node.props.numberOfLines === 1,
         )[0];
+
         expect(title?.props.ellipsizeMode).toBe('head');
     });
 });
