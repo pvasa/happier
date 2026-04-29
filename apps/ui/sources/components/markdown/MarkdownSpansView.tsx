@@ -3,12 +3,16 @@ import { Link } from 'expo-router';
 import * as React from 'react';
 import { Platform } from 'react-native';
 import { Text } from '../ui/text/Text';
+import { StreamingTextReveal } from './streaming/StreamingTextReveal';
+import type { StreamingTextRevealPreset } from './streaming/streamingTextRevealConfig';
 
 export type MarkdownSpansViewProps = {
     spans: MarkdownSpan[];
     baseStyle?: any;
     linkStyle?: any;
     resolveSpanStyle?: (styleName: MarkdownSpan['styles'][number]) => any;
+    streamingReveal?: boolean;
+    streamingRevealPreset?: StreamingTextRevealPreset;
 };
 
 export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
@@ -44,11 +48,25 @@ export const MarkdownSpansView = React.memo((props: MarkdownSpansViewProps) => {
                     );
                 }
 
+                const spanStyle = [props.baseStyle, span.styles.map(resolveSpanStyle)];
+                if (props.streamingReveal === true && !span.styles.includes('code')) {
+                    return (
+                        <StreamingTextReveal
+                            key={index}
+                            selectable
+                            style={spanStyle}
+                            text={span.text}
+                            animated
+                            preset={props.streamingRevealPreset}
+                        />
+                    );
+                }
+
                 return (
                     <Text
                         key={index}
                         selectable
-                        style={[props.baseStyle, span.styles.map(resolveSpanStyle)]}
+                        style={spanStyle}
                     >
                         {span.text}
                     </Text>

@@ -44,6 +44,33 @@ import { normalizeVoiceAgentTurnTranscriptText } from '@happier-dev/agents';
 import { TranscriptRollbackActionButton } from '@/components/sessions/transcript/TranscriptRollbackActionButton';
 import type { TranscriptRollbackAction } from '@/sync/domains/sessionRollback/rollbackUiSupport';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { useStreamingTextSmoothing } from '@/components/sessions/transcript/streaming/useStreamingTextSmoothing';
+import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMeta';
+
+type StreamSegmentStateForRendering = 'streaming' | 'complete' | 'interrupted';
+
+function normalizeStreamSegmentStateForRendering(value: unknown): StreamSegmentStateForRendering | null {
+  return value === 'streaming' || value === 'complete' || value === 'interrupted' ? value : null;
+}
+
+function readStreamSegmentStateForRendering(params: {
+  messageMeta: unknown;
+  streamSegmentMeta: ReturnType<typeof readStreamSegmentMetaV1>;
+}): StreamSegmentStateForRendering | null {
+  if (params.streamSegmentMeta && 'segmentState' in params.streamSegmentMeta) {
+    return normalizeStreamSegmentStateForRendering(params.streamSegmentMeta.segmentState);
+  }
+
+  if (!params.messageMeta || typeof params.messageMeta !== 'object' || Array.isArray(params.messageMeta)) {
+    return null;
+  }
+  const segment = (params.messageMeta as Record<string, unknown>).happierStreamSegmentV1;
+  if (!segment || typeof segment !== 'object' || Array.isArray(segment)) {
+    return null;
+  }
+  return normalizeStreamSegmentStateForRendering((segment as Record<string, unknown>).segmentState);
+}
 
 function shouldHideVoiceAgentTurnMessage(message: Message): boolean {
     if (message.kind !== 'user-text' && message.kind !== 'agent-text') return false;
@@ -522,10 +549,6 @@ function AgentTextBlock(props: {
     return cleaned.slice(0, 117) + '…';
   };
   const copyText = isStructuredOnly ? props.message.text : markdown;
-  const linkedWorkspaceFiles = React.useMemo(
-    () => extractWorkspaceFileMentions(markdown),
-    [markdown],
-  );
 
   const handleOptionPress = React.useCallback((option: Option) => {
     fireAndForget((async () => {
@@ -566,6 +589,68 @@ function AgentTextBlock(props: {
       sessionThinkingInlineChrome === 'plain' ? 'plain' : 'card';
     const thinkingMarkdownTextStyle =
       normalizedThinkingInlineChrome === 'card' ? styles.thinkingMarkdownTextCard : styles.thinkingMarkdownText;
+
+  const transcriptStreamingSmoothingEnabledRaw = useSetting('transcriptStreamingSmoothingEnabled');
+  const transcriptStreamingSettleDelayMsRaw = useSetting('transcriptStreamingSettleDelayMs');
+  const transcriptStreamingPartialOutputEnabledRaw = useSetting('transcriptStreamingPartialOutputEnabled');
+  const transcriptStreamingMarkdownRenderingEnabledRaw = useSetting('transcriptStreamingMarkdownRenderingEnabled');
+  const transcriptStreamingSmoothingEnabled =
+    typeof transcriptStreamingSmoothingEnabledRaw === 'boolean'
+      ? transcriptStreamingSmoothingEnabledRaw
+      : settingsDefaults.transcriptStreamingSmoothingEnabled;
+  const transcriptStreamingSettleDelayMs =
+    typeof transcriptStreamingSettleDelayMsRaw === 'number' && Number.isFinite(transcriptStreamingSettleDelayMsRaw)
+      ? Math.max(0, Math.trunc(transcriptStreamingSettleDelayMsRaw))
+      : settingsDefaults.transcriptStreamingSettleDelayMs;
+  const transcriptStreamingPartialOutputEnabled =
+    typeof transcriptStreamingPartialOutputEnabledRaw === 'boolean'
+      ? transcriptStreamingPartialOutputEnabledRaw
+      : settingsDefaults.transcriptStreamingPartialOutputEnabled;
+  const transcriptStreamingMarkdownRenderingEnabled =
+    typeof transcriptStreamingMarkdownRenderingEnabledRaw === 'boolean'
+      ? transcriptStreamingMarkdownRenderingEnabledRaw
+      : settingsDefaults.transcriptStreamingMarkdownRenderingEnabled;
+
+  const streamSegmentMeta = readStreamSegmentMetaV1(props.message.meta);
+  const streamSegmentAssistantState =
+    streamSegmentMeta?.segmentKind === 'assistant'
+      ? readStreamSegmentStateForRendering({ messageMeta: props.message.meta, streamSegmentMeta })
+      : null;
+  const streamSegmentAssistantStreaming =
+    streamSegmentMeta?.segmentKind === 'assistant'
+      ? streamSegmentAssistantState === 'streaming' || streamSegmentAssistantState === null
+      : false;
+  const streamingPlainEligible =
+    props.historical !== true &&
+    props.message.isThinking !== true &&
+    isStructuredOnly !== true;
+  const shouldRenderActiveStreamSegmentPlain =
+    streamingPlainEligible && streamSegmentAssistantStreaming === true;
+  const shouldHidePartialStreamingOutput =
+    transcriptStreamingPartialOutputEnabled !== true &&
+    shouldRenderActiveStreamSegmentPlain;
+  const renderedAgentText = shouldHidePartialStreamingOutput ? '...' : markdown;
+  const streamingSmoothingEligible =
+    transcriptStreamingSmoothingEnabled === true &&
+    streamingPlainEligible &&
+    (streamSegmentMeta ? streamSegmentAssistantStreaming === true : true);
+  const streaming = useStreamingTextSmoothing({
+    enabled: streamingSmoothingEligible,
+    targetText: renderedAgentText,
+    settleDelayMs: transcriptStreamingSettleDelayMs,
+  });
+  const shouldRenderStreamingPlain = shouldRenderActiveStreamSegmentPlain || streaming.isStreaming;
+  const shouldRenderStreamingMarkdown =
+    shouldRenderStreamingPlain && transcriptStreamingMarkdownRenderingEnabled === true;
+  const streamingRevealAnimationEnabled =
+    transcriptStreamingSmoothingEnabled === true &&
+    motion?.config.preset !== 'off' &&
+    motion?.config.animateNewItemsEnabled === true;
+  const streamingRevealPreset = motion?.config.preset === 'full' ? 'full' : 'subtle';
+  const linkedWorkspaceFiles = React.useMemo(() => {
+    if (shouldRenderStreamingPlain) return [];
+    return extractWorkspaceFileMentions(markdown);
+  }, [markdown, shouldRenderStreamingPlain]);
 
   return (
     <Pressable
@@ -624,12 +709,31 @@ function AgentTextBlock(props: {
                   />
                 </ThinkingTimelineRow>
             ) : (
-              <MarkdownView
-                markdown={markdown}
-                onOptionPress={handleOptionPress}
-                textStyle={props.message.isThinking ? styles.thinkingMarkdownText : styles.transcriptMarkdownText}
-                variant={props.message.isThinking ? 'thinking' : undefined}
-              />
+              shouldRenderStreamingMarkdown ? (
+                <MarkdownView
+                  markdown={streaming.displayText}
+                  onOptionPress={handleOptionPress}
+                  textStyle={styles.transcriptMarkdownText}
+                  streamingMode="streaming"
+                  streamingAnimated={streamingRevealAnimationEnabled}
+                  streamingRevealPreset={streamingRevealPreset}
+                />
+              ) : shouldRenderStreamingPlain ? (
+                <Text
+                  testID={`transcript-streaming-plain:${props.message.id}`}
+                  selectable={true}
+                  style={[styles.transcriptMarkdownText, styles.streamingPlainText]}
+                >
+                  {streaming.displayText}
+                </Text>
+              ) : (
+                <MarkdownView
+                  markdown={markdown}
+                  onOptionPress={handleOptionPress}
+                  textStyle={props.message.isThinking ? styles.thinkingMarkdownText : styles.transcriptMarkdownText}
+                  variant={props.message.isThinking ? 'thinking' : undefined}
+                />
+              )
             )
           )
         )}
@@ -1078,6 +1182,9 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: 20,
     marginTop: 0,
     marginBottom: 0,
+  },
+  streamingPlainText: {
+    color: theme.colors.text,
   },
     thinkingLabel: {
       marginBottom: 6,
