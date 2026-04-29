@@ -298,6 +298,8 @@ vi.mock('@/agent/runtime/initializeBackendApiContext', () => ({
         updateMetadata: vi.fn(),
         updateAgentState: vi.fn(async () => {}),
         keepAlive: vi.fn(),
+        sendAgentMessageCommitted: vi.fn(async () => {}),
+        sendAgentMessageEphemeral: vi.fn(),
         sendSessionDeath: vi.fn(),
         flush: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
@@ -785,8 +787,12 @@ describe('runCodex CodexACP resume behavior', () => {
     const runtimeArgs = createCodexAppServerRuntimeSpy.mock.calls[0]?.[0] as {
       processEnv?: NodeJS.ProcessEnv;
       configOverrides?: string[];
+      transcriptSession?: {
+        sendAgentMessageEphemeral?: unknown;
+      };
     } | undefined;
     expect(runtimeArgs?.processEnv).toBe(process.env);
+    expect(runtimeArgs?.transcriptSession?.sendAgentMessageEphemeral).toBeTypeOf('function');
     expect(runtimeArgs?.configOverrides).toEqual([
       'mcp_servers.happier.command="/tmp/happier-mcp-bridge"',
       'mcp_servers.happier.args=["--url","http://127.0.0.1:0"]',

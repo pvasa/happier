@@ -24,6 +24,7 @@ import { registerRunnerTerminationHandlers } from '@/agent/runtime/runnerTermina
 import { waitForMessagesOrPending } from '@/agent/runtime/waitForMessagesOrPending';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { createCurrentSessionTranscriptPort } from '@/api/session/createCurrentSessionTranscriptPort';
 import { DeferredApiSessionClient } from '@/agent/runtime/startup/DeferredApiSessionClient';
 import { configuration } from '@/configuration';
 import { isExperimentalCodexAcpEnabled } from '@/backends/codex/experiments';
@@ -1129,6 +1130,7 @@ export async function runCodex(opts: {
             processEnv: codexAppServerProcessEnv,
             configOverrides: codexAppServerConfigOverrides,
             session,
+            transcriptSession: createCurrentSessionTranscriptPort(() => session),
             onThinkingChange: (value) => { thinking = value; },
             permissionHandler,
             getPermissionMode: () => runtimePermissionModeRef.current,
