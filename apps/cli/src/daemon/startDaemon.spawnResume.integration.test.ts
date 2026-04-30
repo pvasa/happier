@@ -565,6 +565,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         detached: true,
         stdio: 'ignore',
       }));
+      const launchOptions = firstCall as unknown as [unknown, unknown, unknown?];
+      expect(launchOptions[2]).toEqual({ preferWindowsPackagedBinary: true });
 
       const launchedChild = spawnHappyCliCapture.children[0];
       if (!launchedChild) {
@@ -1372,6 +1374,10 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         args: expect.arrayContaining(['codex', '--happy-starting-mode', 'remote']),
         workingDirectory: '/tmp',
       }));
+      expect(buildHappyCliSubprocessLaunchSpec).toHaveBeenCalledWith(
+        expect.any(Array),
+        { preferWindowsPackagedBinary: true },
+      );
       expect(spawnHappyCLI).not.toHaveBeenCalled();
     } finally {
       if (run) {

@@ -1177,7 +1177,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     requestedMode: params.requested,
                     fallbackReason: params.fallbackReason,
                   });
-                  const launchSpec = buildHappyCliSubprocessLaunchSpec(consoleArgs);
+                  const launchSpec = buildHappyCliSubprocessLaunchSpec(consoleArgs, {
+                    preferWindowsPackagedBinary: true,
+                  });
                   const started = await startHappySessionInVisibleWindowsConsole({
                     filePath: launchSpec.filePath,
                     args: launchSpec.args,
@@ -1219,7 +1221,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     requestedMode: 'windows_terminal',
                     windowId: windowsTerminalIdentity.windowId,
                   });
-                  const launchSpec = buildHappyCliSubprocessLaunchSpec(windowsTerminalArgs);
+                  const launchSpec = buildHappyCliSubprocessLaunchSpec(windowsTerminalArgs, {
+                    preferWindowsPackagedBinary: true,
+                  });
                   const started = await startHappySessionInWindowsTerminal({
                     filePath: launchSpec.filePath,
                     args: launchSpec.args,
@@ -1295,7 +1299,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     },
                   },
                 )
-                : spawnHappyCLI(args, spawnOptions);
+                : spawnHappyCLI(args, spawnOptions, {
+                  preferWindowsPackagedBinary: true,
+                });
 
               if (!happyProcess.pid) {
                 logger.debug('[DAEMON RUN] Failed to spawn process - no PID returned');
