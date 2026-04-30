@@ -14,6 +14,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
 import { verifyPackageExportTargets } from './verifyExports.mjs';
 
 function rand() {
@@ -215,25 +216,27 @@ export function resolveCliCommonBuildTscInvocations({
   tscArgs,
 } = {}) {
   const args = Array.isArray(tscArgs) ? tscArgs : [];
-  const candidates = [];
   const npmExecPath = typeof env?.npm_execpath === 'string' ? env.npm_execpath.trim() : '';
-  if (npmExecPath.length > 0) {
-    candidates.push({ command: process.execPath, args: [npmExecPath, ...args] });
-  }
-  if (platform === 'win32') {
-    candidates.push({ command: 'yarn.cmd', args });
-    candidates.push({ command: 'yarn', args });
-  } else {
-    candidates.push({ command: 'yarn', args });
-  }
-  return candidates;
+  return [
+    resolveYarnCommandInvocation(args, {
+      npmExecPath,
+      platform,
+      processExecPath: process.execPath,
+      comspec: env?.COMSPEC ?? env?.ComSpec ?? env?.comspec,
+    }),
+  ];
 }
 
 function runFirstAvailableChecked(candidates, options, runCommandImpl) {
   let lastError = null;
   for (const candidate of candidates) {
     try {
-      runChecked(candidate.command, candidate.args, options, runCommandImpl);
+      runChecked(candidate.command, candidate.args, {
+        ...options,
+        ...(candidate.windowsVerbatimArguments
+          ? { windowsVerbatimArguments: candidate.windowsVerbatimArguments }
+          : {}),
+      }, runCommandImpl);
       return;
     } catch (error) {
       lastError = error;

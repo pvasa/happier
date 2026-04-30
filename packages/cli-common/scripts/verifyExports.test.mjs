@@ -74,10 +74,12 @@ describe('cli-common build export verification', () => {
     }
   });
 
-  it('retries the plain yarn command when the Windows yarn.cmd shim cannot be spawned', async () => {
+  it('runs the Windows yarn.cmd shim through cmd.exe and ignores npm_execpath npm shims', async () => {
     const { buildCliCommonDist } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
-    const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-windows-yarn-fallback-'));
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-windows-yarn-shim-'));
     const commands = [];
+    const buildId = 'windows-yarn-shim';
+    const comspec = 'C:\\Windows\\System32\\cmd.exe';
 
     try {
       mkdirSync(join(fixtureDir, 'dist'), { recursive: true });
@@ -102,17 +104,17 @@ describe('cli-common build export verification', () => {
 
       await buildCliCommonDist({
         packageDir: fixtureDir,
-        buildId: 'windows-yarn-fallback',
+        buildId,
         lockPath: join(fixtureDir, 'build.lock'),
         platform: 'win32',
-        env: { ...process.env, npm_execpath: '' },
-        runCommandImpl: (cmd, args) => {
-          commands.push(cmd);
-          if (cmd === 'yarn.cmd') {
-            return { error: Object.assign(new Error('spawnSync yarn.cmd EINVAL'), { code: 'EINVAL' }) };
-          }
-
-          const tsconfigPath = args.at(-1);
+        env: {
+          ...process.env,
+          npm_execpath: 'C:\\npm\\node_modules\\npm\\bin\\npm-cli.js',
+          COMSPEC: comspec,
+        },
+        runCommandImpl: (cmd, args, options = {}) => {
+          commands.push({ cmd, args, options });
+          const tsconfigPath = join(fixtureDir, `.tsconfig.build.${buildId}.json`);
           const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
           const outDir = tsconfig.compilerOptions.outDir;
           mkdirSync(outDir, { recursive: true });
@@ -122,7 +124,11 @@ describe('cli-common build export verification', () => {
         },
       });
 
-      expect(commands).toEqual(['yarn.cmd', 'yarn']);
+      expect(commands).toHaveLength(1);
+      expect(commands[0].cmd).toBe(comspec);
+      expect(commands[0].options.windowsVerbatimArguments).toBe(true);
+      expect(commands[0].args.join(' ')).toContain('yarn.cmd');
+      expect(commands[0].args.join(' ')).not.toContain('npm-cli.js');
       expect(readFileSync(join(fixtureDir, 'dist', 'index.js'), 'utf8')).toContain('newValue');
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });
