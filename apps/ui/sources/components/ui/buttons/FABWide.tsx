@@ -22,10 +22,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'center',
     },
     buttonDefault: {
-        backgroundColor: theme.colors.button.primary.background,
+        backgroundColor: theme.colors.fab.background,
     },
     buttonPressed: {
-        backgroundColor: theme.colors.surfacePressed,
+        backgroundColor: theme.colors.fab.backgroundPressed,
     },
     text: {
         fontSize: 16,

@@ -96,6 +96,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionItemSelected: {
         backgroundColor: theme.colors.surfaceSelected,
+        borderColor: theme.dark ? theme.colors.surfaceSelected : theme.colors.surface,
     },
     sessionTitleSelected: {
         color: theme.colors.text,

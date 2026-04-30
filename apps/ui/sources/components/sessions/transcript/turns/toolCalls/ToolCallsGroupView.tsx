@@ -139,7 +139,7 @@ export const ToolCallsGroupView = React.memo((props: {
     const feedBackgroundStyle = showFeedBackground
         ? {
             borderRadius: 14,
-            backgroundColor: theme.colors.input.background,
+            backgroundColor: theme.colors.feed.card.background,
             overflow: 'hidden' as const,
             paddingHorizontal: 10,
             paddingVertical: 6,
