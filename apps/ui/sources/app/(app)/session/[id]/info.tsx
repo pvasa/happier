@@ -366,7 +366,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         if (!result.success) {
             throw new HappyError(result.message || t('sessionInfo.failedToDeleteSession'), false);
         }
-        // Success - no alert needed, UI will update to show deleted state
+        handleExitAfterSessionMutation();
     });
 
     const handleDeleteSession = useCallback(() => {

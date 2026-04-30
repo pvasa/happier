@@ -15,6 +15,7 @@ let mockServerId: string | undefined;
 let mockSession: any = null;
 let isDataReady = true;
 let sessionHydrated = true;
+let sessionIsConnected = true;
 const routerPushSpy = vi.fn();
 const routerBackSpy = vi.fn();
 const safeRouterBackSpy = vi.fn();
@@ -25,6 +26,7 @@ const usePreferredServerIdForSessionSpy = vi.fn();
 const machineRpcWithServerScopeSpy = vi.fn();
 const sessionStopSpy = vi.fn(async () => ({ success: true }));
 const sessionArchiveSpy = vi.fn(async () => ({ success: true, archivedAt: 1 }));
+const sessionDeleteSpy = vi.fn(async () => ({ success: true }));
 const modalAlertSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
 const applySessionListRenderablePatchesSpy = vi.fn();
@@ -181,7 +183,7 @@ vi.mock('@/components/sessions/info/SessionRetentionNotice', () => ({ SessionRet
 vi.mock('@/hooks/ui/useHappyAction', () => ({ useHappyAction: (fn: any) => useHappyActionMock(fn) }));
 vi.mock('@/sync/ops', () => ({
     sessionArchiveWithServerScope: sessionArchiveSpy,
-    sessionDelete: vi.fn(),
+    sessionDelete: sessionDeleteSpy,
     sessionRename: vi.fn(),
     sessionStop: sessionStopSpy,
     sessionStopWithServerScope: sessionStopSpy,
@@ -252,7 +254,7 @@ vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }
 vi.mock('@/utils/sessions/sessionUtils', () => ({
     getSessionName: () => 'name',
     useSessionStatus: () => ({
-        isConnected: true,
+        isConnected: sessionIsConnected,
         statusText: 'Connected',
         statusColor: 'green',
         statusDotColor: 'green',
@@ -277,6 +279,7 @@ describe('/session/[id]/info', () => {
         mockSession = null;
         isDataReady = true;
         sessionHydrated = true;
+        sessionIsConnected = true;
         routerPushSpy.mockReset();
         routerBackSpy.mockReset();
         safeRouterBackSpy.mockReset();
@@ -284,6 +287,7 @@ describe('/session/[id]/info', () => {
         readMachineTargetForSessionSpy.mockReturnValue(null);
         sessionStopSpy.mockClear();
         sessionArchiveSpy.mockClear();
+        sessionDeleteSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
         resolvedServerId = 'server-1';
@@ -960,6 +964,56 @@ describe('/session/[id]/info', () => {
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
+        expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
+            router: expect.any(Object),
+            fallbackHref: '/session/session-1?serverId=server-b',
+        });
+        expect(safeRouterBackSpy).toHaveBeenNthCalledWith(2, {
+            router: expect.any(Object),
+            fallbackHref: '/',
+        });
+    });
+
+    it('deletes a session and exits via the safe back helper', async () => {
+        mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
+        sessionIsConnected = false;
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+            archivedAt: null,
+        };
+
+        const screen = await renderInfoScreen();
+        screen.pressByTestId('sessionInfo.deleteSession');
+
+        expect(modalAlertSpy).toHaveBeenCalledWith(
+            'sessionInfo.deleteSession',
+            'sessionInfo.deleteSessionWarning',
+            expect.arrayContaining([
+                expect.objectContaining({ text: 'common.cancel', style: 'cancel' }),
+                expect.objectContaining({ text: 'sessionInfo.deleteSession', style: 'destructive' }),
+            ]),
+        );
+
+        const alertButtons = modalAlertSpy.mock.calls[0]?.[2];
+        const deleteButton = alertButtons?.find((button: { text?: string }) => button.text === 'sessionInfo.deleteSession');
+        if (!deleteButton?.onPress) {
+            throw new Error('expected delete confirmation button to expose onPress');
+        }
+
+        await act(async () => {
+            await deleteButton.onPress();
+        });
+
+        expect(sessionDeleteSpy).toHaveBeenCalledWith('session-1');
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
