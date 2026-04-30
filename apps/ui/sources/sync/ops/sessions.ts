@@ -16,7 +16,6 @@ import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestrati
 import { resolveServerScopedSessionContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedSessionContext';
 import { sessionRpcWithPreferredSessionScope } from '@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
-import { createEphemeralServerSocketClient } from '@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient';
 import { runtimeFetchWithServerReachability } from '@/sync/runtime/connectivity/serverReachabilityRuntimeFetch';
 import type {
     LlmTaskRunnerConfigV1,
@@ -41,7 +40,13 @@ import {
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { normalizeSpawnSessionResult } from './_shared';
 import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
-import { canUseSessionRpc, readMachineTargetForSession, resolveMachinePathFromSessionBase, shouldFallbackToSessionRpc } from './sessionMachineTarget';
+import {
+    canUseSessionRpc,
+    readMachineTargetForSession,
+    resolveMachinePathFromSessionBase,
+    shouldFallbackToSessionRpc,
+} from './sessionMachineTarget';
+import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
 import type { Metadata } from '../domains/state/storageTypes';
 export {
     sessionScmBranchCheckout,
@@ -125,10 +130,6 @@ interface SessionRipgrepResponse {
 }
 
 // Kill session operation types
-interface SessionKillRequest {
-    // No parameters needed
-}
-
 interface SessionKillResponse {
     success: boolean;
     message: string;
@@ -741,9 +742,9 @@ export interface SessionStopResponse {
 /**
  * Stop a session.
  *
- * Primary behavior: kill the session process (same as previous "archive" behavior).
- * Fallback: if the session RPC method is unavailable (e.g. session crashed / disconnected),
- * mark the session inactive server-side so it no longer appears "online".
+ * Primary behavior: stop through the supervising daemon when the hosting machine is reachable.
+ * Compatibility fallback: ask the runner to terminate via session RPC.
+ * Last-resort cleanup: if no process-control RPC is available, mark the session inactive server-side.
  */
 export async function sessionStop(sessionId: string): Promise<SessionStopResponse> {
     return await sessionStopWithServerScope(sessionId, {
@@ -755,60 +756,16 @@ export async function sessionStopWithServerScope(
     sessionId: string,
     opts?: Readonly<{ serverId?: string | null }>,
 ): Promise<SessionStopResponse> {
-    const killResult = await (async (): Promise<SessionKillResponse> => {
-        try {
-            const response = await sessionRpcWithServerScope<SessionKillResponse, SessionKillRequest>({
-                sessionId,
-                serverId: opts?.serverId ?? null,
-                method: 'killSession',
-                payload: {},
-            });
-            return assertRpcResponseWithSuccess<SessionKillResponse>(response);
-        } catch (error) {
-            return {
-                success: false,
-                message: error instanceof Error ? error.message : 'Unknown error',
-                errorCode: readSessionRpcErrorCode(error),
-            };
-        }
-    })();
-
-    if (killResult.success) {
-        applyStoppedSessionToLocalList(sessionId);
-        return { success: true };
-    }
-
-    const message = killResult.message || 'Failed to archive session';
-    const isRpcMethodUnavailable = isRpcMethodNotAvailableError({
-        rpcErrorCode: killResult.errorCode,
-        message,
+    const stopResult = await stopSessionUsingCanonicalStrategy({
+        sessionId,
+        serverId: opts?.serverId ?? null,
     });
-
-    if (isRpcMethodUnavailable) {
-        const context = await resolveServerScopedSessionContext({ serverId: opts?.serverId ?? null });
-        try {
-            if (context.scope === 'active') {
-                apiSocket.send('session-end', { sid: sessionId, time: Date.now() });
-            } else {
-                const socket = await createEphemeralServerSocketClient({
-                    serverUrl: context.targetServerUrl,
-                    token: context.token,
-                    timeoutMs: context.timeoutMs,
-                });
-                try {
-                    socket.emit('session-end', { sid: sessionId, time: Date.now() });
-                } finally {
-                    socket.disconnect();
-                }
-            }
-        } catch {
-            // Best-effort: server will also eventually time out stale sessions.
-        }
+    if (stopResult.success) {
         applyStoppedSessionToLocalList(sessionId);
         return { success: true };
     }
 
-    return { success: false, message };
+    return { success: false, message: stopResult.message };
 }
 
 function applyStoppedSessionToLocalList(sessionId: string): void {
@@ -849,6 +806,8 @@ export interface SessionArchiveResponse {
     message?: string;
     code?: string;
 }
+
+const SESSION_ACTIVE_ARCHIVE_MESSAGE = 'Cannot archive an active session';
 
 async function archiveRequestWithContext(params: Readonly<{
     sessionId: string;
@@ -912,7 +871,7 @@ export async function sessionArchiveWithServerScope(
         if (!response.ok) {
             const message = await response.text().catch(() => '');
             if (response.status === 409) {
-                return { success: false, message: message || 'Cannot archive an active session', code: 'session_active' };
+                return { success: false, message: SESSION_ACTIVE_ARCHIVE_MESSAGE, code: 'session_active' };
             }
             return { success: false, message: message || 'Failed to archive session' };
         }

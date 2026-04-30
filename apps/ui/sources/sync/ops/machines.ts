@@ -23,6 +23,7 @@ import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
 import { mergeMachineMetadataForVersionMismatch } from './machineMetadataMerge';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { stopSessionViaDaemonMachineRpc } from './sessionStopStrategy';
 
 export type { SpawnHappySessionRpcParams, SpawnSessionOptions } from '../domains/session/spawn/spawnSessionPayload';
 export { buildSpawnHappySessionRpcParams } from '../domains/session/spawn/spawnSessionPayload';
@@ -160,34 +161,29 @@ export type MachineBashRequest =
     }>;
 
 /**
- * Stop an existing remote session process on a specific machine.
- *
- * This is intentionally destructive and should be used only as a last resort
- * when session-scoped RPC (for example, execution run stop) is unavailable.
+ * Stop an existing session process through the daemon supervising a specific machine.
  */
 export async function machineStopSession(
     machineId: string,
     sessionId: string,
     options?: Readonly<{ serverId?: string | null }>,
 ): Promise<MachineStopSessionResult> {
-    try {
-        const response = await machineRpcWithServerScope<unknown, { sessionId: string }>({
-            machineId,
-            method: RPC_METHODS.STOP_SESSION,
-            payload: { sessionId },
-            serverId: options?.serverId,
-        });
-        if (!response || typeof response !== 'object' || typeof (response as any).message !== 'string') {
-            return { ok: false, error: 'Unsupported response from machine RPC' };
-        }
+    const result = await stopSessionViaDaemonMachineRpc({
+        machineId,
+        sessionId,
+        serverId: options?.serverId,
+    });
+    if (result.type === 'stopped') {
         return { ok: true };
-    } catch (error) {
+    }
+    if (result.errorCode) {
         return {
             ok: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
-            errorCode: readRpcErrorCode(error),
+            error: result.message,
+            errorCode: result.errorCode,
         };
     }
+    return { ok: false, error: result.message };
 }
 
 /**

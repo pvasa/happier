@@ -22,7 +22,7 @@ import { Session } from '@/sync/domains/state/storageTypes';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { HappyError } from '@/utils/errors/errors';
-import { clearSessionVisibleWhenInactive, stopSessionAndMaybeArchive } from '@/components/sessions/sessionStopArchiveFlow';
+import { clearSessionVisibleWhenInactive, isSessionActiveArchiveResult, stopSessionAndMaybeArchive } from '@/components/sessions/sessionStopArchiveFlow';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { resolveProfileById } from '@/sync/domains/profiles/profileUtils';
 import { getProfileDisplayName } from '@/components/profiles/profileDisplay';
@@ -296,7 +296,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     }, [performStop]);
 
     const handleArchive = useCallback(async () => {
-        if (session.active) {
+        const stopThenArchiveSession = async () => {
             await stopSessionAndMaybeArchive({
                 sessionId: session.id,
                 hideInactiveSessions,
@@ -308,11 +308,19 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                 archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
             });
             handleExitAfterSessionMutation();
+        };
+
+        if (session.active) {
+            await stopThenArchiveSession();
             return;
         }
 
         const result = await sessionArchiveWithServerScope(session.id, { serverId: scopedMutationServerId });
         if (!result.success) {
+            if (isSessionActiveArchiveResult(result)) {
+                await stopThenArchiveSession();
+                return;
+            }
             throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
         }
         clearSessionVisibleWhenInactive(session.id);

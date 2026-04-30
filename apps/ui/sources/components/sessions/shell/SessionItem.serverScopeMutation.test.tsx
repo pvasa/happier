@@ -60,7 +60,13 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 }));
 
 const stopSpy = vi.fn(async () => ({ success: true }));
-const archiveSpy = vi.fn(async () => ({ success: true, archivedAt: 1 }));
+type ArchiveSpyResult = Readonly<{
+    success: boolean;
+    archivedAt?: number | null;
+    message?: string;
+    code?: string;
+}>;
+const archiveSpy = vi.fn(async (): Promise<ArchiveSpyResult> => ({ success: true, archivedAt: 1 }));
 const modalConfirmSpy = vi.fn(async () => true);
 let hideInactiveSessions = false;
 
@@ -128,7 +134,7 @@ describe('SessionItem server-scoped mutations', () => {
         hideInactiveSessions = false;
     });
 
-    it('stops active sessions using server scope when serverId is provided', async () => {
+    it('archives active sessions from the swipe action using server scope when serverId is provided', async () => {
         archiveSpy.mockClear();
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
@@ -177,18 +183,18 @@ describe('SessionItem server-scoped mutations', () => {
         });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.stopSession',
-            'sessionInfo.stopSessionConfirm',
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.stopSession',
+                confirmText: 'sessionInfo.archiveSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_1', { serverId: 'server_a' });
-        expect(archiveSpy).not.toHaveBeenCalled();
+        expect(archiveSpy).toHaveBeenCalledWith('sess_1', { serverId: 'server_a' });
     });
 
     it('archives inactive sessions using server scope when serverId is provided', async () => {
@@ -255,7 +261,79 @@ describe('SessionItem server-scoped mutations', () => {
         expect(stopSpy).not.toHaveBeenCalled();
     });
 
-    it('stops without archiving when hidden inactive sessions are enabled', async () => {
+    it('stops and retries archiving when an inactive-looking session is still active server-side', async () => {
+        archiveSpy.mockClear();
+        archiveSpy
+            .mockResolvedValueOnce({
+                success: false,
+                message: 'Cannot archive an active session',
+                code: 'session_active',
+            })
+            .mockResolvedValueOnce({ success: true, archivedAt: 1 });
+        stopSpy.mockClear();
+        modalAlertSpy.mockClear();
+        modalConfirmSpy.mockClear();
+
+        const { SessionItem } = await import('./SessionItem');
+
+        const session = {
+            id: 'sess_stale_inactive',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'offline',
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_b"
+                serverName="Server B"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const swipeable = screen.find((node: any) => typeof node.props?.renderRightActions === 'function');
+        const rightActions = swipeable.props.renderRightActions();
+        const rightActionsScreen = await renderScreen(rightActions);
+        await act(async () => {
+            await pressTestInstanceAsync(
+                rightActionsScreen.find((node: any) => node.type === 'Pressable'),
+                'session swipe action',
+            );
+        });
+
+        expect(modalConfirmSpy).toHaveBeenCalledWith(
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
+            {
+                cancelText: 'common.cancel',
+                confirmText: 'sessionInfo.archiveSession',
+                destructive: true,
+            },
+        );
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(stopSpy).toHaveBeenCalledWith('sess_stale_inactive', { serverId: 'server_b' });
+        expect(archiveSpy).toHaveBeenCalledTimes(2);
+        expect(archiveSpy).toHaveBeenNthCalledWith(1, 'sess_stale_inactive', { serverId: 'server_b' });
+        expect(archiveSpy).toHaveBeenNthCalledWith(2, 'sess_stale_inactive', { serverId: 'server_b' });
+    });
+
+    it('archives active sessions from the swipe action when hidden inactive sessions are enabled', async () => {
         hideInactiveSessions = true;
         archiveSpy.mockClear();
         stopSpy.mockClear();
@@ -306,18 +384,18 @@ describe('SessionItem server-scoped mutations', () => {
         });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.stopSession',
-            'sessionInfo.stopSessionConfirm',
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.stopSession',
+                confirmText: 'sessionInfo.archiveSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_3', { serverId: 'server_c' });
-        expect(archiveSpy).not.toHaveBeenCalled();
+        expect(archiveSpy).toHaveBeenCalledWith('sess_3', { serverId: 'server_c' });
     });
 
     it('offers an archive action for active sessions in the more menu and stops before archiving', async () => {
@@ -386,7 +464,7 @@ describe('SessionItem server-scoped mutations', () => {
         expect(archiveSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d' });
     });
 
-    it('stops pinned sessions without archiving when hidden inactive sessions are enabled', async () => {
+    it('archives pinned active sessions from the swipe action when hidden inactive sessions are enabled', async () => {
         hideInactiveSessions = true;
         archiveSpy.mockClear();
         stopSpy.mockClear();
@@ -438,17 +516,17 @@ describe('SessionItem server-scoped mutations', () => {
         });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.stopSession',
-            'sessionInfo.stopSessionConfirm',
+            'sessionInfo.archiveSession',
+            'sessionInfo.archiveSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.stopSession',
+                confirmText: 'sessionInfo.archiveSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_4', { serverId: 'server_d' });
-        expect(archiveSpy).not.toHaveBeenCalled();
+        expect(archiveSpy).toHaveBeenCalledWith('sess_4', { serverId: 'server_d' });
     });
 });

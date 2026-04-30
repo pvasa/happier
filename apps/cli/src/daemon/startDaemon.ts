@@ -1451,7 +1451,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 };
 
             const stopSessionCore = createStopSession({ pidToTrackedSession });
-        const sessionRespawnEnabled = parseBooleanEnv(process.env.HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED, true);
+        const sessionRespawnEnabled = parseBooleanEnv(process.env.HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED, false);
         const sessionRespawnMaxAttempts = resolvePositiveIntEnv(
           process.env.HAPPIER_DAEMON_SESSION_RESPAWN_MAX_ATTEMPTS,
           10,
@@ -1513,7 +1513,19 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
         const stopSession = async (sessionId: string): Promise<boolean> => {
           sessionRunnerRespawnManager.markStopRequested(sessionId, { reason: 'daemon_stop_session', requestedAtMs: Date.now() });
-          return await stopSessionCore(sessionId);
+          const stopped = await stopSessionCore(sessionId);
+          if (!stopped) return false;
+          if (configuration.daemonStopSessionWaitForExitMs > 0) {
+            await waitForExistingSessionExitIfStopRequested({
+              sessionId,
+              pidToTrackedSession,
+              isSessionRunnerActive,
+              timeoutMs: configuration.daemonStopSessionWaitForExitMs,
+              pollIntervalMs: configuration.daemonStopSessionWaitForExitPollIntervalMs,
+              onExitObserved: (pid, exit) => onChildExited(pid, exit),
+            });
+          }
+          return true;
         };
 
     const controlToken = randomBytes(32).toString('base64url');

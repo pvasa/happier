@@ -25,7 +25,13 @@ const resolvePreferredServerIdForSessionIdSpy = vi.fn();
 const usePreferredServerIdForSessionSpy = vi.fn();
 const machineRpcWithServerScopeSpy = vi.fn();
 const sessionStopSpy = vi.fn(async () => ({ success: true }));
-const sessionArchiveSpy = vi.fn(async () => ({ success: true, archivedAt: 1 }));
+type ArchiveSpyResult = Readonly<{
+    success: boolean;
+    archivedAt?: number | null;
+    message?: string;
+    code?: string;
+}>;
+const sessionArchiveSpy = vi.fn(async (): Promise<ArchiveSpyResult> => ({ success: true, archivedAt: 1 }));
 const sessionDeleteSpy = vi.fn(async () => ({ success: true }));
 const modalAlertSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
@@ -974,6 +980,36 @@ describe('/session/[id]/info', () => {
             router: expect.any(Object),
             fallbackHref: '/',
         });
+    });
+
+    it('stops and retries archiving when an inactive session is still active server-side', async () => {
+        mockServerId = 'server-b';
+        setSessionOwnerServer('server-b');
+        sessionArchiveSpy
+            .mockResolvedValueOnce({
+                success: false,
+                message: 'Cannot archive an active session',
+                code: 'session_active',
+            })
+            .mockResolvedValueOnce({ success: true, archivedAt: 1 });
+        mockSession = {
+            id: 'session-1',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+            archivedAt: null,
+        };
+
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(sessionArchiveSpy).toHaveBeenCalledTimes(2);
+        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
     });
 
     it('deletes a session and exits via the safe back helper', async () => {

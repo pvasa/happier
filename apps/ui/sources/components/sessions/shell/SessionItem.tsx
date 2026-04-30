@@ -31,12 +31,12 @@ import {
     SESSION_LIST_ROW_HEIGHT_DEFAULT,
     SESSION_LIST_ROW_HEIGHT_MINIMAL,
 } from './sessionListRowHeights';
-import { clearSessionVisibleWhenInactive, stopSessionAndMaybeArchive } from '../sessionStopArchiveFlow';
+import { clearSessionVisibleWhenInactive, isSessionActiveArchiveResult, stopSessionAndMaybeArchive } from '../sessionStopArchiveFlow';
 
 const AVATAR_SIZE_DEFAULT = 48;
 const AVATAR_SIZE_COMPACT = 30;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
-const SESSION_TITLE_SKELETON_ANIMATION_MS = 900;
+const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
 
 const stylesheet = StyleSheet.create((theme) => ({
     sessionItemContainer: {
@@ -107,6 +107,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         height: AVATAR_SIZE_DEFAULT,
     },
     avatarContainerCompact: {
+        width: AVATAR_SIZE_COMPACT,
+        height: AVATAR_SIZE_COMPACT,
+    },
+    avatarLoading: {
+        width: AVATAR_SIZE_DEFAULT,
+        height: AVATAR_SIZE_DEFAULT,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surfaceHighest,
+    },
+    avatarLoadingCompact: {
         width: AVATAR_SIZE_COMPACT,
         height: AVATAR_SIZE_COMPACT,
     },
@@ -219,6 +229,18 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '56%',
         height: 12,
         borderRadius: 6,
+    },
+    sessionSubtitleLoading: {
+        width: '46%',
+        height: 10,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surfaceHigh,
+        marginTop: 3,
+    },
+    sessionSubtitleLoadingCompact: {
+        width: '42%',
+        height: 9,
+        marginTop: 2,
     },
     serverBadgeContainer: {
         borderRadius: 999,
@@ -462,22 +484,22 @@ export const SessionItem = React.memo(
         const resolvedSession = sessionFromStore ?? session;
         const sessionStatus = useSessionStatus(resolvedSession);
         const sessionNameResolved = getSessionName(resolvedSession);
-        const isSessionNameLoading = resolvedSession.metadata == null && sessionNameResolved === t('status.unknown');
-        const titleSkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
+        const isSessionIdentityLoading = resolvedSession.metadata == null && sessionNameResolved === t('status.unknown');
+        const identitySkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
         React.useEffect(() => {
-            if (!isSessionNameLoading) return;
+            if (!isSessionIdentityLoading) return;
             if (typeof Animated.loop !== 'function' || typeof Animated.sequence !== 'function') return;
 
             const animation = Animated.loop(
                 Animated.sequence([
-                    Animated.timing(titleSkeletonOpacity, {
+                    Animated.timing(identitySkeletonOpacity, {
                         toValue: 1,
-                        duration: SESSION_TITLE_SKELETON_ANIMATION_MS,
+                        duration: SESSION_IDENTITY_SKELETON_ANIMATION_MS,
                         useNativeDriver: true,
                     }),
-                    Animated.timing(titleSkeletonOpacity, {
+                    Animated.timing(identitySkeletonOpacity, {
                         toValue: 0.45,
-                        duration: SESSION_TITLE_SKELETON_ANIMATION_MS,
+                        duration: SESSION_IDENTITY_SKELETON_ANIMATION_MS,
                         useNativeDriver: true,
                     }),
                 ]),
@@ -486,7 +508,7 @@ export const SessionItem = React.memo(
             return () => {
                 animation.stop();
             };
-        }, [isSessionNameLoading, titleSkeletonOpacity]);
+        }, [isSessionIdentityLoading, identitySkeletonOpacity]);
         const sessionSubtitle = subtitleOverride ?? getSessionSubtitle(resolvedSession);
         const navigateToSession = useNavigateToSession();
         const swipeableRef = React.useRef<Swipeable | null>(null);
@@ -500,7 +522,7 @@ export const SessionItem = React.memo(
         const canArchiveSession = hasAdminAccess && !isArchivedSession;
         const canRenameSession = hasAdminAccess;
         const hideInactiveSessions = useSetting('hideInactiveSessions');
-        const swipeEnabled = Platform.OS !== 'web' && (isActiveSession ? canStopSession : canArchiveSession);
+        const swipeEnabled = Platform.OS !== 'web' && canArchiveSession;
         const [isRowHovered, setIsRowHovered] = React.useState(false);
         const [isActionsHovered, setIsActionsHovered] = React.useState(false);
         const [tagMenuOpen, setTagMenuOpen] = React.useState(false);
@@ -615,7 +637,7 @@ export const SessionItem = React.memo(
         });
 
         const [archivingSession, performArchiveMutation] = useHappyAction(async () => {
-            if (isActiveSession) {
+            const stopThenArchiveSession = async () => {
                 await stopSessionAndMaybeArchive({
                     sessionId: resolvedSession.id,
                     hideInactiveSessions: Boolean(hideInactiveSessions),
@@ -626,11 +648,19 @@ export const SessionItem = React.memo(
                     stopErrorMessage: t('sessionInfo.failedToStopSession'),
                     archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
                 });
+            };
+
+            if (isActiveSession) {
+                await stopThenArchiveSession();
                 return;
             }
 
             const result = await sessionArchiveWithServerScope(resolvedSession.id, { serverId: serverId ?? null });
             if (!result.success) {
+                if (isSessionActiveArchiveResult(result)) {
+                    await stopThenArchiveSession();
+                    return;
+                }
                 throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
             }
             clearSessionVisibleWhenInactive(resolvedSession.id);
@@ -667,12 +697,8 @@ export const SessionItem = React.memo(
 
         const handleSwipeAction = React.useCallback(async () => {
             swipeableRef.current?.close();
-            if (isActiveSession) {
-                await confirmStopSession();
-                return;
-            }
             await confirmArchiveSession();
-        }, [confirmArchiveSession, confirmStopSession, isActiveSession]);
+        }, [confirmArchiveSession]);
 
         const handleRenameSession = React.useCallback(async () => {
             const newName = await Modal.prompt(
@@ -805,7 +831,12 @@ export const SessionItem = React.memo(
         const shouldUsePathSubtitleStartEllipsis = effectiveSecondaryLineMode === 'path';
         const shouldUseWebPathSubtitleStartEllipsis = shouldUsePathSubtitleStartEllipsis && isWeb;
         const showMinimalStatusLine = isMinimal && shouldShowMinimalSessionStatusLine(sessionStatus);
-        const showStandardSecondaryLine = !isMinimal && (effectiveSecondaryLineMode === 'status' || Boolean(sessionSubtitle));
+        const shouldShowIdentitySubtitleSkeleton = !isMinimal && isSessionIdentityLoading && requestedSecondaryLineMode === 'path';
+        const showStandardSecondaryLine = !isMinimal && (
+            shouldShowIdentitySubtitleSkeleton
+            || effectiveSecondaryLineMode === 'status'
+            || Boolean(sessionSubtitle)
+        );
         const shouldEmphasizeTitle = shouldEmphasizeSessionRowTitle({
             hasUnreadMessages,
             pendingCount,
@@ -857,13 +888,24 @@ export const SessionItem = React.memo(
                     </View>
                 ) : (
                     <View style={[styles.avatarContainer, compact ? styles.avatarContainerCompact : null]}>
-                        <Avatar
-                            id={avatarId}
-                            size={compact ? AVATAR_SIZE_COMPACT : AVATAR_SIZE_DEFAULT}
-                            monochrome={shouldRenderAvatarMonochrome}
-                            flavor={resolvedSession.metadata?.flavor}
-                            hasUnreadMessages={hasUnreadMessages}
-                        />
+                        {isSessionIdentityLoading ? (
+                            <Animated.View
+                                testID={`session-list-avatar-loading-${resolvedSession.id}`}
+                                style={[
+                                    styles.avatarLoading,
+                                    compact ? styles.avatarLoadingCompact : null,
+                                    { opacity: identitySkeletonOpacity },
+                                ]}
+                            />
+                        ) : (
+                            <Avatar
+                                id={avatarId}
+                                size={compact ? AVATAR_SIZE_COMPACT : AVATAR_SIZE_DEFAULT}
+                                monochrome={shouldRenderAvatarMonochrome}
+                                flavor={resolvedSession.metadata?.flavor}
+                                hasUnreadMessages={hasUnreadMessages}
+                            />
+                        )}
                         {pendingBadge ? (
                             <View
                                 style={[
@@ -891,14 +933,14 @@ export const SessionItem = React.memo(
                     ]}
                 >
                     <View style={styles.sessionTitleRow}>
-                        {isSessionNameLoading ? (
+                        {isSessionIdentityLoading ? (
                             <Animated.View
                                 testID={`session-list-title-loading-${resolvedSession.id}`}
                                 style={[
                                     styles.sessionTitleLoading,
                                     compact ? styles.sessionTitleLoadingCompact : null,
                                     isMinimal ? styles.sessionTitleLoadingMinimal : null,
-                                    { opacity: titleSkeletonOpacity },
+                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : (
@@ -949,7 +991,16 @@ export const SessionItem = React.memo(
                     ) : null}
 
                     {showStandardSecondaryLine ? (
-                        effectiveSecondaryLineMode === 'status' ? (
+                        shouldShowIdentitySubtitleSkeleton ? (
+                            <Animated.View
+                                testID={`session-list-subtitle-loading-${resolvedSession.id}`}
+                                style={[
+                                    styles.sessionSubtitleLoading,
+                                    compact ? styles.sessionSubtitleLoadingCompact : null,
+                                    { opacity: identitySkeletonOpacity },
+                                ]}
+                            />
+                        ) : effectiveSecondaryLineMode === 'status' ? (
                             <View style={styles.secondaryLineRow}>
                                 <View
                                     style={[
@@ -1243,9 +1294,9 @@ export const SessionItem = React.memo(
 
         const renderRightActions = () => (
             <Pressable style={styles.swipeAction} onPress={handleSwipeAction} disabled={mutatingSession}>
-                <Ionicons name={isActiveSession ? 'stop-circle-outline' : 'archive-outline'} size={20} style={styles.swipeActionIcon} />
+                <Ionicons name="archive-outline" size={20} style={styles.swipeActionIcon} />
                 <Text style={styles.swipeActionText} numberOfLines={2}>
-                    {isActiveSession ? t('sessionInfo.stopSession') : t('sessionInfo.archiveSession')}
+                    {t('sessionInfo.archiveSession')}
                 </Text>
             </Pressable>
         );
