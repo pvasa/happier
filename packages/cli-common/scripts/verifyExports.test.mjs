@@ -74,6 +74,61 @@ describe('cli-common build export verification', () => {
     }
   });
 
+  it('retries the plain yarn command when the Windows yarn.cmd shim cannot be spawned', async () => {
+    const { buildCliCommonDist } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-windows-yarn-fallback-'));
+    const commands = [];
+
+    try {
+      mkdirSync(join(fixtureDir, 'dist'), { recursive: true });
+      writeFileSync(join(fixtureDir, 'dist', 'index.js'), 'export const oldValue = true;\n', 'utf8');
+      writeFileSync(join(fixtureDir, 'dist', 'index.d.ts'), 'export declare const oldValue: boolean;\n', 'utf8');
+      writeFileSync(join(fixtureDir, 'package.json'), JSON.stringify({
+        name: '@happier-dev/cli-common-fixture',
+        exports: {
+          '.': {
+            default: './dist/index.js',
+            types: './dist/index.d.ts',
+          },
+        },
+      }, null, 2), 'utf8');
+      writeFileSync(join(fixtureDir, 'tsconfig.json'), JSON.stringify({
+        extends: './tsconfig.base.json',
+        compilerOptions: {
+          outDir: 'dist',
+          tsBuildInfoFile: 'dist/.tsbuildinfo',
+        },
+      }, null, 2), 'utf8');
+
+      await buildCliCommonDist({
+        packageDir: fixtureDir,
+        buildId: 'windows-yarn-fallback',
+        lockPath: join(fixtureDir, 'build.lock'),
+        platform: 'win32',
+        env: { ...process.env, npm_execpath: '' },
+        runCommandImpl: (cmd, args) => {
+          commands.push(cmd);
+          if (cmd === 'yarn.cmd') {
+            return { error: Object.assign(new Error('spawnSync yarn.cmd EINVAL'), { code: 'EINVAL' }) };
+          }
+
+          const tsconfigPath = args.at(-1);
+          const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
+          const outDir = tsconfig.compilerOptions.outDir;
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(outDir, 'index.js'), 'export const newValue = true;\n', 'utf8');
+          writeFileSync(join(outDir, 'index.d.ts'), 'export declare const newValue: boolean;\n', 'utf8');
+          return { status: 0 };
+        },
+      });
+
+      expect(commands).toEqual(['yarn.cmd', 'yarn']);
+      expect(readFileSync(join(fixtureDir, 'dist', 'index.js'), 'utf8')).toContain('newValue');
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it('detects missing files for declared export targets', () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-exports-'));
 

@@ -209,6 +209,42 @@ function runChecked(command, args, options, runCommandImpl) {
   }
 }
 
+export function resolveCliCommonBuildTscInvocations({
+  env = process.env,
+  platform = process.platform,
+  tscArgs,
+} = {}) {
+  const args = Array.isArray(tscArgs) ? tscArgs : [];
+  const candidates = [];
+  const npmExecPath = typeof env?.npm_execpath === 'string' ? env.npm_execpath.trim() : '';
+  if (npmExecPath.length > 0) {
+    candidates.push({ command: process.execPath, args: [npmExecPath, ...args] });
+  }
+  if (platform === 'win32') {
+    candidates.push({ command: 'yarn.cmd', args });
+    candidates.push({ command: 'yarn', args });
+  } else {
+    candidates.push({ command: 'yarn', args });
+  }
+  return candidates;
+}
+
+function runFirstAvailableChecked(candidates, options, runCommandImpl) {
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      runChecked(candidate.command, candidate.args, options, runCommandImpl);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!error?.code || candidate === candidates.at(-1)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError ?? new Error('No package-manager command candidates were available');
+}
+
 async function replaceDistWithStagedBuild({ distDir, tempDistDir, backupDir }) {
   let hadExisting = false;
   await rm(backupDir, { recursive: true, force: true });
@@ -246,7 +282,10 @@ export async function buildCliCommonDist(options = {}) {
   const tempTsconfigPath = join(packageDir, `.tsconfig.build.${buildId}.json`);
   const lockPath = options.lockPath ?? resolveCliCommonDistBuildLockPath(packageDir);
   const runCommandImpl = options.runCommandImpl ?? spawnSync;
-  const yarnCommand = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
+  const commandEnv = {
+    ...process.env,
+    ...(options.env ?? {}),
+  };
 
   return await withWorkspaceDistBuildLock(async () => {
     await rm(tempDistDir, { recursive: true, force: true });
@@ -264,15 +303,17 @@ export async function buildCliCommonDist(options = {}) {
     await writeFile(tempTsconfigPath, `${JSON.stringify(tempTsconfig, null, 2)}\n`, 'utf8');
 
     try {
-      runChecked(
-        yarnCommand,
-        ['-s', 'tsc', '-p', tempTsconfigPath],
+      runFirstAvailableChecked(
+        resolveCliCommonBuildTscInvocations({
+          env: commandEnv,
+          platform: options.platform ?? process.platform,
+          tscArgs: ['-s', 'tsc', '-p', tempTsconfigPath],
+        }),
         {
           cwd: packageDir,
           stdio: options.stdio ?? 'inherit',
           env: {
-            ...process.env,
-            ...(options.env ?? {}),
+            ...commandEnv,
             HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: lockPath,
           },
         },
@@ -293,7 +334,7 @@ export async function buildCliCommonDist(options = {}) {
     if (!marker.trim()) {
       throw new Error(`cli-common build produced an empty dist entrypoint: ${relative(packageDir, indexPath)}`);
     }
-  }, { lockPath, env: options.env ?? process.env });
+  }, { lockPath, env: commandEnv });
 }
 
 export async function main() {
