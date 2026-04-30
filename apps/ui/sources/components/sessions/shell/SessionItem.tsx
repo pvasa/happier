@@ -300,6 +300,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         lineHeight: 16,
         ...Typography.default(),
     },
+    sessionPathSubtitleWeb: {
+        writingDirection: 'rtl' as const,
+        textAlign: 'left' as const,
+    },
+    sessionPathSubtitleTextWeb: {
+        writingDirection: 'ltr' as const,
+        unicodeBidi: 'isolate' as const,
+    },
     sessionSubtitleCompact: {
         fontSize: 11,
         lineHeight: 14,
@@ -752,6 +760,8 @@ export const SessionItem = React.memo(
             requestedSecondaryLineMode === 'path'
                 ? (sessionSubtitle ? 'path' : 'status')
                 : (sessionStatus.statusText ? 'status' : sessionSubtitle ? 'path' : 'status');
+        const shouldUsePathSubtitleStartEllipsis = effectiveSecondaryLineMode === 'path';
+        const shouldUseWebPathSubtitleStartEllipsis = shouldUsePathSubtitleStartEllipsis && isWeb;
         const showMinimalStatusLine = isMinimal && shouldShowMinimalSessionStatusLine(sessionStatus);
         const showStandardSecondaryLine = !isMinimal && (effectiveSecondaryLineMode === 'status' || Boolean(sessionSubtitle));
         const shouldEmphasizeTitle = shouldEmphasizeSessionRowTitle({
@@ -907,8 +917,20 @@ export const SessionItem = React.memo(
                                 </Text>
                             </View>
                         ) : (
-                            <Text style={[styles.sessionSubtitle, compact ? styles.sessionSubtitleCompact : null]} numberOfLines={1}>
-                                {sessionSubtitle}
+                            <Text
+                                style={[
+                                    styles.sessionSubtitle,
+                                    compact ? styles.sessionSubtitleCompact : null,
+                                    shouldUseWebPathSubtitleStartEllipsis ? styles.sessionPathSubtitleWeb : null,
+                                ]}
+                                numberOfLines={1}
+                                ellipsizeMode={shouldUseWebPathSubtitleStartEllipsis ? undefined : 'head'}
+                            >
+                                {shouldUseWebPathSubtitleStartEllipsis ? (
+                                    <Text style={styles.sessionPathSubtitleTextWeb}>
+                                        {sessionSubtitle}
+                                    </Text>
+                                ) : sessionSubtitle}
                             </Text>
                         )
                     ) : null}
