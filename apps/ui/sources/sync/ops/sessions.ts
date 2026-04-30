@@ -774,6 +774,7 @@ export async function sessionStopWithServerScope(
     })();
 
     if (killResult.success) {
+        applyStoppedSessionToLocalList(sessionId);
         return { success: true };
     }
 
@@ -803,10 +804,43 @@ export async function sessionStopWithServerScope(
         } catch {
             // Best-effort: server will also eventually time out stale sessions.
         }
+        applyStoppedSessionToLocalList(sessionId);
         return { success: true };
     }
 
     return { success: false, message };
+}
+
+function applyStoppedSessionToLocalList(sessionId: string): void {
+    const timestamp = nowServerMs();
+    const state = storage.getState();
+    state.applySessionListRenderablePatches([
+        {
+            sessionId,
+            patch: {
+                active: false,
+                activeAt: timestamp,
+                thinking: false,
+                thinkingAt: timestamp,
+                presence: timestamp,
+                updatedAt: timestamp,
+            },
+        },
+    ]);
+
+    const session = state.sessions?.[sessionId];
+    if (!session) return;
+    state.applySessions([
+        {
+            ...session,
+            active: false,
+            activeAt: timestamp,
+            thinking: false,
+            thinkingAt: timestamp,
+            presence: timestamp,
+            updatedAt: timestamp,
+        },
+    ]);
 }
 
 export interface SessionArchiveResponse {
@@ -845,13 +879,26 @@ async function archiveRequestWithContext(params: Readonly<{
 }
 
 async function applyArchivedAtToLocalSession(sessionId: string, archivedAt: number | null): Promise<void> {
+    const updatedAt = nowServerMs();
     const session = storage.getState().sessions[sessionId];
-    if (!session) return;
-    storage.getState().applySessions([
+    if (session) {
+        storage.getState().applySessions([
+            {
+                ...session,
+                archivedAt,
+                updatedAt,
+            },
+        ]);
+        return;
+    }
+
+    storage.getState().applySessionListRenderablePatches([
         {
-            ...session,
-            archivedAt,
-            updatedAt: nowServerMs(),
+            sessionId,
+            patch: {
+                archivedAt,
+                updatedAt,
+            },
         },
     ]);
 }

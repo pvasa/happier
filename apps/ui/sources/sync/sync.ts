@@ -1995,6 +1995,23 @@ class Sync {
         });
     }
 
+    public fetchArchivedSessions = async (): Promise<void> => {
+        if (!this.credentials) return;
+        await fetchAndApplySessions({
+            sessionListPath: '/v2/sessions/archived',
+            serverId: String(getActiveServerSnapshot().serverId ?? '').trim() || null,
+            credentials: this.credentials,
+            encryption: this.encryption,
+            sessionDataKeys: this.sessionDataKeys,
+            getExistingSession: (sessionId) => storage.getState().sessions[sessionId] ?? null,
+            applySessions: (sessions) => {
+                this.applySessions(sessions);
+            },
+            repairInvalidReadStateV1: (params) => this.repairInvalidReadStateV1(params),
+            log,
+        });
+    }
+
     private isSessionKnownOnActiveServer = (sessionId: string): boolean => {
         if (this.activeServerSessionIds.has(sessionId)) {
             return true;

@@ -336,6 +336,22 @@ export async function handleUpdateContainer(params: {
     } else if (updateData.body.t === 'update-session') {
         const session = storage.getState().sessions[updateData.body.id];
         if (!session) {
+            const canPatchRenderableWithoutHydration =
+                !updateData.body.metadata
+                && !updateData.body.agentState
+                && (typeof updateData.body.archivedAt === 'number' || updateData.body.archivedAt === null);
+            if (canPatchRenderableWithoutHydration) {
+                storage.getState().applySessionListRenderablePatches([
+                    {
+                        sessionId: updateData.body.id,
+                        patch: {
+                            archivedAt: updateData.body.archivedAt,
+                            updatedAt: updateData.createdAt,
+                        },
+                    },
+                ]);
+                return;
+            }
             invalidateSessions();
             return;
         }
@@ -581,6 +597,17 @@ export function flushActivityUpdates(params: { updates: Map<string, ApiEphemeral
     const { updates, applySessions } = params;
 
     const sessions: Session[] = [];
+    const renderablePatches: Array<{
+        sessionId: string;
+        patch: {
+            active: boolean;
+            activeAt: number;
+            thinking: boolean;
+            thinkingAt: number;
+            presence: 'online' | number;
+            updatedAt: number;
+        };
+    }> = [];
 
     for (const [sessionId, update] of updates) {
         const session = storage.getState().sessions[sessionId];
@@ -617,11 +644,37 @@ export function flushActivityUpdates(params: { updates: Map<string, ApiEphemeral
                 thinking: nextThinking,
                 thinkingAt: update.activeAt, // Always use activeAt for consistency
             });
+            continue;
+        }
+
+        const renderable = storage.getState().sessionListRenderables[sessionId];
+        if (renderable) {
+            const nextThinking = update.thinking ?? false;
+            const isTurningOff = update.active === false && nextThinking === false;
+            if (isTurningOff) {
+                if (update.activeAt < renderable.activeAt) continue;
+            } else if (update.activeAt < renderable.updatedAt) {
+                continue;
+            }
+            renderablePatches.push({
+                sessionId,
+                patch: {
+                    active: update.active,
+                    activeAt: update.activeAt,
+                    thinking: nextThinking,
+                    thinkingAt: update.activeAt,
+                    presence: update.active ? 'online' : update.activeAt,
+                    updatedAt: update.activeAt,
+                },
+            });
         }
     }
 
     if (sessions.length > 0) {
         applySessions(sessions);
+    }
+    if (renderablePatches.length > 0) {
+        storage.getState().applySessionListRenderablePatches(renderablePatches);
     }
 }
 

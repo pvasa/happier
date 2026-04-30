@@ -55,4 +55,21 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     const agentState = nextSession.agentState as unknown as { controlledByUser?: unknown };
     expect(agentState.controlledByUser).toBe(true);
   });
+
+  it('applies archivedAt from update-session payloads', async () => {
+    const base = createSession({ sessionId: 's1', encryptionMode: 'plain' });
+
+    const { nextSession } = await buildUpdatedSessionFromSocketUpdate({
+      session: base,
+      updateBody: {
+        archivedAt: 123,
+      },
+      updateSeq: 10,
+      updateCreatedAt: 456,
+      sessionEncryption: null,
+    });
+
+    expect(nextSession.archivedAt).toBe(123);
+    expect(nextSession.updatedAt).toBe(456);
+  });
 });

@@ -195,6 +195,7 @@ describe('updates transcript vNext payloads', () => {
         version: 2,
         anotherFutureField: 'hello',
       },
+      archivedAt: 1_234,
     });
 
     expect(parsed.success).toBe(true);

@@ -23,10 +23,10 @@ export const buildNewSessionUpdate = vi.fn((_session: any, seq: number, updateId
     body: { t: "new-session" },
 }));
 export const buildUpdateSessionUpdate = vi.fn(
-    (_sessionId: string, seq: number, updateId: string, metadata: any, agentState: any) => ({
+    (_sessionId: string, seq: number, updateId: string, metadata: any, agentState: any, projection?: any) => ({
         id: updateId,
         seq,
-        body: { t: "update-session", metadata, agentState },
+        body: { t: "update-session", metadata, agentState, ...projection },
     }),
 );
 

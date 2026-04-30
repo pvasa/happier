@@ -213,6 +213,7 @@ export function looksLikeCurrentV2SessionNotFound404(body: unknown): boolean {
 export async function fetchSessionListPageCompat(params: Readonly<{
     request: SessionRequest;
     token: string;
+    sessionListPath?: string;
     cursor?: string | null;
     limit: number;
 }>): Promise<{
@@ -221,7 +222,8 @@ export async function fetchSessionListPageCompat(params: Readonly<{
     hasNext: boolean;
     source: 'v2' | 'v1';
 }> {
-    const url = new URL('/v2/sessions', 'http://placeholder.local');
+    const sessionListPath = params.sessionListPath || '/v2/sessions';
+    const url = new URL(sessionListPath, 'http://placeholder.local');
     url.searchParams.set('limit', String(params.limit));
     if (params.cursor) {
         url.searchParams.set('cursor', params.cursor);
@@ -242,8 +244,8 @@ export async function fetchSessionListPageCompat(params: Readonly<{
                 source: 'v2',
             };
         }
-    } else if (!looksLikeMissingV2SessionsListRoute(v2Response.status, v2Body)) {
-        throwSessionListHttpError(v2Response.status, '/v2/sessions');
+    } else if (sessionListPath !== '/v2/sessions' || !looksLikeMissingV2SessionsListRoute(v2Response.status, v2Body)) {
+        throwSessionListHttpError(v2Response.status, sessionListPath);
     }
 
     const legacyResponse = await params.request('/v1/sessions', {

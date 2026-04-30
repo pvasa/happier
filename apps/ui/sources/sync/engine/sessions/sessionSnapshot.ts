@@ -204,6 +204,7 @@ function scheduleReadStateRepair(params: {
 }
 
 export async function fetchAndApplySessions(params: {
+    sessionListPath?: string;
     serverId?: string | null;
     credentials: AuthCredentials;
     encryption: SessionListEncryption;
@@ -236,6 +237,7 @@ export async function fetchAndApplySessions(params: {
         const page = await fetchSessionListPageCompat({
             request,
             token: credentials.token,
+            sessionListPath: params.sessionListPath,
             cursor,
             limit: pageLimit,
         });

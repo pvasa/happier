@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Animated, Platform, Pressable, View } from 'react-native';
 import { GestureDetector, Swipeable, type ComposedGesture, type GestureType } from 'react-native-gesture-handler';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -36,6 +36,7 @@ import { clearSessionVisibleWhenInactive, stopSessionAndMaybeArchive } from '../
 const AVATAR_SIZE_DEFAULT = 48;
 const AVATAR_SIZE_COMPACT = 30;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
+const SESSION_TITLE_SKELETON_ANIMATION_MS = 900;
 
 const stylesheet = StyleSheet.create((theme) => ({
     sessionItemContainer: {
@@ -202,6 +203,22 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionTitleDisconnected: {
         color: theme.colors.textSecondary,
+    },
+    sessionTitleLoading: {
+        width: '68%',
+        height: 14,
+        borderRadius: 7,
+        backgroundColor: theme.colors.surfaceHighest,
+    },
+    sessionTitleLoadingCompact: {
+        width: '60%',
+        height: 13,
+        borderRadius: 7,
+    },
+    sessionTitleLoadingMinimal: {
+        width: '56%',
+        height: 12,
+        borderRadius: 6,
     },
     serverBadgeContainer: {
         borderRadius: 999,
@@ -445,6 +462,31 @@ export const SessionItem = React.memo(
         const resolvedSession = sessionFromStore ?? session;
         const sessionStatus = useSessionStatus(resolvedSession);
         const sessionNameResolved = getSessionName(resolvedSession);
+        const isSessionNameLoading = resolvedSession.metadata == null && sessionNameResolved === t('status.unknown');
+        const titleSkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
+        React.useEffect(() => {
+            if (!isSessionNameLoading) return;
+            if (typeof Animated.loop !== 'function' || typeof Animated.sequence !== 'function') return;
+
+            const animation = Animated.loop(
+                Animated.sequence([
+                    Animated.timing(titleSkeletonOpacity, {
+                        toValue: 1,
+                        duration: SESSION_TITLE_SKELETON_ANIMATION_MS,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(titleSkeletonOpacity, {
+                        toValue: 0.45,
+                        duration: SESSION_TITLE_SKELETON_ANIMATION_MS,
+                        useNativeDriver: true,
+                    }),
+                ]),
+            );
+            animation.start();
+            return () => {
+                animation.stop();
+            };
+        }, [isSessionNameLoading, titleSkeletonOpacity]);
         const sessionSubtitle = subtitleOverride ?? getSessionSubtitle(resolvedSession);
         const navigateToSession = useNavigateToSession();
         const swipeableRef = React.useRef<Swipeable | null>(null);
@@ -849,27 +891,39 @@ export const SessionItem = React.memo(
                     ]}
                 >
                     <View style={styles.sessionTitleRow}>
-                        <Text
-                            style={[
-                                styles.sessionTitle,
-                                compact ? styles.sessionTitleCompact : null,
-                                isMinimal ? styles.sessionTitleMinimal : null,
-                                shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
-                                sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
-                                selected ? styles.sessionTitleSelected : null,
-                            ]}
-                            numberOfLines={1}
-                        >
-                            {sessionNameResolved}
-                        </Text>
-                    {showServerBadge && serverName ? (
-                        <View style={styles.serverBadgeContainer}>
-                            <Text style={styles.serverBadgeText} numberOfLines={1}>
-                                {serverName}
+                        {isSessionNameLoading ? (
+                            <Animated.View
+                                testID={`session-list-title-loading-${resolvedSession.id}`}
+                                style={[
+                                    styles.sessionTitleLoading,
+                                    compact ? styles.sessionTitleLoadingCompact : null,
+                                    isMinimal ? styles.sessionTitleLoadingMinimal : null,
+                                    { opacity: titleSkeletonOpacity },
+                                ]}
+                            />
+                        ) : (
+                            <Text
+                                style={[
+                                    styles.sessionTitle,
+                                    compact ? styles.sessionTitleCompact : null,
+                                    isMinimal ? styles.sessionTitleMinimal : null,
+                                    shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
+                                    sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
+                                    selected ? styles.sessionTitleSelected : null,
+                                ]}
+                                numberOfLines={1}
+                            >
+                                {sessionNameResolved}
                             </Text>
-                        </View>
-                    ) : null}
-                </View>
+                        )}
+                        {showServerBadge && serverName ? (
+                            <View style={styles.serverBadgeContainer}>
+                                <Text style={styles.serverBadgeText} numberOfLines={1}>
+                                    {serverName}
+                                </Text>
+                            </View>
+                        ) : null}
+                    </View>
 
                     {showMinimalStatusLine ? (
                         <View style={[styles.secondaryLineRow, styles.secondaryLineRowMinimal]}>

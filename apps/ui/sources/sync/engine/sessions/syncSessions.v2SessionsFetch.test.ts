@@ -80,6 +80,45 @@ afterEach(() => {
 });
 
 describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
+    it('can fetch the archived sessions route without falling back to the regular list', async () => {
+        const requestSpy = vi.fn(async (path: string) => {
+            expect(path).toBe('/v2/sessions/archived?limit=150');
+            return jsonResponse({
+                sessions: [
+                    buildSessionRow({
+                        id: 'archived_1',
+                        encryptionMode: 'plain',
+                        archivedAt: 12,
+                        metadata: JSON.stringify({ path: '/archived', host: 'archive-host' }),
+                        agentState: JSON.stringify({}),
+                    }),
+                ],
+                nextCursor: null,
+                hasNext: false,
+            });
+        });
+        const { encryption } = createEncryptionHarness();
+        const applySessions = vi.fn();
+
+        await fetchAndApplySessions({
+            sessionListPath: '/v2/sessions/archived',
+            credentials: { token: 't', secret: 's' } as AuthCredentials,
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions,
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        });
+
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({
+                id: 'archived_1',
+                archivedAt: 12,
+            }),
+        ]);
+    });
+
     it('accepts legacy-compatible session rows when /v2 payloads omit newer fields', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({

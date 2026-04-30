@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiUpdateContainer } from '@/sync/api/types/apiTypes';
 import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { handleUpdateContainer } from './socket';
+import { flushActivityUpdates, handleUpdateContainer } from './socket';
 
 const initialStorageState = storage.getInitialState();
 type HandleUpdateContainerParams = Parameters<typeof handleUpdateContainer>[0];
@@ -193,5 +193,140 @@ describe('socket update handling: plaintext update-session', () => {
         );
         expect(params.invalidateSessions).not.toHaveBeenCalled();
         expect((params.applySessions as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    });
+
+    it('updates cache-only renderables for archive-only update-session payloads without forcing a sessions refresh', async () => {
+        storage.getState().replaceSessionListRenderables([
+            {
+                id: 's_cached_archived',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: false,
+                activeAt: 1,
+                archivedAt: null,
+                metadataVersion: 1,
+                agentStateVersion: 0,
+                metadata: { path: '/tmp', host: 'localhost' },
+                thinking: false,
+                thinkingAt: 0,
+                presence: 1,
+            },
+        ]);
+
+        const params = buildBaseParams();
+        const updateData: ApiUpdateContainer = {
+            id: 'u_plain_archive_cache_only',
+            seq: 13,
+            createdAt: 1237,
+            body: {
+                t: 'update-session',
+                id: 's_cached_archived',
+                archivedAt: 44,
+            },
+        };
+
+        await handleUpdateContainer({
+            ...params,
+            updateData,
+        });
+
+        expect(storage.getState().sessionListRenderables['s_cached_archived']).toEqual(
+            expect.objectContaining({
+                archivedAt: 44,
+                updatedAt: 1237,
+            }),
+        );
+        expect(params.invalidateSessions).not.toHaveBeenCalled();
+        expect((params.applySessions as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    });
+
+    it('keeps invalidating cache-only rows for metadata update-session payloads', async () => {
+        storage.getState().replaceSessionListRenderables([
+            {
+                id: 's_cached_metadata',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                archivedAt: null,
+                metadataVersion: 1,
+                agentStateVersion: 0,
+                metadata: { path: '/tmp', host: 'localhost' },
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+            },
+        ]);
+
+        const params = buildBaseParams();
+        const updateData: ApiUpdateContainer = {
+            id: 'u_plain_metadata_cache_only',
+            seq: 14,
+            createdAt: 1238,
+            body: {
+                t: 'update-session',
+                id: 's_cached_metadata',
+                metadata: { version: 2, value: JSON.stringify({ path: '/work', host: 'devbox' }) },
+                archivedAt: 55,
+            },
+        };
+
+        await handleUpdateContainer({
+            ...params,
+            updateData,
+        });
+
+        expect(params.invalidateSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('updates cache-only renderables for activity updates without waiting for hydration', () => {
+        storage.getState().replaceSessionListRenderables([
+            {
+                id: 's_cached_activity',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                archivedAt: null,
+                metadataVersion: 1,
+                agentStateVersion: 0,
+                metadata: { path: '/tmp', host: 'localhost' },
+                thinking: true,
+                thinkingAt: 1,
+                presence: 'online',
+            },
+        ]);
+
+        const applySessions = vi.fn();
+        flushActivityUpdates({
+            updates: new Map([
+                [
+                    's_cached_activity',
+                    {
+                        type: 'activity',
+                        id: 's_cached_activity',
+                        sessionId: 's_cached_activity',
+                        active: false,
+                        activeAt: 20,
+                        thinking: false,
+                    },
+                ],
+            ]),
+            applySessions,
+        });
+
+        expect(storage.getState().sessionListRenderables['s_cached_activity']).toEqual(
+            expect.objectContaining({
+                active: false,
+                activeAt: 20,
+                thinking: false,
+                thinkingAt: 20,
+                presence: 20,
+            }),
+        );
+        expect(applySessions).not.toHaveBeenCalled();
     });
 });

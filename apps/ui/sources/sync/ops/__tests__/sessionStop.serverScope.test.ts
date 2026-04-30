@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
-const { mockSessionRpcWithServerScope, mockResolveContext, mockApiSend, mockCreateEphemeralClient } = vi.hoisted(
+const { mockSessionRpcWithServerScope, mockResolveContext, mockApiSend, mockCreateEphemeralClient, mockApplySessionListRenderablePatches } = vi.hoisted(
   () => ({
     mockSessionRpcWithServerScope: vi.fn(),
     mockResolveContext: vi.fn(),
     mockApiSend: vi.fn(),
     mockCreateEphemeralClient: vi.fn(),
+    mockApplySessionListRenderablePatches: vi.fn(),
   }),
 );
 
@@ -28,6 +29,14 @@ vi.mock('../../runtime/orchestration/serverScopedRpc/createEphemeralServerSocket
   createEphemeralServerSocketClient: mockCreateEphemeralClient,
 }));
 
+vi.mock('../../domains/state/storage', () => ({
+  storage: {
+    getState: () => ({
+      applySessionListRenderablePatches: mockApplySessionListRenderablePatches,
+    }),
+  },
+}));
+
 // ops.ts imports ./sync, which pulls in Expo-native modules in node/vitest.
 // sessionStopWithServerScope doesn't need real encryption in these tests.
 vi.mock('../../sync', () => ({
@@ -47,6 +56,28 @@ describe('sessionStopWithServerScope', () => {
     mockResolveContext.mockReset();
     mockApiSend.mockReset();
     mockCreateEphemeralClient.mockReset();
+    mockApplySessionListRenderablePatches.mockReset();
+  });
+
+  it('marks the local cache-only list row inactive after a successful kill RPC', async () => {
+    mockSessionRpcWithServerScope.mockResolvedValue({ success: true });
+
+    const res = await sessionStopWithServerScope('sid-killed', { serverId: 'server-a' });
+
+    expect(res).toEqual({ success: true });
+    expect(mockApplySessionListRenderablePatches).toHaveBeenCalledWith([
+      {
+        sessionId: 'sid-killed',
+        patch: expect.objectContaining({
+          active: false,
+          thinking: false,
+          activeAt: expect.any(Number),
+          thinkingAt: expect.any(Number),
+          presence: expect.any(Number),
+          updatedAt: expect.any(Number),
+        }),
+      },
+    ]);
   });
 
   it('falls back to session-end on the active socket when scope is active and RPC method is unavailable', async () => {
@@ -68,6 +99,17 @@ describe('sessionStopWithServerScope', () => {
       'session-end',
       expect.objectContaining({ sid: 'sid-1', time: expect.any(Number) }),
     );
+    expect(mockApplySessionListRenderablePatches).toHaveBeenCalledWith([
+      {
+        sessionId: 'sid-1',
+        patch: expect.objectContaining({
+          active: false,
+          thinking: false,
+          activeAt: expect.any(Number),
+          presence: expect.any(Number),
+        }),
+      },
+    ]);
   });
 
   it('falls back to session-end on an ephemeral socket when scope is not active and RPC method is unavailable', async () => {

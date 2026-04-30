@@ -106,6 +106,10 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             typeof updateBody.pendingUserActionRequestCount === 'number'
                 ? updateBody.pendingUserActionRequestCount
                 : session.pendingUserActionRequestCount,
+        archivedAt:
+            typeof updateBody.archivedAt === 'number' || updateBody.archivedAt === null
+                ? updateBody.archivedAt
+                : session.archivedAt,
         metadata,
         metadataVersion: updateBody.metadata ? updateBody.metadata.version : session.metadataVersion,
         updatedAt: updateCreatedAt,
