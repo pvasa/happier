@@ -58,7 +58,6 @@
   "dependencies": {
     "@codemirror/autocomplete": "6.20.0",
     "@codemirror/commands": "6.10.2",
-    "@codemirror/history": "0.19.2",
     "@codemirror/lang-cpp": "6.0.3",
     "@codemirror/lang-css": "6.3.1",
     "@codemirror/lang-go": "6.0.1",
@@ -90,6 +89,7 @@
     "@happier-dev/release-runtime": "0.0.0",
     "@happier-dev/sherpa-native": "0.0.0",
     "@happier-dev/transfers": "0.0.0",
+    "@lezer/highlight": "1.2.3",
     "@legendapp/list": "2.0.0-beta.3",
     "@livekit/react-native": "^2.9.0",
     "@livekit/react-native-expo-plugin": "^1.0.1",
