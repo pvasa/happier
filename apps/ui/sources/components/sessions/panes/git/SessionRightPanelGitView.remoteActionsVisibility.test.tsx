@@ -11,7 +11,7 @@ import { installSessionDetailsPanelCommonModuleMocks } from '../sessionDetailsPa
 const publishBranchMock = vi.hoisted(() => vi.fn(async () => true));
 const usePublishBranchActionMock = vi.hoisted(() => vi.fn());
 const setScmRemoteConfirmPolicyMock = vi.hoisted(() => vi.fn());
-const confirmCommitAdjacentPushMock = vi.hoisted(() => vi.fn(async () => true));
+const confirmCommitAdjacentPushMock = vi.hoisted(() => vi.fn(async (_input?: unknown) => true));
 const scmOperationsState = vi.hoisted(() => ({
     runRemoteOperation: vi.fn(),
     createCommitFromMessage: vi.fn(),
@@ -129,7 +129,7 @@ vi.mock('@/hooks/session/sourceControl/usePublishBranchAction', () => ({
 }));
 
 vi.mock('@/scm/operations/commitAdjacentPushConfirmation', () => ({
-    confirmCommitAdjacentPush: (...args: any[]) => confirmCommitAdjacentPushMock(...args),
+    confirmCommitAdjacentPush: (input: unknown) => confirmCommitAdjacentPushMock(input),
 }));
 
 vi.mock('@/components/sessions/sourceControl/states', () => ({
@@ -310,6 +310,8 @@ describe('SessionRightPanelGitView (remote action visibility)', () => {
         const screen = await renderScreen(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1" />);
 
         const commitTab = screen.findByTestId('session-right-panel-git-commit-tab');
+        expect(commitTab).not.toBeNull();
+        if (!commitTab) throw new Error('Expected commit tab to render');
         const pushAction = (commitTab.props as any).commitAdjacentPushAction;
         expect(pushAction).toMatchObject({
             visible: true,
