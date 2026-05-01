@@ -34,6 +34,11 @@ import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPush
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
 import { createTurnAssistantPreviewTracker, type TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { shouldSendReadyPushNotification } from '@/settings/notifications/notificationsPolicy';
+import {
+    resolveRemoteModeControlSurface,
+    startRemoteModeStaticControl,
+    type RemoteModeStaticControl,
+} from '@/ui/remoteControl/remoteModeControl';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { configuration } from '@/configuration';
@@ -226,17 +231,37 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     const turnAssistantPreviewTracker = createTurnAssistantPreviewTracker();
 
     // Check if we have a TTY for UI rendering
-    const hasTTY = resolveHasTTY({
+    const terminalInkAvailable = resolveHasTTY({
         stdoutIsTTY: process.stdout.isTTY,
         stdinIsTTY: process.stdin.isTTY,
         startedBy: session.startedBy,
     });
-    const shouldRenderInkUi = hasTTY && session.startedBy !== 'daemon';
-    logger.debug(`[claudeRemoteLauncher] TTY available: ${hasTTY}`);
+    const controlSurface = session.startedBy === 'daemon'
+        ? resolveRemoteModeControlSurface({
+            stdoutIsTTY: process.stdout.isTTY,
+            stdinIsTTY: process.stdin.isTTY,
+            startedBy: session.startedBy,
+            terminalMode: session.terminalRuntime?.mode ?? null,
+        })
+        : terminalInkAvailable
+            ? 'ink'
+            : 'none';
+    const shouldRenderInkUi = controlSurface === 'ink';
+    logger.debug(`[claudeRemoteLauncher] remote control surface: ${controlSurface}`);
 
     // Configure terminal
     let messageBuffer = new MessageBuffer();
     let inkInstance: any = null;
+    let staticControl: RemoteModeStaticControl | null = null;
+    // Handle abort
+    let exitReason: 'switch' | 'exit' | null = null;
+    let abortController: AbortController | null = null;
+    let abortFuture: Future<void> | null = null;
+    let turnInterrupt: (() => Promise<void>) | null = null;
+    let permissionHandler: PermissionHandler | null = null;
+    let didUserAbortThisLaunch = false;
+    const turnChangeTracker = new ClaudeTurnChangeTracker();
+    const suppressedExplicitDiffCallIds = new Set<string>();
 
     if (shouldRenderInkUi) {
         console.clear();
@@ -263,9 +288,28 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             patchConsole: false,
             stdout: inkStdout,
         });
+    } else if (controlSurface === 'static') {
+        staticControl = startRemoteModeStaticControl({
+            providerName: 'Claude',
+            stdin: process.stdin,
+            stdout: process.stdout,
+            allowSwitchToLocal: true,
+            onExit: async () => {
+                logger.debug('[remote]: Exiting client via Ctrl-C');
+                session.noteUserAbortRequested();
+                if (!exitReason) {
+                    exitReason = 'exit';
+                }
+                await interruptThenTeardown('exit');
+            },
+            onSwitchToLocal: () => {
+                logger.debug('[remote]: Switching to local mode via static control');
+                doSwitch();
+            },
+        });
     }
 
-    if (hasTTY) {
+    if (shouldRenderInkUi) {
         // Ensure we can capture keypresses for the remote-mode UI.
         // Avoid forcing stdin encoding here; Ink (and Node) should handle key decoding safely.
         process.stdin.resume();
@@ -273,16 +317,6 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             process.stdin.setRawMode(true);
         }
     }
-
-	    // Handle abort
-	    let exitReason: 'switch' | 'exit' | null = null;
-	    let abortController: AbortController | null = null;
-	    let abortFuture: Future<void> | null = null;
-	    let turnInterrupt: (() => Promise<void>) | null = null;
-        let permissionHandler: PermissionHandler | null = null;
-        let didUserAbortThisLaunch = false;
-	    const turnChangeTracker = new ClaudeTurnChangeTracker();
-	    const suppressedExplicitDiffCallIds = new Set<string>();
 
     async function abort() {
         if (abortController && !abortController.signal.aborted) {
@@ -1113,6 +1147,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 
         if (inkInstance) {
             inkInstance.unmount();
+        }
+        if (staticControl) {
+            await staticControl.stop();
+            staticControl = null;
         }
 
         // Give Ink a brief moment to release stdin/tty state, then drain any buffered input

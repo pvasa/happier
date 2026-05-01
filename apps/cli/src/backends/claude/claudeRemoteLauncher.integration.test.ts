@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import type { Metadata } from '@/api/types';
+import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
+import type { startRemoteModeStaticControl as startRemoteModeStaticControlFn } from '@/ui/remoteControl/remoteModeControl';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { CHANGE_TITLE_INSTRUCTION } from '@/agent/runtime/changeTitleInstruction';
 import { Session } from './session';
@@ -32,6 +34,7 @@ type RemoteDispatchMockOptions = {
   signal?: AbortSignal;
   onSessionFound?: (sessionId: string) => void;
 };
+type StartRemoteModeStaticControlParams = Parameters<typeof startRemoteModeStaticControlFn>[0];
 
 const mockInkRender = vi.fn(() => ({ unmount: vi.fn() }));
 vi.mock('ink', () => ({
@@ -139,6 +142,8 @@ function createRemoteHarness(options?: {
   sessionId?: string | null;
   metadata?: Metadata | null;
   applyMetadataUpdates?: boolean;
+  startedBy?: 'daemon' | 'terminal';
+  terminalRuntime?: TerminalRuntimeFlags | null;
 }): RemoteHarness {
   const switchDeferred = createDeferred<RpcHandler>();
   const abortDeferred = createDeferred<RpcHandler>();
@@ -199,6 +204,8 @@ function createRemoteHarness(options?: {
     messageQueue: new MessageQueue2<EnhancedMode>(hashClaudeEnhancedModeForQueue),
     onModeChange: () => {},
     hookSettingsPath: '/tmp/hooks.json',
+    startedBy: options?.startedBy,
+    terminalRuntime: options?.terminalRuntime ?? null,
   });
 
   createdSessions.push(session);
@@ -1638,6 +1645,48 @@ function createRemoteHarness(options?: {
     const switchHandler = await switchHandlerReady;
     expect(await switchHandler({ to: 'local' })).toBe(true);
     await expect(launcherPromise).resolves.toBe('switch');
+  }, 30_000);
+
+  it('starts the static remote-control surface for daemon-started tmux sessions', async () => {
+    const stopStaticControl = vi.fn(async () => {});
+    const startStaticControl = vi.fn((_params: StartRemoteModeStaticControlParams) => ({ stop: stopStaticControl }));
+    vi.doMock('@/ui/remoteControl/remoteModeControl', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/ui/remoteControl/remoteModeControl')>();
+      return {
+        ...actual,
+        resolveRemoteModeControlSurface: vi.fn(() => 'static'),
+        startRemoteModeStaticControl: startStaticControl,
+      };
+    });
+
+    const { session, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      startedBy: 'daemon',
+      terminalRuntime: { mode: 'tmux' },
+    });
+
+    mockInkRender.mockClear();
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as RemoteDispatchMockOptions;
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    await vi.waitFor(() => {
+      expect(startStaticControl).toHaveBeenCalledTimes(1);
+    });
+    expect(startStaticControl.mock.calls[0]?.[0]).toMatchObject({
+      providerName: 'Claude',
+      allowSwitchToLocal: true,
+    });
+    expect(mockInkRender).not.toHaveBeenCalled();
+
+    const switchHandler = await switchHandlerReady;
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+    expect(stopStaticControl).toHaveBeenCalledTimes(1);
   }, 30_000);
 
   it('respects switch RPC params and is idempotent', async () => {

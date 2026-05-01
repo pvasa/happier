@@ -17,6 +17,7 @@ import { createHappierMcpBridge } from '@/agent/runtime/createHappierMcpBridge';
 import type { McpServerConfig } from '@/agent';
 import type { AccountSettings } from '@happier-dev/protocol';
 import { resolveConfiguredClaudeConfigDir } from './utils/resolveConfiguredClaudeConfigDir';
+import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
 
 export type SessionFoundInfo = {
     sessionId: string;
@@ -99,6 +100,8 @@ export class Session {
     readonly jsRuntime: JsRuntime;
     /** How this session was started (affects TTY/UI behavior). */
     readonly startedBy: 'daemon' | 'terminal';
+    /** Terminal host metadata for this CLI process, when launched by tmux/daemon wrappers. */
+    readonly terminalRuntime: TerminalRuntimeFlags | null;
     readonly defaultSystemPromptText: string | undefined;
 
     sessionId: string | null;
@@ -164,6 +167,7 @@ export class Session {
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
         startedBy?: 'daemon' | 'terminal',
+        terminalRuntime?: TerminalRuntimeFlags | null,
         defaultSystemPromptText?: string,
         precomputedMcpBridge?: { mcpServers: Record<string, McpServerConfig>; stop: () => void } | null,
     }) {
@@ -181,6 +185,7 @@ export class Session {
         this.hookPluginDir = opts.hookPluginDir ?? null;
         this.jsRuntime = opts.jsRuntime ?? 'node';
         this.startedBy = opts.startedBy ?? 'terminal';
+        this.terminalRuntime = opts.terminalRuntime ?? null;
         this.defaultSystemPromptText =
             typeof opts.defaultSystemPromptText === 'string' && opts.defaultSystemPromptText.trim().length > 0
                 ? opts.defaultSystemPromptText.trim()

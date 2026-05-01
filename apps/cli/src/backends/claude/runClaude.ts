@@ -1441,6 +1441,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         startingMode: options.startingMode,
                         claudeCodeExperimentalAgentTeamsEnabled: currentClaudeRemoteMetaState.claudeCodeExperimentalAgentTeamsEnabled,
                         startedBy: options.startedBy,
+                        terminalRuntime: options.terminalRuntime ?? null,
                         messageQueue,
                         onModeChange: (newMode) => {
                         artifacts.deferredSession.sendSessionEvent({ type: 'switch', mode: newMode });

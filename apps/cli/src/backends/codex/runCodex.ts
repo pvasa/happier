@@ -84,6 +84,7 @@ import {
 import { createLocalRemoteModeController } from '@/agent/localControl/createLocalRemoteModeController';
 import { createCodexRemoteTerminalUi } from './runtime/createCodexRemoteTerminalUi';
 import { resolveCodexStartingMode } from './utils/resolveCodexStartingMode';
+import { resolveRemoteModeControlSurface } from '@/ui/remoteControl/remoteModeControl';
 import { abortAcpRuntimeTurnIfNeeded } from '@/agent/acp/runtime/createAcpRuntime';
 import { createSwitchToLocalAbortPromise } from './localControl/createSwitchToLocalAbortPromise';
 import { archiveAndCloseRuntimeSession } from '@/session/services/archiveAndCloseRuntimeSession';
@@ -916,6 +917,16 @@ export async function runCodex(opts: {
         stdinIsTTY: process.stdin.isTTY,
         startedBy: opts.startedBy,
     });
+    const remoteControlSurface = opts.startedBy === 'daemon'
+        ? resolveRemoteModeControlSurface({
+            stdoutIsTTY: process.stdout.isTTY,
+            stdinIsTTY: process.stdin.isTTY,
+            startedBy: opts.startedBy,
+            terminalMode: opts.terminalRuntime?.mode ?? null,
+        })
+        : hasTTY
+            ? 'ink'
+            : 'none';
     let requestedSwitchToLocal = false;
     const createSwitchToLocalBarrier = (): { promise: Promise<void>; resolve: () => void } => {
         let resolve!: () => void;
@@ -962,6 +973,7 @@ export async function runCodex(opts: {
         messageBuffer,
         logPath: process.env.DEBUG ? logger.getLogPath() : undefined,
         hasTTY,
+        surface: remoteControlSurface,
         stdin: process.stdin,
         onExit: async () => {
             logger.debug('[codex]: Exiting agent via Ctrl-C');
