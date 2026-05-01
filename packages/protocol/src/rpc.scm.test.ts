@@ -17,6 +17,13 @@ describe('RPC_METHODS scm surface', () => {
         expect(RPC_METHODS.SCM_BRANCH_LIST).toBe('scm.branch.list');
         expect(RPC_METHODS.SCM_BRANCH_CREATE).toBe('scm.branch.create');
         expect(RPC_METHODS.SCM_BRANCH_CHECKOUT).toBe('scm.branch.checkout');
+        expect(RPC_METHODS.SCM_BRANCH_MERGE).toBe('scm.branch.merge');
+        expect(RPC_METHODS.SCM_BRANCH_REBASE).toBe('scm.branch.rebase');
+        expect(RPC_METHODS.SCM_BRANCH_OPERATION_CONTINUE).toBe('scm.branch.operation.continue');
+        expect(RPC_METHODS.SCM_BRANCH_OPERATION_ABORT).toBe('scm.branch.operation.abort');
+        expect(RPC_METHODS.SCM_REMOTE_ADD).toBe('scm.remote.add');
+        expect(RPC_METHODS.SCM_REMOTE_SET_URL).toBe('scm.remote.setUrl');
+        expect(RPC_METHODS.SCM_REMOTE_REMOVE).toBe('scm.remote.remove');
         expect(RPC_METHODS.SCM_REMOTE_FETCH).toBe('scm.remote.fetch');
         expect(RPC_METHODS.SCM_REMOTE_PULL).toBe('scm.remote.pull');
         expect(RPC_METHODS.SCM_REMOTE_PUSH).toBe('scm.remote.push');

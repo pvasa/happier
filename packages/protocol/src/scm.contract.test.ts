@@ -12,6 +12,9 @@ import {
     parseScmPatchPaths,
     ScmStatusSnapshotRequestSchema,
     ScmStatusSnapshotResponseSchema,
+    ScmRemoteAddRequestSchema,
+    ScmRemoteRemoveRequestSchema,
+    ScmRemoteSetUrlRequestSchema,
     ScmWorkingSnapshotSchema,
 } from './scm.js';
 
@@ -154,6 +157,12 @@ describe('scm protocol contracts', () => {
                 detached: false,
             },
             hasConflicts: false,
+            operationState: {
+                kind: 'merge',
+                sourceRef: 'feature/auth',
+                canContinue: true,
+                canAbort: true,
+            },
             entries: [],
             totals: {
                 includedFiles: 0,
@@ -183,9 +192,62 @@ describe('scm protocol contracts', () => {
                 pushUrl: 'git@github.com:happier-dev/happier.git',
             },
         ]);
+        expect(response.snapshot?.operationState).toEqual({
+            kind: 'merge',
+            sourceRef: 'feature/auth',
+            canContinue: true,
+            canAbort: true,
+        });
         expect(response.snapshot?.totals.pendingFiles).toBe(0);
         expect(response.snapshot?.capabilities.changeSetModel).toBe('index');
         expect(response.snapshot?.capabilities.supportedDiffAreas).toEqual(['included', 'pending', 'both']);
+    });
+
+    it('parses remote management requests with shared safety validation', () => {
+        expect(ScmRemoteAddRequestSchema.parse({
+            cwd: '.',
+            name: ' origin ',
+            fetchUrl: ' /tmp/happier remote.git ',
+            pushUrl: 'git@github.com:happier-dev/happier.git',
+        })).toMatchObject({
+            name: 'origin',
+            fetchUrl: '/tmp/happier remote.git',
+            pushUrl: 'git@github.com:happier-dev/happier.git',
+        });
+        expect(ScmRemoteSetUrlRequestSchema.parse({
+            cwd: '.',
+            name: 'origin',
+            pushUrl: null,
+        })).toMatchObject({
+            name: 'origin',
+            pushUrl: null,
+        });
+        expect(ScmRemoteRemoveRequestSchema.parse({
+            cwd: '.',
+            name: 'origin',
+        })).toMatchObject({
+            name: 'origin',
+        });
+
+        expect(ScmRemoteAddRequestSchema.safeParse({
+            cwd: '.',
+            name: '--upload-pack=hack',
+            fetchUrl: '/tmp/remote.git',
+        }).success).toBe(false);
+        expect(ScmRemoteAddRequestSchema.safeParse({
+            cwd: '.',
+            name: 'origin/main',
+            fetchUrl: '/tmp/remote.git',
+        }).success).toBe(false);
+        expect(ScmRemoteAddRequestSchema.safeParse({
+            cwd: '.',
+            name: 'origin',
+            fetchUrl: '--upload-pack=hack',
+        }).success).toBe(false);
+        expect(ScmRemoteSetUrlRequestSchema.safeParse({
+            cwd: '.',
+            name: 'origin',
+        }).success).toBe(false);
     });
 
     it('supports backend-native commit scope in commit create requests', () => {

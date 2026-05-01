@@ -18,6 +18,9 @@ export const SCM_OPERATION_ERROR_CODES = {
   REMOTE_FF_ONLY_REQUIRED: 'REMOTE_FF_ONLY_REQUIRED',
   REMOTE_REJECTED: 'REMOTE_REJECTED',
   REMOTE_NOT_FOUND: 'REMOTE_NOT_FOUND',
+  REMOTE_ALREADY_EXISTS: 'REMOTE_ALREADY_EXISTS',
+  BRANCH_OPERATION_IN_PROGRESS: 'BRANCH_OPERATION_IN_PROGRESS',
+  BRANCH_OPERATION_NOT_IN_PROGRESS: 'BRANCH_OPERATION_NOT_IN_PROGRESS',
   FEATURE_UNSUPPORTED: 'FEATURE_UNSUPPORTED',
   BACKEND_UNAVAILABLE: 'BACKEND_UNAVAILABLE',
 } as const;
@@ -39,6 +42,9 @@ export const ScmOperationErrorCodeSchema = z.enum([
   SCM_OPERATION_ERROR_CODES.REMOTE_FF_ONLY_REQUIRED,
   SCM_OPERATION_ERROR_CODES.REMOTE_REJECTED,
   SCM_OPERATION_ERROR_CODES.REMOTE_NOT_FOUND,
+  SCM_OPERATION_ERROR_CODES.REMOTE_ALREADY_EXISTS,
+  SCM_OPERATION_ERROR_CODES.BRANCH_OPERATION_IN_PROGRESS,
+  SCM_OPERATION_ERROR_CODES.BRANCH_OPERATION_NOT_IN_PROGRESS,
   SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
   SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
 ]);
@@ -61,6 +67,9 @@ export type ScmDiffArea = z.infer<typeof ScmDiffAreaSchema>;
 export const ScmChangeSetModelSchema = z.enum(['index', 'working-copy']);
 export type ScmChangeSetModel = z.infer<typeof ScmChangeSetModelSchema>;
 
+export const ScmBranchIntegrationOperationSchema = z.enum(['merge', 'rebase']);
+export type ScmBranchIntegrationOperation = z.infer<typeof ScmBranchIntegrationOperationSchema>;
+
 const ScmCapabilitiesSchemaCore = z.object({
   readStatus: z.boolean(),
   readDiffFile: z.boolean(),
@@ -77,6 +86,12 @@ const ScmCapabilitiesSchemaCore = z.object({
   writeBackout: z.boolean(),
   writeBranchCreate: z.boolean().optional(),
   writeBranchCheckout: z.boolean().optional(),
+  writeBranchMerge: z.boolean().optional(),
+  writeBranchRebase: z.boolean().optional(),
+  writeBranchOperationControl: z.boolean().optional(),
+  writeRemoteAdd: z.boolean().optional(),
+  writeRemoteSetUrl: z.boolean().optional(),
+  writeRemoteRemove: z.boolean().optional(),
   writeRemoteFetch: z.boolean(),
   writeRemotePull: z.boolean(),
   writeRemotePush: z.boolean(),
@@ -159,6 +174,14 @@ export const ScmRemoteInfoSchema = z.object({
 });
 export type ScmRemoteInfo = z.infer<typeof ScmRemoteInfoSchema>;
 
+export const ScmOperationStateSchema = z.object({
+  kind: ScmBranchIntegrationOperationSchema,
+  sourceRef: z.string().nullable().optional(),
+  canContinue: z.boolean(),
+  canAbort: z.boolean(),
+});
+export type ScmOperationState = z.infer<typeof ScmOperationStateSchema>;
+
 export const ScmWorkingSnapshotSchema = z.object({
   projectKey: z.string(),
   fetchedAt: z.number().int(),
@@ -179,6 +202,7 @@ export const ScmWorkingSnapshotSchema = z.object({
     detached: z.boolean(),
   }),
   stashCount: z.number().int().nonnegative().optional(),
+  operationState: ScmOperationStateSchema.nullable().optional(),
   hasConflicts: z.boolean(),
   entries: z.array(ScmWorkingEntrySchema),
   totals: z.object({
@@ -514,6 +538,18 @@ export type ScmRemoteRequestNormalizationResult =
   | { ok: true; request: { remote: string | undefined; branch: string | undefined } }
   | { ok: false; error: string };
 
+export type ScmRemoteNameNormalizationResult =
+  | { ok: true; name: string }
+  | { ok: false; error: string };
+
+export type ScmRemoteUrlNormalizationResult =
+  | { ok: true; url: string }
+  | { ok: false; error: string };
+
+export type ScmBranchSourceRefNormalizationResult =
+  | { ok: true; sourceRef: string }
+  | { ok: false; error: string };
+
 const CONTROL_CHAR_REGEX = /[\u0000-\u001F\u007F]/;
 
 function hasUnsupportedRemoteRefSyntax(value: string, label: 'Remote name' | 'Branch name'): boolean {
@@ -524,7 +560,7 @@ function hasUnsupportedRemoteRefSyntax(value: string, label: 'Remote name' | 'Br
   if (value.includes('@{') || value.includes('..')) return true;
 
   if (label === 'Remote name') {
-    return value.includes(':');
+    return value.includes(':') || value.includes('/');
   }
 
   return (
@@ -567,6 +603,93 @@ function normalizeRemoteRefValue(
   return { ok: true, value: normalized };
 }
 
+function normalizeRequiredRemoteRefValue(
+  value: string | undefined,
+  label: 'Remote name' | 'Branch name'
+): { ok: true; value: string } | { ok: false; error: string } {
+  const normalized = normalizeRemoteRefValue(value, label);
+  if (!normalized.ok) {
+    return normalized;
+  }
+  if (!normalized.value) {
+    return { ok: false, error: `${label} is required` };
+  }
+  return { ok: true, value: normalized.value };
+}
+
+export function normalizeScmRemoteName(value: string | undefined): ScmRemoteNameNormalizationResult {
+  const normalized = normalizeRequiredRemoteRefValue(value, 'Remote name');
+  if (!normalized.ok) {
+    return normalized;
+  }
+  return { ok: true, name: normalized.value };
+}
+
+export function normalizeScmRemoteUrl(
+  value: string | undefined,
+  label = 'Remote URL'
+): ScmRemoteUrlNormalizationResult {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) {
+    return { ok: false, error: `${label} is required` };
+  }
+  if (normalized.startsWith('-')) {
+    return { ok: false, error: `${label} cannot start with "-"` };
+  }
+  if (CONTROL_CHAR_REGEX.test(normalized)) {
+    return { ok: false, error: `${label} contains unsupported characters` };
+  }
+  return { ok: true, url: normalized };
+}
+
+export function normalizeScmBranchSourceRef(value: string | undefined): ScmBranchSourceRefNormalizationResult {
+  const normalized = normalizeRequiredRemoteRefValue(value, 'Branch name');
+  if (!normalized.ok) {
+    return { ok: false, error: normalized.error.replace(/^Branch name/, 'Source ref') };
+  }
+  return { ok: true, sourceRef: normalized.value };
+}
+
+function createNormalizedStringSchema<TValue extends string>(
+  normalize: (value: string | undefined) => { ok: true; value: TValue } | { ok: false; error: string }
+) {
+  return z.string().transform((value, ctx) => {
+    const result = normalize(value);
+    if (!result.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.error,
+      });
+      return z.NEVER;
+    }
+    return result.value;
+  });
+}
+
+export const ScmRemoteNameSchema = createNormalizedStringSchema((value) => {
+  const normalized = normalizeScmRemoteName(value);
+  return normalized.ok
+    ? { ok: true, value: normalized.name }
+    : normalized;
+});
+export type ScmRemoteName = z.infer<typeof ScmRemoteNameSchema>;
+
+export const ScmRemoteUrlSchema = createNormalizedStringSchema((value) => {
+  const normalized = normalizeScmRemoteUrl(value);
+  return normalized.ok
+    ? { ok: true, value: normalized.url }
+    : normalized;
+});
+export type ScmRemoteUrl = z.infer<typeof ScmRemoteUrlSchema>;
+
+export const ScmBranchSourceRefSchema = createNormalizedStringSchema((value) => {
+  const normalized = normalizeScmBranchSourceRef(value);
+  return normalized.ok
+    ? { ok: true, value: normalized.sourceRef }
+    : normalized;
+});
+export type ScmBranchSourceRef = z.infer<typeof ScmBranchSourceRefSchema>;
+
 export function normalizeScmRemoteRequest(
   request: Readonly<Pick<ScmRemoteRequest, 'remote' | 'branch'>>
 ): ScmRemoteRequestNormalizationResult {
@@ -586,6 +709,43 @@ export function normalizeScmRemoteRequest(
     },
   };
 }
+
+export const ScmRemoteAddRequestSchema = ScmRequestBaseSchema.extend({
+  name: ScmRemoteNameSchema,
+  fetchUrl: ScmRemoteUrlSchema,
+  pushUrl: ScmRemoteUrlSchema.optional(),
+});
+export type ScmRemoteAddRequest = z.infer<typeof ScmRemoteAddRequestSchema>;
+
+export const ScmRemoteSetUrlRequestSchema = ScmRequestBaseSchema.extend({
+  name: ScmRemoteNameSchema,
+  fetchUrl: ScmRemoteUrlSchema.optional(),
+  pushUrl: ScmRemoteUrlSchema.nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (value.fetchUrl === undefined && value.pushUrl === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'At least one remote URL field is required',
+      path: ['fetchUrl'],
+    });
+  }
+});
+export type ScmRemoteSetUrlRequest = z.infer<typeof ScmRemoteSetUrlRequestSchema>;
+
+export const ScmRemoteRemoveRequestSchema = ScmRequestBaseSchema.extend({
+  name: ScmRemoteNameSchema,
+});
+export type ScmRemoteRemoveRequest = z.infer<typeof ScmRemoteRemoveRequestSchema>;
+
+export const ScmRemoteManagementResponseSchema = z.object({
+  success: z.boolean(),
+  remotes: z.array(ScmRemoteInfoSchema).optional(),
+  stdout: z.string().optional(),
+  stderr: z.string().optional(),
+  error: z.string().optional(),
+  errorCode: ScmOperationErrorCodeSchema.optional(),
+});
+export type ScmRemoteManagementResponse = z.infer<typeof ScmRemoteManagementResponseSchema>;
 
 export function hasAnyPendingScmChanges(snapshot: Pick<ScmRemoteMutationSnapshot, 'totals'>): boolean {
   return (
@@ -663,7 +823,11 @@ export function classifyScmOperationErrorCode(
     case SCM_OPERATION_ERROR_CODES.REMOTE_FF_ONLY_REQUIRED:
     case SCM_OPERATION_ERROR_CODES.REMOTE_REJECTED:
     case SCM_OPERATION_ERROR_CODES.REMOTE_NOT_FOUND:
+    case SCM_OPERATION_ERROR_CODES.REMOTE_ALREADY_EXISTS:
       return 'remote';
+    case SCM_OPERATION_ERROR_CODES.BRANCH_OPERATION_IN_PROGRESS:
+    case SCM_OPERATION_ERROR_CODES.BRANCH_OPERATION_NOT_IN_PROGRESS:
+      return 'worktree';
     case SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED:
       return 'capability';
     case SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE:
@@ -709,6 +873,9 @@ export function mapGitScmErrorCode(stderr: string): ScmOperationErrorCode {
   }
   if (lower.includes('no such remote') || lower.includes('does not appear to be a git repository')) {
     return SCM_OPERATION_ERROR_CODES.REMOTE_NOT_FOUND;
+  }
+  if (lower.includes('remote') && lower.includes('already exists')) {
+    return SCM_OPERATION_ERROR_CODES.REMOTE_ALREADY_EXISTS;
   }
   if (
     lower.includes('authentication failed') ||

@@ -16,6 +16,12 @@ describe('scmCapabilities', () => {
     expect(capabilities.readBranches).toBe(false);
     expect(capabilities.writeBranchCreate).toBe(false);
     expect(capabilities.writeBranchCheckout).toBe(false);
+    expect(capabilities.writeBranchMerge).toBe(false);
+    expect(capabilities.writeBranchRebase).toBe(false);
+    expect(capabilities.writeBranchOperationControl).toBe(false);
+    expect(capabilities.writeRemoteAdd).toBe(false);
+    expect(capabilities.writeRemoteSetUrl).toBe(false);
+    expect(capabilities.writeRemoteRemove).toBe(false);
     expect(capabilities.writeRemotePublish).toBe(false);
     expect(capabilities.readStash).toBe(false);
     expect(capabilities.writeStash).toBe(false);
@@ -30,6 +36,12 @@ describe('scmCapabilities', () => {
     expect(capabilities.readBranches).toBe(true);
     expect(capabilities.writeBranchCreate).toBe(true);
     expect(capabilities.writeBranchCheckout).toBe(true);
+    expect(capabilities.writeBranchMerge).toBe(true);
+    expect(capabilities.writeBranchRebase).toBe(true);
+    expect(capabilities.writeBranchOperationControl).toBe(true);
+    expect(capabilities.writeRemoteAdd).toBe(true);
+    expect(capabilities.writeRemoteSetUrl).toBe(true);
+    expect(capabilities.writeRemoteRemove).toBe(true);
     expect(capabilities.writeRemotePublish).toBe(true);
     expect(capabilities.readStash).toBe(true);
     expect(capabilities.writeStash).toBe(true);
@@ -44,6 +56,12 @@ describe('scmCapabilities', () => {
     expect(capabilities.readBranches).toBe(false);
     expect(capabilities.writeBranchCreate).toBe(false);
     expect(capabilities.writeBranchCheckout).toBe(false);
+    expect(capabilities.writeBranchMerge).toBe(false);
+    expect(capabilities.writeBranchRebase).toBe(false);
+    expect(capabilities.writeBranchOperationControl).toBe(false);
+    expect(capabilities.writeRemoteAdd).toBe(false);
+    expect(capabilities.writeRemoteSetUrl).toBe(false);
+    expect(capabilities.writeRemoteRemove).toBe(false);
     expect(capabilities.writeRemotePublish).toBe(false);
     expect(capabilities.readStash).toBe(false);
     expect(capabilities.writeStash).toBe(false);
