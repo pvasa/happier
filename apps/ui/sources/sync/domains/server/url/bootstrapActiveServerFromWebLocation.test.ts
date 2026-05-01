@@ -66,4 +66,20 @@ describe('bootstrapActiveServerFromWebLocation', () => {
         expect(getActiveServerUrl()).toBe('http://qa-stack.localhost:57010');
         expect(result?.serverUrl).toBe('http://127.0.0.1:57010');
     });
+
+    it('does not consume terminal connect query params as a global server override', async () => {
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
+        process.env.EXPO_PUBLIC_HAPPY_SERVER_URL = 'https://api.happier.dev';
+
+        stubWebLocation('https://app.example.test/terminal/connect?key=abc123&server=https%3A%2F%2Fwrong.example.test');
+
+        const { bootstrapActiveServerFromWebLocation, readWebServerUrlOverrideFromLocation } = await importFreshBootstrap();
+        const override = readWebServerUrlOverrideFromLocation();
+        const result = bootstrapActiveServerFromWebLocation({ scope: 'device' });
+
+        const { getActiveServerUrl } = await importFreshServerProfiles();
+        expect(override).toBeNull();
+        expect(result).toBeNull();
+        expect(getActiveServerUrl()).toBe('https://api.happier.dev');
+    });
 });

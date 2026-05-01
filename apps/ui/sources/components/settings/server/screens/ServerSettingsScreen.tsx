@@ -49,7 +49,12 @@ export function ServerSettingsScreen() {
                 style={styles.keyboardAvoidingView}
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 >
-                    <ItemList style={styles.itemListContainer}>
+                    <ItemList
+                        style={styles.itemListContainer}
+                        keyboardShouldPersistTaps="handled"
+                        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                        {...(Platform.OS === 'ios' ? { automaticallyAdjustKeyboardInsets: true } : {})}
+                    >
                     {controller.relayDriftBanner ? (
                         isDesktop ? (
                             <RelayDriftActionCard banner={controller.relayDriftBanner} />

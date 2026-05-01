@@ -5,6 +5,7 @@ import { t } from '@/text';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { removeServerProfile, renameServerProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { promptSignedOutServerSwitchConfirmation } from '@/components/settings/server/modals/ServerSwitchAuthPrompt';
+import { retargetPendingTerminalConnectToServerUrl } from '@/components/settings/server/hooks/retargetPendingTerminalConnectToServerUrl';
 
 import type { ServerAuthStatus } from './useServerAuthStatusByServerId';
 
@@ -35,6 +36,7 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
 
         params.setServerSelectionActiveTargetKind('server');
         params.setServerSelectionActiveTargetId(profile.id);
+        retargetPendingTerminalConnectToServerUrl(profile.serverUrl);
 
         await params.onSwitchServerById(profile.id);
         if (authStatus === 'signedOut') {

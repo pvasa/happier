@@ -24,6 +24,7 @@ import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanoni
 import { isInsecureRemoteHttpServerUrl } from '@/sync/domains/server/url/serverUrlClassification';
 import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import { useAuth } from '@/auth/context/AuthContext';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { parseServerSettingsRouteParams } from '@/components/settings/server/navigation/serverSettingsRouteParams';
 import { useServerAuthStatusByServerId } from '@/components/settings/server/hooks/useServerAuthStatusByServerId';
@@ -32,6 +33,8 @@ import { useServerSettingsServerProfileActions } from '@/components/settings/ser
 import { useServerSettingsGroupActions } from '@/components/settings/server/hooks/useServerSettingsGroupActions';
 import { useServerSettingsConcurrentActions } from '@/components/settings/server/hooks/useServerSettingsConcurrentActions';
 import { useRelayDriftBanner } from '@/components/settings/server/useRelayDriftBanner';
+import { promptSignedOutServerSwitchConfirmation } from '@/components/settings/server/modals/ServerSwitchAuthPrompt';
+import { retargetPendingTerminalConnectToServerUrl } from '@/components/settings/server/hooks/retargetPendingTerminalConnectToServerUrl';
 import type { RelayDriftBanner } from '@/components/settings/server/relayDriftTypes';
 import { runtimeFetch } from '@/utils/system/runtimeFetch';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -396,8 +399,27 @@ export function useServerSettingsScreenController(): ServerSettingsController {
             // best-effort
         }
 
-        await switchServerById(profile.id, { normalizeRoute: route.source !== 'notification' });
+        let targetAuthStatus: 'signedIn' | 'signedOut' | 'unknown' = 'unknown';
+        try {
+            const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
+            targetAuthStatus = creds ? 'signedIn' : 'signedOut';
+        } catch {
+            targetAuthStatus = 'unknown';
+        }
+
+        if (targetAuthStatus === 'signedOut') {
+            const shouldContinue = await promptSignedOutServerSwitchConfirmation();
+            if (!shouldContinue) return;
+        }
+
+        retargetPendingTerminalConnectToServerUrl(profile.serverUrl);
+        await switchServerById(profile.id, { normalizeRoute: targetAuthStatus === 'signedOut' ? false : route.source !== 'notification' });
         setRevision((r) => r + 1);
+
+        if (targetAuthStatus === 'signedOut') {
+            router.replace('/');
+            return;
+        }
 
         if (route.source === 'notification' && route.url) {
             const pending = getPendingNotificationNav();
