@@ -355,6 +355,10 @@ export function useFilesScmOperations(input: {
                 if (!mountedRef.current) return;
                 await loadCommitHistory(opts);
             },
+            refreshScmData: async () => {
+                if (!mountedRef.current) return;
+                await refreshScmData();
+            },
             setScmOperationBusy: setScmOperationBusySafe,
             setScmOperationStatus: setScmOperationStatusSafe,
             tracking,
@@ -368,6 +372,7 @@ export function useFilesScmOperations(input: {
         commitSelectionPaths,
         scmCommitStrategy,
         loadCommitHistory,
+        refreshScmData,
         sessionId,
         sessionPath,
         mountedRef,

@@ -179,6 +179,22 @@ vi.mock('@/components/sessions/files/views/SessionRepositoryTreeBrowserView', ()
 
 vi.mock('@/scm/scmAttribution', () => ({
     getDefaultChangedFilesViewMode: () => 'session',
+    getSelectableChangedFilesViewModes: (input: { showTurnViewToggle: boolean; showSessionViewToggle: boolean }) => {
+        if (!input.showTurnViewToggle && !input.showSessionViewToggle) return [];
+        return [
+            'repository',
+            ...(input.showTurnViewToggle ? ['turn'] : []),
+            ...(input.showSessionViewToggle ? ['session'] : []),
+        ];
+    },
+    resolveChangedFilesViewMode: (input: { mode: string; showTurnViewToggle: boolean; showSessionViewToggle: boolean }) => {
+        if (input.mode === 'turn' && input.showTurnViewToggle) return 'turn';
+        if (input.mode === 'session' && input.showSessionViewToggle) return 'session';
+        if (input.mode === 'repository') return 'repository';
+        if (input.showTurnViewToggle) return 'turn';
+        if (input.showSessionViewToggle) return 'session';
+        return 'repository';
+    },
 }));
 
 vi.mock('@/scm/settings/commitStrategy', () => ({

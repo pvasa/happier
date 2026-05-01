@@ -3759,6 +3759,11 @@ export const pl: TranslationStructure = {
 
   session: {
     inputPlaceholder: "Wpisz wiadomość...",
+    rightPanel: {
+      tabs: {
+        git: "Git",
+      },
+    },
     toolCalls: "Wywołania narzędzi",
     toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} więcej…`,
     forking: {
@@ -5132,6 +5137,8 @@ export const pl: TranslationStructure = {
       `Session-attributed changes (${count})`,
     latestTurnChanges: ({ count }: { count: number }) =>
       `Zmiany ostatniej tury (${count})`,
+    selectedForCommitChanges: ({ count }: { count: number }) =>
+      `Wybrane do commita (${count})`,
     latestTurnDescription:
       'Zmiany pochodzące od dostawcy z ostatnio zakończonej tury.',
     otherRepositoryChanges: ({ count }: { count: number }) =>
@@ -5264,10 +5271,12 @@ export const pl: TranslationStructure = {
 	      upload: "Prześlij",
 	      uploadFiles: "Prześlij pliki",
 	      uploadFolder: "Prześlij folder",
-	      allRepositoryFiles: "Wszystkie pliki repozytorium",
+      allRepositoryFiles: "Wszystkie pliki repozytorium",
       repositoryView: "Widok repozytorium",
+      selectedForCommitView: "Wybrane do commita",
       turnView: "Widok tury",
       sessionView: "Widok sesji",
+      view: "Widok",
       review: "Przegląd",
       list: "Lista",
       scm: "Git",

@@ -4104,6 +4104,11 @@ export const ru: TranslationStructure = {
 
   session: {
     inputPlaceholder: "Введите сообщение...",
+    rightPanel: {
+      tabs: {
+        git: "Git",
+      },
+    },
     toolCalls: "Вызовы инструментов",
     toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} ещё…`,
     forking: {
@@ -5117,6 +5122,8 @@ export const ru: TranslationStructure = {
       `Изменения, привязанные к сессии (${count})`,
     latestTurnChanges: ({ count }: { count: number }) =>
       `Изменения последнего хода (${count})`,
+    selectedForCommitChanges: ({ count }: { count: number }) =>
+      `Выбрано для коммита (${count})`,
     latestTurnDescription:
       'Изменения от провайдера из последнего завершённого хода.',
     otherRepositoryChanges: ({ count }: { count: number }) =>
@@ -5250,10 +5257,12 @@ export const ru: TranslationStructure = {
 	      upload: "Загрузить",
 	      uploadFiles: "Загрузить файлы",
 	      uploadFolder: "Загрузить папку",
-	      allRepositoryFiles: "Все файлы репозитория",
+      allRepositoryFiles: "Все файлы репозитория",
       repositoryView: "Вид репозитория",
+      selectedForCommitView: "Выбрано для коммита",
       turnView: "Вид хода",
       sessionView: "Вид сессии",
+      view: "Вид",
       review: "Ревью",
       list: "Список",
       scm: "Git",

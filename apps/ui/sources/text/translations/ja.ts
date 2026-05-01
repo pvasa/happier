@@ -4005,6 +4005,11 @@ localTailscale: {
 
   session: {
     inputPlaceholder: "メッセージを入力...",
+    rightPanel: {
+      tabs: {
+        git: "Git",
+      },
+    },
     toolCalls: "ツール呼び出し",
     toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} 件…`,
     forking: {
@@ -5377,6 +5382,8 @@ localTailscale: {
       `セッションに紐づく変更 (${count})`,
     latestTurnChanges: ({ count }: { count: number }) =>
       `直近のターンの変更（${count}）`,
+    selectedForCommitChanges: ({ count }: { count: number }) =>
+      `コミット対象として選択（${count}）`,
     latestTurnDescription:
       '直近で完了したターンのプロバイダ由来の変更です。',
     otherRepositoryChanges: ({ count }: { count: number }) =>
@@ -5508,10 +5515,12 @@ localTailscale: {
 	      upload: "アップロード",
 	      uploadFiles: "ファイルをアップロード",
 	      uploadFolder: "フォルダーをアップロード",
-	      allRepositoryFiles: "リポジトリ内のすべてのファイル",
+      allRepositoryFiles: "リポジトリ内のすべてのファイル",
       repositoryView: "リポジトリ表示",
+      selectedForCommitView: "コミット対象として選択",
       turnView: "ターン表示",
       sessionView: "セッション表示",
+      view: "表示",
       review: "レビュー",
       list: "一覧",
       scm: "Git",

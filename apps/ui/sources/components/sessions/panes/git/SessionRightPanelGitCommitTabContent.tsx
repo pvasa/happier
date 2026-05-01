@@ -6,7 +6,11 @@ import { ScmCommitSelectionToggleButton } from '@/components/sessions/sourceCont
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
 import { ScmChangeOverflowMenu } from '@/components/sessions/sourceControl/changes/ScmChangeOverflowMenu';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
-import { getDefaultChangedFilesViewMode } from '@/scm/scmAttribution';
+import {
+    getDefaultChangedFilesViewMode,
+    resolveChangedFilesViewMode,
+    type ChangedFilesViewMode,
+} from '@/scm/scmAttribution';
 import { storage } from '@/sync/domains/state/storage';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { ScmCommitSelectionPatch } from '@/sync/domains/state/storageTypes';
@@ -59,27 +63,11 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
     const commitSelectionUiEnabled = props.commitSelectionUiEnabled === true;
     const { latestTurnScopedChangeSet, sessionChangeSet } = useDerivedSessionChangeSet(props.sessionId);
 
-    const [changedFilesViewMode, setChangedFilesViewMode] = React.useState(() => {
+    const [requestedChangedFilesViewMode, setChangedFilesViewMode] = React.useState<ChangedFilesViewMode>(() => {
         if (latestTurnScopedChangeSet) return 'turn' as const;
         if (sessionChangeSet) return 'session' as const;
         return getDefaultChangedFilesViewMode();
     });
-
-    React.useEffect(() => {
-        if (changedFilesViewMode === 'turn' && latestTurnScopedChangeSet) return;
-        if (changedFilesViewMode === 'session' && sessionChangeSet) return;
-        if (latestTurnScopedChangeSet) {
-            setChangedFilesViewMode('turn');
-            return;
-        }
-        if (sessionChangeSet) {
-            setChangedFilesViewMode('session');
-            return;
-        }
-        if (changedFilesViewMode !== 'repository') {
-            setChangedFilesViewMode(getDefaultChangedFilesViewMode());
-        }
-    }, [changedFilesViewMode, latestTurnScopedChangeSet, sessionChangeSet]);
 
     const changed = useChangedFilesData({
         sessionId: props.sessionId,
@@ -91,9 +79,6 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
         showAllRepositoryFiles: false,
         latestTurnChangeSet: latestTurnScopedChangeSet,
         sessionChangeSet,
-        // The sidebar commit surface defaults to repository-only. Skip attribution work unless we
-        // actually need to render the session-attribution view (keeps initial open snappy on large repos).
-        computeAttribution: changedFilesViewMode !== 'repository',
     });
 
     const {
@@ -101,6 +86,7 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
         isSelectedForCommit,
         toggleCommitSelectionForFile,
         bulkSelectAll,
+        bulkSelectFiles,
         bulkSelectNone,
         disableSelectAll,
         disableSelectNone,
@@ -114,6 +100,44 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
         commitSelectionPatches: props.commitSelectionPatches,
         changedFiles: changed.allRepositoryChangedFiles,
     });
+
+    const selectedRepositoryChangedFiles = React.useMemo(() => {
+        return changed.allRepositoryChangedFiles.filter((file) => isSelectedForCommit(file));
+    }, [changed.allRepositoryChangedFiles, isSelectedForCommit]);
+
+    const showSelectedViewToggle = selectedRepositoryChangedFiles.length > 0;
+
+    const changedFilesViewMode = React.useMemo(() => resolveChangedFilesViewMode({
+        mode: requestedChangedFilesViewMode,
+        showTurnViewToggle: changed.showTurnViewToggle,
+        showSessionViewToggle: changed.showSessionViewToggle,
+        showSelectedViewToggle,
+    }), [changed.showSessionViewToggle, changed.showTurnViewToggle, requestedChangedFilesViewMode, showSelectedViewToggle]);
+
+    const currentScopeChangedFiles = React.useMemo<readonly ScmFileStatus[]>(() => {
+        if (changedFilesViewMode === 'selected') return selectedRepositoryChangedFiles;
+        if (changedFilesViewMode === 'turn') {
+            return changed.turnAttributedFiles.map((entry) => entry.file);
+        }
+        if (changedFilesViewMode === 'session') {
+            return changed.sessionAttributedFiles.map((entry) => entry.file);
+        }
+        return changed.allRepositoryChangedFiles;
+    }, [
+        changed.allRepositoryChangedFiles,
+        changed.sessionAttributedFiles,
+        changed.turnAttributedFiles,
+        changedFilesViewMode,
+        selectedRepositoryChangedFiles,
+    ]);
+
+    const bulkSelectCurrentScope = React.useCallback(() => {
+        if (changedFilesViewMode === 'repository') {
+            bulkSelectAll();
+            return;
+        }
+        bulkSelectFiles(currentScopeChangedFiles);
+    }, [bulkSelectAll, bulkSelectFiles, changedFilesViewMode, currentScopeChangedFiles]);
 
     const renderCommitSelectionAction = React.useCallback((file: ScmFileStatus) => {
         const selectedForCommit = isSelectedForCommit(file);
@@ -190,6 +214,7 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
             changedFilesViewMode={changedFilesViewMode}
             attributionReliability={changed.attributionReliability}
             allRepositoryChangedFiles={changed.allRepositoryChangedFiles}
+            selectedRepositoryChangedFiles={selectedRepositoryChangedFiles}
             turnAttributedFiles={changed.turnAttributedFiles}
             turnRepositoryOnlyFiles={changed.turnRepositoryOnlyFiles}
             sessionAttributedFiles={changed.sessionAttributedFiles}
@@ -197,11 +222,12 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
             suppressedInferredCount={changed.suppressedInferredCount}
             showTurnViewToggle={changed.showTurnViewToggle}
             showSessionViewToggle={changed.showSessionViewToggle}
+            showSelectedViewToggle={showSelectedViewToggle}
             onChangedFilesViewMode={setChangedFilesViewMode}
             repositorySelectedCount={repositorySelectedCount}
-            onSelectAll={commitSelectionUiEnabled ? bulkSelectAll : noop}
+            onSelectAll={commitSelectionUiEnabled ? bulkSelectCurrentScope : noop}
             onSelectNone={commitSelectionUiEnabled ? bulkSelectNone : noop}
-            disableSelectAll={commitSelectionUiEnabled ? disableSelectAll : true}
+            disableSelectAll={commitSelectionUiEnabled ? disableSelectAll || currentScopeChangedFiles.length === 0 : true}
             disableSelectNone={commitSelectionUiEnabled ? disableSelectNone : true}
             onFilePress={(file) => props.openFileInDetails(file.fullPath)}
             onFilePressPinned={(file) => props.openFileInDetailsPinned(file.fullPath)}

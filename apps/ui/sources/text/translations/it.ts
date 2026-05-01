@@ -4077,6 +4077,11 @@ export const it: TranslationStructure = {
 
   session: {
     inputPlaceholder: "Scrivi un messaggio ...",
+    rightPanel: {
+      tabs: {
+        git: "Git",
+      },
+    },
     toolCalls: "Chiamate strumento",
     toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} in più…`,
     forking: {
@@ -5454,6 +5459,8 @@ export const it: TranslationStructure = {
       `Modifiche attribuite alla sessione (${count})`,
     latestTurnChanges: ({ count }: { count: number }) =>
       `Modifiche dell'ultimo turno (${count})`,
+    selectedForCommitChanges: ({ count }: { count: number }) =>
+      `Selezionati per il commit (${count})`,
     latestTurnDescription:
       'Modifiche supportate dal provider per il turno completato più recente.',
     otherRepositoryChanges: ({ count }: { count: number }) =>
@@ -5590,8 +5597,10 @@ export const it: TranslationStructure = {
       uploadFolder: "Carica cartella",
       allRepositoryFiles: "Tutti i file del repository",
       repositoryView: "Vista repository",
+      selectedForCommitView: "Selezionati per il commit",
       turnView: "Vista turno",
       sessionView: "Vista sessione",
+      view: "Vista",
       review: "Revisione",
       list: "Elenco",
       scm: "Git",

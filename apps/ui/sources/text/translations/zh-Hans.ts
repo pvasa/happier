@@ -3570,6 +3570,11 @@ export const zhHans: TranslationStructure = {
 
   session: {
     inputPlaceholder: "输入消息...",
+    rightPanel: {
+      tabs: {
+        git: "Git",
+      },
+    },
     toolCalls: "工具调用",
     toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} 更多…`,
     forking: {
@@ -4907,6 +4912,8 @@ export const zhHans: TranslationStructure = {
       `会话归因的变更（${count}）`,
     latestTurnChanges: ({ count }: { count: number }) =>
       `最近一轮变更（${count}）`,
+    selectedForCommitChanges: ({ count }: { count: number }) =>
+      `已选择提交（${count}）`,
     latestTurnDescription:
       '来自最近一次已完成轮次的提供方变更。',
     otherRepositoryChanges: ({ count }: { count: number }) =>
@@ -5035,10 +5042,12 @@ export const zhHans: TranslationStructure = {
 	      upload: "上传",
 	      uploadFiles: "上传文件",
 	      uploadFolder: "上传文件夹",
-	      allRepositoryFiles: "仓库中的所有文件",
+      allRepositoryFiles: "仓库中的所有文件",
       repositoryView: "仓库视图",
+      selectedForCommitView: "已选择提交",
       turnView: "轮次视图",
       sessionView: "会话视图",
+      view: "视图",
       review: "审阅",
       list: "列表",
       scm: "Git",

@@ -223,10 +223,10 @@ describe('useFilesScmOperations integration', () => {
         });
 
         expect(git(workspace, ['rev-parse', `origin/${branch}`])).toBe(localHeadAfterCommit);
-        expect(invalidateFromMutationAndAwait).toHaveBeenCalledTimes(2);
+        expect(refreshScmData).toHaveBeenCalledTimes(1);
+        expect(invalidateFromMutationAndAwait).toHaveBeenCalledTimes(1);
         expect(loadCommitHistory).toHaveBeenNthCalledWith(1, { reset: true });
         expect(loadCommitHistory).toHaveBeenNthCalledWith(2, { reset: true });
-        expect(refreshScmData).not.toHaveBeenCalled();
         expect(modalConfirm).toHaveBeenCalledTimes(1);
         expect(modalAlert).not.toHaveBeenCalled();
 
@@ -280,7 +280,8 @@ describe('useFilesScmOperations integration', () => {
         expect(git(workspace, ['log', '-1', '--pretty=%s'])).toBe('feat: draft commit');
         expect(showScmCommitMessageEditorModal).not.toHaveBeenCalled();
         expect(modalAlert).not.toHaveBeenCalled();
-        expect(invalidateFromMutationAndAwait).toHaveBeenCalledTimes(1);
+        expect(refreshScmData).toHaveBeenCalledTimes(1);
+        expect(invalidateFromMutationAndAwait).not.toHaveBeenCalled();
         expect(loadCommitHistory).toHaveBeenCalledWith({ reset: true });
 
         await hook.unmount();
@@ -551,14 +552,16 @@ describe('useFilesScmOperations integration', () => {
         }
 
         storage.getState().markSessionProjectScmCommitSelectionPaths(sessionId, ['a.txt']);
-        invalidateFromMutationAndAwait.mockRejectedValueOnce(new Error('refresh failed'));
+        const refreshScmData = vi.fn(async () => {
+            throw new Error('refresh failed');
+        });
 
         const hook = await mountHook({
             sessionId,
             sessionPath: workspace,
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
-            refreshScmData: vi.fn(async () => {}),
+            refreshScmData,
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
             scmRemoteConfirmPolicy: 'always',
@@ -1034,9 +1037,9 @@ describe('useFilesScmOperations integration', () => {
         });
 
         expect(runSapling(workspace, ['status', '--root-relative'])).toBe('');
-        expect(invalidateFromMutationAndAwait).toHaveBeenCalledTimes(1);
+        expect(refreshScmData).toHaveBeenCalledTimes(1);
+        expect(invalidateFromMutationAndAwait).not.toHaveBeenCalled();
         expect(loadCommitHistory).toHaveBeenCalledWith({ reset: true });
-        expect(refreshScmData).not.toHaveBeenCalled();
         expect(modalAlert).not.toHaveBeenCalled();
 
         const operationLog = storage.getState().getSessionProjectScmOperationLog(sessionId);

@@ -3467,6 +3467,11 @@ deps: {
 
     session: {
         inputPlaceholder: 'Escriu un missatge...',
+        rightPanel: {
+            tabs: {
+                git: 'Git',
+            },
+        },
         toolCalls: 'Crides d’eines',
         toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} més…`,
         forking: {
@@ -4742,6 +4747,7 @@ deps: {
           repositoryChangedFiles: ({ count }: { count: number }) => `Fitxers canviats al repositori (${count})`,
           sessionAttributedChanges: ({ count }: { count: number }) => `Canvis atribuïts a la sessió (${count})`,
           latestTurnChanges: ({ count }: { count: number }) => `Canvis de l’últim torn (${count})`,
+          selectedForCommitChanges: ({ count }: { count: number }) => `Seleccionats per al commit (${count})`,
           latestTurnDescription: 'Canvis proporcionats pel proveïdor de l’últim torn completat.',
           otherRepositoryChanges: ({ count }: { count: number }) => `Altres canvis del repositori (${count})`,
         attributionReliabilityHigh: 'Atribució de millor esforç. La vista del repositori continua sent la font de veritat.',
@@ -4862,8 +4868,10 @@ deps: {
 	            uploadFolder: 'Pujar carpeta',
 	            allRepositoryFiles: 'Tots els fitxers del repositori',
             repositoryView: 'Vista del repositori',
+            selectedForCommitView: 'Seleccionats per al commit',
             turnView: 'Vista del torn',
             sessionView: 'Vista de la sessió',
+            view: 'Vista',
             review: 'Revisió',
             list: 'Llista',
             scm: 'Git',

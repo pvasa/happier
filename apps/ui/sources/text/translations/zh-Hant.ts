@@ -3086,6 +3086,11 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 
       session: {
           inputPlaceholder: '輸入訊息...',
+          rightPanel: {
+              tabs: {
+                  git: 'Git',
+              },
+          },
           toolCalls: '工具呼叫',
           toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} 更多…`,
             forking: {
@@ -4013,6 +4018,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         repositoryChangedFiles: ({ count }: { count: number }) => `儲存庫變更檔案（${count}）`,
         sessionAttributedChanges: ({ count }: { count: number }) => `工作階段歸因的變更（${count}）`,
         latestTurnChanges: ({ count }: { count: number }) => `最近一輪變更（${count}）`,
+        selectedForCommitChanges: ({ count }: { count: number }) => `已選取提交（${count}）`,
         latestTurnDescription: '來自最近一次已完成輪次的提供者變更。',
         otherRepositoryChanges: ({ count }: { count: number }) => `其他儲存庫變更（${count}）`,
         attributionReliabilityHigh: '歸因盡力而為。儲存庫檢視仍為最終依據。',
@@ -4128,10 +4134,12 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
 	            upload: '上傳',
 	            uploadFiles: '上傳檔案',
 	            uploadFolder: '上傳資料夾',
-	            allRepositoryFiles: '儲存庫中的所有檔案',
+            allRepositoryFiles: '儲存庫中的所有檔案',
             repositoryView: '儲存庫檢視',
+            selectedForCommitView: '已選取提交',
             turnView: '輪次檢視',
             sessionView: '工作階段檢視',
+            view: '檢視',
             review: '審閱',
             list: '清單',
             scm: 'Git',

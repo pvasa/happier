@@ -3477,6 +3477,11 @@ export const en = {
 
     session: {
         inputPlaceholder: 'What would you like to work on?',
+        rightPanel: {
+            tabs: {
+                git: 'Git',
+            },
+        },
         toolCalls: 'Tool calls',
         toolCallsCollapsedPreviewMore: ({ count }: { count: number }) => `+${count} more…`,
         forking: {
@@ -4749,6 +4754,7 @@ export const en = {
             repositoryChangedFiles: ({ count }: { count: number }) => `Repository changed files (${count})`,
             sessionAttributedChanges: ({ count }: { count: number }) => `Session-attributed changes (${count})`,
             latestTurnChanges: ({ count }: { count: number }) => `Latest turn changes (${count})`,
+            selectedForCommitChanges: ({ count }: { count: number }) => `Selected for commit (${count})`,
             latestTurnDescription: 'Provider-backed changes from the most recent completed turn.',
             otherRepositoryChanges: ({ count }: { count: number }) => `Other repository changes (${count})`,
           attributionReliabilityHigh: 'Best effort attribution. Repository view remains the source of truth.',
@@ -4869,8 +4875,10 @@ export const en = {
                 uploadFolder: 'Upload folder',
                 allRepositoryFiles: 'All repository files',
                 repositoryView: 'Repository view',
+                selectedForCommitView: 'Selected for commit',
                 turnView: 'Turn view',
                 sessionView: 'Session view',
+                view: 'View',
                 review: 'Review',
                 list: 'List',
                 scm: 'SCM',
