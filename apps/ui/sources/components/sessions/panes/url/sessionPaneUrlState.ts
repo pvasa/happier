@@ -1,6 +1,12 @@
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
-import { createSessionDetailsTerminalTab, SESSION_DETAILS_TERMINAL_TAB_KEY } from '@/components/sessions/terminal/embeddedTerminalDocking';
-import { t } from '@/text';
+import { SESSION_DETAILS_TERMINAL_TAB_KEY } from '@/components/sessions/terminal/embeddedTerminalDocking';
+import {
+    createSessionCommitDetailsTab,
+    createSessionDetailsTerminalTab,
+    createSessionFileDetailsTab,
+    createSessionScmReviewDetailsTab,
+    SESSION_DETAILS_SCM_REVIEW_TAB_KEY,
+} from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
 export type SessionPaneUrlDetailsTarget =
     | Readonly<{ kind: 'file'; path: string }>
@@ -19,17 +25,6 @@ type PaneScopeStateLike = Readonly<{
     bottom: Readonly<{ isOpen: boolean; activeTabId: string | null }>;
     details: Readonly<{ isOpen: boolean; tabs: ReadonlyArray<Readonly<{ key: string; kind: string; resource: unknown }>>; activeTabKey: string | null }>;
 }>;
-
-const SESSION_DETAILS_SCM_REVIEW_TAB_KEY = 'scmReview:working';
-
-function createSessionScmReviewDetailsTab() {
-    return {
-        key: SESSION_DETAILS_SCM_REVIEW_TAB_KEY,
-        kind: 'scmReview',
-        title: t('files.toolbar.review'),
-        resource: { kind: 'scmReview', scope: 'working' },
-    } as const;
-}
 
 function readSingleStringParam(params: Readonly<Record<string, unknown>>, key: string): string | null {
     const raw = params[key];
@@ -202,25 +197,13 @@ export function applySessionPaneUrlState(
     if (state.details?.kind === 'file') {
         const fullPath = state.details.path.trim();
         if (!isSafeWorkspaceRelativePath(fullPath)) return;
-        const fileName = fullPath.split('/').pop() ?? fullPath;
-        pane.openDetailsTab({
-            key: `file:${fullPath}`,
-            kind: 'file',
-            title: fileName,
-            resource: { kind: 'file', path: fullPath },
-        });
+        pane.openDetailsTab(createSessionFileDetailsTab(fullPath));
         return;
     }
 
     if (state.details?.kind === 'commit') {
-        const safeSha = state.details.sha.trim().split(/\s+/)[0] ?? '';
-        if (!safeSha) return;
-        pane.openDetailsTab({
-            key: `commit:${safeSha}`,
-            kind: 'commit',
-            title: safeSha.slice(0, 7),
-            resource: { kind: 'commit', sha: safeSha },
-        });
+        const tab = createSessionCommitDetailsTab(state.details.sha);
+        if (tab) pane.openDetailsTab(tab);
         return;
     }
 

@@ -82,6 +82,7 @@ function buildScmSnapshotMock(capabilities: any) {
 
 vi.mock('@/components/ui/text/Text', () => ({
     Text: 'Text',
+    TextInput: 'TextInput',
 }));
 
 vi.mock('@/constants/Typography', () => ({
@@ -135,10 +136,6 @@ vi.mock('@/scm/scmStatusSync', () => ({
 
 vi.mock('@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard', () => ({
     ScmCommitComposerCard: (props: any) => React.createElement('ScmCommitComposerCard', props),
-}));
-
-vi.mock('@/components/sessions/files/SourceControlOperationsPanel', () => ({
-    SourceControlOperationsPanel: (props: any) => React.createElement('SourceControlOperationsPanel', props),
 }));
 
 vi.mock('@/components/sessions/files/SourceControlOperationsHistorySection', () => ({

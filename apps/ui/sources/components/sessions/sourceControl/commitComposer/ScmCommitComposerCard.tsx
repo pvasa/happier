@@ -7,6 +7,14 @@ import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
+export type ScmCommitAdjacentPushAction = Readonly<{
+    visible: boolean;
+    disabled: boolean;
+    busy: boolean;
+    accessibilityLabel: string;
+    onPress: () => void;
+}>;
+
 export type ScmCommitComposerCardProps = Readonly<{
     theme: any;
     commitActionLabel: string;
@@ -26,6 +34,7 @@ export type ScmCommitComposerCardProps = Readonly<{
         | { ok: true; message: string }
         | { ok: false; error: string }
     >;
+    pushAction?: ScmCommitAdjacentPushAction;
 }>;
 
 function unwrapMarkdownCodeFence(value: string): string {
@@ -65,6 +74,8 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
     const variant = props.variant ?? 'card';
     const generatorEnabled = props.commitMessageGeneratorEnabled === true && typeof props.onGenerateCommitMessageSuggestion === 'function';
     const [generating, setGenerating] = React.useState(false);
+    const pushAction = props.pushAction?.visible === true ? props.pushAction : null;
+    const pushDisabled = props.busy || pushAction?.disabled === true || pushAction?.busy === true;
     const commitButtonContentColor = commitDisabled
         ? props.theme.colors.textSecondary
         : props.theme.colors.button?.primary?.tint ?? props.theme.colors.surface;
@@ -261,6 +272,37 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                         </Text>
                     )}
                 </Pressable>
+                {pushAction ? (
+                    <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={pushAction.accessibilityLabel}
+                        accessibilityState={{ busy: pushAction.busy, disabled: pushDisabled }}
+                        disabled={pushDisabled}
+                        onPress={pushAction.onPress}
+                        testID="scm-commit-adjacent-push"
+                        style={({ pressed }) => ({
+                            width: 38,
+                            height: 38,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: props.theme.colors.divider,
+                            backgroundColor: props.theme.colors.surfaceHigh ?? props.theme.colors.surface,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            opacity: pushDisabled ? 0.5 : pressed ? 0.85 : 1,
+                        })}
+                    >
+                        {pushAction.busy ? (
+                            <ActivityIndicator color={props.theme.colors.textSecondary} />
+                        ) : (
+                            <Ionicons
+                                name="arrow-up-circle-outline"
+                                size={17}
+                                color={props.theme.colors.textSecondary}
+                            />
+                        )}
+                    </Pressable>
+                ) : null}
             </View>
         </View>
     );

@@ -4,7 +4,10 @@ import { Octicons } from '@expo/vector-icons';
 
 import { SourceControlBranchSummary } from '@/components/sessions/files/SourceControlBranchSummary';
 import { ChangedFilesList } from '@/components/sessions/files/content/ChangedFilesList';
-import { ScmCommitComposerCard } from '@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard';
+import {
+    ScmCommitComposerCard,
+    type ScmCommitAdjacentPushAction,
+} from '@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard';
 import { ScmChangeRow } from '@/components/sessions/sourceControl/changes/ScmChangeRow';
 import { ChangedFilesViewModeMenu } from '@/components/sessions/files/ChangedFilesViewModeMenu';
 import { Text } from '@/components/ui/text/Text';
@@ -71,6 +74,7 @@ export type SessionRightPanelGitCommitTabProps = Readonly<{
         | { ok: false; error: string }
     >;
     onClearSelection?: () => void;
+    commitAdjacentPushAction?: ScmCommitAdjacentPushAction;
 
     scmStatusFiles: ScmStatusFiles | null;
     showBranchSummary?: boolean;
@@ -149,6 +153,7 @@ export const SessionRightPanelGitCommitTab = React.memo((props: SessionRightPane
                         selectionCount={props.repositorySelectedCount}
                         onClearSelection={props.onClearSelection}
                         onSelectAllSelection={props.onSelectAll}
+                        pushAction={props.commitAdjacentPushAction}
                     />
                 </View>
             ) : null}
@@ -174,6 +179,7 @@ const CommitComposerFooter = React.memo((props: Readonly<{
     selectionCount: number;
     onClearSelection?: () => void;
     onSelectAllSelection?: () => void;
+    pushAction?: ScmCommitAdjacentPushAction;
 }>) => {
     const [localDraftMessage, setLocalDraftMessage] = React.useState(() => String(props.externalDraftMessage ?? ''));
     const dirtyRef = React.useRef(false);
@@ -225,6 +231,7 @@ const CommitComposerFooter = React.memo((props: Readonly<{
             onClearSelection={props.onClearSelection}
             onSelectAllSelection={props.onSelectAllSelection}
             variant="railFooter"
+            pushAction={props.pushAction}
         />
     );
 });

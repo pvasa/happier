@@ -197,7 +197,7 @@ describe('SourceControlBranchMenu', () => {
         });
     });
 
-    it('publishes branch when selecting publish', async () => {
+    it('does not expose publish from the branch menu', async () => {
         sourceControlBranchMenuModuleState.useSettingMock.mockImplementation(() => 'always_bring');
         sourceControlBranchMenuModuleState.fetchBranchesForSessionMock.mockResolvedValue([]);
         sourceControlBranchMenuModuleState.sessionScmBranchCreateMock.mockResolvedValue({ success: true });
@@ -223,10 +223,7 @@ describe('SourceControlBranchMenu', () => {
                 />);
 
         const menu = screen.findByType('DropdownMenu' as any);
-        await act(async () => {
-            await menu.props.onSelect('publish');
-        });
 
-        expect(sourceControlBranchMenuModuleState.publishBranchMock).toHaveBeenCalledTimes(1);
+        expect(menu.props.items.some((item: any) => item.id === 'publish')).toBe(false);
     });
 });

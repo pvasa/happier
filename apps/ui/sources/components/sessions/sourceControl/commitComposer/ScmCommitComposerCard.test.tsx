@@ -179,4 +179,37 @@ describe('ScmCommitComposerCard', () => {
         expect(screen.findAllByType('ActivityIndicator')).toHaveLength(1);
         expect(screen.findAll((node) => node.props?.children === 'Refreshing repository status...')).toHaveLength(0);
     });
+
+    it('renders an optional commit-adjacent push button and invokes it', async () => {
+        const onPush = vi.fn();
+        const { ScmCommitComposerCard } = await import('./ScmCommitComposerCard');
+
+        const screen = (await renderScreen(
+            <ScmCommitComposerCard
+                theme={{ colors: { divider: '#444', surface: '#111', surfaceHigh: '#222', text: '#fff', textSecondary: '#aaa', success: '#0a0' } }}
+                commitActionLabel="Commit"
+                draftMessage="feat: test"
+                onDraftMessageChange={() => {}}
+                busy={false}
+                status={null}
+                commitAllowed
+                commitBlockedMessage={null}
+                onCommitFromMessage={() => {}}
+                pushAction={{
+                    visible: true,
+                    disabled: false,
+                    busy: false,
+                    accessibilityLabel: 'Push to origin/main',
+                    onPress: onPush,
+                }}
+            />
+        )).tree;
+
+        const pushButton = screen.findByProps({ testID: 'scm-commit-adjacent-push' });
+        expect(pushButton).toBeTruthy();
+
+        await pressTestInstanceAsync(pushButton);
+
+        expect(onPush).toHaveBeenCalledTimes(1);
+    });
 });

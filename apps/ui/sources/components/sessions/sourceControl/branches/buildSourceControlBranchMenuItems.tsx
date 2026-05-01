@@ -18,7 +18,6 @@ export function buildSourceControlBranchMenuItems(input: Readonly<{
     canCheckout: boolean;
     canCreateWorktrees: boolean;
     canLaunchWorktreeSession: boolean;
-    canPublish: boolean;
     canReadBranches: boolean;
     currentBranch: string | null;
     hasMachineTarget: boolean;
@@ -32,7 +31,6 @@ export function buildSourceControlBranchMenuItems(input: Readonly<{
         canCheckout,
         canCreateWorktrees,
         canLaunchWorktreeSession,
-        canPublish,
         canReadBranches,
         currentBranch,
         hasMachineTarget,
@@ -43,15 +41,6 @@ export function buildSourceControlBranchMenuItems(input: Readonly<{
     } = input;
 
     const out: DropdownMenuItem[] = [];
-
-    if (canPublish) {
-        out.push({
-            id: 'publish',
-            title: t('files.branchMenu.publish.title'),
-            subtitle: t('files.branchMenu.publish.subtitle'),
-            category: t('files.branchMenu.category.actions'),
-        });
-    }
 
     if (canCreateWorktrees) {
         out.push({
@@ -149,4 +138,3 @@ export function buildSourceControlBranchMenuItems(input: Readonly<{
 
     return out;
 }
-

@@ -26,7 +26,6 @@ const sourceControlBranchMenuModuleState = vi.hoisted(() => ({
     modalConfirmSpy: vi.fn(async () => false),
     modalShowSpy: vi.fn(),
     pruneWorktreesForMachinePathMock: vi.fn(),
-    publishBranchMock: vi.fn(async () => true),
     readCachedBranchesForSessionMock: vi.fn(),
     readMachineTargetForSessionMock: vi.fn(),
     removeWorktreeForMachinePathMock: vi.fn(),
@@ -34,7 +33,6 @@ const sourceControlBranchMenuModuleState = vi.hoisted(() => ({
     sessionScmBranchCheckoutMock: vi.fn(),
     sessionScmBranchCreateMock: vi.fn(),
     sessionScmRemotePublishMock: vi.fn(),
-    usePublishBranchActionMock: vi.fn(),
     useSettingMock: vi.fn(),
     options: {
         modal: undefined as SourceControlBranchMenuModuleFactory | undefined,
@@ -56,8 +54,6 @@ export function resetSourceControlBranchMenuCommonModuleMockState() {
     sourceControlBranchMenuModuleState.modalConfirmSpy.mockResolvedValue(false);
     sourceControlBranchMenuModuleState.modalShowSpy.mockReset();
     sourceControlBranchMenuModuleState.pruneWorktreesForMachinePathMock.mockReset();
-    sourceControlBranchMenuModuleState.publishBranchMock.mockReset();
-    sourceControlBranchMenuModuleState.publishBranchMock.mockResolvedValue(true);
     sourceControlBranchMenuModuleState.readCachedBranchesForSessionMock.mockReset();
     sourceControlBranchMenuModuleState.readCachedBranchesForSessionMock.mockReturnValue([]);
     sourceControlBranchMenuModuleState.readMachineTargetForSessionMock.mockReset();
@@ -67,16 +63,6 @@ export function resetSourceControlBranchMenuCommonModuleMockState() {
     sourceControlBranchMenuModuleState.sessionScmBranchCheckoutMock.mockReset();
     sourceControlBranchMenuModuleState.sessionScmBranchCreateMock.mockReset();
     sourceControlBranchMenuModuleState.sessionScmRemotePublishMock.mockReset();
-    sourceControlBranchMenuModuleState.usePublishBranchActionMock.mockReset();
-    sourceControlBranchMenuModuleState.usePublishBranchActionMock.mockImplementation(({ writeEnabled, disabled, snapshot }: any) => ({
-        canPublish:
-            writeEnabled !== false
-            && disabled !== true
-            && snapshot?.capabilities?.writeRemotePublish === true
-            && snapshot?.branch?.upstream == null,
-        publishBusy: false,
-        publishBranch: sourceControlBranchMenuModuleState.publishBranchMock,
-    }));
     sourceControlBranchMenuModuleState.useSettingMock.mockReset();
     sourceControlBranchMenuModuleState.options = {
         modal: undefined,
@@ -218,11 +204,6 @@ export function installSourceControlBranchMenuCommonModuleMocks(
         scmStatusSync: {
             invalidateFromMutationAndAwait: vi.fn(async () => {}),
         },
-    }));
-
-    vi.mock('@/hooks/session/sourceControl/usePublishBranchAction', () => ({
-        usePublishBranchAction: (...args: any[]) =>
-            sourceControlBranchMenuModuleState.usePublishBranchActionMock(...args),
     }));
 
     vi.mock('@/scm/repository/repoScmWorktreeService', () => ({

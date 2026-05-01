@@ -5,6 +5,8 @@ import { SourceControlBranchSummary } from '@/components/sessions/files/SourceCo
 import type { ScmStatusFiles } from '@/scm/scmStatusFiles';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { SourceControlRemoteActionsRail, type SourceControlRemoteAction } from '@/components/sessions/sourceControl/remoteActions/SourceControlRemoteActionsRail';
+import { SourceControlBranchIntegrationSection } from '@/components/sessions/sourceControl/update/SourceControlBranchIntegrationSection';
+import { SourceControlRemotesSection } from '@/components/sessions/sourceControl/update/SourceControlRemotesSection';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
@@ -50,6 +52,20 @@ export const SessionRightPanelGitUpdateTab = React.memo((props: SessionRightPane
                     />
                 ) : null}
                 <SourceControlRemoteActionsRail theme={props.theme} actions={props.actions} hint={props.hint} />
+                <SourceControlRemotesSection
+                    theme={props.theme}
+                    sessionId={props.sessionId}
+                    snapshot={props.scmSnapshot}
+                    writeEnabled={props.scmWriteEnabled}
+                    disabled={props.disabled}
+                />
+                <SourceControlBranchIntegrationSection
+                    theme={props.theme}
+                    sessionId={props.sessionId}
+                    snapshot={props.scmSnapshot}
+                    writeEnabled={props.scmWriteEnabled}
+                    disabled={props.disabled}
+                />
             </ScrollView>
             <ScrollEdgeFades
                 color={props.theme.colors.surface}

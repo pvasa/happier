@@ -147,6 +147,43 @@ describe('ScmChangeRow', () => {
     expect(textContent.join(' ')).not.toContain('/README.md');
   });
 
+  it('renders nested paths with head ellipsis so filenames keep priority', async () => {
+    const { ScmChangeRow } = await import('./ScmChangeRow');
+    const theme = {
+      colors: {
+        surface: '#fff',
+        surfaceHigh: '#f8f8f8',
+        divider: '#ddd',
+        text: '#111',
+        textSecondary: '#666',
+        success: '#0a0',
+        danger: '#a00',
+        warning: '#b60',
+        info: '#09f',
+      },
+    } as any;
+
+    const screen = await renderScreen(<ScmChangeRow
+          theme={theme}
+          file={{
+            fileName: 'rateLimit.ts',
+            filePath: 'src/middleware',
+            fullPath: 'src/middleware/rateLimit.ts',
+            status: 'modified',
+            isIncluded: false,
+            linesAdded: 0,
+            linesRemoved: 0,
+          } as any}
+          onPress={() => {}}
+        />);
+
+    const pathLabel = screen.tree.findAllByType('Text' as any).find((node) => node.props.children === 'src/middleware/')!;
+    expect(pathLabel.props.ellipsizeMode).toBe('head');
+    expect(pathLabel.props.style).toEqual(expect.arrayContaining([
+      expect.objectContaining({ textAlign: 'right' }),
+    ]));
+  });
+
   it('uses surfaceHigh background when highlighted', async () => {
     const { ScmChangeRow } = await import('./ScmChangeRow');
     const theme = {

@@ -19,6 +19,7 @@ import { useChangedFilesData } from '@/hooks/session/files/useChangedFilesData';
 import { useDerivedSessionChangeSet } from '@/sync/domains/session/changes/hooks/useDerivedSessionChangeSet';
 import { useSessionRightPanelGitCommitSelection } from './useSessionRightPanelGitCommitSelection';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
+import type { ScmCommitAdjacentPushAction } from '@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard';
 
 export type SessionRightPanelGitCommitTabContentProps = Readonly<{
     theme: any;
@@ -51,6 +52,7 @@ export type SessionRightPanelGitCommitTabContentProps = Readonly<{
         | { ok: true; message: string }
         | { ok: false; error: string }
     >;
+    commitAdjacentPushAction?: ScmCommitAdjacentPushAction;
     showBranchSummary?: boolean;
     onOpenFilesSidebar: () => void;
     onOpenReviewAllChanges: () => void;
@@ -239,6 +241,7 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
             onCommitFromMessage={props.onCommitFromMessage}
             commitMessageGeneratorEnabled={props.commitMessageGeneratorEnabled}
             onGenerateCommitMessageSuggestion={props.onGenerateCommitMessageSuggestion}
+            commitAdjacentPushAction={props.commitAdjacentPushAction}
             onClearSelection={commitSelectionUiEnabled && repositorySelectedCount > 0 ? bulkSelectNone : undefined}
             scmStatusFiles={changed.scmStatusFiles}
             showBranchSummary={props.showBranchSummary}
