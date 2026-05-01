@@ -17,12 +17,19 @@ import {
     resolveGitWorkspaceTransferSourceMetadata,
 } from './sourceController';
 import { gitBranchCheckout, gitBranchCreate, gitBranchList } from './operations/branchOperations';
+import {
+    gitBranchMerge,
+    gitBranchOperationAbort,
+    gitBranchOperationContinue,
+    gitBranchRebase,
+} from './operations/branchIntegrationOperations';
 import { gitChangeExclude, gitChangeInclude } from './operations/changeApply';
 import { gitChangeDiscard } from './operations/changeDiscard';
 import { gitCommitBackout, gitCommitCreate } from './operations/commitOperations';
 import { gitRemotePublish } from './operations/publishOperations';
 import { gitDiffCommit, gitDiffFile, gitLogList } from './operations/readOperations';
 import { gitRemoteFetch, gitRemotePull, gitRemotePush } from './operations/remoteOperations';
+import { gitRemoteAdd, gitRemoteRemove, gitRemoteSetUrl } from './operations/remoteManagementOperations';
 import { gitStashApply, gitStashDrop, gitStashList, gitStashPop, gitStashShow } from './operations/stashOperations';
 import { gitWorktreeCreate, gitWorktreePrune, gitWorktreeRemove } from './operations/worktreeOperations';
 
@@ -48,6 +55,12 @@ function createUnsupportedGitModeCapabilities() {
         readBranches: false,
         writeBranchCreate: false,
         writeBranchCheckout: false,
+        writeBranchMerge: false,
+        writeBranchRebase: false,
+        writeBranchOperationControl: false,
+        writeRemoteAdd: false,
+        writeRemoteSetUrl: false,
+        writeRemoteRemove: false,
         readStash: false,
         writeStash: false,
     };
@@ -105,9 +118,16 @@ export function createGitBackend(): ScmBackend {
         branchList: gitBranchList,
         branchCreate: gitBranchCreate,
         branchCheckout: gitBranchCheckout,
+        branchMerge: gitBranchMerge,
+        branchRebase: gitBranchRebase,
+        branchOperationContinue: gitBranchOperationContinue,
+        branchOperationAbort: gitBranchOperationAbort,
         worktreeCreate: gitWorktreeCreate,
         worktreeRemove: gitWorktreeRemove,
         worktreePrune: gitWorktreePrune,
+        remoteAdd: gitRemoteAdd,
+        remoteSetUrl: gitRemoteSetUrl,
+        remoteRemove: gitRemoteRemove,
         remoteFetch: gitRemoteFetch,
         remotePull: gitRemotePull,
         remotePush: gitRemotePush,

@@ -315,6 +315,7 @@ export function createNonRepositorySnapshot(input: {
             detached: false,
         },
         stashCount: 0,
+        operationState: null,
         hasConflicts: false,
         entries: [],
         totals: {

@@ -1,6 +1,7 @@
 import {
     type ScmWorktree,
     createGitScmCapabilities,
+    type ScmOperationState,
     type ScmWorkingEntry,
     type ScmWorkingSnapshot,
 } from '@happier-dev/protocol';
@@ -39,6 +40,7 @@ export function buildGitSnapshot(input: {
     untrackedStatsByPath?: Record<string, { pendingAdded: number; isBinary: boolean }>;
     worktreesOutput?: string;
     remotesOutput?: string;
+    operationState?: ScmOperationState | null;
 }): ScmWorkingSnapshot {
     const parsedStatus = parseGitStatusPorcelainV2Z(input.statusOutput);
     const includedSummary = parseNumStatZ(input.includedNumStatOutput);
@@ -152,6 +154,7 @@ export function buildGitSnapshot(input: {
             detached,
         },
         stashCount: parsedStatus.stashCount,
+        operationState: input.operationState ?? null,
         hasConflicts: sortedEntries.some((entry) => entry.kind === 'conflicted'),
         entries: sortedEntries,
         totals: {

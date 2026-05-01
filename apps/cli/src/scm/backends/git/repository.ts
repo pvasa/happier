@@ -6,6 +6,7 @@ import { runScmCommand } from '../../runtime';
 import { normalizeRepoRootRelativePath } from '../../runtime';
 import { buildGitSnapshot } from './statusSnapshot';
 import { inspectGitCheckoutIdentity } from './checkoutIdentity';
+import { readGitBranchOperationState } from './operations/branchOperationState';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
@@ -145,6 +146,7 @@ export async function getGitSnapshot(input: {
         timeoutMs: 10_000,
     });
     const checkoutIdentity = await inspectGitCheckoutIdentity({ cwd: context.cwd });
+    const operationState = await readGitBranchOperationState(context);
 
     const statusRaw = statusResult.stdout ?? '';
     const hasUntrackedHint = /(?:^|\0)\?\s/.test(statusRaw);
@@ -164,6 +166,7 @@ export async function getGitSnapshot(input: {
             untrackedStatsByPath,
             worktreesOutput: worktreesResult.success ? (worktreesResult.stdout ?? '') : '',
             remotesOutput: remotesResult.success ? (remotesResult.stdout ?? '') : '',
+            operationState,
         }),
     };
 }

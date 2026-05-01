@@ -1,6 +1,9 @@
 import type {
     ScmBackendDescribeRequest,
     ScmBackendDescribeResponse,
+    ScmBranchIntegrationRequest,
+    ScmBranchIntegrationResponse,
+    ScmBranchOperationControlRequest,
     ScmBranchCheckoutRequest,
     ScmBranchCheckoutResponse,
     ScmBranchCreateRequest,
@@ -24,8 +27,12 @@ import type {
     ScmLogListResponse,
     ScmRemotePublishRequest,
     ScmRemotePublishResponse,
+    ScmRemoteAddRequest,
+    ScmRemoteManagementResponse,
+    ScmRemoteRemoveRequest,
     ScmRemoteRequest,
     ScmRemoteResponse,
+    ScmRemoteSetUrlRequest,
     ScmRepoMode,
     ScmStashApplyRequest,
     ScmStashApplyResponse,
@@ -230,6 +237,22 @@ export interface ScmBackend {
         context: ScmBackendContext;
         request: ScmBranchCheckoutRequest;
     }): Promise<ScmBranchCheckoutResponse>;
+    branchMerge(input: {
+        context: ScmBackendContext;
+        request: ScmBranchIntegrationRequest;
+    }): Promise<ScmBranchIntegrationResponse>;
+    branchRebase(input: {
+        context: ScmBackendContext;
+        request: ScmBranchIntegrationRequest;
+    }): Promise<ScmBranchIntegrationResponse>;
+    branchOperationContinue(input: {
+        context: ScmBackendContext;
+        request: ScmBranchOperationControlRequest;
+    }): Promise<ScmBranchIntegrationResponse>;
+    branchOperationAbort(input: {
+        context: ScmBackendContext;
+        request: ScmBranchOperationControlRequest;
+    }): Promise<ScmBranchIntegrationResponse>;
     worktreeCreate(input: {
         context: ScmBackendContext;
         request: ScmWorktreeCreateRequest;
@@ -242,6 +265,18 @@ export interface ScmBackend {
         context: ScmBackendContext;
         request: ScmWorktreePruneRequest;
     }): Promise<ScmWorktreePruneResponse>;
+    remoteAdd(input: {
+        context: ScmBackendContext;
+        request: ScmRemoteAddRequest;
+    }): Promise<ScmRemoteManagementResponse>;
+    remoteSetUrl(input: {
+        context: ScmBackendContext;
+        request: ScmRemoteSetUrlRequest;
+    }): Promise<ScmRemoteManagementResponse>;
+    remoteRemove(input: {
+        context: ScmBackendContext;
+        request: ScmRemoteRemoveRequest;
+    }): Promise<ScmRemoteManagementResponse>;
     remoteFetch(input: {
         context: ScmBackendContext;
         request: ScmRemoteRequest;
