@@ -36,6 +36,7 @@ import { clearSessionVisibleWhenInactive, isSessionActiveArchiveResult, stopSess
 const AVATAR_SIZE_DEFAULT = 48;
 const AVATAR_SIZE_COMPACT = 30;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
+const CONTEXT_MENU_DEFERRED_ACTION_DELAY_MS = 0;
 const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -426,6 +427,7 @@ export const SessionItem = React.memo(
         embeddedIsLast,
         session,
         subtitleOverride,
+        subtitleEllipsizeMode,
         serverId,
         serverName,
         currentUserId,
@@ -454,6 +456,7 @@ export const SessionItem = React.memo(
         embeddedIsLast?: boolean;
         session: Session | SessionListRenderableSession;
         subtitleOverride?: string | null;
+        subtitleEllipsizeMode?: 'head' | 'tail';
         serverId?: string;
         serverName?: string;
         currentUserId?: string | null;
@@ -795,8 +798,15 @@ export const SessionItem = React.memo(
                 onTogglePinned?.();
                 return;
             }
+            if (itemId === 'rename') {
+                setContextMenuOpen(false);
+                setTimeout(() => {
+                    void handleMoreMenuSelect(itemId);
+                }, CONTEXT_MENU_DEFERRED_ACTION_DELAY_MS);
+                return;
+            }
             setContextMenuOpen(false);
-            handleMoreMenuSelect(itemId);
+            void handleMoreMenuSelect(itemId);
         }, [handleMoreMenuSelect, onTogglePinned]);
 
         const avatarId = React.useMemo(() => {
@@ -829,7 +839,8 @@ export const SessionItem = React.memo(
             requestedSecondaryLineMode === 'path'
                 ? (sessionSubtitle ? 'path' : 'status')
                 : (sessionStatus.statusText ? 'status' : sessionSubtitle ? 'path' : 'status');
-        const shouldUsePathSubtitleStartEllipsis = effectiveSecondaryLineMode === 'path';
+        const effectiveSubtitleEllipsizeMode = subtitleEllipsizeMode ?? 'head';
+        const shouldUsePathSubtitleStartEllipsis = effectiveSecondaryLineMode === 'path' && effectiveSubtitleEllipsizeMode === 'head';
         const shouldUseWebPathSubtitleStartEllipsis = shouldUsePathSubtitleStartEllipsis && isWeb;
         const showMinimalStatusLine = isMinimal && shouldShowMinimalSessionStatusLine(sessionStatus);
         const shouldShowIdentitySubtitleSkeleton = !isMinimal && isSessionIdentityLoading && requestedSecondaryLineMode === 'path';
@@ -1030,7 +1041,7 @@ export const SessionItem = React.memo(
                                     shouldUseWebPathSubtitleStartEllipsis ? styles.sessionPathSubtitleWeb : null,
                                 ]}
                                 numberOfLines={1}
-                                ellipsizeMode={shouldUseWebPathSubtitleStartEllipsis ? undefined : 'head'}
+                                ellipsizeMode={shouldUseWebPathSubtitleStartEllipsis ? undefined : effectiveSubtitleEllipsizeMode}
                             >
                                 {shouldUseWebPathSubtitleStartEllipsis ? (
                                     <Text style={styles.sessionPathSubtitleTextWeb}>

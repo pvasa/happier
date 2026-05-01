@@ -152,33 +152,10 @@ export const ToolCallsGroupView = React.memo((props: {
         if (!Number.isFinite(raw)) return 5;
         return Math.max(0, Math.min(15, Math.trunc(raw)));
     })();
-    const latestToolMessageId = props.toolMessages[count - 1]?.id ?? null;
-    const collapsedPreviewAnchorIdRef = React.useRef<string | null>(null);
-    const prevExpandedRef = React.useRef<boolean>(expanded);
-    React.useEffect(() => {
-        const prevExpanded = prevExpandedRef.current;
-        prevExpandedRef.current = expanded;
-        if (expanded) {
-            collapsedPreviewAnchorIdRef.current = null;
-            return;
-        }
-        // Freeze the preview window when a group is collapsed so streaming tool messages don't cause
-        // previously-visible tool rows to disappear (which is jarring while the user is reading).
-        if (collapsedPreviewAnchorIdRef.current == null || prevExpanded) {
-            collapsedPreviewAnchorIdRef.current = latestToolMessageId;
-        }
-    }, [expanded, latestToolMessageId]);
-
     const previewMessages = React.useMemo(() => {
-        if (expanded || previewCount <= 0 || count === 0) return [];
-        const anchorId = collapsedPreviewAnchorIdRef.current;
-        const anchorIndex = anchorId ? props.toolMessages.findIndex((m) => m.id === anchorId) : -1;
-        const anchoredMessages =
-            anchorIndex >= 0
-                ? props.toolMessages.slice(0, anchorIndex + 1)
-                : props.toolMessages;
-        return anchoredMessages.slice(-previewCount);
-    }, [count, expanded, previewCount, props.toolMessages]);
+        if (expanded || previewCount <= 0) return [];
+        return props.toolMessages.slice(-previewCount);
+    }, [expanded, previewCount, props.toolMessages]);
 
     const hiddenCount = expanded ? 0 : Math.max(0, count - previewMessages.length);
     const showExpandButton = !expanded && hiddenCount > 0;

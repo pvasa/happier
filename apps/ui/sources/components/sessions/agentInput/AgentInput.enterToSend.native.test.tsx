@@ -10,6 +10,7 @@ import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 const mocks = vi.hoisted(() => ({
     onChangeText: vi.fn(),
     onSend: vi.fn(),
+    inputBlur: vi.fn(),
     suggestionMoveUp: vi.fn(),
     suggestionMoveDown: vi.fn(),
 }));
@@ -126,7 +127,7 @@ vi.mock('@/components/ui/forms/MultiTextInput', () => ({
                 props.onStateChange?.({ text, selection });
             },
             focus: () => {},
-            blur: () => {},
+            blur: mocks.inputBlur,
         }));
         return React.createElement('MultiTextInput', props, null);
     }),
@@ -206,10 +207,11 @@ describe('AgentInput (enter to send on native)', () => {
         vi.clearAllMocks();
     });
 
-    it('sends on Enter when native enter-to-send is enabled', async () => {
+    it('sends and blurs on Enter for existing sessions when native enter-to-send is enabled', async () => {
         const { AgentInput } = await import('./AgentInput');
         const screen = await renderScreen(
             <AgentInput
+                sessionId="session-1"
                 value="hello"
                 onChangeText={mocks.onChangeText}
                 placeholder="p"
@@ -231,5 +233,6 @@ describe('AgentInput (enter to send on native)', () => {
         });
 
         expect(mocks.onSend).toHaveBeenCalledTimes(1);
+        expect(mocks.inputBlur).toHaveBeenCalledTimes(1);
     });
 });

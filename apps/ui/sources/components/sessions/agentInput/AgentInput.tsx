@@ -814,10 +814,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
 
     const sendActionDisabled = Boolean(props.disabled || props.isSendDisabled || props.isSending);
+    const inputRef = React.useRef<MultiTextInputHandle>(null);
 
     const handleSend = React.useCallback(() => {
         if (sendActionDisabled) {
             return;
+        }
+        if (props.sessionId) {
+            inputRef.current?.blur();
         }
         if (props.sessionId && (props.value.trim().length > 0 || props.hasSendableAttachments === true)) {
             // Clear immediately for existing sessions so Enter-to-send doesn't leave stale text behind
@@ -856,7 +860,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // Abort button state
     const [isAborting, setIsAborting] = React.useState(false);
     const shakerRef = React.useRef<ShakeInstance>(null);
-    const inputRef = React.useRef<MultiTextInputHandle>(null);
 
     // Forward ref to the MultiTextInput
     React.useImperativeHandle(ref, () => inputRef.current!, []);
