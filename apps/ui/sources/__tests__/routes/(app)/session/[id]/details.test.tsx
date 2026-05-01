@@ -7,7 +7,7 @@ import {
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
-import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+import { getStyleValue, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,6 +18,7 @@ let sessionHydrated = true;
 let mockDetailsParam: string | undefined;
 let mockPathParam: string | undefined;
 let mockShaParam: string | undefined;
+let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
 const routerBackSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string, _options?: { serverId?: string }) => Promise.resolve());
@@ -48,6 +49,7 @@ type MockScopeState = Readonly<{
 let scopeState: MockScopeState = { details: null };
 
 installSessionRouteCommonModuleMocks({
+    safeAreaInsets: () => safeAreaInsets,
     router: () => ({
         ...routerMock.module,
         useLocalSearchParams: () => ({ id: mockSessionId, serverId: mockServerId, details: mockDetailsParam, path: mockPathParam, sha: mockShaParam }),
@@ -158,6 +160,7 @@ describe('/session/[id]/details', () => {
         mockDetailsParam = undefined;
         mockPathParam = undefined;
         mockShaParam = undefined;
+        safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
         canGoBack = true;
         scopeState = { details: null };
         routerBackSpy.mockClear();
@@ -170,6 +173,16 @@ describe('/session/[id]/details', () => {
 
     afterEach(() => {
         standardCleanup();
+    });
+
+    it('keeps the fullscreen details surface inside the vertical safe area', async () => {
+        scopeState = { details: { tabs: [{ key: 'file:README.md' }], activeTabKey: 'file:README.md' } };
+        const screen = await renderScreen(<Screen />);
+        const surface = screen.findByTestId('session-details-screen');
+        if (!surface) throw new Error('Expected session details screen surface to render');
+
+        expect(getStyleValue(surface.props.style, 'paddingTop')).toBe(47);
+        expect(getStyleValue(surface.props.style, 'paddingBottom')).toBe(34);
     });
 
     it('restores file details from route params before falling back to the session route', async () => {
@@ -208,6 +221,7 @@ describe('/session/[id]/details', () => {
         const panel = screen.findByType('SessionDetailsPanel' as any);
         expect(panel.props.sessionId).toBe('session-1');
         expect(panel.props.scopeId).toBe('session:session-1');
+        expect(panel.props.presentation).toBe('screen');
     });
 
     it('hydrates the session for deep links by requesting session visibility', async () => {

@@ -1,9 +1,11 @@
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 import { createSessionDetailsTerminalTab, SESSION_DETAILS_TERMINAL_TAB_KEY } from '@/components/sessions/terminal/embeddedTerminalDocking';
+import { t } from '@/text';
 
 export type SessionPaneUrlDetailsTarget =
     | Readonly<{ kind: 'file'; path: string }>
     | Readonly<{ kind: 'commit'; sha: string }>
+    | Readonly<{ kind: 'scmReview' }>
     | Readonly<{ kind: 'terminal' }>;
 
 export type SessionPaneUrlState = Readonly<{
@@ -17,6 +19,17 @@ type PaneScopeStateLike = Readonly<{
     bottom: Readonly<{ isOpen: boolean; activeTabId: string | null }>;
     details: Readonly<{ isOpen: boolean; tabs: ReadonlyArray<Readonly<{ key: string; kind: string; resource: unknown }>>; activeTabKey: string | null }>;
 }>;
+
+const SESSION_DETAILS_SCM_REVIEW_TAB_KEY = 'scmReview:working';
+
+function createSessionScmReviewDetailsTab() {
+    return {
+        key: SESSION_DETAILS_SCM_REVIEW_TAB_KEY,
+        kind: 'scmReview',
+        title: t('files.toolbar.review'),
+        resource: { kind: 'scmReview', scope: 'working' },
+    } as const;
+}
 
 function readSingleStringParam(params: Readonly<Record<string, unknown>>, key: string): string | null {
     const raw = params[key];
@@ -45,6 +58,9 @@ export function parseSessionPaneUrlState(params: Readonly<Record<string, unknown
     if (detailsRaw === 'commit' && shaRaw) {
         details = { kind: 'commit', sha: shaRaw };
     }
+    if (detailsRaw === 'scmReview') {
+        details = { kind: 'scmReview' };
+    }
     if (detailsRaw === 'terminal') {
         details = { kind: 'terminal' };
     }
@@ -72,6 +88,9 @@ export function serializeSessionPaneUrlState(state: SessionPaneUrlState): Record
     if (state.details?.kind === 'commit') {
         out.details = 'commit';
         out.sha = state.details.sha;
+    }
+    if (state.details?.kind === 'scmReview') {
+        out.details = 'scmReview';
     }
     if (state.details?.kind === 'terminal') {
         out.details = 'terminal';
@@ -103,6 +122,10 @@ export function buildActiveDetailsRouteParams(
         const sha = rawSha.trim().split(/\s+/)[0] ?? '';
         if (!sha) return {};
         return serializeSessionPaneUrlState({ details: { kind: 'commit', sha } });
+    }
+
+    if (activeTab.key === SESSION_DETAILS_SCM_REVIEW_TAB_KEY || activeTab.kind === 'scmReview') {
+        return serializeSessionPaneUrlState({ details: { kind: 'scmReview' } });
     }
 
     if (activeTab.key === SESSION_DETAILS_TERMINAL_TAB_KEY || activeTab.kind === 'terminal') {
@@ -142,6 +165,8 @@ export function deriveSessionPaneUrlStateFromScopeState(scopeState: PaneScopeSta
                     details = { kind: 'commit', sha: safeSha };
                 }
             }
+        } else if (tab?.key === SESSION_DETAILS_SCM_REVIEW_TAB_KEY || tab?.kind === 'scmReview') {
+            details = { kind: 'scmReview' };
         } else if (tab?.key === SESSION_DETAILS_TERMINAL_TAB_KEY || tab?.kind === 'terminal') {
             details = { kind: 'terminal' };
         }
@@ -201,6 +226,11 @@ export function applySessionPaneUrlState(
 
     if (state.details?.kind === 'terminal') {
         pane.openDetailsTab(createSessionDetailsTerminalTab(), { intent: 'pinned' });
+        return;
+    }
+
+    if (state.details?.kind === 'scmReview') {
+        pane.openDetailsTab(createSessionScmReviewDetailsTab(), { intent: 'pinned' });
     }
 }
 

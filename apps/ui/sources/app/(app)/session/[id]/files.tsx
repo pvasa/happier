@@ -5,6 +5,7 @@ import { useIsFocused } from '@react-navigation/native';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
+import { SessionFullscreenPaneSafeAreaView } from '@/components/sessions/panes/SessionFullscreenPaneSafeAreaView';
 import { SessionRightPanel } from '@/components/sessions/panes/SessionRightPanel';
 import { buildActiveDetailsRouteParams } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
@@ -34,6 +35,7 @@ export default function FilesScreenRoute() {
     const detailsIsOpen = pane.scopeState?.details?.isOpen ?? false;
     const detailsTabs = pane.scopeState?.details?.tabs ?? [];
     const lastPushedDetailsKeyRef = React.useRef<string | null>(null);
+    const initializedRightPaneSessionRef = React.useRef<string | null>(null);
 
     React.useEffect(() => {
         lastPushedDetailsKeyRef.current = null;
@@ -42,6 +44,8 @@ export default function FilesScreenRoute() {
     React.useEffect(() => {
         if (!isFocused) return;
         if (!sessionId) return;
+        if (initializedRightPaneSessionRef.current === sessionId) return;
+        initializedRightPaneSessionRef.current = sessionId;
         openRight({ tabId: 'files' });
         if (pane.scopeState?.right?.activeTabId !== 'files') {
             setRightTab('files');
@@ -79,14 +83,19 @@ export default function FilesScreenRoute() {
     }
 
     return (
-        <View testID="session-files-screen" style={{ flex: 1 }}>
+        <SessionFullscreenPaneSafeAreaView testID="session-files-screen">
             {sessionHydrated ? (
-                <SessionRightPanel sessionId={sessionId} scopeId={scopeId} onRequestClose={onRequestClose} />
+                <SessionRightPanel
+                    sessionId={sessionId}
+                    scopeId={scopeId}
+                    presentation="screen"
+                    onRequestClose={onRequestClose}
+                />
             ) : (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                     <ActivityIndicator />
                 </View>
             )}
-        </View>
+        </SessionFullscreenPaneSafeAreaView>
     );
 }

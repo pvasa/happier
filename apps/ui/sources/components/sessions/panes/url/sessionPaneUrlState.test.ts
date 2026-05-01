@@ -49,6 +49,12 @@ describe('sessionPaneUrlState', () => {
                 details: { kind: 'terminal' },
             });
         });
+
+        it('parses source-control review details target', () => {
+            expect(parseSessionPaneUrlState({ details: 'scmReview' })).toEqual({
+                details: { kind: 'scmReview' },
+            });
+        });
     });
 
     describe('applySessionPaneUrlState', () => {
@@ -141,6 +147,32 @@ describe('sessionPaneUrlState', () => {
             );
         });
 
+        it('opens the source-control review tab when requested in url state', () => {
+            const pane = {
+                openRight: vi.fn(),
+                setRightTab: vi.fn(),
+                openBottom: vi.fn(),
+                setBottomTab: vi.fn(),
+                openDetailsTab: vi.fn(),
+            };
+
+            applySessionPaneUrlState(pane as any, {
+                details: { kind: 'scmReview' },
+            });
+
+            expect(pane.openRight).toHaveBeenCalledTimes(0);
+            expect(pane.openBottom).toHaveBeenCalledTimes(0);
+            expect(pane.openDetailsTab).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    key: 'scmReview:working',
+                    kind: 'scmReview',
+                    title: expect.any(String),
+                    resource: { kind: 'scmReview', scope: 'working' },
+                }),
+                { intent: 'pinned' },
+            );
+        });
+
         it('ignores unsafe file paths in url state', () => {
             const pane = {
                 openRight: vi.fn(),
@@ -213,6 +245,16 @@ describe('sessionPaneUrlState', () => {
                 })
             ).toEqual({
                 details: 'terminal',
+            });
+        });
+
+        it('serializes source-control review details state', () => {
+            expect(
+                serializeSessionPaneUrlState({
+                    details: { kind: 'scmReview' },
+                })
+            ).toEqual({
+                details: 'scmReview',
             });
         });
     });
@@ -298,6 +340,31 @@ describe('sessionPaneUrlState', () => {
                 } as any)
             ).toEqual({
                 details: { kind: 'terminal' },
+            });
+        });
+
+        it('derives an active source-control review details tab', () => {
+            expect(
+                deriveSessionPaneUrlStateFromScopeState({
+                    right: { isOpen: false, activeTabId: null, tabState: {} },
+                    bottom: { isOpen: false, activeTabId: null, tabState: {} },
+                    details: {
+                        isOpen: true,
+                        tabs: [
+                            {
+                                key: 'scmReview:working',
+                                kind: 'scmReview',
+                                title: 'Review',
+                                resource: { kind: 'scmReview', scope: 'working' },
+                                isPinned: true,
+                                isPreview: false,
+                            },
+                        ],
+                        activeTabKey: 'scmReview:working',
+                    },
+                } as any)
+            ).toEqual({
+                details: { kind: 'scmReview' },
             });
         });
     });

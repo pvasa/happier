@@ -6,6 +6,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
+import { SessionFullscreenPaneSafeAreaView } from '@/components/sessions/panes/SessionFullscreenPaneSafeAreaView';
 import { applySessionPaneUrlState, parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
@@ -92,14 +93,14 @@ export default function SessionDetailsScreenRoute() {
     }
 
     return (
-        <View testID="session-details-screen" style={{ flex: 1 }}>
+        <SessionFullscreenPaneSafeAreaView testID="session-details-screen">
             {sessionHydrated ? (
-                <SessionDetailsPanel sessionId={sessionId} scopeId={scopeId} onRequestClose={onRequestClose} />
+                <SessionDetailsPanel sessionId={sessionId} scopeId={scopeId} presentation="screen" onRequestClose={onRequestClose} />
             ) : (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                     <ActivityIndicator />
                 </View>
             )}
-        </View>
+        </SessionFullscreenPaneSafeAreaView>
     );
 }

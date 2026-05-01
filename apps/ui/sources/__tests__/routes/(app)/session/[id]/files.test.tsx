@@ -6,7 +6,7 @@ import {
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
-import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+import { getStyleValue, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,6 +17,7 @@ let mockSessionId = 'session-1';
 let mockServerId: string | undefined;
 let isFocused = true;
 let canGoBack = true;
+let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
 
 const openRightSpy = vi.fn();
 const closeRightSpy = vi.fn();
@@ -36,6 +37,7 @@ vi.mock('@react-navigation/native', () => ({
 }));
 
 installSessionRouteCommonModuleMocks({
+    safeAreaInsets: () => safeAreaInsets,
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
@@ -110,6 +112,7 @@ describe('/session/[id]/files', () => {
         mockServerId = undefined;
         isFocused = true;
         canGoBack = true;
+        safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
         scopeState = {
             right: { isOpen: false, activeTabId: null, tabState: {} },
             details: null,
@@ -133,12 +136,22 @@ describe('/session/[id]/files', () => {
         return renderScreen(<SessionFilesRouteScreen />);
     }
 
+    it('keeps the fullscreen files surface inside the vertical safe area', async () => {
+        const screen = await renderRouteScreen();
+        const surface = screen.findByTestId('session-files-screen');
+        if (!surface) throw new Error('Expected session files screen surface to render');
+
+        expect(getStyleValue(surface.props.style, 'paddingTop')).toBe(47);
+        expect(getStyleValue(surface.props.style, 'paddingBottom')).toBe(34);
+    });
+
     it('renders the shared SessionRightPanel surface fullscreen and opens the right pane state', async () => {
         const screen = await renderRouteScreen();
 
         const panel = screen.findByType('SessionRightPanel' as any);
         expect(panel.props.sessionId).toBe('session-1');
         expect(panel.props.scopeId).toBe('session:session-1');
+        expect(panel.props.presentation).toBe('screen');
         expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'files' });
         expect(setRightTabSpy).toHaveBeenCalledWith('files');
     });
@@ -153,6 +166,22 @@ describe('/session/[id]/files', () => {
 
         expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'files' });
         expect(setRightTabSpy).toHaveBeenCalledWith('files');
+    });
+
+    it('does not re-target the files tab after the shared panel selects another tab', async () => {
+        const screen = await renderRouteScreen();
+        openRightSpy.mockClear();
+        setRightTabSpy.mockClear();
+
+        scopeState = {
+            ...scopeState,
+            right: { ...scopeState.right, activeTabId: 'git' },
+        };
+
+        await screen.update(<SessionFilesRouteScreen />);
+
+        expect(openRightSpy).not.toHaveBeenCalled();
+        expect(setRightTabSpy).not.toHaveBeenCalled();
     });
 
     it('hydrates the session for deep links by requesting session visibility', async () => {

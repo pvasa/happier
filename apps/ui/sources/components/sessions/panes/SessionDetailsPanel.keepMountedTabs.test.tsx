@@ -46,6 +46,21 @@ function createScopeState() {
 
 let scopeState = createScopeState();
 
+function getStyleValue(style: unknown, key: string): unknown {
+    if (!style) return undefined;
+    if (Array.isArray(style)) {
+        for (let i = style.length - 1; i >= 0; i -= 1) {
+            const value = getStyleValue(style[i], key);
+            if (value !== undefined) return value;
+        }
+        return undefined;
+    }
+    if (typeof style === 'object' && style !== null && key in style) {
+        return (style as Record<string, unknown>)[key];
+    }
+    return undefined;
+}
+
 installSessionDetailsPanelCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -201,6 +216,19 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
 
         expect(aIcon).toBeTruthy();
         expect(reviewIcon).toBeTruthy();
+    });
+
+    it('reserves a stable width for detail tabs so native headers render tab titles', async () => {
+        const screen = await renderSessionDetailsPanel();
+
+        const tab = screen.findByTestId('session-details-tab-file_a');
+        if (!tab) {
+            throw new Error('Unable to find file details tab');
+        }
+
+        const minWidth = getStyleValue(tab.props.style, 'minWidth');
+        expect(typeof minWidth).toBe('number');
+        expect(minWidth).toBeGreaterThanOrEqual(120);
     });
 
     it('renders preview tab pin action as a pin icon (not pin-slash)', async () => {

@@ -6,7 +6,7 @@ import {
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
-import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+import { getStyleValue, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -20,6 +20,7 @@ let canGoBack = true;
 let terminalFeatureEnabled = true;
 let terminalDockLocation = 'sidebar';
 let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
+let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
 
 const openRightSpy = vi.fn();
 const closeRightSpy = vi.fn();
@@ -40,6 +41,7 @@ vi.mock('@react-navigation/native', () => ({
 }));
 
 installSessionRouteCommonModuleMocks({
+    safeAreaInsets: () => safeAreaInsets,
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
@@ -134,6 +136,7 @@ describe('/session/[id]/terminal', () => {
         terminalFeatureEnabled = true;
         terminalDockLocation = 'sidebar';
         deviceType = 'desktop';
+        safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
         scopeState = {
             right: { isOpen: false, activeTabId: null, tabState: {} },
             details: null,
@@ -157,12 +160,22 @@ describe('/session/[id]/terminal', () => {
         return renderScreen(<SessionTerminalRouteScreen />);
     }
 
+    it('keeps the fullscreen terminal surface inside the vertical safe area', async () => {
+        const screen = await renderRouteScreen();
+        const surface = screen.findByTestId('session-terminal-screen');
+        if (!surface) throw new Error('Expected session terminal screen surface to render');
+
+        expect(getStyleValue(surface.props.style, 'paddingTop')).toBe(47);
+        expect(getStyleValue(surface.props.style, 'paddingBottom')).toBe(34);
+    });
+
     it('opens the right pane with the terminal tab selected', async () => {
         const screen = await renderRouteScreen();
 
         const panel = screen.findByType('SessionRightPanel' as any);
         expect(panel.props.sessionId).toBe('session-1');
         expect(panel.props.scopeId).toBe('session:session-1');
+        expect(panel.props.presentation).toBe('screen');
         expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'terminal' });
         expect(setRightTabSpy).toHaveBeenCalledWith('terminal');
     });

@@ -20,10 +20,18 @@ import { useWebScrollLockBypass } from '@/components/ui/scroll/useWebScrollLockB
 import { resolveWebScrollableElementWithin } from '@/components/ui/scroll/resolveWebScrollableElement';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 import { resolveOptionalSessionScreenTestId, useSessionScreenTestIdsEnabled } from '../shell/sessionScreenTestIds';
+import {
+    SessionCommitDetailsViewForPanel,
+    SessionFileDetailsViewForPanel,
+    SessionScmReviewDetailsViewForPanel,
+    SessionScmStashDetailsViewForPanel,
+    SessionSubagentDetailsViewForPanel,
+} from './SessionDetailsPanelDetailViews';
 
 export type SessionDetailsPanelProps = Readonly<{
     sessionId: string;
     scopeId: string;
+    presentation?: 'pane' | 'screen';
     /**
      * Optional override for the close action. Used by fullscreen/mobile routes that render the same
      * surface as the desktop details pane but need to navigate back in the router stack.
@@ -34,6 +42,9 @@ export type SessionDetailsPanelProps = Readonly<{
 const ViewWithWheel = View as unknown as React.ComponentType<
     React.ComponentPropsWithRef<typeof View> & { onWheel?: any; onTouchMove?: any }
 >;
+
+const DETAILS_TAB_MIN_WIDTH = 128;
+const DETAILS_TAB_MAX_WIDTH = 220;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -69,7 +80,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.divider,
         backgroundColor: theme.colors.surface,
-        maxWidth: 220,
+        minWidth: DETAILS_TAB_MIN_WIDTH,
+        maxWidth: DETAILS_TAB_MAX_WIDTH,
     },
     tabActive: {
         backgroundColor: theme.colors.surfaceHigh,
@@ -136,31 +148,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'center',
     },
 }));
-
-const LazySessionFileDetailsView = React.lazy(async () => {
-    const mod = await import('@/components/sessions/files/views/SessionFileDetailsView');
-    return { default: mod.SessionFileDetailsView };
-});
-
-const LazySessionCommitDetailsView = React.lazy(async () => {
-    const mod = await import('@/components/sessions/files/views/SessionCommitDetailsView');
-    return { default: mod.SessionCommitDetailsView };
-});
-
-const LazySessionScmReviewDetailsView = React.lazy(async () => {
-    const mod = await import('@/components/sessions/files/views/SessionScmReviewDetailsView');
-    return { default: mod.SessionScmReviewDetailsView };
-});
-
-const LazySessionScmStashDetailsView = React.lazy(async () => {
-    const mod = await import('@/components/sessions/files/views/SessionScmStashDetailsView');
-    return { default: mod.SessionScmStashDetailsView };
-});
-
-const LazySessionSubagentDetailsView = React.lazy(async () => {
-    const mod = await import('@/components/sessions/agents/details/SessionSubagentDetailsView');
-    return { default: mod.SessionSubagentDetailsView };
-});
 
 function asResource(value: unknown): { kind: string } | null {
     if (!value || typeof value !== 'object') return null;
@@ -237,6 +224,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     const details = pane.scopeState?.details ?? null;
     const tabs = details?.tabs ?? [];
     const activeKey = details?.activeTabKey ?? null;
+    const closeButtonAtStart = props.presentation === 'screen' && Platform.OS !== 'web';
 
     const activeTab = React.useMemo(() => tabs.find((t) => t.key === activeKey) ?? tabs.at(-1) ?? null, [activeKey, tabs]);
     const effectiveActiveKey = activeKey ?? activeTab?.key ?? null;
@@ -270,7 +258,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                 const anchor = (tab.resource as any)?.deepLinkAnchor ?? null;
                 return (
                     <React.Suspense fallback={renderLoadingFallback()}>
-                        <LazySessionFileDetailsView
+                        <SessionFileDetailsViewForPanel
                             sessionId={props.sessionId}
                             filePath={tab.resource.path}
                             deepLinkAnchor={anchor}
@@ -291,7 +279,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                 const sha = (tab.resource as any)?.sha ?? (tab.resource as any)?.commitHash ?? '';
                 return (
                     <React.Suspense fallback={renderLoadingFallback()}>
-                        <LazySessionCommitDetailsView
+                        <SessionCommitDetailsViewForPanel
                             sessionId={props.sessionId}
                             sha={String(sha)}
                             onBack={requestClose}
@@ -307,7 +295,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             if (isScmReviewResource(tab.resource)) {
                 return (
                     <React.Suspense fallback={renderLoadingFallback()}>
-                        <LazySessionScmReviewDetailsView sessionId={props.sessionId} scopeId={props.scopeId} />
+                        <SessionScmReviewDetailsViewForPanel sessionId={props.sessionId} scopeId={props.scopeId} />
                     </React.Suspense>
                 );
             }
@@ -316,7 +304,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             if (isScmStashResource(tab.resource)) {
                 return (
                     <React.Suspense fallback={renderLoadingFallback()}>
-                        <LazySessionScmStashDetailsView
+                        <SessionScmStashDetailsViewForPanel
                             sessionId={props.sessionId}
                             scopeId={props.scopeId}
                             onOpenFile={(path) => openFileTab(path, 'default')}
@@ -342,7 +330,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             if (isSubagentResource(tab.resource)) {
                 return (
                     <React.Suspense fallback={renderLoadingFallback()}>
-                        <LazySessionSubagentDetailsView
+                        <SessionSubagentDetailsViewForPanel
                             sessionId={props.sessionId}
                             scopeId={props.scopeId}
                             subagentId={tab.resource.subagentId}
@@ -380,6 +368,18 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         );
     }, [openFileTab, pane, props.scopeId, props.sessionId, renderLoadingFallback, requestClose, styles.empty, styles.emptyText]);
 
+    const closeButton = (
+        <Pressable
+            onPress={requestClose}
+            testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-details-close')}
+            style={styles.iconButton}
+            accessibilityRole="button"
+            accessibilityLabel={closeButtonAtStart ? t('common.back') : t('session.detailsPanel.closeA11y')}
+        >
+            <Octicons name={closeButtonAtStart ? 'chevron-left' : 'chevron-right'} size={18} color={theme.colors.textSecondary} />
+        </Pressable>
+    );
+
     return (
         <ViewWithWheel
             ref={rootRef}
@@ -390,6 +390,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                 : {})}
         >
             <View style={styles.header}>
+                {closeButtonAtStart ? closeButton : null}
                 <ScrollView horizontal style={styles.tabsScroll} showsHorizontalScrollIndicator={false}>
                     {tabs.map((tab) => {
                         const isActive = effectiveActiveKey ? tab.key === effectiveActiveKey : false;
@@ -414,7 +415,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                 style={{
                                     position: 'relative',
                                     marginRight: 8,
-                                    maxWidth: 220,
+                                    minWidth: DETAILS_TAB_MIN_WIDTH,
+                                    maxWidth: DETAILS_TAB_MAX_WIDTH,
                                     flexShrink: 0,
                                 }}
                             >
@@ -516,17 +518,9 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                             size={18}
                             color={theme.colors.textSecondary}
                         />
-                    </Pressable>
-                ) : null}
-                <Pressable
-                    onPress={requestClose}
-                    testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-details-close')}
-                    style={styles.iconButton}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('session.detailsPanel.closeA11y')}
-                >
-                    <Octicons name="chevron-right" size={18} color={theme.colors.textSecondary} />
-                </Pressable>
+                        </Pressable>
+                    ) : null}
+                {closeButtonAtStart ? null : closeButton}
             </View>
             {tabs.length === 0 ? (
                 <View style={styles.empty}>
