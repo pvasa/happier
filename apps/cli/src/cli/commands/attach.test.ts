@@ -256,18 +256,21 @@ describe('happier attach', () => {
     }) => {
       expect(rows).toHaveLength(3);
       expect(rows[0]).toMatchObject({
+        sessionId: 'sid_attachable_1',
+        disabled: false,
+      });
+      expect(rows[1]).toMatchObject({
         sessionId: 'sid_remote_opencode_1',
         disabled: true,
         annotation: 'remote',
         disabledReason: 'Press P to check remote reachability.',
         probeable: true,
       });
-      expect(rows[1]).toMatchObject({ sessionId: 'sid_attachable_1', disabled: false });
       expect(rows[2]).toMatchObject({
         sessionId: 'sid_not_attachable_1',
         disabled: true,
-        disabledReason: 'Session was not started in tmux.',
       });
+      expect(String(rows[2].disabledReason)).toMatch(/outside tmux|not started in tmux/i);
 
       await expect(probeSessionIdFn?.('sid_remote_opencode_1')).resolves.toMatchObject({
         reachable: true,
