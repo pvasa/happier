@@ -1907,3 +1907,5 @@ export {
   type SecretSatisfactionResult,
   type SecretSatisfactionSource,
 } from './profiles/index.js';
+
+export { normalizeMachineHost, compareMachineHosts } from './machineHost/normalizeMachineHost.js';
