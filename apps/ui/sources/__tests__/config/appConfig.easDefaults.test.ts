@@ -193,6 +193,14 @@ describe('app.config.js', () => {
         expect(exp.runtimeVersion).toEqual({ policy: 'fingerprint' });
     });
 
+    it('uses Expo fingerprint runtime policy for the publicdev lane', () => {
+        const exp = withCleanEnv(() => {
+            process.env.APP_ENV = 'publicdev';
+            return getPublicConfig();
+        });
+        expect(exp.runtimeVersion).toEqual({ policy: 'fingerprint' });
+    });
+
     it('uses Expo appVersion runtime policy for preview lane OTA updates', () => {
         const exp = withCleanEnv(() => {
             process.env.APP_ENV = 'preview';
