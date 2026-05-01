@@ -95,6 +95,7 @@
     "@livekit/react-native-expo-plugin": "^1.0.1",
     "@livekit/react-native-webrtc": "^137.0.0",
     "@more-tech/react-native-libsodium": "^1.5.5",
+    "@noble/ciphers": "^2.2.0",
     "@peoplesgrocers/seti-ui-file-icons": "1.11.3",
     "@pierre/diffs": "1.1.0-beta.13",
     "@radix-ui/react-dialog": "^1.1.15",
