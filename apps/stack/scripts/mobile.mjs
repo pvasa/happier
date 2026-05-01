@@ -11,7 +11,7 @@ import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls
 import { resolveMobileExpoConfig } from './utils/mobile/config.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { expoExec } from './utils/expo/command.mjs';
-import { ensureDevExpoServer } from './utils/dev/expo_dev.mjs';
+import { ensureDevExpoServer, resolveExpoTailscaleEnabled } from './utils/dev/expo_dev.mjs';
 import { resolveMobileReachableServerUrl } from './utils/server/mobile_api_url.mjs';
 import { patchIosXcodeProjectsForSigningAndIdentity, resolveIosAppXcodeProjects } from './utils/mobile/ios_xcodeproj_patch.mjs';
 import { pickMetroPort, resolveStablePortStart } from './utils/expo/metro_ports.mjs';
@@ -52,6 +52,7 @@ async function main() {
           '--run-ios [--device=<id-or-name>] [--configuration=Debug|Release]',
           '--run-android [--device=<id-or-name>]',
           '--metro / --no-metro',
+          '--expo-tailscale',
           '--restart',
           '--no-signing-fix',
         ],
@@ -108,6 +109,7 @@ async function main() {
   // the dev build instead of the App Store app when scanning QR/deeplinks.
   const appEnv = process.env.APP_ENV ?? kv.get('--app-env') ?? 'development';
   const host = kv.get('--host') ?? process.env.HAPPIER_STACK_MOBILE_HOST ?? 'lan';
+  const expoTailscale = flags.has('--expo-tailscale') || resolveExpoTailscaleEnabled({ env: process.env });
   const portFromArg = kv.get('--port') ?? '';
   const portFromEnv = process.env.HAPPIER_STACK_MOBILE_PORT ?? '';
   const portRaw = portFromArg || portFromEnv || '8081';
@@ -214,6 +216,7 @@ async function main() {
         shouldPrebuild: flags.has('--prebuild'),
         shouldRunIos: flags.has('--run-ios'),
         shouldStartMetro,
+        expoTailscale,
         expoPublicHappyServerUrl: env.EXPO_PUBLIC_HAPPY_SERVER_URL ?? '',
       },
     });
@@ -385,6 +388,7 @@ async function main() {
     stackName,
     envPath,
     children,
+    expoTailscale,
   });
 
   await new Promise(() => {});
