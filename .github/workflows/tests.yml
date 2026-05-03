@@ -728,7 +728,11 @@ jobs:
   release-contracts:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_release_contracts }}
     name: Release Contracts
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Pinned to GitHub-hosted ubuntu-latest because two iOS preflight tests
+    # (pipeline_expo_native_build_ios_local_*) shell out to `bash -lc`, whose
+    # login profile resets PATH on Blacksmith Ubuntu images and bypasses the
+    # tests' fastlane/pod stubs.
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
