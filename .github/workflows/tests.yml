@@ -693,7 +693,11 @@ jobs:
   stack:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_stack }}
     name: Stack Tests (unit + integration)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Pinned to GitHub-hosted ubuntu-latest because SwiftBar runtime tests
+    # invoke `bash -lc` with relative `source extras/swiftbar/lib/*.sh` paths.
+    # Blacksmith Ubuntu's login shell init resolves CWD differently and
+    # breaks those relative sources; the GitHub-hosted image is hermetic here.
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
