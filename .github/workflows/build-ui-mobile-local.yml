@@ -106,7 +106,7 @@ jobs:
     name: Release actor guard
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -120,7 +120,7 @@ jobs:
   validate_expo_token:
     name: Validate EXPO_TOKEN
     if: ${{ inputs.action == 'ota' || inputs.platform == 'all' || inputs.platform == 'android' || inputs.platform == 'ios' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: release-shared
     steps:
       - name: Fail when EXPO_TOKEN is missing
@@ -135,7 +135,7 @@ jobs:
   validate_apple_api_private_key:
     name: Validate APPLE_API_PRIVATE_KEY (iOS submit)
     if: ${{ inputs.action == 'build_and_submit' && (inputs.environment == 'dev' || inputs.environment == 'preview' || inputs.environment == 'production') && (inputs.platform == 'all' || inputs.platform == 'ios') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: release-shared
     steps:
       - name: Fail when APPLE_API_PRIVATE_KEY is missing
@@ -151,7 +151,7 @@ jobs:
     name: Build (android)
     if: ${{ inputs.action != 'ota' && (inputs.platform == 'all' || inputs.platform == 'android') }}
     needs: [release_actor_guard, validate_expo_token]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     environment: release-shared
@@ -228,7 +228,7 @@ jobs:
     name: Build (ios)
     if: ${{ inputs.action != 'ota' && (inputs.platform == 'all' || inputs.platform == 'ios') }}
     needs: [release_actor_guard, validate_expo_token]
-    runs-on: macos-26
+    runs-on: blacksmith-6vcpu-macos-26
     environment: release-shared
     env:
       EAS_CLI_VERSION: 18.0.1
@@ -310,7 +310,7 @@ jobs:
     name: OTA update
     if: ${{ inputs.action == 'ota' }}
     needs: [release_actor_guard, validate_expo_token]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: release-shared
     env:
       EAS_CLI_VERSION: 18.0.1

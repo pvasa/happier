@@ -159,7 +159,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 45
     env:
       # UI E2E boots Expo web; keep web assets available to avoid CI-only runtime surprises.
@@ -304,7 +304,7 @@ jobs:
     # Native E2E is intentionally opt-in for now (not a PR check).
     if: ${{ github.event_name == 'workflow_call' && inputs.run_mobile_e2e_android }}
     name: Mobile E2E (Maestro) (android) (opt-in)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -353,7 +353,7 @@ jobs:
     # Native E2E is intentionally opt-in for now (not a PR check).
     if: ${{ github.event_name == 'workflow_call' && inputs.run_mobile_e2e_ios }}
     name: Mobile E2E (Maestro) (ios) (opt-in)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -400,7 +400,7 @@ jobs:
   ui:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_ui }}
     name: UI Tests (unit + integration)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 75
     steps:
       - name: Checkout
@@ -452,7 +452,7 @@ jobs:
   shared-packages-unit:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_ui }}
     name: Shared Package Unit Tests
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -497,7 +497,7 @@ jobs:
   server:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_server }}
     name: Server Tests (unit + integration)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -539,7 +539,7 @@ jobs:
   server-db-contract:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_server_db_contract }}
     name: Server DB Contract (Postgres)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 25
     services:
       postgres:
@@ -600,7 +600,7 @@ jobs:
   cli:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_cli }}
     name: CLI Tests (unit + integration)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 25
     env:
       # Some CLI tests fetch/inspect GitHub Release assets. Prefer the built-in
@@ -693,7 +693,7 @@ jobs:
   stack:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_stack }}
     name: Stack Tests (unit + integration)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -728,7 +728,7 @@ jobs:
   release-contracts:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_release_contracts }}
     name: Release Contracts
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -763,7 +763,7 @@ jobs:
   installers-smoke-linux:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_installers_smoke }}
     name: Installer Smoke (Linux)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     env:
       INSTALLERS_CHANNEL: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.installers_channel || ((github.event_name == 'push' && github.ref_name == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'main')) && 'stable' || 'dev' }}
@@ -812,7 +812,7 @@ jobs:
   installers-smoke-macos:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_installers_smoke }}
     name: Installer Smoke (macOS)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 25
     env:
       INSTALLERS_CHANNEL: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.installers_channel || ((github.event_name == 'push' && github.ref_name == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'main')) && 'stable' || 'dev' }}
@@ -861,7 +861,7 @@ jobs:
   installers-smoke-windows:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_installers_smoke }}
     name: Installer Smoke (Windows)
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     timeout-minutes: 45
     env:
       INSTALLERS_CHANNEL: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.installers_channel || ((github.event_name == 'push' && github.ref_name == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'main')) && 'stable' || 'dev' }}
@@ -911,7 +911,7 @@ jobs:
   binary-smoke:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_binary_smoke }}
     name: Binary Smoke (isolated cwd)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -953,7 +953,7 @@ jobs:
   cli-update-continuity:
     if: ${{ inputs.run_cli_update_continuity }}
     name: Release Validation — CLI Update Continuity (Linux)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     env:
       CLI_UPDATE_FROM_CHANNEL: ${{ inputs.installers_channel }}
@@ -1005,7 +1005,7 @@ jobs:
   daemon-continuity:
     if: ${{ inputs.run_daemon_continuity }}
     name: Release Validation — Daemon Continuity (Linux)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1053,7 +1053,7 @@ jobs:
   session-continuity:
     if: ${{ inputs.run_session_continuity }}
     name: Release Validation — Session Continuity (Linux)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1101,7 +1101,7 @@ jobs:
   release-assets-docker:
     if: ${{ github.event_name == 'workflow_call' && inputs.run_release_assets_docker }}
     name: Release Assets Docker (Linux)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1143,7 +1143,7 @@ jobs:
   self-host-systemd-e2e:
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.run_self_host_systemd }}
     name: Self-Host E2E (Linux systemd)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1182,7 +1182,7 @@ jobs:
   self-host-launchd-e2e:
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.run_self_host_launchd }}
     name: Self-Host E2E (macOS launchd)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1221,7 +1221,7 @@ jobs:
   self-host-schtasks-e2e:
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.run_self_host_schtasks }}
     name: Self-Host E2E (Windows schtasks)
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1261,7 +1261,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [blacksmith-4vcpu-ubuntu-2404, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
@@ -1299,7 +1299,7 @@ jobs:
   typecheck:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_typecheck }}
     name: Typecheck
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -1340,7 +1340,7 @@ jobs:
   cli-daemon-e2e:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_cli_daemon_e2e }}
     name: CLI + Server (light/sqlite) E2E
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     env:
       PORT: "3005"
@@ -1577,7 +1577,7 @@ jobs:
   e2e-core:
     if: ${{ (github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call') || inputs.run_e2e_core }}
     name: Core E2E (fast, packages/tests, server-light, sqlite)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1634,7 +1634,7 @@ jobs:
   e2e-core-slow:
     if: ${{ github.event_name == 'workflow_call' && inputs.run_e2e_core_slow }}
     name: Core E2E (slow, packages/tests, server-light, sqlite)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -1693,7 +1693,7 @@ jobs:
     name: Release actor guard
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1708,7 +1708,7 @@ jobs:
     needs: [release_actor_guard]
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.run_providers }}
     name: Providers (contract matrix)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: providers-ci
     timeout-minutes: 120
     steps:
@@ -1856,7 +1856,7 @@ jobs:
   stress:
     if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.run_stress }}
     name: Stress (repeat/chaos)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     steps:
       - name: Checkout

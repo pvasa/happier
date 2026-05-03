@@ -48,7 +48,7 @@ on:
 jobs:
   resolve:
     name: Resolve flags
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       run_ui_e2e: ${{ steps.flags.outputs.run_ui_e2e }}
       run_wsrepl_lima: ${{ steps.flags.outputs.run_wsrepl_lima }}

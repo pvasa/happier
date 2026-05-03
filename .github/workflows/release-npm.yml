@@ -103,7 +103,7 @@ jobs:
     permissions:
       contents: read
     # We install Sapling via a Ubuntu 22.04 package; pin runner for compatibility.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -119,7 +119,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: release-shared
     env:
       HAPPIER_EMBEDDED_POLICY_ENV: ${{ inputs.channel == 'production' && 'production' || 'preview' }}
@@ -448,7 +448,7 @@ jobs:
     name: npm publish (cli)
     if: ${{ inputs.publish_cli == true && needs.release.result == 'success' }}
     needs: [release_actor_guard, release]
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     environment: release-shared
     permissions:
       contents: read
@@ -482,7 +482,7 @@ jobs:
     name: npm publish (stack)
     if: ${{ inputs.publish_stack == true && needs.release.result == 'success' }}
     needs: [release_actor_guard, release]
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     environment: release-shared
     permissions:
       contents: read
@@ -516,7 +516,7 @@ jobs:
     name: npm publish (server runner)
     if: ${{ inputs.publish_server == true && needs.release.result == 'success' }}
     needs: [release_actor_guard, release]
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     environment: release-shared
     permissions:
       contents: read

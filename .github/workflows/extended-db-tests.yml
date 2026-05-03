@@ -13,7 +13,7 @@ concurrency:
 jobs:
   e2e-postgres:
     name: Core E2E (Postgres)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 120
     services:
       postgres:
@@ -84,7 +84,7 @@ jobs:
 
   e2e-mysql:
     name: Core E2E (MySQL)
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 120
     services:
       mysql:
@@ -154,7 +154,7 @@ jobs:
 
   db-contract-postgres:
     name: DB Contract (Postgres)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     services:
       postgres:
@@ -207,7 +207,7 @@ jobs:
 
   db-contract-mysql:
     name: DB Contract (MySQL)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 120
     services:
       mysql:

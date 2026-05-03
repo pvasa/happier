@@ -55,7 +55,7 @@ jobs:
     name: Release actor guard
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
 
   resolve_source:
     name: Resolve source ref to SHA
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [release_actor_guard]
     outputs:
       source_sha: ${{ steps.resolve.outputs.source_sha }}
@@ -111,7 +111,7 @@ jobs:
       matrix:
         include:
           # AppImage tooling (linuxdeploy/AppImageKit) is significantly more reliable on 22.04 than on ubuntu-latest.
-          - os: ubuntu-22.04
+          - os: blacksmith-4vcpu-ubuntu-2204
             platform_key: linux-x86_64
             tauri_target: ""
           - os: windows-latest
@@ -360,7 +360,7 @@ jobs:
 
   prepare_assets:
     name: Prepare latest.json + publish assets
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: [resolve_source, build]
     outputs:
       ui_version: ${{ steps.meta.outputs.ui_version }}
