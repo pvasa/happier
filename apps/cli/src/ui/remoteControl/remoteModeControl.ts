@@ -4,6 +4,7 @@ export type RemoteModeActionInProgress = 'exiting' | 'switching' | null;
 export type RemoteModeKeypressAction =
   | 'none'
   | 'reset'
+  | 'redraw'
   | 'confirm-exit'
   | 'confirm-switch'
   | 'exit'
@@ -54,6 +55,10 @@ export function interpretRemoteModeKeypress(
 
   if (allowSwitchToLocal && key.ctrl && input === 't') {
     return { action: 'switch' };
+  }
+
+  if (key.ctrl && input === 'l') {
+    return { action: 'redraw' };
   }
 
   if (allowSwitchToLocal && input === ' ') {
@@ -147,6 +152,10 @@ export function createRemoteModeControlController(params: Readonly<{
       resetConfirmation();
       return;
     }
+    if (action === 'redraw') {
+      notify();
+      return;
+    }
     if (action === 'confirm-exit') {
       setConfirmationWithTimeout('exit');
       return;
@@ -225,6 +234,10 @@ function decodeStaticControlInput(chunk: string | Buffer | Uint8Array): Readonly
     }
     if (char === '\u0014') {
       events.push({ input: 't', key: { ctrl: true } });
+      continue;
+    }
+    if (char === '\u000c') {
+      events.push({ input: 'l', key: { ctrl: true } });
       continue;
     }
     events.push({ input: char, key: {} });

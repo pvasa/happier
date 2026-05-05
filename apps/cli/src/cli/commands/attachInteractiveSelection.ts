@@ -141,6 +141,7 @@ export async function buildAttachSelectionModel(params: Readonly<{
       credentials: params.credentials,
       rawSession,
       currentMachineId: params.currentMachineId,
+      currentMachineHost: params.currentMachineHost,
       localAttachmentInfo: localInfo,
       insideTmux: Boolean(process.env.TMUX),
       currentTmuxSocketPath: typeof process.env.TMUX === 'string' ? process.env.TMUX.split(',')[0]?.trim() || null : null,
@@ -264,6 +265,7 @@ export function formatAttachIneligibilityFooter(hint: AttachSelectionFooterHint)
   const tmux = hint.effectiveSessionTmux;
   const ineligible = hint.ineligibleCount;
   const sessionWord = ineligible === 1 ? 'session' : 'sessions';
+  const beVerb = ineligible === 1 ? 'is' : 'are';
 
   switch (hint.dominantCategory) {
     case 'started_outside_tmux': {
@@ -282,13 +284,16 @@ export function formatAttachIneligibilityFooter(hint: AttachSelectionFooterHint)
     case 'windows_hidden':
       return `${ineligible} hidden Windows ${sessionWord} can't be attached after start. `
         + `Restart ${ineligible === 1 ? 'it' : 'them'} with a visible terminal if you need to attach later.`;
+    case 'machine_identity_mismatch':
+      return `${ineligible} ${sessionWord} ${beVerb} running on this computer under a different Happier machine identity, but no tmux target or local attachment marker is available. `
+        + `Use the same Happier app or daemon that started ${ineligible === 1 ? 'it' : 'them'}, or start a new tmux-backed session from this CLI profile.`;
     case 'remote_machine':
-      return `${ineligible} ${sessionWord} are running on other machines. Use \`happier session list --active\` to see all running sessions.`;
+      return `${ineligible} ${sessionWord} ${beVerb} running on other machines. Use \`happier session list --active\` to see all running sessions.`;
     case 'no_local_state':
-      return `${ineligible} ${sessionWord} are running but their local attachment state isn't visible. `
+      return `${ineligible} ${sessionWord} ${beVerb} running but ${ineligible === 1 ? 'its' : 'their'} local attachment state isn't visible. `
         + `Try \`happier daemon start\` and re-run, or attach from the original terminal.`;
     case 'archived_or_inactive':
-      return `${ineligible} ${sessionWord} are no longer active. Use \`happier resume\` to revive a stopped session.`;
+      return `${ineligible} ${sessionWord} ${beVerb} no longer active. Use \`happier resume\` to revive a stopped session.`;
     case 'metadata_unreadable':
       return `${ineligible} ${sessionWord} can't be decrypted on this machine. Sign in on the original device or pair this one with \`happier auth pair-remote\`.`;
     case 'unsupported_agent':

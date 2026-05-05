@@ -157,6 +157,42 @@ describe('buildAttachSelectionModel', () => {
     expect(model.rows.map((row) => row.sessionId)).toEqual(['plain-newer', 'plain-older']);
   });
 
+  it('explains same-host machine-id mismatches without calling them another physical machine', async () => {
+    const { credentials, encryptionSecret } = buildLegacyCredentialsAndKey();
+    const rawSession = buildEncryptedSessionListRow({
+      sessionId: 'same-host-different-machine-id',
+      agentId: 'codex',
+      active: true,
+      encryptionSecret,
+      metadata: {
+        host: 'leeroy-mbp',
+        path: '/Users/leeroy/Documents/Development/atlas',
+        agent: 'codex',
+        machineId: 'machine-from-ui',
+      },
+    });
+
+    const model = await buildAttachSelectionModel({
+      credentials,
+      currentMachineId: 'machine-from-cli',
+      currentMachineHost: 'leeroy-mbp',
+      fetchSessionsPageFn: vi.fn(async () => ({ sessions: [rawSession], nextCursor: null, hasNext: false })),
+      readTerminalAttachmentInfoFn: vi.fn(async () => null),
+      isTmuxAvailableFn: vi.fn(async () => true),
+      accountSettings: accountSettingsParse({ sessionUseTmux: true }),
+    });
+
+    expect(model.rows).toHaveLength(1);
+    expect(model.rows[0].disabled).toBe(true);
+    expect(model.rows[0].annotation).toMatch(/machine identity/i);
+    expect(model.rows[0].disabledReason).toMatch(/machine identity/i);
+    expect(model.hint.dominantCategory).toBe('machine_identity_mismatch');
+
+    const footer = formatAttachIneligibilityFooter(model.hint);
+    expect(footer).toMatch(/machine identity/i);
+    expect(footer).not.toMatch(/other machines/i);
+  });
+
   it('skips sessions whose host does not match this machine', async () => {
     const { credentials, encryptionSecret } = buildLegacyCredentialsAndKey();
     const remoteSession = buildEncryptedSessionListRow({

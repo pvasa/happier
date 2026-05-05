@@ -112,6 +112,20 @@ function isAbortError(e: unknown): boolean {
     return false;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+}
+
+function readRemoteControlTerminalMode(session: Session): string | null {
+    if (session.terminalRuntime?.mode) return session.terminalRuntime.mode;
+
+    const metadata = readRecord(session.client.getMetadataSnapshot?.());
+    const terminal = readRecord(metadata?.terminal);
+    const mode = terminal?.mode;
+    return typeof mode === 'string' && mode.trim().length > 0 ? mode.trim() : null;
+}
+
 type ClaudeCodeArtifacts = Readonly<{
     debugFilePath: string | null;
     stderrFilePath: string | null;
@@ -241,7 +255,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             stdoutIsTTY: process.stdout.isTTY,
             stdinIsTTY: process.stdin.isTTY,
             startedBy: session.startedBy,
-            terminalMode: session.terminalRuntime?.mode ?? null,
+            terminalMode: readRemoteControlTerminalMode(session),
         })
         : terminalInkAvailable
             ? 'ink'

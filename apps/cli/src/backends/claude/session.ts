@@ -143,6 +143,7 @@ export class Session {
     
     /** Callbacks to be notified when session ID is found/changed */
     private sessionFoundCallbacks: ((info: SessionFoundInfo) => void)[] = [];
+    private claudeSessionHookCallbacks: ((data: SessionHookData) => void)[] = [];
     
     /** Keep alive interval reference for cleanup */
     private keepAliveTimer: NodeJS.Timeout | null = null;
@@ -456,6 +457,12 @@ export class Session {
             callback(info);
         }
     }
+
+    onClaudeSessionHook = (data: SessionHookData): void => {
+        for (const callback of this.claudeSessionHookCallbacks) {
+            callback(data);
+        }
+    }
     
     /**
      * Register a callback to be notified when session ID is found/changed
@@ -471,6 +478,17 @@ export class Session {
         const index = this.sessionFoundCallbacks.indexOf(callback);
         if (index !== -1) {
             this.sessionFoundCallbacks.splice(index, 1);
+        }
+    }
+
+    addClaudeSessionHookCallback = (callback: (data: SessionHookData) => void): void => {
+        this.claudeSessionHookCallbacks.push(callback);
+    }
+
+    removeClaudeSessionHookCallback = (callback: (data: SessionHookData) => void): void => {
+        const index = this.claudeSessionHookCallbacks.indexOf(callback);
+        if (index !== -1) {
+            this.claudeSessionHookCallbacks.splice(index, 1);
         }
     }
 

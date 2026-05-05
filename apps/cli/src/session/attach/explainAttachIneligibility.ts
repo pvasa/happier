@@ -27,6 +27,7 @@ export type AttachIneligibilityCategory =
   | 'windows_hidden'              // Windows session launched hidden/plain and cannot be attached later
   | 'tmux_unavailable'            // tmux strategy required but tmux not on PATH
   | 'remote_machine'              // session lives on another machine
+  | 'machine_identity_mismatch'   // same host, but a different Happier machine id
   | 'no_local_state'              // local-host match, but no local attach state and no provider_attach
   | 'archived_or_inactive'
   | 'metadata_unreadable'
@@ -166,6 +167,15 @@ export function explainAttachIneligibility(input: Readonly<{
   // `mbp` and `mbp.local` are treated as equal.
   if (eligibility.reasonCode === 'not_current_machine') {
     const sessionHost = readMetadataString(input.metadata, 'host');
+    if (sessionHost && input.currentMachineHost && compareMachineHosts(sessionHost, input.currentMachineHost)) {
+      return {
+        category: 'machine_identity_mismatch',
+        shortReason: 'different Happier machine identity; no terminal attach target',
+        fullReason: 'This session is running on this computer under a different Happier machine identity, but this CLI does not have a tmux target or local attachment marker for it.',
+        nextStepHint: 'Use the same Happier app or daemon that started the session, or start a new tmux-backed session from this CLI profile.',
+      };
+    }
+
     const remoteSuffix = sessionHost ? ` on ${sessionHost}` : '';
     return {
       category: 'remote_machine',

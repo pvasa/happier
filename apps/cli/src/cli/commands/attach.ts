@@ -69,6 +69,7 @@ type AttachCommandDeps = Readonly<{
   runTmuxAttachFn?: (params: {
     sessionId: string;
     terminal: NonNullable<TerminalAttachmentInfo['terminal']>;
+    refreshRemoteControl?: boolean;
   }) => Promise<number>;
   runWindowsTerminalAttachFn?: (params: {
     sessionId: string;
@@ -107,6 +108,7 @@ type ResolvedAttachContext = Readonly<{
 async function defaultRunTmuxAttach(params: {
   sessionId: string;
   terminal: NonNullable<TerminalAttachmentInfo['terminal']>;
+  refreshRemoteControl?: boolean;
 }, deps?: Readonly<{
   isTmuxAvailableFn?: typeof isTmuxAvailable;
 }>): Promise<number> {
@@ -146,6 +148,14 @@ async function defaultRunTmuxAttach(params: {
   if (selectExit !== 0) {
     console.error(chalk.red('Error:'), `Failed to select tmux window (${plan.target}).`);
     return selectExit;
+  }
+
+  if (params.refreshRemoteControl === true) {
+    await spawnTmux({
+      args: ['send-keys', '-t', plan.target, 'C-l'],
+      env,
+      stdio: 'ignore',
+    });
   }
 
   if (!plan.shouldAttach) return 0;
@@ -190,6 +200,10 @@ async function defaultRunWindowsConsoleAttach(params: {
 function printMissingAttachInfo(sessionId: string): void {
   console.error(chalk.red('Error:'), `No local attachment info found for session ${sessionId}.`);
   console.error(chalk.gray('This usually means the session was not started with an attachable terminal host, or it was started on another machine.'));
+}
+
+function shouldRefreshRemoteControlOnAttach(metadata: Record<string, unknown> | null): boolean {
+  return metadata?.startedBy === 'daemon';
 }
 
 async function resolveAttachContext(
@@ -367,6 +381,7 @@ export async function handleAttachCommand(
       credentials: context.credentials,
       rawSession: context.rawSession,
       currentMachineId: effectiveMachineId,
+      currentMachineHost: hostname(),
       localAttachmentInfo: localInfo,
       insideTmux: Boolean(process.env.TMUX),
       currentTmuxSocketPath: typeof process.env.TMUX === 'string' ? process.env.TMUX.split(',')[0]?.trim() || null : null,
@@ -427,6 +442,7 @@ export async function handleAttachCommand(
         exitCode = await runTmuxAttachFn({
           sessionId: resolvedSessionId,
           terminal: eligibility.terminal,
+          refreshRemoteControl: shouldRefreshRemoteControlOnAttach(eligibility.metadata),
         });
         break;
       case 'windows_terminal_host':

@@ -492,6 +492,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                     logger.debug(`[START] Claude session ID changed: ${previousSessionId} -> ${sessionId}`);
                 }
                 currentSession.onSessionFound(sessionId, data);
+                currentSession.onClaudeSessionHook(data);
             }
         },
         onPermissionHook: async (data) => {
@@ -1026,6 +1027,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
         onSessionHook: (sessionId, data) => {
             if (currentSession) {
                 currentSession.onSessionFound(sessionId, data);
+                currentSession.onClaudeSessionHook(data);
             }
         },
         onPermissionHook: async (data) => {

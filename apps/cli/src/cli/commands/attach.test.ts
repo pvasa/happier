@@ -492,6 +492,61 @@ describe('happier attach', () => {
     }));
   });
 
+  it('requests a remote-control banner refresh when attaching to daemon-started tmux sessions', async () => {
+    const credentials: Credentials = {
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    };
+    const rawSession = createSessionRecordFixture({
+      id: 'sid_daemon_claude_1',
+      active: true,
+      encryptionMode: 'plain',
+      metadata: JSON.stringify({
+        machineId: 'machine-local',
+        path: '/tmp/claude-workspace',
+        host: 'test',
+        flavor: 'claude',
+        startedBy: 'daemon',
+        terminal: {
+          mode: 'tmux',
+          requested: 'tmux',
+          tmux: {
+            target: 'happy:session-1',
+            tmpDir: '/tmp/happy-tmux',
+          },
+        },
+      }),
+    });
+    const runTmuxAttachFn = vi.fn(async () => 0);
+
+    await (handleAttachCommand as any)(['sid_daemon_claude_1'], {
+      readCredentialsFn: async () => credentials,
+      readSettingsFn: async () => localSettings,
+      fetchSessionByIdFn: async () => rawSession,
+      readTerminalAttachmentInfoFn: async () => ({
+        version: 1,
+        sessionId: 'sid_daemon_claude_1',
+        updatedAt: Date.now(),
+        terminal: {
+          mode: 'tmux',
+          requested: 'tmux',
+          tmux: {
+            target: 'happy:session-1',
+            tmpDir: '/tmp/happy-tmux',
+          },
+        },
+      }),
+      isTmuxAvailableFn: async () => true,
+      runProviderAttachFn: vi.fn(async () => false),
+      runTmuxAttachFn,
+    });
+
+    expect(runTmuxAttachFn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sid_daemon_claude_1',
+      refreshRemoteControl: true,
+    }));
+  });
+
   it('falls back to persisted local attachment info when session metadata is unavailable', async () => {
     const runTmuxAttachFn = vi.fn(async () => 0);
 

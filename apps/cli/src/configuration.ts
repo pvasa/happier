@@ -250,6 +250,7 @@ class Configuration {
 
   // Claude local transcript scanner (UI-facing missing-transcript warning delay).
   public readonly claudeTranscriptMissingWarningMs: number
+  public readonly claudeLocalTurnCompletionQuiescenceMs: number
 
 	  // Claude JSONL transcript repair (missing tool_result injection for interrupted tool calls).
 	  public readonly claudeTranscriptRepairWaitForToolUseIdsTimeoutMs: number
@@ -669,6 +670,10 @@ class Configuration {
     this.claudeTranscriptMissingWarningMs = resolveIntEnvWithBounds(
       'HAPPIER_CLAUDE_TRANSCRIPT_MISSING_WARNING_MS',
       { min: 0, max: 2 * 60_000, default: 15_000 },
+    );
+    this.claudeLocalTurnCompletionQuiescenceMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_LOCAL_TURN_COMPLETION_QUIESCENCE_MS',
+      { min: 0, max: 30_000, default: 500 },
     );
 
     // Default: 250ms. Best-effort grace window for the transcript to settle and for tool_use/tool_result

@@ -194,6 +194,28 @@ describe('startRemoteModeStaticControl', () => {
     expect(stdin.rawModeChanges).toEqual([true, false]);
     expect(stdin.paused).toBe(true);
   });
+
+  it('redraws the static banner when a tmux attach refresh key is received', async () => {
+    const stdin = new FakeInputStream();
+    const stdout = new FakeOutputStream();
+
+    const control = startRemoteModeStaticControl({
+      providerName: 'Claude',
+      stdin: asReadStream(stdin),
+      stdout: asWriteStream(stdout),
+      allowSwitchToLocal: true,
+      onSwitchToLocal: vi.fn(),
+      onExit: vi.fn(),
+    });
+
+    const initialWrites = stdout.chunks.length;
+    stdin.emit('data', '\u000c');
+
+    expect(stdout.chunks.length).toBeGreaterThan(initialWrites);
+    expect(stdout.text().match(/Remote session running/g)?.length).toBe(2);
+
+    await control.stop();
+  });
 });
 
 describe('formatRemoteModeStaticBanner', () => {

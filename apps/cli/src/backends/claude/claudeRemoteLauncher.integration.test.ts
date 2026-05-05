@@ -1744,6 +1744,54 @@ function createRemoteHarness(options?: {
     expect(stopStaticControl).toHaveBeenCalledTimes(1);
   }, 30_000);
 
+  it('starts the static remote-control surface from synced tmux metadata when terminal runtime flags are absent', async () => {
+    const stopStaticControl = vi.fn(async () => {});
+    const resolveRemoteModeControlSurface = vi.fn(() => 'static');
+    const startStaticControl = vi.fn((_params: StartRemoteModeStaticControlParams) => ({ stop: stopStaticControl }));
+    vi.doMock('@/ui/remoteControl/remoteModeControl', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/ui/remoteControl/remoteModeControl')>();
+      return {
+        ...actual,
+        resolveRemoteModeControlSurface,
+        startRemoteModeStaticControl: startStaticControl,
+      };
+    });
+
+    const { session, switchHandlerReady } = createRemoteHarness({
+      sessionId: 'sess_0',
+      startedBy: 'daemon',
+      terminalRuntime: null,
+      metadata: {
+        terminal: {
+          mode: 'tmux',
+          requested: 'tmux',
+          tmux: { target: 'happy:session-from-metadata' },
+        },
+      } as Metadata,
+    });
+
+    mockClaudeRemoteDispatch.mockImplementationOnce(async (opts: unknown) => {
+      const dispatchOpts = opts as RemoteDispatchMockOptions;
+      await waitForAbort(dispatchOpts.signal);
+    });
+
+    const { claudeRemoteLauncher } = await import('./claudeRemoteLauncher');
+    const launcherPromise = claudeRemoteLauncher(session);
+
+    await vi.waitFor(() => {
+      expect(startStaticControl).toHaveBeenCalledTimes(1);
+    });
+    expect(resolveRemoteModeControlSurface).toHaveBeenCalledWith(expect.objectContaining({
+      startedBy: 'daemon',
+      terminalMode: 'tmux',
+    }));
+
+    const switchHandler = await switchHandlerReady;
+    expect(await switchHandler({ to: 'local' })).toBe(true);
+    await expect(launcherPromise).resolves.toBe('switch');
+    expect(stopStaticControl).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
   it('respects switch RPC params and is idempotent', async () => {
     const { session, switchHandlerReady } = createRemoteHarness();
 
