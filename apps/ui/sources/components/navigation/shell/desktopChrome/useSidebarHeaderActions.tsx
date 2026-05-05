@@ -77,7 +77,7 @@ export function useSidebarHeaderActions(): SidebarHeaderActionsResult {
 
         out.push({
             id: 'projects',
-            title: t('tabs.projects'),
+            title: t('tabs.sessions'),
             inlineTestID: 'nav-projects',
             icon: (
                 <View style={styles.iconButton}>

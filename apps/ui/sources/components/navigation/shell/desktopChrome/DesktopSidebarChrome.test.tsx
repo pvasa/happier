@@ -170,13 +170,13 @@ describe('DesktopSidebarChrome', () => {
                 onPressHome={vi.fn()}
                 environmentBadge={null}
                 headerActions={[
-                    { id: 'inbox', title: 'Inbox', inlineTestID: 'sidebar-inbox-button', onPress: vi.fn() },
-                    { id: 'settings', title: 'Settings', inlineTestID: 'nav-settings', onPress: vi.fn() },
-                    { id: 'newSession', title: 'New', inlineTestID: 'nav-new-session', onPress: vi.fn() },
+                    { id: 'inbox', title: 'Inbox', inlineTestID: 'sidebar-inbox-button', icon: 'mail-outline', onPress: vi.fn() },
+                    { id: 'settings', title: 'Settings', inlineTestID: 'nav-settings', icon: 'cog-outline', onPress: vi.fn() },
+                    { id: 'newSession', title: 'New', inlineTestID: 'nav-new-session', icon: 'add-outline', onPress: vi.fn() },
                 ]}
                 topUtilityActions={[
-                    { id: 'inbox', title: 'Inbox', inlineTestID: 'sidebar-inbox-button', onPress: vi.fn() },
-                    { id: 'settings', title: 'Settings', inlineTestID: 'nav-settings', onPress: vi.fn() },
+                    { id: 'inbox', title: 'Inbox', inlineTestID: 'sidebar-inbox-button', icon: 'mail-outline', onPress: vi.fn() },
+                    { id: 'settings', title: 'Settings', inlineTestID: 'nav-settings', icon: 'cog-outline', onPress: vi.fn() },
                 ]}
                 renderHeaderOverflowVisual={() => <View testID="desktop-sidebar-overflow-visual" />}
                 popoverBoundaryRef={{ current: null }}

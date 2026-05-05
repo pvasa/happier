@@ -98,11 +98,8 @@ export const DesktopSidebarChrome = React.memo((props: DesktopSidebarChromeProps
                 compactActionIds={compactContentActionIds}
                 pinnedActionIds={compactContentActionIds}
                 overflowPosition="beforePinned"
-                overflowPlacement="bottom"
-                overflowPortal={{ anchorAlign: 'center' }}
                 overflowTriggerTestID="sidebar-header-actions-overflow"
                 popoverBoundaryRef={props.popoverBoundaryRef}
-                renderOverflowAnchorOverlay={props.renderHeaderOverflowVisual}
                 gap={4}
                 renderOverflowTrigger={({ open, toggle, testID, accessibilityLabel, accessibilityHint }) => (
                     <Pressable
