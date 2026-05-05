@@ -218,4 +218,24 @@ describe('scm backend registry selection', () => {
             workingDirectory: '/not-a-repo',
         })).resolves.toBeNull();
     });
+
+    it('selects the owning backend for repository provisioning when another scm already owns the path', async () => {
+        const registry = createScmBackendRegistry([
+            backend({ id: 'git', detected: { isRepo: false, mode: null, rootPath: null } }),
+            backend({ id: 'sapling', detected: { isRepo: true, mode: '.sl', rootPath: '/repo' } }),
+        ]);
+
+        const selected = await registry.selectProvisioningBackend({
+            cwd: '/repo',
+            workingDirectory: '/repo',
+        });
+
+        expect(selected?.backend.id).toBe('sapling');
+        expect(selected?.mode).toBe('.sl');
+        expect(selected?.detection).toEqual({
+            isRepo: true,
+            mode: '.sl',
+            rootPath: '/repo',
+        });
+    });
 });

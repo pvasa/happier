@@ -306,7 +306,9 @@ export function createNonRepositorySnapshot(input: {
             worktrees: [],
             remotes: [],
         },
-        capabilities: createScmCapabilities(),
+        capabilities: createScmCapabilities({
+            writeRepositoryInit: true,
+        }),
         branch: {
             head: null,
             upstream: null,

@@ -15,6 +15,7 @@ import {
     resolveFilesystemAccessPolicy,
     type FilesystemAccessPolicy,
 } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import type { ScmConnectedAccountCredentialResolver } from '@/scm/types';
 import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
@@ -44,6 +45,10 @@ import {
 import { createLoopbackReadinessProbe } from '@/api/connection/createLoopbackReadinessProbe';
 import { createMachineSocketTransport } from '@/api/machine/connection/createMachineSocketTransport';
 import { readMachineOwnerConflictFromSocketError, type MachineOwnerConflictDetails } from '@/api/machine/machineOwnerConflict';
+
+export type ApiMachineClientDeps = Readonly<{
+    connectedAccounts?: ScmConnectedAccountCredentialResolver;
+}>;
 
 export class ApiMachineClient {
     private socket: Socket<ServerToDaemonEvents, DaemonToServerEvents> | null = null;
@@ -119,6 +124,7 @@ export class ApiMachineClient {
             serviceManaged?: boolean;
             serviceLabel?: string;
         }>,
+        deps?: ApiMachineClientDeps,
     ) {
         this.ownershipMetadata = ownershipMetadata ?? {};
         // Initialize RPC handler manager
@@ -157,6 +163,7 @@ export class ApiMachineClient {
         // even when no session is currently active.
         registerScmHandlers(this.rpcHandlerManager, machineRpcWorkingDirectory, {
             accessPolicy: filesystemAccessPolicy,
+            connectedAccounts: deps?.connectedAccounts,
         });
     }
 

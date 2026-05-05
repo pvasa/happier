@@ -25,6 +25,28 @@ import type {
     ScmDiffFileResponse,
     ScmLogListRequest,
     ScmLogListResponse,
+    ScmPullRequestGetRequest,
+    ScmPullRequestGetResponse,
+    ScmPullRequestCheckoutRequest,
+    ScmPullRequestCheckoutResponse,
+    ScmPullRequestListRequest,
+    ScmPullRequestListResponse,
+    ScmPullRequestOpenComposeRequest,
+    ScmPullRequestOpenComposeResponse,
+    ScmPullRequestOpenOrReuseRequest,
+    ScmPullRequestOpenOrReuseResponse,
+    ScmPullRequestPrepareWorktreeRequest,
+    ScmPullRequestPrepareWorktreeResponse,
+    ScmPullRequestRunStackedRequest,
+    ScmPullRequestRunStackedResponse,
+    ScmRepositoryInitRequest,
+    ScmRepositoryInitResponse,
+    ScmRepositoryRemoveIndexLockRequest,
+    ScmRepositoryRemoveIndexLockResponse,
+    ScmHostingRepositoryDescribePublishTargetsRequest,
+    ScmHostingRepositoryDescribePublishTargetsResponse,
+    ScmHostingRepositoryPublishRequest,
+    ScmHostingRepositoryPublishResponse,
     ScmRemotePublishRequest,
     ScmRemotePublishResponse,
     ScmRemoteAddRequest,
@@ -53,6 +75,8 @@ import type {
     ScmWorktreeRemoveRequest,
     ScmWorktreeRemoveResponse,
     ScmBackendId,
+    ConnectedServiceCredentialRecordV1,
+    ConnectedServiceId,
     WorkspaceCheckoutKind,
     WorkspaceLocationScm,
 } from '@happier-dev/protocol';
@@ -85,10 +109,15 @@ export type ScmRepoDetection = {
     mode: ScmRepoMode | null;
 };
 
+export type ScmConnectedAccountCredentialResolver = Readonly<{
+    resolveCredential(serviceId: ConnectedServiceId): Promise<ConnectedServiceCredentialRecordV1 | null>;
+}>;
+
 export type ScmBackendContext = {
     cwd: string;
     projectKey: string;
     detection: ScmRepoDetection;
+    connectedAccounts?: ScmConnectedAccountCredentialResolver;
 };
 
 export type ScmBackendSelection = {
@@ -179,10 +208,62 @@ export type ScmSourceController = Readonly<{
     classifyPortableWorkspacePath?: (input: ScmSourceControllerPortableWorkspacePathInput) => ScmSourceControllerPortableWorkspacePathClassification;
 }>;
 
+export type ScmPullRequestBackend = Readonly<{
+    list(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestListRequest;
+    }): Promise<ScmPullRequestListResponse>;
+    get(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestGetRequest;
+    }): Promise<ScmPullRequestGetResponse>;
+    openCompose(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestOpenComposeRequest;
+    }): Promise<ScmPullRequestOpenComposeResponse>;
+    openOrReuse(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestOpenOrReuseRequest;
+    }): Promise<ScmPullRequestOpenOrReuseResponse>;
+    checkout(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestCheckoutRequest;
+    }): Promise<ScmPullRequestCheckoutResponse>;
+    prepareWorktree(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestPrepareWorktreeRequest;
+    }): Promise<ScmPullRequestPrepareWorktreeResponse>;
+    runStacked?(input: {
+        context: ScmBackendContext;
+        request: ScmPullRequestRunStackedRequest;
+    }): Promise<ScmPullRequestRunStackedResponse>;
+}>;
+
+export type ScmRepositoryProvisioningBackend = Readonly<{
+    init(input: {
+        context: ScmBackendContext;
+        request: ScmRepositoryInitRequest;
+    }): Promise<ScmRepositoryInitResponse>;
+    describePublishTargets(input: {
+        context: ScmBackendContext;
+        request: ScmHostingRepositoryDescribePublishTargetsRequest;
+    }): Promise<ScmHostingRepositoryDescribePublishTargetsResponse>;
+    publishToHostingProvider(input: {
+        context: ScmBackendContext;
+        request: ScmHostingRepositoryPublishRequest;
+    }): Promise<ScmHostingRepositoryPublishResponse>;
+    removeIndexLock(input: {
+        context: ScmBackendContext;
+        request: ScmRepositoryRemoveIndexLockRequest;
+    }): Promise<ScmRepositoryRemoveIndexLockResponse>;
+}>;
+
 export interface ScmBackend {
     id: ScmBackendId;
     selection: ScmBackendSelection;
     sourceController?: ScmSourceController;
+    pullRequests?: ScmPullRequestBackend;
+    repository?: ScmRepositoryProvisioningBackend;
     detectRepo(input: { cwd: string }): Promise<ScmRepoDetection>;
     getCapabilities(input: { mode: ScmRepoMode | null }): ScmCapabilities;
     describeBackend(input: {

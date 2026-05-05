@@ -60,16 +60,25 @@ import {
     runScmRoute,
 } from '@/scm/rpc/dispatch';
 import type { ScmFilesystemAccessPolicy } from '@/scm/runtime';
+import type { ScmConnectedAccountCredentialResolver } from '@/scm/types';
+
+import { registerScmPullRequestHandlers } from './scm/registerScmPullRequestHandlers';
+import { registerScmRepositoryProvisioningHandlers } from './scm/registerScmRepositoryProvisioningHandlers';
+import type { ScmHandlerRouteBase } from './scm/scmHandlerRouteBase';
 
 export function registerScmHandlers(
     rpcHandlerManager: RpcHandlerRegistrar,
     workingDirectory: string,
-    deps?: Readonly<{ accessPolicy?: ScmFilesystemAccessPolicy }>
+    deps?: Readonly<{
+        accessPolicy?: ScmFilesystemAccessPolicy;
+        connectedAccounts?: ScmConnectedAccountCredentialResolver;
+    }>
 ): void {
-    const routeBase = {
+    const routeBase: ScmHandlerRouteBase = {
         workingDirectory,
         accessPolicy: deps?.accessPolicy,
-    } as const;
+        connectedAccounts: deps?.connectedAccounts,
+    };
 
     rpcHandlerManager.registerHandler<ScmBackendDescribeRequest, ScmBackendDescribeResponse>(
         RPC_METHODS.SCM_BACKEND_DESCRIBE,
@@ -398,6 +407,9 @@ export function registerScmHandlers(
                     selection.backend.remotePublish({ context, request }),
             })
     );
+
+    registerScmRepositoryProvisioningHandlers(rpcHandlerManager, routeBase);
+    registerScmPullRequestHandlers(rpcHandlerManager, routeBase);
 
     rpcHandlerManager.registerHandler<ScmStashListRequest, ScmStashListResponse>(
         RPC_METHODS.SCM_STASH_LIST,
