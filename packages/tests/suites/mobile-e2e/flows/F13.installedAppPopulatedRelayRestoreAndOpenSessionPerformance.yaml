@@ -5,10 +5,7 @@ appId: ${HAPPIER_E2E_MOBILE_APP_ID}
     clearKeychain: true
 
 - runFlow:
-    file: _shared/connectUsingLaunchUrl.yaml
-
-- runFlow:
-    file: _shared/connectDevClientIfNeeded.yaml
+    file: _shared/dismissAndroidSystemNotRespondingDialogMaybe.yaml
 
 - openLink: ${HAPPIER_E2E_MOBILE_APP_SCHEME}:///settings/server?auto=1&url=${HAPPIER_E2E_SERVER_URL}
 - runFlow:
@@ -17,9 +14,6 @@ appId: ${HAPPIER_E2E_MOBILE_APP_ID}
 - extendedWaitUntil:
     visible: ".*${HAPPIER_E2E_SERVER_VISIBLE_HOST_PATTERN}.*"
     timeout: 240000
-
-- runFlow:
-    file: _shared/dismissExpoDevMenuOverlayMaybe.yaml
 
 - openLink: ${HAPPIER_E2E_MOBILE_APP_SCHEME}:///restore/manual
 - runFlow:

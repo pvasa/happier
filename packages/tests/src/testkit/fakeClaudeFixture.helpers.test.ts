@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -72,6 +72,33 @@ describe('fake Claude fixture helpers', () => {
 
       const hook = parseHookForwarderCommand(settingsPath);
       expect(hook).toEqual({ type: 'node', scriptPath, port: 7123 });
+    });
+  });
+
+  it('parses SessionStart hook command from plugin hooks file before settings fallback', async () => {
+    await withTempDir({ prefix: 'fake-claude-fixture-' }, async ({ path: dir }) => {
+      const settingsPath = join(dir, 'settings.json');
+      const pluginDir = join(dir, 'plugin');
+      const hooksDir = join(pluginDir, 'hooks');
+      const scriptPath = join(dir, 'forwarder.js');
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          hooks: { SessionStart: [{ hooks: [{ command: 'echo should-not-win' }] }] },
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(hooksDir, 'hooks.json'),
+        JSON.stringify({
+          hooks: { SessionStart: [{ hooks: [{ command: `node "${scriptPath}" 7123 "SessionStart"` }] }] },
+        }),
+        'utf8',
+      );
+
+      const hook = parseHookForwarderCommand(settingsPath, pluginDir);
+      expect(hook).toEqual({ type: 'node', scriptPath, port: 7123, hookEventName: 'SessionStart' });
     });
   });
 
