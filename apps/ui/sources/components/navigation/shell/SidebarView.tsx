@@ -1,7 +1,6 @@
 import { useLocalSettingMutable, useSetting } from '@/sync/domains/state/storage';
 import * as React from 'react';
 import { View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { VoiceSurface } from '@/components/voice/surface/VoiceSurface';
@@ -18,6 +17,7 @@ import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { DesktopSidebarChrome } from './desktopChrome/DesktopSidebarChrome';
 import { useResolvedDesktopWindowControls } from './desktopChrome/useResolvedDesktopWindowControls';
 import { useSidebarHeaderActions } from './desktopChrome/useSidebarHeaderActions';
+import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 
 export type SidebarViewProps = Readonly<{
     sidebarWidthPx?: number | null;
@@ -38,7 +38,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 export const SidebarView = React.memo((props: SidebarViewProps) => {
     const styles = stylesheet;
-    const safeArea = useSafeAreaInsets();
+    const safeArea = useChromeSafeAreaInsets();
     const router = useRouter();
     const headerHeight = useHeaderHeight();
     const popoverBoundaryRef = React.useRef<any>(null);

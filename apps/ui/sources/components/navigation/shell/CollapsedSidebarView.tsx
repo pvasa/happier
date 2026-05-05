@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { t } from '@/text';
 import { SidebarCollapseIcon } from './SidebarIcons';
@@ -73,7 +73,7 @@ export const CollapsedSidebarView = React.memo((props: CollapsedSidebarViewProps
     const { focusModeActive = false, onExitFocusMode, onRequestExpand } = props;
     const [, setSidebarCollapsed] = useLocalSettingMutable('sidebarCollapsed');
     const router = useRouter();
-    const safeArea = useSafeAreaInsets();
+    const safeArea = useChromeSafeAreaInsets();
     const headerHeight = useHeaderHeight();
     const { theme } = useUnistyles();
     const resolvedDesktopWindowControls = useResolvedDesktopWindowControls({
