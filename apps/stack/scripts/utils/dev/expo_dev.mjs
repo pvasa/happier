@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import {
@@ -10,7 +11,7 @@ import {
 } from '../expo/expo.mjs';
 import { pickExpoDevMetroPort } from '../expo/metro_ports.mjs';
 import { ensureEnvFileUpdated } from '../env/env_file.mjs';
-import { isPidAlive, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
+import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
 import { getProcessGroupId, getPsEnvLine, killProcessGroupOwnedByStack, listPidsWithEnvNeedle } from '../proc/ownership.mjs';
 import { terminateProcessGroup } from '../proc/terminate.mjs';
 import { expoSpawn } from '../expo/command.mjs';
@@ -20,8 +21,110 @@ import { resolveMobileReachableServerUrl } from '../server/mobile_api_url.mjs';
 import { getTailscaleStatus } from '../tailscale/ip.mjs';
 import { isTcpPortFree } from '../net/ports.mjs';
 import { resolveExpoTailscaleEnabled, startExpoTailscaleForwarder } from './expo_dev_tailscale.mjs';
+import {
+  computeExpoRestartDelayMs,
+  createExpoCrashOutputTracker,
+  describeExpoTermination,
+  isIntentionalExpoTermination,
+  resolveExpoRestartPolicy,
+} from './expo_dev_supervision.mjs';
 
 export { resolveExpoTailscaleEnabled, startExpoTailscaleForwarder } from './expo_dev_tailscale.mjs';
+
+function createTrackedExpoProcHandle() {
+  const handle = new EventEmitter();
+  let currentProc = null;
+  let exitCode = null;
+  let signalCode = null;
+  let pendingRestartTimer = null;
+  let stopRequested = false;
+  let exitEmitted = false;
+
+  Object.defineProperties(handle, {
+    pid: {
+      enumerable: true,
+      get() {
+        return currentProc?.pid ?? null;
+      },
+    },
+    exitCode: {
+      enumerable: true,
+      get() {
+        return currentProc?.exitCode ?? exitCode;
+      },
+    },
+    signalCode: {
+      enumerable: true,
+      get() {
+        return currentProc?.signalCode ?? signalCode;
+      },
+    },
+  });
+
+  handle.setCurrentProc = (proc) => {
+    if (pendingRestartTimer) {
+      clearTimeout(pendingRestartTimer);
+      pendingRestartTimer = null;
+    }
+    currentProc = proc ?? null;
+    exitCode = null;
+    signalCode = null;
+    stopRequested = false;
+    exitEmitted = false;
+  };
+
+  handle.clearCurrentProc = (proc) => {
+    if (currentProc !== proc) {
+      return false;
+    }
+    currentProc = null;
+    return true;
+  };
+
+  handle.finalizeExit = ({ code = null, signal = null } = {}) => {
+    if (pendingRestartTimer) {
+      clearTimeout(pendingRestartTimer);
+      pendingRestartTimer = null;
+    }
+    currentProc = null;
+    exitCode = typeof code === 'number' ? code : null;
+    signalCode = signal ?? null;
+    if (exitEmitted) {
+      return;
+    }
+    exitEmitted = true;
+    handle.emit('exit', exitCode, signalCode);
+  };
+
+  handle.hasPendingRestart = () => Boolean(pendingRestartTimer);
+
+  handle.requestStop = ({ signal = null } = {}) => {
+    stopRequested = true;
+    if (pendingRestartTimer) {
+      clearTimeout(pendingRestartTimer);
+      pendingRestartTimer = null;
+    }
+    if (!currentProc) {
+      handle.finalizeExit({ code: null, signal });
+    }
+  };
+
+  handle.shouldSuppressRestart = () => stopRequested;
+
+  handle.setPendingRestartTimer = (timer) => {
+    if (pendingRestartTimer) {
+      clearTimeout(pendingRestartTimer);
+    }
+    pendingRestartTimer = timer ?? null;
+  };
+
+  handle.kill = (signal) => {
+    handle.requestStop({ signal });
+    currentProc?.kill?.(signal);
+  };
+
+  return handle;
+}
 
 function normalizeExpoHost(raw) {
   const v = String(raw ?? '').trim().toLowerCase();
@@ -446,47 +549,139 @@ export async function ensureDevExpoServer({
   if (Array.isArray(stdio) && stdio[1] === 'ignore' && stdio[2] === 'ignore') {
     delete normalizedSpawnOptions.stdio;
   }
-  // Run the Expo CLI from the runner dir (where deps/bins live), but target the actual Expo project dir.
-  await ensureWorkspacePackagesBuiltForExpoProject({ projectDir, env, quiet });
-  const proc = await expoSpawn({ label: 'expo', dir: uiDir, projectDir, args, env, options: normalizedSpawnOptions, quiet });
-  children.push(proc);
-
+  const restartPolicy = resolveExpoRestartPolicy({ env, stackMode });
+  const userOnLine = typeof normalizedSpawnOptions.onLine === 'function' ? normalizedSpawnOptions.onLine : null;
+  delete normalizedSpawnOptions.onLine;
   const tailscaleEnabled = Boolean(tailscaleResult?.ok && tailscaleResult?.proxyUrl);
 
-  await publishRuntime({
-    pid: proc.pid,
-    port: metroPort,
-    tailscaleForwarderPid: tailscaleResult?.pid ?? null,
-    tailscaleIp: tailscaleResult?.tailscaleIp ?? null,
-    tailscaleEnabled,
-  });
+  const writeSupervisorLine = (line) => {
+    if (quiet) return;
+    process.stderr.write(`[expo] ${line}\n`);
+  };
 
-  try {
-    await writePidState(paths.statePath, {
+  const writeExpoState = async (proc) => {
+    await publishRuntime({
       pid: proc.pid,
       port: metroPort,
-      uiDir,
-      projectDir,
-      startedAt: new Date().toISOString(),
-      webEnabled: wantWeb,
-      devClientEnabled: wantDevClient,
-      host,
-      apiServerUrl: desiredApiServerUrl || null,
-      scheme: wantDevClient ? scheme : null,
-      tailscaleEnabled,
       tailscaleForwarderPid: tailscaleResult?.pid ?? null,
       tailscaleIp: tailscaleResult?.tailscaleIp ?? null,
+      tailscaleEnabled,
     });
-  } catch {
-    // ignore
-  }
+
+    try {
+      await writePidState(paths.statePath, {
+        pid: proc.pid,
+        port: metroPort,
+        uiDir,
+        projectDir,
+        startedAt: new Date().toISOString(),
+        webEnabled: wantWeb,
+        devClientEnabled: wantDevClient,
+        host,
+        apiServerUrl: desiredApiServerUrl || null,
+        scheme: wantDevClient ? scheme : null,
+        tailscaleEnabled,
+        tailscaleForwarderPid: tailscaleResult?.pid ?? null,
+        tailscaleIp: tailscaleResult?.tailscaleIp ?? null,
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const clearRuntimePidIfCurrent = async (pid) => {
+    if (!stackMode || !runtimeStatePath) return;
+    const runtimeState = await readStackRuntimeStateFile(runtimeStatePath).catch(() => null);
+    if (!runtimeState) return;
+    const currentPid = Number(runtimeState?.processes?.expoPid);
+    if (!Number.isFinite(currentPid) || currentPid <= 1 || currentPid !== Number(pid)) {
+      return;
+    }
+    await recordStackRuntimeUpdate(runtimeStatePath, {
+      processes: {
+        expoPid: null,
+      },
+    }).catch(() => {});
+  };
+
+  const trackedProc = createTrackedExpoProcHandle();
+
+  const spawnTrackedExpo = async ({ restartAttempt = 0 } = {}) => {
+    const outputTracker = createExpoCrashOutputTracker();
+    const proc = await expoSpawn({
+      label: 'expo',
+      dir: uiDir,
+      projectDir,
+      args,
+      env,
+      options: {
+        ...normalizedSpawnOptions,
+        onLine: (event) => {
+          outputTracker.observeLine(event);
+          userOnLine?.(event);
+        },
+      },
+      quiet,
+    });
+    children.push(proc);
+    trackedProc.setCurrentProc(proc);
+    await writeExpoState(proc);
+
+    proc.once('exit', (code, signal) => {
+      void (async () => {
+        trackedProc.clearCurrentProc(proc);
+        if (isIntentionalExpoTermination({ code, signal })) {
+          trackedProc.finalizeExit({ code, signal });
+          return;
+        }
+        await clearRuntimePidIfCurrent(proc.pid);
+        if (!restartPolicy.enabled || restartPolicy.maxAttempts <= 0) {
+          trackedProc.finalizeExit({ code, signal });
+          return;
+        }
+        const nextAttempt = restartAttempt + 1;
+        if (nextAttempt > restartPolicy.maxAttempts) {
+          writeSupervisorLine(
+            `Expo exited unexpectedly (${describeExpoTermination({ code, signal, outputTracker })}); restart suppressed after ${restartPolicy.maxAttempts} attempts.`
+          );
+          trackedProc.finalizeExit({ code, signal });
+          return;
+        }
+
+        const delayMs = computeExpoRestartDelayMs({ attempt: nextAttempt, policy: restartPolicy });
+        writeSupervisorLine(
+          `Expo exited unexpectedly (${describeExpoTermination({ code, signal, outputTracker })}); restarting in ${Math.ceil(delayMs / 1000)}s (attempt ${nextAttempt}/${restartPolicy.maxAttempts}).`
+        );
+        const timer = setTimeout(() => {
+          trackedProc.setPendingRestartTimer(null);
+          if (trackedProc.shouldSuppressRestart()) {
+            return;
+          }
+          void spawnTrackedExpo({ restartAttempt: nextAttempt }).catch((error) => {
+            writeSupervisorLine(`Expo restart failed: ${error instanceof Error ? error.message : String(error)}`);
+            trackedProc.finalizeExit({ code: null, signal: null });
+          });
+        }, delayMs);
+        trackedProc.setPendingRestartTimer(timer);
+        timer.unref?.();
+      })();
+    });
+
+    return proc;
+  };
+
+  // Run the Expo CLI from the runner dir (where deps/bins live), but target the actual Expo project dir.
+  await ensureWorkspacePackagesBuiltForExpoProject({ projectDir, env, quiet });
+  const proc = await spawnTrackedExpo();
 
   return {
     ok: true,
     skipped: false,
-    pid: proc.pid,
+    get pid() {
+      return trackedProc.pid;
+    },
     port: metroPort,
-    proc,
+    proc: trackedProc,
     mode: expoModeLabel({ wantWeb, wantDevClient }),
     tailscale: tailscaleResult ?? null,
   };
