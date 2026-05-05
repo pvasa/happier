@@ -8,9 +8,11 @@ export type SourceControlBranchMenuMachineTarget = Readonly<{
 export async function handleSourceControlBranchMenuSelect(input: Readonly<{
     itemId: string;
     closeMenu: () => void;
+    checkoutPullRequestLocally: () => Promise<void>;
     createWorktreeFromCurrentBranch: () => Promise<void>;
     directoryFallback: string;
     machineTarget: SourceControlBranchMenuMachineTarget;
+    openPullRequestWorktree: () => Promise<void>;
     openNewSessionForDirectory: (directory: string) => void;
     pruneWorktrees: () => Promise<void>;
     removeWorktree: (worktreePath: string) => Promise<void>;
@@ -23,6 +25,14 @@ export async function handleSourceControlBranchMenuSelect(input: Readonly<{
 
     if (itemId === 'worktree:create-current-branch') {
         await input.createWorktreeFromCurrentBranch();
+        return;
+    }
+    if (itemId === 'pull-request:checkout-local') {
+        await input.checkoutPullRequestLocally();
+        return;
+    }
+    if (itemId === 'pull-request:open-worktree') {
+        await input.openPullRequestWorktree();
         return;
     }
     if (itemId === 'worktree:create-from-another-branch') {

@@ -14,7 +14,13 @@ import { repoScmBranchService } from '@/scm/repository/repoScmBranchService';
 import { resolveSessionPathWithinWorktree } from '@/scm/repository/resolveSessionPathWithinWorktree';
 import { useRepoScmBranchList } from '@/scm/repository/useRepoScmBranchList';
 import { repoScmWorktreeService } from '@/scm/repository/repoScmWorktreeService';
-import { sessionScmBranchCheckout, sessionScmBranchCreate } from '@/sync/ops';
+import {
+    sessionScmBranchCheckout,
+    sessionScmBranchCreate,
+    sessionScmPullRequestCheckout,
+    sessionScmPullRequestPrepareWorktree,
+    sessionScmRepositoryRemoveIndexLock,
+} from '@/sync/ops';
 import { useSetting } from '@/sync/domains/state/storage';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
@@ -25,9 +31,11 @@ import { buildSourceControlBranchMenuItems } from './buildSourceControlBranchMen
 import {
     hasUncommittedChanges,
     isBranchStashAlreadyExistsError,
+    isGitIndexLockError,
     normalizeBranchSwitchSetting,
 } from './branchMenuPredicates';
 import { handleSourceControlBranchMenuSelect } from './handleSourceControlBranchMenuSelect';
+import { parsePullRequestReferenceInput } from './pullRequestReferenceInput';
 
 export type SourceControlBranchMenuProps = Readonly<{
     sessionId: string;
@@ -55,6 +63,10 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
     const canReadBranches = snapshot?.capabilities?.readBranches === true;
     const canCheckout = snapshot?.capabilities?.writeBranchCheckout === true && writeEnabled && !disabled;
     const canCreate = snapshot?.capabilities?.writeBranchCreate === true && writeEnabled && !disabled;
+    const canCheckoutPullRequests =
+        snapshot?.capabilities?.writePullRequestCheckout === true && writeEnabled && !disabled;
+    const canPreparePullRequestWorktrees =
+        snapshot?.capabilities?.writePullRequestPrepareWorktree === true && writeEnabled && !disabled;
 
     const [open, setOpen] = React.useState(false);
     const [includeRemotes, setIncludeRemotes] = React.useState(false);
@@ -112,8 +124,10 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
         return buildSourceControlBranchMenuItems({
             branches,
             canCheckout,
+            canCheckoutPullRequests,
             canCreateWorktrees,
             canLaunchWorktreeSession,
+            canPreparePullRequestWorktrees,
             canReadBranches,
             currentBranch,
             includeRemotes,
@@ -125,8 +139,10 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
     }, [
         branches,
         canCheckout,
+        canCheckoutPullRequests,
         canCreateWorktrees,
         canLaunchWorktreeSession,
+        canPreparePullRequestWorktrees,
         canReadBranches,
         currentBranch,
         includeRemotes,
@@ -210,6 +226,24 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
             response = await attemptCheckout(true);
         }
 
+        if (isGitIndexLockError(response)) {
+            const shouldRecover = await Modal.confirm(
+                t('files.branchMenu.indexLock.title'),
+                t('files.branchMenu.indexLock.body'),
+                {
+                    confirmText: t('files.branchMenu.indexLock.confirm'),
+                    cancelText: t('common.cancel'),
+                },
+            );
+            if (!shouldRecover) return;
+            const recovery = await sessionScmRepositoryRemoveIndexLock(props.sessionId, {});
+            if (!recovery.success) {
+                Modal.alert(t('common.error'), recovery.error || t('files.branchMenu.indexLock.recoveryFailed'));
+                return;
+            }
+            response = await attemptCheckout(false);
+        }
+
         if (!response.success) {
             Modal.alert(t('common.error'), response.error || t('files.branchMenu.switch.failed'));
             return;
@@ -226,6 +260,74 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
         currentBranch,
         props.sessionId,
         snapshot,
+    ]);
+
+    const promptForPullRequestReference = React.useCallback(async () => {
+        const raw = await Modal.prompt(
+            t('files.branchMenu.pullRequests.promptTitle'),
+            t('files.branchMenu.pullRequests.promptBody'),
+            {
+                placeholder: t('files.branchMenu.pullRequests.promptPlaceholder'),
+                confirmText: t('common.continue'),
+                cancelText: t('common.cancel'),
+            },
+        );
+        if (raw == null) return null;
+        const reference = parsePullRequestReferenceInput(raw);
+        if (!reference) {
+            Modal.alert(
+                t('common.error'),
+                t('files.branchMenu.pullRequests.invalidReferenceBody'),
+            );
+            return null;
+        }
+        return reference;
+    }, []);
+
+    const checkoutPullRequestLocally = React.useCallback(async () => {
+        if (!canCheckoutPullRequests) return;
+        const prReference = await promptForPullRequestReference();
+        if (!prReference) return;
+
+        const response = await sessionScmPullRequestCheckout(props.sessionId, {
+            prReference,
+        });
+        if (!response.success) {
+            Modal.alert(t('common.error'), response.error || t('files.branchMenu.pullRequests.checkoutFailed'));
+            return;
+        }
+
+        repoScmBranchService.invalidateBranchesForSession({ sessionId: props.sessionId });
+        closeMenu();
+        await scmStatusSync.invalidateFromMutationAndAwait(props.sessionId);
+    }, [canCheckoutPullRequests, closeMenu, promptForPullRequestReference, props.sessionId]);
+
+    const openPullRequestWorktree = React.useCallback(async () => {
+        if (!canPreparePullRequestWorktrees || !machineTarget) return;
+        const prReference = await promptForPullRequestReference();
+        if (!prReference) return;
+
+        const response = await sessionScmPullRequestPrepareWorktree(props.sessionId, {
+            sourcePath: machineTarget.basePath,
+            mode: 'worktree',
+            prReference,
+        });
+        if (!response.success) {
+            Modal.alert(t('common.error'), response.error || t('files.branchMenu.pullRequests.worktreeFailed'));
+            return;
+        }
+
+        repoScmBranchService.invalidateBranchesForSession({ sessionId: props.sessionId });
+        await scmStatusSync.invalidateFromMutationAndAwait(props.sessionId);
+        closeMenu();
+        openNewSessionForDirectory(response.targetPath);
+    }, [
+        canPreparePullRequestWorktrees,
+        closeMenu,
+        machineTarget,
+        openNewSessionForDirectory,
+        promptForPullRequestReference,
+        props.sessionId,
     ]);
 
     const createWorktreeFromCurrentBranch = React.useCallback(async () => {
@@ -306,10 +408,12 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
     const onSelect = React.useCallback(async (itemId: string) => {
         await handleSourceControlBranchMenuSelect({
             itemId,
+            checkoutPullRequestLocally,
             closeMenu,
             createWorktreeFromCurrentBranch,
             directoryFallback,
             machineTarget: machineTarget ? { machineId: machineTarget.machineId, basePath: machineTarget.basePath } : null,
+            openPullRequestWorktree,
             openNewSessionForDirectory,
             pruneWorktrees,
             removeWorktree,
@@ -320,10 +424,12 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
         });
     }, [
         closeMenu,
+        checkoutPullRequestLocally,
         createWorktreeFromCurrentBranch,
         directoryFallback,
         machineTarget?.basePath,
         machineTarget?.machineId,
+        openPullRequestWorktree,
         openNewSessionForDirectory,
         pruneWorktrees,
         removeWorktree,

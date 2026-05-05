@@ -6,6 +6,7 @@ import { sessionScmStatusSnapshot } from '@/sync/ops';
 import { machineScmStatusSnapshot } from '@/sync/ops/scm/machineScm';
 import { storage } from '@/sync/domains/state/storage';
 import type { ScmWorkingSnapshot as UiScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
+import { EMPTY_SCM_CAPABILITIES } from './core/snapshotMappers';
 import { ScmRepositoryService, snapshotToScmStatus } from './scmRepositoryService';
 
 vi.mock('@/sync/ops', () => ({
@@ -185,6 +186,61 @@ describe('snapshotToScmStatus', () => {
 });
 
 describe('ScmRepositoryService.fetchSnapshotForSession', () => {
+    it('preserves hosting provider and pull request projections from protocol snapshots', async () => {
+        const normalized = await Promise.resolve(
+            makeScmSnapshot({
+                hostingProvider: {
+                    kind: 'github',
+                    name: 'GitHub',
+                    baseUrl: 'https://github.com',
+                    nameWithOwner: 'happier/dev',
+                    remoteName: 'origin',
+                },
+                pullRequest: {
+                    provider: {
+                        kind: 'github',
+                        name: 'GitHub',
+                        baseUrl: 'https://github.com',
+                        nameWithOwner: 'happier/dev',
+                        remoteName: 'origin',
+                    },
+                    number: 42,
+                    title: 'Add PR workflow',
+                    url: 'https://github.com/happier/dev/pull/42',
+                    baseBranch: 'main',
+                    headBranch: 'feature/prs',
+                    state: 'open',
+                },
+            })
+        );
+
+        const { normalizeWorkingSnapshotForUi } = await import('./scmRepositoryService');
+        const result = normalizeWorkingSnapshotForUi(normalized, 'machine:/repo');
+
+        expect((result as { hostingProvider?: unknown }).hostingProvider).toEqual({
+            kind: 'github',
+            name: 'GitHub',
+            baseUrl: 'https://github.com',
+            nameWithOwner: 'happier/dev',
+            remoteName: 'origin',
+        });
+        expect((result as { pullRequest?: unknown }).pullRequest).toEqual({
+            provider: {
+                kind: 'github',
+                name: 'GitHub',
+                baseUrl: 'https://github.com',
+                nameWithOwner: 'happier/dev',
+                remoteName: 'origin',
+            },
+            number: 42,
+            title: 'Add PR workflow',
+            url: 'https://github.com/happier/dev/pull/42',
+            baseBranch: 'main',
+            headBranch: 'feature/prs',
+            state: 'open',
+        });
+    });
+
     it('returns null when session metadata path is unavailable', async () => {
         vi.spyOn(storage, 'getState').mockReturnValue({
             sessions: {
@@ -622,30 +678,7 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
         const service = new ScmRepositoryService();
         const result = await service.fetchSnapshotForSession('session_1');
 
-        expect(result?.capabilities).toEqual({
-            readStatus: false,
-            readDiffFile: false,
-            readDiffCommit: false,
-            readLog: false,
-            writeInclude: false,
-            writeExclude: false,
-            writeCommit: false,
-            writeCommitPathSelection: false,
-            writeCommitLineSelection: false,
-            writeBackout: false,
-            writeRemoteFetch: false,
-            writeRemotePull: false,
-            writeRemotePush: false,
-            writeRemotePublish: false,
-            readBranches: false,
-            writeBranchCreate: false,
-            writeBranchCheckout: false,
-            readStash: false,
-            writeStash: false,
-            worktreeCreate: false,
-            changeSetModel: 'working-copy',
-            supportedDiffAreas: ['pending', 'both'],
-        });
+        expect(result?.capabilities).toEqual(EMPTY_SCM_CAPABILITIES);
     });
 });
 

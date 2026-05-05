@@ -121,7 +121,10 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
         >
             {typeof props.selectionCount === 'number' ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                    <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                    <Text
+                        testID="scm-commit-selection-summary"
+                        style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default('semiBold') }}
+                    >
                         {t('files.sourceControlOperations.selection', { count: props.selectionCount })}
                     </Text>
                     {(props.onSelectAllSelection || (props.selectionCount > 0 && props.onClearSelection)) ? (

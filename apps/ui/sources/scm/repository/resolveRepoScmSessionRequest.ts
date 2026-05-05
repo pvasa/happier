@@ -1,5 +1,6 @@
 import { storage } from '@/sync/domains/state/storage';
 import { readSessionWorkspaceContext } from '@/sync/domains/session/readSessionWorkspaceContext';
+import { resolveSessionMachineId } from '@/sync/domains/session/directSessions/resolveSessionMachineId';
 import { resolveProjectMachineScopeId } from '@/sync/runtime/orchestration/projectManager';
 import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
@@ -47,7 +48,7 @@ export function resolveRepoScmSessionRequest(input: Readonly<{
     }
 
     const reachableMachineId = machineTarget?.machineId ?? null;
-    const sessionMachineId = normalizeNonEmptyString(session.metadata?.machineId);
+    const sessionMachineId = resolveSessionMachineId(session.metadata);
     const projectMachineId = normalizeNonEmptyString(workspaceContext.projectMachineId);
     const machineId =
         reachableMachineId

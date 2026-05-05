@@ -19,6 +19,7 @@ import {
     SourceControlUpdateSection,
     type SourceControlUpdateTheme,
 } from './SourceControlUpdateControls';
+import { SourceControlPublishRepositorySection } from './SourceControlPublishRepositorySection';
 
 type EditingRemote =
     | { mode: 'add' }
@@ -161,118 +162,127 @@ export function SourceControlRemotesSection(props: Readonly<{
     const editorDisabled = busy || (editing.mode === 'add' ? !canAdd : !canSetUrl);
 
     return (
-        <SourceControlUpdateSection
-            theme={props.theme}
-            title={t('files.sourceControlOperations.update.remotes.title')}
-            testID="scm-update-remotes-section"
-        >
-            {remotes.length === 0 ? (
-                <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default() }}>
-                    {t('files.sourceControlOperations.update.remotes.empty')}
-                </Text>
-            ) : (
-                <View style={{ gap: 8 }}>
-                    {remotes.map((remote) => (
-                        <View
-                            key={remote.name}
-                            testID="scm-update-remote-row"
-                            style={{
-                                borderWidth: 1,
-                                borderColor: props.theme.colors.divider,
-                                borderRadius: 8,
-                                padding: 10,
-                                gap: 8,
-                                backgroundColor: props.theme.colors.surfaceHigh,
-                            }}
-                        >
-                            <View style={{ gap: 2 }}>
-                                <Text style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}>
-                                    {remote.name}
-                                </Text>
-                                <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.mono() }} numberOfLines={1}>
-                                    {remote.fetchUrl || t('files.sourceControlOperations.update.remotes.noFetchUrl')}
-                                </Text>
-                                {remote.pushUrl && remote.pushUrl !== remote.fetchUrl ? (
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.mono() }} numberOfLines={1}>
-                                        {remote.pushUrl}
-                                    </Text>
-                                ) : null}
-                            </View>
-                            <View style={{ flexDirection: 'row', gap: 8 }}>
-                                <SourceControlUpdateButton
-                                    theme={props.theme}
-                                    testID="scm-update-remote-edit"
-                                    label={t('common.edit')}
-                                    disabled={!canSetUrl || busy}
-                                    onPress={() => beginEdit(remote)}
-                                />
-                                <SourceControlUpdateButton
-                                    theme={props.theme}
-                                    testID="scm-update-remote-remove"
-                                    label={t('files.sourceControlOperations.update.remotes.remove')}
-                                    kind="danger"
-                                    disabled={!canRemove || busy}
-                                    onPress={() => removeRemote(remote)}
-                                />
-                            </View>
-                        </View>
-                    ))}
-                </View>
-            )}
-
-            <View style={{ gap: 8 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <Text style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}>
-                        {editing.mode === 'add'
-                            ? t('files.sourceControlOperations.update.remotes.addTitle')
-                            : t('files.sourceControlOperations.update.remotes.editTitle', { name: editing.remote.name })}
+        <>
+            <SourceControlPublishRepositorySection
+                theme={props.theme}
+                sessionId={props.sessionId}
+                snapshot={props.snapshot}
+                disabled={props.disabled}
+                writeEnabled={props.writeEnabled}
+            />
+            <SourceControlUpdateSection
+                theme={props.theme}
+                title={t('files.sourceControlOperations.update.remotes.title')}
+                testID="scm-update-remotes-section"
+            >
+                {remotes.length === 0 ? (
+                    <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default() }}>
+                        {t('files.sourceControlOperations.update.remotes.empty')}
                     </Text>
+                ) : (
+                    <View style={{ gap: 8 }}>
+                        {remotes.map((remote) => (
+                            <View
+                                key={remote.name}
+                                testID="scm-update-remote-row"
+                                style={{
+                                    borderWidth: 1,
+                                    borderColor: props.theme.colors.divider,
+                                    borderRadius: 8,
+                                    padding: 10,
+                                    gap: 8,
+                                    backgroundColor: props.theme.colors.surfaceHigh,
+                                }}
+                            >
+                                <View style={{ gap: 2 }}>
+                                    <Text style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}>
+                                        {remote.name}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.mono() }} numberOfLines={1}>
+                                        {remote.fetchUrl || t('files.sourceControlOperations.update.remotes.noFetchUrl')}
+                                    </Text>
+                                    {remote.pushUrl && remote.pushUrl !== remote.fetchUrl ? (
+                                        <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.mono() }} numberOfLines={1}>
+                                            {remote.pushUrl}
+                                        </Text>
+                                    ) : null}
+                                </View>
+                                <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <SourceControlUpdateButton
+                                        theme={props.theme}
+                                        testID="scm-update-remote-edit"
+                                        label={t('common.edit')}
+                                        disabled={!canSetUrl || busy}
+                                        onPress={() => beginEdit(remote)}
+                                    />
+                                    <SourceControlUpdateButton
+                                        theme={props.theme}
+                                        testID="scm-update-remote-remove"
+                                        label={t('files.sourceControlOperations.update.remotes.remove')}
+                                        kind="danger"
+                                        disabled={!canRemove || busy}
+                                        onPress={() => removeRemote(remote)}
+                                    />
+                                </View>
+                            </View>
+                        ))}
+                    </View>
+                )}
+
+                <View style={{ gap: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                        <Text style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}>
+                            {editing.mode === 'add'
+                                ? t('files.sourceControlOperations.update.remotes.addTitle')
+                                : t('files.sourceControlOperations.update.remotes.editTitle', { name: editing.remote.name })}
+                        </Text>
+                        <SourceControlUpdateButton
+                            theme={props.theme}
+                            testID="scm-update-add-remote"
+                            label={t('files.sourceControlOperations.update.remotes.add')}
+                            disabled={busy || editing.mode === 'add'}
+                            onPress={beginAdd}
+                        />
+                    </View>
+                    <SourceControlUpdateInput
+                        theme={props.theme}
+                        testID="scm-remote-editor-name"
+                        accessibilityLabel={t('files.sourceControlOperations.update.remotes.nameLabel')}
+                        placeholder={t('files.sourceControlOperations.update.remotes.namePlaceholder')}
+                        value={name}
+                        editable={editing.mode === 'add' && !editorDisabled}
+                        onChangeText={updateName}
+                    />
+                    <SourceControlUpdateInput
+                        theme={props.theme}
+                        testID="scm-remote-editor-fetch-url"
+                        accessibilityLabel={t('files.sourceControlOperations.update.remotes.fetchUrlLabel')}
+                        placeholder={t('files.sourceControlOperations.update.remotes.fetchUrlPlaceholder')}
+                        value={fetchUrl}
+                        editable={!editorDisabled}
+                        onChangeText={updateFetchUrl}
+                    />
+                    <SourceControlUpdateInput
+                        theme={props.theme}
+                        testID="scm-remote-editor-push-url"
+                        accessibilityLabel={t('files.sourceControlOperations.update.remotes.pushUrlLabel')}
+                        placeholder={t('files.sourceControlOperations.update.remotes.pushUrlPlaceholder')}
+                        value={pushUrl}
+                        editable={!editorDisabled}
+                        onChangeText={updatePushUrl}
+                    />
                     <SourceControlUpdateButton
                         theme={props.theme}
-                        testID="scm-update-add-remote"
-                        label={t('files.sourceControlOperations.update.remotes.add')}
-                        disabled={busy || editing.mode === 'add'}
-                        onPress={beginAdd}
+                        testID="scm-remote-editor-save"
+                        label={editing.mode === 'add'
+                            ? t('files.sourceControlOperations.update.remotes.add')
+                            : t('common.save')}
+                        kind="primary"
+                        disabled={editorDisabled}
+                        onPress={save}
                     />
                 </View>
-                <SourceControlUpdateInput
-                    theme={props.theme}
-                    testID="scm-remote-editor-name"
-                    accessibilityLabel={t('files.sourceControlOperations.update.remotes.nameLabel')}
-                    placeholder={t('files.sourceControlOperations.update.remotes.namePlaceholder')}
-                    value={name}
-                    editable={editing.mode === 'add' && !editorDisabled}
-                    onChangeText={updateName}
-                />
-                <SourceControlUpdateInput
-                    theme={props.theme}
-                    testID="scm-remote-editor-fetch-url"
-                    accessibilityLabel={t('files.sourceControlOperations.update.remotes.fetchUrlLabel')}
-                    placeholder={t('files.sourceControlOperations.update.remotes.fetchUrlPlaceholder')}
-                    value={fetchUrl}
-                    editable={!editorDisabled}
-                    onChangeText={updateFetchUrl}
-                />
-                <SourceControlUpdateInput
-                    theme={props.theme}
-                    testID="scm-remote-editor-push-url"
-                    accessibilityLabel={t('files.sourceControlOperations.update.remotes.pushUrlLabel')}
-                    placeholder={t('files.sourceControlOperations.update.remotes.pushUrlPlaceholder')}
-                    value={pushUrl}
-                    editable={!editorDisabled}
-                    onChangeText={updatePushUrl}
-                />
-                <SourceControlUpdateButton
-                    theme={props.theme}
-                    testID="scm-remote-editor-save"
-                    label={editing.mode === 'add'
-                        ? t('files.sourceControlOperations.update.remotes.add')
-                        : t('common.save')}
-                    kind="primary"
-                    disabled={editorDisabled}
-                    onPress={save}
-                />
-            </View>
-        </SourceControlUpdateSection>
+            </SourceControlUpdateSection>
+        </>
     );
 }

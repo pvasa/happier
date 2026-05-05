@@ -287,4 +287,52 @@ describe('machineScm', () => {
             timeoutMs: 120_000,
         });
     });
+
+    it('routes pull request operations through the canonical machine SCM wrapper', async () => {
+        getStateMock.mockReturnValue({
+            settings: {
+                scmGitRepoPreferredBackend: 'git',
+            },
+        });
+        machineRpcWithServerScopeMock.mockResolvedValue({
+            success: true,
+            pullRequests: [],
+            pullRequest: null,
+            url: 'https://github.com/happier/dev/compare/main...feature/prs',
+        });
+
+        const machineScm = await import('./machineScm') as Record<string, unknown>;
+        expect(typeof machineScm.machineScmPullRequestList).toBe('function');
+        expect(typeof machineScm.machineScmPullRequestOpenCompose).toBe('function');
+
+        await (machineScm.machineScmPullRequestList as Function)('machine-1', {
+            cwd: '/repo',
+            head: 'feature/prs',
+        });
+        await (machineScm.machineScmPullRequestOpenCompose as Function)('machine-1', {
+            cwd: '/repo',
+            base: 'main',
+            head: 'feature/prs',
+        });
+
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(1, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_PULL_REQUEST_LIST,
+            payload: {
+                cwd: '/repo',
+                head: 'feature/prs',
+            },
+            timeoutMs: undefined,
+        });
+        expect(machineRpcWithServerScopeMock).toHaveBeenNthCalledWith(2, {
+            machineId: 'machine-1',
+            method: RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE,
+            payload: {
+                cwd: '/repo',
+                base: 'main',
+                head: 'feature/prs',
+            },
+            timeoutMs: undefined,
+        });
+    });
 });

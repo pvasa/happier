@@ -22,6 +22,20 @@ import type {
     ScmDiffFileResponse,
     ScmLogListRequest,
     ScmLogListResponse,
+    ScmPullRequestCheckoutRequest,
+    ScmPullRequestCheckoutResponse,
+    ScmPullRequestGetRequest,
+    ScmPullRequestGetResponse,
+    ScmPullRequestListRequest,
+    ScmPullRequestListResponse,
+    ScmPullRequestOpenComposeRequest,
+    ScmPullRequestOpenComposeResponse,
+    ScmPullRequestOpenOrReuseRequest,
+    ScmPullRequestOpenOrReuseResponse,
+    ScmPullRequestPrepareWorktreeRequest,
+    ScmPullRequestPrepareWorktreeResponse,
+    ScmPullRequestRunStackedRequest,
+    ScmPullRequestRunStackedResponse,
     ScmRemoteAddRequest,
     ScmRemoteManagementResponse,
     ScmRemotePublishRequest,
@@ -383,4 +397,53 @@ export async function machineScmStashShow(
     request: ScmStashShowRequest,
 ): Promise<ScmStashShowResponse> {
     return await callMachineScm<ScmStashShowResponse, ScmStashShowRequest>(machineId, RPC_METHODS.SCM_STASH_SHOW, request);
+}
+
+export async function machineScmPullRequestList(
+    machineId: string,
+    request: ScmPullRequestListRequest,
+): Promise<ScmPullRequestListResponse> {
+    return await callMachineScm<ScmPullRequestListResponse, ScmPullRequestListRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_LIST, request);
+}
+
+export async function machineScmPullRequestGet(
+    machineId: string,
+    request: ScmPullRequestGetRequest,
+): Promise<ScmPullRequestGetResponse> {
+    return await callMachineScm<ScmPullRequestGetResponse, ScmPullRequestGetRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_GET, request);
+}
+
+export async function machineScmPullRequestOpenCompose(
+    machineId: string,
+    request: ScmPullRequestOpenComposeRequest,
+): Promise<ScmPullRequestOpenComposeResponse> {
+    return await callMachineScm<ScmPullRequestOpenComposeResponse, ScmPullRequestOpenComposeRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE, request);
+}
+
+export async function machineScmPullRequestOpenOrReuse(
+    machineId: string,
+    request: ScmPullRequestOpenOrReuseRequest,
+): Promise<ScmPullRequestOpenOrReuseResponse> {
+    return await callMachineScm<ScmPullRequestOpenOrReuseResponse, ScmPullRequestOpenOrReuseRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_OPEN_OR_REUSE, request);
+}
+
+export async function machineScmPullRequestCheckout(
+    machineId: string,
+    request: ScmPullRequestCheckoutRequest,
+): Promise<ScmPullRequestCheckoutResponse> {
+    return await callMachineScm<ScmPullRequestCheckoutResponse, ScmPullRequestCheckoutRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_CHECKOUT, request);
+}
+
+export async function machineScmPullRequestPrepareWorktree(
+    machineId: string,
+    request: ScmPullRequestPrepareWorktreeRequest,
+): Promise<ScmPullRequestPrepareWorktreeResponse> {
+    return await callMachineScm<ScmPullRequestPrepareWorktreeResponse, ScmPullRequestPrepareWorktreeRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_PREPARE_WORKTREE, request);
+}
+
+export async function machineScmPullRequestRunStacked(
+    machineId: string,
+    request: ScmPullRequestRunStackedRequest,
+): Promise<ScmPullRequestRunStackedResponse> {
+    return await callMachineScm<ScmPullRequestRunStackedResponse, ScmPullRequestRunStackedRequest>(machineId, RPC_METHODS.SCM_PULL_REQUEST_RUN_STACKED, request);
 }
