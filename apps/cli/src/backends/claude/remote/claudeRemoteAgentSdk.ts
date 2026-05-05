@@ -103,6 +103,7 @@ export async function claudeRemoteAgentSdk(opts: {
     // Dynamic parameters
     nextMessage: () => Promise<{ message: string; mode: EnhancedMode } | null>;
     onReady: () => void | Promise<void>;
+    onSubagentFlush?: () => void | Promise<void>;
     isAborted: (toolCallId: string) => boolean;
 
     // Callbacks
@@ -1274,6 +1275,16 @@ export async function claudeRemoteAgentSdk(opts: {
             scheduleNextMessagePump();
         };
 
+        const finalizeSubagentTurn = async () => {
+            lastTurnFlushSummary = await flushStreamedTranscriptWriter('turn-end');
+            logger.debug('[claudeRemoteAgentSdk] Subagent turn summary', {
+                ...turnDiagnostics,
+                didPublishAssistantTextThisTurn,
+            });
+            resetTurnDiagnostics();
+            await opts.onSubagentFlush?.();
+        };
+
         // Fire-and-forget capability publication.
         // This must not block the main streaming loop.
         const onCapabilities = opts.onCapabilities;
@@ -1634,7 +1645,7 @@ export async function claudeRemoteAgentSdk(opts: {
                             activeTaskId = null;
                         }
                         if (status === 'stopped' || status === 'failed' || status === 'completed') {
-                            await finalizeCurrentTurn();
+                            await finalizeSubagentTurn();
                         }
                     }
 
