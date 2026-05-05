@@ -80,6 +80,17 @@ export function isCodexPermissionMode(value: PermissionMode): value is CodexPerm
   return (CODEX_PERMISSION_MODES as readonly string[]).includes(value)
 }
 
+export type UpdateReadCursorPayload =
+  | { sid: string, lastViewedSessionSeq: number, operation?: undefined }
+  | { sid: string, operation: 'mark-read' | 'mark-unread', lastViewedSessionSeq?: number }
+
+export type UpdateReadCursorAckResponse = {
+  result: 'success' | 'forbidden' | 'error',
+  lastViewedSessionSeq?: number,
+  didChange?: boolean,
+  readState?: 'read' | 'unread' | 'empty',
+}
+
 /**
  * Usage data type from Claude
  */
@@ -176,10 +187,7 @@ export interface ClientToServerEvents {
       pendingUserActionRequestCount: number,
     },
   }, cb: (answer: UpdateStateAckResponse) => void) => void,
-  'update-read-cursor': (data: {
-    sid: string,
-    lastViewedSessionSeq: number,
-  }, cb: (answer: { result: 'success' | 'forbidden' | 'error', lastViewedSessionSeq?: number }) => void) => void,
+  'update-read-cursor': (data: UpdateReadCursorPayload, cb: (answer: UpdateReadCursorAckResponse) => void) => void,
   'ping': (callback: () => void) => void
   [SOCKET_RPC_EVENTS.REGISTER]: (data: { method: string }) => void
   [SOCKET_RPC_EVENTS.UNREGISTER]: (data: { method: string }) => void
