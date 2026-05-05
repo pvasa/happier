@@ -1,6 +1,6 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
@@ -60,6 +60,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 }));
 
 const stopSpy = vi.fn(async () => ({ success: true }));
+const readStateSpy = vi.fn(async () => ({ success: true, readState: 'unread', lastViewedSessionSeq: 1, didChange: true }));
 type ArchiveSpyResult = Readonly<{
     success: boolean;
     archivedAt?: number | null;
@@ -73,6 +74,7 @@ let hideInactiveSessions = false;
 vi.mock('@/sync/ops', () => ({
     sessionStopWithServerScope: stopSpy,
     sessionArchiveWithServerScope: archiveSpy,
+    sessionSetManualReadStateWithServerScope: readStateSpy,
 }));
 
 const modalAlertSpy = vi.fn();
@@ -128,7 +130,13 @@ installSessionShellCommonModuleMocks({
     },
 });
 
+let SessionItem: (typeof import('./SessionItem'))['SessionItem'];
+
 describe('SessionItem server-scoped mutations', () => {
+    beforeAll(async () => {
+        ({ SessionItem } = await import('./SessionItem'));
+    }, 120_000);
+
     afterEach(() => {
         standardCleanup();
         hideInactiveSessions = false;
@@ -138,8 +146,6 @@ describe('SessionItem server-scoped mutations', () => {
         archiveSpy.mockClear();
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_1',
@@ -175,12 +181,10 @@ describe('SessionItem server-scoped mutations', () => {
         const swipeable = screen.find((node: any) => typeof node.props?.renderRightActions === 'function');
         const rightActions = swipeable.props.renderRightActions();
         const rightActionsScreen = await renderScreen(rightActions);
-        await act(async () => {
-            await pressTestInstanceAsync(
-                rightActionsScreen.find((node: any) => node.type === 'Pressable'),
-                'session swipe action',
-            );
-        });
+        await pressTestInstanceAsync(
+            rightActionsScreen.find((node: any) => node.type === 'Pressable'),
+            'session swipe action',
+        );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.archiveSession',
@@ -202,8 +206,6 @@ describe('SessionItem server-scoped mutations', () => {
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_2',
@@ -239,12 +241,10 @@ describe('SessionItem server-scoped mutations', () => {
         const swipeable = screen.find((node: any) => typeof node.props?.renderRightActions === 'function');
         const rightActions = swipeable.props.renderRightActions();
         const rightActionsScreen = await renderScreen(rightActions);
-        await act(async () => {
-            await pressTestInstanceAsync(
-                rightActionsScreen.find((node: any) => node.type === 'Pressable'),
-                'session swipe action',
-            );
-        });
+        await pressTestInstanceAsync(
+            rightActionsScreen.find((node: any) => node.type === 'Pressable'),
+            'session swipe action',
+        );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.archiveSession',
@@ -273,8 +273,6 @@ describe('SessionItem server-scoped mutations', () => {
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_stale_inactive',
@@ -310,12 +308,10 @@ describe('SessionItem server-scoped mutations', () => {
         const swipeable = screen.find((node: any) => typeof node.props?.renderRightActions === 'function');
         const rightActions = swipeable.props.renderRightActions();
         const rightActionsScreen = await renderScreen(rightActions);
-        await act(async () => {
-            await pressTestInstanceAsync(
-                rightActionsScreen.find((node: any) => node.type === 'Pressable'),
-                'session swipe action',
-            );
-        });
+        await pressTestInstanceAsync(
+            rightActionsScreen.find((node: any) => node.type === 'Pressable'),
+            'session swipe action',
+        );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.archiveSession',
@@ -339,8 +335,6 @@ describe('SessionItem server-scoped mutations', () => {
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_3',
@@ -376,12 +370,10 @@ describe('SessionItem server-scoped mutations', () => {
         const swipeable = screen.find((node: any) => typeof node.props?.renderRightActions === 'function');
         const rightActions = swipeable.props.renderRightActions();
         const rightActionsScreen = await renderScreen(rightActions);
-        await act(async () => {
-            await pressTestInstanceAsync(
-                rightActionsScreen.find((node: any) => node.type === 'Pressable'),
-                'session swipe action',
-            );
-        });
+        await pressTestInstanceAsync(
+            rightActionsScreen.find((node: any) => node.type === 'Pressable'),
+            'session swipe action',
+        );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.archiveSession',
@@ -404,8 +396,6 @@ describe('SessionItem server-scoped mutations', () => {
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_active_archive',
@@ -464,14 +454,242 @@ describe('SessionItem server-scoped mutations', () => {
         expect(archiveSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d' });
     });
 
+    it('does not expose archive for active shared-admin sessions owned by another user', async () => {
+        hideInactiveSessions = false;
+        archiveSpy.mockClear();
+        stopSpy.mockClear();
+
+        const session = {
+            id: 'sess_shared_admin_active',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+            owner: 'u2',
+            accessLevel: 'admin',
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const swipeables = screen.root.findAll((node: any) => typeof node.props?.renderRightActions === 'function');
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+
+        expect(swipeables).toHaveLength(0);
+        expect(contextMenus.some((node: any) =>
+            Array.isArray(node.props?.items)
+            && node.props.items.some((item: any) => item?.id === 'archive'),
+        )).toBe(false);
+        expect(stopSpy).not.toHaveBeenCalled();
+        expect(archiveSpy).not.toHaveBeenCalled();
+    });
+
+    it('offers mark-unread for read sessions in the more menu using server scope', async () => {
+        readStateSpy.mockClear();
+        const session = {
+            id: 'sess_read',
+            seq: 2,
+            lastViewedSessionSeq: 2,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+        const moreMenu = contextMenus.find((node: any) =>
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'session.mark-unread'),
+        );
+        expect(moreMenu).toBeTruthy();
+
+        await act(async () => {
+            moreMenu!.props.onSelect('session.mark-unread');
+        });
+
+        expect(readStateSpy).toHaveBeenCalledWith('sess_read', 'unread', { serverId: 'server_d' });
+    });
+
+    it('offers mark-read for unread sessions in the more menu using server scope', async () => {
+        readStateSpy.mockClear();
+        const session = {
+            id: 'sess_unread',
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+        const moreMenu = contextMenus.find((node: any) =>
+            Array.isArray(node.props?.items) && node.props.items.some((item: any) => item?.id === 'session.mark-read'),
+        );
+        expect(moreMenu).toBeTruthy();
+
+        await act(async () => {
+            moreMenu!.props.onSelect('session.mark-read');
+        });
+
+        expect(readStateSpy).toHaveBeenCalledWith('sess_unread', 'read', { serverId: 'server_d' });
+    });
+
+    it('does not offer read-state actions for archived sessions', async () => {
+        const session = {
+            id: 'sess_archived',
+            seq: 2,
+            lastViewedSessionSeq: 2,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: 123,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+        expect(contextMenus.some((node: any) =>
+            Array.isArray(node.props?.items)
+            && node.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread'),
+        )).toBe(false);
+    });
+
+    it('does not offer read-state actions for view-only shared sessions', async () => {
+        const session = {
+            id: 'sess_view_only',
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+            accessLevel: 'view',
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+        expect(contextMenus.some((node: any) =>
+            Array.isArray(node.props?.items)
+            && node.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread'),
+        )).toBe(false);
+    });
+
     it('archives pinned active sessions from the swipe action when hidden inactive sessions are enabled', async () => {
         hideInactiveSessions = true;
         archiveSpy.mockClear();
         stopSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_4',
@@ -508,12 +726,10 @@ describe('SessionItem server-scoped mutations', () => {
         const swipeable = screen.find((node: any) => typeof node.props?.renderRightActions === 'function');
         const rightActions = swipeable.props.renderRightActions();
         const rightActionsScreen = await renderScreen(rightActions);
-        await act(async () => {
-            await pressTestInstanceAsync(
-                rightActionsScreen.find((node: any) => node.type === 'Pressable'),
-                'session swipe action',
-            );
-        });
+        await pressTestInstanceAsync(
+            rightActionsScreen.find((node: any) => node.type === 'Pressable'),
+            'session swipe action',
+        );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.archiveSession',

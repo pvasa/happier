@@ -144,6 +144,41 @@ describe('buildSessionListViewData', () => {
         ]);
     });
 
+    it('stores the newest session id on project headers for contextual new-session seeding', () => {
+        const machine = makeMachine({
+            id: 'm1',
+            metadata: { host: 'm1', platform: 'darwin', happyCliVersion: '0.0.0', happyHomeDir: '/h', homeDir: '/home/u' },
+        });
+        const sessions: Record<string, Session> = {
+            older: makeSession({
+                id: 'older',
+                createdAt: 10,
+                updatedAt: 100,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+            newest: makeSession({
+                id: 'newest',
+                createdAt: 20,
+                updatedAt: 50,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+        };
+
+        const data = buildSessionListViewData(
+            sessions,
+            { [machine.id]: machine },
+            {
+                groupInactiveSessionsByProject: true,
+                serverScope: { serverId: 'server-a', serverName: 'Server A' },
+            },
+        );
+
+        const projectHeader = data.find((item): item is Extract<typeof item, { type: 'header' }> =>
+            item.type === 'header' && item.headerKind === 'project',
+        );
+        expect(projectHeader?.seedSessionId).toBe('newest');
+    });
+
     it('groups sessions by the canonical reachable machine target when metadata machine ids are stale', () => {
         const machineTarget = makeMachine({
             id: 'm-target',

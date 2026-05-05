@@ -17,6 +17,7 @@ export type SessionListViewItem =
         groupKey?: string;
         workspaceKey?: string;
         workspaceScopeHint?: Readonly<{ serverId: string; machineId: string; rootPath: string }> | null;
+        seedSessionId?: string | null;
         serverId?: string;
         serverName?: string;
         subtitle?: string;
@@ -188,6 +189,7 @@ function pushProjectGroupsToList(params: Readonly<{
                         rootPath: group.workspaceRootPath,
                     }
                     : null,
+                seedSessionId: group.sessions[0]?.id ?? null,
                 machine: group.machine,
                 subtitle: group.machine.metadata?.displayName || group.machine.metadata?.host || group.machine.id,
                 ...params.serverScopeMeta,
