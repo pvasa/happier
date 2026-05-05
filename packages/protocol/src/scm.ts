@@ -1,65 +1,43 @@
 import { z } from 'zod';
+import {
+  ScmBackendIdSchema,
+  ScmBackendPreferenceSchema,
+  ScmRequestBaseSchema,
+} from './scmRequestBase.js';
+import {
+  ScmDefaultBranchPushPolicySchema,
+  ScmHostingProviderSchema,
+  ScmPullRequestSummarySchema,
+} from './scmPullRequests.js';
+import {
+  SCM_OPERATION_ERROR_CODES,
+  ScmOperationErrorCodeSchema,
+  type ScmOperationErrorCode,
+} from './scmErrorCodes.js';
+export {
+  ScmBackendIdSchema,
+  ScmBackendPreferenceSchema,
+  ScmRequestBaseSchema,
+  type ScmBackendId,
+  type ScmBackendPreference,
+  type ScmRequestBase,
+} from './scmRequestBase.js';
+export {
+  ScmDefaultBranchPushPolicySchema,
+  type ScmDefaultBranchPushPolicy,
+} from './scmPullRequests.js';
+export {
+  SCM_OPERATION_ERROR_CODES,
+  ScmOperationErrorCodeSchema,
+  type ScmOperationErrorCode,
+} from './scmErrorCodes.js';
 
 export const SCM_COMMIT_MESSAGE_MAX_LENGTH = 4096;
 export const SCM_COMMIT_PATCH_MAX_COUNT = 256;
 export const SCM_COMMIT_PATCH_MAX_LENGTH = 200_000;
 
-export const SCM_OPERATION_ERROR_CODES = {
-  NOT_REPOSITORY: 'NOT_REPOSITORY',
-  INVALID_PATH: 'INVALID_PATH',
-  INVALID_REQUEST: 'INVALID_REQUEST',
-  COMMAND_FAILED: 'COMMAND_FAILED',
-  CHANGE_APPLY_FAILED: 'CHANGE_APPLY_FAILED',
-  COMMIT_REQUIRED: 'COMMIT_REQUIRED',
-  CONFLICTING_WORKTREE: 'CONFLICTING_WORKTREE',
-  REMOTE_AUTH_REQUIRED: 'REMOTE_AUTH_REQUIRED',
-  REMOTE_UPSTREAM_REQUIRED: 'REMOTE_UPSTREAM_REQUIRED',
-  REMOTE_NON_FAST_FORWARD: 'REMOTE_NON_FAST_FORWARD',
-  REMOTE_FF_ONLY_REQUIRED: 'REMOTE_FF_ONLY_REQUIRED',
-  REMOTE_REJECTED: 'REMOTE_REJECTED',
-  REMOTE_NOT_FOUND: 'REMOTE_NOT_FOUND',
-  REMOTE_ALREADY_EXISTS: 'REMOTE_ALREADY_EXISTS',
-  BRANCH_OPERATION_IN_PROGRESS: 'BRANCH_OPERATION_IN_PROGRESS',
-  BRANCH_OPERATION_NOT_IN_PROGRESS: 'BRANCH_OPERATION_NOT_IN_PROGRESS',
-  FEATURE_UNSUPPORTED: 'FEATURE_UNSUPPORTED',
-  BACKEND_UNAVAILABLE: 'BACKEND_UNAVAILABLE',
-} as const;
-
-export type ScmOperationErrorCode =
-  (typeof SCM_OPERATION_ERROR_CODES)[keyof typeof SCM_OPERATION_ERROR_CODES];
-
-export const ScmOperationErrorCodeSchema = z.enum([
-  SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY,
-  SCM_OPERATION_ERROR_CODES.INVALID_PATH,
-  SCM_OPERATION_ERROR_CODES.INVALID_REQUEST,
-  SCM_OPERATION_ERROR_CODES.COMMAND_FAILED,
-  SCM_OPERATION_ERROR_CODES.CHANGE_APPLY_FAILED,
-  SCM_OPERATION_ERROR_CODES.COMMIT_REQUIRED,
-  SCM_OPERATION_ERROR_CODES.CONFLICTING_WORKTREE,
-  SCM_OPERATION_ERROR_CODES.REMOTE_AUTH_REQUIRED,
-  SCM_OPERATION_ERROR_CODES.REMOTE_UPSTREAM_REQUIRED,
-  SCM_OPERATION_ERROR_CODES.REMOTE_NON_FAST_FORWARD,
-  SCM_OPERATION_ERROR_CODES.REMOTE_FF_ONLY_REQUIRED,
-  SCM_OPERATION_ERROR_CODES.REMOTE_REJECTED,
-  SCM_OPERATION_ERROR_CODES.REMOTE_NOT_FOUND,
-  SCM_OPERATION_ERROR_CODES.REMOTE_ALREADY_EXISTS,
-  SCM_OPERATION_ERROR_CODES.BRANCH_OPERATION_IN_PROGRESS,
-  SCM_OPERATION_ERROR_CODES.BRANCH_OPERATION_NOT_IN_PROGRESS,
-  SCM_OPERATION_ERROR_CODES.FEATURE_UNSUPPORTED,
-  SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
-]);
-
-export const ScmBackendIdSchema = z.enum(['git', 'sapling']);
-export type ScmBackendId = z.infer<typeof ScmBackendIdSchema>;
-
 export const ScmRepoModeSchema = z.enum(['.git', '.sl']);
 export type ScmRepoMode = z.infer<typeof ScmRepoModeSchema>;
-
-export const ScmBackendPreferenceSchema = z.object({
-  kind: z.literal('prefer'),
-  backendId: ScmBackendIdSchema,
-});
-export type ScmBackendPreference = z.infer<typeof ScmBackendPreferenceSchema>;
 
 export const ScmDiffAreaSchema = z.enum(['included', 'pending', 'both']);
 export type ScmDiffArea = z.infer<typeof ScmDiffAreaSchema>;
@@ -96,7 +74,17 @@ const ScmCapabilitiesSchemaCore = z.object({
   writeRemotePull: z.boolean(),
   writeRemotePush: z.boolean(),
   writeRemotePublish: z.boolean().optional(),
+  writeRepositoryInit: z.boolean().optional(),
+  readHostingRepositoryPublishTargets: z.boolean().optional(),
+  writeHostingRepositoryPublish: z.boolean().optional(),
   writeStash: z.boolean().optional(),
+  readHostingProvider: z.boolean().optional(),
+  readPullRequests: z.boolean().optional(),
+  writePullRequestCreate: z.boolean().optional(),
+  writePullRequestCheckout: z.boolean().optional(),
+  writePullRequestPrepareWorktree: z.boolean().optional(),
+  writePullRequestRunStacked: z.boolean().optional(),
+  defaultBranchPushPolicy: ScmDefaultBranchPushPolicySchema.optional(),
   worktreeCreate: z.boolean(),
   changeSetModel: ScmChangeSetModelSchema,
   supportedDiffAreas: z.array(ScmDiffAreaSchema).min(1),
@@ -203,6 +191,8 @@ export const ScmWorkingSnapshotSchema = z.object({
   }),
   stashCount: z.number().int().nonnegative().optional(),
   operationState: ScmOperationStateSchema.nullable().optional(),
+  hostingProvider: ScmHostingProviderSchema.nullable().optional(),
+  pullRequest: ScmPullRequestSummarySchema.nullable().optional(),
   hasConflicts: z.boolean(),
   entries: z.array(ScmWorkingEntrySchema),
   totals: z.object({
@@ -216,12 +206,6 @@ export const ScmWorkingSnapshotSchema = z.object({
   }),
 });
 export type ScmWorkingSnapshot = z.infer<typeof ScmWorkingSnapshotSchema>;
-
-export const ScmRequestBaseSchema = z.object({
-  cwd: z.string().optional(),
-  backendPreference: ScmBackendPreferenceSchema.optional(),
-});
-export type ScmRequestBase = z.infer<typeof ScmRequestBaseSchema>;
 
 export const ScmBackendDescribeRequestSchema = ScmRequestBaseSchema;
 export type ScmBackendDescribeRequest = z.infer<typeof ScmBackendDescribeRequestSchema>;

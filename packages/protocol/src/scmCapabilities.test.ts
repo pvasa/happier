@@ -23,8 +23,18 @@ describe('scmCapabilities', () => {
     expect(capabilities.writeRemoteSetUrl).toBe(false);
     expect(capabilities.writeRemoteRemove).toBe(false);
     expect(capabilities.writeRemotePublish).toBe(false);
+    expect(capabilities.writeRepositoryInit).toBe(false);
+    expect(capabilities.readHostingRepositoryPublishTargets).toBe(false);
+    expect(capabilities.writeHostingRepositoryPublish).toBe(false);
     expect(capabilities.readStash).toBe(false);
     expect(capabilities.writeStash).toBe(false);
+    expect(capabilities.readHostingProvider).toBe(false);
+    expect(capabilities.readPullRequests).toBe(false);
+    expect(capabilities.writePullRequestCreate).toBe(false);
+    expect(capabilities.writePullRequestCheckout).toBe(false);
+    expect(capabilities.writePullRequestPrepareWorktree).toBe(false);
+    expect(capabilities.writePullRequestRunStacked).toBe(false);
+    expect(capabilities.defaultBranchPushPolicy).toBe('deny');
   });
 
   it('creates git capability defaults', () => {
@@ -43,8 +53,18 @@ describe('scmCapabilities', () => {
     expect(capabilities.writeRemoteSetUrl).toBe(true);
     expect(capabilities.writeRemoteRemove).toBe(true);
     expect(capabilities.writeRemotePublish).toBe(true);
+    expect(capabilities.writeRepositoryInit).toBe(true);
+    expect(capabilities.readHostingRepositoryPublishTargets).toBe(true);
+    expect(capabilities.writeHostingRepositoryPublish).toBe(true);
     expect(capabilities.readStash).toBe(true);
     expect(capabilities.writeStash).toBe(true);
+    expect(capabilities.readHostingProvider).toBe(true);
+    expect(capabilities.readPullRequests).toBe(true);
+    expect(capabilities.writePullRequestCreate).toBe(true);
+    expect(capabilities.writePullRequestCheckout).toBe(true);
+    expect(capabilities.writePullRequestPrepareWorktree).toBe(true);
+    expect(capabilities.writePullRequestRunStacked).toBe(true);
+    expect(capabilities.defaultBranchPushPolicy).toBe('requires-feature-branch');
   });
 
   it('creates sapling capability defaults', () => {
@@ -63,7 +83,17 @@ describe('scmCapabilities', () => {
     expect(capabilities.writeRemoteSetUrl).toBe(false);
     expect(capabilities.writeRemoteRemove).toBe(false);
     expect(capabilities.writeRemotePublish).toBe(false);
+    expect(capabilities.writeRepositoryInit).toBe(false);
+    expect(capabilities.readHostingRepositoryPublishTargets).toBe(false);
+    expect(capabilities.writeHostingRepositoryPublish).toBe(false);
     expect(capabilities.readStash).toBe(false);
     expect(capabilities.writeStash).toBe(false);
+    expect(capabilities.readHostingProvider).toBe(false);
+    expect(capabilities.readPullRequests).toBe(false);
+    expect(capabilities.writePullRequestCreate).toBe(false);
+    expect(capabilities.writePullRequestCheckout).toBe(false);
+    expect(capabilities.writePullRequestPrepareWorktree).toBe(false);
+    expect(capabilities.writePullRequestRunStacked).toBe(false);
+    expect(capabilities.defaultBranchPushPolicy).toBe('deny');
   });
 });

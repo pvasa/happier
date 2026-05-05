@@ -28,11 +28,24 @@ describe('RPC_METHODS scm surface', () => {
         expect(RPC_METHODS.SCM_REMOTE_PULL).toBe('scm.remote.pull');
         expect(RPC_METHODS.SCM_REMOTE_PUSH).toBe('scm.remote.push');
         expect(RPC_METHODS.SCM_REMOTE_PUBLISH).toBe('scm.remote.publish');
+        expect(RPC_METHODS.SCM_REPOSITORY_INIT).toBe('scm.repository.init');
+        expect(RPC_METHODS.SCM_REPOSITORY_REMOVE_INDEX_LOCK).toBe('scm.repository.removeIndexLock');
+        expect(RPC_METHODS.SCM_HOSTING_REPOSITORY_DESCRIBE_PUBLISH_TARGETS).toBe(
+            'scm.hostingRepository.describePublishTargets'
+        );
+        expect(RPC_METHODS.SCM_HOSTING_REPOSITORY_PUBLISH).toBe('scm.hostingRepository.publish');
         expect(RPC_METHODS.SCM_STASH_LIST).toBe('scm.stash.list');
         expect(RPC_METHODS.SCM_STASH_DROP).toBe('scm.stash.drop');
         expect(RPC_METHODS.SCM_STASH_POP).toBe('scm.stash.pop');
         expect(RPC_METHODS.SCM_STASH_APPLY).toBe('scm.stash.apply');
         expect(RPC_METHODS.SCM_STASH_SHOW).toBe('scm.stash.show');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_LIST).toBe('scm.pullRequest.list');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_GET).toBe('scm.pullRequest.get');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_OPEN_OR_REUSE).toBe('scm.pullRequest.openOrReuse');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_OPEN_COMPOSE).toBe('scm.pullRequest.openCompose');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_CHECKOUT).toBe('scm.pullRequest.checkout');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_PREPARE_WORKTREE).toBe('scm.pullRequest.prepareWorktree');
+        expect(RPC_METHODS.SCM_PULL_REQUEST_RUN_STACKED).toBe('scm.pullRequest.runStacked');
     });
 
     it('does not expose git method constants', () => {
