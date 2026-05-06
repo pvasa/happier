@@ -8,16 +8,6 @@ import {
     DESKTOP_PET_OVERLAY_TRAY_WIDTH,
 } from '@/components/pets/desktop/desktopPetOverlayGeometry';
 
-type WebTrayFadeStyle = ViewStyle & Readonly<{
-    maskImage: string;
-    WebkitMaskImage: string;
-}>;
-
-export const trayFadeStyle: WebTrayFadeStyle = {
-    maskImage: 'linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 12px), transparent 100%)',
-    WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black 12px, black calc(100% - 12px), transparent 100%)',
-};
-
 export const styles = StyleSheet.create({
     root: {
         width: DESKTOP_PET_OVERLAY_TRAY_WIDTH,
@@ -26,6 +16,15 @@ export const styles = StyleSheet.create({
         gap: 4,
         alignItems: 'flex-end',
         overflow: 'hidden',
+        position: 'relative',
+    } satisfies ViewStyle,
+    scroll: {
+        width: DESKTOP_PET_OVERLAY_TRAY_WIDTH,
+        maxHeight: DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT,
+    } satisfies ViewStyle,
+    scrollContent: {
+        gap: 4,
+        alignItems: 'flex-end',
     } satisfies ViewStyle,
     rootOpen: {
         opacity: 1,
@@ -45,12 +44,21 @@ export const styles = StyleSheet.create({
         width: DESKTOP_PET_OVERLAY_TRAY_WIDTH,
         height: 56,
         minHeight: 56,
-        borderRadius: 16,
+        borderRadius: 14,
         paddingHorizontal: 14,
         paddingVertical: 8,
         gap: 0,
         position: 'relative',
         overflow: 'hidden',
+    } satisfies ViewStyle,
+    itemSurface: {
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        borderRadius: 14,
+        zIndex: 0,
     } satisfies ViewStyle,
     itemReplyOpen: {
         height: 108,
@@ -69,6 +77,7 @@ export const styles = StyleSheet.create({
         justifyContent: 'center',
         borderWidth: 0,
         borderRadius: 0,
+        zIndex: 2,
     },
     iconButton: {
         position: 'absolute',
@@ -95,6 +104,7 @@ export const styles = StyleSheet.create({
         gap: 1,
         minWidth: 0,
         paddingRight: 66,
+        zIndex: 1,
     },
     title: {
         fontSize: 14,
@@ -124,7 +134,7 @@ export const styles = StyleSheet.create({
     replyRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: 8,
         overflow: 'hidden',
     },
     replyRowCollapsed: {
@@ -139,15 +149,15 @@ export const styles = StyleSheet.create({
         flex: 1,
         minHeight: 32,
         borderWidth: 1,
-        borderRadius: 6,
-        paddingHorizontal: 8,
+        borderRadius: 16,
+        paddingHorizontal: 12,
         fontSize: 13,
     },
     sendButton: {
         width: 32,
         height: 32,
-        borderRadius: 6,
-        borderWidth: 1,
+        borderRadius: 16,
+        borderWidth: 0,
         alignItems: 'center',
         justifyContent: 'center',
     },

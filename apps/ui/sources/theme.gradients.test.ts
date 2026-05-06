@@ -29,12 +29,12 @@ describe('control gradient theme tokens', () => {
         expect(lightTheme.colors.segmentedControl.trackBackground).toBe(lightTheme.colors.surfaceHighest);
         expect(lightTheme.colors.segmentedControl.activeBackground).toBe(lightTheme.colors.surface);
         expect(lightTheme.colors.segmentedControl.trackGradient).toBeUndefined();
-        expect(lightTheme.colors.segmentedControl.activeGradient?.colors).toEqual(['#FAFAFA', '#FFFFFF']);
+        expect(lightTheme.colors.segmentedControl.activeGradient?.colors).toEqual(['#FDFDFD', '#FFFFFF']);
 
         expect(darkTheme.colors.segmentedControl.trackBackground).toBe(darkTheme.colors.surfaceHighest);
         expect(darkTheme.colors.segmentedControl.activeBackground).toBe(darkTheme.colors.surface);
         expect(darkTheme.colors.segmentedControl.trackGradient).toBeUndefined();
-        expect(darkTheme.colors.segmentedControl.activeGradient?.colors).toEqual(['#202020', '#262626']);
+        expect(darkTheme.colors.segmentedControl.activeGradient?.colors).toEqual(['#202020', '#232323']);
     });
 
     it('defines primary button gradients separately from color tokens used by non-fill consumers', () => {

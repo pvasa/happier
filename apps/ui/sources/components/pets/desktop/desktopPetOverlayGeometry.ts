@@ -21,7 +21,6 @@ export const DESKTOP_PET_OVERLAY_EXPANDED_WINDOW_WIDTH = 356;
 export const DESKTOP_PET_OVERLAY_EXPANDED_WINDOW_HEIGHT = 320;
 export const DESKTOP_PET_OVERLAY_TRAY_WIDTH = 276;
 export const DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT = 132;
-export const DESKTOP_PET_OVERLAY_TRAY_VISIBLE_ITEM_LIMIT = 2;
 
 export type DesktopPetOverlayGeometry = PetCompanionOverlayMetrics & Readonly<{
     expandedWindowWidth: number;

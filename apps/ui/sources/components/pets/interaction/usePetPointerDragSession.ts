@@ -210,7 +210,11 @@ export function usePetPointerDragSession(input: Readonly<{
 }>): {
     dragState: PetAnimationStateV1 | null;
     dragTargetRef: React.RefCallback<View>;
-    pointerHandlers: Readonly<{ onPointerDown?: (event: unknown) => void }>;
+    pointerHandlers: Readonly<{
+        onPointerDown?: (event: unknown) => void;
+        onMouseDown?: (event: unknown) => void;
+        onTouchStart?: (event: unknown) => void;
+    }>;
     shouldSuppressPress: () => boolean;
 } {
     const [dragState, setDragState] = React.useState<PetAnimationStateV1 | null>(null);
@@ -393,16 +397,22 @@ export function usePetPointerDragSession(input: Readonly<{
         const previous = attachedTargetRef.current;
         if (previous) {
             previous.removeEventListener?.('pointerdown', startDrag as EventListener);
+            previous.removeEventListener?.('mousedown', startDrag as EventListener);
+            previous.removeEventListener?.('touchstart', startDrag as EventListener);
         }
         const next = node != null && typeof node === 'object' ? node as PointerListenerTarget : null;
         attachedTargetRef.current = next;
         if (Platform.OS === 'web') {
             next?.addEventListener?.('pointerdown', startDrag as EventListener);
+            next?.addEventListener?.('mousedown', startDrag as EventListener);
+            next?.addEventListener?.('touchstart', startDrag as EventListener);
         }
     }, [startDrag]);
 
     React.useEffect(() => () => {
         attachedTargetRef.current?.removeEventListener?.('pointerdown', startDrag as EventListener);
+        attachedTargetRef.current?.removeEventListener?.('mousedown', startDrag as EventListener);
+        attachedTargetRef.current?.removeEventListener?.('touchstart', startDrag as EventListener);
         attachedTargetRef.current = null;
         cleanupActiveDrag();
     }, [cleanupActiveDrag, startDrag]);
@@ -414,7 +424,13 @@ export function usePetPointerDragSession(input: Readonly<{
     }, []);
 
     const pointerHandlers = React.useMemo(() => (
-        Platform.OS === 'web' ? { onPointerDown: startDrag } : {}
+        Platform.OS === 'web'
+            ? {
+                onPointerDown: startDrag,
+                onMouseDown: startDrag,
+                onTouchStart: startDrag,
+            }
+            : {}
     ), [startDrag]);
 
     return {

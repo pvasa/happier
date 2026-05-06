@@ -37,10 +37,6 @@ export function applyDesktopPetOverlayTransparentDocumentBackground(
                 height: 100% !important;
                 width: 100% !important;
             }
-            #root *, #app *, #expo-root * {
-                background: transparent !important;
-                background-color: transparent !important;
-            }
         `;
         if (injectedStyleElement) {
             activeDocument.head?.appendChild?.(styleElement);

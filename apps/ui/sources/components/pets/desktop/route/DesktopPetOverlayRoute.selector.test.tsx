@@ -382,6 +382,17 @@ describe('DesktopPetOverlayRoute selectors', () => {
         );
     });
 
+    it('keeps rendering the pet when the native window-state event bridge is not ready yet', async () => {
+        listenDesktopPetOverlayWindowStateMock.mockRejectedValueOnce(new Error('event-bridge-not-ready'));
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(<DesktopPetOverlayRoute />);
+        await flushHookEffects();
+
+        expect(screen.findByTestId('desktop-pet-overlay-root')).not.toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-sprite')).not.toBeNull();
+    });
+
     it('does not render fallback art when the companion selection is disabled', async () => {
         featureDecisionState.companion = { state: 'disabled' };
         const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
@@ -538,6 +549,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
         const screen = await renderScreen(<DesktopPetOverlayRoute />);
         const tray = screen.findByTestId('desktop-pet-overlay-tray');
         const item = screen.findByTestId('desktop-pet-overlay-tray-item-session-compact');
+        const surface = screen.findByTestId('desktop-pet-overlay-tray-surface-session-compact');
         const status = screen.findByTestId('desktop-pet-overlay-tray-status-session-compact');
         const replyRow = screen.findByTestId('desktop-pet-overlay-tray-reply-row-session-compact');
         const statusLabel = status?.props.accessibilityLabel;
@@ -549,14 +561,21 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         const trayStyle = StyleSheet.flatten(tray?.props.style);
         const itemStyle = resolvePressableStyle(item?.props.style);
+        const surfaceStyle = StyleSheet.flatten(surface?.props.style);
         const statusStyle = StyleSheet.flatten(status?.props.style);
         const replyRowStyle = StyleSheet.flatten(replyRow?.props.style);
 
+        expect(surface).not.toBeNull();
+        expect(surfaceStyle?.position).toBe('absolute');
+        expect(surfaceStyle?.backgroundColor).toEqual(expect.any(String));
+        expect(surfaceStyle?.boxShadow).toBeUndefined();
         expect(trayStyle?.width).toBeLessThanOrEqual(276);
         expect(trayStyle?.maxHeight).toBeLessThanOrEqual(132);
         expect(trayStyle?.overflow).toBe('hidden');
-        expect(trayStyle?.maskImage).toEqual(expect.any(String));
+        expect(tray?.props['data-pet-scroll-fade-top']).toBe('false');
+        expect(tray?.props['data-pet-scroll-fade-bottom']).toBe('false');
         expect((itemStyle.borderWidth as number | undefined) ?? 0).toBe(0);
+        expect(itemStyle.boxShadow).toBeUndefined();
         expect((itemStyle.minHeight as number) * 2 + (trayStyle?.gap as number)).toBeLessThanOrEqual(
             trayStyle?.maxHeight as number,
         );
@@ -569,7 +588,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(replyRow?.props.accessibilityElementsHidden).toBe(true);
     });
 
-    it('limits the expanded visual tray to the two highest priority bubbles while preserving the full badge count', async () => {
+    it('keeps every activity bubble mounted inside the scrollable tray while preserving the full badge count', async () => {
         sessionsState.current = [
             createSessionFixture({ id: 'session-first', active: true, pendingCount: 1, updatedAt: 30 }),
             createSessionFixture({ id: 'session-second', active: true, pendingCount: 1, updatedAt: 20 }),
@@ -581,7 +600,8 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-first')).not.toBeNull();
         expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-second')).not.toBeNull();
-        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-third')).toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-third')).not.toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-tray-scroll')).not.toBeNull();
 
         await act(async () => {
             invokeTestInstanceHandler(screen.findByTestId('desktop-pet-overlay-context-toggle'), 'onPress');
@@ -804,6 +824,41 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-hover-reply')).toBeNull();
     });
 
+    it('keeps hover actions active while the pointer crosses into the absolute Reply action', async () => {
+        vi.useFakeTimers();
+        try {
+            sessionsState.current = [
+                createSessionFixture({ id: 'session-hover-bridge', active: true, pendingCount: 1 }),
+            ];
+            const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+            const screen = await renderScreen(<DesktopPetOverlayRoute />);
+            const itemTestID = 'desktop-pet-overlay-tray-item-session-hover-bridge';
+            const item = screen.findByTestId(itemTestID);
+
+            await act(async () => {
+                invokeTestInstanceHandler(item, 'onHoverIn');
+                invokeTestInstanceHandler(screen.findByTestId(itemTestID), 'onHoverOut');
+            });
+
+            const replyAction = screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-hover-bridge');
+            expect(replyAction?.props.pointerEvents).toBe('auto');
+
+            await act(async () => {
+                invokeTestInstanceHandler(replyAction, 'onHoverIn');
+            });
+
+            expect(screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-hover-bridge')?.props.pointerEvents).toBe('auto');
+            await act(async () => {
+                vi.advanceTimersByTime(160);
+            });
+
+            expect(screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-hover-bridge')?.props.pointerEvents).toBe('auto');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('opens quick reply controls from the explicit Reply action', async () => {
         sessionsState.current = [
             createSessionFixture({ id: 'session-badge-reply', active: true, pendingCount: 1 }),
@@ -897,6 +952,11 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(input).not.toBeNull();
         expect(send).not.toBeNull();
         if (!input || !send) return;
+
+        const sendStyle = resolvePressableStyle(send.props.style);
+        expect(sendStyle.borderRadius).toBe(16);
+        expect(sendStyle.borderWidth).toBe(0);
+        expect(screen.root.findAll((node) => node.props?.name === 'arrow-up')).toHaveLength(1);
 
         await act(async () => {
             invokeTestInstanceHandler(input, 'onChangeText', '  Ship it  ');

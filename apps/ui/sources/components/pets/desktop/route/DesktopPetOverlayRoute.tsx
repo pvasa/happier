@@ -39,7 +39,6 @@ import {
     syncDesktopPetOverlayElementMetrics,
 } from '../bridge/desktopPetOverlayBridge';
 import {
-    DESKTOP_PET_OVERLAY_TRAY_VISIBLE_ITEM_LIMIT,
     resolveDesktopPetOverlayGeometry,
 } from '../desktopPetOverlayGeometry';
 
@@ -134,7 +133,7 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
                 return;
             }
             unsubscribe = nextUnsubscribe;
-        });
+        }).catch(() => undefined);
 
         return () => {
             active = false;
@@ -223,10 +222,6 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
             return current || trayItemCount > 0;
         });
     }, [trayItemCount]);
-    const visibleTrayItems = React.useMemo(
-        () => activity.trayItems.slice(0, DESKTOP_PET_OVERLAY_TRAY_VISIBLE_ITEM_LIMIT),
-        [activity.trayItems],
-    );
     const hasTrayItems = petVisible && trayItemCount > 0;
     const trayVisible = hasTrayItems && trayOpen;
     const windowSize = React.useMemo(
@@ -308,7 +303,7 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
             ) : null}
             {hasTrayItems ? (
                 <DesktopPetOverlayTray
-                    items={visibleTrayItems}
+                    items={activity.trayItems}
                     open={trayOpen}
                     onOpenItem={actions.openTrayItem}
                     onDismissItem={handleDismissTrayItem}

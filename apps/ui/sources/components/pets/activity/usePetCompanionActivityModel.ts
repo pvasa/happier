@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import {
     storage,
@@ -9,17 +10,20 @@ import { derivePendingRequestFlagsFromSession } from '@/sync/domains/session/pen
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { deriveSessionListMeaningfulActivityAt } from '@/sync/domains/session/listing/deriveSessionListActivity';
+import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionMessages } from '@/sync/store/domains/messages';
 import type { StorageState } from '@/sync/store/types';
 
 import { buildPetCompanionActivityModel } from './buildPetCompanionActivityModel';
 import type {
+    PetCompanionActivitySession,
     PetCompanionActivityModel,
     PetCompanionSessionSignals,
 } from './petCompanionActivityTypes';
 
-function selectCompanionSessionId(sessions: readonly Session[]): string | null {
+function selectCompanionSessionId(sessions: readonly PetCompanionActivitySession[]): string | null {
     return sessions.find((session) => session.active)?.id ?? sessions[0]?.id ?? null;
 }
 
@@ -63,17 +67,53 @@ function resolveLatestCommittedMessageSubtitle(transcript: SessionMessages | und
     return null;
 }
 
+function isHydratedSession(session: PetCompanionActivitySession): session is Session {
+    return 'agentState' in session;
+}
+
+function mergeActivitySessions(
+    sessions: readonly Session[],
+    sessionListRenderables: readonly SessionListRenderableSession[],
+): PetCompanionActivitySession[] {
+    const visibleHydratedSessions = sessions.filter(isUserFacingSession);
+    const hydratedSessionIds = new Set(sessions.map((session) => session.id));
+    return [
+        ...visibleHydratedSessions,
+        ...sessionListRenderables.filter((session) => (
+            !hydratedSessionIds.has(session.id)
+            && isUserFacingSession(session)
+        )),
+    ].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function sortSessionsByUpdatedAtDescending<T extends Readonly<{ updatedAt: number }>>(values: Record<string, T>): T[] {
+    return Object.values(values).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function usePetCompanionSessionListRenderables(): SessionListRenderableSession[] {
+    return storage(
+        useShallow((state) => sortSessionsByUpdatedAtDescending(state.sessionListRenderables ?? {})),
+    );
+}
+
+function resolveRenderableLastMessageSubtitle(session: SessionListRenderableSession): string | null {
+    return normalizeMessageSubtitleText(session.metadata?.summaryText);
+}
+
 function buildSessionSignalsBySessionId(
     state: StorageState,
-    sessions: readonly Session[],
+    sessions: readonly PetCompanionActivitySession[],
+    sessionListRenderables: readonly SessionListRenderableSession[],
 ): Record<string, PetCompanionSessionSignals> {
     const signalsBySessionId: Record<string, PetCompanionSessionSignals> = {};
     const sessionMessages = state.sessionMessages ?? {};
     const sessionPending = state.sessionPending ?? {};
+    const renderableById = new Map(sessionListRenderables.map((session) => [session.id, session]));
 
     for (const session of sessions) {
         const transcript = sessionMessages[session.id];
         const pending = sessionPending[session.id];
+        const renderable = renderableById.get(session.id);
         const messages = Object.values(transcript?.messagesById ?? {});
         const latestCommittedMessageId =
             transcript?.messageIdsOldestFirst?.length
@@ -91,18 +131,28 @@ function buildSessionSignalsBySessionId(
             latestPendingMessageCreatedAt =
                 latestPendingMessageCreatedAt == null ? createdAt : Math.max(latestPendingMessageCreatedAt, createdAt);
         }
-        const pendingRequestFlags = derivePendingRequestFlagsFromSession(session, messages);
+        const pendingRequestFlags = isHydratedSession(session)
+            ? derivePendingRequestFlagsFromSession(session, messages)
+            : {
+                hasPendingPermissionRequests: session.metadataUnavailable !== true && session.hasPendingPermissionRequests === true,
+                hasPendingUserActionRequests: session.metadataUnavailable !== true && session.hasPendingUserActionRequests === true,
+            };
+        const metadataAvailable = !('metadataUnavailable' in session && session.metadataUnavailable === true);
 
         signalsBySessionId[session.id] = {
             hasFailure: messages.some(hasMessageFailure),
             hasPendingPermissionRequests: pendingRequestFlags.hasPendingPermissionRequests,
             hasPendingUserActionRequests: pendingRequestFlags.hasPendingUserActionRequests,
-            hasUnreadMessages: computeHasUnreadActivity({
-                sessionSeq: session.seq ?? 0,
-                pendingActivityAt: 0,
-                lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
-                lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
-            }),
+            hasUnreadMessages: metadataAvailable && (
+                isHydratedSession(session)
+                    ? computeHasUnreadActivity({
+                        sessionSeq: session.seq ?? 0,
+                        pendingActivityAt: 0,
+                        lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
+                        lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
+                    })
+                    : session.hasUnreadMessages === true
+            ),
             latestThinkingActivityAtMs: transcript?.latestThinkingMessageActivityAtMs ?? null,
             latestMeaningfulActivityAtMs: deriveSessionListMeaningfulActivityAt({
                 sessionCreatedAt: session.createdAt,
@@ -110,7 +160,9 @@ function buildSessionSignalsBySessionId(
                 latestThinkingActivityAt: transcript?.latestThinkingMessageActivityAtMs ?? null,
                 latestPendingMessageCreatedAt,
             }),
-            lastMessageSubtitle: resolveLatestCommittedMessageSubtitle(transcript),
+            lastMessageSubtitle: resolveLatestCommittedMessageSubtitle(transcript)
+                ?? (renderable ? resolveRenderableLastMessageSubtitle(renderable) : null)
+                ?? (!isHydratedSession(session) ? resolveRenderableLastMessageSubtitle(session) : null),
             pendingMessageCount: pending?.messages?.length ?? 0,
         };
     }
@@ -122,22 +174,27 @@ export function usePetCompanionActivityModel(input?: Readonly<{
     dismissedTrayItemKeys?: ReadonlySet<string>;
 }>): PetCompanionActivityModel {
     const sessions = useAllSessions();
+    const sessionListRenderables = usePetCompanionSessionListRenderables();
     const state = storage();
     const [nowMs, setNowMs] = React.useState(() => Date.now());
-    const selectedSessionId = React.useMemo(() => selectCompanionSessionId(sessions), [sessions]);
+    const activitySessions = React.useMemo(
+        () => mergeActivitySessions(sessions, sessionListRenderables),
+        [sessions, sessionListRenderables],
+    );
+    const selectedSessionId = React.useMemo(() => selectCompanionSessionId(activitySessions), [activitySessions]);
     const dismissedTrayItemKeys = input?.dismissedTrayItemKeys;
     const signalsBySessionId = React.useMemo(
-        () => buildSessionSignalsBySessionId(state, sessions),
-        [state, sessions],
+        () => buildSessionSignalsBySessionId(state, activitySessions, sessionListRenderables),
+        [state, activitySessions, sessionListRenderables],
     );
 
     const model = React.useMemo(() => buildPetCompanionActivityModel({
-        sessions,
+        sessions: activitySessions,
         selectedSessionId,
         signalsBySessionId,
         dismissedTrayItemKeys,
         nowMs,
-    }), [dismissedTrayItemKeys, nowMs, selectedSessionId, sessions, signalsBySessionId]);
+    }), [activitySessions, dismissedTrayItemKeys, nowMs, selectedSessionId, signalsBySessionId]);
 
     React.useEffect(() => {
         let nextExpiryAtMs: number | null = null;

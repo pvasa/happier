@@ -134,7 +134,7 @@ export const lightTheme = {
             trackBackground: '#f0f0f0',
             trackGradient: undefined,
             activeBackground: '#ffffff',
-            activeGradient: verticalControlGradient(['#FAFAFA', '#FFFFFF']),
+            activeGradient: verticalControlGradient(['#FDFDFD', '#FFFFFF']),
         },
         radio: {
             active: '#007AFF',
@@ -387,7 +387,7 @@ export const darkTheme = {
             trackBackground: '#292929',
             trackGradient: undefined,
             activeBackground: '#202020',
-            activeGradient: verticalControlGradient(['#202020', '#262626']),
+            activeGradient: verticalControlGradient(['#202020', '#232323']),
         },
         radio: {
             active: '#0A84FF',

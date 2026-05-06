@@ -1,4 +1,4 @@
-import { invokeTauri, listenTauriEvent } from '@/utils/platform/tauri';
+import { invokeTauri, isTauriDesktop, listenTauriEvent } from '@/utils/platform/tauri';
 
 export const DESKTOP_PET_OVERLAY_COMMANDS = {
     readWindowState: 'desktop_pet_overlay_read_window_state',
@@ -227,6 +227,7 @@ function scheduleDesktopPetOverlayMomentumPlan(plan: DesktopPetOverlayMomentumPl
 export async function syncDesktopPetOverlayElementMetrics(
     payload: DesktopPetOverlayElementMetricsPayload,
 ): Promise<void> {
+    if (!isTauriDesktop()) return;
     await invokeTauri<void>(DESKTOP_PET_OVERLAY_COMMANDS.syncElementMetrics, { payload });
 }
 

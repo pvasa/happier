@@ -3,8 +3,10 @@ import { readFileSync } from 'node:fs';
 
 const invokeTauriMock = vi.hoisted(() => vi.fn());
 const listenTauriEventMock = vi.hoisted(() => vi.fn());
+const isTauriDesktopMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock('@/utils/platform/tauri', () => ({
+    isTauriDesktop: () => isTauriDesktopMock(),
     invokeTauri: (command: string, args?: Record<string, unknown>) => invokeTauriMock(command, args),
     listenTauriEvent: (eventName: string, handler: (payload: unknown) => void) => listenTauriEventMock(eventName, handler),
 }));
@@ -14,6 +16,8 @@ describe('desktopPetOverlayBridge', () => {
         vi.useRealTimers();
         invokeTauriMock.mockReset();
         listenTauriEventMock.mockReset();
+        isTauriDesktopMock.mockReset();
+        isTauriDesktopMock.mockReturnValue(true);
     });
 
     it('syncs state using the native pet overlay command payload shape', async () => {
@@ -131,6 +135,20 @@ describe('desktopPetOverlayBridge', () => {
                 controls: { x: 310, y: 176, width: 30, height: 30 },
             },
         });
+    });
+
+    it('ignores element metric sync outside the Tauri desktop shell', async () => {
+        isTauriDesktopMock.mockReturnValue(false);
+        const { syncDesktopPetOverlayElementMetrics } = await import('./desktopPetOverlayBridge');
+
+        await syncDesktopPetOverlayElementMetrics({
+            isTrayVisible: false,
+            mascot: { x: 0, y: 0, width: 1, height: 1 },
+            tray: { x: 0, y: 0, width: 1, height: 1 },
+            controls: { x: 0, y: 0, width: 1, height: 1 },
+        });
+
+        expect(invokeTauriMock).not.toHaveBeenCalled();
     });
 
     it('schedules native momentum deltas from the release velocity plan', async () => {

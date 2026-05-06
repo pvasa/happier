@@ -1,6 +1,9 @@
 import type { PetAnimationStateV1 } from '@happier-dev/protocol';
 
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
+
+export type PetCompanionActivitySession = Session | SessionListRenderableSession;
 
 export type PetCompanionActivityStatus =
     Extract<PetAnimationStateV1, 'waiting' | 'failed' | 'review' | 'running' | 'idle'>;
@@ -43,7 +46,7 @@ export type PetCompanionActivityModel = Readonly<{
 }>;
 
 export type BuildPetCompanionActivityModelInput = Readonly<{
-    sessions: readonly Session[];
+    sessions: readonly PetCompanionActivitySession[];
     selectedSessionId?: string | null;
     signalsBySessionId?: Readonly<Record<string, PetCompanionSessionSignals | undefined>>;
     dismissedTrayItemKeys?: ReadonlySet<string> | readonly string[];

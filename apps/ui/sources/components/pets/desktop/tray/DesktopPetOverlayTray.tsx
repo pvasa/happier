@@ -1,8 +1,9 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
 import {
     I18nManager,
     Pressable,
+    ScrollView,
     View,
     type StyleProp,
     type ViewStyle,
@@ -10,18 +11,23 @@ import {
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { PetCompanionTrayItem } from '@/components/pets/activity';
+import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
+import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { Text, TextInput } from '@/components/ui/text/Text';
-import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 
-import { styles, trayFadeStyle } from './desktopPetOverlayTrayStyles';
+import { styles } from './desktopPetOverlayTrayStyles';
 
 const noDragProps = {
     'data-pet-no-drag': 'true',
     dataSet: { petNoDrag: 'true' },
     className: 'no-drag',
 } as const;
+
+type WebBackgroundFillStyle = ViewStyle & Readonly<{
+    background?: string;
+}>;
 
 type DesktopPetOverlayTrayProps = Readonly<{
     items: readonly PetCompanionTrayItem[];
@@ -91,9 +97,14 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
     const statusColor = resolveStatusColor(props.item.status, theme);
     const statusIcon = resolveStatusIcon(props.item.status);
     const bubbleTheme = theme.colors.desktopPetOverlay.bubble;
+    const primaryButtonTheme = theme.colors.button.primary;
     const writingDirection = I18nManager.isRTL ? 'rtl' : 'ltr';
     const replyOpen = props.replyOpen;
     const active = props.active || replyOpen;
+    const backgroundFillStyle = React.useMemo<WebBackgroundFillStyle>(() => ({
+        background: bubbleTheme.background,
+        backgroundColor: bubbleTheme.background,
+    }), [bubbleTheme.background]);
     const handleSend = React.useCallback(async () => {
         const message = draft.trim();
         if (!message) return;
@@ -119,12 +130,20 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
             style={({ pressed }) => [
                 styles.item,
                 replyOpen ? styles.itemReplyOpen : null,
-                shadowLevelStyle(theme.colors.shadowLevels[3]),
                 {
+                    background: pressed ? bubbleTheme.backgroundPressed : bubbleTheme.background,
                     backgroundColor: pressed ? bubbleTheme.backgroundPressed : bubbleTheme.background,
                 },
             ]}
         >
+            <View
+                pointerEvents="none"
+                testID={`desktop-pet-overlay-tray-surface-${safeSessionId}`}
+                style={[
+                    styles.itemSurface,
+                    backgroundFillStyle,
+                ]}
+            />
             <View
                 {...noDragProps}
                 testID={`desktop-pet-overlay-tray-status-${safeSessionId}`}
@@ -140,6 +159,8 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
                 pointerEvents={active ? 'auto' : 'none'}
                 accessibilityRole="button"
                 accessibilityLabel={t('settingsPets.overlayDismissAction')}
+                onHoverIn={() => props.onActiveChange(props.item, true)}
+                onHoverOut={() => props.onActiveChange(props.item, false)}
                 onPress={(event) => {
                     event?.stopPropagation?.();
                     props.onDismiss(props.item);
@@ -178,6 +199,8 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
                 pointerEvents={active && !replyOpen ? 'auto' : 'none'}
                 accessibilityRole="button"
                 accessibilityLabel={t('settingsPets.overlayReplyAction')}
+                onHoverIn={() => props.onActiveChange(props.item, true)}
+                onHoverOut={() => props.onActiveChange(props.item, false)}
                 onPress={(event) => {
                     event?.stopPropagation?.();
                     props.onReplyOpenChange(props.item, true);
@@ -218,13 +241,13 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
                             style={[
                                 styles.replyInput,
                                 {
-                                    backgroundColor: theme.colors.input.background,
-                                    color: theme.colors.input.text,
-                                    borderColor: theme.colors.divider,
+                                    backgroundColor: bubbleTheme.controlBackground,
+                                    color: bubbleTheme.text,
+                                    borderColor: bubbleTheme.controlBackgroundPressed,
                                     writingDirection,
                                 },
                             ]}
-                            placeholderTextColor={theme.colors.input.placeholder}
+                            placeholderTextColor={bubbleTheme.textSecondary}
                         />
                         <Pressable
                             {...noDragProps}
@@ -239,12 +262,18 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
                             style={({ pressed }) => [
                                 styles.sendButton,
                                 {
-                                    backgroundColor: pressed ? bubbleTheme.controlBackgroundPressed : bubbleTheme.controlBackground,
-                                    borderColor: draft.trim() ? theme.colors.accent.blue : theme.colors.divider,
+                                    backgroundColor: draft.trim()
+                                        ? primaryButtonTheme.background
+                                        : primaryButtonTheme.disabled,
+                                    opacity: pressed ? 0.72 : 1,
                                 },
                             ]}
                         >
-                            <Ionicons name="send" size={14} color={draft.trim() ? theme.colors.accent.blue : theme.colors.textSecondary} />
+                            <Octicons
+                                name="arrow-up"
+                                size={15}
+                                color={primaryButtonTheme.tint}
+                            />
                         </Pressable>
                     </>
                 ) : null}
@@ -256,18 +285,41 @@ function DesktopPetOverlayTrayItemCard(props: Readonly<{
 export function DesktopPetOverlayTray(props: DesktopPetOverlayTrayProps): React.ReactElement | null {
     const [activeItemId, setActiveItemId] = React.useState<string | null>(null);
     const [replyItemId, setReplyItemId] = React.useState<string | null>(null);
-    const handleActiveChange = React.useCallback((item: PetCompanionTrayItem, active: boolean) => {
-        setActiveItemId((current) => {
-            if (active) return item.id;
-            return current === item.id ? null : current;
-        });
+    const deactivateTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const clearDeactivateTimer = React.useCallback(() => {
+        if (deactivateTimerRef.current === null) return;
+        clearTimeout(deactivateTimerRef.current);
+        deactivateTimerRef.current = null;
     }, []);
+    const handleActiveChange = React.useCallback((item: PetCompanionTrayItem, active: boolean) => {
+        if (active) {
+            clearDeactivateTimer();
+            setActiveItemId(item.id);
+            return;
+        }
+        clearDeactivateTimer();
+        deactivateTimerRef.current = setTimeout(() => {
+            setActiveItemId((current) => (current === item.id ? null : current));
+            deactivateTimerRef.current = null;
+        }, 120);
+    }, [clearDeactivateTimer]);
     const handleReplyOpenChange = React.useCallback((item: PetCompanionTrayItem, open: boolean) => {
+        clearDeactivateTimer();
         setReplyItemId(open ? item.id : null);
         if (open) {
             setActiveItemId(item.id);
         }
-    }, []);
+    }, [clearDeactivateTimer]);
+    const scrollFades = useScrollEdgeFades({
+        enabledEdges: { top: true, bottom: true },
+        overflowThreshold: 2,
+        edgeThreshold: 2,
+    });
+    const scrollMaskStyle = React.useMemo(
+        () => resolveVerticalScrollEdgeMaskStyle(scrollFades.visibility, { fadeSize: 14 }),
+        [scrollFades.visibility],
+    );
+    React.useEffect(() => clearDeactivateTimer, [clearDeactivateTimer]);
     if (props.items.length === 0) return null;
 
     return (
@@ -275,6 +327,8 @@ export function DesktopPetOverlayTray(props: DesktopPetOverlayTrayProps): React.
             {...noDragProps}
             testID="desktop-pet-overlay-tray"
             data-pet-tray-open={props.open ? 'true' : 'false'}
+            data-pet-scroll-fade-top={scrollFades.visibility.top ? 'true' : 'false'}
+            data-pet-scroll-fade-bottom={scrollFades.visibility.bottom ? 'true' : 'false'}
             pointerEvents={props.open ? 'auto' : 'none'}
             accessibilityElementsHidden={!props.open}
             importantForAccessibility={props.open ? 'auto' : 'no-hide-descendants'}
@@ -282,24 +336,36 @@ export function DesktopPetOverlayTray(props: DesktopPetOverlayTrayProps): React.
             accessibilityLabel={t('settingsPets.overlayTrayTitle')}
             style={[
                 styles.root,
-                trayFadeStyle,
                 props.style,
                 props.open ? styles.rootOpen : styles.rootCollapsed,
             ]}
         >
-            {props.items.map((item) => (
-                <DesktopPetOverlayTrayItemCard
-                    key={item.id}
-                    item={item}
-                    active={activeItemId === item.id}
-                    replyOpen={replyItemId === item.id}
-                    onActiveChange={handleActiveChange}
-                    onReplyOpenChange={handleReplyOpenChange}
-                    onOpen={props.onOpenItem}
-                    onDismiss={props.onDismissItem}
-                    onQuickReply={props.onQuickReply}
-                />
-            ))}
+            <ScrollView
+                {...noDragProps}
+                testID="desktop-pet-overlay-tray-scroll"
+                style={[styles.scroll, scrollMaskStyle]}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                scrollEventThrottle={16}
+                onLayout={scrollFades.onViewportLayout}
+                onContentSizeChange={scrollFades.onContentSizeChange}
+                onScroll={scrollFades.onScroll}
+                onMomentumScrollEnd={scrollFades.onMomentumScrollEnd}
+            >
+                {props.items.map((item) => (
+                    <DesktopPetOverlayTrayItemCard
+                        key={item.id}
+                        item={item}
+                        active={activeItemId === item.id}
+                        replyOpen={replyItemId === item.id}
+                        onActiveChange={handleActiveChange}
+                        onReplyOpenChange={handleReplyOpenChange}
+                        onOpen={props.onOpenItem}
+                        onDismiss={props.onDismissItem}
+                        onQuickReply={props.onQuickReply}
+                    />
+                ))}
+            </ScrollView>
         </View>
     );
 }

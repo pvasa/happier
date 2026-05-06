@@ -76,6 +76,43 @@ pub(crate) fn resolve_pet_overlay_placement(
     }
 }
 
+pub(crate) fn normalize_pet_overlay_drag_offset(
+    monitor: Rect,
+    window: Size,
+    anchor: DesktopPetOverlayAnchor,
+    offset_x: f64,
+    offset_y: f64,
+    padding: f64,
+) -> DesktopPetOverlayPosition {
+    let padding = sanitize_offset(padding).max(0.0);
+    let min_x = monitor.x + padding;
+    let min_y = monitor.y + padding;
+    let max_x = monitor.x + monitor.width - window.width - padding;
+    let max_y = monitor.y + monitor.height - window.height - padding;
+
+    let (min_offset_x, max_offset_x) = match anchor {
+        DesktopPetOverlayAnchor::BottomRight | DesktopPetOverlayAnchor::TopRight => {
+            (min_x - max_x, 0.0)
+        }
+        DesktopPetOverlayAnchor::BottomLeft | DesktopPetOverlayAnchor::TopLeft => {
+            (0.0, max_x - min_x)
+        }
+    };
+    let (min_offset_y, max_offset_y) = match anchor {
+        DesktopPetOverlayAnchor::BottomRight | DesktopPetOverlayAnchor::BottomLeft => {
+            (min_y - max_y, 0.0)
+        }
+        DesktopPetOverlayAnchor::TopRight | DesktopPetOverlayAnchor::TopLeft => {
+            (0.0, max_y - min_y)
+        }
+    };
+
+    DesktopPetOverlayPosition {
+        x: clamp(sanitize_offset(offset_x), min_offset_x, max_offset_x),
+        y: clamp(sanitize_offset(offset_y), min_offset_y, max_offset_y),
+    }
+}
+
 pub(crate) fn resolve_pet_overlay_parking_position(monitor: Rect) -> DesktopPetOverlayPosition {
     let base_x = if monitor.width > 0.0 {
         monitor.x + monitor.width
@@ -118,6 +155,40 @@ mod tests {
         );
 
         assert_eq!(placement, DesktopPetOverlayPosition { x: 536.0, y: 310.0 },);
+    }
+
+    #[test]
+    fn drag_offset_normalization_recovers_from_a_saturated_right_edge_offset() {
+        let monitor = Rect {
+            x: 100.0,
+            y: 50.0,
+            width: 640.0,
+            height: 480.0,
+        };
+        let window = Size {
+            width: 192.0,
+            height: 208.0,
+        };
+        let padding = 12.0;
+        let normalized = normalize_pet_overlay_drag_offset(
+            monitor,
+            window,
+            DesktopPetOverlayAnchor::BottomRight,
+            4_096.0,
+            0.0,
+            padding,
+        );
+        let placement = resolve_pet_overlay_placement(
+            monitor,
+            window,
+            DesktopPetOverlayAnchor::BottomRight,
+            normalized.x - 40.0,
+            normalized.y,
+            padding,
+        );
+
+        assert_eq!(normalized, DesktopPetOverlayPosition { x: 0.0, y: 0.0 });
+        assert_eq!(placement.x, 496.0);
     }
 
     #[test]

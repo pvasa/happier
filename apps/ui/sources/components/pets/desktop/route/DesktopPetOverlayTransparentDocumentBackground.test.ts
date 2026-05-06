@@ -52,7 +52,8 @@ describe('applyDesktopPetOverlayTransparentDocumentBackground', () => {
         expect(fakeRoot.style.background).toBe('transparent');
         expect(fakeRoot.style.margin).toBe('0px');
         expect(fakeRoot.style.padding).toBe('0px');
-        expect(styleElement.textContent).toContain('#root *, #app *, #expo-root *');
+        expect(styleElement.textContent).toContain('html, body, #root, #app, #expo-root');
+        expect(styleElement.textContent).not.toContain('#root *, #app *, #expo-root *');
 
         dispose();
 

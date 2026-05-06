@@ -132,6 +132,67 @@ describe('usePetPointerDragSession', () => {
         expect(releasePointerCapture).toHaveBeenCalledWith(7);
     });
 
+    it('starts a drag from a mouse fallback when pointer events are not delivered', async () => {
+        const fakeWindow = new EventTarget();
+        vi.stubGlobal('window', fakeWindow);
+        const onDragStart = vi.fn();
+        const onDragMove = vi.fn();
+
+        function Harness() {
+            const drag = usePetPointerDragSession({
+                coordinateSpace: 'screen',
+                onDragMove,
+                onDragStart,
+            });
+            return (
+                <View
+                    ref={drag.dragTargetRef}
+                    testID="pet-drag-target"
+                    {...drag.pointerHandlers}
+                />
+            );
+        }
+
+        const screen = await renderScreen(<Harness />);
+        const target = screen.findByTestId('pet-drag-target');
+
+        await act(async () => {
+            target?.props.onMouseDown?.({
+                button: 0,
+                clientX: 10,
+                clientY: 20,
+                screenX: 100,
+                screenY: 200,
+                timeStamp: 0,
+                target: { closest: closestMascot },
+                currentTarget: {},
+                preventDefault: vi.fn(),
+                stopPropagation: vi.fn(),
+            });
+        });
+
+        await act(async () => {
+            fakeWindow.dispatchEvent(new TestPointerEvent('mousemove', {
+                pointerId: 1,
+                clientX: 30,
+                clientY: 20,
+                screenX: 130,
+                screenY: 200,
+                timeStamp: 20,
+            }));
+        });
+
+        expect(onDragStart).toHaveBeenCalledWith(expect.objectContaining({
+            screenX: 100,
+            screenY: 200,
+            coordinateSpace: 'screen',
+        }));
+        expect(onDragMove).toHaveBeenCalledWith(expect.objectContaining({
+            deltaX: 30,
+            deltaY: 0,
+        }));
+    });
+
     it('keeps below-threshold movement as an activation instead of a drag move', async () => {
         const fakeWindow = new EventTarget();
         vi.stubGlobal('window', fakeWindow);

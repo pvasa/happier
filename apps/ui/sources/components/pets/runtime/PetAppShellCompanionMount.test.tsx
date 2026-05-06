@@ -2,7 +2,12 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+    createSessionFixture,
+    invokeTestInstanceHandler,
+    renderScreen,
+    standardCleanup,
+} from '@/dev/testkit';
 import { resolveBuiltInPetPackage } from '@/components/pets/builtIns/builtInPetRegistry';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -50,6 +55,9 @@ const settingsState = vi.hoisted((): PetAppShellCompanionTestState => ({
         desktopPetOverlayLocked: false,
     },
 }));
+const sessionsState = vi.hoisted(() => ({
+    current: [] as ReturnType<typeof createSessionFixture>[],
+}));
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -70,6 +78,10 @@ vi.mock('react-native', async (importOriginal) => {
     const actual = await importOriginal<typeof import('react-native')>();
     return {
         ...actual,
+        I18nManager: {
+            ...actual.I18nManager,
+            isRTL: false,
+        },
         Platform: {
             ...actual.Platform,
             get OS() {
@@ -92,10 +104,14 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
 }));
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+    const { createStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
     const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    const storage = createStorageStoreMock({
+        accountPetsById: {},
+        localPetSourcesBySourceKey: {},
+    });
     return createStorageModuleMock({
         importOriginal,
         overrides: {
@@ -108,7 +124,8 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
                 ...localSettingsDefaults,
                 ...settingsState.local,
             }),
-            useAllSessions: () => [],
+            useAllSessions: () => sessionsState.current,
+            storage,
         },
     });
 });
@@ -136,6 +153,7 @@ describe('PetAppShellCompanionMount', () => {
             desktopPetOverlayAnchor: 'bottomRight',
             desktopPetOverlayLocked: false,
         };
+        sessionsState.current = [];
         vi.unstubAllGlobals();
     });
 
@@ -147,6 +165,21 @@ describe('PetAppShellCompanionMount', () => {
         expect(screen.findByTestId('pet-app-shell-companion-root')).not.toBeNull();
         const sprite = screen.findByTestId('pet-app-shell-companion-sprite');
         expect(sprite?.props['data-pet-state']).toBe('idle');
+    });
+
+    it('renders the shared activity bubbles in the ordinary web app shell', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(12_000);
+        sessionsState.current = [
+            createSessionFixture({ id: 'web-pet-session', active: true, pendingCount: 1, updatedAt: 11_000 }),
+        ];
+        const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount');
+
+        const screen = await renderScreen(<PetAppShellCompanionMount />);
+
+        expect(screen.findByTestId('pet-app-shell-companion-root')).not.toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-tray')).not.toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-web-pet-session')).not.toBeNull();
     });
 
     it('does not render the companion when the user has not enabled pets', async () => {

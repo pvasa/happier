@@ -1,4 +1,3 @@
-import type { Session } from '@/sync/domains/state/storageTypes';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 import {
@@ -7,6 +6,7 @@ import {
 } from './petCompanionActivityConstants';
 import type {
     BuildPetCompanionActivityModelInput,
+    PetCompanionActivitySession,
     PetCompanionActivityModel,
     PetCompanionActivityStatus,
     PetCompanionSessionSignals,
@@ -14,7 +14,7 @@ import type {
 } from './petCompanionActivityTypes';
 
 type SessionActivityCandidate = Readonly<{
-    session: Session;
+    session: PetCompanionActivitySession;
     status: Exclude<PetCompanionActivityStatus, 'idle'>;
     activityAtMs: number | null;
     expiresAtMs: number | null;
@@ -43,10 +43,18 @@ function latestTimestamp(values: readonly unknown[]): number | null {
     return latest;
 }
 
-function hasWaitingActivity(session: Session, signals: PetCompanionSessionSignals | undefined): boolean {
+function hasWaitingActivity(
+    session: PetCompanionActivitySession,
+    signals: PetCompanionSessionSignals | undefined,
+): boolean {
+    const pendingPermissionRequestCount =
+        'pendingPermissionRequestCount' in session ? session.pendingPermissionRequestCount ?? 0 : 0;
+    const pendingUserActionRequestCount =
+        'pendingUserActionRequestCount' in session ? session.pendingUserActionRequestCount ?? 0 : 0;
+
     return (
-        (session.pendingPermissionRequestCount ?? 0) > 0
-        || (session.pendingUserActionRequestCount ?? 0) > 0
+        pendingPermissionRequestCount > 0
+        || pendingUserActionRequestCount > 0
         || (session.pendingCount ?? 0) > 0
         || signals?.hasPendingPermissionRequests === true
         || signals?.hasPendingUserActionRequests === true
@@ -54,18 +62,27 @@ function hasWaitingActivity(session: Session, signals: PetCompanionSessionSignal
     );
 }
 
+function latestConversationActivityTimestamp(
+    session: PetCompanionActivitySession,
+    signals: PetCompanionSessionSignals | undefined,
+): number | null {
+    return latestTimestamp([
+        signals?.latestMeaningfulActivityAtMs,
+        signals?.latestThinkingActivityAtMs,
+        session.thinkingAt,
+        session.optimisticThinkingAt,
+        session.activeAt,
+        session.createdAt,
+    ]);
+}
+
 function resolveCandidate(
-    session: Session,
+    session: PetCompanionActivitySession,
     signals: PetCompanionSessionSignals | undefined,
     nowMs: number | undefined,
 ): SessionActivityCandidate | null {
     if (hasWaitingActivity(session, signals)) {
-        const activityAtMs = latestTimestamp([
-            signals?.latestMeaningfulActivityAtMs,
-            session.updatedAt,
-            session.activeAt,
-            session.createdAt,
-        ]);
+        const activityAtMs = latestConversationActivityTimestamp(session, signals);
         return {
             session,
             status: 'waiting',
@@ -75,12 +92,7 @@ function resolveCandidate(
     }
 
     if (signals?.hasFailure) {
-        const activityAtMs = latestTimestamp([
-            signals.latestMeaningfulActivityAtMs,
-            session.updatedAt,
-            session.activeAt,
-            session.createdAt,
-        ]);
+        const activityAtMs = latestConversationActivityTimestamp(session, signals);
         return {
             session,
             status: 'failed',
@@ -90,12 +102,7 @@ function resolveCandidate(
     }
 
     if (signals?.hasUnreadMessages) {
-        const activityAtMs = latestTimestamp([
-            signals.latestMeaningfulActivityAtMs,
-            session.updatedAt,
-            session.activeAt,
-            session.createdAt,
-        ]);
+        const activityAtMs = latestConversationActivityTimestamp(session, signals);
         return {
             session,
             status: 'review',
@@ -118,7 +125,6 @@ function resolveCandidate(
                 signals?.latestThinkingActivityAtMs,
                 session.thinkingAt,
                 session.optimisticThinkingAt,
-                session.updatedAt,
                 session.activeAt,
                 session.createdAt,
             ])
@@ -178,21 +184,15 @@ function createTrayItem(
     };
 }
 
-function compareTrayItems(
-    selectedSessionId: string,
-    a: PetCompanionTrayItem,
-    b: PetCompanionTrayItem,
-): number {
+function compareTrayItems(a: PetCompanionTrayItem, b: PetCompanionTrayItem): number {
     if (a.priority !== b.priority) return a.priority - b.priority;
-    if (a.sessionId === selectedSessionId && b.sessionId !== selectedSessionId) return -1;
-    if (b.sessionId === selectedSessionId && a.sessionId !== selectedSessionId) return 1;
     const aActivity = a.activityAtMs ?? Number.NEGATIVE_INFINITY;
     const bActivity = b.activityAtMs ?? Number.NEGATIVE_INFINITY;
     if (aActivity !== bActivity) return bActivity - aActivity;
     return a.sessionId.localeCompare(b.sessionId);
 }
 
-function selectFallbackSession(input: BuildPetCompanionActivityModelInput): Session | null {
+function selectFallbackSession(input: BuildPetCompanionActivityModelInput): PetCompanionActivitySession | null {
     const selectedId = typeof input.selectedSessionId === 'string' ? input.selectedSessionId : '';
     if (selectedId) {
         const selected = input.sessions.find((session) => session.id === selectedId);
@@ -204,7 +204,6 @@ function selectFallbackSession(input: BuildPetCompanionActivityModelInput): Sess
 export function buildPetCompanionActivityModel(
     input: BuildPetCompanionActivityModelInput,
 ): PetCompanionActivityModel {
-    const selectedSessionId = typeof input.selectedSessionId === 'string' ? input.selectedSessionId : '';
     const dismissedKeys = normalizeDismissedKeys(input);
     const trayItems = input.sessions
         .map((session) => {
@@ -219,7 +218,7 @@ export function buildPetCompanionActivityModel(
         .filter(({ candidate }) => !isExpired(candidate, input.nowMs))
         .map(({ candidate, signals }) => createTrayItem(candidate, signals))
         .filter((item) => !dismissedKeys.has(item.dismissKey))
-        .sort((a, b) => compareTrayItems(selectedSessionId, a, b));
+        .sort(compareTrayItems);
     const primary = trayItems[0] ?? null;
 
     if (primary) {

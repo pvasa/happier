@@ -38,7 +38,11 @@ export type PetCompanionSurfaceProps = Readonly<{
     spriteTestID: string;
     hitboxTestID: string;
     dragTargetRef?: React.Ref<View>;
-    pointerHandlers?: Readonly<{ onPointerDown?: (event: unknown) => void }>;
+    pointerHandlers?: Readonly<{
+        onPointerDown?: (event: unknown) => void;
+        onMouseDown?: (event: unknown) => void;
+        onTouchStart?: (event: unknown) => void;
+    }>;
     accessibilityLabel?: string;
     onActivate?: () => void | Promise<void>;
     shouldSuppressPress?: () => boolean;
@@ -55,6 +59,39 @@ function resolveAmbientActionState(): PetAnimationStateV1 {
         Math.floor(Math.random() * PET_AMBIENT_ACTION_STATES.length),
     );
     return PET_AMBIENT_ACTION_STATES[index] ?? PET_AMBIENT_ACTION_STATES[0];
+}
+
+function escapeAttributeValue(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function useWebMascotDomDragBinding(params: Readonly<{
+    hitboxTestID: string;
+    pointerHandlers: PetCompanionSurfaceProps['pointerHandlers'];
+}>): void {
+    React.useEffect(() => {
+        if (Platform.OS !== 'web' || !params.pointerHandlers) return undefined;
+        const documentRef = globalThis.document;
+        if (!documentRef?.querySelector) return undefined;
+        const escapedTestId = escapeAttributeValue(params.hitboxTestID);
+        const element = documentRef.querySelector(
+            `[data-testid="${escapedTestId}"], [data-test-id="${escapedTestId}"]`,
+        );
+        if (!element?.addEventListener) return undefined;
+
+        const pointerDown = params.pointerHandlers.onPointerDown;
+        const mouseDown = params.pointerHandlers.onMouseDown;
+        const touchStart = params.pointerHandlers.onTouchStart;
+        if (pointerDown) element.addEventListener('pointerdown', pointerDown as EventListener);
+        if (mouseDown) element.addEventListener('mousedown', mouseDown as EventListener);
+        if (touchStart) element.addEventListener('touchstart', touchStart as EventListener);
+
+        return () => {
+            if (pointerDown) element.removeEventListener('pointerdown', pointerDown as EventListener);
+            if (mouseDown) element.removeEventListener('mousedown', mouseDown as EventListener);
+            if (touchStart) element.removeEventListener('touchstart', touchStart as EventListener);
+        };
+    }, [params.hitboxTestID, params.pointerHandlers]);
 }
 
 function useAmbientPetState(params: Readonly<{
@@ -118,20 +155,30 @@ export function PetCompanionSurface(props: PetCompanionSurfaceProps): React.Reac
         reducedMotion,
         active,
     });
-    const webPointerHandlers: { onPointerDown?: (event: unknown) => void } =
-        Platform.OS === 'web' && props.pointerHandlers?.onPointerDown
-            ? { onPointerDown: props.pointerHandlers.onPointerDown }
+    const webPointerHandlers =
+        Platform.OS === 'web' && props.pointerHandlers
+            ? {
+                onPointerDown: props.pointerHandlers.onPointerDown,
+                onMouseDown: props.pointerHandlers.onMouseDown,
+                onTouchStart: props.pointerHandlers.onTouchStart,
+            }
             : {};
     const hitboxDataProps = {
         dataSet: {
             petMascot: 'true',
             avatarMascot: 'true',
             avatarOverlayHitRegion: 'true',
+            tauriDragRegion: 'true',
         },
         'data-pet-mascot': 'true',
         'data-avatar-mascot': 'true',
         'data-avatar-overlay-hit-region': 'true',
+        'data-tauri-drag-region': 'true',
     } satisfies Partial<PressableProps> & Record<string, unknown>;
+    useWebMascotDomDragBinding({
+        hitboxTestID: props.hitboxTestID,
+        pointerHandlers: props.pointerHandlers,
+    });
 
     React.useEffect(() => () => {
         if (reactionTimeoutRef.current) {
