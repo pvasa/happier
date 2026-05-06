@@ -34,6 +34,8 @@ import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 type Variant = 'sidebar' | 'header';
 const RELAY_SETTINGS_ROUTE = '/settings/server';
 const RELAY_DROPDOWN_TARGET_THRESHOLD = 2;
+const POPOVER_MAX_WIDTH = 420;
+const POPOVER_MIN_WIDTH = 220;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -96,8 +98,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     popoverSection: {
         paddingHorizontal: 16,
-        paddingTop: 14,
-        gap: 8,
+        paddingTop: 8,
+        gap: 0,
     },
     popoverSectionHeader: {
         flexDirection: 'row',
@@ -112,11 +114,18 @@ const stylesheet = StyleSheet.create((theme) => ({
         textTransform: 'uppercase',
     },
     popoverSectionIconButton: {
-        width: 30,
-        height: 30,
-        borderRadius: 8,
+        width: 24,
+        height: 24,
+        borderRadius: 6,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    popoverRelayBlock: {
+        marginBottom: 12,
+    },
+    popoverRelayActionList: {
+        paddingTop: 0,
+        paddingBottom: 0,
     },
 }));
 
@@ -362,9 +371,8 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
         setOpen(false);
     }, [router]);
 
-    const popoverMaxWidthCap = props.variant === 'sidebar' ? 560 : 420;
-    const popoverMinWidth = props.variant === 'sidebar' && Platform.OS === 'web' ? 420 : undefined;
     const shouldUseRelayDropdown = targetActions.length > RELAY_DROPDOWN_TARGET_THRESHOLD;
+    const popoverMinWidth = props.variant === 'sidebar' && Platform.OS === 'web' ? POPOVER_MIN_WIDTH : undefined;
 
     return (
         <>
@@ -410,7 +418,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                         matchAnchorWidth: false,
                         anchorAlign: 'center',
                     }}
-                    maxWidthCap={popoverMaxWidthCap}
+                    maxWidthCap={POPOVER_MAX_WIDTH}
                     maxHeightCap={520}
                     onRequestClose={() => {
                         setRelayDropdownOpen(false);
@@ -473,18 +481,20 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                 ) : null}
 
                                 {targetActions.length > 0 ? (
-                                    <View style={styles.popoverSection}>
-                                        <View style={styles.popoverSectionHeader}>
-                                            <Text style={styles.popoverSectionTitle}>{t('server.changeServer')}</Text>
-                                            <Pressable
-                                                testID="connection-popover-relay-settings"
-                                                accessibilityRole="button"
-                                                accessibilityLabel={t('server.changeServer')}
-                                                onPress={handleManageRelay}
-                                                style={styles.popoverSectionIconButton}
-                                            >
-                                                <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
-                                            </Pressable>
+                                    <View style={styles.popoverRelayBlock}>
+                                        <View style={styles.popoverSection}>
+                                            <View style={styles.popoverSectionHeader}>
+                                                <Text style={styles.popoverSectionTitle}>{t('server.changeServer')}</Text>
+                                                <Pressable
+                                                    testID="connection-popover-relay-settings"
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel={t('server.changeServer')}
+                                                    onPress={handleManageRelay}
+                                                    style={styles.popoverSectionIconButton}
+                                                >
+                                                    <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
+                                                </Pressable>
+                                            </View>
                                         </View>
 
                                         {shouldUseRelayDropdown ? (
@@ -509,7 +519,10 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                                 maxWidthCap={480}
                                             />
                                         ) : (
-                                            <ActionListSection actions={targetActions} />
+                                            <ActionListSection
+                                                actions={targetActions}
+                                                style={styles.popoverRelayActionList}
+                                            />
                                         )}
                                     </View>
                                 ) : null}
