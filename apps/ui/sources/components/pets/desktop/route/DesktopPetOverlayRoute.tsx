@@ -36,7 +36,6 @@ import {
     releaseDesktopPetOverlayDragVelocity,
     showMainWindowFromDesktopPetOverlay,
     startDesktopPetOverlayDragSession,
-    startNativeDesktopPetOverlayWindowDrag,
     syncDesktopPetOverlayElementMetrics,
 } from '../bridge/desktopPetOverlayBridge';
 import {
@@ -168,7 +167,6 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
         [localSettings.petsCompanionSizeScale],
     );
     const handleDragStart = React.useCallback((start: PetPointerDragStart) => {
-        fireAndForget(startNativeDesktopPetOverlayWindowDrag());
         enqueueDragCommand(() => startDesktopPetOverlayDragSession({
             pointerId: start.pointerId,
             screenX: start.screenX,

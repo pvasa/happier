@@ -38,11 +38,6 @@ export const petDataUriPersistenceGuardRelativeDirs = [
 
 export const desktopPetOverlayCommandContracts = [
   {
-    tsSymbol: 'startNativeDesktopPetOverlayWindowDrag',
-    rustCommand: 'desktop_pet_overlay_start_native_window_drag',
-    registeredCaller: 'PET_OVERLAY_WINDOW_LABEL',
-  },
-  {
     tsSymbol: 'startDesktopPetOverlayDragSession',
     rustCommand: 'desktop_pet_overlay_start_drag_session',
     registeredCaller: 'PET_OVERLAY_WINDOW_LABEL',
@@ -55,6 +50,11 @@ export const desktopPetOverlayCommandContracts = [
   {
     tsSymbol: 'releaseDesktopPetOverlayDragVelocity',
     rustCommand: 'desktop_pet_overlay_release_drag_velocity',
+    registeredCaller: 'PET_OVERLAY_WINDOW_LABEL',
+  },
+  {
+    tsSymbol: 'applyDesktopPetOverlayMomentumDelta',
+    rustCommand: 'desktop_pet_overlay_apply_momentum_delta',
     registeredCaller: 'PET_OVERLAY_WINDOW_LABEL',
   },
   {

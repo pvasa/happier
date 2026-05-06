@@ -11,6 +11,7 @@ vi.mock('@/utils/platform/tauri', () => ({
 
 describe('desktopPetOverlayBridge', () => {
     afterEach(() => {
+        vi.useRealTimers();
         invokeTauriMock.mockReset();
         listenTauriEventMock.mockReset();
     });
@@ -47,7 +48,6 @@ describe('desktopPetOverlayBridge', () => {
 
         await bridge.getDesktopPetOverlayWindowState();
         await bridge.setDesktopPetOverlayInputLocked({ locked: true, reason: 'hidden' });
-        await bridge.startNativeDesktopPetOverlayWindowDrag();
         await bridge.startDesktopPetOverlayDragSession({
             pointerId: 9,
             screenX: 100,
@@ -65,6 +65,11 @@ describe('desktopPetOverlayBridge', () => {
             vx: 640,
             vy: -320,
             sampleWindowMs: 100,
+        });
+        await bridge.applyDesktopPetOverlayMomentumDelta({
+            generation: 42,
+            dx: 6,
+            dy: -3,
         });
         await bridge.syncDesktopPetOverlayElementMetrics({
             isTrayVisible: true,
@@ -85,10 +90,10 @@ describe('desktopPetOverlayBridge', () => {
         expect(invokeTauriMock.mock.calls.map(([command]) => command)).toEqual([
             'desktop_pet_overlay_read_window_state',
             'desktop_pet_overlay_set_input_locked',
-            'desktop_pet_overlay_start_native_window_drag',
             'desktop_pet_overlay_start_drag_session',
             'desktop_pet_overlay_apply_drag_delta',
             'desktop_pet_overlay_release_drag_velocity',
+            'desktop_pet_overlay_apply_momentum_delta',
             'desktop_pet_overlay_sync_element_metrics',
             'desktop_pet_overlay_end_drag_session',
             'desktop_pet_overlay_reset_position',
@@ -111,6 +116,13 @@ describe('desktopPetOverlayBridge', () => {
                 sampleWindowMs: 100,
             },
         });
+        expect(invokeTauriMock).toHaveBeenCalledWith('desktop_pet_overlay_apply_momentum_delta', {
+            payload: {
+                generation: 42,
+                dx: 6,
+                dy: -3,
+            },
+        });
         expect(invokeTauriMock).toHaveBeenCalledWith('desktop_pet_overlay_sync_element_metrics', {
             payload: {
                 isTrayVisible: true,
@@ -119,6 +131,67 @@ describe('desktopPetOverlayBridge', () => {
                 controls: { x: 310, y: 176, width: 30, height: 30 },
             },
         });
+    });
+
+    it('schedules native momentum deltas from the release velocity plan', async () => {
+        vi.useFakeTimers();
+        invokeTauriMock.mockImplementation(async (command) => {
+            if (command === 'desktop_pet_overlay_release_drag_velocity') {
+                return {
+                    generation: 42,
+                    tickMs: 16,
+                    deltas: [
+                        { dx: 8, dy: -4, delayMs: 16 },
+                        { dx: 4, dy: -2, delayMs: 16 },
+                    ],
+                };
+            }
+            return undefined;
+        });
+        const { releaseDesktopPetOverlayDragVelocity } = await import('./desktopPetOverlayBridge');
+
+        await releaseDesktopPetOverlayDragVelocity({
+            pointerId: 9,
+            vx: 640,
+            vy: -320,
+            sampleWindowMs: 100,
+        });
+        await vi.advanceTimersByTimeAsync(16);
+        await vi.advanceTimersByTimeAsync(16);
+
+        expect(invokeTauriMock.mock.calls).toEqual([
+            [
+                'desktop_pet_overlay_release_drag_velocity',
+                {
+                    payload: {
+                        pointerId: '9',
+                        vx: 640,
+                        vy: -320,
+                        sampleWindowMs: 100,
+                    },
+                },
+            ],
+            [
+                'desktop_pet_overlay_apply_momentum_delta',
+                {
+                    payload: {
+                        generation: 42,
+                        dx: 8,
+                        dy: -4,
+                    },
+                },
+            ],
+            [
+                'desktop_pet_overlay_apply_momentum_delta',
+                {
+                    payload: {
+                        generation: 42,
+                        dx: 4,
+                        dy: -2,
+                    },
+                },
+            ],
+        ]);
     });
 
     it('models native layout as part of the window state payload', async () => {

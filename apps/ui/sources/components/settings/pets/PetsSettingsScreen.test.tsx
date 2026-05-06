@@ -1055,6 +1055,36 @@ describe('PetsSettingsScreen', () => {
         expect(screen.findByTestId(importedLocalPetTestIds.source)).not.toBeNull();
     });
 
+    it('shows an error when a discovered daemon pet cannot be imported locally', async () => {
+        machineRpcWithServerScopeMock.mockImplementation(({ method }: { method: string }) => {
+            if (method === PET_DAEMON_RPC_METHODS.DISCOVER_PACKAGES) {
+                return Promise.resolve({ ok: true, pets: [detectedPet] });
+            }
+            if (method === PET_DAEMON_RPC_METHODS.IMPORT_LOCAL_PACKAGE) {
+                return Promise.resolve({
+                    ok: false,
+                    errorCode: 'not_found',
+                    error: 'The detected pet is no longer available.',
+                });
+            }
+            return Promise.reject(new Error(`Unexpected RPC method ${method}`));
+        });
+
+        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
+        const screen = await renderScreen(<PetsSettingsScreen />);
+
+        await screen.pressByTestIdAsync('settings-pets-detect-codex-pets');
+        await screen.pressByTestIdAsync(detectedPetTestIds.useOnThisDevice);
+
+        expect(screen.findByTestId('settings-pets-import-local-daemon-error')).not.toBeNull();
+        expect(screen.findByTestId(detectedPetTestIds.source)).not.toBeNull();
+        expect(applyLocalSettingsSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+            petsSelectedPetOverride: expect.objectContaining({
+                kind: 'happierManagedLocal',
+            }),
+        }));
+    });
+
     it('deduplicates repeated local import presses while daemon import is running', async () => {
         const importLocal = createDeferred<{ importedPet: ImportedLocalPetPackageV1 }>();
         machineRpcWithServerScopeMock.mockImplementation(({ method }: { method: string }) => {
@@ -1241,7 +1271,21 @@ describe('PetsSettingsScreen', () => {
         localPetSourcesState.current = {
             [importedLocalPetMetadata.sourceKey]: importedLocalPetMetadata,
         };
-        machineRpcWithServerScopeMock.mockRejectedValueOnce(new Error('daemon unavailable'));
+        machineRpcWithServerScopeMock.mockImplementation(async (params: { method?: string }) => {
+            if (params.method === PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET) {
+                return {
+                    sourceKey: importedLocalPetMetadata.sourceKey,
+                    mediaType: importedLocalPetMetadata.mediaType,
+                    digest: importedLocalPetMetadata.digest,
+                    dataBase64: 'cGV0LXByZXZpZXc=',
+                    sizeBytes: importedLocalPetMetadata.sizeBytes,
+                };
+            }
+            if (params.method === PET_DAEMON_RPC_METHODS.FORGET_LOCAL_PACKAGE) {
+                throw new Error('daemon unavailable');
+            }
+            return null;
+        });
 
         const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
         const screen = await renderScreen(<PetsSettingsScreen />);
@@ -1249,11 +1293,31 @@ describe('PetsSettingsScreen', () => {
         await screen.pressByTestIdAsync(importedLocalPetTestIds.removeFromDevice);
         await flushHookEffects();
 
-        expect(removeLocalPetSourceSpy).not.toHaveBeenCalled();
+        expect(removeLocalPetSourceSpy).toHaveBeenCalledWith(importedLocalPetMetadata.sourceKey);
         expect(applyLocalSettingsSpy).not.toHaveBeenCalled();
-        expect(screen.findByTestId(importedLocalPetTestIds.source)).not.toBeNull();
+        expect(screen.findByTestId(importedLocalPetTestIds.source)).toBeNull();
         expect(screen.findByTestId('settings-pets-remove-local-daemon-error')).not.toBeNull();
         expect(findSettingsItemByTestId(screen, 'settings-pets-remove-local-daemon-error')?.props.detail).toBe('daemon_forget_failed');
+    });
+
+    it('keeps persisted imported Codex pets removable when no daemon target is available', async () => {
+        machinesState.current = [];
+        localPetSourcesState.current = {
+            [importedLocalPetMetadata.sourceKey]: importedLocalPetMetadata,
+        };
+
+        const { PetsSettingsScreen } = await import('./PetsSettingsScreen');
+        const screen = await renderScreen(<PetsSettingsScreen />);
+
+        machineRpcWithServerScopeMock.mockClear();
+        await screen.pressByTestIdAsync(importedLocalPetTestIds.removeFromDevice);
+
+        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalledWith(expect.objectContaining({
+            method: PET_DAEMON_RPC_METHODS.FORGET_LOCAL_PACKAGE,
+        }));
+        expect(removeLocalPetSourceSpy).toHaveBeenCalledWith(importedLocalPetMetadata.sourceKey);
+        expect(screen.findByTestId(importedLocalPetTestIds.source)).toBeNull();
+        expect(findSettingsItemByTestId(screen, 'settings-pets-remove-local-daemon-error')?.props.detail).toBe('daemon_unavailable');
     });
 
     it('deduplicates repeated remove presses while daemon removal is running', async () => {

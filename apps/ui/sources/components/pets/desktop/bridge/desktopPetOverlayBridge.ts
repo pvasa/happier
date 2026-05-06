@@ -3,10 +3,10 @@ import { invokeTauri, listenTauriEvent } from '@/utils/platform/tauri';
 export const DESKTOP_PET_OVERLAY_COMMANDS = {
     readWindowState: 'desktop_pet_overlay_read_window_state',
     setInputLocked: 'desktop_pet_overlay_set_input_locked',
-    startNativeWindowDrag: 'desktop_pet_overlay_start_native_window_drag',
     startDragSession: 'desktop_pet_overlay_start_drag_session',
     applyDragDelta: 'desktop_pet_overlay_apply_drag_delta',
     releaseDragVelocity: 'desktop_pet_overlay_release_drag_velocity',
+    applyMomentumDelta: 'desktop_pet_overlay_apply_momentum_delta',
     syncElementMetrics: 'desktop_pet_overlay_sync_element_metrics',
     endDragSession: 'desktop_pet_overlay_end_drag_session',
     resetPosition: 'desktop_pet_overlay_reset_position',
@@ -111,6 +111,24 @@ export type DesktopPetOverlayDragVelocity = Readonly<{
     sampleWindowMs: number;
 }>;
 
+export type DesktopPetOverlayMomentumDelta = Readonly<{
+    generation: number;
+    dx: number;
+    dy: number;
+}>;
+
+type DesktopPetOverlayScheduledMomentumDelta = Readonly<{
+    dx: number;
+    dy: number;
+    delayMs: number;
+}>;
+
+type DesktopPetOverlayMomentumPlan = Readonly<{
+    generation: number;
+    tickMs: number;
+    deltas: readonly DesktopPetOverlayScheduledMomentumDelta[];
+}>;
+
 export type DesktopPetOverlayShowMainWindow = Readonly<{
     reason: 'mascot-click' | 'tray-action';
     targetSessionId?: string;
@@ -150,10 +168,6 @@ export async function setDesktopPetOverlayInputLocked(payload: DesktopPetOverlay
     await invokeTauri<void>(DESKTOP_PET_OVERLAY_COMMANDS.setInputLocked, { payload });
 }
 
-export async function startNativeDesktopPetOverlayWindowDrag(): Promise<void> {
-    await invokeTauri<void>(DESKTOP_PET_OVERLAY_COMMANDS.startNativeWindowDrag);
-}
-
 function normalizePointerPayload<TPayload extends { pointerId: DesktopPetOverlayPointerId }>(
     payload: TPayload,
 ): Omit<TPayload, 'pointerId'> & { pointerId: string } {
@@ -182,8 +196,31 @@ export async function endDesktopPetOverlayDragSession(payload: DesktopPetOverlay
 }
 
 export async function releaseDesktopPetOverlayDragVelocity(payload: DesktopPetOverlayDragVelocity): Promise<void> {
-    await invokeTauri<void>(DESKTOP_PET_OVERLAY_COMMANDS.releaseDragVelocity, {
+    const plan = await invokeTauri<DesktopPetOverlayMomentumPlan>(DESKTOP_PET_OVERLAY_COMMANDS.releaseDragVelocity, {
         payload: normalizePointerPayload(payload),
+    });
+    scheduleDesktopPetOverlayMomentumPlan(plan);
+}
+
+export async function applyDesktopPetOverlayMomentumDelta(payload: DesktopPetOverlayMomentumDelta): Promise<void> {
+    await invokeTauri<void>(DESKTOP_PET_OVERLAY_COMMANDS.applyMomentumDelta, { payload });
+}
+
+function scheduleDesktopPetOverlayMomentumPlan(plan: DesktopPetOverlayMomentumPlan | undefined): void {
+    if (!plan || !Array.isArray(plan.deltas)) {
+        return;
+    }
+    plan.deltas.forEach((delta, index) => {
+        const delayMs = Number.isFinite(delta.delayMs) && delta.delayMs >= 0
+            ? delta.delayMs * (index + 1)
+            : plan.tickMs * (index + 1);
+        setTimeout(() => {
+            void applyDesktopPetOverlayMomentumDelta({
+                generation: plan.generation,
+                dx: delta.dx,
+                dy: delta.dy,
+            }).catch(() => undefined);
+        }, delayMs);
     });
 }
 

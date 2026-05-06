@@ -26,7 +26,6 @@ describe('resolveSelectedPetPackage', () => {
                 accountPetsById: new Map(),
                 builtInFallbackPetId: 'blink',
                 builtInPetIds: ['blink'],
-                detectedCodexHomeBySourceKey: new Map(),
                 happierManagedLocalBySourceKey: new Map(),
             },
         })).toEqual({
@@ -62,13 +61,46 @@ describe('resolveSelectedPetPackage', () => {
                 accountPetsById: new Map(),
                 builtInFallbackPetId: 'blink',
                 builtInPetIds: ['blink'],
-                detectedCodexHomeBySourceKey: new Map(),
                 happierManagedLocalBySourceKey: new Map([[localSource.sourceKey, localSource]]),
             },
         })).toEqual({
             enabled: true,
             source: localSource,
             fallback: null,
+        });
+    });
+
+    it('does not render a stale detected Codex pet override before it is imported locally', () => {
+        const detectedSource = {
+            kind: 'detectedCodexHome',
+            sourceKey: 'detected:blink-copy',
+        } as const;
+
+        expect(resolveSelectedPetPackage({
+            companionDecision: companionEnabled,
+            syncDecision: syncEnabled,
+            accountSettings: {
+                petsEnabled: true,
+                petsSelectedPetRef: { kind: 'builtIn', petId: 'fury' },
+            },
+            localSettings: {
+                petsEnabledOverride: 'inherit',
+                petsSelectedPetOverride: { kind: 'detectedCodexHome', sourceKey: detectedSource.sourceKey },
+            },
+            sources: {
+                accountPetsById: new Map(),
+                builtInFallbackPetId: 'blink',
+                builtInPetIds: ['blink', 'fury'],
+                happierManagedLocalBySourceKey: new Map(),
+            },
+        })).toEqual({
+            enabled: true,
+            source: { kind: 'builtIn', petId: 'blink' },
+            fallback: {
+                reason: 'unknown_pet_source',
+                originalRef: { kind: 'detectedCodexHome', sourceKey: detectedSource.sourceKey },
+                shouldPersist: false,
+            },
         });
     });
 
@@ -88,7 +120,6 @@ describe('resolveSelectedPetPackage', () => {
                 accountPetsById: new Map(),
                 builtInFallbackPetId: 'blink',
                 builtInPetIds: ['blink'],
-                detectedCodexHomeBySourceKey: new Map(),
                 happierManagedLocalBySourceKey: new Map(),
             },
         })).toEqual({
@@ -117,7 +148,6 @@ describe('resolveSelectedPetPackage', () => {
                 accountPetsById: new Map(),
                 builtInFallbackPetId: DEFAULT_BUILT_IN_PET_ID,
                 builtInPetIds: BUILT_IN_PET_IDS,
-                detectedCodexHomeBySourceKey: new Map(),
                 happierManagedLocalBySourceKey: new Map(),
             },
         })).toEqual({

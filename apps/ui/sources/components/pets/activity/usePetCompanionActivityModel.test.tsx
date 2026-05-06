@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import type { Message } from '@/sync/domains/messages/messageTypes';
@@ -7,6 +8,7 @@ import { createReducer } from '@/sync/reducer/reducer';
 import type { SessionMessages } from '@/sync/store/domains/messages';
 
 import { usePetCompanionActivityModel } from './usePetCompanionActivityModel';
+import { PET_COMPANION_ACTIVITY_EXPIRY_MS } from './petCompanionActivityConstants';
 
 function createSessionMessages(messages: readonly Message[]): SessionMessages {
     const messagesById: Record<string, Message> = {};
@@ -29,7 +31,12 @@ function createSessionMessages(messages: readonly Message[]): SessionMessages {
 }
 
 describe('usePetCompanionActivityModel', () => {
+    beforeEach(() => {
+        vi.spyOn(Date, 'now').mockReturnValue(4_000);
+    });
+
     afterEach(() => {
+        vi.restoreAllMocks();
         standardCleanup();
     });
 
@@ -166,6 +173,164 @@ describe('usePetCompanionActivityModel', () => {
                 sessionId: failedSession.id,
             });
             expect(hook.getCurrent().trayItems.map((item) => item.sessionId)).toContain(failedSession.id);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('uses recent session thinking timestamps when the transcript is not hydrated in this window', async () => {
+        vi.mocked(Date.now).mockReturnValue(12_000);
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'recent-thinking-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 10_000,
+            activeAt: 10_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 10_000,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {},
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'running',
+                reason: 'running',
+                sessionId: session.id,
+                trayItems: [
+                    expect.objectContaining({
+                        sessionId: session.id,
+                        status: 'running',
+                    }),
+                ],
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('expires stale activity when no store update happens at the expiry boundary', async () => {
+        vi.restoreAllMocks();
+        vi.useFakeTimers();
+        vi.setSystemTime(4_000);
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'recent-thinking-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 1_000,
+            activeAt: 1_000,
+            lastViewedSessionSeq: 1,
+            thinking: false,
+            thinkingAt: 1_000,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {},
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'running',
+                reason: 'running',
+                sessionId: session.id,
+            });
+
+            await act(async () => {
+                vi.setSystemTime(1_000 + PET_COMPANION_ACTIVITY_EXPIRY_MS.running + 1);
+                await vi.advanceTimersByTimeAsync(PET_COMPANION_ACTIVITY_EXPIRY_MS.running);
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'idle',
+                reason: 'idle',
+                sessionId: session.id,
+                trayItems: [],
+            });
+
+            await hook.unmount();
+        } finally {
+            vi.useRealTimers();
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('uses unhydrated agent-state requests as waiting activity', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'agent-state-request-session',
+            active: true,
+            seq: 1,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 1,
+            pendingCount: 0,
+            pendingPermissionRequestCount: 0,
+            pendingUserActionRequestCount: 0,
+            agentState: {
+                controlledByUser: null,
+                requests: {
+                    request_1: {
+                        tool: 'Bash',
+                        kind: 'permission',
+                        arguments: { command: 'git status' },
+                        createdAt: 2_000,
+                    },
+                },
+            },
+            agentStateVersion: 2,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {},
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'waiting',
+                reason: 'waiting',
+                sessionId: session.id,
+                trayItems: [
+                    expect.objectContaining({
+                        sessionId: session.id,
+                        status: 'waiting',
+                    }),
+                ],
+            });
 
             await hook.unmount();
         } finally {

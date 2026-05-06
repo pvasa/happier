@@ -10,7 +10,7 @@ import { t } from '@/text';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import { DevicePetSelector, type DetectedDevicePetSelectorItem, type LocalDevicePetSelectorItem } from '../DevicePetSelector';
-import type { CodexDetectionState, LocalPetRemovalDiagnostic } from './types';
+import type { CodexDetectionState, LocalPetImportDiagnostic, LocalPetRemovalDiagnostic } from './types';
 
 const PETS_HELP_URL = 'https://docs.happier.dev';
 
@@ -23,6 +23,7 @@ type PetsLocalLibrarySectionProps = Readonly<{
     localPetRows: readonly LocalDevicePetSelectorItem[];
     onDiscoverPets: () => void;
     onSelectBuiltInPet: (petId: string) => void;
+    importDiagnostic: LocalPetImportDiagnostic | null;
     removalDiagnostic: LocalPetRemovalDiagnostic | null;
     selectedBuiltInPetId: string | null;
 }>;
@@ -86,6 +87,7 @@ export function PetsLocalLibrarySection(props: PetsLocalLibrarySectionProps): Re
                         companionSizeScale={props.companionSizeScale}
                         detectedPetRowsCount={props.detectedPetRowsCount}
                         detectedPetTileRows={props.detectedPetTileRows}
+                        importDiagnostic={props.importDiagnostic}
                     />
                 </View>
             </View>
@@ -98,6 +100,7 @@ function PetsDetectedCodexState(props: Readonly<{
     companionSizeScale: number;
     detectedPetRowsCount: number;
     detectedPetTileRows: readonly DetectedDevicePetSelectorItem[];
+    importDiagnostic: LocalPetImportDiagnostic | null;
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
     const { codexDetectionState } = props;
@@ -117,6 +120,20 @@ function PetsDetectedCodexState(props: Readonly<{
                         onSelectBuiltInPet={() => undefined}
                     />
                 </ItemGroup>
+                {props.importDiagnostic ? (
+                    <ItemGroup>
+                        <Item
+                            testID="settings-pets-import-local-daemon-error"
+                            title={t('settingsPets.importToDeviceDaemonErrorTitle')}
+                            subtitle={t('settingsPets.importToDeviceDaemonErrorSubtitle', {
+                                code: props.importDiagnostic.code,
+                            })}
+                            icon={<Ionicons name="warning-outline" size={25} color={theme.colors.warningCritical} />}
+                            detail={props.importDiagnostic.code}
+                            mode="info"
+                        />
+                    </ItemGroup>
+                ) : null}
             </View>
         );
     }

@@ -58,6 +58,7 @@ import {
 import type {
     CodexDetectionState,
     DetectedPet,
+    LocalPetImportDiagnostic,
     LocalPetRemovalDiagnostic,
     LocalDevicePetRow,
 } from './petsSettingsScreen/types';
@@ -84,6 +85,7 @@ export function PetsSettingsScreen() {
     const [discoveredPets, setDiscoveredPets] = React.useState<DiscoveredPetPackageV1[]>([]);
     const [importedLocalPets, setImportedLocalPets] = React.useState<ImportedLocalPetPackageV1[]>([]);
     const [importedAccountPets, setImportedAccountPets] = React.useState<AccountPetLibraryEntryV1[]>([]);
+    const [localImportDiagnostic, setLocalImportDiagnostic] = React.useState<LocalPetImportDiagnostic | null>(null);
     const [localRemovalDiagnostic, setLocalRemovalDiagnostic] = React.useState<LocalPetRemovalDiagnostic | null>(null);
     const importingLocalPetKeysRef = React.useRef(new Set<string>());
     const importingAccountPetKeysRef = React.useRef(new Set<string>());
@@ -219,6 +221,7 @@ export function PetsSettingsScreen() {
         const importKey = payload.sourceKey;
         if (importingLocalPetKeysRef.current.has(importKey)) return;
         importingLocalPetKeysRef.current.add(importKey);
+        setLocalImportDiagnostic(null);
         try {
             const raw = await machineRpcWithServerScope<unknown, DaemonPetImportLocalPackageRequestV1>({
                 machineId: targetMachineId,
@@ -227,8 +230,17 @@ export function PetsSettingsScreen() {
                 payload,
             });
             const parsed = DaemonPetImportLocalPackageResponseV1Schema.parse(raw);
+            if ('ok' in parsed && parsed.ok === false) {
+                setLocalImportDiagnostic({
+                    code: typeof parsed.errorCode === 'string' ? parsed.errorCode : 'daemon_import_failed',
+                });
+                return;
+            }
             const importedPetResult = ImportedLocalPetPackageV1Schema.safeParse(parsed.importedPet);
-            if (!importedPetResult.success || importedPetResult.data.kind !== 'happierManagedLocal') return;
+            if (!importedPetResult.success || importedPetResult.data.kind !== 'happierManagedLocal') {
+                setLocalImportDiagnostic({ code: 'invalid_response' });
+                return;
+            }
             const importedPet = importedPetResult.data;
             const metadata = createLocalPetSourceMetadata(importedPet, {
                 machineId: targetMachineId,
@@ -243,6 +255,7 @@ export function PetsSettingsScreen() {
                 },
             });
         } catch {
+            setLocalImportDiagnostic({ code: 'daemon_import_failed' });
             setImportedLocalPets((pets) => pets);
         } finally {
             importingLocalPetKeysRef.current.delete(importKey);
@@ -286,7 +299,6 @@ export function PetsSettingsScreen() {
         if (removingLocalPetSourceKeysRef.current.has(pet.sourceKey)) return;
         removingLocalPetSourceKeysRef.current.add(pet.sourceKey);
         setLocalRemovalDiagnostic(null);
-        let daemonForgetSucceeded = false;
         try {
             if (targetMachineId && targetServerId) {
                 const payload: DaemonPetForgetLocalPackageRequestV1 = { sourceKey: pet.sourceKey };
@@ -296,8 +308,10 @@ export function PetsSettingsScreen() {
                     method: PET_DAEMON_RPC_METHODS.FORGET_LOCAL_PACKAGE,
                     payload,
                 });
-                DaemonPetForgetLocalPackageResponseV1Schema.safeParse(raw);
-                daemonForgetSucceeded = true;
+                const parsed = DaemonPetForgetLocalPackageResponseV1Schema.safeParse(raw);
+                if (!parsed.success || ('ok' in parsed.data && parsed.data.ok === false)) {
+                    setLocalRemovalDiagnostic({ code: 'daemon_forget_failed' });
+                }
             } else {
                 setLocalRemovalDiagnostic({ code: 'daemon_unavailable' });
             }
@@ -306,8 +320,6 @@ export function PetsSettingsScreen() {
         } finally {
             removingLocalPetSourceKeysRef.current.delete(pet.sourceKey);
         }
-
-        if (!daemonForgetSucceeded) return;
 
         storage.getState().removeLocalPetSource(pet.sourceKey);
         setImportedLocalPets((pets) => pets.filter((candidate) => candidate.sourceKey !== pet.sourceKey));
@@ -411,6 +423,7 @@ export function PetsSettingsScreen() {
                 localPetRows={localSelectorRows}
                 onDiscoverPets={discoverPets}
                 onSelectBuiltInPet={handleSelectBuiltInPet}
+                importDiagnostic={localImportDiagnostic}
                 removalDiagnostic={localRemovalDiagnostic}
                 selectedBuiltInPetId={selectedBuiltInPetId}
             />

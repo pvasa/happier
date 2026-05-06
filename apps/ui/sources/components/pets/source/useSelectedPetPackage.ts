@@ -33,9 +33,9 @@ export function useSelectedPetPackage(): ResolveSelectedPetPackageResult {
                 },
             ]),
         );
-        const detectedCodexHomeBySourceKey = new Map<string, SelectedPetPackageSource>();
         const happierManagedLocalBySourceKey = new Map<string, SelectedPetPackageSource>();
         for (const source of Object.values(localPetSourcesBySourceKey)) {
+            if (source.kind !== 'happierManagedLocal') continue;
             const entry = {
                 kind: source.kind,
                 sourceKey: source.sourceKey,
@@ -43,11 +43,7 @@ export function useSelectedPetPackage(): ResolveSelectedPetPackageResult {
                 digest: source.digest,
                 daemonTarget: source.daemonTarget,
             };
-            if (source.kind === 'detectedCodexHome') {
-                detectedCodexHomeBySourceKey.set(source.sourceKey, entry);
-            } else {
-                happierManagedLocalBySourceKey.set(source.sourceKey, entry);
-            }
+            happierManagedLocalBySourceKey.set(source.sourceKey, entry);
         }
 
         return resolveSelectedPetPackage({
@@ -65,7 +61,6 @@ export function useSelectedPetPackage(): ResolveSelectedPetPackageResult {
                 accountPetsById: accountPetSources,
                 builtInFallbackPetId: DEFAULT_BUILT_IN_PET_ID,
                 builtInPetIds: BUILT_IN_PET_IDS,
-                detectedCodexHomeBySourceKey,
                 happierManagedLocalBySourceKey,
             },
         });

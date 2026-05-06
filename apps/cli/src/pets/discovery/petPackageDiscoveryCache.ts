@@ -33,14 +33,12 @@ type CacheRecord = Readonly<{
 export type PetPackageDiscoveryCache = Readonly<{
   remember: (pets: readonly PetPackageDiscoveryCacheEntry[]) => void;
   get: (sourceKey: string) => PetPackageDiscoveryCacheEntry | null;
-  getRetained: (sourceKey: string) => PetPackageDiscoveryCacheEntry | null;
   forget: (sourceKey: string) => void;
   drop: () => void;
 }>;
 
 export function createPetPackageDiscoveryCache(options: PetPackageDiscoveryCacheOptions = {}): PetPackageDiscoveryCache {
   const petsBySourceKey = new Map<string, CacheRecord>();
-  const retainedPetsBySourceKey = new Map<string, PetPackageDiscoveryCacheEntry>();
   const ttlMs = options.ttlMs ?? PET_DISCOVERY_LIMITS_V1.discoveryCacheTtlMs;
   const nowMs = options.nowMs ?? Date.now;
 
@@ -55,7 +53,6 @@ export function createPetPackageDiscoveryCache(options: PetPackageDiscoveryCache
           pet,
           rememberedAtMs: nowMs(),
         });
-        retainedPetsBySourceKey.set(pet.sourceKey, pet);
       }
     },
     get: (sourceKey) => {
@@ -65,10 +62,8 @@ export function createPetPackageDiscoveryCache(options: PetPackageDiscoveryCache
       petsBySourceKey.delete(sourceKey);
       return null;
     },
-    getRetained: (sourceKey) => retainedPetsBySourceKey.get(sourceKey) ?? null,
     forget: (sourceKey) => {
       petsBySourceKey.delete(sourceKey);
-      retainedPetsBySourceKey.delete(sourceKey);
     },
     drop: () => {
       petsBySourceKey.clear();

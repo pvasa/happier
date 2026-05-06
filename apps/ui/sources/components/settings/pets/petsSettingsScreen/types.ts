@@ -37,3 +37,7 @@ export type CodexDetectionState = 'idle' | 'loading' | 'success' | 'empty' | 'er
 export type LocalPetRemovalDiagnostic = Readonly<{
     code: 'daemon_forget_failed' | 'daemon_unavailable';
 }>;
+
+export type LocalPetImportDiagnostic = Readonly<{
+    code: string;
+}>;

@@ -30,7 +30,7 @@ export async function handleReadPetPreviewAsset(
   }
 
   // Trust boundary: preview access is sourceKey registry based, never caller-supplied paths.
-  const cachedSource = deps.discoveryCache?.getRetained(parsed.data.sourceKey)?.source ?? null;
+  const cachedSource = deps.discoveryCache?.get(parsed.data.sourceKey)?.source ?? null;
   let source = cachedSource;
   if (!source) {
     const managedLocalSource = await resolveManagedLocalPetSourceBySourceKey({

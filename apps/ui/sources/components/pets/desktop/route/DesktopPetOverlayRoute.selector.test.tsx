@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoreApi, UseBoundStore } from 'zustand';
 
 import {
@@ -81,7 +81,6 @@ type TestDesktopPetOverlayWindowStatePayload = Readonly<{
 const serverFetchMock = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 const startDesktopPetOverlayDragSessionMock = vi.hoisted(() => vi.fn());
-const startNativeDesktopPetOverlayWindowDragMock = vi.hoisted(() => vi.fn());
 const applyDesktopPetOverlayDragDeltaMock = vi.hoisted(() => vi.fn());
 const releaseDesktopPetOverlayDragVelocityMock = vi.hoisted(() => vi.fn());
 const endDesktopPetOverlayDragSessionMock = vi.hoisted(() => vi.fn());
@@ -166,7 +165,6 @@ vi.mock('@/components/pets/desktop/bridge/desktopPetOverlayBridge', async (impor
     const actual = await importOriginal<typeof import('@/components/pets/desktop/bridge/desktopPetOverlayBridge')>();
     return {
         ...actual,
-        startNativeDesktopPetOverlayWindowDrag: startNativeDesktopPetOverlayWindowDragMock,
         startDesktopPetOverlayDragSession: startDesktopPetOverlayDragSessionMock,
         applyDesktopPetOverlayDragDelta: applyDesktopPetOverlayDragDeltaMock,
         releaseDesktopPetOverlayDragVelocity: releaseDesktopPetOverlayDragVelocityMock,
@@ -325,6 +323,11 @@ function installDesktopPetOverlayMeasurementHarness() {
 }
 
 describe('DesktopPetOverlayRoute selectors', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(12_000);
+    });
+
     afterEach(() => {
         vi.useRealTimers();
         standardCleanup();
@@ -345,7 +348,6 @@ describe('DesktopPetOverlayRoute selectors', () => {
         sessionSignalsState.current = {};
         serverFetchMock.mockReset();
         machineRpcWithServerScopeMock.mockReset();
-        startNativeDesktopPetOverlayWindowDragMock.mockReset();
         startDesktopPetOverlayDragSessionMock.mockReset();
         applyDesktopPetOverlayDragDeltaMock.mockReset();
         releaseDesktopPetOverlayDragVelocityMock.mockReset();
@@ -1538,16 +1540,12 @@ describe('DesktopPetOverlayRoute selectors', () => {
         });
 
         expect(setPointerCapture).toHaveBeenCalledWith(42);
-        expect(startNativeDesktopPetOverlayWindowDragMock).toHaveBeenCalledTimes(1);
         expect(startDesktopPetOverlayDragSessionMock).toHaveBeenCalledWith({
             pointerId: 42,
             screenX: 500,
             screenY: 600,
             startedAtMs: 1_000,
         });
-        expect(startNativeDesktopPetOverlayWindowDragMock.mock.invocationCallOrder[0]).toBeLessThan(
-            startDesktopPetOverlayDragSessionMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-        );
         expect(applyDesktopPetOverlayDragDeltaMock).toHaveBeenCalledWith({
             pointerId: 42,
             dx: 1_500,

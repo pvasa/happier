@@ -104,7 +104,7 @@ describe('handleReadPetPreviewAsset', () => {
     });
   });
 
-  it('revalidates detected preview bytes after the cache entry expires', async () => {
+  it('rejects detected preview requests after the cache entry expires', async () => {
     const root = tempRoot();
     const codexHome = join(root, 'codex-home');
     const packagePath = join(codexHome, 'pets', 'blink');
@@ -143,14 +143,12 @@ describe('handleReadPetPreviewAsset', () => {
     const preview = await handleReadPetPreviewAsset({ sourceKey }, { discoveryCache });
 
     expect(preview).toMatchObject({
-      sourceKey,
-      mediaType: 'image/png',
-      digest: validation.digest,
-      dataBase64: expect.any(String),
+      ok: false,
+      errorCode: 'not_found',
     });
   });
 
-  it('revalidates detected preview bytes after discovery cache eviction', async () => {
+  it('rejects detected preview requests after discovery cache eviction', async () => {
     const root = tempRoot();
     const codexHome = join(root, 'codex-home');
     const packagePath = join(codexHome, 'pets', 'blink');
@@ -188,10 +186,8 @@ describe('handleReadPetPreviewAsset', () => {
     const preview = await handleReadPetPreviewAsset({ sourceKey }, { discoveryCache });
 
     expect(preview).toMatchObject({
-      sourceKey,
-      mediaType: 'image/png',
-      digest: validation.digest,
-      dataBase64: expect.any(String),
+      ok: false,
+      errorCode: 'not_found',
     });
   });
 

@@ -88,7 +88,7 @@ export function localPetSourceMatchesDaemonTarget(
     source: LocalPetSourceMetadata,
     daemonTarget: Readonly<{ machineId: string; serverId: string }> | null,
 ): boolean {
-    if (!daemonTarget) return false;
+    if (!daemonTarget) return true;
     return source.daemonTarget.machineId === daemonTarget.machineId
         && source.daemonTarget.serverId === daemonTarget.serverId;
 }

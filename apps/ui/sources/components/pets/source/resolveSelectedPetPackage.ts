@@ -51,7 +51,6 @@ export type ResolveSelectedPetPackageInput = Readonly<{
         accountPetsById: ReadonlyMap<string, SelectedPetPackageSource>;
         builtInFallbackPetId: string;
         builtInPetIds: readonly string[];
-        detectedCodexHomeBySourceKey: ReadonlyMap<string, SelectedPetPackageSource>;
         happierManagedLocalBySourceKey: ReadonlyMap<string, SelectedPetPackageSource>;
     }>;
 }>;
@@ -113,14 +112,11 @@ export function resolveSelectedPetPackage(input: ResolveSelectedPetPackageInput)
 
     const localOverride = input.localSettings.petsSelectedPetOverride;
     if (localOverride.kind === 'detectedCodexHome') {
-        const source = input.sources.detectedCodexHomeBySourceKey.get(localOverride.sourceKey) ?? null;
-        return source
-            ? { enabled: true, source, fallback: null }
-            : {
-                enabled: true,
-                source: builtInFallbackSource(input.sources.builtInFallbackPetId),
-                fallback: { reason: 'unknown_pet_source', originalRef: localOverride, shouldPersist: false },
-            };
+        return {
+            enabled: true,
+            source: builtInFallbackSource(input.sources.builtInFallbackPetId),
+            fallback: { reason: 'unknown_pet_source', originalRef: localOverride, shouldPersist: false },
+        };
     }
 
     if (localOverride.kind === 'happierManagedLocal') {

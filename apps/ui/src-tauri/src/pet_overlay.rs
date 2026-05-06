@@ -163,6 +163,30 @@ pub struct DesktopPetOverlayDragVelocityPayload {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DesktopPetOverlayMomentumDeltaPayload {
+    pub generation: u64,
+    pub dx: f64,
+    pub dy: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPetOverlayScheduledMomentumDeltaPayload {
+    pub dx: f64,
+    pub dy: f64,
+    pub delay_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPetOverlayMomentumPlanPayload {
+    pub generation: u64,
+    pub tick_ms: u64,
+    pub deltas: Vec<DesktopPetOverlayScheduledMomentumDeltaPayload>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DesktopPetOverlayCoordinateSpace {
     Screen,
 }
@@ -327,29 +351,6 @@ pub fn desktop_pet_overlay_set_input_locked<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn desktop_pet_overlay_start_native_window_drag<R: Runtime>(
-    state: State<'_, DesktopPetOverlayState>,
-    caller_window: WebviewWindow<R>,
-) -> Result<(), String> {
-    validate_pet_overlay_command_caller_for_command(
-        "desktop_pet_overlay_start_native_window_drag",
-        caller_window.label(),
-    )?;
-
-    {
-        let guard = state
-            .0
-            .lock()
-            .map_err(|_| "DesktopPetOverlayState poisoned".to_string())?;
-        require_enabled_overlay_interaction(&guard)?;
-    }
-
-    caller_window
-        .start_dragging()
-        .map_err(|error| format!("Failed to start desktop pet overlay native window drag: {error}"))
-}
-
-#[tauri::command]
 pub fn desktop_pet_overlay_start_drag_session<R: Runtime>(
     state: State<'_, DesktopPetOverlayState>,
     payload: DesktopPetOverlayDragStartPayload,
@@ -434,7 +435,7 @@ pub fn desktop_pet_overlay_release_drag_velocity<R: Runtime>(
     state: State<'_, DesktopPetOverlayState>,
     payload: DesktopPetOverlayDragVelocityPayload,
     caller_window: WebviewWindow<R>,
-) -> Result<(), String> {
+) -> Result<DesktopPetOverlayMomentumPlanPayload, String> {
     validate_pet_overlay_command_caller_for_command(
         "desktop_pet_overlay_release_drag_velocity",
         caller_window.label(),
@@ -461,7 +462,23 @@ pub fn desktop_pet_overlay_release_drag_velocity<R: Runtime>(
             cap_velocity(payload.vx, payload.vy),
         )
     };
-    apply_pet_overlay_momentum(&app, generation, velocity)?;
+    Ok(resolve_pet_overlay_momentum_plan(generation, velocity))
+}
+
+#[tauri::command]
+pub fn desktop_pet_overlay_apply_momentum_delta<R: Runtime>(
+    app: AppHandle<R>,
+    payload: DesktopPetOverlayMomentumDeltaPayload,
+    caller_window: WebviewWindow<R>,
+) -> Result<(), String> {
+    validate_pet_overlay_command_caller_for_command(
+        "desktop_pet_overlay_apply_momentum_delta",
+        caller_window.label(),
+    )?;
+    validate_finite("dx", payload.dx)?;
+    validate_finite("dy", payload.dy)?;
+
+    apply_pet_overlay_momentum_delta(&app, payload.generation, payload.dx, payload.dy)?;
     Ok(())
 }
 
@@ -613,10 +630,10 @@ fn validate_pet_overlay_command_caller_for_command(
         | "desktop_pet_overlay_set_input_locked"
         | "desktop_pet_overlay_reset_position"
         | "emit_desktop_pet_overlay_interaction_result" => &[MAIN_WINDOW_LABEL],
-        "desktop_pet_overlay_start_native_window_drag"
-        | "desktop_pet_overlay_start_drag_session"
+        "desktop_pet_overlay_start_drag_session"
         | "desktop_pet_overlay_apply_drag_delta"
         | "desktop_pet_overlay_release_drag_velocity"
+        | "desktop_pet_overlay_apply_momentum_delta"
         | "desktop_pet_overlay_end_drag_session"
         | "desktop_pet_overlay_sync_element_metrics"
         | "desktop_pet_overlay_show_main_window" => &[PET_OVERLAY_WINDOW_LABEL],
@@ -814,18 +831,22 @@ fn resolve_pet_overlay_momentum_deltas(vx: f64, vy: f64) -> Vec<(f64, f64)> {
     deltas
 }
 
-fn apply_pet_overlay_momentum<R: Runtime>(
-    app: &AppHandle<R>,
+fn resolve_pet_overlay_momentum_plan(
     generation: u64,
     velocity: (f64, f64),
-) -> Result<(), String> {
-    let deltas = resolve_pet_overlay_momentum_deltas(velocity.0, velocity.1);
-    for (dx, dy) in deltas {
-        if !apply_pet_overlay_momentum_delta(app, generation, dx, dy)? {
-            break;
-        }
+) -> DesktopPetOverlayMomentumPlanPayload {
+    DesktopPetOverlayMomentumPlanPayload {
+        generation,
+        tick_ms: PET_MOMENTUM_TICK_MS,
+        deltas: resolve_pet_overlay_momentum_deltas(velocity.0, velocity.1)
+            .into_iter()
+            .map(|(dx, dy)| DesktopPetOverlayScheduledMomentumDeltaPayload {
+                dx,
+                dy,
+                delay_ms: PET_MOMENTUM_TICK_MS,
+            })
+            .collect(),
     }
-    Ok(())
 }
 
 fn apply_pet_overlay_momentum_delta<R: Runtime>(
@@ -899,6 +920,18 @@ mod tests {
         });
         serde_json::from_str(&contents).unwrap_or_else(|error| {
             panic!("failed to parse tauri config {}: {error}", path.display())
+        })
+    }
+
+    fn read_pet_overlay_source_file() -> String {
+        let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("pet_overlay.rs");
+        fs::read_to_string(&source_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to read pet overlay source {}: {error}",
+                source_path.display()
+            )
         })
     }
 
@@ -1045,16 +1078,6 @@ mod tests {
         )
         .is_err());
         assert!(validate_pet_overlay_command_caller_for_command(
-            "desktop_pet_overlay_start_native_window_drag",
-            PET_OVERLAY_WINDOW_LABEL,
-        )
-        .is_ok());
-        assert!(validate_pet_overlay_command_caller_for_command(
-            "desktop_pet_overlay_start_native_window_drag",
-            "main",
-        )
-        .is_err());
-        assert!(validate_pet_overlay_command_caller_for_command(
             "desktop_pet_overlay_start_drag_session",
             PET_OVERLAY_WINDOW_LABEL,
         )
@@ -1079,6 +1102,16 @@ mod tests {
             PET_OVERLAY_WINDOW_LABEL,
         )
         .is_ok());
+        assert!(validate_pet_overlay_command_caller_for_command(
+            "desktop_pet_overlay_apply_momentum_delta",
+            PET_OVERLAY_WINDOW_LABEL,
+        )
+        .is_ok());
+        assert!(validate_pet_overlay_command_caller_for_command(
+            "desktop_pet_overlay_apply_momentum_delta",
+            "main",
+        )
+        .is_err());
         assert!(validate_pet_overlay_command_caller_for_command(
             "desktop_pet_overlay_end_drag_session",
             PET_OVERLAY_WINDOW_LABEL,
@@ -1134,6 +1167,7 @@ mod tests {
             "allow-desktop-pet-overlay-start-drag-session",
             "allow-desktop-pet-overlay-apply-drag-delta",
             "allow-desktop-pet-overlay-release-drag-velocity",
+            "allow-desktop-pet-overlay-apply-momentum-delta",
             "allow-desktop-pet-overlay-end-drag-session",
             "allow-desktop-pet-overlay-sync-element-metrics",
             "allow-desktop-pet-overlay-show-main-window",
@@ -1208,6 +1242,7 @@ mod tests {
             "allow-desktop-set-autostart-enabled",
             "allow-sync-desktop-pet-overlay-state",
             "allow-desktop-pet-overlay-sync-element-metrics",
+            "allow-desktop-pet-overlay-apply-momentum-delta",
             "allow-desktop-pet-overlay-show-main-window",
             "allow-start-system-task",
             "allow-respond-system-task-prompt",
@@ -1268,6 +1303,37 @@ mod tests {
         assert!(deltas
             .windows(2)
             .all(|window| { window[1].0 <= (window[0].0 * PET_MOMENTUM_FRICTION) + 0.000_001 }));
+    }
+
+    #[test]
+    fn resolves_momentum_plan_from_the_native_constants() {
+        let plan = resolve_pet_overlay_momentum_plan(17, (3_200.0, 0.0));
+
+        assert_eq!(plan.generation, 17);
+        assert_eq!(plan.tick_ms, PET_MOMENTUM_TICK_MS);
+        assert!(!plan.deltas.is_empty());
+        assert!(plan
+            .deltas
+            .iter()
+            .all(|delta| delta.delay_ms == PET_MOMENTUM_TICK_MS));
+    }
+
+    #[test]
+    fn release_velocity_returns_momentum_plan_instead_of_applying_all_ticks_synchronously() {
+        let source = read_pet_overlay_source_file();
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("pet overlay source should contain production code before tests");
+
+        assert!(
+            production_source.contains("resolve_pet_overlay_momentum_plan(generation, velocity)"),
+            "release velocity should return a scheduled momentum plan",
+        );
+        assert!(
+            !production_source.contains("spawn_pet_overlay_momentum"),
+            "release velocity must not spawn native momentum work with non-Send Tauri handles",
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -22,6 +23,15 @@ type LocalPetsSettingsSubset = Pick<
 const desktopRuntimeProps = vi.hoisted(() => ({
     calls: [] as Record<string, unknown>[],
 }));
+const listenDesktopPetOverlayShowMainWindowRequestedMock = vi.hoisted(() =>
+    vi.fn(async (_handler: (payload: { targetSessionId?: string }) => void | Promise<void>) => () => {}),
+);
+const executePetOverlayMainWindowActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const createDefaultActionExecutorMock = vi.hoisted(() =>
+    vi.fn(() => ({
+        execute: executePetOverlayMainWindowActionMock,
+    })),
+);
 const featureState = vi.hoisted(() => ({
     companionEnabled: true,
 }));
@@ -74,6 +84,18 @@ vi.mock('@/components/pets/desktop/runtime/DesktopPetOverlayRuntime', () => ({
     },
 }));
 
+vi.mock('@/components/pets/desktop/bridge/desktopPetOverlayBridge', () => ({
+    listenDesktopPetOverlayShowMainWindowRequested: listenDesktopPetOverlayShowMainWindowRequestedMock,
+}));
+
+vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+    createDefaultActionExecutor: createDefaultActionExecutorMock,
+}));
+
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', () => ({
+    resolveServerIdForSessionIdFromLocalCache: (sessionId: string) => (sessionId === 'session-from-tray' ? 'server-pets' : null),
+}));
+
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => featureId === 'pets.companion' && featureState.companionEnabled,
 }));
@@ -102,14 +124,22 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
 
 describe('DesktopPetOverlayRuntimeMount', () => {
     beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(12_000);
         sessionsState.value = [
             createSessionFixture({ id: 'session-running', active: true, thinking: true }),
         ];
+        listenDesktopPetOverlayShowMainWindowRequestedMock.mockResolvedValue(() => {});
+        executePetOverlayMainWindowActionMock.mockResolvedValue({ ok: true });
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         standardCleanup();
         desktopRuntimeProps.calls = [];
+        listenDesktopPetOverlayShowMainWindowRequestedMock.mockReset();
+        executePetOverlayMainWindowActionMock.mockReset();
+        createDefaultActionExecutorMock.mockClear();
         featureState.companionEnabled = true;
         accountSettingsState.current = {
             petsEnabled: true,
@@ -152,6 +182,34 @@ describe('DesktopPetOverlayRuntimeMount', () => {
         });
         expect((desktopRuntimeProps.calls[0]?.window as { width: number }).width).toBeGreaterThanOrEqual(320);
         expect((desktopRuntimeProps.calls[0]?.window as { height: number }).height).toBeGreaterThanOrEqual(280);
+    });
+
+    it('opens tray target sessions from native main-window requests in the main app runtime', async () => {
+        let requestHandler: ((payload: { targetSessionId?: string }) => void | Promise<void>) | null = null;
+        listenDesktopPetOverlayShowMainWindowRequestedMock.mockImplementation(async (handler) => {
+            requestHandler = handler;
+            return () => {};
+        });
+        const { DesktopPetOverlayRuntimeMount } = await import('./DesktopPetOverlayRuntimeMount');
+
+        await renderScreen(<DesktopPetOverlayRuntimeMount />);
+
+        expect(listenDesktopPetOverlayShowMainWindowRequestedMock).toHaveBeenCalledTimes(1);
+        expect(createDefaultActionExecutorMock).toHaveBeenCalledWith(expect.objectContaining({
+            resolveServerIdForSessionId: expect.any(Function),
+            openSession: expect.any(Function),
+        }));
+        expect(requestHandler).not.toBeNull();
+
+        await act(async () => {
+            await requestHandler?.({ targetSessionId: 'session-from-tray' });
+        });
+
+        expect(executePetOverlayMainWindowActionMock).toHaveBeenCalledWith(
+            'session.open',
+            { sessionId: 'session-from-tray' },
+            { defaultSessionId: 'session-from-tray' },
+        );
     });
 
     it('shows the desktop pet overlay when enabled even if the companion is idle', async () => {

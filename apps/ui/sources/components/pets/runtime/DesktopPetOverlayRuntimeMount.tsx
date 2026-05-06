@@ -1,16 +1,23 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
+import { useRouter } from 'expo-router';
 
 import {
     resolveDesktopPetOverlayGeometry,
 } from '@/components/pets/desktop/desktopPetOverlayGeometry';
+import {
+    listenDesktopPetOverlayShowMainWindowRequested,
+} from '@/components/pets/desktop/bridge/desktopPetOverlayBridge';
 import { DesktopPetOverlayRuntime } from '@/components/pets/desktop/runtime/DesktopPetOverlayRuntime';
 import { isDesktopPetOverlayWindowContext } from '@/components/pets/desktop/runtime/isDesktopPetOverlayWindowContext';
 import { resolveDesktopPetOverlayPolicy } from '@/components/pets/desktop/policy/resolveDesktopPetOverlayPolicy';
 import { buildPetCompanionActivityState } from '@/components/pets/state/buildPetCompanionActivityState';
 import { usePetCompanionActivityState } from '@/components/pets/state/usePetCompanionActivityState';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { useLocalSettings, useSettings } from '@/sync/domains/state/storage';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 
 function shouldShowDesktopPetOverlay(params: Readonly<{
@@ -23,6 +30,48 @@ function shouldShowDesktopPetOverlay(params: Readonly<{
         return params.activity.state === 'waiting' || params.activity.state === 'failed' || params.activity.state === 'review';
     }
     return params.activity.state !== 'idle' || params.activity.sessionId !== null;
+}
+
+function useDesktopPetOverlayMainWindowRequests(): void {
+    const router = useRouter();
+    const actionExecutor = React.useMemo(
+        () => createDefaultActionExecutor({
+            resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
+            openSession: (sessionId) => {
+                router.push((`/session/${sessionId}`) as never);
+            },
+        }),
+        [router],
+    );
+
+    React.useEffect(() => {
+        let active = true;
+        let unsubscribe: (() => void) | null = null;
+
+        listenDesktopPetOverlayShowMainWindowRequested((payload) => {
+            const sessionId = typeof payload.targetSessionId === 'string' ? payload.targetSessionId.trim() : '';
+            if (!sessionId) return;
+
+            fireAndForget(actionExecutor.execute(
+                'session.open',
+                { sessionId },
+                { defaultSessionId: sessionId },
+            ), {
+                tag: 'DesktopPetOverlayRuntimeMount.openRequestedSession',
+            });
+        }).then((nextUnsubscribe) => {
+            if (!active) {
+                nextUnsubscribe();
+                return;
+            }
+            unsubscribe = nextUnsubscribe;
+        }).catch(() => undefined);
+
+        return () => {
+            active = false;
+            unsubscribe?.();
+        };
+    }, [actionExecutor]);
 }
 
 export function DesktopPetOverlayRuntimeMount(): React.ReactElement | null {
@@ -38,6 +87,7 @@ function TauriDesktopPetOverlayRuntimeMount(): React.ReactElement {
     const localSettings = useLocalSettings();
     const companionEnabled = useFeatureEnabled('pets.companion');
     const activity = usePetCompanionActivityState();
+    useDesktopPetOverlayMainWindowRequests();
     const policy = React.useMemo(() => resolveDesktopPetOverlayPolicy({
         companionFeatureState: companionEnabled ? 'enabled' : 'disabled',
         accountSettings: settings,

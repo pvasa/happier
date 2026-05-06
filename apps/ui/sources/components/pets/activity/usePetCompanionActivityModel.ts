@@ -5,6 +5,7 @@ import {
     useAllSessions,
 } from '@/sync/domains/state/storage';
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
+import { derivePendingRequestFlagsFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { deriveSessionListMeaningfulActivityAt } from '@/sync/domains/session/listing/deriveSessionListActivity';
@@ -90,9 +91,12 @@ function buildSessionSignalsBySessionId(
             latestPendingMessageCreatedAt =
                 latestPendingMessageCreatedAt == null ? createdAt : Math.max(latestPendingMessageCreatedAt, createdAt);
         }
+        const pendingRequestFlags = derivePendingRequestFlagsFromSession(session, messages);
 
         signalsBySessionId[session.id] = {
             hasFailure: messages.some(hasMessageFailure),
+            hasPendingPermissionRequests: pendingRequestFlags.hasPendingPermissionRequests,
+            hasPendingUserActionRequests: pendingRequestFlags.hasPendingUserActionRequests,
             hasUnreadMessages: computeHasUnreadActivity({
                 sessionSeq: session.seq ?? 0,
                 pendingActivityAt: 0,
@@ -119,6 +123,7 @@ export function usePetCompanionActivityModel(input?: Readonly<{
 }>): PetCompanionActivityModel {
     const sessions = useAllSessions();
     const state = storage();
+    const [nowMs, setNowMs] = React.useState(() => Date.now());
     const selectedSessionId = React.useMemo(() => selectCompanionSessionId(sessions), [sessions]);
     const dismissedTrayItemKeys = input?.dismissedTrayItemKeys;
     const signalsBySessionId = React.useMemo(
@@ -126,10 +131,28 @@ export function usePetCompanionActivityModel(input?: Readonly<{
         [state, sessions],
     );
 
-    return React.useMemo(() => buildPetCompanionActivityModel({
+    const model = React.useMemo(() => buildPetCompanionActivityModel({
         sessions,
         selectedSessionId,
         signalsBySessionId,
         dismissedTrayItemKeys,
-    }), [dismissedTrayItemKeys, selectedSessionId, sessions, signalsBySessionId]);
+        nowMs,
+    }), [dismissedTrayItemKeys, nowMs, selectedSessionId, sessions, signalsBySessionId]);
+
+    React.useEffect(() => {
+        let nextExpiryAtMs: number | null = null;
+        for (const item of model.trayItems) {
+            if (typeof item.expiresAtMs !== 'number' || !Number.isFinite(item.expiresAtMs)) continue;
+            if (item.expiresAtMs <= nowMs) continue;
+            nextExpiryAtMs = nextExpiryAtMs === null ? item.expiresAtMs : Math.min(nextExpiryAtMs, item.expiresAtMs);
+        }
+        if (nextExpiryAtMs === null) return undefined;
+        const delayMs = Math.max(1, nextExpiryAtMs - nowMs + 1);
+        const timeout = setTimeout(() => {
+            setNowMs(Date.now());
+        }, delayMs);
+        return () => clearTimeout(timeout);
+    }, [model.trayItems, nowMs]);
+
+    return model;
 }
