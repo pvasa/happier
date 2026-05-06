@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useChangelog } from '@/hooks/inbox/useChangelog';
 import { useUpdates } from '@/hooks/inbox/useUpdates';
+import { resolveActivityAttentionSessions } from '@/activity/attention/activityAttentionSessions';
 import {
     useAllSessionListRenderablesForAttention,
     useAllSessionsForAttention,
@@ -19,7 +20,6 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { buildActivityBadgeState } from './buildActivityBadgeState';
 import { applyExpoNativeBadgeState } from './channels/applyExpoNativeBadgeState';
 import { applyTauriBadgeState } from './channels/applyTauriBadgeState';
-import { resolveActivityBadgeSessions } from './resolveActivityBadgeSessions';
 
 type ServerBadgeSnapshot = Readonly<{
     count: number;
@@ -118,7 +118,7 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
             return { count: 0, showNonNumericDot: false };
         }
 
-        const badgeSessions = resolveActivityBadgeSessions({
+        const badgeSessions = resolveActivityAttentionSessions({
             sessions,
             sessionRows: sessionListRenderables,
         });

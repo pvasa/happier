@@ -1,5 +1,8 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { deriveSessionReadState } from '@/sync/domains/session/readState/sessionReadState';
+import {
+    deriveActivityAttentionFlags,
+    resolveActivityAttentionSessions,
+} from '@/activity/attention/activityAttentionSessions';
 import { listPendingPermissionRequests, listPendingUserActionRequests, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
@@ -38,18 +41,15 @@ function normalizeBuildInboxSessionStateInput(input: BuildInboxSessionStateInput
 }
 
 function hasUnreadSessionAttention(session: InboxUnreadSession): boolean {
-    if ('metadataUnavailable' in session && session.metadataUnavailable === true) {
-        return false;
-    }
-    if ('hasUnreadMessages' in session && typeof session.hasUnreadMessages === 'boolean') {
-        return session.hasUnreadMessages;
-    }
-    return deriveSessionReadState(session) === 'unread';
+    return deriveActivityAttentionFlags(session, {
+        showPendingPermissionRequests: false,
+        showPendingUserActionRequests: false,
+        showQueuedUserInput: false,
+    }).hasUnread;
 }
 
 export function buildInboxSessionState(input: BuildInboxSessionStateInput): InboxSessionState {
     const { sessions, sessionRows } = normalizeBuildInboxSessionStateInput(input);
-    const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     const sessionsNeedingAttention: InboxSessionAttentionEntry[] = [];
     const attentionSessionIds = new Set<string>();
 
@@ -67,18 +67,7 @@ export function buildInboxSessionState(input: BuildInboxSessionStateInput): Inbo
         });
     }
 
-    const unreadCandidates: InboxUnreadSession[] = [];
-    const candidateSessionIds = new Set<string>();
-    for (const row of sessionRows) {
-        if (candidateSessionIds.has(row.id)) continue;
-        candidateSessionIds.add(row.id);
-        unreadCandidates.push(sessionsById.get(row.id) ?? row);
-    }
-    for (const session of sessions) {
-        if (candidateSessionIds.has(session.id)) continue;
-        candidateSessionIds.add(session.id);
-        unreadCandidates.push(session);
-    }
+    const unreadCandidates = resolveActivityAttentionSessions({ sessions, sessionRows });
 
     const unreadSessions: InboxUnreadSession[] = [];
     const unreadSessionIds = new Set<string>();
