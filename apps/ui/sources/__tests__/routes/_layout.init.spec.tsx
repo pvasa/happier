@@ -757,7 +757,7 @@ describe('app/_layout init resilience', () => {
         expect(screen.findAllByTestId('root-shell-app-update-status-tag').length).toBeGreaterThan(0);
     });
 
-    it('does not render root shell update chrome in the desktop pet overlay window', async () => {
+    it('restores sync state in the desktop pet overlay window without rendering root shell update chrome', async () => {
         bootCredentialsState.value = { token: 'token', secret: 'secret' };
         shellChromeState.isTauriDesktop = true;
         shellChromeState.isTablet = false;
@@ -767,6 +767,6 @@ describe('app/_layout init resilience', () => {
 
         expect(screen.findAllByTestId('desktop-fallback-shell-chrome')).toHaveLength(0);
         expect(screen.findAllByTestId('root-shell-app-update-status-tag')).toHaveLength(0);
-        expect(syncRestoreMock).not.toHaveBeenCalled();
+        expect(syncRestoreMock).toHaveBeenCalledWith({ token: 'token', secret: 'secret' });
     });
 });

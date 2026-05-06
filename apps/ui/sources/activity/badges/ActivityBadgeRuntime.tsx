@@ -5,7 +5,13 @@ import { Platform } from 'react-native';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useChangelog } from '@/hooks/inbox/useChangelog';
 import { useUpdates } from '@/hooks/inbox/useUpdates';
-import { useAllSessionListRenderables, useAllSessions, useFriendRequests, useIsDataReady, useLocalSettings } from '@/sync/domains/state/storage';
+import {
+    useAllSessionListRenderablesForAttention,
+    useAllSessionsForAttention,
+    useFriendRequests,
+    useIsDataReady,
+    useLocalSettings,
+} from '@/sync/domains/state/storage';
 import { serverFetch } from '@/sync/http/client';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -13,6 +19,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { buildActivityBadgeState } from './buildActivityBadgeState';
 import { applyExpoNativeBadgeState } from './channels/applyExpoNativeBadgeState';
 import { applyTauriBadgeState } from './channels/applyTauriBadgeState';
+import { resolveActivityBadgeSessions } from './resolveActivityBadgeSessions';
 
 type ServerBadgeSnapshot = Readonly<{
     count: number;
@@ -49,8 +56,8 @@ function canUseServerBadgeSnapshot(options: ActivityBadgeSessionOptions): boolea
 }
 
 export function ActivityBadgeRuntime(): React.ReactElement | null {
-    const sessions = useAllSessions();
-    const sessionListRenderables = useAllSessionListRenderables();
+    const sessions = useAllSessionsForAttention();
+    const sessionListRenderables = useAllSessionListRenderablesForAttention();
     const isDataReady = useIsDataReady();
     const friendRequests = useFriendRequests();
     const localSettings = useLocalSettings();
@@ -111,7 +118,10 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
             return { count: 0, showNonNumericDot: false };
         }
 
-        const badgeSessions = sessionListRenderables.length > 0 ? sessionListRenderables : sessions;
+        const badgeSessions = resolveActivityBadgeSessions({
+            sessions,
+            sessionRows: sessionListRenderables,
+        });
         return buildActivityBadgeState({
             sessions: badgeSessions,
             numericInboxCount:
@@ -135,9 +145,11 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
         updateAvailable,
     ]);
 
+    const hasLocalBadgeSource = sessions.length > 0 || sessionListRenderables.length > 0;
+
     const badgeState = React.useMemo(() => {
         if (!badgesEnabled) return localBadgeState;
-        if (isDataReady) return localBadgeState;
+        if (isDataReady || hasLocalBadgeSource) return localBadgeState;
         if (
             serverSnapshotAllowed
             && serverBadgeSnapshot
@@ -151,6 +163,7 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
         activeServer.generation,
         activeServer.serverId,
         badgesEnabled,
+        hasLocalBadgeSource,
         isDataReady,
         localBadgeState,
         serverBadgeSnapshot,

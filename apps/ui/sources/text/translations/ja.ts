@@ -5663,6 +5663,7 @@ localTailscale: {
         cannotDisplayBinary: "バイナリファイルの内容を表示できません",
         diff: "差分",
       file: "ファイル",
+      markdown: "Markdown",
     diffModes: {
       pending: "保留中",
       included: "含めた",

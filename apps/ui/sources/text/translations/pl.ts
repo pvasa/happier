@@ -5419,6 +5419,7 @@ export const pl: TranslationStructure = {
         cannotDisplayBinary: "Nie można wyświetlić zawartości pliku binarnego",
         diff: "Różnice",
       file: "Plik",
+      markdown: "Markdown",
     diffModes: {
       pending: "Oczekujące",
       included: "Uwzględnione",

@@ -1,5 +1,12 @@
 import { useUpdates } from './useUpdates';
-import { useAllSessionListRenderables, useAllSessions, useArtifacts, useFeedItems, useFriendRequests, useRequestedFriends } from '@/sync/domains/state/storage';
+import {
+    useAllSessionListRenderablesForAttention,
+    useAllSessionsForAttention,
+    useArtifacts,
+    useFeedItems,
+    useFriendRequests,
+    useRequestedFriends,
+} from '@/sync/domains/state/storage';
 import { useChangelog } from './useChangelog';
 import { buildInboxSessionState } from './buildInboxSessionState';
 
@@ -11,8 +18,8 @@ export function useInboxHasContent(): boolean {
     const feedItems = useFeedItems();
     const changelog = useChangelog();
     const artifacts = useArtifacts();
-    const sessions = useAllSessions();
-    const sessionRows = useAllSessionListRenderables();
+    const sessions = useAllSessionsForAttention();
+    const sessionRows = useAllSessionListRenderablesForAttention();
     const { unreadSessions, sessionsNeedingAttention } = buildInboxSessionState({ sessions, sessionRows });
 
     const hasOpenApprovals = artifacts.some(

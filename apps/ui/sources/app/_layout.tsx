@@ -683,7 +683,7 @@ function AppBoot(props: {
                 }
                 await sodium.ready;
                 credentials = await resolveBootCredentials(Platform.OS);
-                if (credentials && !isDesktopPetOverlayWindow) {
+                if (credentials) {
                     try {
                         await syncRestore(credentials);
                     } catch (error) {

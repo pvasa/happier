@@ -6,10 +6,14 @@ const { mockRequest, mockResolveContext, mockRuntimeFetchWithServerReachability,
     mockRuntimeFetchWithServerReachability: vi.fn(),
     mockStorageState: {
         sessions: {},
+        sessionListRenderables: {},
         applySessions: vi.fn(),
+        applySessionListRenderablePatches: vi.fn(),
     } as {
         sessions: Record<string, any>;
+        sessionListRenderables: Record<string, any>;
         applySessions: ReturnType<typeof vi.fn>;
+        applySessionListRenderablePatches: ReturnType<typeof vi.fn>;
     },
 }));
 
@@ -69,7 +73,9 @@ describe('sessionSetManualReadStateWithServerScope', () => {
         mockResolveContext.mockReset();
         mockRuntimeFetchWithServerReachability.mockReset();
         mockStorageState.sessions = {};
+        mockStorageState.sessionListRenderables = {};
         mockStorageState.applySessions.mockReset();
+        mockStorageState.applySessionListRenderablePatches.mockReset();
         resetSessionManualUnreadHoldsForTests();
         clearActiveViewingSessionId('sid-1');
     });
@@ -179,6 +185,41 @@ describe('sessionSetManualReadStateWithServerScope', () => {
                 }),
             }),
         ]);
+    });
+
+    it('applies returned read cursors to session-list renderables without waiting for hydration', async () => {
+        mockStorageState.sessionListRenderables = {
+            'sid-1': {
+                id: 'sid-1',
+                seq: 7,
+                lastViewedSessionSeq: 6,
+                hasUnreadMessages: true,
+            },
+        };
+        mockResolveContext.mockResolvedValue({
+            scope: 'active',
+            targetServerUrl: 'https://active.example',
+            targetServerId: 'server-a',
+            token: 'tok',
+            timeoutMs: 1000,
+            encryption: null,
+        });
+        mockRequest.mockResolvedValue(makeResponse({
+            ok: true,
+            json: { success: true, state: 'read', lastViewedSessionSeq: 7, didChange: true },
+        }));
+
+        const res = await sessionSetManualReadStateWithServerScope('sid-1', 'read', { serverId: 'server-a' });
+
+        expect(res).toEqual({ success: true, readState: 'read', lastViewedSessionSeq: 7, didChange: true });
+        expect(mockStorageState.applySessions).not.toHaveBeenCalled();
+        expect(mockStorageState.applySessionListRenderablePatches).toHaveBeenCalledWith([{
+            sessionId: 'sid-1',
+            patch: {
+                lastViewedSessionSeq: 7,
+                hasUnreadMessages: false,
+            },
+        }]);
     });
 
     it('registers an active-view hold after marking the current session unread', async () => {

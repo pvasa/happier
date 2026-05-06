@@ -4289,6 +4289,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         cannotDisplayBinary: '無法顯示二進位檔案內容',
         diff: '差異',
         file: '檔案',
+        markdown: 'Markdown',
         diffModes: {
             pending: '待處理',
             included: '已包含',

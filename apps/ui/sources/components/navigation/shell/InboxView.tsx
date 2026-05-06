@@ -2,8 +2,8 @@ import * as React from 'react';
 import { View, ScrollView, ActivityIndicator } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
-    useAllSessionListRenderables,
-    useAllSessions,
+    useAllSessionListRenderablesForAttention,
+    useAllSessionsForAttention,
     useArtifacts,
     useFeedItems,
     useFeedLoaded,
@@ -93,8 +93,8 @@ export const InboxView = React.memo(({}: InboxViewProps) => {
     const friendsEnabled = useFriendsEnabled();
     const friendsIdentityReadiness = useFriendsIdentityReadiness();
     const friendsIdentityReady = friendsIdentityReadiness.isReady;
-    const sessions = useAllSessions();
-    const sessionRows = useAllSessionListRenderables();
+    const sessions = useAllSessionsForAttention();
+    const sessionRows = useAllSessionListRenderablesForAttention();
     const { unreadSessions, sessionsNeedingAttention } = React.useMemo(
         () => buildInboxSessionState({ sessions, sessionRows }),
         [sessionRows, sessions],

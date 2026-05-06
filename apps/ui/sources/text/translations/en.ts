@@ -5019,6 +5019,7 @@ export const en = {
             cannotDisplayBinary: 'Cannot display binary file content',
             diff: 'Diff',
             file: 'File',
+            markdown: 'Markdown',
             diffModes: {
                 pending: 'Pending',
                 included: 'Included',

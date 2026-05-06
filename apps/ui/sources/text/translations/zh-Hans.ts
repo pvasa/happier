@@ -5192,6 +5192,7 @@ export const zhHans: TranslationStructure = {
         cannotDisplayBinary: "无法显示二进制文件内容",
         diff: "差异",
       file: "文件",
+      markdown: "Markdown",
     diffModes: {
       pending: "待处理",
       included: "已包含",

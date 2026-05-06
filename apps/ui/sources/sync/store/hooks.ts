@@ -557,12 +557,24 @@ export function useAllSessions(): Session[] {
   );
 }
 
+export function useAllSessionsForAttention(): Session[] {
+  return getStorage()(
+    useShallow((state) => sortValuesByUpdatedAtDescending(state.sessions))
+  );
+}
+
 export function useAllSessionListRenderables(): SessionListRenderableSession[] {
   return getStorage()(
     useShallow((state) => {
       if (!state.isDataReady) return [];
       return sortValuesByUpdatedAtDescending(state.sessionListRenderables);
     })
+  );
+}
+
+export function useAllSessionListRenderablesForAttention(): SessionListRenderableSession[] {
+  return getStorage()(
+    useShallow((state) => sortValuesByUpdatedAtDescending(state.sessionListRenderables))
   );
 }
 

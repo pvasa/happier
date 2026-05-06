@@ -31,6 +31,8 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
     const allMachines = [] as ReturnType<StorageModule['useAllMachines']>;
     const allSessions = [] as ReturnType<StorageModule['useAllSessions']>;
     const allSessionListRenderables = [] as ReturnType<StorageModule['useAllSessionListRenderables']>;
+    const allAttentionSessions = [] as ReturnType<StorageModule['useAllSessionsForAttention']>;
+    const allAttentionSessionListRenderables = [] as ReturnType<StorageModule['useAllSessionListRenderablesForAttention']>;
     const socketStatus = {
         status: 'disconnected',
         lastConnectedAt: null,
@@ -75,6 +77,8 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useAllMachines: () => allMachines,
         useAllSessions: () => allSessions,
         useAllSessionListRenderables: () => allSessionListRenderables,
+        useAllSessionsForAttention: () => allAttentionSessions,
+        useAllSessionListRenderablesForAttention: () => allAttentionSessionListRenderables,
         useMachine: () => null,
         useSocketStatus: () => socketStatus,
         useEndpointConnectivity: () => endpointConnectivity,

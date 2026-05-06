@@ -1,4 +1,3 @@
-import { isHiddenSystemSession } from '@happier-dev/protocol';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { SessionListRenderableSession } from './sessionListRenderable';
 import { t } from '@/text';
@@ -7,6 +6,7 @@ import {
     resolveDisplayPathForSessionFromState,
     type SessionMachineTargetState,
 } from '@/sync/ops/sessionMachineTarget';
+import { isUserFacingSession } from './isUserFacingSession';
 import { resolveSessionWorkspacePresentation } from './sessionWorkspacePresentation';
 
 export type SessionListViewItem =
@@ -358,7 +358,7 @@ export function buildSessionListViewData(
 
     Object.values(sessions).forEach((session) => {
         // Hide system sessions from user-facing lists by default.
-        if (session.metadata?.hiddenSystemSession === true || isHiddenSystemSession({ metadata: session.metadata as never })) {
+        if (!isUserFacingSession(session)) {
             return;
         }
         const isSharedSession = typeof session.owner === 'string' && session.owner.trim().length > 0;

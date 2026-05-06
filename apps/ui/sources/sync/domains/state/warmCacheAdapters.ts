@@ -10,6 +10,31 @@ const EMPTY_WARM_CACHE_ENTRIES: Record<string, never> = {};
 const EMPTY_SESSION_LIST_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRIES as Record<string, SessionListCacheEntryV1>;
 const EMPTY_MACHINE_DISPLAY_CACHE_ENTRIES = EMPTY_WARM_CACHE_ENTRIES as Record<string, MachineDisplayCacheEntryV1>;
 
+function normalizeNonNegativeInteger(value: number | null | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.trunc(value))
+        : null;
+}
+
+function normalizeBoolean(value: boolean | undefined): boolean | undefined {
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+function hasNonEmptyString(value: string | null | undefined): boolean {
+    return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function isSessionListCacheEntryMetadataUsable(entry: SessionListCacheEntryV1 | undefined): entry is SessionListCacheEntryV1 {
+    if (!entry) return false;
+    return hasNonEmptyString(entry.name)
+        || hasNonEmptyString(entry.path)
+        || hasNonEmptyString(entry.host)
+        || hasNonEmptyString(entry.machineId)
+        || hasNonEmptyString(entry.flavor)
+        || entry.directSessionV1 != null
+        || entry.hiddenSystemSession === true;
+}
+
 function areDirectSessionCacheEntriesEqual(
     next: SessionListCacheEntryV1['directSessionV1'],
     previous: SessionListCacheEntryV1['directSessionV1'],
@@ -24,13 +49,15 @@ function areSessionListCacheEntriesEqual(
     previousEntry: SessionListCacheEntryV1,
 ): boolean {
     return (
-        nextEntry.metadataVersion === previousEntry.metadataVersion
+        nextEntry.seq === previousEntry.seq
+        && nextEntry.metadataVersion === previousEntry.metadataVersion
         && nextEntry.agentStateVersion === previousEntry.agentStateVersion
         && nextEntry.updatedAt === previousEntry.updatedAt
         && nextEntry.createdAt === previousEntry.createdAt
         && nextEntry.active === previousEntry.active
         && nextEntry.activeAt === previousEntry.activeAt
         && nextEntry.archivedAt === previousEntry.archivedAt
+        && nextEntry.lastViewedSessionSeq === previousEntry.lastViewedSessionSeq
         && nextEntry.pendingCount === previousEntry.pendingCount
         && nextEntry.pendingVersion === previousEntry.pendingVersion
         && nextEntry.accessLevel === previousEntry.accessLevel
@@ -47,6 +74,7 @@ function areSessionListCacheEntriesEqual(
         && nextEntry.keepVisibleWhenInactive === previousEntry.keepVisibleWhenInactive
         && nextEntry.hasPendingPermissionRequests === previousEntry.hasPendingPermissionRequests
         && nextEntry.hasPendingUserActionRequests === previousEntry.hasPendingUserActionRequests
+        && nextEntry.hasUnreadMessages === previousEntry.hasUnreadMessages
     );
 }
 
@@ -78,9 +106,10 @@ function countOwnEntries(record: Readonly<Record<string, unknown>> | null | unde
 }
 
 export function buildSessionListRenderableFromCacheEntry(entry: SessionListCacheEntryV1): SessionListRenderableSession {
+    const metadataUsable = isSessionListCacheEntryMetadataUsable(entry);
     return {
         id: entry.sessionId,
-        seq: 0,
+        seq: normalizeNonNegativeInteger(entry.seq) ?? 0,
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,
         active: entry.active,
@@ -88,9 +117,10 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
         archivedAt: entry.archivedAt,
         pendingCount: entry.pendingCount,
         pendingVersion: entry.pendingVersion,
+        lastViewedSessionSeq: normalizeNonNegativeInteger(entry.lastViewedSessionSeq),
         metadataVersion: entry.metadataVersion,
         agentStateVersion: entry.agentStateVersion,
-        metadata: {
+        metadata: metadataUsable ? {
             name: entry.name,
             summaryText: entry.summaryText ?? null,
             path: entry.path,
@@ -100,7 +130,7 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
             flavor: entry.flavor ?? null,
             directSessionV1: entry.directSessionV1 ?? null,
             hiddenSystemSession: entry.hiddenSystemSession === true,
-        },
+        } : null,
         thinking: false,
         thinkingAt: 0,
         presence: entry.active ? 'online' : entry.activeAt,
@@ -109,6 +139,8 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
         keepVisibleWhenInactive: entry.keepVisibleWhenInactive === true,
         hasPendingPermissionRequests: entry.hasPendingPermissionRequests === true,
         hasPendingUserActionRequests: entry.hasPendingUserActionRequests === true,
+        hasUnreadMessages: normalizeBoolean(entry.hasUnreadMessages),
+        metadataUnavailable: !metadataUsable,
     };
 }
 
@@ -116,7 +148,9 @@ function shouldPreserveSessionMetadataFromPreviousEntry(
     session: SessionListRenderableSession,
     previousEntry: SessionListCacheEntryV1 | undefined,
 ): previousEntry is SessionListCacheEntryV1 {
-    return session.metadata == null && Boolean(previousEntry);
+    return session.metadata == null
+        && session.metadataUnavailable !== true
+        && isSessionListCacheEntryMetadataUsable(previousEntry);
 }
 
 function shouldPreserveSessionAgentStateFromPreviousEntry(
@@ -130,15 +164,28 @@ function shouldPreserveSessionAgentStateFromPreviousEntry(
     );
 }
 
+function shouldPreserveSessionReadStateFromPreviousEntry(
+    session: SessionListRenderableSession,
+    previousEntry: SessionListCacheEntryV1 | undefined,
+): previousEntry is SessionListCacheEntryV1 {
+    return (
+        typeof session.lastViewedSessionSeq !== 'number'
+        && typeof session.hasUnreadMessages !== 'boolean'
+        && Boolean(previousEntry)
+    );
+}
+
 export function buildSessionListCacheEntryFromRenderable(
     session: SessionListRenderableSession,
     previousEntry?: SessionListCacheEntryV1,
 ): SessionListCacheEntryV1 {
     const preserveMetadata = shouldPreserveSessionMetadataFromPreviousEntry(session, previousEntry);
     const preserveAgentState = shouldPreserveSessionAgentStateFromPreviousEntry(session, previousEntry);
+    const preserveReadState = shouldPreserveSessionReadStateFromPreviousEntry(session, previousEntry);
 
     const nextEntry: SessionListCacheEntryV1 = {
         sessionId: session.id,
+        seq: preserveReadState ? previousEntry.seq : normalizeNonNegativeInteger(session.seq) ?? 0,
         metadataVersion: preserveMetadata ? previousEntry.metadataVersion : session.metadataVersion,
         agentStateVersion: preserveAgentState ? previousEntry.agentStateVersion : session.agentStateVersion,
         updatedAt: session.updatedAt,
@@ -146,6 +193,9 @@ export function buildSessionListCacheEntryFromRenderable(
         active: session.active,
         activeAt: session.activeAt,
         archivedAt: session.archivedAt ?? null,
+        lastViewedSessionSeq: preserveReadState
+            ? previousEntry.lastViewedSessionSeq ?? null
+            : normalizeNonNegativeInteger(session.lastViewedSessionSeq),
         pendingCount: session.pendingCount,
         pendingVersion: session.pendingVersion,
         accessLevel: session.accessLevel,
@@ -172,6 +222,9 @@ export function buildSessionListCacheEntryFromRenderable(
             : typeof session.hasPendingUserActionRequests === 'boolean'
                 ? session.hasPendingUserActionRequests
                 : undefined,
+        hasUnreadMessages: preserveReadState
+            ? normalizeBoolean(previousEntry.hasUnreadMessages)
+            : normalizeBoolean(session.hasUnreadMessages),
     };
 
     return previousEntry && areSessionListCacheEntriesEqual(nextEntry, previousEntry) ? previousEntry : nextEntry;

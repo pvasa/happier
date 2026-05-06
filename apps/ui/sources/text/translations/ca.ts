@@ -5012,6 +5012,7 @@ deps: {
             cannotDisplayBinary: 'No es pot mostrar el contingut del fitxer binari',
             diff: 'Diferències',
           file: 'Fitxer',
+          markdown: 'Markdown',
         diffModes: {
             pending: 'Pendent',
             included: 'Inclòs',

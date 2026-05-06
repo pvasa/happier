@@ -81,6 +81,16 @@ function applyManualReadStateToLocalSession(params: Readonly<{
     lastViewedSessionSeq: number | null;
 }>): void {
     const state = storage.getState();
+    if (state.sessionListRenderables?.[params.sessionId]) {
+        state.applySessionListRenderablePatches?.([{
+            sessionId: params.sessionId,
+            patch: {
+                lastViewedSessionSeq: params.lastViewedSessionSeq,
+                hasUnreadMessages: params.readState === 'unread',
+            },
+        }]);
+    }
+
     const session = state.sessions[params.sessionId];
     if (!session) return;
 

@@ -3,6 +3,7 @@ import { V2SessionListResponseSchema, type V2SessionListResponse } from '@happie
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { serverFetch } from '@/sync/http/client';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
 import { reportNewAgentRequestsFromSessionTransition } from '@/voice/context/reportNewAgentRequestsFromSessionTransition';
 import { runTasksWithLimit } from '@/sync/runtime/orchestration/runTasksWithLimit';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
@@ -12,6 +13,7 @@ import {
     type SessionListRenderableMetadata,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { SessionListCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
+import { isSessionListCacheEntryMetadataUsable } from '@/sync/domains/state/warmCacheAdapters';
 import {
     createSessionDataKeyHydrationPlan,
     hydrateSessionDataKeys,
@@ -108,6 +110,12 @@ function normalizeAccessLevel(accessLevel: unknown): 'view' | 'edit' | 'admin' |
     return accessLevel === 'view' || accessLevel === 'edit' || accessLevel === 'admin' ? accessLevel : undefined;
 }
 
+function normalizeLastViewedSessionSeq(value: number | null | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.trunc(value))
+        : null;
+}
+
 function buildRenderableFromRowAndCache(
     row: SessionListRow,
     cachedEntry: SessionListCacheEntryV1 | undefined,
@@ -119,7 +127,7 @@ function buildRenderableFromRowAndCache(
     const existingMetadataMatches = existingSession?.metadataVersion === row.metadataVersion
         && existingRenderable?.metadata != null;
     const existingAgentStateMatches = existingSession?.agentStateVersion === row.agentStateVersion;
-    const metadataFromCache: SessionListRenderableMetadata | null = cachedEntry
+    const metadataFromCache: SessionListRenderableMetadata | null = isSessionListCacheEntryMetadataUsable(cachedEntry)
         ? {
             name: cachedEntry.name,
             summaryText: cachedEntry.summaryText ?? null,
@@ -158,6 +166,13 @@ function buildRenderableFromRowAndCache(
                 : existingAgentStateMatches
                     ? existingRenderable?.hasPendingUserActionRequests === true
                     : undefined;
+    const lastViewedSessionSeq = normalizeLastViewedSessionSeq(row.lastViewedSessionSeq);
+    const hasUnreadMessages = computeHasUnreadActivity({
+        sessionSeq: row.seq ?? 0,
+        pendingActivityAt: 0,
+        lastViewedSessionSeq: lastViewedSessionSeq ?? undefined,
+        lastViewedPendingActivityAt: undefined,
+    });
 
     return {
         id: row.id,
@@ -169,6 +184,7 @@ function buildRenderableFromRowAndCache(
         archivedAt: row.archivedAt ?? null,
         pendingCount: row.pendingCount,
         pendingVersion: row.pendingVersion,
+        lastViewedSessionSeq,
         metadataVersion: useStaleCacheMetadata
             ? staleCacheMetadataVersion
             : row.metadataVersion,
@@ -181,6 +197,7 @@ function buildRenderableFromRowAndCache(
         canApprovePermissions: row.share?.canApprovePermissions ?? undefined,
         hasPendingPermissionRequests,
         hasPendingUserActionRequests,
+        hasUnreadMessages,
     };
 }
 

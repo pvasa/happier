@@ -32,8 +32,9 @@ function readSessionFlag(
 
 function hasSessionBadgeAttention(session: ActivityBadgeSession, options?: ActivityBadgeSessionOptions): boolean {
     const isSessionActive = session.active === true;
+    const metadataUnavailable = 'metadataUnavailable' in session && session.metadataUnavailable === true;
 
-    if (options?.showUnread !== false) {
+    if (!metadataUnavailable && options?.showUnread !== false) {
         const renderedUnread = readSessionFlag(session, 'hasUnreadMessages');
         const hasUnread = renderedUnread !== null
             ? renderedUnread

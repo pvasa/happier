@@ -5410,6 +5410,7 @@ export const es: TranslationStructure = {
         cannotDisplayBinary: "No se puede mostrar el contenido del archivo binario",
         diff: "Diferencias",
       file: "Archivo",
+      markdown: "Markdown",
     diffModes: {
       pending: "Pendiente",
       included: "Incluido",

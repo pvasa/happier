@@ -5405,6 +5405,7 @@ export const ru: TranslationStructure = {
         cannotDisplayBinary: "Невозможно отобразить содержимое бинарного файла",
         diff: "Различия",
       file: "Файл",
+      markdown: "Markdown",
     diffModes: {
       pending: "Ожидает",
       included: "Включено",
