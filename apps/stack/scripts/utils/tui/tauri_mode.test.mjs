@@ -135,6 +135,28 @@ test('resolveTauriPaneSpawnConfig can pin the TUI-orchestrated Expo port and ski
   assert.equal(env.HAPPIER_STACK_TAURI_WAIT_FOR_EXPO, '0');
 });
 
+test('buildTauriPaneEnv can force a clean Expo cache for TUI-managed Tauri runs', () => {
+  const env = tauriMode.buildTauriPaneEnv({
+    env: { PATH: '/usr/bin:/bin' },
+    forceExpoClearCache: true,
+  });
+
+  assert.equal(env.HAPPIER_STACK_TUI, '1');
+  assert.equal(env.HAPPIER_STACK_EXPO_CLEAR_CACHE, '1');
+});
+
+test('buildTauriPaneEnv preserves an explicit Expo cache opt-out', () => {
+  const env = tauriMode.buildTauriPaneEnv({
+    env: {
+      PATH: '/usr/bin:/bin',
+      HAPPIER_STACK_EXPO_CLEAR_CACHE: '0',
+    },
+    forceExpoClearCache: true,
+  });
+
+  assert.equal(env.HAPPIER_STACK_EXPO_CLEAR_CACHE, '0');
+});
+
 test('waitForTauriPaneExpoReady waits for the TUI runtime Expo port to become reachable', async () => {
   assert.equal(typeof tauriMode.waitForTauriPaneExpoReady, 'function');
 

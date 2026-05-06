@@ -579,7 +579,7 @@ async function main() {
   // In TUI mode, we intentionally do not forward keyboard input to the child process (stdin is ignored),
   // so any interactive prompts inside the child would deadlock.
   // Mark the child env so dependency installers can auto-approve safe prompts (Corepack yarn downloads).
-  const childEnv = buildTauriPaneEnv({ env: process.env });
+  const childEnv = buildTauriPaneEnv({ env: process.env, forceExpoClearCache: withTauri });
   let child = null;
 
   const spawnForwardedChild = () => {

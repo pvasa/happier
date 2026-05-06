@@ -46,13 +46,17 @@ export function resolveTauriPaneInvocation({ rootDir, env = process.env } = {}) 
   };
 }
 
-export function buildTauriPaneEnv({ env = process.env, resolveUserHomeDir } = {}) {
-  return {
+export function buildTauriPaneEnv({ env = process.env, resolveUserHomeDir, forceExpoClearCache = false } = {}) {
+  const nextEnv = {
     ...buildTauriRuntimeEnv({ env, resolveUserHomeDir }),
     HAPPIER_STACK_TUI: '1',
     COREPACK_ENABLE_AUTO_PIN: '0',
     COREPACK_ENABLE_STRICT: '0',
   };
+  if (forceExpoClearCache && !String(nextEnv.HAPPIER_STACK_EXPO_CLEAR_CACHE ?? '').trim()) {
+    nextEnv.HAPPIER_STACK_EXPO_CLEAR_CACHE = '1';
+  }
+  return nextEnv;
 }
 
 export function resolveTauriPaneLaunchEnv({
