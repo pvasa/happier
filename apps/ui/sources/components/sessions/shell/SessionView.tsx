@@ -86,6 +86,12 @@ import { resolveHappierReplayConfig } from '@/sync/domains/session/resume/happie
 import { buildLiveSessionAuthoringContext } from '@/components/sessions/authoring/context/buildLiveSessionAuthoringContext';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { resolveSessionComposerStateFromAuthoringContext } from '@/components/sessions/authoring/context/resolveSessionComposerStateFromAuthoringContext';
+import {
+    resolveSessionViewAvailableWidth,
+    resolveSessionViewContentBottomSpacing,
+    SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
+    SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX,
+} from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
 import { isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/deriveSessionSubagentCounts';
@@ -99,7 +105,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { usePathname, useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
-import { ActivityIndicator, Platform, Pressable, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { sessionSwitch } from '@/sync/ops';
@@ -118,6 +124,7 @@ import { countEnabledAutomationsLinkedToSession } from '@/sync/domains/automatio
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
+import { layout } from '@/components/ui/layout/layout';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
 import { useAttachmentDraftManager } from '@/components/sessions/attachments/useAttachmentDraftManager';
@@ -749,6 +756,7 @@ function SessionViewLoaded({
         [deviceType],
     );
     const { width: windowWidth } = useWindowDimensions();
+    const [measuredContentWidth, setMeasuredContentWidth] = React.useState<number | null>(null);
     // Treat multi-pane panels as enabled unless explicitly disabled. `useLocalSetting` can return
     // `undefined` during hydration; failing closed here causes deep links like `?right=git` to be
     // ignored and makes the UI feel broken on first load.
@@ -2250,6 +2258,27 @@ function SessionViewLoaded({
         </View>
     ) : null;
 
+    const handleContentLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const nextWidth = Math.trunc(event.nativeEvent.layout.width);
+        if (!Number.isFinite(nextWidth) || nextWidth <= 0) return;
+        setMeasuredContentWidth((currentWidth) => (
+            currentWidth === nextWidth ? currentWidth : nextWidth
+        ));
+    }, []);
+    const contentPaddingBottom = resolveSessionViewContentBottomSpacing({
+        chatBottomSpacing,
+        safeAreaBottomPx: safeArea.bottom,
+        availableWidthPx: resolveSessionViewAvailableWidth({
+            measuredContentWidthPx: measuredContentWidth,
+            windowWidthPx: windowWidth,
+        }),
+        contentMaxWidthPx: layout.maxWidth,
+        defaultContentBottomGapPx: (isRunningOnMac() || Platform.OS === 'web')
+            ? SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX
+            : 0,
+        inputOuterBottomPaddingPx: SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
+    });
+
     const main = (
         <>
             {/* CLI Version Warning Overlay - Subtle centered pill */}
@@ -2286,12 +2315,11 @@ function SessionViewLoaded({
 
             {/* Main content area - no padding since header is overlay */}
             <View
+                onLayout={handleContentLayout}
                 style={{
                     flexBasis: 0,
                     flexGrow: 1,
-                    paddingBottom: chatBottomSpacing === 'none'
-                        ? 0
-                        : safeArea.bottom + ((isRunningOnMac() || Platform.OS === 'web') ? 32 : 0),
+                    paddingBottom: contentPaddingBottom,
                 }}
             >
                 <AgentContentView

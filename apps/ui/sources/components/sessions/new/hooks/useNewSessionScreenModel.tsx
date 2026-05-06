@@ -598,7 +598,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         }
         setSelectedProfileId(nextProfileId);
     }, [initialImplicitProfileId, selectedProfileId, useProfiles]);
-    const { preflightModels, modelOptions, probe: modelOptionsProbeState } = useNewSessionPreflightModelsState({
+    const { preflightModels, preflightModelsTargetKey, modelOptions, probe: modelOptionsProbeState } = useNewSessionPreflightModelsState({
         backendTarget,
         selectedMachineId,
         capabilityServerId,
@@ -1154,18 +1154,25 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         const core = getAgentCore(agentType);
         const next = coerceNewSessionModelMode({
             modelMode: String(modelMode),
-            modelConfig: { defaultMode: core.model.defaultMode, allowedModes: core.model.allowedModes, supportsFreeform: core.model.supportsFreeform },
+            modelConfig: {
+                defaultMode: core.model.defaultMode,
+                allowedModes: core.model.allowedModes,
+                supportsFreeform: core.model.supportsFreeform,
+                dynamicProbe: core.model.dynamicProbe ?? 'auto',
+            },
             preflight: preflightModels
                 ? {
                     availableModels: preflightModels.availableModels.map((m) => ({ id: m.id })),
                     supportsFreeform: preflightModels.supportsFreeform === true,
+                    targetKey: preflightModelsTargetKey,
                 }
                 : null,
+            currentTargetKey: selectedBackendEntry?.targetKey ?? selectedBackendTargetKey,
         });
         if (next !== modelMode) {
             setModelMode(next as ModelMode);
         }
-    }, [agentType, modelMode, preflightModels]);
+    }, [agentType, modelMode, preflightModels, preflightModelsTargetKey, selectedBackendEntry?.targetKey, selectedBackendTargetKey]);
 
     const {
         agentPickerOptions,

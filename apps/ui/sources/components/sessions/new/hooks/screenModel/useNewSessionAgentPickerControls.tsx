@@ -31,6 +31,25 @@ type EngineSelection = Readonly<{
 
 const FAVORITE_MODELS_AGENT_PICKER_OPTION_ID = 'favorite-models';
 
+function areConfigOverridesEqual(
+    left: Readonly<Record<string, string>>,
+    right: Readonly<Record<string, string>>,
+): boolean {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+        if (left[key] !== right[key]) return false;
+    }
+    return true;
+}
+
+function areEngineSelectionsEqual(left: EngineSelection, right: EngineSelection): boolean {
+    return left.modelId === right.modelId
+        && left.sessionModeId === right.sessionModeId
+        && areConfigOverridesEqual(left.configOverrides, right.configOverrides);
+}
+
 function FavoriteModelsPickerIcon() {
     const { theme } = useUnistyles();
     return (
@@ -109,6 +128,10 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
     }, [compatibleBackendTargetKeys, params, profileForAgentSelection]);
 
     const engineSelectionByTargetKeyRef = React.useRef(new Map<string, EngineSelection>());
+    const pendingAppliedSelectionRef = React.useRef<Readonly<{
+        targetKey: string;
+        selection: EngineSelection;
+    }> | null>(null);
 
     const buildInitialEngineSelection = React.useCallback((targetKey: string): EngineSelection => ({
         modelId: targetKey === (params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey) ? String(params.modelMode) : 'default',
@@ -132,7 +155,16 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
 
     React.useEffect(() => {
         const currentTargetKey = params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey;
-        engineSelectionByTargetKeyRef.current.set(currentTargetKey, buildInitialEngineSelection(currentTargetKey));
+        const nextSelection = buildInitialEngineSelection(currentTargetKey);
+        const pendingAppliedSelection = pendingAppliedSelectionRef.current;
+        if (pendingAppliedSelection?.targetKey === currentTargetKey) {
+            if (!areEngineSelectionsEqual(nextSelection, pendingAppliedSelection.selection)) {
+                engineSelectionByTargetKeyRef.current.set(currentTargetKey, pendingAppliedSelection.selection);
+                return;
+            }
+            pendingAppliedSelectionRef.current = null;
+        }
+        engineSelectionByTargetKeyRef.current.set(currentTargetKey, nextSelection);
     }, [buildInitialEngineSelection, params.selectedBackendEntry?.targetKey, params.selectedBackendTargetKey]);
 
     const getEngineSelectionForTargetKey = React.useCallback((targetKey: string) => {
@@ -145,6 +177,10 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
 
     const applyEngineSelection = React.useCallback((entry: ResolvedBackendCatalogEntry, selection: EngineSelection) => {
         const nextConfigOverrides: Readonly<Record<string, string>> = selection.configOverrides ?? {};
+        pendingAppliedSelectionRef.current = {
+            targetKey: entry.targetKey,
+            selection,
+        };
         params.setBackendTarget(entry.target);
         params.setModelMode(selection.modelId as ModelMode);
         params.setAcpSessionModeId(selection.sessionModeId);
@@ -186,6 +222,25 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         const nextSelection = {
             ...getEngineSelectionForTargetKey(entry.targetKey),
             modelId,
+        };
+        engineSelectionByTargetKeyRef.current.set(entry.targetKey, nextSelection);
+        applyEngineSelection(entry, nextSelection);
+    }, [applyEngineSelection, getEngineSelectionForTargetKey]);
+
+    const handleSelectFavoriteModelOptionValue = React.useCallback((
+        entry: ResolvedBackendCatalogEntry,
+        modelId: string,
+        configId: string,
+        valueId: string,
+    ) => {
+        const currentSelection = getEngineSelectionForTargetKey(entry.targetKey);
+        const nextSelection = {
+            ...currentSelection,
+            modelId,
+            configOverrides: {
+                ...currentSelection.configOverrides,
+                [configId]: valueId,
+            },
         };
         engineSelectionByTargetKeyRef.current.set(entry.targetKey, nextSelection);
         applyEngineSelection(entry, nextSelection);
@@ -288,6 +343,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                 label: t('profiles.groups.favorites'),
                 icon: <FavoriteModelsPickerIcon />,
                 closeOnSelectImmediate: false,
+                preserveFocusOnExternalSelectionChange: true,
                 onSelectImmediate: () => {},
                 renderDetailContent: () => (
                     <NewSessionFavoriteModelsDetail
@@ -295,12 +351,16 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                         resolvedBackendEntries={favoriteBackendEntries}
                         selectedBackendTargetKey={params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey}
                         selectedModelId={String(params.modelMode)}
+                        selectedConfigOverrides={getEngineSelectionForTargetKey(
+                            params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey,
+                        ).configOverrides}
                         selectedMachineId={params.selectedMachineId}
                         capabilityServerId={params.capabilityServerId}
                         cwd={params.selectedPath}
                         settings={params.settings}
                         refreshProbe={params.refreshProbe ?? null}
                         onSelectFavoriteModel={handleSelectFavoriteModel}
+                        onSelectFavoriteModelOptionValue={handleSelectFavoriteModelOptionValue}
                         onToggleFavoriteModel={handleToggleFavoriteModel}
                         onRemoveFavoriteModelSelection={handleRemoveFavoriteModelSelection}
                     />
@@ -312,6 +372,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         applyEngineSelection,
         compatibleBackendTargetKeys,
         handleSelectFavoriteModel,
+        handleSelectFavoriteModelOptionValue,
         handleToggleFavoriteModel,
         handleRemoveFavoriteModelSelection,
         getEngineSelectionForTargetKey,
