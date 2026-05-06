@@ -24,11 +24,18 @@ async function createAccountWithoutDaemon(params: Readonly<{
 }>): Promise<void> {
   await gotoDomContentLoadedWithPathFallback(params.page, `${params.uiBaseUrl}/`, '/', 180_000);
   await waitForInitialAppUi({ page: params.page, timeoutMs: 180_000 });
+  const continueToAuth = params.page.getByTestId('setup.continueToAuth');
+  if ((await continueToAuth.count()) > 0) {
+    await expect(continueToAuth).toBeEnabled({ timeout: 120_000 });
+    await continueToAuth.click();
+  }
   await expect(params.page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
   await params.page.getByTestId('welcome-create-account').click();
-  await expect(params.page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, {
-    timeout: 120_000,
-  });
+  await expect.poll(async () => (
+    await params.page.getByTestId('sidebar-view').count()
+    + await params.page.getByTestId('sidebar-expand-button').count()
+    + await params.page.getByTestId('session-getting-started-kind-connect_machine').count()
+  ), { timeout: 120_000 }).toBeGreaterThan(0);
 }
 
 async function launchDesktopShell(page: Page, params: Readonly<{
@@ -55,12 +62,19 @@ async function readUtilityRowTestIds(page: Page): Promise<string[]> {
 }
 
 async function dragFromMainContentTitlebar(page: Page): Promise<void> {
-  const sidebarBox = await page.getByTestId('desktop-sidebar-chrome').boundingBox();
-  if (!sidebarBox) throw new Error('missing desktop sidebar chrome bounds');
+    const sidebarBox = await page.getByTestId('desktop-sidebar-chrome').boundingBox();
+    if (!sidebarBox) throw new Error('missing desktop sidebar chrome bounds');
 
-  await page.mouse.move(sidebarBox.x + sidebarBox.width + 96, 40);
-  await page.mouse.down();
-  await page.mouse.up();
+    await page.mouse.move(sidebarBox.x + sidebarBox.width + 96, 40);
+    await page.mouse.down();
+    await page.mouse.up();
+}
+
+async function doubleClickMainContentTitlebar(page: Page): Promise<void> {
+    const sidebarBox = await page.getByTestId('desktop-sidebar-chrome').boundingBox();
+    if (!sidebarBox) throw new Error('missing desktop sidebar chrome bounds');
+
+    await page.mouse.dblclick(sidebarBox.x + sidebarBox.width + 96, 40);
 }
 
 test.describe('ui e2e: desktop sidebar chrome window controls', () => {
@@ -122,7 +136,7 @@ test.describe('ui e2e: desktop sidebar chrome window controls', () => {
     await expect(page.getByTestId('desktop-window-controls-toggle-maximize')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('desktop-window-controls-close')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId('desktop-update-indicator-host')).toHaveCount(1);
-    await expect(page.getByTestId('desktop-update-indicator-host').locator('[data-testid="app-update-status-tag"]')).toHaveCount(1);
+    await expect(page.getByTestId('desktop-update-indicator-host').locator('[data-testid="sidebar-shell-app-update-status-tag"]')).toHaveCount(1);
 
     await expect.poll(async () => readUtilityRowTestIds(page), { timeout: 60_000 }).toEqual([
       'sidebar-back-button',
@@ -137,6 +151,14 @@ test.describe('ui e2e: desktop sidebar chrome window controls', () => {
       controls: { dragCount: 1 },
     });
 
+    await doubleClickMainContentTitlebar(page);
+    await expect.poll(async () => readFakeTauriDesktopState(page), { timeout: 60_000 }).toMatchObject({
+      controls: {
+        toggleMaximizeCount: 1,
+      },
+      isMaximized: true,
+    });
+
     await page.getByTestId('desktop-window-controls-minimize').click();
     await page.getByTestId('desktop-window-controls-toggle-maximize').click();
     await page.getByTestId('desktop-window-controls-close').click();
@@ -145,9 +167,9 @@ test.describe('ui e2e: desktop sidebar chrome window controls', () => {
       controls: {
         closeCount: 1,
         minimizeCount: 1,
-        toggleMaximizeCount: 1,
+        toggleMaximizeCount: 2,
       },
-      isMaximized: true,
+      isMaximized: false,
     });
   });
 
@@ -160,7 +182,8 @@ test.describe('ui e2e: desktop sidebar chrome window controls', () => {
 
     await expect(page.getByTestId('desktop-window-controls-host')).toHaveCount(0);
     await expect(page.getByTestId('desktop-window-controls-minimize')).toHaveCount(0);
-    await expect(page.getByTestId('desktop-sidebar-chrome')).toHaveCount(0);
+    await expect(page.getByTestId('desktop-sidebar-chrome-controls-row')).toHaveCount(0);
+    await expect(page.getByTestId('desktop-sidebar-chrome-utility-row')).toHaveCount(0);
   });
 
   test('excludes global desktop chrome from the desktop pet overlay route', async ({ page }) => {

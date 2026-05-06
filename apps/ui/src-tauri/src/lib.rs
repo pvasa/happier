@@ -42,10 +42,10 @@ pub fn run() {
                 pet_overlay::desktop_pet_overlay_read_window_state,
                 pet_overlay::desktop_pet_overlay_set_input_locked,
                 pet_overlay::desktop_pet_overlay_sync_element_metrics,
-                pet_overlay::desktop_pet_overlay_start_native_window_drag,
                 pet_overlay::desktop_pet_overlay_start_drag_session,
                 pet_overlay::desktop_pet_overlay_apply_drag_delta,
                 pet_overlay::desktop_pet_overlay_release_drag_velocity,
+                pet_overlay::desktop_pet_overlay_apply_momentum_delta,
                 pet_overlay::desktop_pet_overlay_end_drag_session,
                 pet_overlay::desktop_pet_overlay_reset_position,
                 pet_overlay::emit_desktop_pet_overlay_interaction_result,
@@ -87,8 +87,32 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            #[cfg(desktop)]
+            match event {
+                tauri::RunEvent::Ready => {
+                    window_chrome::present_main_window_for_lifecycle_event(
+                        app_handle,
+                        window_chrome::DesktopMainWindowLifecycleEvent::AppReady,
+                    );
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    window_chrome::present_main_window_for_lifecycle_event(
+                        app_handle,
+                        window_chrome::DesktopMainWindowLifecycleEvent::MacOsReopen {
+                            has_visible_windows,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        });
 }
 
 #[cfg(desktop)]
