@@ -25,6 +25,7 @@ import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
 import { isDefaultWriteLikeToolName } from './writeLikeToolNameHeuristics';
 import { extractShellCommand } from './permissionToolIdentifier';
 import { resolveAgentRequestKind } from './requestKind';
+import { shouldDenyAgentSessionTitleToolCall } from './codingPromptTitlePermission';
 
 export type { PermissionResult, PendingRequest };
 
@@ -94,6 +95,14 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
   private resolveDecisionForToolCall(toolCallId: string, toolName: string, input: unknown): PermissionResult | null {
     if (resolveAgentRequestKind(toolName) === 'user_action') {
       return null;
+    }
+
+    if (shouldDenyAgentSessionTitleToolCall({
+      settings: this.getAccountSettingsSnapshot(),
+      toolName,
+      input,
+    })) {
+      return { decision: 'denied' };
     }
 
     const isAlwaysAutoApprove =
@@ -198,6 +207,16 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
       const pending = this.requestPermissionDecision(toolCallId, toolName, input);
       logger.debug(`${this.getLogPrefix()} User action request sent for tool: ${toolName} (${toolCallId})`);
       return pending;
+    }
+
+    if (shouldDenyAgentSessionTitleToolCall({
+      settings: this.getAccountSettingsSnapshot(),
+      toolName,
+      input,
+    })) {
+      logger.debug(`${this.getLogPrefix()} Denying session title tool ${toolName} (${toolCallId}) because title updates are disabled`);
+      this.recordAutoDecision(toolCallId, toolName, input, 'denied');
+      return { decision: 'denied' };
     }
 
     const isAlwaysAutoApprove =

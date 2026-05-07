@@ -12,6 +12,7 @@ const setPermissionPromptSurface = vi.fn();
 const setDefaultPersistenceMode = vi.fn();
 const setDefaultPersistenceModeByTargetKey = vi.fn();
 const setRememberLastProjectSessionSelections = vi.fn();
+const setCodingPromptBehavior = vi.fn();
 
 installSessionSettingsCommonModuleMocks({
     unistyles: async () => {
@@ -37,6 +38,11 @@ installSessionSettingsCommonModuleMocks({
                     if (name === 'newSessionDefaultPersistenceModeV1') return ['persisted', setDefaultPersistenceMode];
                     if (name === 'newSessionDefaultPersistenceModeByTargetKeyV1') return [{}, setDefaultPersistenceModeByTargetKey];
                     if (name === 'rememberLastProjectSessionSelections') return [true, setRememberLastProjectSessionSelections];
+                    if (name === 'codingPromptBehaviorV1') return [{
+                        v: 1,
+                        sessionTitleUpdates: 'agent',
+                        responseOptions: 'agent',
+                    }, setCodingPromptBehavior];
                     return [null, vi.fn()];
                 },
                 useSettings: () => ({ schemaVersion: 1, opencodeBackendMode: 'server' } as any),
@@ -138,5 +144,27 @@ describe('PermissionsSettingsView', () => {
         expect(screen.findRowByTitle('DropdownItem:agent.codex:settingsSession.defaultStorage.useGlobalDefault')).toBeTruthy();
         screen.pressRowByTitle('DropdownItem:agent.codex:settingsSession.defaultStorage.useGlobalDefault');
         expect(setDefaultPersistenceModeByTargetKey).toHaveBeenCalledWith({});
+    });
+
+    it('renders coding prompt behavior toggles and preserves existing behavior fields', async () => {
+        const { PermissionsSettingsView } = await import('./PermissionsSettingsView');
+        const screen = await renderSettingsView(React.createElement(PermissionsSettingsView));
+
+        expect(screen.findRowByTitle('settingsSession.codingPromptBehavior.sessionTitleUpdatesTitle')).toBeTruthy();
+        expect(screen.findRowByTitle('settingsSession.codingPromptBehavior.responseOptionsTitle')).toBeTruthy();
+
+        screen.pressRowByTitle('settingsSession.codingPromptBehavior.sessionTitleUpdatesTitle');
+        expect(setCodingPromptBehavior).toHaveBeenCalledWith({
+            v: 1,
+            sessionTitleUpdates: 'disabled',
+            responseOptions: 'agent',
+        });
+
+        screen.pressRowByTitle('settingsSession.codingPromptBehavior.responseOptionsTitle');
+        expect(setCodingPromptBehavior).toHaveBeenCalledWith({
+            v: 1,
+            sessionTitleUpdates: 'agent',
+            responseOptions: 'disabled',
+        });
     });
 });

@@ -2,7 +2,12 @@ import * as React from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { buildBackendTargetKey, type BackendTargetRefV1 } from '@happier-dev/protocol';
+import {
+    DEFAULT_CODING_PROMPT_BEHAVIOR_V1,
+    buildBackendTargetKey,
+    type BackendTargetRefV1,
+    type CodingPromptBehaviorV1,
+} from '@happier-dev/protocol';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -39,6 +44,7 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
     const [permissionModeApplyTiming, setPermissionModeApplyTiming] = useSettingMutable('sessionPermissionModeApplyTiming');
     const [permissionPromptSurface, setPermissionPromptSurface] = useSettingMutable('permissionPromptSurface');
     const [rememberLastProjectSessionSelections, setRememberLastProjectSessionSelections] = useSettingMutable('rememberLastProjectSessionSelections');
+    const [codingPromptBehavior, setCodingPromptBehavior] = useSettingMutable('codingPromptBehaviorV1');
     const [defaultTranscriptStorageMode, setDefaultTranscriptStorageMode] = useSettingMutable('newSessionDefaultPersistenceModeV1');
     const [defaultTranscriptStorageModeByTargetKey, setDefaultTranscriptStorageModeByTargetKey] = useSettingMutable('newSessionDefaultPersistenceModeByTargetKeyV1');
 
@@ -116,6 +122,25 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
     const normalizedPromptSurface: PermissionPromptSurfaceMenuOption =
         resolvePermissionPromptSurface(permissionPromptSurface);
     const rememberProjectSelectionsEnabled = rememberLastProjectSessionSelections !== false;
+    const normalizedCodingPromptBehavior = React.useMemo<CodingPromptBehaviorV1>(() => {
+        const raw = codingPromptBehavior && typeof codingPromptBehavior === 'object' && !Array.isArray(codingPromptBehavior)
+            ? codingPromptBehavior as Partial<CodingPromptBehaviorV1>
+            : {};
+        return {
+            ...DEFAULT_CODING_PROMPT_BEHAVIOR_V1,
+            ...(raw.sessionTitleUpdates === 'disabled' ? { sessionTitleUpdates: 'disabled' as const } : {}),
+            ...(raw.responseOptions === 'disabled' ? { responseOptions: 'disabled' as const } : {}),
+        };
+    }, [codingPromptBehavior]);
+    const setCodingPromptBehaviorField = React.useCallback(
+        (key: keyof Pick<CodingPromptBehaviorV1, 'sessionTitleUpdates' | 'responseOptions'>, enabled: boolean) => {
+            setCodingPromptBehavior({
+                ...normalizedCodingPromptBehavior,
+                [key]: enabled ? 'agent' : 'disabled',
+            } as any);
+        },
+        [normalizedCodingPromptBehavior, setCodingPromptBehavior],
+    );
 
     const promptSurfaceOptions: Array<{ key: PermissionPromptSurfaceMenuOption; title: string; subtitle: string }> = [
         {
@@ -164,6 +189,50 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
                         />
                     }
                     onPress={() => setRememberLastProjectSessionSelections((!rememberProjectSelectionsEnabled) as any)}
+                />
+            </ItemGroup>
+
+            <ItemGroup
+                title={t('settingsSession.codingPromptBehavior.title')}
+                footer={t('settingsSession.codingPromptBehavior.footer')}
+            >
+                <Item
+                    title={t('settingsSession.codingPromptBehavior.sessionTitleUpdatesTitle')}
+                    subtitle={t(
+                        normalizedCodingPromptBehavior.sessionTitleUpdates === 'agent'
+                            ? 'settingsSession.codingPromptBehavior.sessionTitleUpdatesEnabledSubtitle'
+                            : 'settingsSession.codingPromptBehavior.sessionTitleUpdatesDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="text-outline" size={29} color={theme.colors.textSecondary} />}
+                    rightElement={
+                        <Switch
+                            value={normalizedCodingPromptBehavior.sessionTitleUpdates === 'agent'}
+                            onValueChange={(next) => setCodingPromptBehaviorField('sessionTitleUpdates', Boolean(next))}
+                        />
+                    }
+                    onPress={() => setCodingPromptBehaviorField(
+                        'sessionTitleUpdates',
+                        normalizedCodingPromptBehavior.sessionTitleUpdates !== 'agent',
+                    )}
+                />
+                <Item
+                    title={t('settingsSession.codingPromptBehavior.responseOptionsTitle')}
+                    subtitle={t(
+                        normalizedCodingPromptBehavior.responseOptions === 'agent'
+                            ? 'settingsSession.codingPromptBehavior.responseOptionsEnabledSubtitle'
+                            : 'settingsSession.codingPromptBehavior.responseOptionsDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="list-circle-outline" size={29} color={theme.colors.textSecondary} />}
+                    rightElement={
+                        <Switch
+                            value={normalizedCodingPromptBehavior.responseOptions === 'agent'}
+                            onValueChange={(next) => setCodingPromptBehaviorField('responseOptions', Boolean(next))}
+                        />
+                    }
+                    onPress={() => setCodingPromptBehaviorField(
+                        'responseOptions',
+                        normalizedCodingPromptBehavior.responseOptions !== 'agent',
+                    )}
                 />
             </ItemGroup>
 

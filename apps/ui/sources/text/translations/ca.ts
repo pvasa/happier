@@ -5668,6 +5668,16 @@ settingsSession: {
               rememberLastProjectSelectionsEnabledSubtitle: 'Les dreceres de projecte reutilitzen la màquina, carpeta, motor, model i opcions de la sessió més recent.',
               rememberLastProjectSelectionsDisabledSubtitle: 'Les dreceres de projecte només preseleccionen la màquina i la carpeta del projecte.',
           },
+          codingPromptBehavior: {
+              title: 'Agent prompt behavior',
+              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
+              sessionTitleUpdatesTitle: 'Agent session titles',
+              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
+              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
+              responseOptionsTitle: 'Suggested reply options',
+              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
+              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          },
           defaultPermissions: {
               title: 'Permisos per defecte',
               footer: 'S’aplica en iniciar una sessió nova. Els perfils poden sobrescriure-ho opcionalment.',

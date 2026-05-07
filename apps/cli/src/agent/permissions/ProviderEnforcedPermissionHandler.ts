@@ -20,6 +20,7 @@ import {
 import type { ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
 import type { AccountSettings } from '@happier-dev/protocol';
 import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
+import { shouldDenyAgentSessionTitleToolCall } from './codingPromptTitlePermission';
 
 export type { PermissionResult, PendingRequest };
 
@@ -125,6 +126,13 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
   }
 
   getImmediateDecision(toolCallId: string, toolName: string, input: unknown): PermissionResult | null {
+    if (shouldDenyAgentSessionTitleToolCall({
+      settings: this.getAccountSettingsSnapshot(),
+      toolName,
+      input,
+    })) {
+      return { decision: 'denied' };
+    }
     if (!this.isAlwaysAutoApprove(toolName, toolCallId)) {
       return null;
     }

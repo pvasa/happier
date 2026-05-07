@@ -5687,6 +5687,16 @@ settingsSession: {
               rememberLastProjectSelectionsEnabledSubtitle: 'Project shortcuts reuse the newest session’s machine, folder, engine, model, and session options.',
               rememberLastProjectSelectionsDisabledSubtitle: 'Project shortcuts only preselect the project machine and folder.',
           },
+          codingPromptBehavior: {
+              title: 'Agent prompt behavior',
+              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
+              sessionTitleUpdatesTitle: 'Agent session titles',
+              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
+              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
+              responseOptionsTitle: 'Suggested reply options',
+              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
+              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          },
           defaultPermissions: {
               title: 'Default permissions',
               footer: 'Applies when starting a new session. Profiles can optionally override this.',

@@ -95,6 +95,15 @@ describe('settings', () => {
             });
         });
 
+        it('includes codingPromptBehaviorV1 by default', () => {
+            const settings = settingsParse({});
+            expect((settings as any).codingPromptBehaviorV1).toEqual({
+                v: 1,
+                sessionTitleUpdates: 'agent',
+                responseOptions: 'agent',
+            });
+        });
+
         it('includes promptInvocationsV1 by default', () => {
             const settings = settingsParse({});
             expect((settings as any).promptInvocationsV1).toEqual({

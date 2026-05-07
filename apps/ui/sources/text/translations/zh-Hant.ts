@@ -4905,6 +4905,16 @@ settingsSession: {
               rememberLastProjectSelectionsEnabledSubtitle: '專案捷徑會重用最新工作階段的機器、資料夾、引擎、模型與工作階段選項。',
               rememberLastProjectSelectionsDisabledSubtitle: '專案捷徑只會預選專案機器與資料夾。',
           },
+          codingPromptBehavior: {
+              title: 'Agent prompt behavior',
+              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
+              sessionTitleUpdatesTitle: 'Agent session titles',
+              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
+              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
+              responseOptionsTitle: 'Suggested reply options',
+              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
+              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          },
           defaultPermissions: {
               title: '預設權限',
               footer: '啟動新工作階段時套用。設定檔可選擇覆寫此值。',

@@ -4,6 +4,32 @@ import { accountSettingsParse } from './accountSettings.js';
 import { isActionEnabledByActionsSettings } from '../../actions/actionSettings.js';
 
 describe('accountSettings', () => {
+  it('defaults coding prompt behavior to current agent-managed behavior', () => {
+    const parsed = accountSettingsParse({});
+
+    expect(parsed.codingPromptBehaviorV1).toEqual({
+      v: 1,
+      sessionTitleUpdates: 'agent',
+      responseOptions: 'agent',
+    });
+  });
+
+  it('accepts disabled coding prompt behavior options', () => {
+    const parsed = accountSettingsParse({
+      codingPromptBehaviorV1: {
+        v: 1,
+        sessionTitleUpdates: 'disabled',
+        responseOptions: 'disabled',
+      },
+    });
+
+    expect(parsed.codingPromptBehaviorV1).toEqual({
+      v: 1,
+      sessionTitleUpdates: 'disabled',
+      responseOptions: 'disabled',
+    });
+  });
+
   it('defaults ready notification preview settings to enabled', () => {
     const parsed = accountSettingsParse({});
 

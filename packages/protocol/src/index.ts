@@ -1722,7 +1722,24 @@ export {
   type PromptModalityV1,
   type PromptPlanV1,
 } from './prompts/promptPlanV1.js';
-export { HAPPIER_BASE_SYSTEM_PROMPT_V1 } from './prompts/systemPromptBaseV1.js';
+export {
+  HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
+  HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
+  HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
+  HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_V1,
+  HAPPIER_BASE_SYSTEM_PROMPT_V1,
+  buildHappierBaseSystemPromptV1,
+} from './prompts/systemPromptBaseV1.js';
+export {
+  CodingPromptBehaviorModeV1Schema,
+  CodingPromptBehaviorV1Schema,
+  DEFAULT_CODING_PROMPT_BEHAVIOR_V1,
+  isCodingPromptResponseOptionsEnabled,
+  isCodingPromptSessionTitleUpdatesEnabled,
+  resolveCodingPromptBehaviorV1,
+  type CodingPromptBehaviorModeV1,
+  type CodingPromptBehaviorV1,
+} from './prompts/codingPromptBehaviorV1.js';
 export {
   CHANGE_TITLE_INSTRUCTION_V1,
   buildChangeTitleInstructionV1,

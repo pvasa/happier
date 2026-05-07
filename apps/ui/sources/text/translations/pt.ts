@@ -6248,6 +6248,16 @@ settingsSession: {
         rememberLastProjectSelectionsDisabledSubtitle:
           "Os atalhos do projeto só preselecionam a máquina e a pasta do projeto.",
       },
+          codingPromptBehavior: {
+              title: 'Agent prompt behavior',
+              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
+              sessionTitleUpdatesTitle: 'Agent session titles',
+              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
+              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
+              responseOptionsTitle: 'Suggested reply options',
+              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
+              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          },
       defaultPermissions: {
         title: "Permissões padrão",
         footer:
