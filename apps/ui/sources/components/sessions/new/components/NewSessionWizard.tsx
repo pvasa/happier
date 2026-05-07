@@ -9,10 +9,13 @@ import { AttachmentFilePicker } from '@/components/sessions/attachments/Attachme
 import { PopoverBoundaryProvider } from '@/components/ui/popover';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { MachineSelector } from '@/components/sessions/new/components/MachineSelector';
 import { PathSelector } from '@/components/sessions/new/components/PathSelector';
 import { WizardSectionHeaderRow } from '@/components/sessions/new/components/WizardSectionHeaderRow';
+import { NewSessionModelSelectionContent } from '@/components/sessions/new/components/NewSessionModelSelectionContent';
 import { ProfilesList } from '@/components/profiles/ProfilesList';
+import { AdaptiveSelectionSection, type ResolvedAdaptiveSelectionPresentation } from '@/components/ui/selection/AdaptiveSelectionSection';
 import { layout } from '@/components/ui/layout/layout';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -26,9 +29,11 @@ import type { CLIAvailability } from '@/hooks/auth/useCLIDetection';
 import type { AgentId } from '@/agents/catalog/catalog';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import { getAgentPickerOptions } from '@/agents/catalog/agentPickerOptions';
+import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { InstallableDepInstaller, type InstallableDepInstallerProps } from '@/components/machines/InstallableDepInstaller';
 import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
+import { AgentInputContentPopover, type AgentInputContentPopoverConfig } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import type { CreatedSessionFollowUpContext } from '../hooks/useCreateNewSession';
 import { buildNewSessionProfileSelectionPopover } from '@/components/sessions/new/components/buildNewSessionProfileSelectionPopover';
@@ -38,6 +43,11 @@ import { useNewSessionAttachmentsController } from '@/components/sessions/new/at
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { NewSessionComposerKeyboardHost } from './NewSessionComposerKeyboardHost';
 import { NewSessionKeyboardContainer } from './NewSessionKeyboardContainer';
+import type {
+    NewSessionWizardSectionPresentation,
+    NewSessionWizardSelectionSectionId,
+} from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
+import type { FavoriteModelSelectionV1 } from '@/sync/domains/models/favoriteModelSelections';
 
 
 export interface NewSessionWizardLayoutProps {
@@ -90,8 +100,11 @@ export interface NewSessionWizardAgentProps {
     agentPickerSelectedOptionId?: React.ComponentProps<typeof AgentInput>['agentPickerSelectedOptionId'];
     onAgentPickerSelect?: React.ComponentProps<typeof AgentInput>['onAgentPickerSelect'];
     agentPickerProbe?: React.ComponentProps<typeof AgentInput>['agentPickerProbe'];
+    selectedBackendEntry?: ResolvedBackendCatalogEntry | null;
     modelOptions: ReadonlyArray<{ value: ModelMode; label: string; description: string }>;
     modelOptionsProbe?: React.ComponentProps<typeof AgentInput>['modelOptionsOverrideProbe'];
+    favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
+    setFavoriteModelSelections?: (favorites: FavoriteModelSelectionV1[]) => void;
     acpSessionModeOptions?: ReadonlyArray<Readonly<{ id: string; name: string; description?: string }>>;
     acpSessionModeProbe?: React.ComponentProps<typeof AgentInput>['acpSessionModeOptionsOverrideProbe'];
     acpSessionModeId?: string | null;
@@ -153,10 +166,64 @@ export interface NewSessionWizardFooterProps {
 export interface NewSessionWizardProps {
     popoverBoundaryRef: React.RefObject<RNView>;
     layout: NewSessionWizardLayoutProps;
+    sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
     profiles: NewSessionWizardProfilesProps;
     agent: NewSessionWizardAgentProps;
     machine: NewSessionWizardMachineProps;
     footer: NewSessionWizardFooterProps;
+}
+
+function resolveWizardAdaptivePresentation(
+    value: NewSessionWizardSectionPresentation | undefined,
+    autoPresentation: ResolvedAdaptiveSelectionPresentation,
+): ResolvedAdaptiveSelectionPresentation {
+    if (value === 'list') return 'expanded';
+    if (value === 'dropdown') return 'compact';
+    return autoPresentation;
+}
+
+function NewSessionWizardPopoverItem(props: Readonly<{
+    testID: string;
+    title: string;
+    subtitle?: string | null;
+    icon: React.ReactNode;
+    popover?: AgentInputContentPopoverConfig;
+    boundaryRef: React.RefObject<RNView>;
+}>) {
+    const [open, setOpen] = React.useState(false);
+    const anchorRef = React.useRef<RNView>(null);
+    return (
+        <View ref={anchorRef} collapsable={false}>
+            <Item
+                testID={props.testID}
+                title={props.title}
+                subtitle={props.subtitle ?? undefined}
+                leftElement={props.icon}
+                showChevron={true}
+                disabled={!props.popover}
+                onPress={() => {
+                    if (!props.popover) return;
+                    setOpen(true);
+                }}
+            />
+            {props.popover ? (
+                <AgentInputContentPopover
+                    open={open}
+                    anchorRef={anchorRef}
+                    boundaryRef={props.popover.boundaryRef ?? props.boundaryRef}
+                    content={props.popover.renderContent}
+                    maxHeightCap={props.popover.maxHeightCap}
+                    maxWidthCap={props.popover.maxWidthCap}
+                    scrollEnabled={props.popover.scrollEnabled}
+                    keyboardShouldPersistTaps={props.popover.keyboardShouldPersistTaps}
+                    edgeFades={props.popover.edgeFades}
+                    edgeIndicators={props.popover.edgeIndicators}
+                    initialVisibility={props.popover.initialVisibility}
+                    onRequestClose={() => setOpen(false)}
+                />
+            ) : null}
+        </View>
+    );
 }
 
 export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewSessionWizardProps) {
@@ -286,9 +353,16 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         enabledAgentIds,
         isAgentSelectable,
         agentType,
+        agentLabel,
+        agentPickerOptions,
+        agentPickerSelectedOptionId,
+        onAgentPickerSelect,
+        selectedBackendEntry,
         setAgentType,
         modelOptions,
         modelOptionsProbe,
+        favoriteModelSelections,
+        setFavoriteModelSelections,
         modelMode,
         setModelMode,
         selectedIndicatorColor,
@@ -349,6 +423,34 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         });
     }, [machineDisplayName, props.popoverBoundaryRef, props.profiles, serverId]);
 
+    const sectionPresentation = props.sectionPresentation ?? {};
+    const profilePresentation = resolveWizardAdaptivePresentation(
+        sectionPresentation.profiles,
+        profiles.length > 8 ? 'compact' : 'expanded',
+    );
+    const backendOptions = React.useMemo(() => getAgentPickerOptions(enabledAgentIds), [enabledAgentIds]);
+    const backendPresentation = resolveWizardAdaptivePresentation(
+        sectionPresentation.backends,
+        backendOptions.length > 6 ? 'compact' : 'expanded',
+    );
+    const modelPresentation = resolveWizardAdaptivePresentation(
+        sectionPresentation.models,
+        modelOptions.length > 8 ? 'compact' : 'expanded',
+    );
+    const machinePresentation = resolveWizardAdaptivePresentation(
+        sectionPresentation.machines,
+        machines.length > 8 ? 'compact' : 'expanded',
+    );
+    const pathPresentation = resolveWizardAdaptivePresentation(
+        sectionPresentation.paths,
+        (favoriteDirectories.length + recentPaths.length) > 8 ? 'compact' : 'expanded',
+    );
+    const permissionOptions = React.useMemo(() => getPermissionModeOptionsForAgentType(agentType), [agentType]);
+    const permissionPresentation = resolveWizardAdaptivePresentation(
+        sectionPresentation.permissions,
+        permissionOptions.length > 6 ? 'compact' : 'expanded',
+    );
+
     return (
         <NewSessionKeyboardContainer
             headerHeight={headerHeight}
@@ -398,15 +500,34 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         <Text style={styles.sectionDescription}>
                                             {t('newSession.selectAiProfileDescription')}
                                         </Text>
-                                        <NewSessionProfilesBrowserContent
-                                            profilesListProps={sharedProfilesListProps}
-                                            machineId={selectedMachineId}
-                                            serverId={serverId}
-                                            machineName={machineDisplayName}
-                                            previewDisplay="below-list"
-                                            inlinePreviewSpacingTop={16}
-                                            renderListContent={(profilesListProps) => (
-                                                <ProfilesList {...profilesListProps} />
+                                        <AdaptiveSelectionSection
+                                            presentation={profilePresentation}
+                                            expandedContent={(
+                                                <NewSessionProfilesBrowserContent
+                                                    profilesListProps={sharedProfilesListProps}
+                                                    machineId={selectedMachineId}
+                                                    serverId={serverId}
+                                                    machineName={machineDisplayName}
+                                                    previewDisplay="below-list"
+                                                    inlinePreviewSpacingTop={16}
+                                                    renderListContent={(profilesListProps) => (
+                                                        <ProfilesList {...profilesListProps} />
+                                                    )}
+                                                />
+                                            )}
+                                            compactContent={(
+                                                <NewSessionWizardPopoverItem
+                                                    testID="new-session-profile-dropdown-trigger"
+                                                    title={t('newSession.selectAiProfileTitle')}
+                                                    subtitle={
+                                                        selectedProfileId
+                                                            ? (resolvedProfileMap.get(selectedProfileId)?.name ?? getBuiltInProfile(selectedProfileId)?.name ?? selectedProfileId)
+                                                            : t('profiles.noProfile')
+                                                    }
+                                                    icon={renderNormalizedIconNode('person-outline', 24, theme.colors.textSecondary)}
+                                                    popover={profilePopover}
+                                                    boundaryRef={props.popoverBoundaryRef}
+                                                />
                                             )}
                                         />
 

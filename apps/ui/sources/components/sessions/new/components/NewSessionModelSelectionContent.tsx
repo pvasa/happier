@@ -31,6 +31,7 @@ export type NewSessionModelSelectionContentProps = Readonly<{
     selectedModelId: ModelMode | undefined;
     selectedIndicatorColor: string;
     selectedBackendEntry?: ResolvedBackendCatalogEntry | null;
+    popoverBoundaryRef?: React.RefObject<any> | null;
     favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
     onSelectModel: (modelId: ModelMode) => void;
     onFavoriteModelSelectionsChange?: (favorites: FavoriteModelSelectionV1[]) => void;
@@ -293,6 +294,7 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
                 showCategoryTitles={rows.favoriteRows.length > 0}
                 matchTriggerWidth
                 connectToTrigger
+                popoverBoundaryRef={props.popoverBoundaryRef}
                 itemTrigger={{
                     title: t('newSession.selectModelTitle'),
                     subtitle: selectedRow?.subtitle ?? t('newSession.selectModelDescription'),
