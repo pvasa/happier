@@ -123,6 +123,5 @@ export function hasActivityAttention(
         flags.hasUnread
         || flags.hasPendingPermissionRequests
         || flags.hasPendingUserActionRequests
-        || flags.hasQueuedUserInput
     );
 }

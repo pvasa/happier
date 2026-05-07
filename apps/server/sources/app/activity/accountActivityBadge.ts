@@ -27,7 +27,6 @@ export function computeSessionContributesToActivityBadge(session: SessionActivit
 
     const seq = typeof session.seq === "number" ? session.seq : 0;
     const lastViewedSessionSeq = typeof session.lastViewedSessionSeq === "number" ? session.lastViewedSessionSeq : null;
-    const pendingCount = typeof session.pendingCount === "number" ? session.pendingCount : 0;
     const pendingPermissionRequestCount =
         typeof session.pendingPermissionRequestCount === "number" ? session.pendingPermissionRequestCount : 0;
     const pendingUserActionRequestCount =
@@ -37,7 +36,7 @@ export function computeSessionContributesToActivityBadge(session: SessionActivit
         typeof lastViewedSessionSeq === "number"
             ? seq > lastViewedSessionSeq
             : seq > 0;
-    return hasUnread || pendingCount > 0 || pendingPermissionRequestCount > 0 || pendingUserActionRequestCount > 0;
+    return hasUnread || pendingPermissionRequestCount > 0 || pendingUserActionRequestCount > 0;
 }
 
 export function didSessionActivityBadgeContributionChange(

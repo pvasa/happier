@@ -123,4 +123,43 @@ describe("accountRoutes (activity badge snapshot) (integration)", () => {
             badgeCount: 1,
         });
     });
+
+    it("does not count queued pending input as badge attention", async () => {
+        const app = createTestApp();
+        const account = await db.account.create({ data: { publicKey: "pk_activity_badges_3" } });
+        const token = await auth.createToken(account.id);
+
+        const session = await db.session.create({
+            data: {
+                accountId: account.id,
+                tag: "sess-3",
+                encryptionMode: "e2ee",
+                metadata: "ciphertext",
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                seq: 5,
+                pendingVersion: 1,
+                pendingCount: 2,
+                active: true,
+            },
+            select: { id: true },
+        });
+
+        await db.$executeRawUnsafe(
+            `UPDATE "Session" SET "lastViewedSessionSeq" = 5, "pendingPermissionRequestCount" = 0, "pendingUserActionRequestCount" = 0 WHERE "id" = '${session.id}'`,
+        );
+
+        const res = await app.inject({
+            method: "GET",
+            url: "/v1/account/activity/badge-snapshot",
+            headers: { authorization: `Bearer ${token}` },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as any;
+        expect(body).toMatchObject({
+            badgeCount: 0,
+        });
+    });
 });

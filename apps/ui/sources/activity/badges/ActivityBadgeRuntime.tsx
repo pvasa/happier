@@ -31,7 +31,6 @@ type ActivityBadgeSessionOptions = Readonly<{
     showUnread: boolean;
     showPendingPermissionRequests: boolean;
     showPendingUserActionRequests: boolean;
-    showQueuedUserInput: boolean;
 }>;
 
 async function fetchServerBadgeCount(): Promise<number | null> {
@@ -51,8 +50,7 @@ async function fetchServerBadgeCount(): Promise<number | null> {
 function canUseServerBadgeSnapshot(options: ActivityBadgeSessionOptions): boolean {
     return options.showUnread
         && options.showPendingPermissionRequests
-        && options.showPendingUserActionRequests
-        && options.showQueuedUserInput;
+        && options.showPendingUserActionRequests;
 }
 
 export function ActivityBadgeRuntime(): React.ReactElement | null {
@@ -74,11 +72,9 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
             localSettings.activityBadgeShowPendingPermissionRequests !== false,
         showPendingUserActionRequests:
             localSettings.activityBadgeShowPendingUserActionRequests !== false,
-        showQueuedUserInput: localSettings.activityBadgeShowQueuedUserInput !== false,
     }), [
         localSettings.activityBadgeShowPendingPermissionRequests,
         localSettings.activityBadgeShowPendingUserActionRequests,
-        localSettings.activityBadgeShowQueuedUserInput,
         localSettings.activityBadgeShowUnread,
     ]);
 
