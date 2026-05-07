@@ -336,12 +336,12 @@ export const darkTheme = {
         },
         desktopPetOverlay: {
             bubble: {
-                background: '#FFFFFF',
-                backgroundPressed: '#F7F7F7',
-                text: '#1C1C1E',
-                textSecondary: '#5F6368',
-                controlBackground: 'rgba(255, 255, 255, 0.96)',
-                controlBackgroundPressed: '#F2F2F7',
+                background: '#2C2C2C',
+                backgroundPressed: '#343434',
+                text: '#FFFFFF',
+                textSecondary: '#B4B4B8',
+                controlBackground: 'rgba(44, 44, 44, 0.96)',
+                controlBackgroundPressed: '#3A3A3A',
             },
         },
         surfaceHigh: '#171717',

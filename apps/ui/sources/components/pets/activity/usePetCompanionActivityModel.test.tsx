@@ -181,12 +181,12 @@ describe('usePetCompanionActivityModel', () => {
         }
     });
 
-    it('uses recent session thinking timestamps when the transcript is not hydrated in this window', async () => {
+    it('does not treat a read online row with historical thinkingAt as running activity', async () => {
         vi.mocked(Date.now).mockReturnValue(12_000);
         const previousState = storage.getState();
         const session = createSessionFixture({
-            id: 'recent-thinking-session',
-            active: true,
+            id: 'historical-thinking-session',
+            active: false,
             seq: 1,
             createdAt: 1_000,
             updatedAt: 10_000,
@@ -209,13 +209,55 @@ describe('usePetCompanionActivityModel', () => {
             });
 
             expect(hook.getCurrent()).toMatchObject({
-                state: 'running',
-                reason: 'running',
+                state: 'idle',
+                reason: 'idle',
+                sessionId: session.id,
+                trayItems: [],
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('keeps old unread sessions visible as waiting activity until they are read', async () => {
+        vi.mocked(Date.now).mockReturnValue(900_000_000);
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'old-unread-session',
+            active: false,
+            seq: 5,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            activeAt: 2_000,
+            lastViewedSessionSeq: 4,
+            pendingCount: 0,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {},
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'waiting',
+                reason: 'waiting',
                 sessionId: session.id,
                 trayItems: [
                     expect.objectContaining({
                         sessionId: session.id,
-                        status: 'running',
+                        status: 'waiting',
+                        expiresAtMs: null,
                     }),
                 ],
             });
@@ -324,8 +366,8 @@ describe('usePetCompanionActivityModel', () => {
             createdAt: 1_000,
             updatedAt: 3_000,
             activeAt: 3_000,
-            lastViewedSessionSeq: 1,
-            pendingCount: 1,
+            lastViewedSessionSeq: 0,
+            pendingCount: 0,
             thinking: false,
             thinkingAt: 0,
             metadata: {
@@ -337,13 +379,14 @@ describe('usePetCompanionActivityModel', () => {
         });
         const visibleSession = createSessionFixture({
             id: 'visible-session',
-            active: false,
+            active: true,
             seq: 2,
             createdAt: 1_000,
             updatedAt: 2_000,
             activeAt: 2_000,
             lastViewedSessionSeq: 2,
-            pendingCount: 1,
+            pendingCount: 0,
+            pendingUserActionRequestCount: 1,
             thinking: false,
             thinkingAt: 0,
             metadata: {
@@ -460,6 +503,7 @@ describe('usePetCompanionActivityModel', () => {
             lastViewedSessionSeq: 1,
             thinking: false,
             thinkingAt: 1_000,
+            optimisticThinkingAt: 1_000,
         });
 
         try {
@@ -495,6 +539,46 @@ describe('usePetCompanionActivityModel', () => {
             await hook.unmount();
         } finally {
             vi.useRealTimers();
+            storage.setState(previousState, true);
+        }
+    });
+
+    it('does not use queued pending input as waiting activity', async () => {
+        const previousState = storage.getState();
+        const session = createSessionFixture({
+            id: 'stale-queued-session',
+            active: true,
+            seq: 2,
+            createdAt: 1_000,
+            updatedAt: 3_000,
+            activeAt: 3_000,
+            lastViewedSessionSeq: 2,
+            pendingCount: 1,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        try {
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { [session.id]: session },
+                sessionMessages: {},
+            }));
+
+            const hook = await renderHook(() => usePetCompanionActivityModel(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toMatchObject({
+                state: 'idle',
+                reason: 'idle',
+                sessionId: session.id,
+                trayItems: [],
+            });
+
+            await hook.unmount();
+        } finally {
             storage.setState(previousState, true);
         }
     });
@@ -567,8 +651,8 @@ describe('usePetCompanionActivityModel', () => {
             createdAt: 1_000,
             updatedAt: 3_000,
             activeAt: 3_000,
-            lastViewedSessionSeq: 1,
-            pendingCount: 1,
+            lastViewedSessionSeq: 0,
+            pendingCount: 0,
             thinking: false,
             thinkingAt: 0,
         });
@@ -622,8 +706,8 @@ describe('usePetCompanionActivityModel', () => {
             createdAt: 1_000,
             updatedAt: 3_000,
             activeAt: 3_000,
-            lastViewedSessionSeq: 1,
-            pendingCount: 1,
+            lastViewedSessionSeq: 0,
+            pendingCount: 0,
             thinking: false,
             thinkingAt: 0,
         });
@@ -669,8 +753,8 @@ describe('usePetCompanionActivityModel', () => {
             createdAt: 1_000,
             updatedAt: 9_000,
             activeAt: 1_000,
-            lastViewedSessionSeq: 1,
-            pendingCount: 1,
+            lastViewedSessionSeq: 0,
+            pendingCount: 0,
             thinking: false,
             thinkingAt: 0,
         });
@@ -681,8 +765,8 @@ describe('usePetCompanionActivityModel', () => {
             createdAt: 1_000,
             updatedAt: 5_000,
             activeAt: 1_000,
-            lastViewedSessionSeq: 1,
-            pendingCount: 1,
+            lastViewedSessionSeq: 0,
+            pendingCount: 0,
             thinking: false,
             thinkingAt: 0,
         });

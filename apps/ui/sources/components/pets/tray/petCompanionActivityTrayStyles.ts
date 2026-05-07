@@ -42,8 +42,6 @@ export const styles = StyleSheet.create({
     },
     item: {
         width: DESKTOP_PET_OVERLAY_TRAY_WIDTH,
-        height: 56,
-        minHeight: 56,
         borderRadius: 14,
         paddingHorizontal: 14,
         paddingVertical: 8,
@@ -61,8 +59,6 @@ export const styles = StyleSheet.create({
         zIndex: 0,
     } satisfies ViewStyle,
     itemReplyOpen: {
-        height: 108,
-        minHeight: 108,
     } satisfies ViewStyle,
     rowReverse: {
         flexDirection: 'row-reverse',
@@ -134,7 +130,6 @@ export const styles = StyleSheet.create({
     replyRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
         overflow: 'hidden',
     },
     replyRowCollapsed: {
@@ -143,22 +138,41 @@ export const styles = StyleSheet.create({
     },
     replyRowExpanded: {
         opacity: 1,
+        marginTop: 8,
         maxHeight: 40,
     },
-    replyInput: {
+    replyInputShell: {
         flex: 1,
+        minWidth: 0,
+        minHeight: 32,
+        position: 'relative',
+    },
+    replyInput: {
+        width: '100%',
         minHeight: 32,
         borderWidth: 1,
         borderRadius: 16,
-        paddingHorizontal: 12,
+        paddingLeft: 12,
+        paddingRight: 44,
         fontSize: 13,
     },
+    replyInputRtl: {
+        paddingRight: 12,
+        paddingLeft: 44,
+    },
     sendButton: {
+        position: 'absolute',
+        right: 2,
+        top: 0,
         width: 32,
         height: 32,
         borderRadius: 16,
         borderWidth: 0,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    sendButtonRtl: {
+        right: undefined,
+        left: 2,
     },
 });

@@ -500,7 +500,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('running');
     });
 
-    it('derives review attention from the existing unread session selector', async () => {
+    it('derives persistent waiting attention from the existing unread session selector', async () => {
         sessionsState.current = [
             createSessionFixture({ id: 'session-unread', active: true, thinking: false }),
         ];
@@ -516,7 +516,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         const screen = await renderScreen(<DesktopPetOverlayRoute />);
 
-        expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('review');
+        expect(screen.findByTestId('pet-companion-state')?.props['data-pet-state']).toBe('waiting');
     });
 
     it('renders activity tray items as no-drag actionable status cards', async () => {
@@ -574,11 +574,10 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(trayStyle?.overflow).toBe('hidden');
         expect(tray?.props['data-pet-scroll-fade-top']).toBe('false');
         expect(tray?.props['data-pet-scroll-fade-bottom']).toBe('false');
+        expect(itemStyle.height).toBeUndefined();
+        expect(itemStyle.minHeight).toBeUndefined();
         expect((itemStyle.borderWidth as number | undefined) ?? 0).toBe(0);
         expect(itemStyle.boxShadow).toBeUndefined();
-        expect((itemStyle.minHeight as number) * 2 + (trayStyle?.gap as number)).toBeLessThanOrEqual(
-            trayStyle?.maxHeight as number,
-        );
         expect(statusStyle?.position).toBe('absolute');
         expect((statusStyle?.borderWidth as number | undefined) ?? 0).toBe(0);
         expect(statusStyle?.width).toBeLessThanOrEqual(18);
@@ -885,6 +884,48 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-badge-reply')).not.toBeNull();
     });
 
+    it('keeps quick reply open when activity timestamps refresh for the same session', async () => {
+        sessionsState.current = [
+            createSessionFixture({
+                id: 'session-stable-reply',
+                active: true,
+                pendingCount: 1,
+                activeAt: 1_000,
+                thinkingAt: 1_000,
+            }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(<DesktopPetOverlayRoute />);
+        await act(async () => {
+            invokeTestInstanceHandler(screen.findByTestId('desktop-pet-overlay-tray-item-session-stable-reply'), 'onHoverIn');
+        });
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-stable-reply'),
+                'onPress',
+                { stopPropagation: vi.fn() },
+            );
+        });
+        expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-stable-reply')).not.toBeNull();
+
+        sessionsState.current = [
+            createSessionFixture({
+                id: 'session-stable-reply',
+                active: true,
+                pendingCount: 1,
+                activeAt: 2_000,
+                thinkingAt: 2_000,
+            }),
+        ];
+        await screen.update(<DesktopPetOverlayRoute />);
+
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-stable-reply')?.props['data-pet-reply-expanded']).toBe(
+            'true',
+        );
+        expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-stable-reply')).not.toBeNull();
+    });
+
     it('opens tray items through the existing session action path', async () => {
         sessionsState.current = [
             createSessionFixture({ id: 'session-open', active: true, pendingCount: 1 }),
@@ -954,9 +995,34 @@ describe('DesktopPetOverlayRoute selectors', () => {
         if (!input || !send) return;
 
         const sendStyle = resolvePressableStyle(send.props.style);
-        expect(sendStyle.borderRadius).toBe(16);
+        const inputShell = screen.findByTestId('desktop-pet-overlay-tray-reply-input-shell-session-reply');
+        const replyRow = screen.findByTestId('desktop-pet-overlay-tray-reply-row-session-reply');
+        const inputStyle = StyleSheet.flatten(input.props.style);
+        const inputShellStyle = StyleSheet.flatten(inputShell?.props.style);
+        const replyRowStyle = StyleSheet.flatten(replyRow?.props.style);
+        expect(replyRowStyle?.marginTop).toBeGreaterThan(0);
+        expect(inputShellStyle?.position).toBe('relative');
+        expect(inputStyle?.paddingRight).toBeGreaterThan(36);
+        expect(sendStyle.position).toBe('absolute');
+        expect(sendStyle.right).toBeGreaterThan(0);
+        expect(sendStyle.borderRadius).toBeGreaterThanOrEqual(16);
+        expect(sendStyle.borderTopLeftRadius).toBeUndefined();
+        expect(sendStyle.borderBottomLeftRadius).toBeUndefined();
         expect(sendStyle.borderWidth).toBe(0);
         expect(screen.root.findAll((node) => node.props?.name === 'arrow-up')).toHaveLength(1);
+
+        await act(async () => {
+            invokeTestInstanceHandler(inputShell, 'onPress', { stopPropagation: vi.fn() });
+            invokeTestInstanceHandler(input, 'onPress', { stopPropagation: vi.fn() });
+        });
+        await act(async () => {
+            invokeTestInstanceHandler(input, 'onPressIn', { stopPropagation: vi.fn() });
+        });
+        expect(executePetOverlayActionMock).not.toHaveBeenCalledWith(
+            'session.open',
+            expect.objectContaining({ sessionId: 'session-reply' }),
+            expect.anything(),
+        );
 
         await act(async () => {
             invokeTestInstanceHandler(input, 'onChangeText', '  Ship it  ');

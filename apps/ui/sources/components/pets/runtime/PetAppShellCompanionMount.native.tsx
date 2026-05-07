@@ -20,16 +20,24 @@ import {
     PET_TAP_REACTION_DURATION_MS,
     PET_TAP_REACTION_HAPTIC,
 } from '@/components/pets/animation/petAnimationPlaybackConfig';
+import { usePetCompanionActivityModel, type PetCompanionTrayItem } from '@/components/pets/activity';
 import { DEFAULT_BUILT_IN_PET_ID } from '@/components/pets/builtIns/builtInPetRegistry';
+import {
+    openDesktopPetOverlayTrayItem,
+    sendDesktopPetOverlayQuickReply,
+} from '@/components/pets/desktop/actions/desktopPetOverlayActions';
+import {
+    resolveDesktopPetOverlayGeometry,
+} from '@/components/pets/desktop/desktopPetOverlayGeometry';
 import { PetNativeAnimatedView, usePetNativePanGesture } from '@/components/pets/interaction/usePetNativePanGesture';
-import { PetNoDragRegionProvider, usePetNoDragRegions } from '@/components/pets/interaction/PetNoDragRegion';
+import { PetNoDragRegion, PetNoDragRegionProvider, usePetNoDragRegions } from '@/components/pets/interaction/PetNoDragRegion';
 import { PetCompanionState } from '@/components/pets/render/PetCompanionState';
 import { resolvePetCompanionOverlayMetrics } from '@/components/pets/render/petCompanionDisplayMetrics';
 import { PetSprite } from '@/components/pets/render/PetSprite.native';
 import { usePetAnimatedFrame } from '@/components/pets/render/usePetAnimatedFrame';
 import { usePetSpritesheetSource } from '@/components/pets/render/usePetSpritesheetSource';
 import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPackage';
-import { usePetCompanionActivityState } from '@/components/pets/state/usePetCompanionActivityState';
+import { PetCompanionActivityTray } from '@/components/pets/tray/PetCompanionActivityTray';
 import {
     PET_COMPANION_POSITION_DEFAULT_MARGIN_PT,
     createStoredPetCompanionPosition,
@@ -40,6 +48,7 @@ import {
     type PetCompanionViewportMetrics,
 } from '@/sync/domains/pets/companionPosition/companionPosition';
 import { useLocalSettings } from '@/sync/domains/state/storage';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 
@@ -122,7 +131,9 @@ function useTapReactionState(): Readonly<{
 
 function NativePetCompanionLayer(): React.ReactElement | null {
     const selectedPetPackage = useSelectedPetPackage();
-    const activity = usePetCompanionActivityState();
+    const [dismissedTrayItemKeys, setDismissedTrayItemKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+    const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
+    const [trayOpen, setTrayOpen] = React.useState(false);
     const localSettings = useLocalSettings();
     const applyLocalSettings = useApplyLocalSettings();
     const dimensions = useWindowDimensions();
@@ -137,6 +148,22 @@ function NativePetCompanionLayer(): React.ReactElement | null {
         () => resolvePetCompanionOverlayMetrics(localSettings.petsCompanionSizeScale),
         [localSettings.petsCompanionSizeScale],
     );
+    const geometry = React.useMemo(
+        () => resolveDesktopPetOverlayGeometry(localSettings.petsCompanionSizeScale),
+        [localSettings.petsCompanionSizeScale],
+    );
+    const trayItemCount = activity.trayItems.length;
+    const hasTrayItems = trayItemCount > 0;
+    const rootWidth = hasTrayItems ? geometry.expandedWindowWidth : metrics.spriteWidth;
+    const rootHeight = hasTrayItems ? geometry.expandedWindowHeight : metrics.spriteHeight;
+    const actionExecutor = React.useMemo(() => createDefaultActionExecutor(), []);
+
+    React.useEffect(() => {
+        setTrayOpen((current) => {
+            if (trayItemCount === 0) return false;
+            return current || trayItemCount > 0;
+        });
+    }, [trayItemCount]);
 
     const viewport = React.useMemo<PetCompanionViewportMetrics>(() => ({
         width: dimensions.width,
@@ -148,8 +175,8 @@ function NativePetCompanionLayer(): React.ReactElement | null {
 
     const bounds = React.useMemo(() => resolvePetCompanionPositionBounds({
         viewport,
-        petSize: { width: metrics.spriteWidth, height: metrics.spriteHeight },
-    }), [metrics.spriteHeight, metrics.spriteWidth, viewport]);
+        petSize: { width: rootWidth, height: rootHeight },
+    }), [rootHeight, rootWidth, viewport]);
 
     const initialPoint = React.useMemo<PetCompanionPoint>(() => denormalizePetCompanionPosition(
         parsePetCompanionPosition(localSettings.petsCompanionPosition),
@@ -173,6 +200,23 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     });
     const effectiveState = reactionState ?? pan.dragState ?? activity.state;
     const frame = usePetAnimatedFrame({ state: effectiveState, reducedMotion: reducedMotion || !appActive });
+    const handleOpenTrayItem = React.useCallback(async (item: PetCompanionTrayItem) => {
+        await openDesktopPetOverlayTrayItem({
+            item,
+            executor: actionExecutor,
+            showMainWindow: async () => undefined,
+        });
+    }, [actionExecutor]);
+    const handleQuickReply = React.useCallback(async (item: PetCompanionTrayItem, message: string) => {
+        await sendDesktopPetOverlayQuickReply({ item, message, executor: actionExecutor });
+    }, [actionExecutor]);
+    const handleDismissTrayItem = React.useCallback((item: PetCompanionTrayItem) => {
+        setDismissedTrayItemKeys((current) => {
+            const next = new Set(current);
+            next.add(item.dismissKey);
+            return next;
+        });
+    }, []);
 
     if (!selectedPetPackage.enabled || !selectedPetPackage.source) {
         return null;
@@ -185,18 +229,50 @@ function NativePetCompanionLayer(): React.ReactElement | null {
                 style={[
                     styles.root,
                     {
-                        width: metrics.spriteWidth,
-                        height: metrics.spriteHeight,
+                        width: rootWidth,
+                        height: rootHeight,
                     },
                     pan.animatedStyle,
                 ]}
                 testID="pet-app-shell-companion-root"
             >
-                <PetCompanionState state={effectiveState}>
+                {hasTrayItems ? (
+                    <PetNoDragRegion
+                        testID="pet-app-shell-companion-tray-no-drag-region"
+                        style={[
+                            styles.trayNoDragRegion,
+                            { bottom: geometry.windowHeight + 18 },
+                        ]}
+                    >
+                        <PetCompanionActivityTray
+                            items={activity.trayItems}
+                            open={trayOpen}
+                            onOpenItem={handleOpenTrayItem}
+                            onDismissItem={handleDismissTrayItem}
+                            onQuickReply={handleQuickReply}
+                        />
+                    </PetNoDragRegion>
+                ) : null}
+                <PetCompanionState
+                    state={effectiveState}
+                    style={[
+                        hasTrayItems ? styles.stateExpanded : styles.stateCompact,
+                        {
+                            width: metrics.spriteWidth,
+                            height: metrics.spriteHeight,
+                        },
+                    ]}
+                >
                     <Pressable
                         testID="pet-app-shell-companion-hitbox"
                         onPress={(event) => triggerTapReaction(event, pan.shouldSuppressPress)}
-                        style={styles.hitbox}
+                        style={[
+                            styles.hitbox,
+                            {
+                                width: metrics.spriteWidth,
+                                height: metrics.spriteHeight,
+                            },
+                        ]}
                     >
                         <PetSprite
                             testID="pet-app-shell-companion-sprite"
@@ -231,5 +307,21 @@ const styles = StyleSheet.create({
     } satisfies ViewStyle,
     hitbox: {
         backgroundColor: 'transparent',
+    } satisfies ViewStyle,
+    stateCompact: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+    } satisfies ViewStyle,
+    stateExpanded: {
+        position: 'absolute',
+        right: 36,
+        bottom: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+    } satisfies ViewStyle,
+    trayNoDragRegion: {
+        position: 'absolute',
+        right: 58,
     } satisfies ViewStyle,
 });

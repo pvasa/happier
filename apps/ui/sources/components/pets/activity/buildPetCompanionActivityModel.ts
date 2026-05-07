@@ -1,4 +1,4 @@
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionName, OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS } from '@/utils/sessions/sessionUtils';
 
 import {
     PET_COMPANION_ACTIVITY_EXPIRY_MS,
@@ -47,18 +47,20 @@ function hasWaitingActivity(
     session: PetCompanionActivitySession,
     signals: PetCompanionSessionSignals | undefined,
 ): boolean {
+    const isSessionActive = session.active === true;
     const pendingPermissionRequestCount =
         'pendingPermissionRequestCount' in session ? session.pendingPermissionRequestCount ?? 0 : 0;
     const pendingUserActionRequestCount =
         'pendingUserActionRequestCount' in session ? session.pendingUserActionRequestCount ?? 0 : 0;
 
     return (
-        pendingPermissionRequestCount > 0
-        || pendingUserActionRequestCount > 0
-        || (session.pendingCount ?? 0) > 0
-        || signals?.hasPendingPermissionRequests === true
-        || signals?.hasPendingUserActionRequests === true
-        || (signals?.pendingMessageCount ?? 0) > 0
+        isSessionActive
+        && (
+            pendingPermissionRequestCount > 0
+            || pendingUserActionRequestCount > 0
+            || signals?.hasPendingPermissionRequests === true
+            || signals?.hasPendingUserActionRequests === true
+        )
     );
 }
 
@@ -71,9 +73,19 @@ function latestConversationActivityTimestamp(
         signals?.latestThinkingActivityAtMs,
         session.thinkingAt,
         session.optimisticThinkingAt,
-        session.activeAt,
         session.createdAt,
     ]);
+}
+
+function getOptimisticThinkingExpiryAtMs(
+    session: PetCompanionActivitySession,
+    nowMs: number | undefined,
+): number | null {
+    const optimisticThinkingAt = session.optimisticThinkingAt ?? null;
+    if (!isPositiveTimestamp(optimisticThinkingAt)) return null;
+    const expiresAtMs = optimisticThinkingAt + OPTIMISTIC_SESSION_THINKING_TIMEOUT_MS;
+    if (isFiniteTimestamp(nowMs) && nowMs >= expiresAtMs) return null;
+    return expiresAtMs;
 }
 
 function resolveCandidate(
@@ -105,43 +117,42 @@ function resolveCandidate(
         const activityAtMs = latestConversationActivityTimestamp(session, signals);
         return {
             session,
-            status: 'review',
+            status: 'waiting',
             activityAtMs,
-            expiresAtMs: activityAtMs === null ? null : activityAtMs + PET_COMPANION_ACTIVITY_EXPIRY_MS.review,
+            expiresAtMs: null,
         };
     }
 
     const isInThinkingGrace =
         isPositiveTimestamp(session.thinkingGraceUntil)
         && (!isFiniteTimestamp(nowMs) || session.thinkingGraceUntil > nowMs);
-    const hasRecentThinkingActivity =
-        isPositiveTimestamp(signals?.latestThinkingActivityAtMs)
-        || isPositiveTimestamp(session.thinkingAt)
-        || isPositiveTimestamp(session.optimisticThinkingAt);
+    const optimisticThinkingExpiryAtMs = getOptimisticThinkingExpiryAtMs(session, nowMs);
+    const isOptimisticThinking = optimisticThinkingExpiryAtMs !== null;
 
-    if (session.thinking || isInThinkingGrace || hasRecentThinkingActivity) {
+    if (session.thinking || isInThinkingGrace || isOptimisticThinking) {
         const activityAtMs = session.thinking
             ? latestTimestamp([
                 signals?.latestThinkingActivityAtMs,
                 session.thinkingAt,
                 session.optimisticThinkingAt,
-                session.activeAt,
                 session.createdAt,
             ])
             : latestTimestamp([
                 signals?.latestThinkingActivityAtMs,
                 session.thinkingAt,
                 session.optimisticThinkingAt,
-                isInThinkingGrace ? session.updatedAt : null,
-                isInThinkingGrace ? session.activeAt : null,
+                session.createdAt,
             ]);
+        const runningExpiresAtMs = session.thinking
+            ? null
+            : isInThinkingGrace
+                ? session.thinkingGraceUntil ?? null
+                : optimisticThinkingExpiryAtMs;
         return {
             session,
             status: 'running',
             activityAtMs,
-            expiresAtMs: session.thinking || isInThinkingGrace || activityAtMs === null
-                ? null
-                : activityAtMs + PET_COMPANION_ACTIVITY_EXPIRY_MS.running,
+            expiresAtMs: runningExpiresAtMs,
         };
     }
 

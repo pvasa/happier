@@ -3,7 +3,12 @@ import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+    createSessionFixture,
+    invokeTestInstanceHandler,
+    renderScreen,
+    standardCleanup,
+} from '@/dev/testkit';
 import { resolveBuiltInPetPackage } from '@/components/pets/builtIns/builtInPetRegistry';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -49,6 +54,10 @@ const safeAreaState = vi.hoisted(() => ({
     bottom: 34,
     left: 0,
 }));
+const sessionsState = vi.hoisted(() => ({
+    current: [] as ReturnType<typeof createSessionFixture>[],
+}));
+const executePetCompanionActionSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -66,6 +75,9 @@ vi.mock('react-native', async () => {
         AppState: {
             currentState: 'active',
             addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+        },
+        I18nManager: {
+            isRTL: false,
         },
         Keyboard: {
             addListener: vi.fn(() => ({ remove: vi.fn() })),
@@ -94,6 +106,12 @@ vi.mock('@/sync/store/settingsWriters', () => ({
     useApplyLocalSettings: () => applyLocalSettingsSpy,
 }));
 
+vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+    createDefaultActionExecutor: () => ({
+        execute: executePetCompanionActionSpy,
+    }),
+}));
+
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
     const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
@@ -111,7 +129,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
                 ...localSettingsDefaults,
                 ...settingsState.local,
             }),
-            useAllSessions: () => [],
+            useAllSessions: () => sessionsState.current,
         },
     });
 });
@@ -139,6 +157,8 @@ describe('PetAppShellCompanionMount.native', () => {
                 lastViewport: null,
             },
         };
+        sessionsState.current = [];
+        executePetCompanionActionSpy.mockClear();
     });
 
     it('renders the selected pet in the native app shell with safe-area-aware positioning', async () => {
@@ -245,5 +265,55 @@ describe('PetAppShellCompanionMount.native', () => {
         });
 
         expect(screen.findByTestId('pet-app-shell-companion-root')).not.toBeNull();
+    });
+
+    it('renders shared activity bubbles and keeps quick reply input taps out of session open handling', async () => {
+        sessionsState.current = [
+            createSessionFixture({ id: 'native-pet-session', active: true, pendingCount: 1, updatedAt: 11_000 }),
+        ];
+        const { PetAppShellCompanionMount } = await import('./PetAppShellCompanionMount.native');
+
+        const screen = await renderScreen(<PetAppShellCompanionMount />);
+
+        expect(screen.findByTestId('desktop-pet-overlay-tray')).not.toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-native-pet-session')).not.toBeNull();
+
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-action-native-pet-session'),
+                'onPress',
+                { stopPropagation: vi.fn() },
+            );
+        });
+        const input = screen.findByTestId('desktop-pet-overlay-tray-reply-input-native-pet-session');
+        expect(input).not.toBeNull();
+
+        await act(async () => {
+            invokeTestInstanceHandler(input, 'onPress', { stopPropagation: vi.fn() });
+            invokeTestInstanceHandler(input, 'onPressIn', { stopPropagation: vi.fn() });
+        });
+
+        expect(executePetCompanionActionSpy).not.toHaveBeenCalledWith(
+            'session.open',
+            expect.objectContaining({ sessionId: 'native-pet-session' }),
+            expect.anything(),
+        );
+
+        await act(async () => {
+            invokeTestInstanceHandler(input, 'onChangeText', '  Reply from native  ');
+        });
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-send-native-pet-session'),
+                'onPress',
+                { stopPropagation: vi.fn() },
+            );
+        });
+
+        expect(executePetCompanionActionSpy).toHaveBeenCalledWith(
+            'session.message.send',
+            { sessionId: 'native-pet-session', message: 'Reply from native' },
+            expect.objectContaining({ defaultSessionId: 'native-pet-session' }),
+        );
     });
 });
