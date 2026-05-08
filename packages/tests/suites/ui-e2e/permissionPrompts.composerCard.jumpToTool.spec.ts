@@ -5,10 +5,10 @@ import { join, resolve } from 'node:path';
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
-import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
-import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/uiE2e/acknowledgeTerminalConnectSuccessIfPresent';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { repoRootDir } from '../../src/testkit/paths';
 
@@ -128,46 +128,21 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
     const testDir = resolve(join(suiteDir, 't1-composer-card-jump'));
     await mkdir(testDir, { recursive: true });
 
-    let cliLogin: StartedCliTerminalConnect | null = null;
     let thrown: unknown = null;
     try {
       await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-      await page.getByTestId('welcome-create-account').click();
-      await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
-
-      cliLogin = await startCliAuthLoginForTerminalConnect({
-        testDir,
-        cliHomeDir,
-        serverUrl: server.baseUrl,
-        webappUrl: uiBaseUrl,
-        env: {
-          ...process.env,
-          CI: '1',
-          HAPPIER_DISABLE_CAFFEINATE: '1',
-          HAPPIER_VARIANT: 'dev',
-        },
-      });
-
-      await gotoDomContentLoadedWithRetries(page, cliLogin.connectUrl, 90_000);
-      await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-      await page.getByTestId('terminal-connect-approve').click();
-      await cliLogin.waitForSuccess();
-      await acknowledgeTerminalConnectSuccessIfPresent(page);
+      await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       const fakeClaudePath = fakeClaudeFixturePath();
       const fakeClaudeLogPath = resolve(join(testDir, 'fake-claude.jsonl'));
-
-      daemon = await startTestDaemon({
+      daemon = await authenticateAndStartDaemon({
+        page,
         testDir,
-        happyHomeDir: cliHomeDir,
-        env: {
-          ...process.env,
-          CI: '1',
-          HAPPIER_HOME_DIR: cliHomeDir,
-          HAPPIER_SERVER_URL: server.baseUrl,
-          HAPPIER_WEBAPP_URL: uiBaseUrl,
-          HAPPIER_DISABLE_CAFFEINATE: '1',
-          HAPPIER_VARIANT: 'dev',
+        cliHomeDir,
+        serverUrl: server.baseUrl,
+        uiBaseUrl,
+        extraEnv: {
+          HOME: cliHomeDir,
           HAPPIER_CLAUDE_PATH: fakeClaudePath,
           HAPPIER_E2E_FAKE_CLAUDE_LOG: fakeClaudeLogPath,
           HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
@@ -196,7 +171,8 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionId}`, 120_000);
       await expect(page.getByTestId('session-composer-input')).toHaveCount(1, { timeout: 120_000 });
       await page.getByTestId('session-composer-input').fill(`trigger permission prompt ${run.runId}`);
-      await page.getByTestId('session-composer-input').press('Enter');
+      await expect(page.getByTestId('session-composer-send')).toBeEnabled({ timeout: 60_000 });
+      await page.getByTestId('session-composer-send').click();
       await expect(page.getByTestId('permission-prompt-card')).toHaveCount(1, { timeout: 180_000 });
 
       await page.getByTestId('permission-prompt-view-tool').click();
@@ -215,7 +191,6 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
       thrown = error;
       throw error;
     } finally {
-      await cliLogin?.stop().catch(() => {});
       if (thrown) {
         await testInfo.attach('note.txt', { body: 'permission prompt composer card e2e failed', contentType: 'text/plain' });
       }

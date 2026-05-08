@@ -8,6 +8,7 @@ import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -54,9 +55,7 @@ function decryptTokenEncryptedBundle(params: { tokenEncryptedBase64: string; rec
 
 async function createAccountViaWeb(page: Page, baseUrl: string): Promise<void> {
   await gotoDomContentLoadedWithRetries(page, baseUrl);
-  await expect(page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
-  await page.getByTestId('welcome-create-account').click();
-  await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+  await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 }
 
 test.describe('ui e2e: add your phone (desktop QR → mobile scan)', () => {

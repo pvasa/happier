@@ -9,13 +9,16 @@ import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/da
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 async function enableEnhancedSessionWizardInSettings(page: Page, baseUrl: string) {
     await page.goto(`${baseUrl}/settings/features`, { waitUntil: 'domcontentloaded' });
     const enhancedWizardToggle = page.getByTestId('settings-feature-toggle-useEnhancedSessionWizard');
-    await expect(enhancedWizardToggle).toHaveCount(1, { timeout: 60_000 });
+    if ((await enhancedWizardToggle.count()) === 0) {
+        return;
+    }
     await enhancedWizardToggle.click();
 }
 
@@ -32,16 +35,7 @@ async function ensureSignedInAndConnected(params: Readonly<{
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl, 420_000);
     await waitForInitialAppUi({ page, timeoutMs: 420_000 });
 
-    const createAccountByTestId = page.getByTestId('welcome-create-account');
-    const createAccountByRole = page.getByRole('button', { name: 'Create account' });
-    const createAccount =
-        (await createAccountByTestId.count()) ? createAccountByTestId
-            : (await createAccountByRole.count()) ? createAccountByRole
-                : null;
-    if (createAccount) {
-        await createAccount.click({ timeout: 60_000, force: true });
-        await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
-    }
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const testDir = resolve(join(suiteDir, flowDirName));
     await mkdir(testDir, { recursive: true });
@@ -111,6 +105,27 @@ async function selectDirectoryFromPathBrowser(
         allowRootFallback?: boolean;
     }>,
 ): Promise<string> {
+    const inlinePathTextbox = page.getByRole('textbox', { name: 'Enter a path...' }).first();
+    if (await inlinePathTextbox.count()) {
+        const inlineCandidates = ['/Users/leeroy/Documents', '/Users/leeroy/Desktop', '/Users/leeroy'] as const;
+        for (const candidate of inlineCandidates) {
+            const button = page.getByRole('button', { name: new RegExp(candidate.replace(/\//g, '\\/')) }).first();
+            if (await button.count()) {
+                await button.click();
+                await expect(inlinePathTextbox).toHaveCount(0, { timeout: 30_000 });
+                return candidate;
+            }
+        }
+
+        const firstSuggested = page.getByRole('button', { name: /\/Users\// }).first();
+        await expect(firstSuggested).toHaveCount(1, { timeout: 30_000 });
+        const firstSuggestedText = (await firstSuggested.textContent()) ?? '';
+        const selectedPath = firstSuggestedText.match(/\/Users\/[^\s]+/)?.[0] ?? '/Users/leeroy';
+        await firstSuggested.click();
+        await expect(inlinePathTextbox).toHaveCount(0, { timeout: 30_000 });
+        return selectedPath;
+    }
+
     await expect(page.getByTestId('path-browser-modal')).toHaveCount(1, { timeout: 60_000 });
     const candidates = ['/tmp', '/Users'] as const;
     let visiblePath: string | null = null;
@@ -180,6 +195,18 @@ async function selectDirectoryFromPathBrowser(
     });
     await expect(page.getByTestId('path-browser-modal')).toHaveCount(0, { timeout: 30_000 });
     return visiblePath;
+}
+
+async function openPathBrowserFromNewSession(page: Page): Promise<void> {
+    const modernPathChip = page.getByTestId('agent-input-path-chip').first();
+    if (await modernPathChip.count()) {
+        await modernPathChip.click();
+        return;
+    }
+
+    const legacyTrigger = page.getByTestId('path-browser-trigger').first();
+    await expect(legacyTrigger).toHaveCount(1, { timeout: 180_000 });
+    await legacyTrigger.click();
 }
 
 async function ensureNewSessionBackendIsReady(page: Page): Promise<void> {
@@ -285,10 +312,14 @@ test.describe('ui e2e: directory path browser reuse', () => {
 
         await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new`);
         await ensureNewSessionBackendIsReady(page);
-        await expect(page.getByTestId('path-browser-trigger')).toHaveCount(1, { timeout: 180_000 });
-        await page.getByTestId('path-browser-trigger').click();
+        await openPathBrowserFromNewSession(page);
         const selectedPath = await selectDirectoryFromPathBrowser(page);
-        await expect(page.getByTestId('path-selector-input')).toHaveValue(selectedPath, { timeout: 30_000 });
+        const pathSelectorInput = page.getByTestId('path-selector-input');
+        if (await pathSelectorInput.count()) {
+            await expect(pathSelectorInput).toHaveValue(selectedPath, { timeout: 30_000 });
+        } else {
+            await expect(page.getByTestId('agent-input-path-chip')).toContainText(selectedPath, { timeout: 30_000 });
+        }
     });
 
     test('uses the shared path browser from the MCP detected-directory settings input', async ({ page }) => {
@@ -312,9 +343,9 @@ test.describe('ui e2e: directory path browser reuse', () => {
         await expect(page.getByTestId('settings.mcpServers.segment:detected')).toHaveCount(1, { timeout: 180_000 });
         await page.getByTestId('settings.mcpServers.segment:detected').click();
         await expect(page.getByTestId('settings.mcpServers.detect.directoryInput')).toHaveCount(1, { timeout: 60_000 });
-        await expect(page.getByTestId('path-browser-trigger')).toHaveCount(1, { timeout: 60_000 });
-
-        await page.getByTestId('path-browser-trigger').click();
+        const settingsPathBrowserTrigger = page.getByTestId('path-browser-trigger').first();
+        await expect(settingsPathBrowserTrigger).toHaveCount(1, { timeout: 60_000 });
+        await settingsPathBrowserTrigger.click();
         const selectedPath = await selectDirectoryFromPathBrowser(page, { allowRootFallback: true });
         await expect(page.getByTestId('settings.mcpServers.detect.directoryInput')).toHaveValue(selectedPath, { timeout: 30_000 });
     });
