@@ -34,6 +34,14 @@ function isAllowedAliasRequire(aliasPath: string): boolean {
     return ALIAS_REQUIRE_ALLOWLIST.some((prefix) => aliasPath.startsWith(prefix));
 }
 
+function isExpoModulesCoreSourcePath(request: string): boolean {
+    return /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?expo-modules-core[\\/]src[\\/]index\.ts$/.test(request);
+}
+
+function isExpoConstantsSourcePath(request: string): boolean {
+    return /(?:^|[\\/])node_modules[\\/](?:@[^\\/]+[\\/])?expo-constants[\\/]src[\\/]Constants\.ts$/.test(request);
+}
+
 export function installVitestRnShim(options: VitestRnShimOptions = {}): void {
     const globalState = globalThis as Record<string, unknown>;
     if (globalState[SHIM_INSTALLED_KEY] === true) return;
@@ -79,8 +87,20 @@ export function installVitestRnShim(options: VitestRnShimOptions = {}): void {
 
                 if (request === 'react-native') return reactNativeRootStub;
                 if (request.startsWith('react-native/')) return reactNativeInternalProxy;
-                if (request === 'expo-constants' || request.startsWith('expo-constants/')) return expoConstantsStub;
-                if (request === 'expo-modules-core' || request.startsWith('expo-modules-core/')) return expoModulesCoreStub;
+                if (
+                    request === 'expo-constants'
+                    || request.startsWith('expo-constants/')
+                    || isExpoConstantsSourcePath(request)
+                ) {
+                    return expoConstantsStub;
+                }
+                if (
+                    request === 'expo-modules-core'
+                    || request.startsWith('expo-modules-core/')
+                    || isExpoModulesCoreSourcePath(request)
+                ) {
+                    return expoModulesCoreStub;
+                }
                 if (request === '@react-native/virtualized-lists' || request.startsWith('@react-native/virtualized-lists/')) {
                     return reactNativeVirtualizedListsStub;
                 }
