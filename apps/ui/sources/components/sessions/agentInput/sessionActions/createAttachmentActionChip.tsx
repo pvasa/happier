@@ -10,13 +10,16 @@ import { t } from '@/text';
 import { blurActiveElementOnWeb } from '@/utils/platform/deferOnWeb';
 
 const WEB_PICKER_DOUBLE_OPEN_COOLDOWN_MS = 500;
+const NATIVE_PICKER_OPEN_AFTER_POPOVER_DISMISS_DELAY_MS = 250;
 
 function runAfterNativePopoverDismiss(action: () => void): void {
     if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
         action();
         return;
     }
-    InteractionManager.runAfterInteractions(action);
+    InteractionManager.runAfterInteractions(() => {
+        setTimeout(action, NATIVE_PICKER_OPEN_AFTER_POPOVER_DISMISS_DELAY_MS);
+    });
 }
 
 export function createAttachmentActionChip(params: Readonly<{

@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
@@ -11,6 +11,14 @@ vi.mock('expo-haptics', () => ({
     notificationAsync: vi.fn(async () => {}),
     ImpactFeedbackStyle: { Light: 'Light' },
     NotificationFeedbackType: { Error: 'Error' },
+}));
+
+const keyboardMockState = vi.hoisted(() => ({
+    height: 0,
+}));
+
+vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
+    useKeyboardHeight: () => keyboardMockState.height,
 }));
 
 let storageSettings: Settings = {
@@ -75,6 +83,15 @@ installAgentInputCommonModuleMocks({
     });
 
 describe('AgentInput (action bar auto layout)', () => {
+    beforeEach(() => {
+        keyboardMockState.height = 0;
+        storageSettings = {
+            ...storageSettings,
+            agentInputActionBarLayout: 'auto',
+            agentInputChipDensity: 'labels',
+        };
+    });
+
     it('uses the scrollable action bar layout in auto mode on sub-tablet widths', async () => {
         storageSettings = { ...storageSettings, agentInputChipDensity: 'labels' };
         vi.resetModules();
@@ -101,6 +118,38 @@ describe('AgentInput (action bar auto layout)', () => {
         ));
         expect(scrollViews.length).toBeGreaterThan(0);
         expect(scrollViews[0]?.props?.scrollEnabled).toBe(true);
+    });
+
+    it('keeps mobile keyboard action controls in a footer with two scrollable chip rows', async () => {
+        keyboardMockState.height = 280;
+        vi.resetModules();
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                onPermissionClick={() => {}}
+                onMachineClick={() => {}}
+                machineName="Builder"
+                onPathClick={() => {}}
+                currentPath="/tmp"
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+            />,
+        );
+
+        const verticalScrollViews = screen.tree.root.findAll((node: any) => (
+            node?.type === 'ScrollView' && node?.props?.horizontal !== true
+        ));
+        expect(verticalScrollViews.length).toBeGreaterThan(0);
+
+        const horizontalScrollViews = screen.tree.root.findAll((node: any) => (
+            node?.type === 'ScrollView' && node?.props?.horizontal === true
+        ));
+        expect(horizontalScrollViews).toHaveLength(2);
     });
 
     it('keeps the path chip label visible even when chip density is icons', async () => {
