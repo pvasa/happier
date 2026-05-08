@@ -1,3 +1,5 @@
+import { applyTheme, applyThemeWithTransition } from './theme-transition.js';
+
 // Theme Toggle
 const themeToggle = document.getElementById('theme-toggle');
 const html = document.documentElement;
@@ -25,9 +27,8 @@ function getSystemTheme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-// Apply theme
-function applyTheme(theme) {
-  html.classList.toggle('dark', theme === 'dark');
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 // Initialize theme
@@ -37,14 +38,25 @@ applyTheme(getStoredTheme() ?? getSystemTheme());
 themeToggle?.addEventListener('click', () => {
   const currentTheme = html.classList.contains('dark') ? 'dark' : 'light';
   const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
-  applyTheme(nextTheme);
+  void applyThemeWithTransition({
+    currentTheme,
+    document,
+    nextTheme,
+    reduceMotion: prefersReducedMotion(),
+  });
   safeLocalStorageSet('theme', nextTheme);
 });
 
 // Listen for system theme changes
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
   if (!getStoredTheme()) {
-    applyTheme(e.matches ? 'dark' : 'light');
+    const currentTheme = html.classList.contains('dark') ? 'dark' : 'light';
+    void applyThemeWithTransition({
+      currentTheme,
+      document,
+      nextTheme: e.matches ? 'dark' : 'light',
+      reduceMotion: prefersReducedMotion(),
+    });
   }
 });
 
