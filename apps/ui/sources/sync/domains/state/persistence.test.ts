@@ -173,6 +173,21 @@ describe('persistence', () => {
     });
 
     describe('scoped session local metadata', () => {
+        it('filters invalid persisted permission modes', () => {
+            store.set(
+                'session-permission-modes',
+                JSON.stringify({ ok: 'yolo', bad: 'not-a-mode', numeric: 12 }),
+            );
+
+            expect(loadSessionPermissionModes()).toEqual({ ok: 'yolo' });
+        });
+
+        it('returns an empty object when persisted permission modes are not a record', () => {
+            store.set('session-permission-modes', JSON.stringify(['yolo']));
+
+            expect(loadSessionPermissionModes()).toEqual({});
+        });
+
         it('isolates session drafts by server account scope', () => {
             saveSessionDrafts({ s1: 'account A draft' }, sessionLocalScopeA);
 

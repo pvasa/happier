@@ -31,7 +31,7 @@ const authContextState = vi.hoisted(() => ({
     liveIsAuthenticated: null as boolean | null,
 }));
 
-const { fromModuleMock, trackingState } = vi.hoisted(() => ({
+const { fromModuleMock, trackingState, fontAwesomeFontMock, ioniconsFontMock } = vi.hoisted(() => ({
     fromModuleMock: vi.fn(),
     trackingState: {
         client: null as null | {
@@ -40,6 +40,8 @@ const { fromModuleMock, trackingState } = vi.hoisted(() => ({
             capture?: ReturnType<typeof vi.fn>;
         },
     },
+    fontAwesomeFontMock: { FontAwesome: 101 },
+    ioniconsFontMock: { Ionicons: 202 },
 }));
 
 vi.mock('react-native-quick-base64', () => ({}));
@@ -87,7 +89,8 @@ vi.mock('expo-notifications', () => ({
 }));
 
 vi.mock('@expo/vector-icons', () => ({
-    FontAwesome: { font: {} },
+    FontAwesome: { font: fontAwesomeFontMock },
+    Ionicons: { font: ioniconsFontMock },
 }));
 
 vi.mock('@/auth/storage/tokenStorage', () => ({
@@ -421,6 +424,18 @@ describe('app/_layout init resilience', () => {
                 showBadge: true,
             }),
         );
+    });
+
+    it('preloads both FontAwesome and Ionicons icon fonts on native', async () => {
+        mockedPlatformOS = 'ios';
+
+        await renderSettledRootLayout();
+
+        expect(loadAsyncMock).toHaveBeenCalledTimes(1);
+        expect(loadAsyncMock.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+            ...fontAwesomeFontMock,
+            ...ioniconsFontMock,
+        }));
     });
 
     it('uses app variant as the default Sentry environment when EXPO_PUBLIC_SENTRY_ENVIRONMENT is unset', async () => {
