@@ -19,6 +19,10 @@ function responseItemLine(params: { timestamp: string; payload: Record<string, u
   return `${JSON.stringify({ type: 'response_item', timestamp: params.timestamp, payload: params.payload })}\n`;
 }
 
+function eventMsgLine(params: { timestamp: string; payload: Record<string, unknown> }): string {
+  return `${JSON.stringify({ type: 'event_msg', timestamp: params.timestamp, payload: params.payload })}\n`;
+}
+
 describe('pageCodexTranscript', () => {
   it('pages newest-first (direction=older) from a rollout jsonl transcript', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-page-'));
@@ -104,6 +108,54 @@ describe('pageCodexTranscript', () => {
     expect(secondTypes).toEqual(['text', 'message']);
     expect(second.hasMore).toBe(false);
     expect(second.nextCursor).toBeNull();
+  });
+
+  it('maps Codex rollout compaction markers into direct transcript events', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-page-compaction-'));
+    const codexHome = join(root, 'codex-home');
+    const sessionsDir = join(codexHome, 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+
+    const sessionId = '11111111-1111-1111-1111-111111111111';
+    const filePath = join(sessionsDir, `rollout-2026-01-02T00-00-00-${sessionId}.jsonl`);
+
+    await writeFile(
+      filePath,
+      sessionMetaLine({ id: sessionId, timestamp: '2026-01-02T00:00:00.000Z', cwd: '/repo/one' })
+        + eventMsgLine({
+          timestamp: '2026-01-02T00:00:01.000Z',
+          payload: { type: 'context_compacted', turn_id: 'turn_compact' },
+        }),
+      'utf8',
+    );
+    await utimes(filePath, new Date('2026-01-02T00:00:01.000Z'), new Date('2026-01-02T00:00:01.000Z'));
+
+    const page = await pageCodexTranscript({
+      source: { kind: 'codexHome', home: 'user' },
+      env: { CODEX_HOME: codexHome } as NodeJS.ProcessEnv,
+      activeServerDir: join(root, 'servers', 'cloud'),
+      remoteSessionId: sessionId,
+      direction: 'older',
+      maxBytes: 1024 * 1024,
+      maxItems: 10,
+    });
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]?.raw).toEqual({
+      role: 'agent',
+      content: {
+        type: 'event',
+        id: expect.any(String),
+        data: expect.objectContaining({
+          type: 'context-compaction',
+          phase: 'completed',
+          lifecycleId: 'codex:context-compaction:turn_compact',
+          provider: 'codex',
+          source: 'provider-event',
+          providerEventId: 'turn_compact',
+        }),
+      },
+    });
   });
 
   it('falls back to app-server preview metadata when rollout files are missing', async () => {

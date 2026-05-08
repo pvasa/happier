@@ -19,6 +19,41 @@ function isBoolean(value: unknown): value is boolean {
   return value === true || value === false;
 }
 
+function readPiCompactionTrigger(value: unknown): 'manual' | 'threshold' | 'overflow' | 'unknown' {
+  return value === 'manual' || value === 'threshold' || value === 'overflow' ? value : 'unknown';
+}
+
+function readPiCompactionLifecycleId(record: Record<string, unknown>): string {
+  return (
+    asNonEmptyString(record.compactionId) ??
+    asNonEmptyString(record.compaction_id) ??
+    asNonEmptyString(record.id) ??
+    asNonEmptyString(record.turnId) ??
+    asNonEmptyString(record.turn_id) ??
+    'pi:context-compaction'
+  );
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readRetryAttempt(record: Record<string, unknown>, result: Record<string, unknown> | null): number | null {
+  const raw = readFiniteNumber(record.retryAttempt) ?? readFiniteNumber(record.retry_attempt) ?? readFiniteNumber(result?.retryAttempt) ?? readFiniteNumber(result?.retry_attempt);
+  return raw === null ? null : Math.max(0, Math.trunc(raw));
+}
+
+function readPiCompactionCancelled(record: Record<string, unknown>, result: Record<string, unknown> | null): boolean {
+  return (
+    record.cancelled === true ||
+    record.canceled === true ||
+    result?.cancelled === true ||
+    result?.canceled === true ||
+    asNonEmptyString(record.status)?.toLowerCase() === 'cancelled' ||
+    asNonEmptyString(record.status)?.toLowerCase() === 'canceled'
+  );
+}
+
 function extractAssistantText(message: unknown): string | null {
   const record = asRecord(message);
   if (!record) return null;
@@ -68,6 +103,52 @@ export function mapPiRpcEventToAgentMessages(event: unknown): AgentMessage[] {
   }
   if (type === 'agent_end' || type === 'turn_end') {
     return [{ type: 'status', status: 'idle' }];
+  }
+
+  if (type === 'compaction_start') {
+    const lifecycleId = readPiCompactionLifecycleId(record);
+    return [{
+      type: 'event',
+      name: 'context_compaction',
+      payload: {
+        type: 'context-compaction',
+        phase: 'started',
+        provider: 'pi',
+        lifecycleId,
+        trigger: readPiCompactionTrigger(record.reason),
+        source: 'provider-event',
+      },
+    }];
+  }
+
+  if (type === 'compaction_end') {
+    const result = asRecord(record.result);
+    const tokensBefore = result ? readFiniteNumber(result.tokensBefore) : null;
+    const tokensAfter = result ? readFiniteNumber(result.tokensAfter) : null;
+    const sanitizedErrorPreview = asNonEmptyString(record.errorMessage);
+    const errorCode = asNonEmptyString(record.errorCode);
+    const aborted = isBoolean(record.aborted) ? record.aborted : false;
+    const retryAttempt = readRetryAttempt(record, result);
+    const lifecycleId = readPiCompactionLifecycleId(record);
+    const cancelled = readPiCompactionCancelled(record, result);
+    const failed = !cancelled && Boolean(aborted || sanitizedErrorPreview);
+    return [{
+      type: 'event',
+      name: 'context_compaction',
+      payload: {
+        type: 'context-compaction',
+        phase: cancelled ? 'cancelled' : failed ? 'failed' : 'completed',
+        provider: 'pi',
+        lifecycleId,
+        trigger: readPiCompactionTrigger(record.reason),
+        source: 'provider-event',
+        ...(tokensBefore !== null ? { tokenCountBefore: tokensBefore } : {}),
+        ...(tokensAfter !== null ? { tokenCountAfter: tokensAfter } : {}),
+        ...(retryAttempt !== null ? { retryAttempt } : {}),
+        ...(errorCode ? { errorCode } : {}),
+        ...(sanitizedErrorPreview ? { sanitizedErrorPreview } : {}),
+      },
+    }];
   }
 
   if (type === 'message_update') {

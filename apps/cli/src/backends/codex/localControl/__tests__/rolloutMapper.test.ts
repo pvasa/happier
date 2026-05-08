@@ -10,6 +10,45 @@ describe('mapCodexRolloutEventToActions', () => {
         expect(actions).toEqual([{ type: 'codex-session-id', id: 'abc' }]);
     });
 
+    it('maps Codex rollout compaction markers to structured context-compaction actions', () => {
+        expect(
+            mapCodexRolloutEventToActions(
+                {
+                    type: 'event_msg',
+                    timestamp: '2026-01-02T00:00:01.000Z',
+                    payload: { type: 'context_compacted', turn_id: 'turn_compact' },
+                },
+                { debug: false },
+            ),
+        ).toEqual([
+            {
+                type: 'context-compaction',
+                phase: 'completed',
+                lifecycleId: 'codex:context-compaction:turn_compact',
+                source: 'provider-event',
+                providerEventId: 'turn_compact',
+            },
+        ]);
+
+        expect(
+            mapCodexRolloutEventToActions(
+                {
+                    type: 'compacted',
+                    timestamp: '2026-01-02T00:00:02.000Z',
+                    payload: { message: 'private compaction summary' },
+                },
+                { debug: false },
+            ),
+        ).toEqual([
+            {
+                type: 'context-compaction',
+                phase: 'completed',
+                lifecycleId: 'codex:context-compaction:2026-01-02T00:00:02.000Z',
+                source: 'transcript-inference',
+            },
+        ]);
+    });
+
     it('maps user message to user-text (filters harness blobs by default)', () => {
         const actions = mapCodexRolloutEventToActions(
             {

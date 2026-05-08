@@ -69,6 +69,66 @@ describe('mapPiRpcEventToAgentMessages', () => {
     expect(mapPiRpcEventToAgentMessages({ type: 'turn_end' })).toEqual([{ type: 'status', status: 'idle' }]);
   });
 
+  it('maps compaction lifecycle events to structured provider events', () => {
+    expect(mapPiRpcEventToAgentMessages({ type: 'compaction_start', reason: 'manual' })).toEqual([
+      {
+        type: 'event',
+        name: 'context_compaction',
+        payload: {
+          type: 'context-compaction',
+          phase: 'started',
+          provider: 'pi',
+          lifecycleId: 'pi:context-compaction',
+          trigger: 'manual',
+          source: 'provider-event',
+        },
+      },
+    ]);
+
+    expect(mapPiRpcEventToAgentMessages({
+      type: 'compaction_end',
+      reason: 'threshold',
+      result: { tokensBefore: 1234, tokensAfter: 456 },
+      aborted: false,
+      retryAttempt: 2,
+    })).toEqual([
+      {
+        type: 'event',
+        name: 'context_compaction',
+        payload: {
+          type: 'context-compaction',
+          phase: 'completed',
+          provider: 'pi',
+          lifecycleId: 'pi:context-compaction',
+          trigger: 'threshold',
+          source: 'provider-event',
+          tokenCountBefore: 1234,
+          tokenCountAfter: 456,
+          retryAttempt: 2,
+        },
+      },
+    ]);
+
+    expect(mapPiRpcEventToAgentMessages({
+      type: 'compaction_end',
+      reason: 'manual',
+      cancelled: true,
+    })).toEqual([
+      {
+        type: 'event',
+        name: 'context_compaction',
+        payload: {
+          type: 'context-compaction',
+          phase: 'cancelled',
+          provider: 'pi',
+          lifecycleId: 'pi:context-compaction',
+          trigger: 'manual',
+          source: 'provider-event',
+        },
+      },
+    ]);
+  });
+
   it('returns an empty list for unknown events', () => {
     expect(mapPiRpcEventToAgentMessages({ type: 'something_new' })).toEqual([]);
   });

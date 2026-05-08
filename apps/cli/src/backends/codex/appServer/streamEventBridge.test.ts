@@ -109,6 +109,34 @@ describe('createCodexAppServerStreamEventBridge', () => {
         ).toEqual([{ type: 'reasoning-final', itemId: 'reason_1', text: 'final reasoning' }]);
     });
 
+    it('maps app-server context compaction item lifecycle notifications', () => {
+        const bridge = createCodexAppServerStreamEventBridge();
+
+        expect(
+            bridge.onNotification({
+                method: 'item/started',
+                params: {
+                    item: {
+                        id: 'compact_1',
+                        type: 'contextCompaction',
+                    },
+                },
+            }),
+        ).toEqual([{ type: 'context-compaction', phase: 'started', itemId: 'compact_1' }]);
+
+        expect(
+            bridge.onNotification({
+                method: 'item/completed',
+                params: {
+                    item: {
+                        id: 'compact_1',
+                        type: 'contextCompaction',
+                    },
+                },
+            }),
+        ).toEqual([{ type: 'context-compaction', phase: 'completed', itemId: 'compact_1' }]);
+    });
+
     it('maps command execution items and approval requests', () => {
         const bridge = createCodexAppServerStreamEventBridge();
 
@@ -181,6 +209,42 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 output: {
                     stdout: 'done',
                     exitCode: 0,
+                },
+            },
+        ]);
+    });
+
+    it('maps permission escalation approval requests without requiring a prior tool item', () => {
+        const bridge = createCodexAppServerStreamEventBridge();
+
+        expect(
+            bridge.onServerRequest({
+                method: 'item/permissions/requestApproval',
+                params: {
+                    threadId: 'thread_1',
+                    turnId: 'turn_1',
+                    itemId: 'perm_1',
+                    cwd: '/repo',
+                    reason: 'Needs network access',
+                    permissions: {
+                        network: { enabled: true },
+                    },
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'permissions-request',
+                callId: 'perm_1',
+                toolName: 'request_permissions',
+                input: {
+                    cwd: '/repo',
+                    reason: 'Needs network access',
+                    permissions: {
+                        network: { enabled: true },
+                    },
+                },
+                permissions: {
+                    network: { enabled: true },
                 },
             },
         ]);

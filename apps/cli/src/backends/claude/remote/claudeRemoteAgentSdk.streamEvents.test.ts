@@ -1707,6 +1707,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
     it('treats compact_boundary as a turn boundary so queued prompts keep flowing without waiting for a result message', async () => {
         const onReady = vi.fn();
         const onSessionFound = vi.fn();
+        const onCompletionEvent = vi.fn();
 
         let releaseStream!: () => void;
         const streamClosed = new Promise<void>((resolve) => {
@@ -1765,17 +1766,43 @@ describe('claudeRemoteAgentSdk stream events', () => {
             onReady,
             onSessionFound,
             onMessage: () => {},
+            onCompletionEvent,
             createQuery,
         } as any);
 
         try {
             await vi.waitFor(() => {
-                expect(onReady).toHaveBeenCalledTimes(1);
+            expect(onReady).toHaveBeenCalledTimes(1);
             });
             await vi.waitFor(() => {
                 expect(nextMessage).toHaveBeenCalledTimes(2);
             });
             expect(onSessionFound).toHaveBeenCalledWith('sess_compacted_boundary_2', expect.anything());
+            expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'context-compaction',
+                phase: 'started',
+                provider: 'claude',
+                source: 'user-command',
+                trigger: 'manual',
+                lifecycleId: expect.any(String),
+            }));
+            expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'context-compaction',
+                phase: 'completed',
+                provider: 'claude',
+                source: 'provider-event',
+                trigger: 'manual',
+                providerSessionId: 'sess_compacted_boundary_2',
+                tokenCountBefore: 175_000,
+                tokenCountSource: 'claude-compact-metadata.pre_tokens',
+                lifecycleId: expect.any(String),
+            }));
+            const compactionEvents = onCompletionEvent.mock.calls.map((call) => call[0]);
+            const started = compactionEvents.find((event: any) => event?.type === 'context-compaction' && event.phase === 'started');
+            const completed = compactionEvents.find((event: any) => event?.type === 'context-compaction' && event.phase === 'completed');
+            expect(completed?.lifecycleId).toBe(started?.lifecycleId);
+            expect(compactionEvents).not.toContain('Compaction started');
+            expect(compactionEvents).not.toContain('Compaction completed');
         } finally {
             releaseStream();
             await runnerPromise.catch(() => {});

@@ -49,6 +49,17 @@ type NormalizedAgentContent =
 
 type ToolResultPermissions = Extract<NormalizedAgentContent, { type: 'tool-result' }>['permissions'];
 
+type ContextCompactionPhase = 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';
+type ContextCompactionSource =
+    | 'provider-event'
+    | 'provider-status'
+    | 'provider-hook'
+    | 'transcript-inference'
+    | 'user-command'
+    | 'runtime';
+type ContextCompactionTrigger = 'manual' | 'auto' | 'threshold' | 'overflow' | 'unknown';
+type ContextCompactionAgentEvent = Extract<AgentEvent, { type: 'context-compaction' }>;
+
 export type NormalizedMessage = ({
     role: 'user'
     content: {
@@ -78,6 +89,105 @@ export type NormalizedMessage = ({
     usage?: UsageData,
 };
 
+function readNonEmptyString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readOriginalStructuredContentData(rawInput: unknown, contentType: 'event' | 'acp'): Record<string, unknown> | null {
+    if (!isPlainRecord(rawInput)) return null;
+    const content = rawInput.content;
+    if (!isPlainRecord(content) || content.type !== contentType) return null;
+    return isPlainRecord(content.data) ? content.data : null;
+}
+
+function normalizeContextCompactionPhase(value: unknown): {
+    phase: ContextCompactionPhase;
+    legacyDetected: boolean;
+} {
+    if (value === 'started' || value === 'progress' || value === 'completed' || value === 'failed' || value === 'cancelled') {
+        return { phase: value, legacyDetected: false };
+    }
+    if (value === 'detected') {
+        return { phase: 'completed', legacyDetected: true };
+    }
+    return { phase: 'completed', legacyDetected: false };
+}
+
+function normalizeContextCompactionSource(value: unknown, fallback: ContextCompactionSource | undefined): ContextCompactionSource | undefined {
+    if (
+        value === 'provider-event' ||
+        value === 'provider-status' ||
+        value === 'provider-hook' ||
+        value === 'transcript-inference' ||
+        value === 'user-command' ||
+        value === 'runtime'
+    ) {
+        return value;
+    }
+    return fallback;
+}
+
+function normalizeContextCompactionTrigger(value: unknown): ContextCompactionTrigger | undefined {
+    return value === 'manual' || value === 'auto' || value === 'threshold' || value === 'overflow' || value === 'unknown'
+        ? value
+        : undefined;
+}
+
+function normalizeContextCompactionEventData(
+    value: Record<string, unknown>,
+    providerFallback?: string,
+): AgentEvent {
+    const phaseResult = normalizeContextCompactionPhase(value.phase);
+    const source = normalizeContextCompactionSource(
+        value.source,
+        phaseResult.legacyDetected ? 'transcript-inference' : undefined,
+    );
+    const provider = readNonEmptyString(value.provider) ?? readNonEmptyString(providerFallback);
+    const tokenCountBefore = readFiniteNumber(value.tokenCountBefore) ?? readFiniteNumber(value.tokensBefore);
+    const tokenCountAfter = readFiniteNumber(value.tokenCountAfter) ?? readFiniteNumber(value.tokensAfter);
+    const retryAttempt = readFiniteNumber(value.retryAttempt);
+    const event: ContextCompactionAgentEvent = {
+        type: 'context-compaction',
+        phase: phaseResult.phase,
+    };
+
+    if (provider) event.provider = provider;
+    const lifecycleId = readNonEmptyString(value.lifecycleId);
+    if (lifecycleId) event.lifecycleId = lifecycleId;
+    const backendId = readNonEmptyString(value.backendId);
+    if (backendId) event.backendId = backendId;
+    const agentId = readNonEmptyString(value.agentId);
+    if (agentId) event.agentId = agentId;
+    const trigger = normalizeContextCompactionTrigger(value.trigger);
+    if (trigger) event.trigger = trigger;
+    if (source) event.source = source;
+    const providerEventId = readNonEmptyString(value.providerEventId);
+    if (providerEventId) event.providerEventId = providerEventId;
+    const providerSessionId = readNonEmptyString(value.providerSessionId);
+    if (providerSessionId) event.providerSessionId = providerSessionId;
+    const turnId = readNonEmptyString(value.turnId);
+    if (turnId) event.turnId = turnId;
+    if (tokenCountBefore !== undefined) event.tokenCountBefore = tokenCountBefore;
+    if (tokenCountAfter !== undefined) event.tokenCountAfter = tokenCountAfter;
+    const tokenCountSource = readNonEmptyString(value.tokenCountSource);
+    if (tokenCountSource) event.tokenCountSource = tokenCountSource;
+    if (retryAttempt !== undefined) event.retryAttempt = Math.max(0, Math.trunc(retryAttempt));
+    const errorCode = readNonEmptyString(value.errorCode);
+    if (errorCode) event.errorCode = errorCode;
+    const sanitizedErrorPreview = readNonEmptyString(value.sanitizedErrorPreview) ?? readNonEmptyString(value.errorMessage);
+    if (sanitizedErrorPreview) event.sanitizedErrorPreview = sanitizedErrorPreview;
+
+    return event;
+}
+
 export function normalizeRawMessage(
     id: string,
     localId: string | null,
@@ -93,26 +203,29 @@ export function normalizeRawMessage(
         // Never log full raw messages in production: tool outputs and user text may contain secrets.
         // Keep enough context for debugging in dev builds only.
         console.error(`[typesRaw] Message validation failed (id=${id})`);
+        const rawInputRecord = isPlainRecord(rawInput) ? rawInput : null;
+        const rawContentRecord = isPlainRecord(rawInputRecord?.content) ? rawInputRecord.content : null;
+        const rawDataRecord = isPlainRecord(rawContentRecord?.data) ? rawContentRecord.data : null;
         if (__DEV__) {
-            const contentType = (rawInput as any)?.content?.type;
-            const dataType = (rawInput as any)?.content?.data?.type;
-            const provider = (rawInput as any)?.content?.provider;
+            const contentType = rawContentRecord?.type;
+            const dataType = rawDataRecord?.type;
+            const provider = rawContentRecord?.provider;
             const toolName =
                 contentType === 'codex'
-                    ? (rawInput as any)?.content?.data?.name
+                    ? rawDataRecord?.name
                     : contentType === 'acp'
-                        ? (rawInput as any)?.content?.data?.name
+                        ? rawDataRecord?.name
                         : null;
             const callId =
                 contentType === 'codex'
-                    ? (rawInput as any)?.content?.data?.callId
+                    ? rawDataRecord?.callId
                     : contentType === 'acp'
-                        ? (rawInput as any)?.content?.data?.callId
+                        ? rawDataRecord?.callId
                         : null;
 
             console.error('Zod issues:', JSON.stringify(parsed.error.issues, null, 2));
             console.error('Raw summary:', {
-                role: (rawInput as any)?.role,
+                role: rawInputRecord?.role,
                 contentType,
                 dataType,
                 provider,
@@ -120,7 +233,7 @@ export function normalizeRawMessage(
                 callId: typeof callId === 'string' ? callId : undefined,
             });
         }
-        const unsafeRole = (rawInput as any)?.role;
+        const unsafeRole = rawInputRecord?.role;
         const role = unsafeRole === 'user' ? 'user' : 'agent';
         const text =
             role === 'user'
@@ -135,7 +248,7 @@ export function normalizeRawMessage(
                 role: 'user',
                 isSidechain: false,
                 content: { type: 'text', text },
-                meta: (rawInput as any)?.meta,
+                meta: rawInputRecord?.meta as MessageMeta | undefined,
             }
             : {
                 id,
@@ -145,7 +258,7 @@ export function normalizeRawMessage(
                 role: 'agent',
                 isSidechain: false,
                 content: [{ type: 'text', text, uuid: id, parentUUID: null }],
-                meta: (rawInput as any)?.meta,
+                meta: rawInputRecord?.meta as MessageMeta | undefined,
             };
     }
     const raw = parsed.data as RawRecord;
@@ -515,13 +628,20 @@ export function normalizeRawMessage(
             };
         }
           if (raw.content.type === 'event') {
+              const originalEventData = readOriginalStructuredContentData(rawInput, 'event');
+              const content = raw.content.data.type === 'context-compaction'
+                  ? normalizeContextCompactionEventData({
+                      ...(raw.content.data as unknown as Record<string, unknown>),
+                      ...(originalEventData ?? {}),
+                  })
+                  : raw.content.data;
               return {
                   id,
                   ...(seq !== undefined ? { seq } : {}),
                   localId,
                   createdAt,
                   role: 'event',
-                  content: raw.content.data,
+                  content,
                   isSidechain: false,
             };
         }
@@ -629,6 +749,22 @@ export function normalizeRawMessage(
           if (raw.content.type === 'acp') {
               const structuredSidechain = resolveStructuredContentSidechain(raw.content.data);
               const acpDataRecord = raw.content.data as unknown as Record<string, unknown>;
+              if (raw.content.data.type === 'context-compaction') {
+                  const originalAcpDataRecord = readOriginalStructuredContentData(rawInput, 'acp');
+                  return {
+                      id,
+                      ...(seq !== undefined ? { seq } : {}),
+                      localId,
+                      createdAt,
+                      role: 'event',
+                      isSidechain: false,
+                      content: normalizeContextCompactionEventData({
+                          ...acpDataRecord,
+                          ...(originalAcpDataRecord ?? {}),
+                      }, raw.content.provider),
+                      meta: raw.meta,
+                  } satisfies NormalizedMessage;
+              }
               if (raw.content.data.type === 'token_count') {
                   const usage = buildUsageDataFromTokenCountMessage(acpDataRecord);
                   if (!usage) return null;

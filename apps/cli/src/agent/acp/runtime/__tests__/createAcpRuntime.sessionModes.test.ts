@@ -4,12 +4,104 @@ import type { EventMessage } from '@/agent/core/AgentMessage';
 import { createAcpRuntime } from '../createAcpRuntime';
 import type { Metadata } from '@/api/types';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
-import { createBasicSessionClient, createSessionClientWithMetadata } from '@/testkit/backends/sessionFixtures';
+import { createBasicSessionClient, createBasicSessionClientWithOverrides, createSessionClientWithMetadata } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createFakeAcpRuntimeBackend } from '@/testkit/backends/acpRuntimeBackend';
 import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHandler';
 
 describe('createAcpRuntime (session modes)', () => {
+  it('forwards structured context compaction provider events into ACP transcript data', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const sent: unknown[] = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        sent.push(body);
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({
+      type: 'event',
+      name: 'context_compaction',
+      payload: {
+        type: 'context-compaction',
+        phase: 'started',
+        lifecycleId: 'compact_1',
+        provider: 'pi',
+        source: 'provider-event',
+      },
+    });
+
+    expect(sent).toEqual([
+      {
+        type: 'context-compaction',
+        phase: 'started',
+        lifecycleId: 'compact_1',
+        provider: 'pi',
+        source: 'provider-event',
+      },
+    ]);
+  });
+
+  it('normalizes ACP-carried context compaction compatibility aliases before forwarding', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const sent: unknown[] = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendAgentMessage: (_provider, body) => {
+        sent.push(body);
+      },
+    });
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({
+      type: 'event',
+      name: 'context_compaction',
+      payload: {
+        type: 'context-compaction',
+        phase: 'detected',
+        tokensBefore: 12,
+        tokensAfter: 4,
+        errorMessage: 'safe preview',
+        retrying: true,
+      },
+    });
+
+    expect(sent).toEqual([
+      {
+        type: 'context-compaction',
+        phase: 'completed',
+        source: 'transcript-inference',
+        tokenCountBefore: 12,
+        tokenCountAfter: 4,
+        sanitizedErrorPreview: 'safe preview',
+      },
+    ]);
+  });
+
   it('publishes ACP session modes into session metadata', async () => {
     const backend = createFakeAcpRuntimeBackend();
     const { session, metadataUpdates, getMetadata } = createSessionClientWithMetadata({

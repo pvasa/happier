@@ -8,6 +8,7 @@ import type { LocalTurnLifecycleEvent } from '@/agent/localControl/turnLifecycle
 export type CodexRolloutAction =
     | { type: 'codex-session-id'; id: string }
     | { type: 'turn-lifecycle'; event: LocalTurnLifecycleEvent }
+    | { type: 'context-compaction'; phase: 'completed'; lifecycleId: string; source: 'provider-event' | 'transcript-inference'; providerEventId?: string }
     | { type: 'user-text'; text: string }
     | { type: 'assistant-text'; text: string }
     | { type: 'tool-call'; callId: string; name: string; input: unknown }
@@ -88,6 +89,27 @@ function readStringField(record: Record<string, unknown>, key: string): string |
 
 function readProviderTurnId(record: Record<string, unknown>): string | null {
     return readStringField(record, 'turn_id') ?? readStringField(record, 'turnId');
+}
+
+function readEnvelopeTimestamp(env: RolloutEnvelope): string | null {
+    return typeof env.timestamp === 'string' && env.timestamp.trim().length > 0 ? env.timestamp.trim() : null;
+}
+
+function buildCodexCompactionLifecycleId(env: RolloutEnvelope, payload: Record<string, unknown>): {
+    lifecycleId: string;
+    providerEventId?: string;
+} {
+    const providerEventId = readProviderTurnId(payload);
+    if (providerEventId) {
+        return {
+            lifecycleId: `codex:context-compaction:${providerEventId}`,
+            providerEventId,
+        };
+    }
+    const timestamp = readEnvelopeTimestamp(env);
+    return {
+        lifecycleId: `codex:context-compaction:${timestamp ?? 'unknown'}`,
+    };
 }
 
 function readCollaborationStatus(statusValue: unknown): { status: 'completed' | 'interrupted'; summaryText: string | null } | null {
@@ -184,6 +206,15 @@ export function mapCodexRolloutEventToActions(event: unknown, opts: { debug: boo
             }];
         }
 
+        if (payloadType === 'context_compacted') {
+            return [{
+                type: 'context-compaction',
+                phase: 'completed',
+                source: 'provider-event',
+                ...buildCodexCompactionLifecycleId(env, payload),
+            }];
+        }
+
         if (payloadType === 'collab_agent_spawn_end') {
             const threadId = readStringField(payload, 'new_thread_id');
             if (!threadId) return [];
@@ -213,6 +244,16 @@ export function mapCodexRolloutEventToActions(event: unknown, opts: { debug: boo
         }
 
         return opts.debug ? [{ type: 'debug', message: `unhandled rollout event type: ${payloadType}`, value: payload }] : [];
+    }
+
+    if (env.type === 'compacted') {
+        const payload = asRecord(env.payload) ?? {};
+        return [{
+            type: 'context-compaction',
+            phase: 'completed',
+            source: 'transcript-inference',
+            ...buildCodexCompactionLifecycleId(env, payload),
+        }];
     }
 
     if (env.type !== 'response_item') return [];

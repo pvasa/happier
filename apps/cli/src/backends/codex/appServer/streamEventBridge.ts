@@ -5,6 +5,7 @@ import { canonicalizeCodexMcpToolName } from '../utils/canonicalizeCodexMcpToolN
 type RecordLike = Record<string, unknown>;
 
 type ToolKind = 'command' | 'mcp' | 'file-change';
+type PermissionRequestToolName = 'request_permissions';
 
 type NotificationEnvelope = Readonly<{
     method: string;
@@ -28,6 +29,7 @@ export type CodexAppServerStreamUpdate =
     | Readonly<{ type: 'assistant-raw-final'; text: string }>
     | Readonly<{ type: 'reasoning-delta'; itemId: string; text: string }>
     | Readonly<{ type: 'reasoning-final'; itemId: string; text: string }>
+    | Readonly<{ type: 'context-compaction'; phase: 'started' | 'completed'; itemId: string }>
     | Readonly<{ type: 'turn-diff-updated'; turnId: string | null; unifiedDiff: string }>
     | Readonly<{ type: 'tool-call'; toolKind: ToolKind; callId: string; name: string; input: unknown }>
     | Readonly<{ type: 'tool-result'; toolKind: ToolKind; callId: string; output: unknown }>
@@ -38,6 +40,17 @@ export type CodexAppServerStreamUpdate =
         toolName: string;
         input: unknown;
         approval: RecordLike;
+    }>
+    | Readonly<{
+        type: 'permissions-request';
+        callId: string;
+        toolName: PermissionRequestToolName;
+        input: {
+            cwd?: string;
+            reason?: string;
+            permissions: unknown;
+        };
+        permissions: unknown;
     }>
     | Readonly<{
         type: 'user-input-request';
@@ -85,6 +98,10 @@ function readItemId(value: RecordLike): string | null {
 
 function readItemType(value: RecordLike): string | null {
     return normalizeType(readString(value.type) ?? readString(value.itemType));
+}
+
+function readContextCompactionItemId(item: RecordLike): string | null {
+    return readItemType(item) === 'contextcompaction' ? readItemId(item) : null;
 }
 
 function omitKeys(value: RecordLike, keys: readonly string[]): RecordLike {
@@ -205,6 +222,11 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
             }
 
             if (notification.method === 'item/started') {
+                const item = readItem(params);
+                if (item) {
+                    const itemId = readContextCompactionItemId(item);
+                    if (itemId) return [{ type: 'context-compaction', phase: 'started', itemId }];
+                }
                 const resolved = resolveToolContext(params);
                 if (!resolved) return [];
                 return [{
@@ -233,6 +255,10 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
             const itemId = readItemId(item);
             const itemType = readItemType(item);
             if (!itemId || !itemType) return [];
+
+            if (itemType === 'contextcompaction') {
+                return [{ type: 'context-compaction', phase: 'completed', itemId }];
+            }
 
             if (itemType === 'agentmessage' || itemType === 'plan') {
                 const text = readText(item, ['text', 'message']) ?? readCodexMessageContentText(item.content);
@@ -278,6 +304,23 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
             if (!params) return [];
             const callId = readItemId(params);
             if (!callId) return [];
+
+            if (request.method === 'item/permissions/requestApproval') {
+                const permissions = params.permissions ?? {};
+                const cwd = readString(params.cwd);
+                const reason = readString(params.reason);
+                return [{
+                    type: 'permissions-request',
+                    callId,
+                    toolName: 'request_permissions',
+                    input: {
+                        ...(cwd ? { cwd } : {}),
+                        ...(reason ? { reason } : {}),
+                        permissions,
+                    },
+                    permissions,
+                }];
+            }
 
             const resolved = resolveToolContext(params);
             if (!resolved) return [];

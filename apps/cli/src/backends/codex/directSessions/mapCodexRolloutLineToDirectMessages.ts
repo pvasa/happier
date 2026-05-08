@@ -87,6 +87,31 @@ export function mapCodexRolloutLineToDirectMessages(params: Readonly<{
       continue;
     }
 
+    if (action.type === 'context-compaction') {
+      if (action.sidechainId) continue;
+      out.push({
+        id: stableId,
+        localId: stableId,
+        createdAtMs,
+        raw: {
+          role: 'agent',
+          content: {
+            type: 'event',
+            id: stableId,
+            data: {
+              type: 'context-compaction',
+              phase: action.phase,
+              lifecycleId: action.lifecycleId,
+              provider: 'codex',
+              source: action.source,
+              ...(action.providerEventId ? { providerEventId: action.providerEventId } : {}),
+            },
+          },
+        },
+      });
+      continue;
+    }
+
     if (action.type === 'tool-call') {
       out.push({
         id: stableId,

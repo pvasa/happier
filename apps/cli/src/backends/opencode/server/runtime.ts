@@ -26,6 +26,7 @@ import { canonicalizeOpenCodeConfiguredMcpToolName } from './openCodeMcpToolName
 import { parseOpenCodeModelId, resolveOpenCodeDefaultProviderIdFromModelId } from './openCodeModelParsing';
 import { parsePermissionRequest } from './openCodePermissionParsing';
 import { readOpenCodeUsageTelemetryFromMessageInfo } from './openCodeUsageTelemetry';
+import { mapOpenCodeCompactionEventToAgentMessage } from './openCodeCompactionEvents';
 import {
   buildQuestionAnswersArray,
   extractBashCommandHint,
@@ -136,6 +137,7 @@ export function createOpenCodeServerRuntime(params: {
   let sessionId: string | null = null;
   let subscriptionAbort: AbortController | null = null;
   let currentContextWindowTokens: number | null = null;
+  const observedCompactionLifecycleIds = new Set<string>();
 
   let selectedAgent: string | null = null;
   let selectedModel: OpenCodeModelRef | null = null;
@@ -1890,6 +1892,22 @@ export function createOpenCodeServerRuntime(params: {
     const type = normalizeString(payload.type);
     const props = payload.properties;
     shapeLogger.log(`event:${type || 'unknown'}`, payload);
+
+    const compactionEvent = mapOpenCodeCompactionEventToAgentMessage(evt, sessionId);
+    if (compactionEvent) {
+      const lifecycleId = normalizeString(compactionEvent.lifecycleId);
+      if (compactionEvent.phase === 'progress' && lifecycleId && observedCompactionLifecycleIds.has(lifecycleId)) {
+        return;
+      }
+      if ((compactionEvent.phase === 'started' || compactionEvent.phase === 'progress') && lifecycleId) {
+        observedCompactionLifecycleIds.add(lifecycleId);
+      }
+      params.session.sendAgentMessage(provider, compactionEvent);
+      if ((compactionEvent.phase === 'completed' || compactionEvent.phase === 'failed' || compactionEvent.phase === 'cancelled') && lifecycleId) {
+        observedCompactionLifecycleIds.delete(lifecycleId);
+      }
+      return;
+    }
 
     if (type === 'message.updated') {
       const info = asRecord(asRecord(props)?.info);

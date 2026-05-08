@@ -190,6 +190,19 @@ export class CodexRolloutMirror {
                 continue;
             }
 
+            if (projected.type === 'context-compaction') {
+                if (projected.sidechainId !== null) continue;
+                this.opts.session.sendSessionEvent({
+                    type: 'context-compaction',
+                    phase: projected.phase,
+                    lifecycleId: projected.lifecycleId,
+                    provider: 'codex',
+                    source: projected.source,
+                    ...(projected.providerEventId ? { providerEventId: projected.providerEventId } : {}),
+                });
+                continue;
+            }
+
             if (projected.type === 'tool-call') {
                 if (context.sidechainId === null && action.type === 'subagent-spawn') {
                     continue;

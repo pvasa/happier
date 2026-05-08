@@ -264,6 +264,18 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 16);',
         '            continue;',
         '        }',
+        '        if (text === "bridge-context-compaction") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { item: { id: "compact_1", type: "contextCompaction" } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { item: { id: "compact_1", type: "contextCompaction" } } }) + "\\n");',
+        '            }, 12);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 16);',
+        '            continue;',
+        '        }',
         '        if (text === "failed-turn") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "error", params: { threadId: msg.params?.threadId ?? null, turnId, willRetry: false, error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header", codexErrorInfo: "other", additionalDetails: null } } }) + "\\n");',
@@ -362,6 +374,15 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, 24);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-request-permissions") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ id: "request-permissions", method: "item/permissions/requestApproval", params: { threadId: msg.params?.threadId ?? null, turnId, itemId: "perm_request_1", cwd: "/repo", reason: "Needs network access", permissions: { network: { enabled: true }, fileSystem: { write: ["/repo/generated"] } } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 16);',
         '            continue;',
         '        }',
         '        if (text === "bridge-user-action") {',
@@ -548,10 +569,13 @@ describe('createCodexAppServerRuntime', () => {
                         approvalPolicy: expect.objectContaining({
                             granular: expect.objectContaining({
                                 mcp_elicitations: true,
+                                request_permissions: true,
                                 rules: true,
                                 sandbox_approval: true,
+                                skill_approval: false,
                             }),
                         }),
+                        approvalsReviewer: 'user',
                         sandbox: 'workspace-write',
                         experimentalRawEvents: true,
                         persistExtendedHistory: true,
@@ -559,6 +583,38 @@ describe('createCodexAppServerRuntime', () => {
                 }),
                 expect.objectContaining({ method: 'collaborationMode/list' }),
                 expect.objectContaining({ method: 'model/list' }),
+            ]),
+        );
+    });
+
+    it('starts safe-yolo app-server threads with auto-reviewer approvals instead of disabling approvals', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-safe-yolo-start-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'safe-yolo',
+        });
+
+        await runtime.startOrLoad({});
+
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    method: 'thread/start',
+                    params: expect.objectContaining({
+                        approvalPolicy: {
+                            granular: expect.objectContaining({
+                                request_permissions: true,
+                                sandbox_approval: true,
+                            }),
+                        },
+                        approvalsReviewer: 'auto_review',
+                        sandbox: 'workspace-write',
+                    }),
+                }),
             ]),
         );
     });
@@ -1227,6 +1283,59 @@ describe('createCodexAppServerRuntime', () => {
         );
     });
 
+    it('bridges permission escalation server requests through the generic permission handler', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-bridge-request-permissions-');
+
+        const permissionHandler = {
+            handleToolCall: vi.fn().mockResolvedValueOnce({ decision: 'approved_for_session' }),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendAgentMessageCommitted: vi.fn(async () => {}),
+                sendCodexMessage: vi.fn(),
+            } as any,
+            permissionHandler: permissionHandler as any,
+        } as any);
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('bridge-request-permissions');
+
+        expect(permissionHandler.handleToolCall).toHaveBeenCalledWith(
+            'perm_request_1',
+            'request_permissions',
+            {
+                cwd: '/repo',
+                reason: 'Needs network access',
+                permissions: {
+                    network: { enabled: true },
+                    fileSystem: { write: ['/repo/generated'] },
+                },
+            },
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+        expect(requestLog).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'request-permissions',
+                    params: null,
+                    result: {
+                        permissions: {
+                            network: { enabled: true },
+                            fileSystem: { write: ['/repo/generated'] },
+                        },
+                        scope: 'session',
+                    },
+                    error: null,
+                }),
+            ]),
+        );
+    });
+
     it('bridges MCP elicitation server requests through the permission handler', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-bridge-mcp-elicitation-');
 
@@ -1756,6 +1865,41 @@ describe('createCodexAppServerRuntime', () => {
                 }),
             ]),
         );
+    });
+
+    it('forwards app-server context compaction lifecycle notifications as session events', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-context-compaction-');
+
+        const sendSessionEvent = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent,
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await expect(runtime.sendPrompt('bridge-context-compaction')).resolves.toBeUndefined();
+
+        expect(sendSessionEvent).toHaveBeenCalledWith({
+            type: 'context-compaction',
+            phase: 'started',
+            lifecycleId: 'compact_1',
+            provider: 'codex',
+            source: 'provider-event',
+            providerEventId: 'compact_1',
+        });
+        expect(sendSessionEvent).toHaveBeenCalledWith({
+            type: 'context-compaction',
+            phase: 'completed',
+            lifecycleId: 'compact_1',
+            provider: 'codex',
+            source: 'provider-event',
+            providerEventId: 'compact_1',
+        });
     });
 
     it('surfaces failed turns as provider errors and aborts the pending turn', async () => {

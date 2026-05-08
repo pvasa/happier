@@ -223,18 +223,58 @@ const RawAgentOutputDataUnknownSchema = z
 
 const RawAgentOutputDataSchema = z.union([RawAgentOutputDataKnownSchema, RawAgentOutputDataUnknownSchema]);
 
+const AgentEventLifecycleShape = {
+  lifecycleId: z.string().trim().min(1).optional(),
+} as const;
+
+const ContextCompactionPhaseSchema = z.preprocess(
+  (value) => value === 'detected' ? 'completed' : value,
+  z.enum(['started', 'progress', 'completed', 'failed', 'cancelled']),
+);
+const ContextCompactionSourceSchema = z.enum([
+  'provider-event',
+  'provider-status',
+  'provider-hook',
+  'transcript-inference',
+  'user-command',
+  'runtime',
+]);
+
+const withAgentEventLifecycle = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) =>
+  schema.extend(AgentEventLifecycleShape).passthrough();
+
 const AgentEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) }).passthrough(),
-  z.object({ type: z.literal('message'), message: z.string() }).passthrough(),
-  z.object({ type: z.literal('limit-reached'), endsAt: z.number() }).passthrough(),
-  z
-    .object({
+  withAgentEventLifecycle(z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) })),
+  withAgentEventLifecycle(z.object({ type: z.literal('message'), message: z.string() })),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('context-compaction'),
+      phase: ContextCompactionPhaseSchema,
+      provider: z.string().trim().min(1).optional(),
+      backendId: z.string().trim().min(1).optional(),
+      agentId: z.string().trim().min(1).optional(),
+      trigger: z.enum(['manual', 'auto', 'threshold', 'overflow', 'unknown']).optional(),
+      source: ContextCompactionSourceSchema.optional(),
+      providerEventId: z.string().optional(),
+      providerSessionId: z.string().optional(),
+      turnId: z.string().optional(),
+      tokenCountBefore: z.number().optional(),
+      tokenCountAfter: z.number().optional(),
+      tokenCountSource: z.string().optional(),
+      retryAttempt: z.number().int().nonnegative().optional(),
+      errorCode: z.string().optional(),
+      sanitizedErrorPreview: z.string().optional(),
+    })
+  ),
+  withAgentEventLifecycle(z.object({ type: z.literal('limit-reached'), endsAt: z.number() })),
+  withAgentEventLifecycle(
+    z.object({
       type: z.literal('task-lifecycle'),
       event: z.enum(['task_started', 'task_complete', 'turn_aborted']),
       id: z.string().nullable().optional(),
     })
-    .passthrough(),
-  z.object({ type: z.literal('ready') }).passthrough(),
+  ),
+  withAgentEventLifecycle(z.object({ type: z.literal('ready') })),
 ]);
 
 const RawAgentRecordSchema = z
@@ -297,6 +337,7 @@ const RawAgentRecordSchema = z
             'turn_aborted',
             'permission-request',
             'token_count',
+            'context-compaction',
           ] as const);
 
           const known = z.discriminatedUnion('type', [
@@ -366,6 +407,28 @@ const RawAgentRecordSchema = z
               })
               .passthrough(),
             z.object({ type: z.literal('token_count'), sidechainId: z.string().optional() }).passthrough(),
+            z
+              .object({
+                type: z.literal('context-compaction'),
+                phase: ContextCompactionPhaseSchema,
+                lifecycleId: z.string().trim().min(1).optional(),
+                provider: z.string().trim().min(1).optional(),
+                backendId: z.string().trim().min(1).optional(),
+                agentId: z.string().trim().min(1).optional(),
+                trigger: z.enum(['manual', 'auto', 'threshold', 'overflow', 'unknown']).optional(),
+                source: ContextCompactionSourceSchema.optional(),
+                providerEventId: z.string().optional(),
+                providerSessionId: z.string().optional(),
+                turnId: z.string().optional(),
+                tokenCountBefore: z.number().optional(),
+                tokenCountAfter: z.number().optional(),
+                tokenCountSource: z.string().optional(),
+                retryAttempt: z.number().int().nonnegative().optional(),
+                errorCode: z.string().optional(),
+                sanitizedErrorPreview: z.string().optional(),
+                sidechainId: z.string().optional(),
+              })
+              .passthrough(),
           ]);
 
           const unknown = z

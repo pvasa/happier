@@ -91,4 +91,45 @@ describe('pageClaudeTranscript', () => {
       'follow after initial page',
     ]);
   });
+
+  it('drops internal Claude hook stdout records from compact hooks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-claude-direct-hook-stdout-'));
+    const configDir = join(root, '.claude');
+    const sessionFile = join(configDir, 'projects', 'proj-a', 'sess-1.jsonl');
+    await mkdir(join(configDir, 'projects', 'proj-a'), { recursive: true });
+
+    await writeFile(
+      sessionFile,
+      [
+        jsonlLine({
+          type: 'assistant',
+          uuid: 'a-hook-stdout',
+          message: {
+            role: 'assistant',
+            model: 'm',
+            content: [{
+              type: 'text',
+              text: [
+                '<local-command-stdout>Compacted PreCompact [/Users/leeroy/.vibe-island/bin/vibe-island-bridge --source claude] completed successfully',
+                "PreCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully",
+                "PostCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully</local-command-stdout>",
+              ].join('\n'),
+            }],
+          },
+        }),
+      ].join(''),
+      'utf8',
+    );
+
+    const page = await pageClaudeTranscript({
+      source: { kind: 'claudeConfig', configDir, projectId: 'proj-a' },
+      env: {} as NodeJS.ProcessEnv,
+      remoteSessionId: 'sess-1',
+      direction: 'older',
+      maxBytes: 1024 * 1024,
+      maxItems: 10,
+    });
+
+    expect(page.items).toHaveLength(0);
+  });
 });

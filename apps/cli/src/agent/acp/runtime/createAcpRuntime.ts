@@ -19,6 +19,7 @@ import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
 import type { AcpRuntimeSessionClient } from '@/agent/acp/sessionClient';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import { readAuthenticationStatus } from '@/api/client/httpStatusError';
+import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import { getAgentModelConfig, type AgentId } from '@happier-dev/agents';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
@@ -95,6 +96,78 @@ export type AcpRuntimeBackend = AgentBackend & {
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeContextCompactionPayload(payloadRecord: Record<string, unknown>): ACPMessageData | null {
+  if (payloadRecord.type !== 'context-compaction') return null;
+
+  const rawPhase = payloadRecord.phase;
+  const legacyDetected = rawPhase === 'detected';
+  const phase =
+    rawPhase === 'started' ||
+    rawPhase === 'progress' ||
+    rawPhase === 'completed' ||
+    rawPhase === 'failed' ||
+    rawPhase === 'cancelled'
+      ? rawPhase
+      : legacyDetected
+        ? 'completed'
+        : null;
+  if (!phase) return null;
+
+  const source =
+    payloadRecord.source === 'provider-event' ||
+    payloadRecord.source === 'provider-status' ||
+    payloadRecord.source === 'provider-hook' ||
+    payloadRecord.source === 'transcript-inference' ||
+    payloadRecord.source === 'user-command' ||
+    payloadRecord.source === 'runtime'
+      ? payloadRecord.source
+      : legacyDetected
+        ? 'transcript-inference'
+        : undefined;
+  const trigger =
+    payloadRecord.trigger === 'manual' ||
+    payloadRecord.trigger === 'auto' ||
+    payloadRecord.trigger === 'threshold' ||
+    payloadRecord.trigger === 'overflow' ||
+    payloadRecord.trigger === 'unknown'
+      ? payloadRecord.trigger
+      : undefined;
+  const tokenCountBefore = readFiniteNumber(payloadRecord.tokenCountBefore) ?? readFiniteNumber(payloadRecord.tokensBefore);
+  const tokenCountAfter = readFiniteNumber(payloadRecord.tokenCountAfter) ?? readFiniteNumber(payloadRecord.tokensAfter);
+  const retryAttempt = readFiniteNumber(payloadRecord.retryAttempt);
+  const sanitizedErrorPreview = readNonEmptyString(payloadRecord.sanitizedErrorPreview) ?? readNonEmptyString(payloadRecord.errorMessage);
+
+  const normalized: ACPMessageData = {
+    type: 'context-compaction',
+    phase,
+    ...(readNonEmptyString(payloadRecord.lifecycleId) ? { lifecycleId: readNonEmptyString(payloadRecord.lifecycleId) } : {}),
+    ...(readNonEmptyString(payloadRecord.provider) ? { provider: readNonEmptyString(payloadRecord.provider) } : {}),
+    ...(readNonEmptyString(payloadRecord.backendId) ? { backendId: readNonEmptyString(payloadRecord.backendId) } : {}),
+    ...(readNonEmptyString(payloadRecord.agentId) ? { agentId: readNonEmptyString(payloadRecord.agentId) } : {}),
+    ...(trigger ? { trigger } : {}),
+    ...(source ? { source } : {}),
+    ...(readNonEmptyString(payloadRecord.providerEventId) ? { providerEventId: readNonEmptyString(payloadRecord.providerEventId) } : {}),
+    ...(readNonEmptyString(payloadRecord.providerSessionId) ? { providerSessionId: readNonEmptyString(payloadRecord.providerSessionId) } : {}),
+    ...(readNonEmptyString(payloadRecord.turnId) ? { turnId: readNonEmptyString(payloadRecord.turnId) } : {}),
+    ...(tokenCountBefore !== undefined ? { tokenCountBefore } : {}),
+    ...(tokenCountAfter !== undefined ? { tokenCountAfter } : {}),
+    ...(readNonEmptyString(payloadRecord.tokenCountSource) ? { tokenCountSource: readNonEmptyString(payloadRecord.tokenCountSource) } : {}),
+    ...(retryAttempt !== undefined ? { retryAttempt: Math.max(0, Math.trunc(retryAttempt)) } : {}),
+    ...(readNonEmptyString(payloadRecord.errorCode) ? { errorCode: readNonEmptyString(payloadRecord.errorCode) } : {}),
+    ...(sanitizedErrorPreview ? { sanitizedErrorPreview } : {}),
+  };
+
+  return normalized;
 }
 
 type NormalizedConfigOptionValue = string | number | boolean | null;
@@ -757,6 +830,13 @@ export function createAcpRuntime(params: {
 
         case 'event': {
           const name = msg.name;
+          if (name === 'context_compaction') {
+            const payloadRecord = asRecord(msg.payload);
+            const normalizedPayload = payloadRecord ? normalizeContextCompactionPayload(payloadRecord) : null;
+            if (normalizedPayload) {
+              params.session.sendAgentMessage(params.provider, normalizedPayload);
+            }
+          }
           if (name === 'available_commands_update') {
             const payload = msg.payload;
             const payloadRecord = asRecord(payload);

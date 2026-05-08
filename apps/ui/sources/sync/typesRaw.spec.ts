@@ -1155,6 +1155,70 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
+        it('accepts structured context compaction event messages', () => {
+            const eventMessage = {
+                role: 'agent',
+                content: {
+                    type: 'event',
+                    id: 'event-compact-123',
+                    data: {
+                        type: 'context-compaction',
+                        phase: 'started',
+                        lifecycleId: 'compact_1',
+                        provider: 'codex',
+                        trigger: 'auto',
+                        source: 'provider-event',
+                        providerEventId: 'item_1',
+                        tokenCountBefore: 1200,
+                    }
+                }
+            };
+
+            const result = RawRecordSchema.safeParse(eventMessage);
+
+            expect(result.success).toBe(true);
+            if (result.success && result.data.content.type === 'event') {
+                expect(result.data.content.data).toMatchObject({
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact_1',
+                    provider: 'codex',
+                    trigger: 'auto',
+                    source: 'provider-event',
+                    providerEventId: 'item_1',
+                    tokenCountBefore: 1200,
+                });
+            }
+        });
+
+        it('normalizes legacy detected context compaction events as inferred completion', () => {
+            const eventMessage = {
+                role: 'agent',
+                content: {
+                    type: 'event',
+                    id: 'event-compact-detected',
+                    data: {
+                        type: 'context-compaction',
+                        phase: 'detected',
+                        source: 'transcript-inference',
+                    },
+                },
+            };
+
+            const result = RawRecordSchema.safeParse(eventMessage);
+
+            expect(result.success).toBe(true);
+            const normalized = normalizeRawMessage('msg-compact-detected', null, Date.now(), eventMessage);
+            expect(normalized).toMatchObject({
+                role: 'event',
+                content: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    source: 'transcript-inference',
+                },
+            });
+        });
+
         it('handles user role messages with text content', () => {
             const userMessage = {
                 role: 'user',
@@ -1742,6 +1806,73 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                     parentUUID: null,
                 });
             }
+        });
+
+        it('normalizes ACP context compaction records into transcript events', () => {
+            const raw = {
+                role: 'agent' as const,
+                content: {
+                    type: 'acp' as const,
+                    provider: 'pi' as const,
+                    data: {
+                        type: 'context-compaction' as const,
+                        phase: 'started' as const,
+                        lifecycleId: 'compact_1',
+                        trigger: 'manual' as const,
+                        source: 'provider-event' as const,
+                        tokenCountBefore: 456,
+                    },
+                },
+            };
+
+            const normalized = normalizeRawMessage('msg-acp-context-compaction', null, Date.now(), raw);
+
+            expect(normalized).toMatchObject({
+                role: 'event',
+                content: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact_1',
+                    provider: 'pi',
+                    trigger: 'manual',
+                    source: 'provider-event',
+                    tokenCountBefore: 456,
+                },
+            });
+        });
+
+        it('normalizes ACP context compaction compatibility aliases to canonical fields', () => {
+            const raw = {
+                role: 'agent' as const,
+                content: {
+                    type: 'acp' as const,
+                    provider: 'pi' as const,
+                    data: {
+                        type: 'context-compaction' as const,
+                        phase: 'detected' as const,
+                        tokensBefore: 456,
+                        tokensAfter: 123,
+                        errorMessage: 'safe preview',
+                        retrying: true,
+                    },
+                },
+            };
+
+            const normalized = normalizeRawMessage('msg-acp-context-compaction-legacy', null, Date.now(), raw);
+
+            expect(normalized).toMatchObject({
+                role: 'event',
+                content: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    provider: 'pi',
+                    source: 'transcript-inference',
+                    tokenCountBefore: 456,
+                    tokenCountAfter: 123,
+                    sanitizedErrorPreview: 'safe preview',
+                },
+            });
+            expect((normalized as any)?.content?.retrying).toBeUndefined();
         });
 
         it('parses ACP tool-call input when input is a JSON string', () => {

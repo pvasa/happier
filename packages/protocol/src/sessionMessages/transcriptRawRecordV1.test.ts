@@ -84,6 +84,59 @@ describe('TranscriptRawRecordV1Schema', () => {
     expect(parsed.success).toBe(true);
   });
 
+  it('parses canonical context compaction records including cancellation and retry attempt metadata', () => {
+    const parsed = TranscriptRawRecordV1Schema.safeParse({
+      role: 'agent',
+      content: {
+        type: 'event',
+        id: 'event-compact-cancelled',
+        data: {
+          type: 'context-compaction',
+          phase: 'cancelled',
+          source: 'provider-event',
+          lifecycleId: 'compact_1',
+          tokenCountBefore: 1200,
+          tokenCountAfter: 320,
+          retryAttempt: 2,
+          sanitizedErrorPreview: 'cancelled by provider',
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.content.type === 'event') {
+      expect(parsed.data.content.data).toMatchObject({
+        type: 'context-compaction',
+        phase: 'cancelled',
+        retryAttempt: 2,
+      });
+    }
+  });
+
+  it('normalizes legacy detected context compaction phase to completed', () => {
+    const parsed = TranscriptRawRecordV1Schema.safeParse({
+      role: 'agent',
+      content: {
+        type: 'event',
+        id: 'event-compact-detected',
+        data: {
+          type: 'context-compaction',
+          phase: 'detected',
+          source: 'transcript-inference',
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.content.type === 'event') {
+      expect(parsed.data.content.data).toMatchObject({
+        type: 'context-compaction',
+        phase: 'completed',
+        source: 'transcript-inference',
+      });
+    }
+  });
+
   it('parses assistant content blocks with unknown types (forward compatibility)', () => {
     const parsed = TranscriptRawRecordV1Schema.safeParse({
       role: 'agent',

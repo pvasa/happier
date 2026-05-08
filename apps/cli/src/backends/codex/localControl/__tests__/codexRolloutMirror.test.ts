@@ -93,6 +93,37 @@ describe('CodexRolloutMirror', () => {
     expect(sessionEvents).toEqual([]);
   });
 
+  it('emits Codex rollout compaction markers as structured session events', async () => {
+    const sessionEvents: SessionEvent[] = [];
+
+    const mirror = new CodexRolloutMirror({
+      filePath: '/tmp/codex-rollout-mirror-unused.jsonl',
+      debug: false,
+      onCodexSessionId: () => {},
+      session: {
+        sendUserTextMessage: () => {},
+        sendCodexMessage: () => {},
+        sendSessionEvent: (event: unknown) => sessionEvents.push(event as SessionEvent),
+      } as any,
+    });
+
+    await (mirror as any).onJson({
+      type: 'event_msg',
+      payload: { type: 'context_compacted', turn_id: 'turn_compact' },
+    });
+
+    expect(sessionEvents).toEqual([
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'completed',
+        lifecycleId: 'codex:context-compaction:turn_compact',
+        provider: 'codex',
+        source: 'provider-event',
+        providerEventId: 'turn_compact',
+      }),
+    ]);
+  });
+
   it('emits user + assistant messages and tool calls/results', async () => {
     const userTexts: string[] = [];
     const codexBodies: CodexBody[] = [];

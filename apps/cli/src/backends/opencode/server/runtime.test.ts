@@ -731,6 +731,111 @@ describe('createOpenCodeServerRuntime', () => {
     expect(session.keepAlive.mock.calls).toEqual([[true, 'remote'], [false, 'remote']]);
   });
 
+  it('maps OpenCode compaction lifecycle events to structured transcript events', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    (session.sendAgentMessage as any).mockClear();
+
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'session.next.compaction.started',
+        properties: { sessionID: 'ses_1', id: 'compact_1', reason: 'threshold' },
+      },
+    });
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'session.next.compaction.delta',
+        properties: { sessionID: 'ses_1', id: 'compact_1', summary: 'private summary text' },
+      },
+    });
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'session.next.compaction.ended',
+        properties: { sessionID: 'ses_1', id: 'compact_1', reason: 'threshold' },
+      },
+    });
+
+    const compactionEvents = session.sendAgentMessage.mock.calls
+      .map((call: unknown[]) => call[1])
+      .filter((body: any) => body?.type === 'context-compaction');
+
+    expect(compactionEvents).toEqual([
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'started',
+        provider: 'opencode',
+        source: 'provider-event',
+        trigger: 'threshold',
+        lifecycleId: 'opencode:context-compaction:ses_1:compact_1',
+        providerEventId: 'compact_1',
+        providerSessionId: 'ses_1',
+      }),
+      expect.objectContaining({
+        type: 'context-compaction',
+        phase: 'completed',
+        provider: 'opencode',
+        source: 'provider-event',
+        trigger: 'threshold',
+        lifecycleId: 'opencode:context-compaction:ses_1:compact_1',
+        providerEventId: 'compact_1',
+        providerSessionId: 'ses_1',
+      }),
+    ]);
+    expect(JSON.stringify(compactionEvents)).not.toContain('private summary text');
+  });
+
+  it('maps an OpenCode compaction delta to progress when the start event was missed', async () => {
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    (session.sendAgentMessage as any).mockClear();
+
+    await client.__emit({
+      directory: '/tmp',
+      payload: {
+        type: 'session.next.compaction.delta',
+        properties: { sessionID: 'ses_1', id: 'compact_1', summary: 'private summary text' },
+      },
+    });
+
+    expect(session.sendAgentMessage).toHaveBeenCalledWith('opencode', expect.objectContaining({
+      type: 'context-compaction',
+      phase: 'progress',
+      provider: 'opencode',
+      source: 'provider-event',
+      lifecycleId: 'opencode:context-compaction:ses_1:compact_1',
+      providerEventId: 'compact_1',
+      providerSessionId: 'ses_1',
+    }));
+    expect(JSON.stringify(session.sendAgentMessage.mock.calls)).not.toContain('private summary text');
+  });
+
   it('publishes keepAlive when a turn starts and ends without status events', async () => {
     const client = createFakeClient();
     const session = createFakeSession();

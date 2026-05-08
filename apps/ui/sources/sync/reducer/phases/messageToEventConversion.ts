@@ -81,8 +81,10 @@ export function runMessageToEventConversion({
     // Handle compaction completed events - reset context but keep todos
     if (
       msg.role === 'event' &&
-      msg.content.type === 'message' &&
-      msg.content.message === 'Compaction completed'
+      (
+        (msg.content.type === 'message' && msg.content.message === 'Compaction completed') ||
+        (msg.content.type === 'context-compaction' && msg.content.phase === 'completed')
+      )
     ) {
       // Reset usage/context to zero but keep todos unchanged
       state.latestUsage = {

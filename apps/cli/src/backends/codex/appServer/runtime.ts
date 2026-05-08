@@ -629,6 +629,19 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return;
         }
 
+        if (update.type === 'context-compaction') {
+            if (context.sidechainId) return;
+            params.session.sendSessionEvent({
+                type: 'context-compaction',
+                phase: update.phase,
+                lifecycleId: update.itemId,
+                provider: 'codex',
+                source: 'provider-event',
+                providerEventId: update.itemId,
+            });
+            return;
+        }
+
         if (update.type === 'tool-call') {
             await itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
             if (update.toolKind === 'file-change') {
@@ -725,6 +738,27 @@ export function createCodexAppServerRuntime(params: Readonly<{
             case 'denied':
                 return { decision: 'decline' };
         }
+    };
+
+    const mapPermissionsDecision = (
+        update: Extract<CodexAppServerStreamUpdate, { type: 'permissions-request' }>,
+        result: PermissionResult,
+    ): Readonly<Record<string, unknown>> => {
+        if (
+            result.decision === 'approved'
+            || result.decision === 'approved_for_session'
+            || result.decision === 'approved_execpolicy_amendment'
+        ) {
+            return {
+                permissions: update.permissions,
+                scope: result.decision === 'approved_for_session' ? 'session' : 'turn',
+            };
+        }
+
+        return {
+            permissions: {},
+            scope: 'turn',
+        };
     };
 
     const buildUserInputResponse = (
@@ -893,6 +927,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     ? await params.permissionHandler.handleToolCall(update.callId, update.toolName, update.input)
                     : { decision: 'denied' as const };
                 return mapApprovalDecision(update.requestKind, result);
+            }
+
+            if (update.type === 'permissions-request') {
+                const result = params.permissionHandler
+                    ? await params.permissionHandler.handleToolCall(update.callId, update.toolName, update.input)
+                    : { decision: 'denied' as const };
+                return mapPermissionsDecision(update, result);
             }
 
         if (update.type === 'user-input-request') {
@@ -1217,6 +1258,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     client.registerRequestHandler('item/tool/requestUserInput', (requestParams) => {
                         return runBridgeWork(() => handleServerRequest('item/tool/requestUserInput', requestParams));
                     });
+                    client.registerRequestHandler('item/permissions/requestApproval', (requestParams) => {
+                        return runBridgeWork(() => handleServerRequest('item/permissions/requestApproval', requestParams));
+                    });
                     client.registerRequestHandler('mcpServer/elicitation/request', (requestParams, message) => {
                         return runBridgeWork(() => handleMcpElicitationRequest(requestParams, message));
                     });
@@ -1292,7 +1336,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
             threadId: requestedThreadId,
             ...(currentModelId ? { model: currentModelId } : {}),
             ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-            ...(policy ? { approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox } : {}),
+            ...(policy ? {
+                approvalPolicy: policy.approvalPolicy,
+                ...(policy.approvalsReviewer ? { approvalsReviewer: policy.approvalsReviewer } : {}),
+                sandbox: policy.sandbox,
+            } : {}),
             persistExtendedHistory: true,
         });
         return {
@@ -1337,7 +1385,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 cwd: params.directory,
                 ...(currentModelId ? { model: currentModelId } : {}),
                 ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
-                ...(policy ? { approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox } : {}),
+                ...(policy ? {
+                    approvalPolicy: policy.approvalPolicy,
+                    ...(policy.approvalsReviewer ? { approvalsReviewer: policy.approvalsReviewer } : {}),
+                    sandbox: policy.sandbox,
+                } : {}),
                 experimentalRawEvents: true,
                 persistExtendedHistory: true,
             });
@@ -1515,7 +1567,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         ...(currentModelId ? { model: currentModelId } : {}),
                         ...(currentReasoningEffort ? { effort: currentReasoningEffort } : {}),
                         ...(hasServiceTierOverride ? (currentServiceTier === 'fast' ? { serviceTier: 'fast' } : { serviceTier: null }) : {}),
-                        ...(policy ? { approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy } : {}),
+                        ...(policy ? {
+                            approvalPolicy: policy.approvalPolicy,
+                            ...(policy.approvalsReviewer ? { approvalsReviewer: policy.approvalsReviewer } : {}),
+                            sandboxPolicy: policy.sandboxPolicy,
+                        } : {}),
                         ...(collaborationMode ? { collaborationMode } : {}),
                     });
                     const startedTurnId = readTurnId(response);

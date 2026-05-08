@@ -1,11 +1,14 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import type { AgentEvent } from '@/sync/typesRaw';
 import { t } from '@/text';
+
+const EVENT_ICON_SIZE = 18;
+const EVENT_SPINNER_SIZE = 14;
 
 function formatLimitReachedTime(timestamp: number): string {
     try {
@@ -22,6 +25,8 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     const { theme } = useUnistyles();
     let iconName: React.ComponentProps<typeof Ionicons>['name'] = 'information-circle-outline';
     let text = t('message.unknownEvent');
+    let isLoading = false;
+    let testID: string | undefined;
 
     if (props.event.type === 'switch') {
         iconName = 'swap-horizontal-outline';
@@ -29,16 +34,35 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     } else if (props.event.type === 'message') {
         iconName = 'information-circle-outline';
         text = props.event.message;
+    } else if (props.event.type === 'context-compaction') {
+        testID = `transcript-event-context-compaction-${props.event.phase}`;
+        if (props.event.phase === 'started' || props.event.phase === 'progress') {
+            isLoading = true;
+            text = t('message.contextCompactionStarted');
+        } else if (props.event.phase === 'failed') {
+            iconName = 'warning-outline';
+            text = t('message.contextCompactionFailed');
+        } else if (props.event.phase === 'cancelled') {
+            iconName = 'close-circle-outline';
+            text = t('message.contextCompactionCancelled');
+        } else {
+            iconName = 'checkmark-circle-outline';
+            text = t('message.contextCompactionCompleted');
+        }
     } else if (props.event.type === 'limit-reached') {
         iconName = 'warning-outline';
         text = t('message.usageLimitUntil', { time: formatLimitReachedTime(props.event.endsAt) });
     }
 
     return (
-        <View style={styles.container}>
+        <View style={styles.container} testID={testID}>
             <View style={styles.row}>
                 <View style={styles.iconContainer}>
-                    <Ionicons name={iconName} size={18} color={theme.colors.textSecondary} />
+                    {isLoading ? (
+                        <ActivityIndicator size={EVENT_SPINNER_SIZE} color={theme.colors.textSecondary} />
+                    ) : (
+                        <Ionicons name={iconName} size={EVENT_ICON_SIZE} color={theme.colors.textSecondary} />
+                    )}
                 </View>
                 <Text selectable style={styles.text}>
                     {text}

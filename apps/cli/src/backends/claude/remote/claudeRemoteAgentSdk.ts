@@ -36,6 +36,12 @@ import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTra
 import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAgentSdkSlashCommands';
 import { parseExplicitSpawnEnvKeysFromProcessEnv } from './agentSdk/explicitSpawnEnvKeysMarker';
 import {
+    buildClaudeCompactionCompletedEvent,
+    buildClaudeCompactionLifecycleId,
+    buildClaudeCompactionStartedEvent,
+    type ClaudeCompletionEvent,
+} from '../contextCompactionEvents';
+import {
     extractTextStartFromStreamEvent,
     extractTextDeltaFromStreamEvent,
     extractThinkingStartFromStreamEvent,
@@ -111,7 +117,7 @@ export async function claudeRemoteAgentSdk(opts: {
     onThinkingChange?: (thinking: boolean) => void;
     onMessage: (message: SDKMessage) => void;
     streamedTranscriptWriter?: StreamedTranscriptWriter | null;
-    onCompletionEvent?: (message: string) => void;
+    onCompletionEvent?: (event: ClaudeCompletionEvent) => void;
     onSessionReset?: () => void;
     setUserMessageSender?: (sender: ((message: SDKUserMessage) => void) | null) => void;
     /**
@@ -149,6 +155,60 @@ export async function claudeRemoteAgentSdk(opts: {
 	        logPrefix: 'claudeRemoteAgentSdk',
 	    });
 
+    let compactionSequence = 0;
+    let activeCompactionLifecycleId: string | null = null;
+    const nextCompactionLifecycleId = (sessionId?: string | null) => buildClaudeCompactionLifecycleId({
+        sessionId: sessionId ?? opts.sessionId ?? startFrom,
+        sequence: ++compactionSequence,
+    });
+    const emitManualCompactionStarted = () => {
+        const lifecycleId = nextCompactionLifecycleId();
+        activeCompactionLifecycleId = lifecycleId;
+        opts.onCompletionEvent?.(buildClaudeCompactionStartedEvent({ lifecycleId }));
+    };
+    const emitCompactionCompleted = (params?: Readonly<{
+        providerSessionId?: string | null;
+        trigger?: 'manual' | 'auto' | 'threshold' | 'overflow' | 'unknown';
+        tokenCountBefore?: number;
+        tokenCountSource?: string;
+    }>) => {
+        const lifecycleId = activeCompactionLifecycleId ?? nextCompactionLifecycleId(params?.providerSessionId);
+        activeCompactionLifecycleId = null;
+        opts.onCompletionEvent?.(buildClaudeCompactionCompletedEvent({
+            lifecycleId,
+            source: 'provider-event',
+            trigger: params?.trigger ?? 'manual',
+            ...(params?.providerSessionId ? { providerSessionId: params.providerSessionId } : {}),
+            ...(typeof params?.tokenCountBefore === 'number' ? { tokenCountBefore: params.tokenCountBefore } : {}),
+            ...(params?.tokenCountSource ? { tokenCountSource: params.tokenCountSource } : {}),
+        }));
+    };
+    const readCompactBoundaryMetadata = (system: Record<string, unknown>) => {
+        const metadata = system.compact_metadata;
+        const record = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+            ? metadata as Record<string, unknown>
+            : {};
+        const rawTrigger = record.trigger;
+        const trigger: 'manual' | 'auto' | 'threshold' | 'overflow' | 'unknown' | undefined =
+            rawTrigger === 'manual' ||
+                rawTrigger === 'auto' ||
+                rawTrigger === 'threshold' ||
+                rawTrigger === 'overflow' ||
+                rawTrigger === 'unknown'
+                ? rawTrigger
+                : undefined;
+        const rawPreTokens = record.pre_tokens;
+        const tokenCountBefore = typeof rawPreTokens === 'number' && Number.isFinite(rawPreTokens)
+            ? rawPreTokens
+            : undefined;
+        return {
+            ...(trigger ? { trigger } : {}),
+            ...(typeof tokenCountBefore === 'number'
+                ? { tokenCountBefore, tokenCountSource: 'claude-compact-metadata.pre_tokens' }
+                : {}),
+        };
+    };
+
     const initial = await opts.nextMessage();
     if (!initial) return;
 
@@ -163,7 +223,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	    if (specialCommand.type === 'compact') {
 	        logger.debug('[claudeRemoteAgentSdk] /compact command detected - will process as normal but with compaction behavior');
 	        isCompactCommand = true;
-	        opts.onCompletionEvent?.('Compaction started');
+	        emitManualCompactionStarted();
 	    }
 
 	    let mode = initial.mode;
@@ -1215,7 +1275,7 @@ export async function claudeRemoteAgentSdk(opts: {
 
                         if (nextSpecial.type === 'compact') {
                             isCompactCommand = true;
-                            opts.onCompletionEvent?.('Compaction started');
+                            emitManualCompactionStarted();
                         }
 
                         mode = next.mode;
@@ -1249,7 +1309,7 @@ export async function claudeRemoteAgentSdk(opts: {
             })();
         };
 
-        const finalizeCurrentTurn = async (params?: { completionEvent?: string }) => {
+        const finalizeCurrentTurn = async (params?: { completionEvent?: ClaudeCompletionEvent }) => {
             if (didFinalizeTurn) return;
             didFinalizeTurn = true;
             awaitingNextTurnStart = true;
@@ -1668,11 +1728,17 @@ export async function claudeRemoteAgentSdk(opts: {
                         }
 
                         if (subtype === 'compact_boundary') {
-                            const completionEvent = isCompactCommand ? 'Compaction completed' : undefined;
+                            const completionEvent = buildClaudeCompactionCompletedEvent({
+                                lifecycleId: activeCompactionLifecycleId ?? nextCompactionLifecycleId(system.session_id),
+                                source: 'provider-event',
+                                providerSessionId: typeof system.session_id === 'string' ? system.session_id : undefined,
+                                ...readCompactBoundaryMetadata(system as Record<string, unknown>),
+                            });
+                            activeCompactionLifecycleId = null;
                             isCompactCommand = false;
-                            await finalizeCurrentTurn(completionEvent ? { completionEvent } : undefined);
+                            await finalizeCurrentTurn({ completionEvent });
                         } else if (isCompactCommand) {
-                            opts.onCompletionEvent?.('Compaction completed');
+                            emitCompactionCompleted();
                             isCompactCommand = false;
                             await finalizeCurrentTurn();
                         }
@@ -1719,7 +1785,13 @@ export async function claudeRemoteAgentSdk(opts: {
                 if (!didFinalizeTurn) {
                     if (isCompactCommand) {
                         isCompactCommand = false;
-                        await finalizeCurrentTurn({ completionEvent: 'Compaction completed' });
+                        await finalizeCurrentTurn({
+                            completionEvent: buildClaudeCompactionCompletedEvent({
+                                lifecycleId: activeCompactionLifecycleId ?? nextCompactionLifecycleId(),
+                                source: 'provider-event',
+                            }),
+                        });
+                        activeCompactionLifecycleId = null;
                     } else {
                         await finalizeCurrentTurn();
                     }

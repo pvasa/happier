@@ -346,6 +346,53 @@ describe('reducer', () => {
             });
         });
 
+        it('resets usage when a structured context compaction completes', () => {
+            const state = createReducer();
+
+            reducer(state, [
+                {
+                    id: 'usage-before-structured-compaction',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [],
+                    usage: {
+                        input_tokens: 900,
+                        output_tokens: 300,
+                        cache_read_input_tokens: 100,
+                        context_used_tokens: 1_300,
+                        context_window_tokens: 258_400,
+                    },
+                },
+            ]);
+
+            reducer(state, [
+                {
+                    id: 'structured-compaction-completed',
+                    localId: null,
+                    createdAt: 2000,
+                    role: 'event',
+                    isSidechain: false,
+                    content: {
+                        type: 'context-compaction',
+                        phase: 'completed',
+                        provider: 'codex',
+                    },
+                },
+            ]);
+
+            expect(state.latestUsage).toEqual({
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheCreation: 0,
+                cacheRead: 0,
+                contextSize: 0,
+                contextWindowTokens: 258_400,
+                timestamp: 2000,
+            });
+        });
+
         it('should process agent text messages', () => {
             const state = createReducer();
             const messages: NormalizedMessage[] = [

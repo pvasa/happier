@@ -160,6 +160,169 @@ describe('buildChatListItems', () => {
         expect(ids).toEqual(['m-user', 'm-tool', 'm-event', 'p3']);
     });
 
+    it('hides started compaction event rows after a terminal event with the same lifecycle id is present', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-event',
+                id: 'm-compact-started',
+                createdAt: 20,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact_1',
+                    provider: 'codex',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-other-started',
+                createdAt: 21,
+                event: {
+                    type: 'message',
+                    message: 'Preparing workspace',
+                    lifecycleId: 'workspace_1',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-compact-completed',
+                createdAt: 22,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    lifecycleId: 'compact_1',
+                    provider: 'codex',
+                },
+            },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const items = buildChatListItems({
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+        });
+
+        expect(items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual([
+            'm-other-started',
+            'm-compact-completed',
+        ]);
+    });
+
+    it('keeps compaction lifecycle rows independent when lifecycle ids differ', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-event',
+                id: 'm-compact-started',
+                createdAt: 20,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact-start',
+                    provider: 'claude',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-compact-completed',
+                createdAt: 22,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    lifecycleId: 'compact-complete',
+                    provider: 'claude',
+                },
+            },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const items = buildChatListItems({
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+        });
+
+        expect(items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual([
+            'm-compact-started',
+            'm-compact-completed',
+        ]);
+    });
+
+    it('keeps compaction lifecycle rows without lifecycle ids independent', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-event',
+                id: 'm-compact-started',
+                createdAt: 20,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    provider: 'claude',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-compact-completed',
+                createdAt: 22,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    provider: 'claude',
+                },
+            },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const items = buildChatListItems({
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+        });
+
+        expect(items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual([
+            'm-compact-started',
+            'm-compact-completed',
+        ]);
+    });
+
+    it('renders only the latest compaction row for a lifecycle id', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-event',
+                id: 'm-compact-started',
+                createdAt: 20,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact_1',
+                    provider: 'claude',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-compact-progress',
+                createdAt: 21,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'progress',
+                    lifecycleId: 'compact_1',
+                    provider: 'claude',
+                },
+            },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const items = buildChatListItems({
+            messageIdsOldestFirst: messages.map((m) => m.id),
+            messagesById,
+            pendingMessages: [],
+        });
+
+        expect(items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual([
+            'm-compact-progress',
+        ]);
+    });
+
     it('keeps pending messages without localId in the pending queue item', () => {
         const pending: PendingMessage[] = [
             buildPending({ id: 'p-null', localId: null, createdAt: 1 }),
@@ -205,6 +368,97 @@ describe('buildChatListItemsCached', () => {
         // Object identity stability is the entire point of caching.
         expect(r2.items[0]).toBe(r1.items[0]);
         expect(r2.items[1]).toBe(r1.items[1]);
+    });
+
+    it('hides cached started compaction event rows after appending a terminal event with the same lifecycle id', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-event',
+                id: 'm-compact-started',
+                createdAt: 20,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact_1',
+                    provider: 'codex',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-compact-completed',
+                createdAt: 22,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    lifecycleId: 'compact_1',
+                    provider: 'codex',
+                },
+            },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const before = buildChatListItemsCached({
+            cache: null,
+            messageIdsOldestFirst: ['m-compact-started'],
+            messagesById,
+            pendingMessages: [],
+        });
+        const after = buildChatListItemsCached({
+            cache: before.cache,
+            messageIdsOldestFirst: ['m-compact-started', 'm-compact-completed'],
+            messagesById,
+            pendingMessages: [],
+        });
+
+        expect(before.items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual(['m-compact-started']);
+        expect(after.items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual(['m-compact-completed']);
+    });
+
+    it('keeps cached compaction lifecycle rows independent when lifecycle ids differ', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-event',
+                id: 'm-compact-started',
+                createdAt: 20,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'started',
+                    lifecycleId: 'compact-start',
+                    provider: 'claude',
+                },
+            },
+            {
+                kind: 'agent-event',
+                id: 'm-compact-completed',
+                createdAt: 22,
+                event: {
+                    type: 'context-compaction',
+                    phase: 'completed',
+                    lifecycleId: 'compact-complete',
+                    provider: 'claude',
+                },
+            },
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+
+        const before = buildChatListItemsCached({
+            cache: null,
+            messageIdsOldestFirst: ['m-compact-started'],
+            messagesById,
+            pendingMessages: [],
+        });
+        const after = buildChatListItemsCached({
+            cache: before.cache,
+            messageIdsOldestFirst: ['m-compact-started', 'm-compact-completed'],
+            messagesById,
+            pendingMessages: [],
+        });
+
+        expect(before.items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual(['m-compact-started']);
+        expect(after.items.flatMap((item) => item.kind === 'message' ? item.messageId : [])).toEqual([
+            'm-compact-started',
+            'm-compact-completed',
+        ]);
     });
 
     it('groups consecutive tool-call messages into a tool-calls-group item when enabled', () => {
