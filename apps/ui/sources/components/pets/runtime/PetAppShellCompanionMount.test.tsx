@@ -163,6 +163,9 @@ describe('PetAppShellCompanionMount', () => {
         const screen = await renderScreen(<PetAppShellCompanionMount />);
 
         expect(screen.findByTestId('pet-app-shell-companion-root')).not.toBeNull();
+        const rootStyle = flattenStyle(screen.findByTestId('pet-app-shell-companion-root')?.props.style);
+        expect(rootStyle.position).toBe('fixed');
+        expect(rootStyle.zIndex).toBeGreaterThan(100);
         const sprite = screen.findByTestId('pet-app-shell-companion-sprite');
         expect(sprite?.props['data-pet-state']).toBe('idle');
     });
@@ -471,7 +474,7 @@ describe('PetAppShellCompanionMount', () => {
         expect(screen.findByTestId('pet-app-shell-companion-root')).toBeNull();
     });
 
-    it('renders the app-shell companion in Tauri when the desktop overlay does not own the pet', async () => {
+    it('does not render the app-shell companion inside the Tauri desktop app', async () => {
         platformState.tauri = true;
         settingsState.account = {
             ...settingsState.account,
@@ -485,6 +488,6 @@ describe('PetAppShellCompanionMount', () => {
 
         const screen = await renderScreen(<PetAppShellCompanionMount />);
 
-        expect(screen.findByTestId('pet-app-shell-companion-root')).not.toBeNull();
+        expect(screen.findByTestId('pet-app-shell-companion-root')).toBeNull();
     });
 });

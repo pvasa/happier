@@ -20,7 +20,11 @@ import {
     PET_TAP_REACTION_DURATION_MS,
     PET_TAP_REACTION_HAPTIC,
 } from '@/components/pets/animation/petAnimationPlaybackConfig';
-import { usePetCompanionActivityModel, type PetCompanionTrayItem } from '@/components/pets/activity';
+import {
+    usePetCompanionActivityModel,
+    usePetCompanionTrayDismissals,
+    type PetCompanionTrayItem,
+} from '@/components/pets/activity';
 import { DEFAULT_BUILT_IN_PET_ID } from '@/components/pets/builtIns/builtInPetRegistry';
 import {
     openDesktopPetOverlayTrayItem,
@@ -131,7 +135,7 @@ function useTapReactionState(): Readonly<{
 
 function NativePetCompanionLayer(): React.ReactElement | null {
     const selectedPetPackage = useSelectedPetPackage();
-    const [dismissedTrayItemKeys, setDismissedTrayItemKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+    const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const [trayOpen, setTrayOpen] = React.useState(false);
     const localSettings = useLocalSettings();
@@ -210,13 +214,6 @@ function NativePetCompanionLayer(): React.ReactElement | null {
     const handleQuickReply = React.useCallback(async (item: PetCompanionTrayItem, message: string) => {
         await sendDesktopPetOverlayQuickReply({ item, message, executor: actionExecutor });
     }, [actionExecutor]);
-    const handleDismissTrayItem = React.useCallback((item: PetCompanionTrayItem) => {
-        setDismissedTrayItemKeys((current) => {
-            const next = new Set(current);
-            next.add(item.dismissKey);
-            return next;
-        });
-    }, []);
 
     if (!selectedPetPackage.enabled || !selectedPetPackage.source) {
         return null;
@@ -248,7 +245,7 @@ function NativePetCompanionLayer(): React.ReactElement | null {
                             items={activity.trayItems}
                             open={trayOpen}
                             onOpenItem={handleOpenTrayItem}
-                            onDismissItem={handleDismissTrayItem}
+                            onDismissItem={dismissTrayItem}
                             onQuickReply={handleQuickReply}
                         />
                     </PetNoDragRegion>

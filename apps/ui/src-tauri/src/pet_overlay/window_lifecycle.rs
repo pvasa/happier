@@ -1,12 +1,32 @@
 use super::{PET_OVERLAY_WINDOW_LABEL, PET_OVERLAY_WINDOW_ROUTE};
 use crate::pet_overlay::placement::{
-    resolve_pet_overlay_parking_position, DesktopPetOverlayPosition, Rect,
+    resolve_pet_overlay_parking_position, DesktopPetOverlayMonitorRect, DesktopPetOverlayPosition,
+    Rect,
 };
 use tauri::utils::config::Color;
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DesktopPetOverlayMacMouseSettings {
+    pub(crate) accept_first_mouse: bool,
+    pub(crate) accepts_mouse_moved_events: bool,
+}
+
+pub(crate) fn resolve_pet_overlay_macos_mouse_settings(
+    is_macos: bool,
+) -> Option<DesktopPetOverlayMacMouseSettings> {
+    if !is_macos {
+        return None;
+    }
+
+    Some(DesktopPetOverlayMacMouseSettings {
+        accept_first_mouse: true,
+        accepts_mouse_moved_events: true,
+    })
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DesktopPetOverlayWindowSpec {
@@ -79,6 +99,70 @@ pub(crate) fn monitor_to_logical_rect(
     }
 }
 
+fn resolve_pet_overlay_monitor_id(monitor: &tauri::Monitor) -> String {
+    let name = monitor
+        .name()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("display");
+    format!(
+        "{}@{},{}:{}x{}:{:.4}",
+        name,
+        monitor.position().x,
+        monitor.position().y,
+        monitor.size().width,
+        monitor.size().height,
+        monitor.scale_factor(),
+    )
+}
+
+fn monitor_to_overlay_monitor_rect(
+    monitor: &tauri::Monitor,
+    fallback_scale_factor: f64,
+) -> DesktopPetOverlayMonitorRect {
+    DesktopPetOverlayMonitorRect {
+        id: resolve_pet_overlay_monitor_id(monitor),
+        rect: monitor_to_logical_rect(monitor, fallback_scale_factor),
+    }
+}
+
+pub(crate) fn resolve_pet_overlay_available_monitor_rects<R: Runtime>(
+    app: &AppHandle<R>,
+    overlay_window: &WebviewWindow<R>,
+) -> Vec<DesktopPetOverlayMonitorRect> {
+    let overlay_scale_factor = overlay_window.scale_factor().unwrap_or(1.0).max(0.000_1);
+    let monitors = overlay_window
+        .available_monitors()
+        .or_else(|_| app.available_monitors())
+        .unwrap_or_default();
+
+    monitors
+        .into_iter()
+        .map(|monitor| monitor_to_overlay_monitor_rect(&monitor, overlay_scale_factor))
+        .collect()
+}
+
+pub(crate) fn resolve_pet_overlay_monitor_rect_with_id<R: Runtime>(
+    app: &AppHandle<R>,
+    overlay_window: &WebviewWindow<R>,
+    preferred_monitor_id: Option<&str>,
+) -> DesktopPetOverlayMonitorRect {
+    let available = resolve_pet_overlay_available_monitor_rects(app, overlay_window);
+    if let Some(preferred_monitor_id) = preferred_monitor_id {
+        if let Some(monitor) = available
+            .iter()
+            .find(|monitor| monitor.id == preferred_monitor_id)
+        {
+            return monitor.clone();
+        }
+    }
+
+    DesktopPetOverlayMonitorRect {
+        id: "current".to_string(),
+        rect: resolve_pet_overlay_monitor_rect(app, overlay_window),
+    }
+}
+
 pub(crate) fn resolve_pet_overlay_monitor_rect<R: Runtime>(
     app: &AppHandle<R>,
     overlay_window: &WebviewWindow<R>,
@@ -134,27 +218,60 @@ pub(crate) fn ensure_pet_overlay_window<R: Runtime>(
 ) -> Result<WebviewWindow<R>, String> {
     if let Some(window) = app.get_webview_window(PET_OVERLAY_WINDOW_LABEL) {
         let _ = window.set_always_on_top(always_on_top);
+        let _ = window.set_visible_on_all_workspaces(true);
+        apply_pet_overlay_macos_mouse_settings(&window)?;
         navigate_pet_overlay_window_to_route(&window)?;
         return Ok(window);
     }
 
     let spec = build_pet_overlay_window_spec(always_on_top);
-    let window = WebviewWindowBuilder::new(app, spec.label, WebviewUrl::App(spec.route.into()))
+    let builder = WebviewWindowBuilder::new(app, spec.label, WebviewUrl::App(spec.route.into()))
         .title(spec.title)
         .decorations(spec.decorations)
         .resizable(spec.resizable)
         .always_on_top(spec.always_on_top)
+        .visible_on_all_workspaces(true)
         .transparent(spec.transparent)
         .visible(spec.visible)
-        .skip_taskbar(spec.skip_taskbar)
+        .skip_taskbar(spec.skip_taskbar);
+
+    #[cfg(target_os = "macos")]
+    let builder = if let Some(settings) = resolve_pet_overlay_macos_mouse_settings(true) {
+        builder.accept_first_mouse(settings.accept_first_mouse)
+    } else {
+        builder
+    };
+
+    let window = builder
         .build()
         .map_err(|error| error.to_string())?;
 
     window
         .set_background_color(spec.background_color)
         .map_err(|error| error.to_string())?;
+    apply_pet_overlay_macos_mouse_settings(&window)?;
     navigate_pet_overlay_window_to_route(&window)?;
     Ok(window)
+}
+
+#[cfg(target_os = "macos")]
+fn apply_pet_overlay_macos_mouse_settings<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<(), String> {
+    let Some(settings) = resolve_pet_overlay_macos_mouse_settings(true) else {
+        return Ok(());
+    };
+    let ns_window_ptr = window.ns_window().map_err(|error| error.to_string())?;
+    let ns_window: &objc2_app_kit::NSWindow = unsafe { &*ns_window_ptr.cast() };
+    ns_window.setAcceptsMouseMovedEvents(settings.accepts_mouse_moved_events);
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_pet_overlay_macos_mouse_settings<R: Runtime>(
+    _window: &WebviewWindow<R>,
+) -> Result<(), String> {
+    Ok(())
 }
 
 pub(crate) fn park_pet_overlay_window_offscreen<R: Runtime>(
@@ -224,6 +341,34 @@ mod tests {
     }
 
     #[test]
+    fn pet_overlay_window_joins_all_macos_spaces_when_visible() {
+        let source_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("pet_overlay")
+            .join("window_lifecycle.rs");
+        let source = fs::read_to_string(&source_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to read monitor lifecycle source {}: {error}",
+                source_path.display()
+            )
+        });
+
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source should contain production code before tests");
+
+        assert!(
+            production_source.contains(".visible_on_all_workspaces(true)"),
+            "new pet overlay windows should join all macOS Spaces",
+        );
+        assert!(
+            production_source.contains("set_visible_on_all_workspaces(true)"),
+            "reused pet overlay windows should re-assert all-Spaces visibility",
+        );
+    }
+
+    #[test]
     fn pet_overlay_navigation_url_preserves_existing_query_and_targets_overlay_route() {
         let current_url =
             tauri::Url::parse("http://localhost:8081/sessions?serverId=srv-1").expect("valid URL");
@@ -242,6 +387,18 @@ mod tests {
     fn input_locked_overlay_ignores_cursor_events_for_click_through() {
         assert!(resolve_pet_overlay_ignore_cursor_events(true));
         assert!(!resolve_pet_overlay_ignore_cursor_events(false));
+    }
+
+    #[test]
+    fn macos_pet_overlay_accepts_first_mouse_and_mouse_moved_events() {
+        assert_eq!(
+            resolve_pet_overlay_macos_mouse_settings(true),
+            Some(DesktopPetOverlayMacMouseSettings {
+                accept_first_mouse: true,
+                accepts_mouse_moved_events: true,
+            }),
+        );
+        assert_eq!(resolve_pet_overlay_macos_mouse_settings(false), None);
     }
 
     #[test]

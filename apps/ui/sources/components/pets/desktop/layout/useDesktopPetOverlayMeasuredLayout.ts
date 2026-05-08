@@ -1,10 +1,17 @@
 import * as React from 'react';
 
 import {
+    DESKTOP_PET_OVERLAY_CONTEXT_BOTTOM_GAP_PX,
+    DESKTOP_PET_OVERLAY_CONTEXT_MASCOT_TOP_OVERLAP_PX,
+    DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX,
+    DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
+    DESKTOP_PET_OVERLAY_TRAY_GAP_PX,
     DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT,
     DESKTOP_PET_OVERLAY_TRAY_WIDTH,
     type DesktopPetOverlayGeometry,
 } from '@/components/pets/desktop/desktopPetOverlayGeometry';
+
+const DESKTOP_PET_OVERLAY_CONTEXT_SIZE_PX = 30;
 
 export type DesktopPetOverlayMeasuredElementId = 'root' | 'mascot' | 'tray' | 'controls';
 
@@ -79,31 +86,40 @@ function buildFallbackMeasuredLayout(input: UseDesktopPetOverlayMeasuredLayoutIn
     const window = input.windowSize;
     const mascot = input.hasTrayItems
         ? {
-            x: window.width - input.geometry.windowWidth - 36,
-            y: window.height - input.geometry.windowHeight - 18,
-            width: input.geometry.windowWidth,
-            height: input.geometry.windowHeight,
+            x: window.width - input.geometry.spriteWidth - DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
+            y: window.height - input.geometry.spriteHeight - DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX,
+            width: input.geometry.spriteWidth,
+            height: input.geometry.spriteHeight,
         }
         : {
-            x: window.width - input.geometry.windowWidth,
-            y: window.height - input.geometry.windowHeight,
-            width: input.geometry.windowWidth,
-            height: input.geometry.windowHeight,
+            x: window.width - input.geometry.spriteWidth,
+            y: window.height - input.geometry.spriteHeight,
+            width: input.geometry.spriteWidth,
+            height: input.geometry.spriteHeight,
         };
     const tray = input.trayVisible
         ? {
-            x: window.width - DESKTOP_PET_OVERLAY_TRAY_WIDTH - 58,
-            y: window.height - input.geometry.windowHeight - 18 - DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT,
+            x: window.width - DESKTOP_PET_OVERLAY_TRAY_WIDTH - DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
+            y: window.height
+                - input.geometry.spriteHeight
+                - DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX
+                - DESKTOP_PET_OVERLAY_TRAY_GAP_PX
+                - DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT,
             width: DESKTOP_PET_OVERLAY_TRAY_WIDTH,
             height: DESKTOP_PET_OVERLAY_TRAY_MAX_HEIGHT,
         }
         : null;
     const controls = input.hasTrayItems
         ? {
-            x: window.width - 46 - 30,
-            y: window.height - (input.geometry.windowHeight - 12) - 30,
-            width: 30,
-            height: 30,
+            x: window.width - DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX - DESKTOP_PET_OVERLAY_CONTEXT_SIZE_PX,
+            y: window.height
+                - input.geometry.spriteHeight
+                - DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX
+                - DESKTOP_PET_OVERLAY_CONTEXT_BOTTOM_GAP_PX
+                - DESKTOP_PET_OVERLAY_CONTEXT_SIZE_PX
+                + DESKTOP_PET_OVERLAY_CONTEXT_MASCOT_TOP_OVERLAP_PX,
+            width: DESKTOP_PET_OVERLAY_CONTEXT_SIZE_PX,
+            height: DESKTOP_PET_OVERLAY_CONTEXT_SIZE_PX,
         }
         : {
             x: window.width - 14 - 30,
@@ -122,7 +138,7 @@ function measureLayout(input: UseDesktopPetOverlayMeasuredLayoutInput): DesktopP
     const trayElement = input.trayVisible ? resolveElement('tray') : null;
     const controlsElement = resolveElement('controls');
 
-    if (!rootElement || !mascotElement || !controlsElement) {
+    if (!rootElement || !mascotElement || !controlsElement || (input.trayVisible && !trayElement)) {
         return buildFallbackMeasuredLayout(input);
     }
 

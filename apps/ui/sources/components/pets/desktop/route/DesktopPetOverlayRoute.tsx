@@ -2,7 +2,10 @@ import * as React from 'react';
 import { StyleSheet, View, type ViewStyle } from 'react-native';
 
 import { DEFAULT_BUILT_IN_PET_ID } from '@/components/pets/builtIns/builtInPetRegistry';
-import { usePetCompanionActivityModel, type PetCompanionTrayItem } from '@/components/pets/activity';
+import {
+    usePetCompanionActivityModel,
+    usePetCompanionTrayDismissals,
+} from '@/components/pets/activity';
 import { DesktopPetOverlayContextActions } from '@/components/pets/desktop/actions/DesktopPetOverlayContextActions';
 import { useDesktopPetOverlayActions } from '@/components/pets/desktop/actions/useDesktopPetOverlayActions';
 import {
@@ -39,10 +42,14 @@ import {
     syncDesktopPetOverlayElementMetrics,
 } from '../bridge/desktopPetOverlayBridge';
 import {
+    DESKTOP_PET_OVERLAY_CONTEXT_BOTTOM_GAP_PX,
+    DESKTOP_PET_OVERLAY_CONTEXT_MASCOT_TOP_OVERLAP_PX,
+    DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX,
+    DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
+    DESKTOP_PET_OVERLAY_TRAY_GAP_PX,
     resolveDesktopPetOverlayGeometry,
 } from '../desktopPetOverlayGeometry';
 
-const CONTEXT_ACTION_SHOULDER_BOTTOM_OFFSET_PX = 12;
 const CONTEXT_ACTION_SIZE_PX = 30;
 
 export type DesktopPetOverlayRouteProps = Readonly<{
@@ -58,6 +65,27 @@ function rectStyle(rect: DesktopPetOverlayMeasuredRect): ViewStyle {
         top: rect.y,
         width: rect.width,
         height: rect.height,
+    };
+}
+
+function trayRectStyle(
+    rect: DesktopPetOverlayMeasuredRect,
+    layout: DesktopPetOverlayNativeLayoutState,
+): ViewStyle {
+    const baseStyle: ViewStyle = {
+        position: 'absolute',
+        left: rect.x,
+        width: rect.width,
+    };
+    if (layout.placement === 'bottomStart' || layout.placement === 'bottomEnd') {
+        return {
+            ...baseStyle,
+            top: rect.y,
+        };
+    }
+    return {
+        ...baseStyle,
+        bottom: layout.window.height - rect.y - rect.height,
     };
 }
 
@@ -142,7 +170,7 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
     }, [props.nativeLayoutState]);
     const selectedPetPackage = useSelectedPetPackage();
     const localSettings = useLocalSettings();
-    const [dismissedTrayItemKeys, setDismissedTrayItemKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+    const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const [trayOpen, setTrayOpen] = React.useState(false);
     const trayItemCount = activity.trayItems.length;
@@ -201,13 +229,6 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
     const handleActivate = React.useCallback(() => {
         void showMainWindowFromDesktopPetOverlay({ reason: 'mascot-click' });
     }, []);
-    const handleDismissTrayItem = React.useCallback((item: PetCompanionTrayItem) => {
-        setDismissedTrayItemKeys((current) => {
-            const next = new Set(current);
-            next.add(item.dismissKey);
-            return next;
-        });
-    }, []);
     const drag = usePetPointerDragSession({
         coordinateSpace: 'screen',
         onDragStart: handleDragStart,
@@ -222,48 +243,68 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
             return current || trayItemCount > 0;
         });
     }, [trayItemCount]);
+    const invalidateNativeLayoutState = React.useCallback(() => {
+        setNativeLayoutState(null);
+    }, []);
     const hasTrayItems = petVisible && trayItemCount > 0;
     const trayVisible = hasTrayItems && trayOpen;
+    const resolvedNativeLayoutState = nativeLayoutState && (!trayVisible || nativeLayoutState.tray)
+        ? nativeLayoutState
+        : null;
     const windowSize = React.useMemo(
         () => {
-            if (nativeLayoutState) return nativeLayoutState.window;
+            if (resolvedNativeLayoutState) return resolvedNativeLayoutState.window;
             return hasTrayItems
                 ? { width: geometry.expandedWindowWidth, height: geometry.expandedWindowHeight }
-                : { width: geometry.windowWidth, height: geometry.windowHeight };
+                : { width: geometry.spriteWidth, height: geometry.spriteHeight };
         },
         [
             geometry.expandedWindowHeight,
             geometry.expandedWindowWidth,
-            geometry.windowHeight,
-            geometry.windowWidth,
+            geometry.spriteHeight,
+            geometry.spriteWidth,
             hasTrayItems,
-            nativeLayoutState,
+            resolvedNativeLayoutState,
         ],
     );
-    const mascotStyle = nativeLayoutState
-        ? rectStyle(nativeLayoutState.mascot)
+    const mascotStyle = resolvedNativeLayoutState
+        ? rectStyle(resolvedNativeLayoutState.mascot)
         : [
             styles.state,
             {
-                width: geometry.windowWidth,
-                height: geometry.windowHeight,
+                width: geometry.spriteWidth,
+                height: geometry.spriteHeight,
             },
             hasTrayItems ? styles.stateExpanded : styles.stateCompact,
         ];
-    const trayStyle = nativeLayoutState?.tray
-        ? rectStyle(nativeLayoutState.tray)
+    const trayStyle = resolvedNativeLayoutState?.tray
+        ? trayRectStyle(resolvedNativeLayoutState.tray, resolvedNativeLayoutState)
         : [
             styles.tray,
-            { bottom: geometry.windowHeight + 18 },
+            {
+                bottom:
+                    geometry.spriteHeight
+                    + DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX
+                    + DESKTOP_PET_OVERLAY_TRAY_GAP_PX,
+            },
         ];
-    const contextActionsStyle = nativeLayoutState
+    const contextActionsStyle = resolvedNativeLayoutState
         ? rectStyle({
-            ...nativeLayoutState.controls,
-            width: nativeLayoutState.controls.width || CONTEXT_ACTION_SIZE_PX,
-            height: nativeLayoutState.controls.height || CONTEXT_ACTION_SIZE_PX,
+            ...resolvedNativeLayoutState.controls,
+            width: resolvedNativeLayoutState.controls.width || CONTEXT_ACTION_SIZE_PX,
+            height: resolvedNativeLayoutState.controls.height || CONTEXT_ACTION_SIZE_PX,
         })
         : hasTrayItems
-            ? [styles.contextExpanded, { bottom: geometry.windowHeight - CONTEXT_ACTION_SHOULDER_BOTTOM_OFFSET_PX }]
+            ? [
+                styles.contextExpanded,
+                {
+                    bottom:
+                        geometry.spriteHeight
+                        + DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX
+                        + DESKTOP_PET_OVERLAY_CONTEXT_BOTTOM_GAP_PX
+                        - DESKTOP_PET_OVERLAY_CONTEXT_MASCOT_TOP_OVERLAP_PX,
+                },
+            ]
             : styles.contextCompact;
     useDesktopPetOverlayMeasuredLayout({
         enabled: petVisible,
@@ -306,12 +347,13 @@ export function DesktopPetOverlayRoute(props: DesktopPetOverlayRouteProps = {}):
                     items={activity.trayItems}
                     open={trayOpen}
                     onOpenItem={actions.openTrayItem}
-                    onDismissItem={handleDismissTrayItem}
+                    onDismissItem={dismissTrayItem}
                     onQuickReply={actions.quickReply}
+                    onInteractionLayoutChange={invalidateNativeLayoutState}
                     style={trayStyle}
                 />
             ) : null}
-            {petVisible ? (
+            {hasTrayItems ? (
                 <DesktopPetOverlayContextActions
                     trayCount={trayItemCount}
                     trayOpen={trayOpen}
@@ -340,18 +382,18 @@ const styles = StyleSheet.create({
         bottom: 0,
     },
     stateExpanded: {
-        right: 36,
-        bottom: 18,
+        right: DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
+        bottom: DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_BOTTOM_INSET_PX,
     },
     tray: {
         position: 'absolute',
-        right: 58,
+        right: DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
     },
     contextCompact: {
         right: 14,
         top: 22,
     },
     contextExpanded: {
-        right: 46,
+        right: DESKTOP_PET_OVERLAY_EXPANDED_MASCOT_RIGHT_INSET_PX,
     },
 });

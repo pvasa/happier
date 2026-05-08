@@ -17,9 +17,20 @@ const QUIT_APP_MENU_ID: &str = "tray-quit-app";
 const TRAY_ICON_ID: &str = "main";
 #[cfg(desktop)]
 const TRAY_ICON_SIZE: u32 = 18;
+#[cfg(desktop)]
+const DESKTOP_TRAY_ENABLED: bool = false;
+
+#[cfg(desktop)]
+fn is_desktop_tray_enabled_for_build() -> bool {
+    DESKTOP_TRAY_ENABLED
+}
 
 #[cfg(desktop)]
 pub fn register<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
+    if !is_desktop_tray_enabled_for_build() {
+        return Ok(());
+    }
+
     let initial_state = DesktopTrayStatePayload {
         status: DesktopTrayStatus::Connecting,
         label: "Happier".to_string(),
@@ -82,6 +93,10 @@ pub fn desktop_set_tray_state<R: Runtime>(
     app: AppHandle<R>,
     state: DesktopTrayStatePayload,
 ) -> Result<(), String> {
+    if !is_desktop_tray_enabled_for_build() {
+        return Ok(());
+    }
+
     apply_tray_state(&app, &state).map_err(|error| error.to_string())
 }
 
@@ -178,4 +193,14 @@ fn build_status_icon(status: DesktopTrayStatus) -> Image<'static> {
     }
 
     Image::new_owned(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE)
+}
+
+#[cfg(all(test, desktop))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_dev_build_disables_desktop_tray() {
+        assert!(!is_desktop_tray_enabled_for_build());
+    }
 }

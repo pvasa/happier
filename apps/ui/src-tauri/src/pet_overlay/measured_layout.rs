@@ -5,7 +5,6 @@ use super::placement::{
 };
 use super::storage::PersistedPetOverlayDragOffset;
 
-const MEASURED_LAYOUT_ELEMENT_GAP_PX: f64 = 12.0;
 const MEASURED_LAYOUT_MIN_AXIS_PX: f64 = 1.0;
 const MEASURED_LAYOUT_MAX_AXIS_PX: f64 = 2_048.0;
 
@@ -67,53 +66,22 @@ pub enum DesktopPetOverlayMeasuredLayoutPlacement {
 pub(crate) fn resolve_desktop_pet_overlay_measured_layout(
     input: DesktopPetOverlayMeasuredLayoutInput,
 ) -> DesktopPetOverlayMeasuredLayoutPayload {
-    let mascot_size = sanitize_required_measured_size(rect_size(input.metrics.mascot));
-    let tray_size = if input.expanded && input.metrics.is_tray_visible {
-        input
-            .metrics
-            .tray
-            .map(rect_size)
-            .and_then(sanitize_optional_measured_size)
+    let mascot = sanitize_required_measured_rect(input.metrics.mascot);
+    let tray = if input.expanded && input.metrics.is_tray_visible {
+        input.metrics.tray.and_then(sanitize_optional_measured_rect)
     } else {
         None
     };
-    let controls_size = input
+    let controls = input
         .metrics
         .controls
-        .map(rect_size)
-        .and_then(sanitize_optional_measured_size);
+        .and_then(sanitize_optional_measured_rect);
+    let tray_size = tray.map(rect_size);
 
     let tray_above_mascot = matches!(
         input.anchor,
         DesktopPetOverlayAnchor::BottomRight | DesktopPetOverlayAnchor::BottomLeft
     );
-    let mascot_y = match (tray_size, tray_above_mascot) {
-        (Some(tray), true) => tray.height + MEASURED_LAYOUT_ELEMENT_GAP_PX,
-        _ => 0.0,
-    };
-    let mascot = DesktopPetOverlayRelativeRectPayload {
-        x: 0.0,
-        y: mascot_y,
-        width: mascot_size.width,
-        height: mascot_size.height,
-    };
-    let tray = tray_size.map(|tray| DesktopPetOverlayRelativeRectPayload {
-        x: (mascot_size.width - tray.width) / 2.0,
-        y: if tray_above_mascot {
-            0.0
-        } else {
-            mascot_size.height + MEASURED_LAYOUT_ELEMENT_GAP_PX
-        },
-        width: tray.width,
-        height: tray.height,
-    });
-    let controls = controls_size.map(|controls| DesktopPetOverlayRelativeRectPayload {
-        x: mascot.x + mascot.width - controls.width,
-        y: mascot.y,
-        width: controls.width,
-        height: controls.height,
-    });
-
     let normalized = normalize_relative_layout(mascot, tray, controls);
     let window_size = normalized.window_size;
     let position = resolve_pet_overlay_placement(
@@ -212,12 +180,14 @@ fn shift_rect(
     }
 }
 
-fn sanitize_required_measured_size(
-    size: DesktopPetOverlayMeasuredSizePayload,
-) -> DesktopPetOverlayMeasuredSizePayload {
-    DesktopPetOverlayMeasuredSizePayload {
-        width: sanitize_required_measured_axis(size.width),
-        height: sanitize_required_measured_axis(size.height),
+fn sanitize_required_measured_rect(
+    rect: DesktopPetOverlayRelativeRectPayload,
+) -> DesktopPetOverlayRelativeRectPayload {
+    DesktopPetOverlayRelativeRectPayload {
+        x: sanitize_required_measured_position(rect.x),
+        y: sanitize_required_measured_position(rect.y),
+        width: sanitize_required_measured_axis(rect.width),
+        height: sanitize_required_measured_axis(rect.height),
     }
 }
 
@@ -228,20 +198,31 @@ fn rect_size(rect: DesktopPetOverlayRelativeRectPayload) -> DesktopPetOverlayMea
     }
 }
 
-fn sanitize_optional_measured_size(
-    size: DesktopPetOverlayMeasuredSizePayload,
-) -> Option<DesktopPetOverlayMeasuredSizePayload> {
-    if !size.width.is_finite()
-        || !size.height.is_finite()
-        || size.width <= 0.0
-        || size.height <= 0.0
+fn sanitize_optional_measured_rect(
+    rect: DesktopPetOverlayRelativeRectPayload,
+) -> Option<DesktopPetOverlayRelativeRectPayload> {
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.width <= 0.0
+        || rect.height <= 0.0
     {
         return None;
     }
-    Some(DesktopPetOverlayMeasuredSizePayload {
-        width: size.width.min(MEASURED_LAYOUT_MAX_AXIS_PX),
-        height: size.height.min(MEASURED_LAYOUT_MAX_AXIS_PX),
+    Some(DesktopPetOverlayRelativeRectPayload {
+        x: sanitize_required_measured_position(rect.x),
+        y: sanitize_required_measured_position(rect.y),
+        width: rect.width.min(MEASURED_LAYOUT_MAX_AXIS_PX),
+        height: rect.height.min(MEASURED_LAYOUT_MAX_AXIS_PX),
     })
+}
+
+fn sanitize_required_measured_position(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 0.0;
+    }
+    value.clamp(-MEASURED_LAYOUT_MAX_AXIS_PX, MEASURED_LAYOUT_MAX_AXIS_PX)
 }
 
 fn sanitize_required_measured_axis(value: f64) -> f64 {
@@ -293,6 +274,15 @@ mod tests {
         DesktopPetOverlayRelativeRectPayload {
             x: 0.0,
             y: 0.0,
+            width,
+            height,
+        }
+    }
+
+    fn rect_at(x: f64, y: f64, width: f64, height: f64) -> DesktopPetOverlayRelativeRectPayload {
+        DesktopPetOverlayRelativeRectPayload {
+            x,
+            y,
             width,
             height,
         }
@@ -368,21 +358,18 @@ mod tests {
             true,
             DesktopPetOverlayMeasuredContentMetricsPayload {
                 is_tray_visible: true,
-                mascot: rect(96.0, 80.0),
-                tray: Some(rect(240.0, 100.0)),
-                controls: Some(rect(44.0, 32.0)),
+                mascot: rect_at(166.0, 112.0, 96.0, 80.0),
+                tray: Some(rect_at(0.0, 0.0, 240.0, 100.0)),
+                controls: Some(rect_at(218.0, 112.0, 44.0, 32.0)),
             },
         ));
 
         assert_eq!(layout.window.y, 396.0);
+        assert_eq!(layout.window.width, 262.0);
         assert_eq!(
-            layout.window,
-            DesktopPetOverlayRelativeRectPayload {
-                x: 548.0,
-                y: 396.0,
-                width: 240.0,
-                height: 192.0,
-            },
+            layout.mascot.x,
+            166.0,
+            "expanded overlays should right-align the mascot under the tray with the same shoulder bias as the React surfaces",
         );
         assert_eq!(
             layout.tray,
@@ -405,14 +392,65 @@ mod tests {
     }
 
     #[test]
+    fn expanded_layout_uses_renderer_measured_rect_positions_for_window_bounds() {
+        let layout = resolve_desktop_pet_overlay_measured_layout(base_input(
+            DesktopPetOverlayAnchor::BottomRight,
+            true,
+            DesktopPetOverlayMeasuredContentMetricsPayload {
+                is_tray_visible: true,
+                mascot: rect_at(220.0, 178.0, 116.0, 124.0),
+                tray: Some(rect_at(22.0, 44.0, 276.0, 132.0)),
+                controls: Some(rect_at(284.0, 150.0, 30.0, 30.0)),
+            },
+        ));
+
+        assert_eq!(
+            layout.window,
+            DesktopPetOverlayRelativeRectPayload {
+                x: 474.0,
+                y: 330.0,
+                width: 314.0,
+                height: 258.0,
+            },
+        );
+        assert_eq!(
+            layout.tray,
+            Some(DesktopPetOverlayRelativeRectPayload {
+                x: 0.0,
+                y: 0.0,
+                width: 276.0,
+                height: 132.0,
+            }),
+        );
+        assert_eq!(
+            layout.mascot,
+            DesktopPetOverlayRelativeRectPayload {
+                x: 198.0,
+                y: 134.0,
+                width: 116.0,
+                height: 124.0,
+            },
+        );
+        assert_eq!(
+            layout.controls,
+            Some(DesktopPetOverlayRelativeRectPayload {
+                x: 262.0,
+                y: 106.0,
+                width: 30.0,
+                height: 30.0,
+            }),
+        );
+    }
+
+    #[test]
     fn top_edge_tray_layout_places_tray_below_the_mascot() {
         let layout = resolve_desktop_pet_overlay_measured_layout(base_input(
             DesktopPetOverlayAnchor::TopRight,
             true,
             DesktopPetOverlayMeasuredContentMetricsPayload {
                 is_tray_visible: true,
-                mascot: rect(96.0, 80.0),
-                tray: Some(rect(240.0, 100.0)),
+                mascot: rect_at(166.0, 0.0, 96.0, 80.0),
+                tray: Some(rect_at(0.0, 92.0, 240.0, 100.0)),
                 controls: None,
             },
         ));
@@ -449,6 +487,7 @@ mod tests {
                 drag_offset: PersistedPetOverlayDragOffset {
                     x: 10_000.0,
                     y: 10_000.0,
+                    monitor_id: None,
                 },
                 placement_padding: 12.0,
                 metrics: DesktopPetOverlayMeasuredContentMetricsPayload {

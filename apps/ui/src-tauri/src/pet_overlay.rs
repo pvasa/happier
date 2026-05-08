@@ -14,7 +14,9 @@ use self::measured_layout::{
     DesktopPetOverlayMeasuredLayoutInput, DesktopPetOverlayMeasuredLayoutPayload,
 };
 use self::placement::{
-    normalize_pet_overlay_drag_offset, resolve_pet_overlay_placement, Rect, Size,
+    normalize_pet_overlay_drag_offset, resolve_pet_overlay_monitor_for_position,
+    resolve_pet_overlay_offset_from_position, resolve_pet_overlay_placement,
+    DesktopPetOverlayMonitorRect, DesktopPetOverlayPosition, Rect, Size,
 };
 use self::storage::{
     clear_persisted_drag_offset_path, persist_drag_offset_to_path, read_persisted_drag_offset,
@@ -22,8 +24,8 @@ use self::storage::{
 };
 use self::window_lifecycle::{
     ensure_pet_overlay_window, park_pet_overlay_window_offscreen,
-    resolve_pet_overlay_ignore_cursor_events, resolve_pet_overlay_monitor_rect,
-    set_pet_overlay_window_frame,
+    resolve_pet_overlay_available_monitor_rects, resolve_pet_overlay_ignore_cursor_events,
+    resolve_pet_overlay_monitor_rect_with_id, set_pet_overlay_window_frame,
 };
 
 pub(crate) const PET_OVERLAY_WINDOW_LABEL: &str = "pet_overlay";
@@ -38,7 +40,7 @@ pub(crate) const PET_MOMENTUM_FRICTION: f64 = 0.88;
 pub(crate) const PET_MOMENTUM_STOP_SPEED_PX_PER_S: f64 = 65.0;
 pub(crate) const PET_MOMENTUM_MAX_DURATION_MS: u64 = 900;
 const PET_VELOCITY_MAX_MAGNITUDE_PX_PER_S: f64 = 1_600.0;
-const PET_OVERLAY_PLACEMENT_PADDING_PX: f64 = 12.0;
+const PET_OVERLAY_PLACEMENT_PADDING_PX: f64 = 0.0;
 const PET_OVERLAY_MIN_WINDOW_SIZE_PX: f64 = 1.0;
 const PET_OVERLAY_MAX_WINDOW_SIZE_PX: f64 = 2_048.0;
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -241,7 +243,7 @@ pub fn sync_desktop_pet_overlay_state<R: Runtime>(
             .map_err(|_| "DesktopPetOverlayState poisoned".to_string())?;
         ensure_drag_offset_loaded(&app, &mut guard);
         guard.last_sync_payload = Some(payload.clone());
-        (guard.drag_offset, guard.element_metrics.clone())
+        (guard.drag_offset.clone(), guard.element_metrics.clone())
     };
 
     let applied =
@@ -297,7 +299,7 @@ pub fn desktop_pet_overlay_sync_element_metrics<R: Runtime>(
         guard.element_metrics = Some(payload);
         (
             guard.last_sync_payload.clone(),
-            guard.drag_offset,
+            guard.drag_offset.clone(),
             guard.element_metrics.clone(),
         )
     };
@@ -413,18 +415,34 @@ pub fn desktop_pet_overlay_apply_drag_delta<R: Runtime>(
                 normalize_drag_offset_from_window_state(
                     sync_payload,
                     guard.window_state.as_ref(),
-                    guard.drag_offset,
+                    guard.drag_offset.clone(),
                 )
             })
-            .unwrap_or(guard.drag_offset);
-        guard.drag_offset = sanitize_drag_offset(PersistedPetOverlayDragOffset {
-            x: current_drag_offset.x + payload.dx,
-            y: current_drag_offset.y + payload.dy,
-        });
-        persist_drag_offset_if_possible(&app, guard.drag_offset);
+            .unwrap_or_else(|| guard.drag_offset.clone());
+        guard.drag_offset = guard
+            .last_sync_payload
+            .as_ref()
+            .map(|sync_payload| {
+                resolve_drag_offset_after_window_delta(
+                    &app,
+                    sync_payload,
+                    guard.window_state.as_ref(),
+                    current_drag_offset.clone(),
+                    payload.dx,
+                    payload.dy,
+                )
+            })
+            .unwrap_or_else(|| {
+                sanitize_drag_offset(PersistedPetOverlayDragOffset {
+                    x: current_drag_offset.x + payload.dx,
+                    y: current_drag_offset.y + payload.dy,
+                    monitor_id: current_drag_offset.monitor_id,
+                })
+            });
+        persist_drag_offset_if_possible(&app, guard.drag_offset.clone());
         (
             guard.last_sync_payload.clone(),
-            guard.drag_offset,
+            guard.drag_offset.clone(),
             guard.element_metrics.clone(),
         )
     };
@@ -638,8 +656,8 @@ fn apply_runtime_overlay_payload_result<R: Runtime>(
     state: &mut DesktopPetOverlayRuntimeState,
     applied: AppliedDesktopPetOverlayPayload,
 ) -> DesktopPetOverlayWindowStatePayload {
-    state.drag_offset = applied.drag_offset;
-    persist_drag_offset_if_possible(app, applied.drag_offset);
+    state.drag_offset = applied.drag_offset.clone();
+    persist_drag_offset_if_possible(app, applied.drag_offset.clone());
     state.window_state = Some(applied.window_state.clone());
     applied.window_state
 }
@@ -674,7 +692,72 @@ fn normalize_drag_offset_from_window_state(
     PersistedPetOverlayDragOffset {
         x: normalized.x,
         y: normalized.y,
+        monitor_id: window_state.monitor_id.clone(),
     }
+}
+
+fn resolve_drag_offset_after_window_delta_for_monitors(
+    monitors: &[DesktopPetOverlayMonitorRect],
+    payload: &DesktopPetOverlaySyncPayload,
+    window_state: Option<&DesktopPetOverlayWindowStatePayload>,
+    dx: f64,
+    dy: f64,
+) -> Option<PersistedPetOverlayDragOffset> {
+    let window_state = window_state?;
+    let window = Size {
+        width: window_state.logical_size.width,
+        height: window_state.logical_size.height,
+    };
+    let desired_position = DesktopPetOverlayPosition {
+        x: window_state.logical_position.x + dx,
+        y: window_state.logical_position.y + dy,
+    };
+    let target_monitor =
+        resolve_pet_overlay_monitor_for_position(monitors, None, desired_position, window)?;
+    let offset = resolve_pet_overlay_offset_from_position(
+        target_monitor.rect,
+        window,
+        payload.policy.anchor,
+        desired_position,
+        PET_OVERLAY_PLACEMENT_PADDING_PX,
+    );
+
+    Some(sanitize_drag_offset(PersistedPetOverlayDragOffset {
+        x: offset.x,
+        y: offset.y,
+        monitor_id: Some(target_monitor.id.clone()),
+    }))
+}
+
+fn resolve_drag_offset_after_window_delta<R: Runtime>(
+    app: &AppHandle<R>,
+    payload: &DesktopPetOverlaySyncPayload,
+    window_state: Option<&DesktopPetOverlayWindowStatePayload>,
+    current_drag_offset: PersistedPetOverlayDragOffset,
+    dx: f64,
+    dy: f64,
+) -> PersistedPetOverlayDragOffset {
+    let Some(window) = app.get_webview_window(PET_OVERLAY_WINDOW_LABEL) else {
+        return sanitize_drag_offset(PersistedPetOverlayDragOffset {
+            x: current_drag_offset.x + dx,
+            y: current_drag_offset.y + dy,
+            monitor_id: current_drag_offset.monitor_id,
+        });
+    };
+    resolve_drag_offset_after_window_delta_for_monitors(
+        &resolve_pet_overlay_available_monitor_rects(app, &window),
+        payload,
+        window_state,
+        dx,
+        dy,
+    )
+    .unwrap_or_else(|| {
+        sanitize_drag_offset(PersistedPetOverlayDragOffset {
+            x: current_drag_offset.x + dx,
+            y: current_drag_offset.y + dy,
+            monitor_id: current_drag_offset.monitor_id,
+        })
+    })
 }
 
 fn validate_pet_overlay_command_caller(
@@ -788,14 +871,16 @@ fn apply_desktop_pet_overlay_payload<R: Runtime>(
     }
 
     let window = ensure_pet_overlay_window(app, payload.policy.always_on_top)?;
-    let monitor = resolve_pet_overlay_monitor_rect(app, &window);
+    let target_monitor =
+        resolve_pet_overlay_monitor_rect_with_id(app, &window, drag_offset.monitor_id.as_deref());
+    let monitor = target_monitor.rect;
     let normalized_drag_offset = if let Some(metrics) = element_metrics {
         let layout =
             resolve_desktop_pet_overlay_measured_layout(DesktopPetOverlayMeasuredLayoutInput {
                 expanded: payload.expanded,
                 anchor: payload.policy.anchor,
                 monitor,
-                drag_offset,
+                drag_offset: drag_offset.clone(),
                 placement_padding: PET_OVERLAY_PLACEMENT_PADDING_PX,
                 metrics: metrics.clone(),
             });
@@ -813,6 +898,7 @@ fn apply_desktop_pet_overlay_payload<R: Runtime>(
         PersistedPetOverlayDragOffset {
             x: normalized.x,
             y: normalized.y,
+            monitor_id: Some(target_monitor.id.clone()),
         }
     } else {
         let normalized = normalize_pet_overlay_drag_offset(
@@ -829,6 +915,7 @@ fn apply_desktop_pet_overlay_payload<R: Runtime>(
         PersistedPetOverlayDragOffset {
             x: normalized.x,
             y: normalized.y,
+            monitor_id: Some(target_monitor.id.clone()),
         }
     };
     let layout = element_metrics.map(|metrics| {
@@ -836,7 +923,7 @@ fn apply_desktop_pet_overlay_payload<R: Runtime>(
             expanded: payload.expanded,
             anchor: payload.policy.anchor,
             monitor,
-            drag_offset: normalized_drag_offset,
+            drag_offset: normalized_drag_offset.clone(),
             placement_padding: PET_OVERLAY_PLACEMENT_PADDING_PX,
             metrics: metrics.clone(),
         })
@@ -886,7 +973,7 @@ fn apply_desktop_pet_overlay_payload<R: Runtime>(
         window_state: DesktopPetOverlayWindowStatePayload {
             visible: true,
             input_locked: payload.policy.input_locked,
-            monitor_id: None,
+            monitor_id: Some(target_monitor.id),
             logical_position: LogicalPointPayload {
                 x: position.x,
                 y: position.y,
@@ -992,18 +1079,34 @@ fn apply_pet_overlay_momentum_delta<R: Runtime>(
                 normalize_drag_offset_from_window_state(
                     sync_payload,
                     guard.window_state.as_ref(),
-                    guard.drag_offset,
+                    guard.drag_offset.clone(),
                 )
             })
-            .unwrap_or(guard.drag_offset);
-        guard.drag_offset = sanitize_drag_offset(PersistedPetOverlayDragOffset {
-            x: current_drag_offset.x + dx,
-            y: current_drag_offset.y + dy,
-        });
-        persist_drag_offset_if_possible(app, guard.drag_offset);
+            .unwrap_or_else(|| guard.drag_offset.clone());
+        guard.drag_offset = guard
+            .last_sync_payload
+            .as_ref()
+            .map(|sync_payload| {
+                resolve_drag_offset_after_window_delta(
+                    app,
+                    sync_payload,
+                    guard.window_state.as_ref(),
+                    current_drag_offset.clone(),
+                    dx,
+                    dy,
+                )
+            })
+            .unwrap_or_else(|| {
+                sanitize_drag_offset(PersistedPetOverlayDragOffset {
+                    x: current_drag_offset.x + dx,
+                    y: current_drag_offset.y + dy,
+                    monitor_id: current_drag_offset.monitor_id,
+                })
+            });
+        persist_drag_offset_if_possible(app, guard.drag_offset.clone());
         (
             guard.last_sync_payload.clone(),
-            guard.drag_offset,
+            guard.drag_offset.clone(),
             guard.element_metrics.clone(),
         )
     };
@@ -1140,6 +1243,11 @@ mod tests {
                 height: 1.0,
             },
         );
+    }
+
+    #[test]
+    fn desktop_pet_overlay_places_the_visual_window_flush_to_the_monitor_edge() {
+        assert_eq!(PET_OVERLAY_PLACEMENT_PADDING_PX, 0.0);
     }
 
     #[test]
@@ -1519,6 +1627,58 @@ mod tests {
             },
         });
         assert_eq!(require_enabled_overlay_interaction(&runtime_state), Ok(()));
+    }
+
+    #[test]
+    fn drag_delta_retargets_monitor_from_desired_window_position() {
+        let payload = sync_payload_with_input_lock(false);
+        let window_state = DesktopPetOverlayWindowStatePayload {
+            visible: true,
+            input_locked: false,
+            monitor_id: Some("left".to_string()),
+            logical_position: LogicalPointPayload { x: 688.0, y: 488.0 },
+            logical_size: DesktopPetOverlaySizePayload {
+                width: 100.0,
+                height: 100.0,
+            },
+            scale_factor: 1.0,
+            last_placement_recovery_code: None,
+            placement_diagnostics: None,
+            layout: None,
+        };
+        let monitors = vec![
+            DesktopPetOverlayMonitorRect {
+                id: "left".to_string(),
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 800.0,
+                    height: 600.0,
+                },
+            },
+            DesktopPetOverlayMonitorRect {
+                id: "right".to_string(),
+                rect: Rect {
+                    x: 800.0,
+                    y: 0.0,
+                    width: 800.0,
+                    height: 600.0,
+                },
+            },
+        ];
+
+        let next = resolve_drag_offset_after_window_delta_for_monitors(
+            &monitors,
+            &payload,
+            Some(&window_state),
+            160.0,
+            -108.0,
+        )
+        .expect("drag should resolve a target monitor");
+
+        assert_eq!(next.monitor_id, Some("right".to_string()));
+        assert_eq!(next.x, -652.0);
+        assert_eq!(next.y, -120.0);
     }
 
     #[test]

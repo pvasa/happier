@@ -6,6 +6,7 @@ import {
     ScrollView,
     View,
     type StyleProp,
+    type TextStyle,
     type ViewStyle,
 } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -39,12 +40,31 @@ type WebStopPropagationProps = Readonly<{
     onPointerDown: (event?: StopPropagationEvent) => void;
 }>;
 
+type QuickReplyKeyPressEvent = StopPropagationEvent & Readonly<{
+    preventDefault?: () => void;
+    nativeEvent?: Readonly<{
+        key?: string;
+        shiftKey?: boolean;
+    }>;
+}>;
+
+const REPLY_INPUT_MIN_HEIGHT_PX = 32;
+const REPLY_INPUT_LINE_HEIGHT_PX = 17;
+const REPLY_INPUT_MAX_LINES = 4;
+const webReplyInputFocusStyle = { outlineStyle: 'none' } as unknown as TextStyle;
+
+function resolveReplyInputHeight(draft: string): number {
+    const lineCount = Math.min(REPLY_INPUT_MAX_LINES, draft.split(/\r\n|\r|\n/).length);
+    return REPLY_INPUT_MIN_HEIGHT_PX + ((lineCount - 1) * REPLY_INPUT_LINE_HEIGHT_PX);
+}
+
 export type PetCompanionActivityTrayProps = Readonly<{
     items: readonly PetCompanionTrayItem[];
     open: boolean;
     onOpenItem: (item: PetCompanionTrayItem) => void | Promise<void>;
     onDismissItem: (item: PetCompanionTrayItem) => void;
     onQuickReply: (item: PetCompanionTrayItem, message: string) => void | Promise<void>;
+    onInteractionLayoutChange?: () => void;
     style?: StyleProp<ViewStyle>;
 }>;
 
@@ -111,6 +131,7 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     const writingDirection = I18nManager.isRTL ? 'rtl' : 'ltr';
     const replyOpen = props.replyOpen;
     const active = props.active || replyOpen;
+    const replyInputHeight = resolveReplyInputHeight(draft);
     const backgroundFillStyle = React.useMemo<WebBackgroundFillStyle>(() => ({
         background: bubbleTheme.background,
         backgroundColor: bubbleTheme.background,
@@ -124,11 +145,18 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
     const stopEventPropagation = React.useCallback((event?: StopPropagationEvent) => {
         event?.stopPropagation?.();
     }, []);
+    const claimResponder = React.useCallback(() => true, []);
     const webStopPropagationProps = React.useMemo<WebStopPropagationProps>(() => ({
         onClick: stopEventPropagation,
         onMouseDown: stopEventPropagation,
         onPointerDown: stopEventPropagation,
     }), [stopEventPropagation]);
+    const handleReplyKeyPress = React.useCallback((event: QuickReplyKeyPressEvent) => {
+        event.stopPropagation?.();
+        if (event.nativeEvent?.key !== 'Enter' || event.nativeEvent.shiftKey === true) return;
+        event.preventDefault?.();
+        void handleSend();
+    }, [handleSend]);
 
     return (
         <Pressable
@@ -173,14 +201,22 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
             </View>
             <Pressable
                 {...noDragProps}
+                {...webStopPropagationProps}
                 testID={`desktop-pet-overlay-tray-dismiss-${safeSessionId}`}
                 pointerEvents={active ? 'auto' : 'none'}
                 accessibilityRole="button"
                 accessibilityLabel={t('settingsPets.overlayDismissAction')}
                 onHoverIn={() => props.onActiveChange(props.item, true)}
                 onHoverOut={() => props.onActiveChange(props.item, false)}
+                onPressIn={stopEventPropagation}
+                onStartShouldSetResponder={claimResponder}
                 onPress={(event) => {
                     event?.stopPropagation?.();
+                    if (replyOpen) {
+                        setDraft('');
+                        props.onReplyOpenChange(props.item, false);
+                        return;
+                    }
                     props.onDismiss(props.item);
                 }}
                 style={({ pressed }) => [
@@ -201,7 +237,8 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                 </Text>
                 {props.item.subtitle ? (
                     <Text
-                        numberOfLines={active ? 2 : 1}
+                        testID={`desktop-pet-overlay-tray-subtitle-${safeSessionId}`}
+                        numberOfLines={replyOpen ? 2 : 1}
                         style={[
                             styles.subtitle,
                             { color: bubbleTheme.textSecondary, writingDirection },
@@ -213,12 +250,15 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
             </View>
             <Pressable
                 {...noDragProps}
+                {...webStopPropagationProps}
                 testID={`desktop-pet-overlay-tray-reply-action-${safeSessionId}`}
                 pointerEvents={active && !replyOpen ? 'auto' : 'none'}
                 accessibilityRole="button"
                 accessibilityLabel={t('settingsPets.overlayReplyAction')}
                 onHoverIn={() => props.onActiveChange(props.item, true)}
                 onHoverOut={() => props.onActiveChange(props.item, false)}
+                onPressIn={stopEventPropagation}
+                onStartShouldSetResponder={claimResponder}
                 onPress={(event) => {
                     event?.stopPropagation?.();
                     props.onReplyOpenChange(props.item, true);
@@ -263,8 +303,11 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                             testID={`desktop-pet-overlay-tray-reply-input-${safeSessionId}`}
                             accessibilityLabel={t('settingsPets.overlayQuickReplyPlaceholder')}
                             placeholder={t('settingsPets.overlayQuickReplyPlaceholder')}
+                            multiline={true}
+                            blurOnSubmit={false}
                             value={draft}
                             onChangeText={setDraft}
+                            onKeyPress={handleReplyKeyPress}
                             onPress={stopEventPropagation}
                             onPressIn={stopEventPropagation}
                             onSubmitEditing={(event) => {
@@ -275,10 +318,12 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                             style={[
                                 styles.replyInput,
                                 I18nManager.isRTL ? styles.replyInputRtl : null,
+                                webReplyInputFocusStyle,
                                 {
                                     backgroundColor: bubbleTheme.controlBackground,
                                     color: bubbleTheme.text,
                                     borderColor: bubbleTheme.controlBackgroundPressed,
+                                    minHeight: replyInputHeight,
                                     writingDirection,
                                 },
                             ]}
@@ -291,6 +336,8 @@ function PetCompanionActivityTrayItemCard(props: Readonly<{
                             accessibilityRole="button"
                             accessibilityLabel={t('settingsPets.overlayQuickReplyAction')}
                             disabled={!draft.trim()}
+                            onPressIn={stopEventPropagation}
+                            onStartShouldSetResponder={claimResponder}
                             onPress={(event) => {
                                 event?.stopPropagation?.();
                                 void handleSend();
@@ -323,6 +370,7 @@ export function PetCompanionActivityTray(props: PetCompanionActivityTrayProps): 
     const [activeSessionId, setActiveSessionId] = React.useState<string | null>(null);
     const [replySessionId, setReplySessionId] = React.useState<string | null>(null);
     const deactivateTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const { onInteractionLayoutChange } = props;
     const clearDeactivateTimer = React.useCallback(() => {
         if (deactivateTimerRef.current === null) return;
         clearTimeout(deactivateTimerRef.current);
@@ -342,11 +390,12 @@ export function PetCompanionActivityTray(props: PetCompanionActivityTrayProps): 
     }, [clearDeactivateTimer]);
     const handleReplyOpenChange = React.useCallback((item: PetCompanionTrayItem, open: boolean) => {
         clearDeactivateTimer();
+        onInteractionLayoutChange?.();
         setReplySessionId(open ? item.sessionId : null);
         if (open) {
             setActiveSessionId(item.sessionId);
         }
-    }, [clearDeactivateTimer]);
+    }, [clearDeactivateTimer, onInteractionLayoutChange]);
     const scrollFades = useScrollEdgeFades({
         enabledEdges: { top: true, bottom: true },
         overflowThreshold: 2,

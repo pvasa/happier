@@ -46,6 +46,7 @@ const localSettingsState = vi.hoisted(() => ({
             | { kind: 'detectedCodexHome'; sourceKey: string }
             | { kind: 'happierManagedLocal'; sourceKey: string };
         petsCompanionSizeScale: number;
+        petsDismissedCompanionTrayItemKeys?: string[];
     };
 }));
 const featureDecisionState = vi.hoisted(() => ({
@@ -404,7 +405,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(screen.root.findAllByType('Image')).toHaveLength(0);
     });
 
-    it('renders the desktop overlay sprite inside a smaller padded window frame', async () => {
+    it('renders the desktop overlay sprite inside visible mascot bounds', async () => {
         const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
 
         const screen = await renderScreen(<DesktopPetOverlayRoute />);
@@ -413,11 +414,11 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         expect(spriteStyle?.width).toBeCloseTo(92, 4);
         expect(spriteStyle?.height).toBeCloseTo(99.6666666667, 4);
-        expect(stateStyle?.width).toBe(116);
-        expect(stateStyle?.height).toBe(124);
+        expect(stateStyle?.width).toBeCloseTo(92, 4);
+        expect(stateStyle?.height).toBeCloseTo(99.6666666667, 4);
     });
 
-    it('applies the local companion size scale to desktop overlay sprite and padded frame', async () => {
+    it('applies the local companion size scale to desktop overlay sprite bounds', async () => {
         localSettingsState.current = {
             ...localSettingsState.current,
             petsCompanionSizeScale: 1.5,
@@ -430,8 +431,8 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         expect(spriteStyle?.width).toBeCloseTo(138, 4);
         expect(spriteStyle?.height).toBeCloseTo(149.5, 4);
-        expect(stateStyle?.width).toBe(162);
-        expect(stateStyle?.height).toBe(174);
+        expect(stateStyle?.width).toBeCloseTo(138, 4);
+        expect(stateStyle?.height).toBeCloseTo(149.5, 4);
     });
 
     it('keeps the desktop overlay idle frame still between ambient actions', async () => {
@@ -570,7 +571,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(surfaceStyle?.backgroundColor).toEqual(expect.any(String));
         expect(surfaceStyle?.boxShadow).toBeUndefined();
         expect(trayStyle?.width).toBeLessThanOrEqual(276);
-        expect(trayStyle?.maxHeight).toBeLessThanOrEqual(132);
+        expect(trayStyle?.maxHeight).toBeGreaterThanOrEqual(220);
         expect(trayStyle?.overflow).toBe('hidden');
         expect(tray?.props['data-pet-scroll-fade-top']).toBe('false');
         expect(tray?.props['data-pet-scroll-fade-bottom']).toBe('false');
@@ -667,7 +668,75 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(trayStyle?.position).toBe('absolute');
         expect(trayStyle?.right).toEqual(expect.any(Number));
         expect(trayStyle?.bottom).toEqual(expect.any(Number));
+        expect(trayStyle?.right).toBe(stateStyle?.right);
+        expect(trayStyle?.bottom).toBeCloseTo(125.6666666667, 4);
         expect((trayStyle?.bottom as number)).toBeGreaterThan((stateStyle?.bottom as number));
+
+        const controlsStyle = StyleSheet.flatten(screen.findByTestId('desktop-pet-overlay-context-anchor')?.props.style);
+        expect(controlsStyle?.right).toBe(stateStyle?.right);
+        expect(controlsStyle?.bottom).toBeCloseTo(99.6666666667, 4);
+    });
+
+    it('keeps native measured tray placement fluid so reply expansion can resize the transparent overlay window', async () => {
+        sessionsState.current = [
+            createSessionFixture({ id: 'session-native-layout', active: true, pendingCount: 1 }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(
+            <DesktopPetOverlayRoute
+                nativeLayoutState={{
+                    window: { width: 298, height: 274 },
+                    tray: { x: 0, y: 0, width: 276, height: 132 },
+                    mascot: { x: 182, y: 150, width: 116, height: 124 },
+                    controls: { x: 258, y: 122, width: 30, height: 30 },
+                }}
+            />,
+        );
+
+        const rootStyle = StyleSheet.flatten(screen.findByTestId('desktop-pet-overlay-root')?.props.style);
+        const trayStyle = StyleSheet.flatten(screen.findByTestId('desktop-pet-overlay-tray')?.props.style);
+
+        expect(rootStyle?.width).toBe(298);
+        expect(rootStyle?.height).toBe(274);
+        expect(trayStyle?.left).toBe(0);
+        expect(trayStyle?.bottom).toBe(142);
+        expect(trayStyle?.width).toBe(276);
+        expect(trayStyle?.height).toBeUndefined();
+        expect(trayStyle?.maxHeight).toBeGreaterThanOrEqual(220);
+    });
+
+    it('does not clip tray bubbles behind a stale compact native layout state', async () => {
+        sessionsState.current = [
+            createSessionFixture({
+                id: 'session-stale-compact-layout',
+                active: true,
+                pendingCount: 0,
+                seq: 2,
+                lastViewedSessionSeq: 1,
+            }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(
+            <DesktopPetOverlayRoute
+                nativeLayoutState={{
+                    window: { width: 120, height: 128 },
+                    mascot: { x: 0, y: 4, width: 116, height: 124 },
+                    tray: null,
+                    controls: { x: 86, y: 20, width: 30, height: 30 },
+                }}
+            />,
+        );
+
+        const rootStyle = StyleSheet.flatten(screen.findByTestId('desktop-pet-overlay-root')?.props.style);
+        const tray = screen.findByTestId('desktop-pet-overlay-tray');
+        const trayStyle = StyleSheet.flatten(tray?.props.style);
+
+        expect(rootStyle).toEqual(expect.objectContaining({ width: 356, height: 420 }));
+        expect(tray).not.toBeNull();
+        expect(tray?.props['data-pet-tray-open']).toBe('true');
+        expect(trayStyle?.bottom).toEqual(expect.any(Number));
     });
 
     it('reports measured mascot, tray, and control bounds to the native layout owner without duplicate resizes', async () => {
@@ -677,9 +746,9 @@ describe('DesktopPetOverlayRoute selectors', () => {
         const harness = installDesktopPetOverlayMeasurementHarness();
         const elements: Record<TestMeasuredElementId, Element> = {
             root: createMeasuredElement({ x: 10, y: 20, width: 356, height: 320 }),
-            mascot: createMeasuredElement({ x: 220, y: 178, width: 116, height: 124 }),
-            tray: createMeasuredElement({ x: 22, y: 44, width: 276, height: 132 }),
-            controls: createMeasuredElement({ x: 284, y: 150, width: 30, height: 30 }),
+            mascot: createMeasuredElement({ x: 238, y: 222.3333333333, width: 92, height: 99.6666666667 }),
+            tray: createMeasuredElement({ x: 54, y: 82.3333333333, width: 276, height: 132 }),
+            controls: createMeasuredElement({ x: 300, y: 190.3333333333, width: 30, height: 30 }),
         };
         const onMeasuredLayoutChange = vi.fn();
         const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
@@ -697,15 +766,15 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(syncDesktopPetOverlayElementMetricsMock).toHaveBeenCalledTimes(1);
         expect(syncDesktopPetOverlayElementMetricsMock).toHaveBeenCalledWith({
             isTrayVisible: true,
-            mascot: { x: 210, y: 158, width: 116, height: 124 },
-            tray: { x: 12, y: 24, width: 276, height: 132 },
-            controls: { x: 274, y: 130, width: 30, height: 30 },
+            mascot: { x: 228, y: 202.3333333333, width: 92, height: 99.6666666667 },
+            tray: { x: 44, y: 62.333333333300004, width: 276, height: 132 },
+            controls: { x: 290, y: 170.3333333333, width: 30, height: 30 },
         });
         expect(onMeasuredLayoutChange).toHaveBeenCalledWith({
             window: { width: 356, height: 320 },
-            mascot: { x: 210, y: 158, width: 116, height: 124 },
-            tray: { x: 12, y: 24, width: 276, height: 132 },
-            controls: { x: 274, y: 130, width: 30, height: 30 },
+            mascot: { x: 228, y: 202.3333333333, width: 92, height: 99.6666666667 },
+            tray: { x: 44, y: 62.333333333300004, width: 276, height: 132 },
+            controls: { x: 290, y: 170.3333333333, width: 30, height: 30 },
         });
         const observedElements = harness.observers.flatMap((observer) =>
             observer.observe.mock.calls.map(([element]) => element),
@@ -716,6 +785,34 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(observedElements).toContain(elements.controls);
 
         expect(syncDesktopPetOverlayElementMetricsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps expanded fallback tray metrics when reply expansion briefly remounts the tray element', async () => {
+        sessionsState.current = [
+            createSessionFixture({ id: 'session-reply-remount', active: true, pendingCount: 1 }),
+        ];
+        const harness = installDesktopPetOverlayMeasurementHarness();
+        const elements: Partial<Record<TestMeasuredElementId, Element>> = {
+            root: createMeasuredElement({ x: 10, y: 20, width: 356, height: 420 }),
+            mascot: createMeasuredElement({ x: 238, y: 296.3333333333, width: 92, height: 99.6666666667 }),
+            controls: createMeasuredElement({ x: 300, y: 264.3333333333, width: 30, height: 30 }),
+        };
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        await renderScreen(
+            <DesktopPetOverlayRoute
+                measurementElementResolver={(elementId: TestMeasuredElementId) => elements[elementId] ?? null}
+            />,
+        );
+        await harness.flushFrame();
+
+        expect(syncDesktopPetOverlayElementMetricsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+            isTrayVisible: true,
+            tray: expect.objectContaining({
+                width: 276,
+                height: expect.any(Number),
+            }),
+        }));
     });
 
     it('reports a null tray measurement when the tray is collapsed', async () => {
@@ -786,10 +883,11 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         expect(rootStyle).toEqual(expect.objectContaining({ width: 312, height: 244 }));
         expect(stateStyle).toEqual(expect.objectContaining({ left: 196, top: 120, width: 116, height: 124 }));
-        expect(trayStyle).toEqual(expect.objectContaining({ left: 0, top: 0, width: 276, height: 112 }));
+        expect(trayStyle).toEqual(expect.objectContaining({ left: 0, bottom: 132, width: 276 }));
+        expect(trayStyle?.height).toBeUndefined();
         expect(controlsStyle).toEqual(expect.objectContaining({ left: 266, top: 108 }));
         expect(stateStyle?.right).toBeUndefined();
-        expect(trayStyle?.bottom).toBeUndefined();
+        expect(trayStyle?.top).toBeUndefined();
     });
 
     it('reveals tray actions on hover without opening quick reply input', async () => {
@@ -819,6 +917,11 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(replyRowStyle?.opacity).toBe(0);
         expect(replyRow?.props.accessibilityElementsHidden).toBe(true);
         expect(replyAction).not.toBeNull();
+        expect(replyAction?.props.onPointerDown).toEqual(expect.any(Function));
+        expect(replyAction?.props.onMouseDown).toEqual(expect.any(Function));
+        expect(replyAction?.props.onClick).toEqual(expect.any(Function));
+        expect(replyAction?.props.onPressIn).toEqual(expect.any(Function));
+        expect(replyAction?.props.onStartShouldSetResponder?.()).toBe(true);
         expect(replyAction?.props.pointerEvents).toBe('auto');
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-hover-reply')).toBeNull();
     });
@@ -882,6 +985,97 @@ describe('DesktopPetOverlayRoute selectors', () => {
             'true',
         );
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-badge-reply')).not.toBeNull();
+    });
+
+    it('invalidates stale native layout before opening quick reply so the overlay does not collapse between frames', async () => {
+        sessionsState.current = [
+            createSessionFixture({ id: 'session-reply-layout', active: true, pendingCount: 1 }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(
+            <DesktopPetOverlayRoute
+                nativeLayoutState={{
+                    placement: 'bottomEnd',
+                    window: { width: 312, height: 244 },
+                    mascot: { x: 196, y: 120, width: 116, height: 124 },
+                    tray: { x: 0, y: 0, width: 276, height: 56 },
+                    controls: { x: 266, y: 108, width: 30, height: 30 },
+                }}
+            />,
+        );
+        expect(StyleSheet.flatten(screen.findByTestId('desktop-pet-overlay-root')?.props.style)).toEqual(
+            expect.objectContaining({ width: 312, height: 244 }),
+        );
+
+        await act(async () => {
+            invokeTestInstanceHandler(screen.findByTestId('desktop-pet-overlay-tray-item-session-reply-layout'), 'onHoverIn');
+        });
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-reply-layout'),
+                'onPress',
+                { stopPropagation: vi.fn() },
+            );
+        });
+
+        expect(StyleSheet.flatten(screen.findByTestId('desktop-pet-overlay-root')?.props.style)).toEqual(
+            expect.objectContaining({ width: 356, height: 420 }),
+        );
+        expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply-layout')).not.toBeNull();
+    });
+
+    it('keeps bubble height stable on hover so the measured desktop overlay does not jiggle', async () => {
+        sessionsState.current = [
+            createSessionFixture({ id: 'session-stable-hover', active: true, pendingCount: 1 }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(<DesktopPetOverlayRoute />);
+        const item = screen.findByTestId('desktop-pet-overlay-tray-item-session-stable-hover');
+        const collapsedItemStyle = resolvePressableStyle(item?.props.style);
+
+        await act(async () => {
+            invokeTestInstanceHandler(item, 'onHoverIn');
+        });
+
+        const hoveredItemStyle = resolvePressableStyle(screen.findByTestId('desktop-pet-overlay-tray-item-session-stable-hover')?.props.style);
+        expect(hoveredItemStyle.height).toBe(collapsedItemStyle.height);
+        expect(hoveredItemStyle.minHeight).toBe(collapsedItemStyle.minHeight);
+    });
+
+    it('closes quick reply before dismissing the activity bubble', async () => {
+        sessionsState.current = [
+            createSessionFixture({ id: 'session-close-reply', active: true, pendingCount: 1 }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(<DesktopPetOverlayRoute />);
+        await act(async () => {
+            invokeTestInstanceHandler(screen.findByTestId('desktop-pet-overlay-tray-item-session-close-reply'), 'onHoverIn');
+        });
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-action-session-close-reply'),
+                'onPress',
+                { stopPropagation: vi.fn() },
+            );
+        });
+        expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-close-reply')).not.toBeNull();
+
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-dismiss-session-close-reply'),
+                'onPress',
+                { stopPropagation: vi.fn() },
+            );
+        });
+
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-close-reply')).not.toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-close-reply')).toBeNull();
+        expect(applyLocalSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
+            petsDismissedCompanionTrayItemKeys: expect.anything(),
+        }));
     });
 
     it('keeps quick reply open when activity timestamps refresh for the same session', async () => {
@@ -968,6 +1162,47 @@ describe('DesktopPetOverlayRoute selectors', () => {
         });
 
         expect(screen.findByTestId(itemTestID)).toBeNull();
+        expect(screen.findByTestId('desktop-pet-overlay-context-toggle')).toBeNull();
+        expect(applyLocalSettingsMock).toHaveBeenCalledWith({
+            petsDismissedCompanionTrayItemKeys: expect.arrayContaining([
+                expect.stringMatching(/^waiting:session-dismiss:/),
+            ]),
+        });
+    });
+
+    it('persists dismissed tray items until the same session has newer activity', async () => {
+        localSettingsState.current = {
+            ...localSettingsState.current,
+            petsDismissedCompanionTrayItemKeys: ['waiting:session-dismissed:1000'],
+        } as typeof localSettingsState.current;
+        sessionsState.current = [
+            createSessionFixture({
+                id: 'session-dismissed',
+                active: true,
+                pendingCount: 1,
+                createdAt: 1_000,
+                activeAt: 1_000,
+                thinkingAt: 1_000,
+            }),
+        ];
+        const { DesktopPetOverlayRoute } = await import('./DesktopPetOverlayRoute');
+
+        const screen = await renderScreen(<DesktopPetOverlayRoute />);
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-dismissed')).toBeNull();
+
+        sessionsState.current = [
+            createSessionFixture({
+                id: 'session-dismissed',
+                active: true,
+                pendingCount: 1,
+                createdAt: 1_000,
+                activeAt: 2_000,
+                thinkingAt: 2_000,
+            }),
+        ];
+        await screen.update(<DesktopPetOverlayRoute />);
+
+        expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-dismissed')).not.toBeNull();
     });
 
     it('sends quick replies through the existing session message action path', async () => {
@@ -1002,10 +1237,17 @@ describe('DesktopPetOverlayRoute selectors', () => {
         const replyRowStyle = StyleSheet.flatten(replyRow?.props.style);
         expect(replyRowStyle?.marginTop).toBeGreaterThan(0);
         expect(inputShellStyle?.position).toBe('relative');
+        expect(input.props.multiline).toBe(true);
+        expect(input.props.onKeyPress).toEqual(expect.any(Function));
+        expect(inputStyle?.outlineStyle).toBe('none');
+        expect(inputStyle?.minHeight).toBe(32);
         expect(inputStyle?.paddingRight).toBeGreaterThan(36);
         expect(sendStyle.position).toBe('absolute');
         expect(sendStyle.right).toBeGreaterThan(0);
-        expect(sendStyle.borderRadius).toBeGreaterThanOrEqual(16);
+        expect(sendStyle.top).toBeGreaterThan(0);
+        expect(sendStyle.width).toBeLessThan(32);
+        expect(sendStyle.height).toBe(sendStyle.width);
+        expect(sendStyle.borderRadius).toBe((sendStyle.width as number) / 2);
         expect(sendStyle.borderTopLeftRadius).toBeUndefined();
         expect(sendStyle.borderBottomLeftRadius).toBeUndefined();
         expect(sendStyle.borderWidth).toBe(0);
@@ -1023,6 +1265,49 @@ describe('DesktopPetOverlayRoute selectors', () => {
             expect.objectContaining({ sessionId: 'session-reply' }),
             expect.anything(),
         );
+
+        const shiftEnterEvent = {
+            nativeEvent: { key: 'Enter', shiftKey: true },
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+        };
+        await act(async () => {
+            invokeTestInstanceHandler(input, 'onKeyPress', shiftEnterEvent);
+        });
+        expect(shiftEnterEvent.preventDefault).not.toHaveBeenCalled();
+        expect(executePetOverlayActionMock).not.toHaveBeenCalledWith(
+            'session.message.send',
+            expect.objectContaining({ sessionId: 'session-reply' }),
+            expect.anything(),
+        );
+
+        await act(async () => {
+            invokeTestInstanceHandler(input, 'onChangeText', '  Ship it\nwith details  ');
+        });
+        const multilineInputStyle = StyleSheet.flatten(
+            screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply')?.props.style,
+        );
+        expect(multilineInputStyle?.minHeight).toBeGreaterThan(32);
+
+        const enterEvent = {
+            nativeEvent: { key: 'Enter', shiftKey: false },
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+        };
+        await act(async () => {
+            invokeTestInstanceHandler(
+                screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-reply'),
+                'onKeyPress',
+                enterEvent,
+            );
+        });
+        expect(enterEvent.preventDefault).toHaveBeenCalled();
+        expect(executePetOverlayActionMock).toHaveBeenCalledWith(
+            'session.message.send',
+            { sessionId: 'session-reply', message: 'Ship it\nwith details' },
+            expect.objectContaining({ defaultSessionId: 'session-reply' }),
+        );
+        executePetOverlayActionMock.mockClear();
 
         await act(async () => {
             invokeTestInstanceHandler(input, 'onChangeText', '  Ship it  ');

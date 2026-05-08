@@ -3,6 +3,7 @@ import {
     Platform,
     StyleSheet,
     View,
+    type ViewStyle,
 } from 'react-native';
 
 import { DEFAULT_BUILT_IN_PET_ID } from '@/components/pets/builtIns/builtInPetRegistry';
@@ -15,9 +16,12 @@ import { DesktopPetOverlayContextActions } from '@/components/pets/desktop/actio
 import {
     resolveDesktopPetOverlayGeometry,
 } from '@/components/pets/desktop/desktopPetOverlayGeometry';
-import { resolveDesktopPetOverlayPolicy } from '@/components/pets/desktop/policy/resolveDesktopPetOverlayPolicy';
 import { DesktopPetOverlayTray } from '@/components/pets/desktop/tray/DesktopPetOverlayTray';
-import { usePetCompanionActivityModel, type PetCompanionTrayItem } from '@/components/pets/activity';
+import {
+    usePetCompanionActivityModel,
+    usePetCompanionTrayDismissals,
+    type PetCompanionTrayItem,
+} from '@/components/pets/activity';
 import {
     type PetPointerDragMove,
     usePetPointerDragSession,
@@ -29,7 +33,7 @@ import {
 } from '@/components/pets/render/petCompanionDisplayMetrics';
 import { usePetSpritesheetSource } from '@/components/pets/render/usePetSpritesheetSource';
 import { useSelectedPetPackage } from '@/components/pets/source/useSelectedPetPackage';
-import { useLocalSettings, useSettings } from '@/sync/domains/state/storage';
+import { useLocalSettings } from '@/sync/domains/state/storage';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
 import { isTauriDesktop } from '@/utils/platform/tauri';
@@ -37,6 +41,8 @@ import { isTauriDesktop } from '@/utils/platform/tauri';
 const APP_SHELL_PET_MARGIN = 24;
 const APP_SHELL_DEFAULT_METRICS = resolvePetCompanionOverlayMetrics(1);
 const APP_SHELL_CONTEXT_ACTION_SHOULDER_BOTTOM_OFFSET_PX = 12;
+const APP_SHELL_PET_WEB_Z_INDEX = 90_000;
+const APP_SHELL_PET_WEB_POSITION = ('fixed' as unknown) as ViewStyle['position'];
 
 type PetDragOffset = Readonly<{ x: number; y: number }>;
 
@@ -95,7 +101,6 @@ function useAppShellPetDrag(): {
 
 export function PetAppShellCompanionMount(): React.ReactElement | null {
     const selectedPetPackage = useSelectedPetPackage();
-    const settings = useSettings();
     const localSettings = useLocalSettings();
     const spritesheetSource = usePetSpritesheetSource(selectedPetPackage.source, DEFAULT_BUILT_IN_PET_ID);
     const drag = useAppShellPetDrag();
@@ -103,18 +108,12 @@ export function PetAppShellCompanionMount(): React.ReactElement | null {
         () => resolveDesktopPetOverlayGeometry(localSettings.petsCompanionSizeScale),
         [localSettings.petsCompanionSizeScale],
     );
-    const [dismissedTrayItemKeys, setDismissedTrayItemKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+    const { dismissedTrayItemKeys, dismissTrayItem } = usePetCompanionTrayDismissals();
     const activity = usePetCompanionActivityModel({ dismissedTrayItemKeys });
     const [trayOpen, setTrayOpen] = React.useState(false);
     const trayItemCount = activity.trayItems.length;
     const applyLocalSettings = useApplyLocalSettings();
     const actionExecutor = React.useMemo(() => createDefaultActionExecutor(), []);
-    const desktopOverlayPolicy = React.useMemo(() => resolveDesktopPetOverlayPolicy({
-        companionFeatureState: selectedPetPackage.enabled ? 'enabled' : 'disabled',
-        accountSettings: settings,
-        localSettings,
-    }), [localSettings, selectedPetPackage.enabled, settings]);
-    const desktopOverlayOwnsPet = isTauriDesktop() && desktopOverlayPolicy.enabled;
     React.useEffect(() => {
         setTrayOpen((current) => {
             if (trayItemCount === 0) return false;
@@ -132,18 +131,11 @@ export function PetAppShellCompanionMount(): React.ReactElement | null {
     const handleQuickReply = React.useCallback(async (item: PetCompanionTrayItem, message: string) => {
         await sendDesktopPetOverlayQuickReply({ item, message, executor: actionExecutor });
     }, [actionExecutor]);
-    const handleDismissTrayItem = React.useCallback((item: PetCompanionTrayItem) => {
-        setDismissedTrayItemKeys((current) => {
-            const next = new Set(current);
-            next.add(item.dismissKey);
-            return next;
-        });
-    }, []);
     const handleTuck = React.useCallback(() => {
         tuckDesktopPetOverlay({ applyLocalSettings });
     }, [applyLocalSettings]);
 
-    if (Platform.OS !== 'web' || desktopOverlayOwnsPet || !selectedPetPackage.enabled || !selectedPetPackage.source) {
+    if (Platform.OS !== 'web' || isTauriDesktop() || !selectedPetPackage.enabled || !selectedPetPackage.source) {
         return null;
     }
 
@@ -187,7 +179,7 @@ export function PetAppShellCompanionMount(): React.ReactElement | null {
                     items={activity.trayItems}
                     open={trayOpen}
                     onOpenItem={handleOpenTrayItem}
-                    onDismissItem={handleDismissTrayItem}
+                    onDismissItem={dismissTrayItem}
                     onQuickReply={handleQuickReply}
                     style={[
                         styles.tray,
@@ -213,13 +205,13 @@ export function PetAppShellCompanionMount(): React.ReactElement | null {
 
 const styles = StyleSheet.create({
     root: {
-        position: 'absolute',
+        position: APP_SHELL_PET_WEB_POSITION,
         right: APP_SHELL_PET_MARGIN,
         bottom: APP_SHELL_PET_MARGIN,
         width: APP_SHELL_DEFAULT_METRICS.spriteWidth,
         height: APP_SHELL_DEFAULT_METRICS.spriteHeight,
         backgroundColor: 'transparent',
-        zIndex: 20,
+        zIndex: APP_SHELL_PET_WEB_Z_INDEX,
     },
     petCompact: {
         position: 'absolute',

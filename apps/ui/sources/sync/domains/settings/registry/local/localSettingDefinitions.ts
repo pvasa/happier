@@ -282,6 +282,12 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         description: 'Versioned normalized app-shell pet companion position on this device',
         storageScope: 'local',
     },
+    petsDismissedCompanionTrayItemKeys: {
+        schema: z.array(z.string().min(1)).catch([]),
+        default: [],
+        description: 'Device-local dismissed pet companion activity bubble keys',
+        storageScope: 'local',
+    },
     petsCompanionSizeScale: {
         schema: PetCompanionSizeScaleSchema,
         default: PET_COMPANION_SIZE_SCALE_DEFAULT,

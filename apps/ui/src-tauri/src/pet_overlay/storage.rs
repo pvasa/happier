@@ -7,11 +7,13 @@ use tauri::{path::BaseDirectory, Manager, Runtime};
 
 use super::placement::{clamp, sanitize_offset, PET_OVERLAY_DRAG_OFFSET_LIMIT_PX};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PersistedPetOverlayDragOffset {
     pub x: f64,
     pub y: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_id: Option<String>,
 }
 
 pub(crate) fn sanitize_drag_offset(
@@ -28,7 +30,16 @@ pub(crate) fn sanitize_drag_offset(
             -PET_OVERLAY_DRAG_OFFSET_LIMIT_PX,
             PET_OVERLAY_DRAG_OFFSET_LIMIT_PX,
         ),
+        monitor_id: sanitize_monitor_id(offset.monitor_id),
     }
+}
+
+fn sanitize_monitor_id(monitor_id: Option<String>) -> Option<String> {
+    let monitor_id = monitor_id?.trim().to_string();
+    if monitor_id.is_empty() {
+        return None;
+    }
+    Some(monitor_id.chars().take(256).collect())
 }
 
 pub(crate) fn resolve_pet_overlay_drag_offset_path<R: Runtime>(
@@ -81,11 +92,38 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("desktop-pet-overlay-position.json");
 
-        persist_drag_offset_to_path(&path, PersistedPetOverlayDragOffset { x: 24.0, y: -16.0 });
+        persist_drag_offset_to_path(
+            &path,
+            PersistedPetOverlayDragOffset {
+                x: 24.0,
+                y: -16.0,
+                monitor_id: Some("display-1".to_string()),
+            },
+        );
 
         assert_eq!(
             read_persisted_drag_offset(Some(&path)),
-            PersistedPetOverlayDragOffset { x: 24.0, y: -16.0 },
+            PersistedPetOverlayDragOffset {
+                x: 24.0,
+                y: -16.0,
+                monitor_id: Some("display-1".to_string()),
+            },
+        );
+    }
+
+    #[test]
+    fn reads_legacy_drag_offset_without_monitor_identity() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("desktop-pet-overlay-position.json");
+        fs::write(&path, br#"{"x":24,"y":-16}"#).expect("write legacy payload");
+
+        assert_eq!(
+            read_persisted_drag_offset(Some(&path)),
+            PersistedPetOverlayDragOffset {
+                x: 24.0,
+                y: -16.0,
+                monitor_id: None,
+            },
         );
     }
 
@@ -93,7 +131,14 @@ mod tests {
     fn reset_removes_persisted_drag_offset_file() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("desktop-pet-overlay-position.json");
-        persist_drag_offset_to_path(&path, PersistedPetOverlayDragOffset { x: 24.0, y: -16.0 });
+        persist_drag_offset_to_path(
+            &path,
+            PersistedPetOverlayDragOffset {
+                x: 24.0,
+                y: -16.0,
+                monitor_id: Some("display-1".to_string()),
+            },
+        );
 
         clear_persisted_drag_offset_path(&path).expect("clear should succeed");
 

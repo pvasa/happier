@@ -13,6 +13,7 @@ describe('LOCAL_SETTING_DEFINITIONS pets', () => {
             normalizedY: 0.72,
             lastViewport: null,
         });
+        expect(LOCAL_SETTING_DEFINITIONS.petsDismissedCompanionTrayItemKeys.default).toEqual([]);
         expect(LOCAL_SETTING_DEFINITIONS.petsCompanionSizeScale.default).toBe(1);
         expect(LOCAL_SETTING_DEFINITIONS.petsDetectCodexPets.default).toBe(true);
         expect(LOCAL_SETTING_DEFINITIONS.desktopPetOverlayEnabledOverride.default).toBe('inherit');
@@ -69,6 +70,13 @@ describe('LOCAL_SETTING_DEFINITIONS pets', () => {
             normalizedY: 0.5,
             lastViewport: null,
         }).success).toBe(false);
+    });
+
+    it('stores dismissed companion tray keys as a device-local list', () => {
+        const schema = LOCAL_SETTING_DEFINITIONS.petsDismissedCompanionTrayItemKeys.schema;
+
+        expect(schema.safeParse(['waiting:session:1000']).success).toBe(true);
+        expect(schema.safeParse([42])).toMatchObject({ success: true, data: [] });
     });
 
     it('accepts a numeric companion size scale as a local device preference', () => {
