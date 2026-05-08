@@ -12,6 +12,17 @@ import {
 
 const setMobileWorkspaceExperience = vi.fn();
 
+function findNearestItemGroupTitle(node: any): unknown {
+    let current = node?.parent;
+    while (current) {
+        if (current.type === 'ItemGroup') {
+            return current.props?.title;
+        }
+        current = current.parent;
+    }
+    return undefined;
+}
+
 installSessionSettingsEntryModuleMocks({
     storageModule: async (importOriginal) => {
         const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
@@ -77,6 +88,7 @@ describe('Session settings mobile workspace experience', () => {
         );
 
         expect(dropdown).toBeTruthy();
+        expect(findNearestItemGroupTitle(dropdown)).toBe('settingsSession.mobileWorkspaceExperience.groupTitle');
         expect(dropdown?.props?.selectedId).toBe('cockpit');
         expect(dropdown?.props?.items?.map((item: any) => item.id)).toEqual(['cockpit', 'classic']);
 

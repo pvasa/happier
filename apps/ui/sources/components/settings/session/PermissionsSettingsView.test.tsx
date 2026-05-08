@@ -11,8 +11,6 @@ const setPermissionModeApplyTiming = vi.fn();
 const setPermissionPromptSurface = vi.fn();
 const setDefaultPersistenceMode = vi.fn();
 const setDefaultPersistenceModeByTargetKey = vi.fn();
-const setRememberLastProjectSessionSelections = vi.fn();
-const setCodingPromptBehavior = vi.fn();
 
 installSessionSettingsCommonModuleMocks({
     unistyles: async () => {
@@ -37,12 +35,6 @@ installSessionSettingsCommonModuleMocks({
                     if (name === 'permissionPromptSurface') return ['composer', setPermissionPromptSurface];
                     if (name === 'newSessionDefaultPersistenceModeV1') return ['persisted', setDefaultPersistenceMode];
                     if (name === 'newSessionDefaultPersistenceModeByTargetKeyV1') return [{}, setDefaultPersistenceModeByTargetKey];
-                    if (name === 'rememberLastProjectSessionSelections') return [true, setRememberLastProjectSessionSelections];
-                    if (name === 'codingPromptBehaviorV1') return [{
-                        v: 1,
-                        sessionTitleUpdates: 'agent',
-                        responseOptions: 'agent',
-                    }, setCodingPromptBehavior];
                     return [null, vi.fn()];
                 },
                 useSettings: () => ({ schemaVersion: 1, opencodeBackendMode: 'server' } as any),
@@ -114,14 +106,11 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
 }));
 
 describe('PermissionsSettingsView', () => {
-    it('renders the remembered project session selection toggle', async () => {
+    it('does not render new-session shortcut settings', async () => {
         const { PermissionsSettingsView } = await import('./PermissionsSettingsView');
         const screen = await renderSettingsView(React.createElement(PermissionsSettingsView));
 
-        const row = screen.findRowByTitle('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle');
-        expect(row).toBeTruthy();
-        screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle');
-        expect(setRememberLastProjectSessionSelections).toHaveBeenCalledWith(false);
+        expect(screen.findRowByTitle('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle')).toBeNull();
     });
 
     it('renders session storage defaults and updates both global and per-agent settings', async () => {
@@ -146,25 +135,11 @@ describe('PermissionsSettingsView', () => {
         expect(setDefaultPersistenceModeByTargetKey).toHaveBeenCalledWith({});
     });
 
-    it('renders coding prompt behavior toggles and preserves existing behavior fields', async () => {
+    it('does not render prompt personalization controls inside permissions settings', async () => {
         const { PermissionsSettingsView } = await import('./PermissionsSettingsView');
         const screen = await renderSettingsView(React.createElement(PermissionsSettingsView));
 
-        expect(screen.findRowByTitle('settingsSession.codingPromptBehavior.sessionTitleUpdatesTitle')).toBeTruthy();
-        expect(screen.findRowByTitle('settingsSession.codingPromptBehavior.responseOptionsTitle')).toBeTruthy();
-
-        screen.pressRowByTitle('settingsSession.codingPromptBehavior.sessionTitleUpdatesTitle');
-        expect(setCodingPromptBehavior).toHaveBeenCalledWith({
-            v: 1,
-            sessionTitleUpdates: 'disabled',
-            responseOptions: 'agent',
-        });
-
-        screen.pressRowByTitle('settingsSession.codingPromptBehavior.responseOptionsTitle');
-        expect(setCodingPromptBehavior).toHaveBeenCalledWith({
-            v: 1,
-            sessionTitleUpdates: 'agent',
-            responseOptions: 'disabled',
-        });
+        expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle')).toBeNull();
+        expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsTitle')).toBeNull();
     });
 });

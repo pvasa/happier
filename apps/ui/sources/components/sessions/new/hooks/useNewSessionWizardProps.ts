@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { AgentId } from '@/agents/catalog/catalog';
+import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { t } from '@/text';
 import { getRequiredSecretEnvVarNames } from '@/sync/domains/profiles/profileSecrets';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
@@ -17,6 +18,11 @@ import type { SecretChoiceByProfileIdByEnvVarName } from '@/utils/secrets/secret
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput';
 import type { InstallableDepInstallerProps } from '@/components/machines/InstallableDepInstaller';
+import type {
+    NewSessionWizardSectionPresentation,
+    NewSessionWizardSelectionSectionId,
+} from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
+import type { FavoriteModelSelectionV1 } from '@/sync/domains/models/favoriteModelSelections';
 import type {
     NewSessionWizardAgentProps,
     NewSessionWizardFooterProps,
@@ -40,6 +46,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     newSessionSidePadding: number;
     newSessionBottomPadding: number;
     shouldBottomAnchor: boolean;
+    sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
 
     // Profiles section
     useProfiles: boolean;
@@ -83,8 +90,11 @@ export function useNewSessionWizardProps(params: Readonly<{
     agentPickerOptions?: NewSessionWizardAgentProps['agentPickerOptions'];
     agentPickerSelectedOptionId?: NewSessionWizardAgentProps['agentPickerSelectedOptionId'];
     onAgentPickerSelect?: NewSessionWizardAgentProps['onAgentPickerSelect'];
+    selectedBackendEntry?: ResolvedBackendCatalogEntry | null;
     modelOptions: ReadonlyArray<{ value: ModelMode; label: string; description: string }>;
     modelOptionsProbe?: NewSessionWizardAgentProps['modelOptionsProbe'];
+    favoriteModelSelections?: readonly FavoriteModelSelectionV1[];
+    setFavoriteModelSelections?: (favorites: FavoriteModelSelectionV1[]) => void;
     acpSessionModeOptions?: NewSessionWizardAgentProps['acpSessionModeOptions'];
     acpSessionModeProbe?: NewSessionWizardAgentProps['acpSessionModeProbe'];
     acpSessionModeId?: NewSessionWizardAgentProps['acpSessionModeId'];
@@ -144,6 +154,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     agent: NewSessionWizardAgentProps;
     machine: NewSessionWizardMachineProps;
     footer: NewSessionWizardFooterProps;
+    sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
 }> {
     const wizardLayoutProps = React.useMemo((): NewSessionWizardLayoutProps => {
         return {
@@ -328,9 +339,12 @@ export function useNewSessionWizardProps(params: Readonly<{
             agentPickerOptions: params.agentPickerOptions,
             agentPickerSelectedOptionId: params.agentPickerSelectedOptionId,
             onAgentPickerSelect: params.onAgentPickerSelect,
+            selectedBackendEntry: params.selectedBackendEntry,
             agentPickerProbe,
             modelOptions: params.modelOptions,
             modelOptionsProbe: params.modelOptionsProbe,
+            favoriteModelSelections: params.favoriteModelSelections,
+            setFavoriteModelSelections: params.setFavoriteModelSelections,
             acpSessionModeOptions: params.acpSessionModeOptions,
             acpSessionModeProbe: params.acpSessionModeProbe,
             acpSessionModeId: params.acpSessionModeId,
@@ -353,6 +367,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.agentPickerOptions,
         params.agentPickerSelectedOptionId,
         params.agentPickerTitle,
+        params.favoriteModelSelections,
         params.cliAvailability,
         params.selectedMachineId,
         params.enabledAgentIds,
@@ -370,6 +385,8 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.profileMap,
         params.selectedIndicatorColor,
         params.onAgentPickerSelect,
+        params.selectedBackendEntry,
+        params.setFavoriteModelSelections,
         params.setAgentType,
         params.setAcpConfigOptionOverride,
         params.setAcpSessionModeId,
@@ -466,6 +483,7 @@ export function useNewSessionWizardProps(params: Readonly<{
 
     return {
         layout: wizardLayoutProps,
+        sectionPresentation: params.sectionPresentation,
         profiles: wizardProfilesProps,
         agent: wizardAgentProps,
         machine: wizardMachineProps,

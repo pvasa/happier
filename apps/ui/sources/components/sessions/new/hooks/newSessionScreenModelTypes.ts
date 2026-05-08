@@ -9,6 +9,10 @@ import type {
     NewSessionWizardProfilesProps,
 } from '@/components/sessions/new/components/NewSessionWizard';
 import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
+import type {
+    NewSessionWizardSectionPresentation,
+    NewSessionWizardSelectionSectionId,
+} from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
 
 export type NewSessionSimpleScreenProps = NewSessionSimplePanelProps & Readonly<{
     checkoutCreationDraft: NewSessionCheckoutCreationDraft | null;
@@ -26,6 +30,7 @@ export type NewSessionScreenModel =
         popoverBoundaryRef: React.RefObject<View>;
         wizardProps: Readonly<{
             layout: NewSessionWizardLayoutProps;
+            sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
             profiles: NewSessionWizardProfilesProps;
             agent: NewSessionWizardAgentProps;
             machine: NewSessionWizardMachineProps;

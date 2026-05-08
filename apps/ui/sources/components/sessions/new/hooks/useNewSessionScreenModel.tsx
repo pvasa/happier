@@ -260,6 +260,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const directSessionsFeatureEnabled = useFeatureEnabled('sessions.direct', { scopeKind: 'spawn', serverId: targetServerId });
     const useMachinePickerSearch = useSetting('useMachinePickerSearch');
     const usePathPickerSearch = useSetting('usePathPickerSearch');
+    const newSessionWizardSectionPresentation = useSetting('newSessionWizardSectionPresentationV1');
     const [profiles, setProfiles] = useSettingMutable('profiles');
     const lastUsedProfile = useSetting('lastUsedProfile');
     const [favoriteDirectories, setFavoriteDirectories] = useSettingMutable('favoriteDirectories');
@@ -1442,6 +1443,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
 
     const {
         layout: wizardLayoutProps,
+        sectionPresentation: wizardSectionPresentation,
         profiles: wizardProfilesProps,
         agent: wizardAgentProps,
         machine: wizardMachineProps,
@@ -1456,6 +1458,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         newSessionSidePadding,
         newSessionBottomPadding,
         shouldBottomAnchor,
+        sectionPresentation: newSessionWizardSectionPresentation,
 
         useProfiles,
         profiles,
@@ -1495,11 +1498,14 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         agentPickerOptions,
         agentPickerSelectedOptionId: selectedBackendEntry?.targetKey ?? selectedBackendTargetKey,
         onAgentPickerSelect: handleAgentPickerSelect,
+        selectedBackendEntry,
         modelOptions,
         modelOptionsProbe: {
             phase: modelOptionsProbeState.phase,
             onRefresh: modelOptionsProbeState.onRefresh,
         },
+        favoriteModelSelections,
+        setFavoriteModelSelections,
         acpSessionModeOptions,
         acpSessionModeProbe: {
             phase: acpSessionModeProbeState.phase,
@@ -1650,6 +1656,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         checkoutCreationDraft,
         setCheckoutCreationDraft,
         wizardLayoutProps,
+        wizardSectionPresentation,
         wizardProfilesProps,
         wizardAgentProps,
         wizardMachineProps,

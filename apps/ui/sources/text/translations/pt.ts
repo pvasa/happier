@@ -2762,6 +2762,17 @@ export const pt: TranslationStructure = {
       userActionsTitle: 'Solicitações de ação',
       userActionsSubtitle: 'Mostrar uma notificação local quando uma sessão precisar da sua resposta',
     },
+    desktop: {
+      title: 'Notificações de desktop',
+      footer: 'Verifica a entrega de notificações locais para este app de desktop.',
+      permission: {
+        title: 'Permissão do sistema',
+        checkingSubtitle: 'Verificando a permissão de notificações do macOS',
+        grantedSubtitle: 'O macOS permite que este app envie notificações',
+        notGrantedSubtitle: 'Toque para solicitar a permissão de notificações do macOS',
+        errorSubtitle: 'Não foi possível ler a permissão de notificações do macOS',
+      },
+    },
     push: {
       title: "Notificações push",
       footer:
@@ -4871,11 +4882,11 @@ export const pt: TranslationStructure = {
       default: "Configurações do CLI",
       plan: "Modo de planejamento",
       readOnly: "Modo somente leitura",
-      safeYolo: "YOLO seguro",
+      safeYolo: "Auto",
       yolo: "YOLO",
       badgePlan: "Plano",
       badgeReadOnly: "Somente leitura",
-      badgeSafeYolo: "YOLO seguro",
+      badgeSafeYolo: "Auto",
       badgeYolo: "YOLO",
     },
     codexModel: {
@@ -5931,6 +5942,8 @@ settingsSession: {
 	          tagsDisabledSubtitle: 'Controles de tags ocultos',
 	      },
 	      mobileWorkspaceExperience: {
+	          groupTitle: 'Área de trabalho móvel',
+	          groupFooter: 'Controla como as telas de sessão são organizadas em celulares.',
 	          title: 'Layout de sessão móvel',
 	          subtitle: 'Escolha o layout de telefone usado dentro das sessões.',
 	          options: {
@@ -6240,23 +6253,42 @@ settingsSession: {
       },
       handoff: settingsSessionHandoffTranslationExtensions.pt,
       sessionCreation: {
-        title: "Atalhos de nova sessão",
-        footer: "Escolha como os atalhos do projeto preparam a tela de nova sessão.",
+        title: "Modal de nova sessão",
+        footer: "Escolha como o modal de nova sessão abre e como os atalhos do projeto o preparam.",
+        modalModeTitle: "Modo do modal de nova sessão",
+        modalModeSimpleTitle: "Simples",
+        modalModeSimpleSubtitle: "Abre o modal compacto centrado no compositor.",
+        modalModeWizardTitle: "Assistente",
+        modalModeWizardSubtitle: "Abre a configuração guiada com seletores separados.",
         rememberLastProjectSelectionsTitle: "Lembrar as últimas seleções de sessão do projeto",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Os atalhos do projeto reutilizam a máquina, pasta, motor, modelo e opções da sessão mais recente.",
         rememberLastProjectSelectionsDisabledSubtitle:
           "Os atalhos do projeto só preselecionam a máquina e a pasta do projeto.",
+        wizardSettingsTitle: "Assistente de nova sessão",
+        wizardSettingsSubtitle: "Escolha se cada seletor do assistente aparece como lista ou menu suspenso.",
+        wizardDispositionTitle: "Disposição do assistente",
+        wizardDispositionSubtitle: "Escolha quais seletores do assistente aparecem como listas ou menus suspensos.",
+        wizardPresentationTitle: "Layout dos seletores do assistente",
+        wizardPresentationFooter:
+          "Auto mantém seções curtas como listas e muda seções longas para menus suspensos pesquisáveis.",
+        wizardPresentationAutoTitle: "Auto",
+        wizardPresentationAutoSubtitle:
+          "Deixe o Happier escolher o melhor layout para a quantidade de conteúdo.",
+        wizardPresentationListTitle: "Lista",
+        wizardPresentationListSubtitle: "Mostre todas as linhas diretamente no assistente.",
+        wizardPresentationDropdownTitle: "Menu suspenso",
+        wizardPresentationDropdownSubtitle: "Mostre uma linha compacta que abre o seletor completo.",
       },
-          codingPromptBehavior: {
-              title: 'Agent prompt behavior',
-              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
-              sessionTitleUpdatesTitle: 'Agent session titles',
-              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
-              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
-              responseOptionsTitle: 'Suggested reply options',
-              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
-              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          promptPersonalization: {
+              title: 'Prompt personalization',
+              footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
+              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
+              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
+              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
+              askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
+              askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
           },
       defaultPermissions: {
         title: "Permissões padrão",
@@ -7742,6 +7774,10 @@ settingsSession: {
     switchedToMode: ({ mode }: { mode: string }) => `Mudou para o modo ${mode}`,
     discarded: "Descartado",
     unknownEvent: "Evento desconhecido",
+    contextCompactionStarted: "Compactando contexto...",
+    contextCompactionCompleted: "Contexto compactado",
+    contextCompactionFailed: "Falha ao compactar contexto",
+    contextCompactionCancelled: "Compactação de contexto cancelada",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Limite de uso atingido até ${time}`,
     unknownTime: "horário desconhecido",

@@ -13,6 +13,7 @@ const mockEnv = vi.hoisted(() => ({
 let platformOs: 'web' | 'android' = 'web';
 const useKeyboardHandlerMock = vi.fn();
 
+const machineSelectorPropsRef: { current: Record<string, unknown> | null } = { current: null };
 const pathSelectorPropsRef: { current: Record<string, unknown> | null } = { current: null };
 const CliNotDetectedBannerMock = vi.fn((_props: Record<string, unknown>) => null);
 installNewSessionComponentsCommonModuleMocks({
@@ -93,7 +94,10 @@ vi.mock('@/components/sessions/new/components/CliNotDetectedBanner', () => ({
     CliNotDetectedBanner: (props: Record<string, unknown>) => CliNotDetectedBannerMock(props),
 }));
 vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
-    MachineSelector: () => null,
+    MachineSelector: (props: Record<string, unknown>) => {
+        machineSelectorPropsRef.current = props;
+        return null;
+    },
 }));
 vi.mock('@/components/sessions/new/components/PathSelector', () => ({
     PathSelector: (props: Record<string, unknown>) => {
@@ -159,6 +163,7 @@ describe('NewSessionWizard', () => {
         mockEnv.windowWidth = 800;
         platformOs = 'web';
         useKeyboardHandlerMock.mockReset();
+        machineSelectorPropsRef.current = null;
         pathSelectorPropsRef.current = null;
     });
 
@@ -324,7 +329,7 @@ describe('NewSessionWizard', () => {
     it('does not render CLI not detected banners in the AI backend section', async () => {
         const { NewSessionWizard } = await import('./NewSessionWizard');
 
-        await renderScreen(<NewSessionWizard
+        const screen = await renderScreen(<NewSessionWizard
             popoverBoundaryRef={{ current: null } as any}
             layout={{
                 theme: {
@@ -1200,9 +1205,211 @@ describe('NewSessionWizard', () => {
         }
     });
 
-    it('passes machine browsing config through to the shared path selector', async () => {
+    it('applies forced dropdown presentation to every wizard selection section', async () => {
+        machineSelectorPropsRef.current = null;
         pathSelectorPropsRef.current = null;
         const { NewSessionWizard } = await import('./NewSessionWizard');
+
+        const screen = await renderScreen(<NewSessionWizard
+                        popoverBoundaryRef={{ current: null } as any}
+                        sectionPresentation={{
+                            profiles: 'dropdown',
+                            backends: 'dropdown',
+                            models: 'dropdown',
+                            machines: 'dropdown',
+                            paths: 'dropdown',
+                            permissions: 'dropdown',
+                        }}
+                        layout={{
+                            theme: {
+                                colors: {
+                                    divider: '#ddd',
+                                shadow: { color: '#000' },
+                                groupped: { background: '#fff' },
+                                text: '#000',
+                                textSecondary: '#666',
+                                input: { background: '#fff' },
+                                button: { secondary: { tint: '#000' } },
+                                warning: '#d97706',
+                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                            },
+                        } as any,
+                        styles: {} as any,
+                        safeAreaBottom: 0,
+                        headerHeight: 44,
+                        newSessionSidePadding: 0,
+                        newSessionBottomPadding: 0,
+                    }}
+                    profiles={{
+                        useProfiles: true,
+                        profiles: [],
+                        favoriteProfileIds: [],
+                        setFavoriteProfileIds: () => {},
+                        selectedProfileId: null,
+                        onPressDefaultEnvironment: () => {},
+                        onPressProfile: () => {},
+                        selectedMachineId: 'machine-1',
+                        getProfileDisabled: () => false,
+                        getProfileSubtitleExtra: () => null,
+                        handleAddProfile: () => {},
+                        openProfileEdit: () => {},
+                        handleDuplicateProfile: () => {},
+                        handleDeleteProfile: () => {},
+                        openProfileEnvVarsPreview: () => {},
+                        suppressNextSecretAutoPromptKeyRef: { current: null },
+                        openSecretRequirementModal: () => {},
+                        profilesGroupTitles: { favorites: '', custom: '', builtIn: '' },
+                        getSecretOverrideReady: () => false,
+                        getSecretSatisfactionForProfile: () => ({ isSatisfied: true, hasSecretRequirements: false, items: [] }),
+                        getSecretMachineEnvOverride: () => null,
+                        secretBindingsByProfileId: {},
+                        selectedSecretIdByProfileIdByEnvVarName: {},
+                        setSecretBindingChoice: () => {},
+                        setSessionOnlySecretValueEnc: () => {},
+                    } as any}
+                    agent={{
+                        cliAvailability: { available: true },
+                        tmuxRequested: false,
+                        enabledAgentIds: ['codex'],
+                        isAgentSelectable: () => true,
+                        isCliBannerDismissed: () => true,
+                        dismissCliBanner: () => {},
+                        agentType: 'codex',
+                        setAgentType: () => {},
+                        selectedIndicatorColor: '#000',
+                        permissionMode: 'default',
+                        handlePermissionModeChange: () => {},
+                        modelOptions: [
+                            { value: 'default', label: 'Use CLI settings', description: 'Use configured model' },
+                            { value: 'opus', label: 'Opus', description: 'High capability' },
+                        ],
+                        modelMode: 'default',
+                        setModelMode: () => {},
+                    } as any}
+                    machine={{
+                        machines: [{
+                            id: 'machine-1',
+                            seq: 1,
+                            createdAt: 0,
+                            updatedAt: 0,
+                            active: true,
+                            activeAt: 0,
+                            revokedAt: null,
+                            metadata: {
+                                host: 'box.local',
+                                platform: 'test',
+                                happyCliVersion: '0.0.0-test',
+                                happyHomeDir: '/tmp/happy-home',
+                                homeDir: '/tmp',
+                                displayName: 'Box',
+                            },
+                            metadataVersion: 1,
+                            daemonState: null,
+                            daemonStateVersion: 0,
+                        }],
+                        serverId: 'server-1',
+                        selectedMachine: {
+                            id: 'machine-1',
+                            seq: 1,
+                            createdAt: 0,
+                            updatedAt: 0,
+                            active: true,
+                            activeAt: 0,
+                            revokedAt: null,
+                            metadata: {
+                                host: 'box.local',
+                                platform: 'test',
+                                happyCliVersion: '0.0.0-test',
+                                happyHomeDir: '/tmp/happy-home',
+                                homeDir: '/tmp',
+                                displayName: 'Box',
+                            },
+                            metadataVersion: 1,
+                            daemonState: null,
+                            daemonStateVersion: 0,
+                        },
+                        recentMachines: [],
+                        favoriteMachineItems: [],
+                        useMachinePickerSearch: false,
+                        onRefreshMachines: () => {},
+                        setSelectedMachineId: () => {},
+                        getBestPathForMachine: () => '/tmp',
+                        setSelectedPath: () => {},
+                        favoriteMachines: [],
+                        setFavoriteMachines: () => {},
+                        selectedPath: '/tmp',
+                        recentPaths: ['/tmp/recent'],
+                        usePathPickerSearch: false,
+                        favoriteDirectories: ['~/favorite'],
+                        setFavoriteDirectories: () => {},
+                    } as any}
+                    footer={{
+                        sessionPrompt: '',
+                        setSessionPrompt: () => {},
+                        handleCreateSession: () => {},
+                        canCreate: false,
+                        isCreating: false,
+                        emptyAutocompletePrefixes: [],
+                        emptyAutocompleteSuggestions: async () => [],
+                        agentInputExtraActionChips: [],
+                    }}
+                />);
+
+        const itemTestIds = screen.findAllByType('Item' as any).map((node: any) => node.props?.testID).filter(Boolean);
+        expect(itemTestIds).toEqual(expect.arrayContaining([
+            'new-session-profile-dropdown-trigger',
+            'new-session-agent-dropdown-trigger',
+            'new-session-model-dropdown-trigger',
+            'new-session-permission-dropdown-trigger',
+        ]));
+        expect(itemTestIds).not.toContain('new-session-agent:codex');
+        expect(itemTestIds).not.toContain('new-session-model:default');
+        expect(machineSelectorPropsRef.current).toMatchObject({
+            presentation: 'dropdown',
+            dropdownTestID: 'new-session-machine-dropdown-trigger',
+            favoriteGroupPlacement: 'beforeRecent',
+        });
+        expect(pathSelectorPropsRef.current).toMatchObject({
+            pathEntryPresentation: 'itemGroup',
+            savedPathsPresentation: 'dropdown',
+            favoriteGroupPlacement: 'beforeRecent',
+            machineBrowse: {
+                enabled: true,
+                machineId: 'machine-1',
+                serverId: 'server-1',
+            },
+        });
+    });
+
+    it('uses dropdown presentation automatically when machine and path sections have many visible rows', async () => {
+        machineSelectorPropsRef.current = null;
+        pathSelectorPropsRef.current = null;
+        const { NewSessionWizard } = await import('./NewSessionWizard');
+        const machine = {
+            id: 'machine-1',
+            seq: 1,
+            createdAt: 0,
+            updatedAt: 0,
+            active: true,
+            activeAt: 0,
+            revokedAt: null,
+            metadata: {
+                host: 'box.local',
+                platform: 'test',
+                happyCliVersion: '0.0.0-test',
+                happyHomeDir: '/tmp/happy-home',
+                homeDir: '/tmp',
+                displayName: 'Box',
+            },
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 0,
+        };
+        const recentMachines = Array.from({ length: 5 }, (_, index) => ({
+            ...machine,
+            id: `recent-machine-${index}`,
+            metadata: { ...machine.metadata, displayName: `Recent ${index}` },
+        }));
 
         await renderScreen(<NewSessionWizard
                         popoverBoundaryRef={{ current: null } as any}
@@ -1270,48 +1477,10 @@ describe('NewSessionWizard', () => {
                         setModelMode: () => {},
                     } as any}
                     machine={{
-                        machines: [{
-                            id: 'machine-1',
-                            seq: 1,
-                            createdAt: 0,
-                            updatedAt: 0,
-                            active: true,
-                            activeAt: 0,
-                            revokedAt: null,
-                            metadata: {
-                                host: 'box.local',
-                                platform: 'test',
-                                happyCliVersion: '0.0.0-test',
-                                happyHomeDir: '/tmp/happy-home',
-                                homeDir: '/tmp',
-                                displayName: 'Box',
-                            },
-                            metadataVersion: 1,
-                            daemonState: null,
-                            daemonStateVersion: 0,
-                        }],
+                        machines: [machine],
                         serverId: 'server-1',
-                        selectedMachine: {
-                            id: 'machine-1',
-                            seq: 1,
-                            createdAt: 0,
-                            updatedAt: 0,
-                            active: true,
-                            activeAt: 0,
-                            revokedAt: null,
-                            metadata: {
-                                host: 'box.local',
-                                platform: 'test',
-                                happyCliVersion: '0.0.0-test',
-                                happyHomeDir: '/tmp/happy-home',
-                                homeDir: '/tmp',
-                                displayName: 'Box',
-                            },
-                            metadataVersion: 1,
-                            daemonState: null,
-                            daemonStateVersion: 0,
-                        },
-                        recentMachines: [],
+                        selectedMachine: machine,
+                        recentMachines,
                         favoriteMachineItems: [],
                         useMachinePickerSearch: false,
                         onRefreshMachines: () => {},
@@ -1321,7 +1490,7 @@ describe('NewSessionWizard', () => {
                         favoriteMachines: [],
                         setFavoriteMachines: () => {},
                         selectedPath: '/tmp',
-                        recentPaths: [],
+                        recentPaths: ['/tmp/one', '/tmp/two', '/tmp/three', '/tmp/four', '/tmp/five'],
                         usePathPickerSearch: false,
                         favoriteDirectories: [],
                         setFavoriteDirectories: () => {},
@@ -1338,12 +1507,11 @@ describe('NewSessionWizard', () => {
                     }}
                 />);
 
+        expect(machineSelectorPropsRef.current).toMatchObject({
+            presentation: 'dropdown',
+        });
         expect(pathSelectorPropsRef.current).toMatchObject({
-            machineBrowse: {
-                enabled: true,
-                machineId: 'machine-1',
-                serverId: 'server-1',
-            },
+            savedPathsPresentation: 'dropdown',
         });
     });
 

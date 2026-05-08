@@ -2976,6 +2976,17 @@ export const it: TranslationStructure = {
       userActionsTitle: "Richieste di azione",
       userActionsSubtitle: "Mostra una notifica locale quando una sessione richiede il tuo input",
     },
+    desktop: {
+      title: "Notifiche desktop",
+      footer: "Verifica la consegna delle notifiche locali per questa app desktop.",
+      permission: {
+        title: "Permesso di sistema",
+        checkingSubtitle: "Controllo del permesso notifiche di macOS",
+        grantedSubtitle: "macOS consente a questa app di inviare notifiche",
+        notGrantedSubtitle: "Tocca per richiedere il permesso notifiche di macOS",
+        errorSubtitle: "Impossibile leggere il permesso notifiche di macOS",
+      },
+    },
     push: {
       title: "Notifiche push",
       footer:
@@ -5075,11 +5086,11 @@ export const it: TranslationStructure = {
       default: "Impostazioni CLI",
       plan: "Modalità piano",
       readOnly: "Modalità sola lettura",
-      safeYolo: "YOLO sicuro",
+      safeYolo: "Auto",
       yolo: "YOLO",
       badgePlan: "Piano",
       badgeReadOnly: "Modalità sola lettura",
-      badgeSafeYolo: "YOLO sicuro",
+      badgeSafeYolo: "Auto",
       badgeYolo: "YOLO",
     },
     codexModel: {
@@ -6134,6 +6145,8 @@ settingsSession: {
 	          tagsDisabledSubtitle: 'Controlli tag nascosti',
 	      },
 	      mobileWorkspaceExperience: {
+	          groupTitle: 'Area di lavoro mobile',
+	          groupFooter: 'Controlla come sono organizzate le schermate di sessione sui telefoni.',
 	          title: 'Layout sessione mobile',
 	          subtitle: 'Scegli il layout per telefono usato nelle sessioni.',
 	          options: {
@@ -6439,23 +6452,42 @@ settingsSession: {
       },
       handoff: settingsSessionHandoffTranslationExtensions.it,
       sessionCreation: {
-        title: "Scorciatoie nuova sessione",
-        footer: "Scegli come le scorciatoie di progetto precompilano la schermata della nuova sessione.",
+        title: "Modale nuova sessione",
+        footer: "Scegli come si apre il modale della nuova sessione e come lo preparano le scorciatoie di progetto.",
+        modalModeTitle: "Modalita del modale nuova sessione",
+        modalModeSimpleTitle: "Semplice",
+        modalModeSimpleSubtitle: "Apre il modale compatto centrato sul compositore.",
+        modalModeWizardTitle: "Procedura guidata",
+        modalModeWizardSubtitle: "Apre la configurazione guidata con selettori separati.",
         rememberLastProjectSelectionsTitle: "Ricorda le ultime selezioni di sessione del progetto",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Le scorciatoie di progetto riutilizzano macchina, cartella, motore, modello e opzioni della sessione più recente.",
         rememberLastProjectSelectionsDisabledSubtitle:
           "Le scorciatoie di progetto preselezionano solo macchina e cartella del progetto.",
+        wizardSettingsTitle: "Procedura guidata nuova sessione",
+        wizardSettingsSubtitle: "Scegli se ogni selettore della procedura appare come lista o menu a discesa.",
+        wizardDispositionTitle: "Disposizione della procedura",
+        wizardDispositionSubtitle: "Scegli quali selettori della procedura appaiono come liste o menu a discesa.",
+        wizardPresentationTitle: "Layout dei selettori della procedura",
+        wizardPresentationFooter:
+          "Auto mantiene le sezioni brevi come liste e passa quelle lunghe a menu a discesa ricercabili.",
+        wizardPresentationAutoTitle: "Auto",
+        wizardPresentationAutoSubtitle:
+          "Lascia che Happier scelga il layout migliore in base alla quantità di contenuto.",
+        wizardPresentationListTitle: "Lista",
+        wizardPresentationListSubtitle: "Mostra tutte le righe direttamente nella procedura.",
+        wizardPresentationDropdownTitle: "Menu a discesa",
+        wizardPresentationDropdownSubtitle: "Mostra una riga compatta che apre il selettore completo.",
       },
-          codingPromptBehavior: {
-              title: 'Agent prompt behavior',
-              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
-              sessionTitleUpdatesTitle: 'Agent session titles',
-              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
-              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
-              responseOptionsTitle: 'Suggested reply options',
-              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
-              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          promptPersonalization: {
+              title: 'Prompt personalization',
+              footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
+              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
+              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
+              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
+              askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
+              askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
           },
       defaultPermissions: {
         title: "Permessi predefiniti",
@@ -7945,6 +7977,10 @@ settingsSession: {
       `Passato alla modalità ${mode}`,
     discarded: "Scartato",
     unknownEvent: "Evento sconosciuto",
+    contextCompactionStarted: "Compattazione del contesto...",
+    contextCompactionCompleted: "Contesto compattato",
+    contextCompactionFailed: "Compattazione del contesto non riuscita",
+    contextCompactionCancelled: "Compattazione del contesto annullata",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Limite di utilizzo raggiunto fino a ${time}`,
     unknownTime: "ora sconosciuta",

@@ -2725,6 +2725,17 @@ export const ru: TranslationStructure = {
       userActionsTitle: "Запросы на действия",
       userActionsSubtitle: "Показывать локальное уведомление, когда сеансу требуется ваше участие",
     },
+    desktop: {
+      title: "Уведомления рабочего стола",
+      footer: "Проверяет локальную доставку уведомлений для этого desktop-приложения.",
+      permission: {
+        title: "Системное разрешение",
+        checkingSubtitle: "Проверяем разрешение уведомлений macOS",
+        grantedSubtitle: "macOS разрешает этому приложению отправлять уведомления",
+        notGrantedSubtitle: "Нажмите, чтобы запросить разрешение уведомлений macOS",
+        errorSubtitle: "Не удалось прочитать разрешение уведомлений macOS",
+      },
+    },
     foregroundBehavior: {
       title: "Уведомления в приложении",
       footer:
@@ -4743,11 +4754,11 @@ export const ru: TranslationStructure = {
       default: "Настройки CLI",
       plan: "Режим планирования",
       readOnly: "Только чтение",
-      safeYolo: "Безопасный YOLO",
+      safeYolo: "Авто",
       yolo: "YOLO",
       badgePlan: "План",
       badgeReadOnly: "Только чтение",
-      badgeSafeYolo: "Безопасный YOLO",
+      badgeSafeYolo: "Авто",
       badgeYolo: "YOLO",
     },
     codexModel: {
@@ -5797,6 +5808,8 @@ settingsSession: {
 	        tagsDisabledSubtitle: 'Управление тегами скрыто',
 	    },
 	    mobileWorkspaceExperience: {
+	        groupTitle: 'Мобильное рабочее пространство',
+	        groupFooter: 'Управляет тем, как экраны сессии организованы на телефонах.',
 	        title: 'Мобильный макет сессии',
 	        subtitle: 'Выберите макет для телефона внутри сессий.',
 	        options: {
@@ -6104,23 +6117,42 @@ settingsSession: {
       },
       handoff: settingsSessionHandoffTranslationExtensions.ru,
       sessionCreation: {
-        title: "Быстрые действия новой сессии",
-        footer: "Выберите, как быстрые действия проекта заполняют экран новой сессии.",
+        title: "Модальное окно новой сессии",
+        footer: "Выберите, как открывается модальное окно новой сессии и как быстрые действия проекта заполняют его.",
+        modalModeTitle: "Режим модального окна новой сессии",
+        modalModeSimpleTitle: "Простой",
+        modalModeSimpleSubtitle: "Открывает компактное окно с фокусом на поле ввода.",
+        modalModeWizardTitle: "Мастер",
+        modalModeWizardSubtitle: "Открывает пошаговую настройку с отдельными селекторами.",
         rememberLastProjectSelectionsTitle: "Запоминать последние выборы сессии проекта",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Быстрые действия проекта повторно используют машину, папку, движок, модель и параметры самой новой сессии.",
         rememberLastProjectSelectionsDisabledSubtitle:
           "Быстрые действия проекта только предварительно выбирают машину и папку проекта.",
+        wizardSettingsTitle: "Мастер новой сессии",
+        wizardSettingsSubtitle: "Выберите, показывать каждый селектор мастера списком или выпадающим меню.",
+        wizardDispositionTitle: "Расположение мастера",
+        wizardDispositionSubtitle: "Выберите, какие селекторы мастера показывать списками или выпадающими меню.",
+        wizardPresentationTitle: "Макет селекторов мастера",
+        wizardPresentationFooter:
+          "Auto оставляет короткие разделы списками и переключает длинные разделы на выпадающие меню с поиском.",
+        wizardPresentationAutoTitle: "Auto",
+        wizardPresentationAutoSubtitle:
+          "Позвольте Happier выбрать лучший макет для объема содержимого.",
+        wizardPresentationListTitle: "Список",
+        wizardPresentationListSubtitle: "Показывать все строки прямо в мастере.",
+        wizardPresentationDropdownTitle: "Выпадающее меню",
+        wizardPresentationDropdownSubtitle: "Показывать компактную строку, открывающую полный селектор.",
       },
-          codingPromptBehavior: {
-              title: 'Agent prompt behavior',
-              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
-              sessionTitleUpdatesTitle: 'Agent session titles',
-              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
-              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
-              responseOptionsTitle: 'Suggested reply options',
-              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
-              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          promptPersonalization: {
+              title: 'Prompt personalization',
+              footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
+              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
+              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
+              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
+              askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
+              askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
           },
       defaultPermissions: {
         title: "Разрешения по умолчанию",
@@ -7523,6 +7555,10 @@ settingsSession: {
       `Переключено в режим ${mode}`,
     discarded: "Отброшено",
     unknownEvent: "Неизвестное событие",
+    contextCompactionStarted: "Сжатие контекста...",
+    contextCompactionCompleted: "Контекст сжат",
+    contextCompactionFailed: "Не удалось сжать контекст",
+    contextCompactionCancelled: "Сжатие контекста отменено",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Лимит использования достигнут до ${time}`,
     unknownTime: "неизвестное время",

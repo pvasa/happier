@@ -23,12 +23,13 @@ function NewSessionScreenInner() {
         return <NewSessionSimplePanel {...model.simpleProps} />;
     }
 
-    const { layout, profiles, agent, machine, footer } = model.wizardProps;
+    const { layout, sectionPresentation, profiles, agent, machine, footer } = model.wizardProps;
 
     return (
         <NewSessionWizard
             popoverBoundaryRef={model.popoverBoundaryRef}
             layout={layout}
+            sectionPresentation={sectionPresentation}
             profiles={profiles}
             agent={agent}
             machine={machine}

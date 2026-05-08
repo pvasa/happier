@@ -29,7 +29,7 @@ const state = vi.hoisted(() => ({
     },
 }));
 
-let activeServerId = 'server-a';
+let activeServerId = 'server-b';
 const scopedMachinesState = vi.hoisted(() => ({
     groups: [
         {
@@ -216,7 +216,7 @@ describe('machine picker server scope', () => {
     });
 
     beforeEach(() => {
-        activeServerId = 'server-a';
+        activeServerId = 'server-b';
         state.localSearchParams = {
             selectedId: 'machine-1',
             spawnServerId: 'server-b',

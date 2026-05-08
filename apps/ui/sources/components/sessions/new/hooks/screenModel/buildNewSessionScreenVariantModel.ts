@@ -13,6 +13,10 @@ import type {
     NewSessionScreenModel,
     NewSessionSimpleScreenProps,
 } from '@/components/sessions/new/hooks/newSessionScreenModelTypes';
+import type {
+    NewSessionWizardSectionPresentation,
+    NewSessionWizardSelectionSectionId,
+} from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
 
 export function buildNewSessionScreenVariantModel(params: Readonly<{
     useEnhancedSessionWizard: boolean;
@@ -21,6 +25,7 @@ export function buildNewSessionScreenVariantModel(params: Readonly<{
     checkoutCreationDraft: NewSessionCheckoutCreationDraft | null;
     setCheckoutCreationDraft: React.Dispatch<React.SetStateAction<NewSessionCheckoutCreationDraft | null>>;
     wizardLayoutProps: NewSessionWizardLayoutProps;
+    wizardSectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
     wizardProfilesProps: NewSessionWizardProfilesProps;
     wizardAgentProps: NewSessionWizardAgentProps;
     wizardMachineProps: NewSessionWizardMachineProps;
@@ -45,6 +50,7 @@ export function buildNewSessionScreenVariantModel(params: Readonly<{
         popoverBoundaryRef: params.popoverBoundaryRef,
         wizardProps: {
             layout: params.wizardLayoutProps,
+            sectionPresentation: params.wizardSectionPresentation,
             profiles: params.wizardProfilesProps,
             agent: params.wizardAgentProps,
             machine: params.wizardMachineProps,

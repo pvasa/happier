@@ -2640,6 +2640,17 @@ export const es: TranslationStructure = {
       userActionsTitle: 'Solicitudes de acción',
       userActionsSubtitle: 'Muestra una notificación local cuando una sesión necesita tu intervención',
     },
+    desktop: {
+      title: 'Notificaciones de escritorio',
+      footer: 'Comprueba la entrega de notificaciones locales para esta app de escritorio.',
+      permission: {
+        title: 'Permiso del sistema',
+        checkingSubtitle: 'Comprobando el permiso de notificaciones de macOS',
+        grantedSubtitle: 'macOS permite que esta app envíe notificaciones',
+        notGrantedSubtitle: 'Toca para solicitar el permiso de notificaciones de macOS',
+        errorSubtitle: 'No se pudo leer el permiso de notificaciones de macOS',
+      },
+    },
     push: {
       title: "Notificaciones push",
       footer:
@@ -4744,11 +4755,11 @@ export const es: TranslationStructure = {
       default: "Configuración del CLI",
       plan: "Modo de planificación",
       readOnly: "Modo de solo lectura",
-      safeYolo: "YOLO seguro",
+      safeYolo: "Auto",
       yolo: "YOLO",
       badgePlan: "Plan",
       badgeReadOnly: "Solo lectura",
-      badgeSafeYolo: "YOLO seguro",
+      badgeSafeYolo: "Auto",
       badgeYolo: "YOLO",
     },
     codexModel: {
@@ -5803,6 +5814,8 @@ settingsSession: {
 	          tagsDisabledSubtitle: 'Controles de etiquetas ocultos',
 	      },
 	      mobileWorkspaceExperience: {
+	          groupTitle: 'Espacio de trabajo móvil',
+	          groupFooter: 'Controla cómo se organizan las pantallas de sesión en teléfonos.',
 	          title: 'Diseño de sesión móvil',
 	          subtitle: 'Elige el diseño de teléfono usado dentro de las sesiones.',
 	          options: {
@@ -6145,23 +6158,42 @@ settingsSession: {
       },
       handoff: settingsSessionHandoffTranslationExtensions.es,
       sessionCreation: {
-        title: "Atajos de nueva sesión",
-        footer: "Elige cómo los atajos de proyecto preparan la pantalla de nueva sesión.",
+        title: "Modal de nueva sesión",
+        footer: "Elige cómo se abre el modal de nueva sesión y cómo lo preparan los atajos de proyecto.",
+        modalModeTitle: "Modo del modal de nueva sesión",
+        modalModeSimpleTitle: "Simple",
+        modalModeSimpleSubtitle: "Abre el modal compacto centrado en el compositor.",
+        modalModeWizardTitle: "Asistente",
+        modalModeWizardSubtitle: "Abre la configuración guiada con selectores separados.",
         rememberLastProjectSelectionsTitle: "Recordar las últimas selecciones de sesión del proyecto",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Los atajos de proyecto reutilizan la máquina, la carpeta, el motor, el modelo y las opciones de la sesión más reciente.",
         rememberLastProjectSelectionsDisabledSubtitle:
           "Los atajos de proyecto solo preseleccionan la máquina y la carpeta del proyecto.",
+        wizardSettingsTitle: "Asistente de nueva sesión",
+        wizardSettingsSubtitle: "Elige si cada selector del asistente aparece como lista o desplegable.",
+        wizardDispositionTitle: "Disposición del asistente",
+        wizardDispositionSubtitle: "Elige qué selectores del asistente aparecen como listas o desplegables.",
+        wizardPresentationTitle: "Diseño de selectores del asistente",
+        wizardPresentationFooter:
+          "Auto mantiene las secciones cortas como listas y cambia las largas a desplegables con búsqueda.",
+        wizardPresentationAutoTitle: "Auto",
+        wizardPresentationAutoSubtitle:
+          "Deja que Happier elija el mejor diseño según la cantidad de contenido.",
+        wizardPresentationListTitle: "Lista",
+        wizardPresentationListSubtitle: "Muestra todas las filas directamente en el asistente.",
+        wizardPresentationDropdownTitle: "Desplegable",
+        wizardPresentationDropdownSubtitle: "Muestra una fila compacta que abre el selector completo.",
       },
-          codingPromptBehavior: {
-              title: 'Agent prompt behavior',
-              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
-              sessionTitleUpdatesTitle: 'Agent session titles',
-              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
-              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
-              responseOptionsTitle: 'Suggested reply options',
-              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
-              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          promptPersonalization: {
+              title: 'Prompt personalization',
+              footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
+              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
+              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
+              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
+              askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
+              askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
           },
       defaultPermissions: {
         title: "Permisos predeterminados",
@@ -7621,6 +7653,10 @@ settingsSession: {
     switchedToMode: ({ mode }: { mode: string }) => `Cambiado al modo ${mode}`,
     discarded: "Descartado",
     unknownEvent: "Evento desconocido",
+    contextCompactionStarted: "Compactando contexto...",
+    contextCompactionCompleted: "Contexto compactado",
+    contextCompactionFailed: "Error al compactar el contexto",
+    contextCompactionCancelled: "Compactación de contexto cancelada",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Límite de uso alcanzado hasta ${time}`,
     unknownTime: "tiempo desconocido",

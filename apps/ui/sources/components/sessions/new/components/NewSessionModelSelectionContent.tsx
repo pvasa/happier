@@ -42,6 +42,7 @@ type ModelSelectionRow = Readonly<{
     title: string;
     subtitle: string;
     available: boolean;
+    favoritable: boolean;
     favorite: boolean;
     staleFavorite: FavoriteModelSelectionV1 | null;
 }>;
@@ -89,6 +90,7 @@ function buildRows(params: Readonly<{
             title: option?.label || favorite.modelLabel || modelId,
             subtitle: option?.description || favorite.backendLabel || t('agentInput.model.configureInCli'),
             available: Boolean(option),
+            favoritable: true,
             favorite: true,
             staleFavorite: option ? null : favorite,
         });
@@ -102,6 +104,7 @@ function buildRows(params: Readonly<{
             title: option.label,
             subtitle: option.description,
             available: true,
+            favoritable: isFavoriteModelSelectableId(modelId),
             favorite: false,
             staleFavorite: null,
         }];
@@ -143,16 +146,19 @@ function ModelRightElement(props: Readonly<{
     selected: boolean;
     selectedIndicatorColor: string;
     favoritesEnabled: boolean;
+    showFavoriteAction: boolean;
     onToggleFavorite: () => void;
 }>) {
     return (
         <View style={styles.rightElement}>
-            <FavoriteToggle
-                model={props.model}
-                disabled={!props.favoritesEnabled}
-                selectedIndicatorColor={props.selectedIndicatorColor}
-                onPress={props.onToggleFavorite}
-            />
+            {props.showFavoriteAction ? (
+                <FavoriteToggle
+                    model={props.model}
+                    disabled={!props.favoritesEnabled}
+                    selectedIndicatorColor={props.selectedIndicatorColor}
+                    onPress={props.onToggleFavorite}
+                />
+            ) : null}
             <Ionicons
                 name="checkmark-circle"
                 size={24}
@@ -229,6 +235,7 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
                         selected={selected}
                         selectedIndicatorColor={props.selectedIndicatorColor}
                         favoritesEnabled={Boolean(props.selectedBackendEntry && props.onFavoriteModelSelectionsChange)}
+                        showFavoriteAction={row.favoritable}
                         onToggleFavorite={() => toggleFavorite(row)}
                     />
                 )}
@@ -254,14 +261,14 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
                 category: t('profiles.groups.favorites'),
                 disabled: !row.available,
                 icon: normalizeNodeForView(<Ionicons name="sparkles-outline" size={20} color={theme.colors.textSecondary} />),
-                rightElement: (
+                rightElement: row.favoritable ? (
                     <FavoriteToggle
                         model={row}
                         disabled={false}
                         selectedIndicatorColor={props.selectedIndicatorColor}
                         onPress={() => toggleFavorite(row)}
                     />
-                ),
+                ) : undefined,
             })),
             ...rows.allRows.map((row) => ({
                 id: row.id,
@@ -270,42 +277,44 @@ export function NewSessionModelSelectionContent(props: NewSessionModelSelectionC
                 category: t('common.all'),
                 disabled: !row.available,
                 icon: normalizeNodeForView(<Ionicons name="sparkles-outline" size={20} color={theme.colors.textSecondary} />),
-                rightElement: (
+                rightElement: row.favoritable ? (
                     <FavoriteToggle
                         model={row}
                         disabled={!props.selectedBackendEntry || !props.onFavoriteModelSelectionsChange}
                         selectedIndicatorColor={props.selectedIndicatorColor}
                         onPress={() => toggleFavorite(row)}
                     />
-                ),
+                ) : undefined,
             })),
         ];
         return (
-            <DropdownMenu
-                open={dropdownOpen}
-                onOpenChange={setDropdownOpen}
-                items={dropdownItems}
-                selectedId={selectedModelId}
-                onSelect={(id) => props.onSelectModel(id as ModelMode)}
-                rowKind="item"
-                variant="selectable"
-                search={true}
-                searchPlaceholder={t('modelPickerOverlay.searchPlaceholder')}
-                showCategoryTitles={rows.favoriteRows.length > 0}
-                matchTriggerWidth
-                connectToTrigger
-                popoverBoundaryRef={props.popoverBoundaryRef}
-                itemTrigger={{
-                    title: t('newSession.selectModelTitle'),
-                    subtitle: selectedRow?.subtitle ?? t('newSession.selectModelDescription'),
-                    showSelectedDetail: true,
-                    showSelectedSubtitle: false,
-                    icon: normalizeNodeForView(<Ionicons name="sparkles-outline" size={24} color={theme.colors.textSecondary} />),
-                    itemProps: {
-                        testID: 'new-session-model-dropdown-trigger',
-                    },
-                }}
-            />
+            <ItemGroup title="">
+                <DropdownMenu
+                    open={dropdownOpen}
+                    onOpenChange={setDropdownOpen}
+                    items={dropdownItems}
+                    selectedId={selectedModelId}
+                    onSelect={(id) => props.onSelectModel(id as ModelMode)}
+                    rowKind="item"
+                    variant="selectable"
+                    search={true}
+                    searchPlaceholder={t('modelPickerOverlay.searchPlaceholder')}
+                    showCategoryTitles={rows.favoriteRows.length > 0}
+                    matchTriggerWidth
+                    connectToTrigger
+                    popoverBoundaryRef={props.popoverBoundaryRef}
+                    itemTrigger={{
+                        title: t('newSession.selectModelTitle'),
+                        subtitle: selectedRow?.title ?? t('newSession.selectModelDescription'),
+                        showSelectedDetail: false,
+                        showSelectedSubtitle: false,
+                        icon: normalizeNodeForView(<Ionicons name="sparkles-outline" size={24} color={theme.colors.textSecondary} />),
+                        itemProps: {
+                            testID: 'new-session-model-dropdown-trigger',
+                        },
+                    }}
+                />
+            </ItemGroup>
         );
     }
 

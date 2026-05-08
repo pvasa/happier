@@ -93,12 +93,13 @@ beforeEach(() => {
 });
 
 describe('FeaturesSettingsScreen (web settings moved)', () => {
-    it('does not show Enter-to-send or Message history (moved to Session settings)', async () => {
+    it('does not show session-owned controls that moved to Session settings', async () => {
         const { default: FeaturesSettingsScreen } = await import('@/app/(app)/settings/features');
         const screen = await renderSettingsView(React.createElement(FeaturesSettingsScreen));
         const titles = screen.findAllByType('Item' as any).map((item) => item.props.title);
 
         expect(titles).not.toContain('settingsFeatures.enterToSend');
         expect(titles).not.toContain('settingsFeatures.historyScope');
+        expect(titles).not.toContain('settingsFeatures.enhancedSessionWizard');
     });
 });

@@ -66,6 +66,10 @@ vi.mock('@/components/ui/forms/SearchHeader', () => ({
     SearchHeader: () => null,
 }));
 
+vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
+    DropdownMenu: (props: Record<string, unknown>) => React.createElement('DropdownMenu', props),
+}));
+
 vi.mock('@/constants/Typography', () => ({
     Typography: { default: () => ({}) },
 }));
@@ -95,6 +99,83 @@ vi.mock('@/utils/platform/deferOnWeb', () => ({
 }));
 
 describe('PathSelector', () => {
+    it('can render the editable path entry inside an item group for wizard layouts', async () => {
+        const { PathSelector } = await import('./PathSelector');
+
+        const screen = await renderScreen(
+            <PathSelector
+                machineHomeDir="/Users/leeroy"
+                selectedPath="/Users/leeroy/project"
+                onChangeSelectedPath={() => {}}
+                recentPaths={[]}
+                usePickerSearch={false}
+                favoriteDirectories={[]}
+                onChangeFavoriteDirectories={() => {}}
+                pathEntryPresentation="itemGroup"
+            />,
+        );
+
+        const groups = screen.findAllByType('ItemGroup' as any);
+        expect(groups.some((group) => group.findAllByType('TextInput' as any).length === 1)).toBe(true);
+    });
+
+    it('keeps the path entry visible while saved paths move into a dropdown', async () => {
+        const { PathSelector } = await import('./PathSelector');
+
+        const screen = await renderScreen(
+            <PathSelector
+                machineHomeDir="/Users/leeroy"
+                selectedPath="/Users/leeroy/project"
+                onChangeSelectedPath={() => {}}
+                recentPaths={['/Users/leeroy/recent']}
+                usePickerSearch={true}
+                favoriteDirectories={['~/favorite']}
+                onChangeFavoriteDirectories={() => {}}
+                pathEntryPresentation="itemGroup"
+                savedPathsPresentation="dropdown"
+                favoriteGroupPlacement="beforeRecent"
+            />,
+        );
+
+        expect(screen.findAllByType('TextInput' as any)).toHaveLength(1);
+        expect(screen.findAllByType('Item' as any).filter((item) => item.props.title === '/Users/leeroy/recent')).toHaveLength(0);
+
+        const dropdown = screen.root.findByType('DropdownMenu' as any);
+        expect(dropdown.props.itemTrigger.title).toBe('newSession.selectPathTitle');
+        expect(dropdown.props.itemTrigger.subtitle).toBe('/Users/leeroy/project');
+        expect(dropdown.props.itemTrigger.showSelectedDetail).toBe(false);
+        expect(dropdown.props.itemTrigger.showSelectedSubtitle).toBe(false);
+        expect(dropdown.props.items.map((item: any) => [item.id, item.category])).toEqual([
+            ['/Users/leeroy/favorite', 'newSession.pathPicker.favoritesTitle'],
+            ['/Users/leeroy/recent', 'newSession.pathPicker.recentTitle'],
+        ]);
+        expect(dropdown.props.search).toBe(true);
+    });
+
+    it('can render favorite path groups before recent path groups', async () => {
+        const { PathSelector } = await import('./PathSelector');
+
+        const screen = await renderScreen(
+            <PathSelector
+                machineHomeDir="/Users/leeroy"
+                selectedPath="/Users/leeroy/project"
+                onChangeSelectedPath={() => {}}
+                recentPaths={['/Users/leeroy/recent']}
+                usePickerSearch={false}
+                searchVariant="group"
+                favoriteDirectories={['~/favorite']}
+                onChangeFavoriteDirectories={() => {}}
+                favoriteGroupPlacement="beforeRecent"
+            />,
+        );
+
+        expect(screen.findAllByType('ItemGroup' as any).map((group) => group.props.title)).toEqual([
+            'newSession.pathPicker.favoritesTitle',
+            'newSession.pathPicker.recentTitle',
+            'newSession.pathPicker.suggestedTitle',
+        ]);
+    });
+
     it('does not suggest a hardcoded /projects path (case-sensitive filesystems)', async () => {
         const { PathSelector } = await import('./PathSelector');
 

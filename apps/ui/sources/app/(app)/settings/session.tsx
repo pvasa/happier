@@ -3,6 +3,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, Platform } from 'react-native';
 import { useUnistyles, StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
+import {
+    DEFAULT_CODING_PROMPT_BEHAVIOR_V1,
+    type CodingPromptBehaviorV1,
+} from '@happier-dev/protocol';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -35,6 +39,9 @@ export default React.memo(function SessionSettingsScreen() {
 
     const [messageSendMode, setMessageSendMode] = useSettingMutable('sessionMessageSendMode');
     const [busySteerSendPolicy, setBusySteerSendPolicy] = useSettingMutable('sessionBusySteerSendPolicy');
+    const [codingPromptBehavior, setCodingPromptBehavior] = useSettingMutable('codingPromptBehaviorV1');
+    const [rememberLastProjectSessionSelections, setRememberLastProjectSessionSelections] = useSettingMutable('rememberLastProjectSessionSelections');
+    const [useEnhancedSessionWizard, setUseEnhancedSessionWizard] = useSettingMutable('useEnhancedSessionWizard');
 
     const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
     const [agentInputEnterToSendNative, setAgentInputEnterToSendNative] = useSettingMutable('agentInputEnterToSendNative');
@@ -69,6 +76,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [openHistoryScopeMenu, setOpenHistoryScopeMenu] = React.useState<boolean>(false);
     const [openReplayMenu, setOpenReplayMenu] = React.useState<boolean>(false);
     const [openGroupingMenu, setOpenGroupingMenu] = React.useState<null | 'active' | 'inactive'>(null);
+    const [openNewSessionModalModeMenu, setOpenNewSessionModalModeMenu] = React.useState(false);
     const [openSessionListDensityMenu, setOpenSessionListDensityMenu] = React.useState(false);
     const [openMobileWorkspaceExperienceMenu, setOpenMobileWorkspaceExperienceMenu] = React.useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = React.useState(false);
@@ -80,6 +88,43 @@ export default React.memo(function SessionSettingsScreen() {
             ? t('settingsFeatures.enterToSendEnabled')
             : t('settingsSession.inputBehavior.enterToSendEnabledNativeSubtitle')
         : t('settingsFeatures.enterToSendDisabled');
+    const rememberProjectSelectionsEnabled = rememberLastProjectSessionSelections !== false;
+    const newSessionModalMode = useEnhancedSessionWizard === true ? 'wizard' : 'simple';
+    const newSessionModalModeItems = React.useMemo(() => [
+        {
+            id: 'simple',
+            title: t('settingsSession.sessionCreation.modalModeSimpleTitle'),
+            subtitle: t('settingsSession.sessionCreation.modalModeSimpleSubtitle'),
+            icon: <Ionicons name="chatbox-outline" size={22} color={theme.colors.textSecondary} />,
+        },
+        {
+            id: 'wizard',
+            title: t('settingsSession.sessionCreation.modalModeWizardTitle'),
+            subtitle: t('settingsSession.sessionCreation.modalModeWizardSubtitle'),
+            icon: <Ionicons name="sparkles-outline" size={22} color={theme.colors.textSecondary} />,
+        },
+    ], [theme.colors.textSecondary]);
+    const selectedNewSessionModalModeItem = newSessionModalModeItems.find((item) => item.id === newSessionModalMode)
+        ?? newSessionModalModeItems[0];
+    const normalizedCodingPromptBehavior = React.useMemo<CodingPromptBehaviorV1>(() => {
+        const raw = codingPromptBehavior && typeof codingPromptBehavior === 'object' && !Array.isArray(codingPromptBehavior)
+            ? codingPromptBehavior as Partial<CodingPromptBehaviorV1>
+            : {};
+        return {
+            ...DEFAULT_CODING_PROMPT_BEHAVIOR_V1,
+            ...(raw.sessionTitleUpdates === 'disabled' ? { sessionTitleUpdates: 'disabled' as const } : {}),
+            ...(raw.responseOptions === 'disabled' ? { responseOptions: 'disabled' as const } : {}),
+        };
+    }, [codingPromptBehavior]);
+    const setCodingPromptBehaviorField = React.useCallback(
+        (key: keyof Pick<CodingPromptBehaviorV1, 'sessionTitleUpdates' | 'responseOptions'>, enabled: boolean) => {
+            setCodingPromptBehavior({
+                ...normalizedCodingPromptBehavior,
+                [key]: enabled ? 'agent' : 'disabled',
+            } as any);
+        },
+        [normalizedCodingPromptBehavior, setCodingPromptBehavior],
+    );
 
     const groupingMenuItems = React.useMemo(() => [
         {
@@ -214,6 +259,106 @@ export default React.memo(function SessionSettingsScreen() {
 
     return (
         <ItemList ref={popoverBoundaryRef} style={{ paddingTop: 0 }}>
+            <ItemGroup title={t('settingsSession.sessionCreation.title')} footer={t('settingsSession.sessionCreation.footer')}>
+                <DropdownMenu
+                    open={openNewSessionModalModeMenu}
+                    onOpenChange={setOpenNewSessionModalModeMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={newSessionModalMode}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    popoverBoundaryRef={popoverBoundaryRef}
+                    itemTrigger={{
+                        title: t('settingsSession.sessionCreation.modalModeTitle'),
+                        subtitle: selectedNewSessionModalModeItem?.title,
+                        showSelectedDetail: false,
+                        showSelectedSubtitle: false,
+                        icon: <Ionicons name="albums-outline" size={29} color={theme.colors.accent.indigo} />,
+                        itemProps: { testID: 'settings-new-session-modal-mode' },
+                    }}
+                    items={newSessionModalModeItems}
+                    onSelect={(id) => {
+                        if (id !== 'simple' && id !== 'wizard') return;
+                        setUseEnhancedSessionWizard(id === 'wizard');
+                        setOpenNewSessionModalModeMenu(false);
+                    }}
+                />
+                {useEnhancedSessionWizard === true ? (
+                    <Item
+                        title={t('settingsSession.sessionCreation.wizardDispositionTitle')}
+                        subtitle={t('settingsSession.sessionCreation.wizardDispositionSubtitle')}
+                        icon={<Ionicons name="options-outline" size={29} color={theme.colors.accent.indigo} />}
+                        onPress={() => router.push('/settings/session/new-session-wizard')}
+                    />
+                ) : null}
+                <Item
+                    title={t('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle')}
+                    subtitle={t(
+                        rememberProjectSelectionsEnabled
+                            ? 'settingsSession.sessionCreation.rememberLastProjectSelectionsEnabledSubtitle'
+                            : 'settingsSession.sessionCreation.rememberLastProjectSelectionsDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="copy-outline" size={29} color={theme.colors.textSecondary} />}
+                    rightElement={
+                        <Switch
+                            value={rememberProjectSelectionsEnabled}
+                            onValueChange={(next) => setRememberLastProjectSessionSelections(Boolean(next) as any)}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setRememberLastProjectSessionSelections((!rememberProjectSelectionsEnabled) as any)}
+                />
+            </ItemGroup>
+
+            <ItemGroup
+                title={t('settingsSession.promptPersonalization.title')}
+                footer={t('settingsSession.promptPersonalization.footer')}
+            >
+                <Item
+                    title={t('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle')}
+                    subtitle={t(
+                        normalizedCodingPromptBehavior.sessionTitleUpdates === 'agent'
+                            ? 'settingsSession.promptPersonalization.askAgentToRenameSessionsEnabledSubtitle'
+                            : 'settingsSession.promptPersonalization.askAgentToRenameSessionsDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="text-outline" size={29} color={theme.colors.accent.indigo} />}
+                    rightElement={
+                        <Switch
+                            value={normalizedCodingPromptBehavior.sessionTitleUpdates === 'agent'}
+                            onValueChange={(next) => setCodingPromptBehaviorField('sessionTitleUpdates', Boolean(next))}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setCodingPromptBehaviorField(
+                        'sessionTitleUpdates',
+                        normalizedCodingPromptBehavior.sessionTitleUpdates !== 'agent',
+                    )}
+                />
+                <Item
+                    title={t('settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsTitle')}
+                    subtitle={t(
+                        normalizedCodingPromptBehavior.responseOptions === 'agent'
+                            ? 'settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsEnabledSubtitle'
+                            : 'settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="list-circle-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            value={normalizedCodingPromptBehavior.responseOptions === 'agent'}
+                            onValueChange={(next) => setCodingPromptBehaviorField('responseOptions', Boolean(next))}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setCodingPromptBehaviorField(
+                        'responseOptions',
+                        normalizedCodingPromptBehavior.responseOptions !== 'agent',
+                    )}
+                />
+            </ItemGroup>
+
             <ItemGroup title={t('settingsSession.sessionList.title')} footer={t('settingsSession.sessionList.footer')}>
                 <Item
                     title={t('settingsSession.sessionList.tagsTitle')}
@@ -243,27 +388,6 @@ export default React.memo(function SessionSettingsScreen() {
                     }}
                     items={sessionListDensityItems}
                     onSelect={handleSessionListDensitySelect}
-                />
-                <DropdownMenu
-                    open={openMobileWorkspaceExperienceMenu}
-                    onOpenChange={setOpenMobileWorkspaceExperienceMenu}
-                    variant="selectable"
-                    search={false}
-                    selectedId={normalizeMobileWorkspaceExperience(mobileWorkspaceExperience)}
-                    showCategoryTitles={false}
-                    matchTriggerWidth={true}
-                    connectToTrigger={true}
-                    rowKind="item"
-                    popoverBoundaryRef={popoverBoundaryRef}
-                    itemTrigger={{
-                        title: t('settingsSession.mobileWorkspaceExperience.title'),
-                        subtitle: t('settingsSession.mobileWorkspaceExperience.subtitle'),
-                        icon: <Ionicons name="phone-portrait-outline" size={29} color={theme.colors.accent.indigo} />,
-                        showSelectedSubtitle: false,
-                        itemProps: { testID: 'settings-session-mobileWorkspaceExperience-trigger' },
-                    }}
-                    items={mobileWorkspaceExperienceItems}
-                    onSelect={handleMobileWorkspaceExperienceSelect}
                 />
                 <Item
                     title={t('settingsFeatures.hideInactiveSessions')}
@@ -325,6 +449,33 @@ export default React.memo(function SessionSettingsScreen() {
                     }
                     disabled={!panelsSupported || !uiMultiPanePanelsEnabled}
                     showChevron={false}
+                />
+            </ItemGroup>
+
+            <ItemGroup
+                title={t('settingsSession.mobileWorkspaceExperience.groupTitle')}
+                footer={t('settingsSession.mobileWorkspaceExperience.groupFooter')}
+            >
+                <DropdownMenu
+                    open={openMobileWorkspaceExperienceMenu}
+                    onOpenChange={setOpenMobileWorkspaceExperienceMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={normalizeMobileWorkspaceExperience(mobileWorkspaceExperience)}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    popoverBoundaryRef={popoverBoundaryRef}
+                    itemTrigger={{
+                        title: t('settingsSession.mobileWorkspaceExperience.title'),
+                        subtitle: t('settingsSession.mobileWorkspaceExperience.subtitle'),
+                        icon: <Ionicons name="phone-portrait-outline" size={29} color={theme.colors.accent.indigo} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-session-mobileWorkspaceExperience-trigger' },
+                    }}
+                    items={mobileWorkspaceExperienceItems}
+                    onSelect={handleMobileWorkspaceExperienceSelect}
                 />
             </ItemGroup>
 

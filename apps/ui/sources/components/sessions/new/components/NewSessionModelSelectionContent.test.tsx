@@ -17,7 +17,8 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
+    Item: (props: Record<string, unknown> & { rightElement?: React.ReactNode }) =>
+        React.createElement('Item', props, props.rightElement),
 }));
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
@@ -61,7 +62,6 @@ describe('NewSessionModelSelectionContent', () => {
                 selectedBackendEntry={codexEntry as any}
                 favoriteModelSelections={[
                     {
-                        v: 1,
                         backendTargetKey: 'agent:codex',
                         providerAgentId: 'codex',
                         builtInAgentId: 'codex',
@@ -99,7 +99,6 @@ describe('NewSessionModelSelectionContent', () => {
                 selectedBackendEntry={codexEntry as any}
                 favoriteModelSelections={[
                     {
-                        v: 1,
                         backendTargetKey: 'agent:codex',
                         providerAgentId: 'codex',
                         builtInAgentId: 'codex',
@@ -141,7 +140,6 @@ describe('NewSessionModelSelectionContent', () => {
                 selectedBackendEntry={codexEntry as any}
                 favoriteModelSelections={[
                     {
-                        v: 1,
                         backendTargetKey: 'agent:codex',
                         providerAgentId: 'codex',
                         builtInAgentId: 'codex',
@@ -163,5 +161,106 @@ describe('NewSessionModelSelectionContent', () => {
             ['gpt-5.4', 'All'],
         ]);
         expect(menu.props.search).toBe(true);
+        expect(screen.findAllByType('ItemGroup' as any)).toHaveLength(1);
+    });
+
+    it('wires compact dropdown favorite actions to the model favorites setting', async () => {
+        const onFavoriteModelSelectionsChange = vi.fn();
+        const { NewSessionModelSelectionContent } = await import('./NewSessionModelSelectionContent');
+
+        const screen = await renderScreen(
+            <NewSessionModelSelectionContent
+                presentation="compact"
+                modelOptions={[
+                    { value: 'gpt-5.4', label: 'GPT-5.4', description: 'Fast' },
+                ]}
+                selectedModelId="gpt-5.4"
+                selectedIndicatorColor="#0af"
+                selectedBackendEntry={codexEntry as any}
+                favoriteModelSelections={[]}
+                onSelectModel={vi.fn()}
+                onFavoriteModelSelectionsChange={onFavoriteModelSelectionsChange}
+            />,
+        );
+
+        const menu = screen.root.findByType('DropdownMenu' as any);
+        const favoriteControl = menu.props.items[0]?.rightElement;
+        expect(favoriteControl?.props?.disabled).toBe(false);
+
+        favoriteControl?.props?.onPress?.({ stopPropagation: vi.fn() });
+
+        expect(onFavoriteModelSelectionsChange).toHaveBeenCalledWith([
+            expect.objectContaining({
+                backendTargetKey: 'agent:codex',
+                providerAgentId: 'codex',
+                builtInAgentId: 'codex',
+                modelId: 'gpt-5.4',
+                modelLabel: 'GPT-5.4',
+                backendLabel: 'Codex',
+            }),
+        ]);
+    });
+
+    it('does not render favorite actions for the CLI settings model in list or dropdown mode', async () => {
+        const { NewSessionModelSelectionContent } = await import('./NewSessionModelSelectionContent');
+
+        const expanded = await renderScreen(
+            <NewSessionModelSelectionContent
+                modelOptions={[
+                    { value: 'default', label: 'Use CLI settings', description: 'Use the model configured in the CLI' },
+                ]}
+                selectedModelId="default"
+                selectedIndicatorColor="#0af"
+                selectedBackendEntry={codexEntry as any}
+                favoriteModelSelections={[]}
+                onSelectModel={vi.fn()}
+                onFavoriteModelSelectionsChange={vi.fn()}
+            />,
+        );
+
+        expect(expanded.findAllByProps({ testID: 'new-session-model-favorite:default' })).toHaveLength(0);
+
+        const compact = await renderScreen(
+            <NewSessionModelSelectionContent
+                presentation="compact"
+                modelOptions={[
+                    { value: 'default', label: 'Use CLI settings', description: 'Use the model configured in the CLI' },
+                ]}
+                selectedModelId="default"
+                selectedIndicatorColor="#0af"
+                selectedBackendEntry={codexEntry as any}
+                favoriteModelSelections={[]}
+                onSelectModel={vi.fn()}
+                onFavoriteModelSelectionsChange={vi.fn()}
+            />,
+        );
+
+        const menu = compact.root.findByType('DropdownMenu' as any);
+        expect(menu.props.items[0]?.rightElement).toBeUndefined();
+    });
+
+    it('shows the selected model as the compact dropdown trigger subtitle', async () => {
+        const { NewSessionModelSelectionContent } = await import('./NewSessionModelSelectionContent');
+
+        const screen = await renderScreen(
+            <NewSessionModelSelectionContent
+                presentation="compact"
+                modelOptions={[
+                    { value: 'default', label: 'Use CLI settings', description: 'Use the model configured in the CLI' },
+                    { value: 'gpt-5.4', label: 'GPT-5.4', description: 'Fast' },
+                ]}
+                selectedModelId="default"
+                selectedIndicatorColor="#0af"
+                selectedBackendEntry={codexEntry as any}
+                favoriteModelSelections={[]}
+                onSelectModel={vi.fn()}
+                onFavoriteModelSelectionsChange={vi.fn()}
+            />,
+        );
+
+        const menu = screen.root.findByType('DropdownMenu' as any);
+        expect(menu.props.itemTrigger.subtitle).toBe('Use CLI settings');
+        expect(menu.props.itemTrigger.showSelectedDetail).toBe(false);
+        expect(menu.props.itemTrigger.showSelectedSubtitle).toBe(false);
     });
 });

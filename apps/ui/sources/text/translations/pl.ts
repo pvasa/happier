@@ -2670,6 +2670,17 @@ export const pl: TranslationStructure = {
       userActionsTitle: 'Prośby o akcję',
       userActionsSubtitle: 'Pokazuj lokalne powiadomienie, gdy sesja wymaga Twojego wkładu',
     },
+    desktop: {
+      title: 'Powiadomienia desktopowe',
+      footer: 'Sprawdza lokalne dostarczanie powiadomień dla tej aplikacji desktopowej.',
+      permission: {
+        title: 'Uprawnienie systemowe',
+        checkingSubtitle: 'Sprawdzanie uprawnienia powiadomień macOS',
+        grantedSubtitle: 'macOS pozwala tej aplikacji wysyłać powiadomienia',
+        notGrantedSubtitle: 'Stuknij, aby poprosić o uprawnienie powiadomień macOS',
+        errorSubtitle: 'Nie można odczytać uprawnienia powiadomień macOS',
+      },
+    },
     push: {
       title: "Powiadomienia push",
       footer:
@@ -4757,11 +4768,11 @@ export const pl: TranslationStructure = {
       default: "Ustawienia CLI",
       plan: "Tryb planowania",
       readOnly: "Tryb tylko do odczytu",
-      safeYolo: "Bezpieczne YOLO",
+      safeYolo: "Auto",
       yolo: "YOLO",
       badgePlan: "Plan",
       badgeReadOnly: "Tylko do odczytu",
-      badgeSafeYolo: "Bezpieczne YOLO",
+      badgeSafeYolo: "Auto",
       badgeYolo: "YOLO",
     },
     codexModel: {
@@ -5810,6 +5821,8 @@ settingsSession: {
 	          tagsDisabledSubtitle: 'Kontrolki tagów ukryte',
 	      },
 	      mobileWorkspaceExperience: {
+	          groupTitle: 'Mobilny obszar roboczy',
+	          groupFooter: 'Określa sposób organizacji ekranów sesji na telefonach.',
 	          title: 'Układ sesji mobilnej',
 	          subtitle: 'Wybierz układ telefonu używany w sesjach.',
 	          options: {
@@ -6119,23 +6132,42 @@ settingsSession: {
       },
       handoff: settingsSessionHandoffTranslationExtensions.pl,
       sessionCreation: {
-        title: "Skróty nowej sesji",
-        footer: "Wybierz, jak skróty projektu wypełniają ekran nowej sesji.",
+        title: "Modal nowej sesji",
+        footer: "Wybierz, jak otwiera się modal nowej sesji i jak wypełniają go skróty projektu.",
+        modalModeTitle: "Tryb modalu nowej sesji",
+        modalModeSimpleTitle: "Prosty",
+        modalModeSimpleSubtitle: "Otwiera kompaktowy modal z kompozytorem na pierwszym planie.",
+        modalModeWizardTitle: "Kreator",
+        modalModeWizardSubtitle: "Otwiera konfigurację krokową z oddzielnymi selektorami.",
         rememberLastProjectSelectionsTitle: "Pamiętaj ostatnie wybory sesji projektu",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Skróty projektu używają ponownie maszyny, folderu, silnika, modelu i opcji najnowszej sesji.",
         rememberLastProjectSelectionsDisabledSubtitle:
           "Skróty projektu tylko wstępnie wybierają maszynę i folder projektu.",
+        wizardSettingsTitle: "Kreator nowej sesji",
+        wizardSettingsSubtitle: "Wybierz, czy każdy selektor kreatora ma być listą czy menu rozwijanym.",
+        wizardDispositionTitle: "Układ kreatora",
+        wizardDispositionSubtitle: "Wybierz, które selektory kreatora są listami lub menu rozwijanymi.",
+        wizardPresentationTitle: "Układ selektorów kreatora",
+        wizardPresentationFooter:
+          "Auto zostawia krótkie sekcje jako listy i przełącza długie sekcje na przeszukiwalne menu rozwijane.",
+        wizardPresentationAutoTitle: "Auto",
+        wizardPresentationAutoSubtitle:
+          "Pozwól Happier wybrać najlepszy układ dla ilości treści.",
+        wizardPresentationListTitle: "Lista",
+        wizardPresentationListSubtitle: "Pokaż wszystkie wiersze bezpośrednio w kreatorze.",
+        wizardPresentationDropdownTitle: "Menu rozwijane",
+        wizardPresentationDropdownSubtitle: "Pokaż kompaktowy wiersz otwierający pełny selektor.",
       },
-          codingPromptBehavior: {
-              title: 'Agent prompt behavior',
-              footer: 'Controls built-in instructions added to new agent sessions. This does not hide options an agent already sends.',
-              sessionTitleUpdatesTitle: 'Agent session titles',
-              sessionTitleUpdatesEnabledSubtitle: 'Ask agents to set short descriptive session titles.',
-              sessionTitleUpdatesDisabledSubtitle: 'Do not ask agents to set titles; manual renaming still works.',
-              responseOptionsTitle: 'Suggested reply options',
-              responseOptionsEnabledSubtitle: 'Ask agents to propose quick reply options when useful.',
-              responseOptionsDisabledSubtitle: 'Do not ask agents to add quick reply options.',
+          promptPersonalization: {
+              title: 'Prompt personalization',
+              footer: 'Choose which built-in instructions Happier adds to new agent sessions. This does not hide options an agent already sends.',
+              askAgentToRenameSessionsTitle: 'Ask the agent to rename sessions',
+              askAgentToRenameSessionsEnabledSubtitle: 'The prompt asks agents to set short descriptive session titles.',
+              askAgentToRenameSessionsDisabledSubtitle: 'The prompt does not ask agents to set titles; manual renaming still works.',
+              askAgentToSuggestReplyOptionsTitle: 'Ask the agent to suggest reply options',
+              askAgentToSuggestReplyOptionsEnabledSubtitle: 'The prompt asks agents to propose quick reply options when useful.',
+              askAgentToSuggestReplyOptionsDisabledSubtitle: 'The prompt does not ask agents to add quick reply options.',
           },
       defaultPermissions: {
         title: "Domyślne uprawnienia",
@@ -7625,6 +7657,10 @@ settingsSession: {
       `Przełączono na tryb ${mode}`,
     discarded: "Odrzucono",
     unknownEvent: "Nieznane zdarzenie",
+    contextCompactionStarted: "Kompaktowanie kontekstu...",
+    contextCompactionCompleted: "Kontekst skompaktowany",
+    contextCompactionFailed: "Kompaktowanie kontekstu nie powiodło się",
+    contextCompactionCancelled: "Kompaktowanie kontekstu anulowane",
     usageLimitUntil: ({ time }: { time: string }) =>
       `Osiągnięto limit użycia do ${time}`,
     unknownTime: "nieznany czas",
