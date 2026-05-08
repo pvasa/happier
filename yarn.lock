@@ -7696,7 +7696,7 @@ citty@^0.2.0:
   resolved "https://registry.npmjs.org/citty/-/citty-0.2.0.tgz"
   integrity sha512-8csy5IBFI2ex2hTVpaHN2j+LNE199AgiI7y4dMintrr8i0lQiFn+0AWMZrWdHKIgMOer65f8IThysYhoReqjWA==
 
-cjs-module-lexer@^2.1.1, cjs-module-lexer@^2.2.0:
+cjs-module-lexer@^2.2.0:
   version "2.2.0"
   resolved "https://registry.npmjs.org/cjs-module-lexer/-/cjs-module-lexer-2.2.0.tgz"
   integrity sha512-4bHTS2YuzUvtoLjdy+98ykbNB5jS0+07EvFNXerqZQJ89F7DI6ET7OQo/HJuW6K0aVsKA9hj9/RVb2kQVOrPDQ==
@@ -14469,22 +14469,23 @@ pkg-up@^3.1.0:
   dependencies:
     find-up "^3.0.0"
 
-pkgroll@^2.14.2:
-  version "2.22.0"
-  resolved "https://registry.npmjs.org/pkgroll/-/pkgroll-2.22.0.tgz"
-  integrity sha512-PaVbFliuUdGZedkkY/NeLVLwz26c9J8GLEk6JJv7fi4NU1w0Y3JLcQcC6Cuy0fiRlELH9B1tndsdfBHWD0x89g==
+pkgroll@^2.27.0:
+  version "2.27.0"
+  resolved "https://registry.npmjs.org/pkgroll/-/pkgroll-2.27.0.tgz"
+  integrity sha512-Huw5ZRxWTWeQ0PbNNKdbkAl52bPMy009RXdB4u3qjb47AMEBLG5VVF0V6oOD+YYiZaHaFxvjEeX+A2T9ckaClQ==
   dependencies:
     "@rollup/plugin-alias" "^6.0.0"
     "@rollup/plugin-commonjs" "^29.0.0"
     "@rollup/plugin-dynamic-import-vars" "^2.1.5"
     "@rollup/plugin-json" "^6.1.0"
     "@rollup/plugin-node-resolve" "^16.0.3"
-    cjs-module-lexer "^2.1.1"
+    cjs-module-lexer "^2.2.0"
     esbuild "^0.26.0"
     magic-string "^0.30.21"
-    rollup "^4.53.1"
+    rollup "^4.53.5"
+    rollup-plugin-import-trace "^1.0.1"
     rollup-pluginutils "^2.8.2"
-    yaml "^2.8.1"
+    yaml "^2.8.2"
 
 platform@^1.3.6:
   version "1.3.6"
@@ -15194,6 +15195,11 @@ react-native-url-polyfill@^1.3.0:
   integrity sha512-w9JfSkvpqqlix9UjDvJjm1EjSt652zVQ6iwCIj1cVVkwXf4jQhQgTNXY6EVTwuAmUjg6BC6k9RHCBynoLFo3IQ==
   dependencies:
     whatwg-url-without-unicode "8.0.0-3"
+
+react-native-view-shot@4.0.3:
+  version "4.0.3"
+  resolved "https://registry.npmjs.org/react-native-view-shot/-/react-native-view-shot-4.0.3.tgz"
+  integrity sha512-USNjYmED7C0me02c1DxKA0074Hw+y/nxo+xJKlffMvfUWWzL5ELh/TJA/pTnVqFurIrzthZDPtDM7aBFJuhrHQ==
 
 react-native-vision-camera@^4.7.3:
   version "4.7.3"
@@ -15905,6 +15911,11 @@ robust-predicates@^3.0.2:
   resolved "https://registry.npmjs.org/robust-predicates/-/robust-predicates-3.0.2.tgz"
   integrity sha512-IXgzBWvWQwE6PrDI05OvmXUIruQTcoMDzRsOd5CDvHCVLcLHMTSYvOK5Cm46kWqlV3yAbuSpBZdJ5oP5OUoStg==
 
+rollup-plugin-import-trace@^1.0.1:
+  version "1.0.1"
+  resolved "https://registry.npmjs.org/rollup-plugin-import-trace/-/rollup-plugin-import-trace-1.0.1.tgz"
+  integrity sha512-dWOKrdYba2BXDJh82kkuM4pAR3M6r7WFp6vbVxAgvLfug2WniMFAg2uZ5sNQ/8CoQWo5l2N5EXDG8+QClKk1YQ==
+
 rollup-pluginutils@^2.8.2:
   version "2.8.2"
   resolved "https://registry.npmjs.org/rollup-pluginutils/-/rollup-pluginutils-2.8.2.tgz"
@@ -15946,7 +15957,7 @@ rollup@^4.34.9:
     "@rollup/rollup-win32-x64-msvc" "4.57.1"
     fsevents "~2.3.2"
 
-rollup@^4.43.0, rollup@^4.53.1:
+rollup@^4.43.0, rollup@^4.53.5:
   version "4.57.0"
   resolved "https://registry.npmjs.org/rollup/-/rollup-4.57.0.tgz"
   integrity sha512-e5lPJi/aui4TO1LpAXIRLySmwXSE8k3b9zoGfd42p67wzxog4WHjiZF3M2uheQih4DGyc25QEV4yRBbpueNiUA==
@@ -18255,7 +18266,7 @@ yaml@^1.10.0:
   resolved "https://registry.npmjs.org/yaml/-/yaml-1.10.2.tgz"
   integrity sha512-r3vXyErRCYJ7wg28yvBY5VSoAF8ZvlcW9/BwUzEtUsjvX/DKs24dIkuwjtuprwJJHsbyUbLApepYTR1BN4uHrg==
 
-yaml@^2.2.2, yaml@^2.4.2, yaml@^2.6.1, yaml@^2.8.1:
+yaml@^2.2.2, yaml@^2.4.2, yaml@^2.6.1, yaml@^2.8.2:
   version "2.8.2"
   resolved "https://registry.npmjs.org/yaml/-/yaml-2.8.2.tgz"
   integrity sha512-mplynKqc1C2hTVYxd0PU2xQAc22TI1vShAYGksCCfxbn/dFwnHTNi1bvYsBTkhdUNtGIf5xNOg938rrSSYvS9A==
