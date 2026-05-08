@@ -41,7 +41,7 @@ vi.mock('@/components/ui/lists/SelectableRow', () => {
             'data-testid': props.testID,
             onMouseDownCapture: props.onMouseDownCapture,
             onClick: props.onPress,
-        }, props.title),
+        }, props.title, props.right),
     };
 });
 
@@ -53,7 +53,7 @@ vi.mock('@/components/ui/lists/Item', () => {
             'data-testid': props.testID,
             onMouseDownCapture: props.onMouseDownCapture,
             onClick: props.onPress,
-        }, props.title),
+        }, props.title, props.rightElement),
     };
 });
 
@@ -167,6 +167,73 @@ describe('SelectableMenuResults (web mouse down activation)', () => {
             });
 
             expect(onPressItem).toHaveBeenCalledTimes(1);
+        } finally {
+            await act(async () => {
+                root.unmount();
+            });
+            container.remove();
+        }
+    });
+
+    it('does not activate an item row when mouse down starts from an interactive right element', async () => {
+        const { SelectableMenuResults } = await import('./SelectableMenuResults');
+        const onPressItem = vi.fn();
+        const onFavoritePress = vi.fn();
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        try {
+            await act(async () => {
+                root.render(
+                    <SelectableMenuResults
+                        categories={[
+                            {
+                                id: 'general',
+                                title: 'General',
+                                items: [{
+                                    id: 'model',
+                                    title: 'Model',
+                                    right: (
+                                        <div
+                                            role="button"
+                                            tabIndex={0}
+                                            data-testid="favorite-model"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onFavoritePress();
+                                            }}
+                                        >
+                                            Favorite
+                                        </div>
+                                    ),
+                                }],
+                            },
+                        ]}
+                        selectedIndex={0}
+                        onSelectionChange={() => {}}
+                        onPressItem={onPressItem}
+                        rowVariant="slim"
+                        rowKind="item"
+                    />,
+                );
+            });
+
+            const favoriteButton = container.querySelector('[data-testid="favorite-model"]');
+            expect(favoriteButton).not.toBeNull();
+
+            await act(async () => {
+                favoriteButton!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+            });
+
+            expect(onPressItem).not.toHaveBeenCalled();
+
+            await act(async () => {
+                (favoriteButton as HTMLElement).click();
+            });
+
+            expect(onFavoritePress).toHaveBeenCalledTimes(1);
+            expect(onPressItem).not.toHaveBeenCalled();
         } finally {
             await act(async () => {
                 root.unmount();

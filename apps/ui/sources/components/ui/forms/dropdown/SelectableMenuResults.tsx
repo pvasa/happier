@@ -11,7 +11,13 @@ import { Text } from '@/components/ui/text/Text';
 
 type WebMouseDownActivationEvent = Readonly<{
     button?: number;
-    nativeEvent?: Readonly<{ button?: number }>;
+    currentTarget?: unknown;
+    target?: unknown;
+    nativeEvent?: Readonly<{
+        button?: number;
+        currentTarget?: unknown;
+        target?: unknown;
+    }>;
     preventDefault?: () => void;
     stopPropagation?: () => void;
 }>;
@@ -21,6 +27,38 @@ function asWebMouseDownActivationEvent(event: unknown): WebMouseDownActivationEv
         return {};
     }
     return event as WebMouseDownActivationEvent;
+}
+
+type ElementLike = Readonly<{
+    contains?: (node: unknown) => boolean;
+    closest?: (selector: string) => unknown;
+}>;
+
+function asElementLike(value: unknown): ElementLike | null {
+    if (!value || typeof value !== 'object') return null;
+    return value as ElementLike;
+}
+
+const INTERACTIVE_DESCENDANT_SELECTOR = [
+    'button',
+    'a[href]',
+    'input',
+    'textarea',
+    'select',
+    '[role="button"]',
+    '[role="link"]',
+].join(',');
+
+function startsFromInteractiveDescendant(event: WebMouseDownActivationEvent): boolean {
+    const target = asElementLike(event.target ?? event.nativeEvent?.target);
+    const currentTarget = asElementLike(event.currentTarget ?? event.nativeEvent?.currentTarget);
+    if (!target || !currentTarget || target === currentTarget) return false;
+    if (typeof target.closest !== 'function') return false;
+
+    const interactiveAncestor = target.closest(INTERACTIVE_DESCENDANT_SELECTOR);
+    if (!interactiveAncestor || interactiveAncestor === currentTarget) return false;
+    if (typeof currentTarget.contains !== 'function') return true;
+    return currentTarget.contains(interactiveAncestor);
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -117,6 +155,7 @@ export function SelectableMenuResults(props: {
                                 const activationEvent = asWebMouseDownActivationEvent(event);
                                 if (item.disabled) return;
                                 if (!isPrimaryWebActivationEvent(activationEvent)) return;
+                                if (startsFromInteractiveDescendant(activationEvent)) return;
                                 activationEvent.preventDefault?.();
                                 activationEvent.stopPropagation?.();
                                 handleMouseDownActivatedPress(item);

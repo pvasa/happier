@@ -10,8 +10,8 @@ describe('AdaptiveSelectionSection', () => {
         const screen = await renderScreen(
             <AdaptiveSelectionSection
                 presentation="expanded"
-                expandedContent={<expanded-content testID="expanded-content" />}
-                compactContent={<compact-content testID="compact-content" />}
+                expandedContent={React.createElement('expanded-content', { testID: 'expanded-content' })}
+                compactContent={React.createElement('compact-content', { testID: 'compact-content' })}
             />,
         );
 
@@ -23,9 +23,9 @@ describe('AdaptiveSelectionSection', () => {
         const screen = await renderScreen(
             <AdaptiveSelectionSection
                 presentation="compact"
-                quickContent={<quick-content testID="quick-content" />}
-                expandedContent={<expanded-content testID="expanded-content" />}
-                compactContent={<compact-content testID="compact-content" />}
+                quickContent={React.createElement('quick-content', { testID: 'quick-content' })}
+                expandedContent={React.createElement('expanded-content', { testID: 'expanded-content' })}
+                compactContent={React.createElement('compact-content', { testID: 'compact-content' })}
             />,
         );
 

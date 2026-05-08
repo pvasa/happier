@@ -91,6 +91,48 @@ vi.mock('@/components/ui/forms/SearchHeader', () => ({
 }));
 
 describe('SearchableListSelector (disabled items)', () => {
+    it('can render favorites before recents for dense picker layouts', async () => {
+        const { SearchableListSelector } = await import('./SearchableListSelector');
+
+        const favorite = { id: 'fav', title: 'Favorite' };
+        const recent = { id: 'recent', title: 'Recent' };
+        const other = { id: 'other', title: 'Other' };
+        const config: any = {
+            getItemId: (item: any) => item.id,
+            getItemTitle: (item: any) => item.title,
+            getItemIcon: () => null,
+            formatForDisplay: (item: any) => item.title,
+            parseFromDisplay: () => null,
+            filterItem: () => true,
+            searchPlaceholder: 'Search…',
+            recentSectionTitle: 'Recent',
+            favoritesSectionTitle: 'Favorites',
+            allSectionTitle: 'All',
+            noItemsMessage: 'Empty',
+            showFavorites: true,
+            showRecent: true,
+            showSearch: false,
+            allowCustomInput: false,
+        };
+
+        const screen = await renderScreen(<SearchableListSelector
+            config={config}
+            items={[favorite, recent, other]}
+            recentItems={[recent]}
+            favoriteItems={[favorite]}
+            selectedItem={null}
+            onSelect={() => {}}
+            groupOrder="favoritesFirst"
+            testIdPrefix="selector"
+        />);
+
+        expect(screen.findAllByType('Item' as any).map((item) => item.props.testID)).toEqual([
+            'selector:fav',
+            'selector:recent',
+            'selector:other',
+        ]);
+    });
+
     it('marks disabled rows and prevents selection when pressed', async () => {
         const { SearchableListSelector } = await import('./SearchableListSelector');
         const onSelect = vi.fn();
