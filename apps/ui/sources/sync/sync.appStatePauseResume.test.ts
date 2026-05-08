@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedEndpointSupervisor, ManagedEndpointSupervisorState } from '@happier-dev/connection-supervisor';
 
 import type { PauseController } from '@/utils/timing/pauseController';
+import { createAccountSettingsScope } from './domains/settings/scope/accountSettingsScope';
+import { loadSessionMaterializedMaxSeqById } from './domains/state/persistence';
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
@@ -30,6 +32,7 @@ const appStateAddListener = vi.hoisted(() => vi.fn((_event: string, handler: (st
     appStateHandlers.add(handler);
     return { remove: vi.fn(() => appStateHandlers.delete(handler)) };
 }));
+const isTauriDesktopState = vi.hoisted(() => ({ value: false }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -43,6 +46,10 @@ vi.mock('react-native', async () => {
                     }
     );
 });
+
+vi.mock('@/utils/platform/tauri', () => ({
+    isTauriDesktop: () => isTauriDesktopState.value,
+}));
 
 const apiSocketDisconnect = vi.hoisted(() => vi.fn());
 const apiSocketConnect = vi.hoisted(() => vi.fn());
@@ -66,6 +73,12 @@ vi.mock('@/log', () => ({
 }));
 
 describe('sync AppState pause/resume', () => {
+    const resolveTestSettingsScope = () => {
+        const scope = createAccountSettingsScope('server-appstate-test', 'account-appstate-test');
+        expect(scope).toBeTruthy();
+        return scope!;
+    };
+
     beforeEach(() => {
         vi.resetModules();
         kvStore.clear();
@@ -73,6 +86,7 @@ describe('sync AppState pause/resume', () => {
         appStateAddListener.mockClear();
         apiSocketDisconnect.mockClear();
         apiSocketConnect.mockClear();
+        isTauriDesktopState.value = false;
     });
 
     it('pauses on background and resumes on active (disconnect/connect socket + invalidate endpoint)', async () => {
@@ -119,6 +133,23 @@ describe('sync AppState pause/resume', () => {
         expect(pauseController.isPaused()).toBe(false);
     });
 
+    it('keeps Tauri desktop sync active when AppState reports background', async () => {
+        isTauriDesktopState.value = true;
+        const { sync } = await import('./sync');
+
+        expect(appStateAddListener).toHaveBeenCalled();
+        const handler = Array.from(appStateHandlers)[0];
+        expect(handler).toBeTruthy();
+
+        const pauseController = (sync as unknown as { pauseController: PauseController }).pauseController;
+        expect(pauseController.isPaused()).toBe(false);
+
+        handler!('background');
+
+        expect(apiSocketDisconnect).not.toHaveBeenCalled();
+        expect(pauseController.isPaused()).toBe(false);
+    });
+
     it('quiesces native crypto worker dispatch on background and resumes it on active', async () => {
         const { Encryption } = await import('./encryption/encryption');
         const markQuiescentSpy = vi.spyOn(Encryption, 'markNativeCryptoWorkerQueueQuiescent');
@@ -157,23 +188,25 @@ describe('sync AppState pause/resume', () => {
         vi.useFakeTimers();
         try {
             const { sync } = await import('./sync');
+            const scope = resolveTestSettingsScope();
 
             const handler = Array.from(appStateHandlers)[0];
             expect(handler).toBeTruthy();
 
+            (sync as any).pendingSettingsScope = scope;
             (sync as any).sessionMaterializedMaxSeqById = { s1: 5 };
             (sync as any).sessionMaterializedMaxSeqDirty = true;
 
             handler!('inactive');
 
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(1);
-            expect(kvStore.get('session-materialized-max-seq-v1')).toBeUndefined();
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({});
 
             await vi.advanceTimersByTimeAsync(299);
-            expect(kvStore.get('session-materialized-max-seq-v1')).toBeUndefined();
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({});
 
             await vi.advanceTimersByTimeAsync(1);
-            expect(JSON.parse(kvStore.get('session-materialized-max-seq-v1') ?? '{}')).toEqual({ s1: 5 });
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({ s1: 5 });
         } finally {
             vi.useRealTimers();
         }
@@ -183,10 +216,12 @@ describe('sync AppState pause/resume', () => {
         vi.useFakeTimers();
         try {
             const { sync } = await import('./sync');
+            const scope = resolveTestSettingsScope();
 
             const handler = Array.from(appStateHandlers)[0];
             expect(handler).toBeTruthy();
 
+            (sync as any).pendingSettingsScope = scope;
             (sync as any).sessionMaterializedMaxSeqById = { s1: 5 };
             (sync as any).sessionMaterializedMaxSeqDirty = true;
 
@@ -194,7 +229,7 @@ describe('sync AppState pause/resume', () => {
             handler!('active');
             await vi.advanceTimersByTimeAsync(300);
 
-            expect(kvStore.get('session-materialized-max-seq-v1')).toBeUndefined();
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({});
         } finally {
             vi.useRealTimers();
         }
@@ -204,10 +239,12 @@ describe('sync AppState pause/resume', () => {
         vi.useFakeTimers();
         try {
             const { sync } = await import('./sync');
+            const scope = resolveTestSettingsScope();
 
             const handler = Array.from(appStateHandlers)[0];
             expect(handler).toBeTruthy();
 
+            (sync as any).pendingSettingsScope = scope;
             (sync as any).sessionMaterializedMaxSeqById = { s_old: 5 };
             (sync as any).sessionMaterializedMaxSeqDirty = true;
 
@@ -216,7 +253,7 @@ describe('sync AppState pause/resume', () => {
 
             await vi.advanceTimersByTimeAsync(300);
 
-            expect(kvStore.get('session-materialized-max-seq-v1')).toBeUndefined();
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({});
         } finally {
             vi.useRealTimers();
         }
@@ -226,13 +263,15 @@ describe('sync AppState pause/resume', () => {
         vi.useFakeTimers();
         try {
             const { sync } = await import('./sync');
+            const scope = resolveTestSettingsScope();
 
+            (sync as any).pendingSettingsScope = scope;
             (sync as any).markSessionMaterializedMaxSeq('s_old', 5);
             (sync as any).serverScopeGeneration += 1;
 
             await vi.advanceTimersByTimeAsync(2_000);
 
-            expect(kvStore.get('session-materialized-max-seq-v1')).toBeUndefined();
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({});
         } finally {
             vi.useRealTimers();
         }
@@ -269,6 +308,37 @@ describe('sync AppState pause/resume', () => {
         }
     });
 
+    it('keeps Tauri desktop sync active when document visibility is hidden', async () => {
+        isTauriDesktopState.value = true;
+        const globalWithDocument = globalThis as unknown as { document?: unknown };
+        const originalDocument = globalWithDocument.document;
+        const handlers = new Map<string, Set<() => void>>();
+        const documentStub = {
+            visibilityState: 'hidden',
+            addEventListener: (event: string, listener: () => void) => {
+                const set = handlers.get(event) ?? new Set<() => void>();
+                set.add(listener);
+                handlers.set(event, set);
+            },
+            removeEventListener: (event: string, listener: () => void) => {
+                handlers.get(event)?.delete(listener);
+            },
+            dispatchEvent: (_event: unknown) => {},
+        };
+        globalWithDocument.document = documentStub;
+
+        try {
+            const { sync } = await import('./sync');
+            const pauseController = (sync as unknown as { pauseController: PauseController }).pauseController;
+
+            expect(pauseController.isPaused()).toBe(false);
+            expect(apiSocketDisconnect).not.toHaveBeenCalled();
+            expect(handlers.has('visibilitychange')).toBe(false);
+        } finally {
+            globalWithDocument.document = originalDocument;
+        }
+    });
+
     it('pauses on web visibility hidden and resumes on visible', async () => {
         const globalWithDocument = globalThis as unknown as { document?: unknown };
         const originalDocument = globalWithDocument.document;
@@ -289,6 +359,7 @@ describe('sync AppState pause/resume', () => {
 
         try {
             const { sync } = await import('./sync');
+            const scope = resolveTestSettingsScope();
 
             const onlineState: ManagedEndpointSupervisorState = {
                 phase: 'online',
@@ -318,6 +389,7 @@ describe('sync AppState pause/resume', () => {
             expect(pauseController.isPaused()).toBe(false);
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(0);
 
+            (sync as any).pendingSettingsScope = scope;
             (sync as any).sessionMaterializedMaxSeqById = { s1: 7 };
             (sync as any).sessionMaterializedMaxSeqDirty = true;
 
@@ -327,7 +399,7 @@ describe('sync AppState pause/resume', () => {
             }
             expect(apiSocketDisconnect).toHaveBeenCalledTimes(1);
             expect(pauseController.isPaused()).toBe(true);
-            expect(JSON.parse(kvStore.get('session-materialized-max-seq-v1') ?? '{}')).toEqual({ s1: 7 });
+            expect(loadSessionMaterializedMaxSeqById(scope)).toEqual({ s1: 7 });
 
             documentStub.visibilityState = 'visible';
             for (const handler of handlers.get('visibilitychange') ?? []) {

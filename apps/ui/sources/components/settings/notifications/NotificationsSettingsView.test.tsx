@@ -18,6 +18,9 @@ const modalPromptMock = vi.fn();
 const modalConfirmMock = vi.fn();
 const modalAlertMock = vi.fn();
 const routerPushMock = vi.fn();
+const isTauriDesktopState = vi.hoisted(() => ({ value: false }));
+const tauriIsPermissionGrantedMock = vi.hoisted(() => vi.fn(async () => true));
+const tauriRequestPermissionMock = vi.hoisted(() => vi.fn(async () => 'granted'));
 
 const settingsState: {
     notificationsSettingsV1: NotificationsSettingsV1;
@@ -138,6 +141,15 @@ vi.mock('@/sync/store/settingsWriters', () => ({
     useApplyLocalSettings: () => applyLocalSettingsMock,
 }));
 
+vi.mock('@/utils/platform/tauri', () => ({
+    isTauriDesktop: () => isTauriDesktopState.value,
+}));
+
+vi.mock('@/activity/notifications/channels/tauriNotificationPlugin', () => ({
+    isPermissionGranted: tauriIsPermissionGrantedMock,
+    requestPermission: tauriRequestPermissionMock,
+}));
+
 vi.mock('@/components/ui/lists/ItemList', () => ({
     ItemList: createPassthroughComponentMock('ItemList'),
 }));
@@ -166,6 +178,11 @@ describe('NotificationsSettingsView', () => {
         modalConfirmMock.mockReset();
         modalAlertMock.mockReset();
         routerPushMock.mockReset();
+        tauriIsPermissionGrantedMock.mockReset();
+        tauriRequestPermissionMock.mockReset();
+        tauriIsPermissionGrantedMock.mockResolvedValue(true);
+        tauriRequestPermissionMock.mockResolvedValue('granted');
+        isTauriDesktopState.value = false;
 
         settingsState.notificationsSettingsV1 = {
             v: 1,
@@ -234,6 +251,43 @@ describe('NotificationsSettingsView', () => {
         expect(screen.findRow('settings-notifications-local-enabled')).toBeTruthy();
         expect(screen.findRow('settings-notifications-push-enabled')).toBeTruthy();
         expect(screen.findRow('settings-notifications-add-webhook')).toBeTruthy();
+    });
+
+    it('hides desktop notification diagnostics outside the Tauri app', async () => {
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+
+        expect(screen.findGroup('settingsNotifications.desktop.title')).toBeNull();
+        expect(screen.findRow('settings-notifications-desktop-permission')).toBeNull();
+    });
+
+    it('shows desktop notification diagnostics inside the Tauri app', async () => {
+        isTauriDesktopState.value = true;
+        tauriIsPermissionGrantedMock.mockResolvedValue(false);
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+        await act(async () => {});
+
+        expect(screen.findGroup('settingsNotifications.desktop.title')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-desktop-permission')).toBeTruthy();
+    });
+
+    it('requests Tauri notification permission from the desktop diagnostics row', async () => {
+        isTauriDesktopState.value = true;
+        tauriIsPermissionGrantedMock.mockResolvedValue(false);
+        tauriRequestPermissionMock.mockResolvedValue('granted');
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+        await act(async () => {});
+
+        await act(async () => {
+            screen.pressRow('settings-notifications-desktop-permission');
+        });
+
+        expect(tauriRequestPermissionMock).toHaveBeenCalledTimes(1);
     });
 
     it('writes device-local badge settings through the local settings writer', async () => {

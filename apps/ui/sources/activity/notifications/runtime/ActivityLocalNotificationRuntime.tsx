@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 import { storage, useLocalSettings } from '@/sync/domains/state/storage';
 import { getActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { getActiveServerUrl } from '@/sync/domains/server/serverProfiles';
+import { isTauriMainWindowActivelyViewed } from '@/desktop/window/isTauriMainWindowActivelyViewed';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -32,6 +33,18 @@ function shouldNotifyForEvent(
     return localSettings.localNotificationsShowPendingUserActionRequests !== false;
 }
 
+function shouldSuppressSameSessionNotification(event: ActivityLocalNotificationEvent): boolean {
+    if (getActiveViewingSessionId() !== event.sessionId) {
+        return false;
+    }
+
+    if (!isTauriDesktop()) {
+        return true;
+    }
+
+    return isTauriMainWindowActivelyViewed();
+}
+
 export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
     const localSettings = useLocalSettings();
 
@@ -41,7 +54,7 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
                 return;
             }
 
-            if (getActiveViewingSessionId() === event.sessionId) {
+            if (shouldSuppressSameSessionNotification(event)) {
                 return;
             }
 

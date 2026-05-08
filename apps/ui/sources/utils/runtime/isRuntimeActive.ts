@@ -1,6 +1,11 @@
 import { AppState, Platform } from 'react-native';
+import { isTauriDesktop } from '@/utils/platform/tauri';
 
 export function isRuntimeActive(): boolean {
+    if (isTauriDesktop()) {
+        return true;
+    }
+
     try {
         const appState = String(AppState.currentState ?? '').trim();
         if (appState && appState !== 'active') {

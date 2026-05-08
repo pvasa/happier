@@ -14,6 +14,7 @@ import { Modal } from '@/modal';
 import { useLocalSettings, useSettings } from '@/sync/domains/state/storage';
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
+import { isTauriDesktop } from '@/utils/platform/tauri';
 
 import {
     DEFAULT_NOTIFICATIONS_SETTINGS_V1,
@@ -31,6 +32,7 @@ import {
     removeNotificationChannelById,
     updateNotificationChannelById,
 } from './notificationChannels';
+import { useTauriNotificationPermissionDiagnostics } from './useTauriNotificationPermissionDiagnostics';
 
 type ForegroundBehavior = 'full' | 'silent' | 'off';
 
@@ -45,6 +47,8 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     const localSettings = useLocalSettings();
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const isDesktopNotificationsSupported = React.useMemo(() => isTauriDesktop(), []);
+    const desktopNotificationPermission = useTauriNotificationPermissionDiagnostics(isDesktopNotificationsSupported);
 
     const notificationsRaw = isRecord(settings) ? settings.notificationsSettingsV1 : undefined;
     const notifications = React.useMemo(() => {
@@ -206,6 +210,26 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
             patch: { signingSecret: null },
         }));
     }, [setWebhookChannels, webhookChannels]);
+
+    const desktopPermissionSubtitle = React.useMemo(() => {
+        switch (desktopNotificationPermission.status) {
+            case 'checking':
+                return t('settingsNotifications.desktop.permission.checkingSubtitle');
+            case 'granted':
+                return t('settingsNotifications.desktop.permission.grantedSubtitle');
+            case 'error':
+                return t('settingsNotifications.desktop.permission.errorSubtitle');
+            case 'notGranted':
+            default:
+                return t('settingsNotifications.desktop.permission.notGrantedSubtitle');
+        }
+    }, [desktopNotificationPermission.status]);
+
+    const desktopPermissionIconColor = desktopNotificationPermission.status === 'granted'
+        ? theme.colors.success
+        : desktopNotificationPermission.status === 'checking'
+            ? theme.colors.textSecondary
+            : theme.colors.warning;
 
     return (
         <ItemList style={{ paddingTop: 0 }} testID="settings-notifications-screen">
@@ -376,6 +400,24 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                     showChevron={false}
                 />
             </ItemGroup>
+
+            {isDesktopNotificationsSupported ? (
+                <ItemGroup
+                    title={t('settingsNotifications.desktop.title')}
+                    footer={t('settingsNotifications.desktop.footer')}
+                >
+                    <Item
+                        testID="settings-notifications-desktop-permission"
+                        title={t('settingsNotifications.desktop.permission.title')}
+                        subtitle={desktopPermissionSubtitle}
+                        icon={<Ionicons name="desktop-outline" size={29} color={desktopPermissionIconColor} />}
+                        onPress={desktopNotificationPermission.status === 'granted'
+                            ? undefined
+                            : () => { void desktopNotificationPermission.requestPermission(); }}
+                        showChevron={desktopNotificationPermission.status !== 'granted'}
+                    />
+                </ItemGroup>
+            ) : null}
 
             <ItemGroup
                 title={t('settingsNotifications.push.title')}
