@@ -121,4 +121,5 @@ _.env.pipeline.production.local
 /apps/stack/output
 
 /cli/.dist*
+/packages/cli-common/.dist*
 /.playwright-mcp
