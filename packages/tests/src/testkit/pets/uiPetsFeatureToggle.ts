@@ -83,7 +83,7 @@ async function updateSingleAccountSettings(params: SingleAccountSettingsUpdate):
     { featureToggles: params.featureToggles, settingsPatch: params.settingsPatch },
   );
 
-  await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/`);
+  await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/?happier_hmr=0`, 180_000);
 }
 
 export async function setSingleAccountUiFeatureToggle(params: Readonly<{

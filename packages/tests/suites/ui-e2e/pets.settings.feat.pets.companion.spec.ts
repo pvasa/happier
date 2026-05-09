@@ -9,6 +9,11 @@ import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { createMinimalCodexPetPackage } from '../../src/testkit/pets/petPackageFixture';
+import {
+  detectedPetTileByDisplayName,
+  localLibraryPetTileByDisplayName,
+  tileSubnodeByTestIdPrefix,
+} from '../../src/testkit/pets/petsSettingsSelectors';
 import { setSingleAccountUiFeatureToggle } from '../../src/testkit/pets/uiPetsFeatureToggle';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
@@ -116,14 +121,24 @@ test.describe('ui e2e: pets settings', () => {
 
     await page.getByTestId('settings-pets-detect-codex-pets').click();
     await expect(page.getByTestId('settings-pets-detected-codex-pets-grid')).toHaveCount(1, { timeout: 120_000 });
-    const detectedPetTile = page.getByTestId('settings-pets-detected-tile-blink-e2e-fixture');
+    const detectedPetTile = detectedPetTileByDisplayName({
+      page,
+      displayName: 'Blink E2E Fixture',
+    });
     await expect(detectedPetTile).toHaveCount(1, { timeout: 120_000 });
-    await expect(detectedPetTile.getByTestId('settings-pets-detected-source-blink-e2e-fixture')).toHaveCount(1);
-    await expect(detectedPetTile.getByTestId('settings-pets-detected-preview-blink-e2e-fixture')).toHaveCount(1);
-    await expect(detectedPetTile.getByTestId('settings-pets-import-to-account-blink-e2e-fixture')).toHaveCount(0);
-    const useOnThisDeviceAction = detectedPetTile.getByTestId(
-      'settings-pets-use-on-this-device-blink-e2e-fixture',
-    );
+    await expect(tileSubnodeByTestIdPrefix({
+      tile: detectedPetTile,
+      prefix: 'settings-pets-detected-source-',
+    })).toHaveCount(1);
+    await expect(tileSubnodeByTestIdPrefix({
+      tile: detectedPetTile,
+      prefix: 'settings-pets-detected-preview-',
+    })).toHaveCount(1);
+    await expect(detectedPetTile.locator('[data-testid^="settings-pets-import-to-account-"]')).toHaveCount(0);
+    const useOnThisDeviceAction = tileSubnodeByTestIdPrefix({
+      tile: detectedPetTile,
+      prefix: 'settings-pets-use-on-this-device-',
+    });
     await expect(useOnThisDeviceAction).toHaveCount(1, { timeout: 120_000 });
     await useOnThisDeviceAction.click();
 
@@ -131,10 +146,20 @@ test.describe('ui e2e: pets settings', () => {
     await expect(localLibrary.locator('[data-testid^="settings-pets-select-source"]')).toHaveCount(1, {
       timeout: 120_000,
     });
-    const localPetTile = localLibrary.getByTestId('settings-pets-local-tile-blink-e2e-fixture');
+    const localPetTile = localLibraryPetTileByDisplayName({
+      page,
+      localLibrary,
+      displayName: 'Blink E2E Fixture',
+    });
     await expect(localPetTile).toHaveCount(1, { timeout: 120_000 });
-    await expect(localPetTile.getByTestId('settings-pets-select-source-local-blink-e2e-fixture')).toHaveCount(1);
-    const removeFromDeviceAction = localPetTile.getByTestId('settings-pets-remove-from-device-blink-e2e-fixture');
+    await expect(tileSubnodeByTestIdPrefix({
+      tile: localPetTile,
+      prefix: 'settings-pets-select-source-local-',
+    })).toHaveCount(1);
+    const removeFromDeviceAction = tileSubnodeByTestIdPrefix({
+      tile: localPetTile,
+      prefix: 'settings-pets-remove-from-device-',
+    });
     await expect(removeFromDeviceAction).toHaveCount(1, { timeout: 60_000 });
     await removeFromDeviceAction.click();
     await expect(localPetTile).toHaveCount(0, { timeout: 120_000 });

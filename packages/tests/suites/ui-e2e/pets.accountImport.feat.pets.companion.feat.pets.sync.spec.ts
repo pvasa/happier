@@ -9,6 +9,11 @@ import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { createMinimalCodexPetPackage } from '../../src/testkit/pets/petPackageFixture';
+import {
+  accountLibraryPetTileByDisplayName,
+  detectedPetTileByDisplayName,
+  tileSubnodeByTestIdPrefix,
+} from '../../src/testkit/pets/petsSettingsSelectors';
 import { setSingleAccountUiFeatureToggle } from '../../src/testkit/pets/uiPetsFeatureToggle';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
@@ -32,9 +37,10 @@ test.describe('ui e2e: pets account import', () => {
       testDir: suiteDir,
       dbProvider: 'sqlite',
       extraEnv: {
-        HAPPIER_BUILD_FEATURES_DENY: 'sharing.contentKeys',
         HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '1',
         HAPPIER_FEATURE_PETS_SYNC__ENABLED: '1',
+        HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
+        HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE: 'plain',
       },
     });
 
@@ -94,13 +100,23 @@ test.describe('ui e2e: pets account import', () => {
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/settings/pets?happier_hmr=0`, 180_000);
     await expect(page.getByTestId('settings-pets-account-library-list')).toHaveCount(1, { timeout: 120_000 });
     await page.getByTestId('settings-pets-detect-codex-pets').click();
-    const detectedPetTile = page.getByTestId('settings-pets-detected-tile-blink-e2e-fixture');
+    const detectedPetTile = detectedPetTileByDisplayName({
+      page,
+      displayName: 'Blink E2E Fixture',
+    });
     await expect(detectedPetTile).toHaveCount(1, { timeout: 120_000 });
-    await expect(detectedPetTile.getByTestId('settings-pets-detected-source-blink-e2e-fixture')).toHaveCount(1);
-    await expect(detectedPetTile.getByTestId('settings-pets-detected-preview-blink-e2e-fixture')).toHaveCount(1);
-    const importToAccountAction = detectedPetTile.getByTestId(
-      'settings-pets-import-to-account-blink-e2e-fixture',
-    );
+    await expect(tileSubnodeByTestIdPrefix({
+      tile: detectedPetTile,
+      prefix: 'settings-pets-detected-source-',
+    })).toHaveCount(1);
+    await expect(tileSubnodeByTestIdPrefix({
+      tile: detectedPetTile,
+      prefix: 'settings-pets-detected-preview-',
+    })).toHaveCount(1);
+    const importToAccountAction = tileSubnodeByTestIdPrefix({
+      tile: detectedPetTile,
+      prefix: 'settings-pets-import-to-account-',
+    });
     await expect(importToAccountAction).toHaveCount(1, { timeout: 120_000 });
     await importToAccountAction.click();
 
@@ -108,6 +124,10 @@ test.describe('ui e2e: pets account import', () => {
     await expect(accountLibrary.locator('[data-testid^="settings-pets-select-source"]')).toHaveCount(1, {
       timeout: 120_000,
     });
-    await expect(accountLibrary.locator('[data-testid*="blink-e2e-fixture"]')).toHaveCount(1, { timeout: 60_000 });
+    await expect(accountLibraryPetTileByDisplayName({
+      page,
+      accountLibrary,
+      displayName: 'Blink E2E Fixture',
+    })).toHaveCount(1, { timeout: 60_000 });
   });
 });
