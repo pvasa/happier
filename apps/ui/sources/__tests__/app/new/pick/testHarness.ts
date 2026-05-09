@@ -105,12 +105,8 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         if (activeOptions.reactNavigationNative) {
             return await activeOptions.reactNavigationNative();
         }
-
-        return {
-            CommonActions: {
-                setParams: (params: Record<string, unknown>) => ({ type: 'SET_PARAMS', payload: { params } }),
-            },
-        };
+        const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+        return createReactNavigationNativeMock();
     });
 
     vi.mock('@expo/vector-icons', async () => {

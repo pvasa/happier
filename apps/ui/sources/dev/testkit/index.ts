@@ -23,6 +23,7 @@ export * from './mocks/modal';
 export * from './mocks/reactNative';
 export * from './mocks/router';
 export * from './mocks/storage';
+export * from './mocks/persistence';
 export * from './mocks/capabilities';
 export * from './mocks/syncOps';
 export * from './mocks/text';

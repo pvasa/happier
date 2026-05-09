@@ -203,7 +203,9 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
       expect(sendA.kind).toBe('session_send');
 
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/session/${sessionAId}`, 120_000);
-      await expect(page.getByText(msgA)).toHaveCount(1, { timeout: 120_000 });
+      const transcript = page.getByTestId('transcript-chat-list');
+      await expect(transcript).toHaveCount(1, { timeout: 120_000 });
+      await expect(transcript.getByText(msgA, { exact: true }).first()).toBeVisible({ timeout: 120_000 });
 
       await toggleAccountEncryptionMode({ page, uiBaseUrl, expectedMode: 'plain' });
 

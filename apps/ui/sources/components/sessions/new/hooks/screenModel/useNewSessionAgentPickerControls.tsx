@@ -29,22 +29,32 @@ type EngineSelection = Readonly<{
     configOverrides: Readonly<Record<string, string>>;
 }>;
 
+type EngineSelectionLike = Readonly<{
+    modelId: string;
+    sessionModeId: string;
+    configOverrides?: Readonly<Record<string, string>> | null;
+}>;
+
 const FAVORITE_MODELS_AGENT_PICKER_OPTION_ID = 'favorite-models';
 
 function areConfigOverridesEqual(
-    left: Readonly<Record<string, string>>,
-    right: Readonly<Record<string, string>>,
+    left: Readonly<Record<string, string>> | null | undefined,
+    right: Readonly<Record<string, string>> | null | undefined,
 ): boolean {
-    const leftKeys = Object.keys(left);
-    const rightKeys = Object.keys(right);
+    const leftKeys = Object.keys(left ?? {});
+    const rightKeys = Object.keys(right ?? {});
     if (leftKeys.length !== rightKeys.length) return false;
     for (const key of leftKeys) {
-        if (left[key] !== right[key]) return false;
+        if ((left ?? {})[key] !== (right ?? {})[key]) return false;
     }
     return true;
 }
 
-function areEngineSelectionsEqual(left: EngineSelection, right: EngineSelection): boolean {
+function normalizeConfigOverrides(overrides: Readonly<Record<string, string>> | null | undefined): Readonly<Record<string, string>> {
+    return overrides ?? {};
+}
+
+function areEngineSelectionsEqual(left: EngineSelectionLike, right: EngineSelectionLike): boolean {
     return left.modelId === right.modelId
         && left.sessionModeId === right.sessionModeId
         && areConfigOverridesEqual(left.configOverrides, right.configOverrides);
@@ -175,11 +185,15 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         return initialSelection;
     }, [buildInitialEngineSelection]);
 
-    const applyEngineSelection = React.useCallback((entry: ResolvedBackendCatalogEntry, selection: EngineSelection) => {
-        const nextConfigOverrides: Readonly<Record<string, string>> = selection.configOverrides ?? {};
+    const applyEngineSelection = React.useCallback((entry: ResolvedBackendCatalogEntry, selection: EngineSelectionLike) => {
+        const nextConfigOverrides = normalizeConfigOverrides(selection.configOverrides);
+        const normalizedSelection: EngineSelection = {
+            ...selection,
+            configOverrides: nextConfigOverrides,
+        };
         pendingAppliedSelectionRef.current = {
             targetKey: entry.targetKey,
-            selection,
+            selection: normalizedSelection,
         };
         params.setBackendTarget(entry.target);
         params.setModelMode(selection.modelId as ModelMode);

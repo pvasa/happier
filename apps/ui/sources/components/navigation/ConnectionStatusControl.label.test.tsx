@@ -123,7 +123,7 @@ vi.mock('@/sync/domains/server/url/serverUrlDisplay', () => ({
 }));
 
 vi.mock('@/components/navigation/connection/useConnectionTargetActions', () => ({
-    useConnectionTargetActions: () => ({}),
+    useConnectionTargetActions: () => [],
 }));
 
 vi.mock('@/components/navigation/connection/ConnectionTargetList', () => ({

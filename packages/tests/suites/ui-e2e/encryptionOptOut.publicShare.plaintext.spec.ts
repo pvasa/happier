@@ -1,6 +1,7 @@
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
@@ -129,8 +130,7 @@ test.describe('ui e2e: plaintext mode + public share', () => {
     try {
       await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
       await waitForInitialAppUi({ page, timeoutMs: 120_000 });
-      await page.getByTestId('welcome-create-account').click();
-      await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+      await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       cliLogin = await startCliAuthLoginForTerminalConnect({
         testDir,

@@ -2,9 +2,8 @@ import type { Page } from '@playwright/test';
 
 import {
   accountSettingsScopeKeySuffix,
-  type AccountSettingsScope,
-} from '../../../../../apps/ui/sources/sync/domains/settings/scope/accountSettingsScope';
-
+  type UiE2eAccountSettingsScope,
+} from './accountSettingsScopeKeySuffix';
 import { gotoDomContentLoadedWithRetries } from './pageNavigation';
 
 type PersistedSettingsEnvelope = {
@@ -18,7 +17,7 @@ export async function setUiFeatureToggle(params: Readonly<{
   baseUrl: string;
   featureId: string;
   enabled: boolean;
-  settingsScope?: AccountSettingsScope;
+  settingsScope?: UiE2eAccountSettingsScope;
 }>): Promise<void> {
   const scopedSettingsSuffix = params.settingsScope ? accountSettingsScopeKeySuffix(params.settingsScope) : null;
 

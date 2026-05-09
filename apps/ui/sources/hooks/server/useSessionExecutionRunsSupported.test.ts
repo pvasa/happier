@@ -31,6 +31,15 @@ vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
   sessionExecutionRunList: (...args: unknown[]) => listRunsSpy(...args),
 }));
 
+function expectHistoricalRunsProbeCall(sessionId: string): void {
+  expect(listRunsSpy).toHaveBeenCalledTimes(1);
+  const [calledSessionId, calledRequest, calledScope] = listRunsSpy.mock.calls[0] ?? [];
+  expect(calledSessionId).toBe(sessionId);
+  expect(calledRequest).toEqual({});
+  expect(calledScope).toEqual(expect.any(Object));
+  expect(calledScope).toHaveProperty('serverId');
+}
+
 async function renderHarness(sessionId = 'session-1'): Promise<{
   getValue: () => boolean;
   rerenderSync: (nextSessionId: string) => void;
@@ -102,7 +111,7 @@ describe('useSessionExecutionRunsSupported', () => {
 
     const harness = await renderHarness('session-historical');
 
-    expect(listRunsSpy).toHaveBeenCalledWith('session-historical', {});
+    expectHistoricalRunsProbeCall('session-historical');
     expect(harness.getValue()).toBe(true);
     harness.unmount();
   });
@@ -112,7 +121,7 @@ describe('useSessionExecutionRunsSupported', () => {
 
     const harness = await renderHarness('session-empty');
 
-    expect(listRunsSpy).toHaveBeenCalledWith('session-empty', {});
+    expectHistoricalRunsProbeCall('session-empty');
     expect(harness.getValue()).toBe(false);
     harness.unmount();
   });
@@ -141,7 +150,7 @@ describe('useSessionExecutionRunsSupported', () => {
 
     const harness = await renderHarness('session-with-runs');
 
-    expect(listRunsSpy).toHaveBeenCalledWith('session-with-runs', {});
+    expectHistoricalRunsProbeCall('session-with-runs');
     expect(harness.getValue()).toBe(true);
 
     harness.rerenderSync('session-without-runs');

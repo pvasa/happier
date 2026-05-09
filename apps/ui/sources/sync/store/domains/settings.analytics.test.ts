@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
-
 const mocks = vi.hoisted(() => ({
     saveLocalSettings: vi.fn(),
     savePurchases: vi.fn(),
@@ -11,60 +9,65 @@ const mocks = vi.hoisted(() => ({
     },
 }));
 
-vi.mock('@/sync/domains/state/persistence', () => ({
-    loadSettings: () => ({
-        settings: {
-            analyticsOptOut: false,
-            crashReportsOptOut: false,
-            experiments: true,
-            sessionListDensity: 'comfortable',
-        },
-        version: 1,
-    }),
-    loadLocalSettings: () => ({ ...localSettingsDefaults }),
-    loadPurchases: () => ({}),
-    loadProfile: () => ({
-        id: '',
-        timestamp: 0,
-        firstName: null,
-        lastName: null,
-        username: null,
-        avatar: null,
-        linkedProviders: [],
-        connectedServices: [],
-        connectedServicesV2: [],
-    }),
-    saveLocalSettings: mocks.saveLocalSettings,
-    savePurchases: mocks.savePurchases,
-    saveSettings: mocks.saveSettings,
-    saveProfile: vi.fn(),
-    loadSessionDrafts: () => ({}),
-    loadSessionLastViewed: () => ({}),
-    loadSessionModelModeUpdatedAts: () => ({}),
-    loadSessionModelModes: () => ({}),
-    loadSessionPermissionModeUpdatedAts: () => ({}),
-    loadSessionPermissionModes: () => ({}),
-    loadSessionActionDrafts: () => ({}),
-    loadSessionReviewCommentsDrafts: () => ({}),
-    loadPendingSettings: () => ({}),
-    loadSessionMaterializedMaxSeqById: () => ({}),
-    loadChangesCursor: () => null,
-    pruneStaleInstanceChangesCursors: vi.fn(() => 0),
-    saveSessionDrafts: vi.fn(),
-    saveSessionLastViewed: vi.fn(),
-    saveSessionModelModeUpdatedAts: vi.fn(),
-    saveSessionModelModes: vi.fn(),
-    saveSessionPermissionModeUpdatedAts: vi.fn(),
-    saveSessionPermissionModes: vi.fn(),
-    saveSessionActionDrafts: vi.fn(),
-    saveSessionReviewCommentsDrafts: vi.fn(),
-    savePendingSettings: vi.fn(),
-    saveSessionMaterializedMaxSeqById: vi.fn(),
-    saveChangesCursor: vi.fn(),
-}));
+vi.mock('@/sync/domains/state/persistence', async (importOriginal) => {
+    const { installPersistenceModuleMock } = await import('@/dev/testkit');
+    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    const { purchasesDefaults } = await import('@/sync/domains/purchases/purchases');
+    return installPersistenceModuleMock({
+        loadSettings: () => ({
+            settings: {
+                analyticsOptOut: false,
+                crashReportsOptOut: false,
+                experiments: true,
+                sessionListDensity: 'comfortable',
+            },
+            version: 1,
+        }),
+        loadLocalSettings: () => ({ ...localSettingsDefaults }),
+        loadPurchases: () => ({ ...purchasesDefaults }),
+        loadProfile: () => ({
+            id: '',
+            timestamp: 0,
+            firstName: null,
+            lastName: null,
+            username: null,
+            avatar: null,
+            linkedProviders: [],
+            connectedServices: [],
+            connectedServicesV2: [],
+        }),
+        saveLocalSettings: mocks.saveLocalSettings,
+        savePurchases: mocks.savePurchases,
+        saveSettings: mocks.saveSettings,
+        saveProfile: vi.fn(),
+        loadSessionDrafts: () => ({}),
+        loadSessionLastViewed: () => ({}),
+        loadSessionModelModeUpdatedAts: () => ({}),
+        loadSessionModelModes: () => ({}),
+        loadSessionPermissionModeUpdatedAts: () => ({}),
+        loadSessionPermissionModes: () => ({}),
+        loadSessionActionDrafts: () => ({}),
+        loadSessionReviewCommentsDrafts: () => ({}),
+        loadPendingSettings: () => ({}),
+        loadSessionMaterializedMaxSeqById: () => ({}),
+        loadChangesCursor: () => null,
+        pruneStaleInstanceChangesCursors: vi.fn(() => 0),
+        saveSessionDrafts: vi.fn(),
+        saveSessionLastViewed: vi.fn(),
+        saveSessionModelModeUpdatedAts: vi.fn(),
+        saveSessionModelModes: vi.fn(),
+        saveSessionPermissionModeUpdatedAts: vi.fn(),
+        saveSessionPermissionModes: vi.fn(),
+        saveSessionActionDrafts: vi.fn(),
+        saveSessionReviewCommentsDrafts: vi.fn(),
+        savePendingSettings: vi.fn(),
+        saveSessionMaterializedMaxSeqById: vi.fn(),
+        saveChangesCursor: vi.fn(),
+    })(importOriginal);
+});
 
 vi.mock('@/sync/domains/settings/settings', async (importOriginal) => {
-    const actual = await importOriginal<any>();
+    const actual = await importOriginal<typeof import('@/sync/domains/settings/settings')>();
     return {
         ...actual,
         applySettings: (settings: Record<string, unknown>, delta: Record<string, unknown>) => ({

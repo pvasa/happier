@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,16 @@ const iosProjectRoot = join(process.cwd(), 'ios');
 
 function readJson(path: string): unknown {
     return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function findIosProjectFiles(): string[] {
+    if (!existsSync(iosProjectRoot)) {
+        return [];
+    }
+    return readdirSync(iosProjectRoot)
+        .filter((entry) => entry.endsWith('.xcodeproj'))
+        .map((entry) => join(iosProjectRoot, entry, 'project.pbxproj'))
+        .filter((path) => existsSync(path));
 }
 
 describe('happier hardware keyboard shortcuts local Expo module config', () => {
@@ -45,9 +55,12 @@ describe('happier hardware keyboard shortcuts local Expo module config', () => {
 
     it('does not keep the legacy app-target RCTKeyCommands bridge registered alongside the Expo module', () => {
         const legacyModulePath = join(iosProjectRoot, 'Happierinternaldev/HappierHardwareKeyboardShortcuts.m');
-        const projectFile = readFileSync(join(iosProjectRoot, 'Happierinternaldev.xcodeproj/project.pbxproj'), 'utf8');
 
         expect(existsSync(legacyModulePath)).toBe(false);
-        expect(projectFile).not.toContain('HappierHardwareKeyboardShortcuts.m');
+
+        for (const projectPath of findIosProjectFiles()) {
+            const projectFile = readFileSync(projectPath, 'utf8');
+            expect(projectFile).not.toContain('HappierHardwareKeyboardShortcuts.m');
+        }
     });
 });

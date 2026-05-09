@@ -1,41 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 
-const persistedPermissionModes = vi.hoisted(() => new Map<string, string>());
+const persistedPermissionModes = vi.hoisted(() => new Map<string, PermissionMode>());
 const persistedPermissionModeUpdatedAts = vi.hoisted(() => new Map<string, number>());
 
 vi.mock('../../domains/state/persistence', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../domains/state/persistence')>();
-    return {
-        ...actual,
-        loadSessionDrafts: () => ({}),
-        loadSessionLastViewed: () => ({}),
-        loadSessionModelModeUpdatedAts: () => ({}),
-        loadSessionModelModes: () => ({}),
-        loadSessionPermissionModeUpdatedAts: () => Object.fromEntries(persistedPermissionModeUpdatedAts.entries()),
-        loadSessionPermissionModes: () => Object.fromEntries(persistedPermissionModes.entries()),
-        loadSessionActionDrafts: () => ({}),
-        loadSessionReviewCommentsDrafts: () => ({}),
-        loadWorkspaceReviewCommentsDrafts: () => ({}),
-        saveSessionDrafts: () => {},
-        saveSessionLastViewed: () => {},
-        saveSessionModelModeUpdatedAts: () => {},
-        saveSessionModelModes: () => {},
-        saveSessionPermissionModeUpdatedAts: (updatedAts: Record<string, number>) => {
-            persistedPermissionModeUpdatedAts.clear();
-            for (const [k, v] of Object.entries(updatedAts)) {
-                if (typeof v === 'number') persistedPermissionModeUpdatedAts.set(k, v);
-            }
+    const { createPersistenceModuleMock } = await import('@/dev/testkit/mocks/persistence');
+    return createPersistenceModuleMock({
+        importOriginal,
+        overrides: {
+            loadSessionDrafts: () => ({}),
+            loadSessionLastViewed: () => ({}),
+            loadSessionModelModeUpdatedAts: () => ({}),
+            loadSessionModelModes: () => ({}),
+            loadSessionPermissionModeUpdatedAts: () => Object.fromEntries(persistedPermissionModeUpdatedAts.entries()),
+            loadSessionPermissionModes: () => Object.fromEntries(persistedPermissionModes.entries()),
+            loadSessionActionDrafts: () => ({}),
+            loadSessionReviewCommentsDrafts: () => ({}),
+            loadWorkspaceReviewCommentsDrafts: () => ({}),
+            saveSessionDrafts: () => {},
+            saveSessionLastViewed: () => {},
+            saveSessionModelModeUpdatedAts: () => {},
+            saveSessionModelModes: () => {},
+            saveSessionPermissionModeUpdatedAts: (updatedAts: Record<string, number>) => {
+                persistedPermissionModeUpdatedAts.clear();
+                for (const [k, v] of Object.entries(updatedAts)) {
+                    if (typeof v === 'number') persistedPermissionModeUpdatedAts.set(k, v);
+                }
+            },
+            saveSessionPermissionModes: (modes: Record<string, PermissionMode>) => {
+                persistedPermissionModes.clear();
+                for (const [k, v] of Object.entries(modes)) {
+                    if (typeof v === 'string') persistedPermissionModes.set(k, v);
+                }
+            },
+            saveSessionActionDrafts: () => {},
+            saveSessionReviewCommentsDrafts: () => {},
+            saveWorkspaceReviewCommentsDrafts: () => {},
         },
-        saveSessionPermissionModes: (modes: Record<string, string>) => {
-            persistedPermissionModes.clear();
-            for (const [k, v] of Object.entries(modes)) {
-                if (typeof v === 'string') persistedPermissionModes.set(k, v);
-            }
-        },
-        saveSessionActionDrafts: () => {},
-        saveSessionReviewCommentsDrafts: () => {},
-        saveWorkspaceReviewCommentsDrafts: () => {},
-    };
+    });
 });
 
 vi.mock('../../domains/state/warmCachePersistence', () => ({

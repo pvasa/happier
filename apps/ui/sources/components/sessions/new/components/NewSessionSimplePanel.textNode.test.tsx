@@ -212,9 +212,13 @@ vi.mock('@/sync/domains/state/storageStore', () => ({
     getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
-}));
+vi.mock('@/sync/store/hooks', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/store/hooks')>();
+    return {
+        ...actual,
+        useLocalSetting: () => 1,
+    };
+});
 
 vi.mock('@/agents/catalog/catalog', () => ({
     AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],

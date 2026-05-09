@@ -80,11 +80,13 @@ export function createStorageModuleStub<TOverrides extends object>(overrides: TO
         useAllSessionsForAttention: () => allAttentionSessions,
         useAllSessionListRenderablesForAttention: () => allAttentionSessionListRenderables,
         useMachine: () => null,
+        useIsDataReady: () => true,
         useSocketStatus: () => socketStatus,
         useEndpointConnectivity: () => endpointConnectivity,
         useSyncError: () => null,
         useArtifacts: () => [],
         useWorkspaceReviewCommentsDrafts: () => [],
+        useProjectForSession: () => null,
         useMachineListByServerId: () => ({}),
         useMachineListStatusByServerId: () => ({}),
     } satisfies Partial<StorageModule>;
@@ -145,7 +147,22 @@ export function installPartialStorageModuleMock(overrides: object) {
 }
 
 export function createStorageStoreMock(state: Partial<StorageState>): UseBoundStore<StoreApi<StorageState>> {
-    const snapshot = state as StorageState;
+    const snapshot = {
+        sessions: {},
+        sessionListRenderables: {},
+        sessionMessages: {},
+        machines: {},
+        machineDisplayById: {},
+        machineListByServerId: {},
+        machineListStatusByServerId: {},
+        artifacts: {},
+        automations: {},
+        friends: {},
+        users: {},
+        accountPetsById: {},
+        localPetSourcesBySourceKey: {},
+        ...state,
+    } as StorageState;
 
     return Object.assign(
         ((selector?: (value: StorageState) => unknown) =>

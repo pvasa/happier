@@ -25,9 +25,16 @@ vi.mock('@/components/ui/code/diff/useInlineDiffVirtualizationThresholds', () =>
     useInlineDiffVirtualizationThresholds: () => ({ lineThreshold: 50_000, byteThreshold: 120_000 }),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
-}));
+vi.mock('@/constants/Typography', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/constants/Typography')>();
+    return {
+        ...actual,
+        Typography: {
+            ...actual.Typography,
+            default: () => ({}),
+        },
+    };
+});
 
 describe('FileContentPanel (web read-only diff)', () => {
     const theme = { colors: { textSecondary: '#999' } };

@@ -63,6 +63,10 @@ vi.mock('@/sync/store/hooks', () => ({
         serverSelectionActiveTargetKind: 'server',
         serverSelectionActiveTargetId: mockState.serverId,
     }),
+    useActiveServerAccountScope: () => ({
+        serverId: mockState.serverId,
+        accountId: 'account-1',
+    }),
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
@@ -86,12 +90,11 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
 }));
 
 vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState', () => ({
-    useNewSessionServerTargetState: ({ request }: { request: { spawnServerIdParam?: string | null } }) => ({
-        targetServerId: typeof request?.spawnServerIdParam === 'string'
-            ? request.spawnServerIdParam
-            : mockState.resolvedTargetServerId === undefined
+    useNewSessionServerTargetState: ({ request }: { request?: { spawnServerIdParam?: string | null } }) => ({
+        targetServerId: request?.spawnServerIdParam
+            ?? (mockState.resolvedTargetServerId === undefined
                 ? mockState.serverId
-                : mockState.resolvedTargetServerId,
+                : mockState.resolvedTargetServerId),
     }),
 }));
 
@@ -104,7 +107,7 @@ vi.mock('expo-router', async () => {
 });
 
 vi.mock('@/sync/domains/state/persistence', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/state/persistence')>();
+    const actual = await importOriginal() as typeof import('@/sync/domains/state/persistence');
     return {
         ...actual,
         loadNewSessionDraft: () => {
@@ -142,8 +145,13 @@ vi.mock('@/components/sessions/new/components/NewSessionWizard', () => ({
     NewSessionWizard: 'NewSessionWizard',
 }));
 
+vi.mock('@/components/sessions/new/navigation/newSessionContainedModalScreen', () => ({
+    NewSessionScreenPortalScope: ({ children }: { children: React.ReactNode }) =>
+        React.createElement(React.Fragment, null, children),
+}));
+
 vi.mock('@/components/ui/popover', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/components/ui/popover')>();
+    const actual = await importOriginal() as typeof import('@/components/ui/popover');
     return {
         ...actual,
         PopoverBoundaryProvider: ({ children }: any) => React.createElement(React.Fragment, null, children),

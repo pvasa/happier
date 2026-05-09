@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { purchasesDefaults } from '@/sync/domains/purchases/purchases';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
 import type { UseMachineEnvPresenceResult } from '@/hooks/machine/useMachineEnvPresence';
 import { renderScreen } from '@/dev/testkit';
 import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
@@ -90,47 +93,51 @@ async function setupHarness(options?: Readonly<{
       getState: () => storageState,
     },
   }));
-  vi.doMock('@/sync/domains/state/persistence', () => ({
-    clearNewSessionDraft: vi.fn(),
-    loadSettings: () => ({ settings: {}, version: null }),
-    loadDeviceAnalyticsId: () => null,
-    saveDeviceAnalyticsId: vi.fn(),
-    saveSettings: vi.fn(),
-    loadPendingSettings: () => ({}),
-    savePendingSettings: vi.fn(),
-    loadLocalSettings: () => ({}),
-    saveLocalSettings: vi.fn(),
-    loadThemePreference: () => 'adaptive',
-    loadPurchases: () => ({}),
-    savePurchases: vi.fn(),
-    loadSessionDrafts: () => ({}),
-    saveSessionDrafts: vi.fn(),
-    loadSessionReviewCommentsDrafts: () => ({}),
-    saveSessionReviewCommentsDrafts: vi.fn(),
-    loadSessionActionDrafts: () => ({}),
-    saveSessionActionDrafts: vi.fn(),
-    loadNewSessionDraft: () => null,
-    saveNewSessionDraft: vi.fn(),
-    loadSessionPermissionModes: () => ({}),
-    saveSessionPermissionModes: vi.fn(),
-    loadSessionPermissionModeUpdatedAts: () => ({}),
-    saveSessionPermissionModeUpdatedAts: vi.fn(),
-    loadSessionLastViewed: () => ({}),
-    saveSessionLastViewed: vi.fn(),
-    loadSessionModelModes: () => ({}),
-    saveSessionModelModes: vi.fn(),
-    loadSessionModelModeUpdatedAts: () => ({}),
-    saveSessionModelModeUpdatedAts: vi.fn(),
-    loadSessionMaterializedMaxSeqById: () => ({}),
-    saveSessionMaterializedMaxSeqById: vi.fn(),
-    loadChangesCursor: () => null,
-    saveChangesCursor: vi.fn(),
-    loadLastChangesCursorByAccountId: () => ({}),
-    saveLastChangesCursorByAccountId: vi.fn(),
-    loadProfile: () => ({}),
-    saveProfile: vi.fn(),
-    clearPersistence: vi.fn(),
-  }));
+  vi.doMock('@/sync/domains/state/persistence', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/persistence')).createPersistenceModuleMock({
+      importOriginal,
+      overrides: {
+        clearNewSessionDraft: vi.fn(),
+        loadSettings: () => ({ settings: {}, version: null }),
+        loadDeviceAnalyticsId: () => null,
+        saveDeviceAnalyticsId: vi.fn(),
+        saveSettings: vi.fn(),
+        loadPendingSettings: () => ({}),
+        savePendingSettings: vi.fn(),
+        loadLocalSettings: () => ({ ...localSettingsDefaults }),
+        saveLocalSettings: vi.fn(),
+        loadThemePreference: () => 'adaptive',
+        loadPurchases: () => ({ ...purchasesDefaults }),
+        savePurchases: vi.fn(),
+        loadSessionDrafts: () => ({}),
+        saveSessionDrafts: vi.fn(),
+        loadSessionReviewCommentsDrafts: () => ({}),
+        saveSessionReviewCommentsDrafts: vi.fn(),
+        loadSessionActionDrafts: () => ({}),
+        saveSessionActionDrafts: vi.fn(),
+        loadNewSessionDraft: () => null,
+        saveNewSessionDraft: vi.fn(),
+        loadSessionPermissionModes: () => ({}),
+        saveSessionPermissionModes: vi.fn(),
+        loadSessionPermissionModeUpdatedAts: () => ({}),
+        saveSessionPermissionModeUpdatedAts: vi.fn(),
+        loadSessionLastViewed: () => ({}),
+        saveSessionLastViewed: vi.fn(),
+        loadSessionModelModes: () => ({}),
+        saveSessionModelModes: vi.fn(),
+        loadSessionModelModeUpdatedAts: () => ({}),
+        saveSessionModelModeUpdatedAts: vi.fn(),
+        loadSessionMaterializedMaxSeqById: () => ({}),
+        saveSessionMaterializedMaxSeqById: vi.fn(),
+        loadChangesCursor: () => null,
+        saveChangesCursor: vi.fn(),
+        loadLastChangesCursorByAccountId: () => ({}),
+        saveLastChangesCursorByAccountId: vi.fn(),
+        loadProfile: () => ({ ...profileDefaults }),
+        saveProfile: vi.fn(),
+        clearPersistence: vi.fn(),
+      },
+    }));
   vi.doMock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: vi.fn(() => ({
       serverId: 'server-a',

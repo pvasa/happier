@@ -19,9 +19,21 @@ vi.mock('@/sync/domains/state/storage', async () => {
     });
 });
 
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+
 vi.mock('@/components/sessions/linkedFiles/projectPicker/LinkFilePickerPopoverContent', () => ({
     LinkFilePickerPopoverContent: (props: Record<string, unknown>) => React.createElement('LinkFilePickerPopoverContent', props),
 }));
+
+const sessionAgentInputTheme = {
+    colors: {
+        success: '#0f0',
+        textDestructive: '#f00',
+    },
+} as const;
 
 describe('useNewSessionAgentInputPresentation', () => {
     it('exposes automation controls via an action chip (no inline automation section)', async () => {
@@ -43,12 +55,7 @@ describe('useNewSessionAgentInputPresentation', () => {
         } as unknown as Router;
 
         const hook = await renderHook(() => useNewSessionAgentInputPresentation({
-            theme: {
-                colors: {
-                    success: '#0f0',
-                    textDestructive: '#f00',
-                },
-            },
+            theme: sessionAgentInputTheme,
             selectedMachine: null,
             automationFeatureEnabled: true,
             automationDraft: {
@@ -144,12 +151,7 @@ describe('useNewSessionAgentInputPresentation', () => {
         } as unknown as Router;
 
         const hook = await renderHook(() => useNewSessionAgentInputPresentation({
-            theme: {
-                colors: {
-                    success: '#0f0',
-                    textDestructive: '#f00',
-                },
-            },
+            theme: sessionAgentInputTheme,
             selectedMachine: null,
             automationFeatureEnabled: true,
             automationDraft: {

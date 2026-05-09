@@ -9,6 +9,7 @@ type InstallServerRouteCommonModuleMocksOptions = Readonly<{
     unistyles?: ServerRouteModuleFactory;
     text?: ServerRouteModuleFactory;
     modal?: ServerRouteModuleFactory;
+    settingsWriters?: ServerRouteModuleFactory;
 }>;
 
 const serverRouteModuleState = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const serverRouteModuleState = vi.hoisted(() => ({
         unistyles: undefined as ServerRouteModuleFactory | undefined,
         text: undefined as ServerRouteModuleFactory | undefined,
         modal: undefined as ServerRouteModuleFactory | undefined,
+        settingsWriters: undefined as ServerRouteModuleFactory | undefined,
     },
 }));
 
@@ -30,6 +32,7 @@ export function installServerRouteCommonModuleMocks(
         unistyles: options.unistyles,
         text: options.text,
         modal: options.modal,
+        settingsWriters: options.settingsWriters,
     };
 
     vi.mock('react-native-reanimated', () => ({}));
@@ -103,6 +106,19 @@ export function installServerRouteCommonModuleMocks(
 
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock().module;
+    });
+
+    vi.mock('@/sync/store/settingsWriters', async () => {
+        const activeOptions = serverRouteModuleState.options;
+        if (activeOptions.settingsWriters) {
+            return await activeOptions.settingsWriters();
+        }
+
+        const noop = () => undefined;
+        return {
+            useApplySettings: () => noop,
+            useApplyLocalSettings: () => noop,
+        };
     });
 
     vi.mock('@/components/ui/lists/ItemList', () => ({

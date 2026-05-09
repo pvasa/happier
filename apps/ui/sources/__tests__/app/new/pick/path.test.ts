@@ -105,12 +105,6 @@ installPickerCommonModuleMocks({
         }),
 });
 
-vi.mock('@react-navigation/native', () => ({
-    CommonActions: {
-        setParams: (params: Record<string, unknown>) => ({ type: 'SET_PARAMS', payload: { params } }),
-    },
-}));
-
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 vi.mock('@/components/ui/lists/ItemList', () => ({

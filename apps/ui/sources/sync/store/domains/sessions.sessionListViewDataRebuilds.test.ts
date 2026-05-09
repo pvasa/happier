@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { installPersistenceModuleMock } from '@/dev/testkit';
+import { purchasesDefaults } from '@/sync/domains/purchases/purchases';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { buildSessionListRenderableFromSession } from '../../domains/session/listing/sessionListRenderable';
 
 const storageStateRef = vi.hoisted(() => ({
@@ -13,8 +17,8 @@ beforeEach(() => {
 });
 
 function mockSessionPersistenceBoundaries(): void {
-    vi.doMock('../../domains/state/persistence', () => ({
-        loadProfile: vi.fn(() => ({ id: 'account_a' })),
+    vi.doMock('../../domains/state/persistence', installPersistenceModuleMock({
+        loadProfile: vi.fn(() => ({ ...profileDefaults, id: 'account_a' })),
         saveProfile: vi.fn(),
         loadSessionDrafts: vi.fn(() => ({})),
         loadSessionLastViewed: vi.fn(() => ({})),
@@ -33,8 +37,8 @@ function mockSessionPersistenceBoundaries(): void {
             },
             version: null,
         })),
-        loadLocalSettings: vi.fn(() => ({})),
-        loadPurchases: vi.fn(() => ({})),
+        loadLocalSettings: vi.fn(() => ({ ...localSettingsDefaults })),
+        loadPurchases: vi.fn(() => ({ ...purchasesDefaults })),
         saveSessionModelModeUpdatedAts: vi.fn(),
         saveSessionModelModes: vi.fn(),
         saveSessionPermissionModeUpdatedAts: vi.fn(),

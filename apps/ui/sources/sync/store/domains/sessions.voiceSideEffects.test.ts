@@ -11,39 +11,45 @@ afterEach(() => {
 });
 
 function mockSessionsDomainBoundaries(): void {
-    vi.doMock('../../domains/state/persistence', () => ({
-        loadSettings: () => ({
-            settings: { groupInactiveSessionsByProject: false },
-            version: null,
-        }),
-        loadLocalSettings: () => ({}),
-        loadPendingSettings: () => ({}),
-        loadPurchases: () => ({}),
-        loadProfile: () => ({ id: 'account_a' }),
-        loadSessionDrafts: () => ({}),
-        loadSessionLastViewed: () => ({}),
-        loadSessionModelModeUpdatedAts: () => ({}),
-        loadSessionModelModes: () => ({}),
-        loadSessionPermissionModeUpdatedAts: () => ({}),
-        loadSessionPermissionModes: () => ({}),
-        loadSessionActionDrafts: () => ({}),
-        loadSessionReviewCommentsDrafts: () => ({}),
-        loadWorkspaceReviewCommentsDrafts: () => ({}),
-        saveSessionDrafts: vi.fn(),
-        saveSessionLastViewed: vi.fn(),
-        saveSessionModelModeUpdatedAts: vi.fn(),
-        saveSessionModelModes: vi.fn(),
-        saveSessionPermissionModeUpdatedAts: vi.fn(),
-        saveSessionPermissionModes: vi.fn(),
-        saveSessionActionDrafts: vi.fn(),
-        saveSessionReviewCommentsDrafts: vi.fn(),
-        saveWorkspaceReviewCommentsDrafts: vi.fn(),
-        saveSettings: vi.fn(),
-        saveLocalSettings: vi.fn(),
-        savePendingSettings: vi.fn(),
-        savePurchases: vi.fn(),
-        saveProfile: vi.fn(),
-    }));
+    vi.doMock('../../domains/state/persistence', async (importOriginal) => {
+        const { installPersistenceModuleMock } = await import('@/dev/testkit');
+        const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+        const { purchasesDefaults } = await import('@/sync/domains/purchases/purchases');
+        const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+        return installPersistenceModuleMock({
+            loadSettings: () => ({
+                settings: { groupInactiveSessionsByProject: false },
+                version: null,
+            }),
+            loadLocalSettings: () => ({ ...localSettingsDefaults }),
+            loadPendingSettings: () => ({}),
+            loadPurchases: () => ({ ...purchasesDefaults }),
+            loadProfile: () => ({ ...profileDefaults, id: 'account_a' }),
+            loadSessionDrafts: () => ({}),
+            loadSessionLastViewed: () => ({}),
+            loadSessionModelModeUpdatedAts: () => ({}),
+            loadSessionModelModes: () => ({}),
+            loadSessionPermissionModeUpdatedAts: () => ({}),
+            loadSessionPermissionModes: () => ({}),
+            loadSessionActionDrafts: () => ({}),
+            loadSessionReviewCommentsDrafts: () => ({}),
+            loadWorkspaceReviewCommentsDrafts: () => ({}),
+            saveSessionDrafts: vi.fn(),
+            saveSessionLastViewed: vi.fn(),
+            saveSessionModelModeUpdatedAts: vi.fn(),
+            saveSessionModelModes: vi.fn(),
+            saveSessionPermissionModeUpdatedAts: vi.fn(),
+            saveSessionPermissionModes: vi.fn(),
+            saveSessionActionDrafts: vi.fn(),
+            saveSessionReviewCommentsDrafts: vi.fn(),
+            saveWorkspaceReviewCommentsDrafts: vi.fn(),
+            saveSettings: vi.fn(),
+            saveLocalSettings: vi.fn(),
+            savePendingSettings: vi.fn(),
+            savePurchases: vi.fn(),
+            saveProfile: vi.fn(),
+        })(importOriginal);
+    });
     vi.doMock('../../domains/state/warmCachePersistence', () => ({
         resolveWarmCacheAccountScope: vi.fn(() => null),
         saveSessionListWarmCacheEntries: vi.fn(),
@@ -80,7 +86,7 @@ function mockSessionsDomainBoundaries(): void {
                 subscribe: () => () => undefined,
                 destroy: () => undefined,
             },
-        } as any);
+        });
     });
     vi.doMock('@/sync/sync', () => ({
         sync: {

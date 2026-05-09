@@ -53,6 +53,11 @@ vi.mock('@/utils/platform/tauri', () => ({
 
 const apiSocketDisconnect = vi.hoisted(() => vi.fn());
 const apiSocketConnect = vi.hoisted(() => vi.fn());
+const checkpointScope = createAccountSettingsScope('server-a', 'account-a');
+
+if (!checkpointScope) {
+    throw new Error('Expected valid checkpoint scope test fixture');
+}
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
