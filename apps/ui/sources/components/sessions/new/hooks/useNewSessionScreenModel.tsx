@@ -261,6 +261,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const useMachinePickerSearch = useSetting('useMachinePickerSearch');
     const usePathPickerSearch = useSetting('usePathPickerSearch');
     const newSessionWizardSectionPresentation = useSetting('newSessionWizardSectionPresentationV1');
+    const newSessionWizardColumnsEnabled = useSetting('newSessionWizardColumnsEnabled');
     const [profiles, setProfiles] = useSettingMutable('profiles');
     const lastUsedProfile = useSetting('lastUsedProfile');
     const [favoriteDirectories, setFavoriteDirectories] = useSettingMutable('favoriteDirectories');
@@ -1444,6 +1445,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const {
         layout: wizardLayoutProps,
         sectionPresentation: wizardSectionPresentation,
+        useColumnLayout: wizardUseColumnLayout,
         profiles: wizardProfilesProps,
         agent: wizardAgentProps,
         machine: wizardMachineProps,
@@ -1459,6 +1461,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         newSessionBottomPadding,
         shouldBottomAnchor,
         sectionPresentation: newSessionWizardSectionPresentation,
+        useColumnLayout: newSessionWizardColumnsEnabled === true,
 
         useProfiles,
         profiles,
@@ -1657,6 +1660,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         setCheckoutCreationDraft,
         wizardLayoutProps,
         wizardSectionPresentation,
+        wizardUseColumnLayout,
         wizardProfilesProps,
         wizardAgentProps,
         wizardMachineProps,

@@ -617,6 +617,7 @@ export interface ScmWorkingSnapshot {
         rootPath: string | null;
         backendId?: 'git' | 'sapling' | null;
         mode?: '.git' | '.sl' | null;
+        defaultBranch?: string | null;
         worktrees?: Array<{
             path: string;
             branch: string | null;

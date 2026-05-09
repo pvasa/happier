@@ -20,6 +20,7 @@ describe('machines ops server-scoped routing', () => {
             directory: '/tmp',
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
             serverId: 'server-b',
+            accountSettingsVersionHint: 0,
         });
 
         expect(result).toEqual({ type: 'success', sessionId: 'sess-1' });

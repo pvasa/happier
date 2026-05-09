@@ -171,6 +171,7 @@ export interface NewSessionWizardProps {
     popoverBoundaryRef: React.RefObject<RNView>;
     layout: NewSessionWizardLayoutProps;
     sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
+    useColumnLayout?: boolean;
     profiles: NewSessionWizardProfilesProps;
     agent: NewSessionWizardAgentProps;
     machine: NewSessionWizardMachineProps;
@@ -223,7 +224,10 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
     const { width: windowWidth } = useWindowDimensions();
     const shouldBottomAnchor =
         shouldBottomAnchorOverride ?? (Platform.OS !== 'web' || isMobileLayoutWidth(windowWidth));
-    const useSelectionColumns = Platform.OS === 'web' && !isMobileLayoutWidth(windowWidth) && windowWidth >= 1100;
+    const useSelectionColumns = props.useColumnLayout === true
+        && Platform.OS === 'web'
+        && !isMobileLayoutWidth(windowWidth)
+        && windowWidth >= 1100;
 
     // Wizard-only scroll bookkeeping (keep it out of NewSessionScreen)
     const scrollViewRef = React.useRef<ScrollView>(null);

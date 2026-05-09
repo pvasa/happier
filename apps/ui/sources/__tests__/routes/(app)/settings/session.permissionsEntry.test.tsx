@@ -29,21 +29,18 @@ describe('Session settings (Permissions entry)', () => {
         expect(titles).not.toContain('settingsSession.defaultPermissions.applyPermissionChangesTitle');
     });
 
-    it('renders new-session modal mode in the new-session modal group', async () => {
+    it('renders wizard mode as a toggle in the new-session modal group', async () => {
         const mod = await import('@/app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
-        const modalModeDropdown = dropdowns.find((dropdown) =>
+        expect(screen.findAllByType('DropdownMenu' as any).some((dropdown) =>
             dropdown.props.itemTrigger?.title === 'settingsSession.sessionCreation.modalModeTitle'
-        );
-        expect(modalModeDropdown).toBeTruthy();
-        expect(modalModeDropdown?.props.selectedId).toBe('simple');
-        expect(modalModeDropdown?.props.itemTrigger.subtitle).toBe('settingsSession.sessionCreation.modalModeSimpleTitle');
+        )).toBe(false);
+        expect(screen.findRowByTitle('settingsSession.sessionCreation.wizardModeTitle')).toBeTruthy();
         expect(screen.findRowByTitle('settingsSession.sessionCreation.wizardDispositionTitle')).toBeNull();
 
-        modalModeDropdown?.props.onSelect?.('wizard');
+        screen.pressRowByTitle('settingsSession.sessionCreation.wizardModeTitle');
         expect(sessionSettingsEntryState.settingsState.useEnhancedSessionWizard).toBe(true);
     });
 

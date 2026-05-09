@@ -26,6 +26,7 @@ export function buildNewSessionScreenVariantModel(params: Readonly<{
     setCheckoutCreationDraft: React.Dispatch<React.SetStateAction<NewSessionCheckoutCreationDraft | null>>;
     wizardLayoutProps: NewSessionWizardLayoutProps;
     wizardSectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
+    wizardUseColumnLayout?: boolean;
     wizardProfilesProps: NewSessionWizardProfilesProps;
     wizardAgentProps: NewSessionWizardAgentProps;
     wizardMachineProps: NewSessionWizardMachineProps;
@@ -51,6 +52,7 @@ export function buildNewSessionScreenVariantModel(params: Readonly<{
         wizardProps: {
             layout: params.wizardLayoutProps,
             sectionPresentation: params.wizardSectionPresentation,
+            useColumnLayout: params.wizardUseColumnLayout,
             profiles: params.wizardProfilesProps,
             agent: params.wizardAgentProps,
             machine: params.wizardMachineProps,

@@ -17,6 +17,7 @@ describe('buildNewSessionScreenVariantModel', () => {
             setCheckoutCreationDraft: () => {},
             wizardLayoutProps: {},
             wizardSectionPresentation: sectionPresentation,
+            wizardUseColumnLayout: true,
             wizardProfilesProps: {},
             wizardAgentProps: {},
             wizardMachineProps: {},
@@ -26,5 +27,6 @@ describe('buildNewSessionScreenVariantModel', () => {
         expect(model.variant).toBe('wizard');
         if (model.variant !== 'wizard') return;
         expect(model.wizardProps.sectionPresentation).toBe(sectionPresentation);
+        expect(model.wizardProps.useColumnLayout).toBe(true);
     });
 });

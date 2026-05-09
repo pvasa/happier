@@ -29,6 +29,7 @@ import {
     measureMachineEncryptRawAttribution,
 } from '@/sync/encryption/machineEncryption';
 import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
+import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
 
 export type { SpawnHappySessionRpcParams, SpawnSessionOptions } from '../domains/session/spawn/spawnSessionPayload';
 export { buildSpawnHappySessionRpcParams } from '../domains/session/spawn/spawnSessionPayload';
@@ -78,18 +79,18 @@ function remapLegacyDirectoryCompatibilityError(params: Readonly<{
  * Spawn a new remote session on a specific machine
  */
 export async function machineSpawnNewSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
-    const accountSettingsPreparation = typeof options.accountSettingsVersionHint === 'number'
-        ? {}
-        : await prepareAccountSettingsForDaemonSpawnIfNeeded(options.accountSettingsVersionHint);
-    const preparedOptions = {
-        ...options,
-        ...accountSettingsPreparation,
-    };
-    const { machineId } = preparedOptions;
-    const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
-    const daemonCliVersion = readMachineDaemonCliVersion(machineId);
-
     try {
+        const accountSettingsPreparation = typeof options.accountSettingsVersionHint === 'number'
+            ? {}
+            : await prepareAccountSettingsForDaemonSpawnIfNeeded(options.accountSettingsVersionHint);
+        const preparedOptions = {
+            ...options,
+            ...accountSettingsPreparation,
+        };
+        const { machineId } = preparedOptions;
+        const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
+        const daemonCliVersion = readMachineDaemonCliVersion(machineId);
+
         if (
             shouldUseLegacySpawnHappySessionRpcParams(daemonCliVersion)
             && preparedOptions.backendTarget.kind !== 'builtInAgent'
@@ -121,6 +122,13 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
             daemonCliVersion,
         });
     } catch (error) {
+        if (isAccountSettingsScopeChangedDuringSpawnPreparationError(error)) {
+            return {
+                type: 'error',
+                errorCode: SPAWN_SESSION_ERROR_CODES.ACCOUNT_SCOPE_CHANGED,
+                errorMessage: 'Account changed while syncing settings. Please retry from the current account.',
+            };
+        }
         const rpcErrorCode = readRpcErrorCode(error);
         if (rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
             return {

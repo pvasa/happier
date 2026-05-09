@@ -1,3 +1,5 @@
+import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
+
 export type AccountSettingsDaemonSpawnPreparation = Readonly<{
     accountSettingsVersionHint?: number;
 }>;
@@ -26,5 +28,13 @@ export async function prepareAccountSettingsForDaemonSpawnIfNeeded(
 ): Promise<AccountSettingsDaemonSpawnPreparation> {
     if (hasValidAccountSettingsVersionHint(existingVersionHint)) return {};
     if (!prepareAccountSettingsForDaemonSpawn) return {};
-    return await prepareAccountSettingsForDaemonSpawn();
+    try {
+        return await prepareAccountSettingsForDaemonSpawn();
+    } catch (error) {
+        if (isAccountSettingsScopeChangedDuringSpawnPreparationError(error)) {
+            throw error;
+        }
+        console.warn('[SYNC] Failed to prepare account settings before daemon spawn; continuing without a settings version hint', error);
+        return {};
+    }
 }

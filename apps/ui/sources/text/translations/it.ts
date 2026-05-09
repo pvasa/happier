@@ -5750,6 +5750,11 @@ export const it: TranslationStructure = {
         `Caricamento ${fileName}...`,
         binaryFile: "File binario",
         imagePreviewTooLarge: "L'anteprima dell'immagine è troppo grande per essere visualizzata",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `Apri immagine generata ${name}`,
+          attachmentImageA11y: ({ name }: { name: string }) => `Apri immagine allegata ${name}`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `Apri immagine artefatto dello strumento ${name}`,
+        },
         cannotDisplayBinary: "Impossibile mostrare il contenuto del file binario",
         diff: "Differenze",
       file: "Documento",
@@ -6459,6 +6464,9 @@ settingsSession: {
         modalModeSimpleSubtitle: "Apre il modale compatto centrato sul compositore.",
         modalModeWizardTitle: "Procedura guidata",
         modalModeWizardSubtitle: "Apre la configurazione guidata con selettori separati.",
+        wizardModeTitle: "Modalita procedura guidata",
+        wizardModeEnabledSubtitle: "Apre la configurazione guidata con selettori separati.",
+        wizardModeDisabledSubtitle: "Usa il modale compatto centrato sul compositore.",
         rememberLastProjectSelectionsTitle: "Ricorda le ultime selezioni di sessione del progetto",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Le scorciatoie di progetto riutilizzano macchina, cartella, motore, modello e opzioni della sessione più recente.",
@@ -6468,6 +6476,11 @@ settingsSession: {
         wizardSettingsSubtitle: "Scegli se ogni selettore della procedura appare come lista o menu a discesa.",
         wizardDispositionTitle: "Disposizione della procedura",
         wizardDispositionSubtitle: "Scegli quali selettori della procedura appaiono come liste o menu a discesa.",
+        wizardLayoutTitle: "Layout della procedura",
+        wizardLayoutFooter: "Controlla come sono disposte le sezioni della procedura sugli schermi larghi.",
+        wizardColumnsTitle: "Layout a due colonne",
+        wizardColumnsEnabledSubtitle: "Affianca i selettori correlati sugli schermi larghi.",
+        wizardColumnsDisabledSubtitle: "Impila tutti i selettori della procedura in una colonna.",
         wizardPresentationTitle: "Layout dei selettori della procedura",
         wizardPresentationFooter:
           "Auto mantiene le sezioni brevi come liste e passa quelle lunghe a menu a discesa ricercabili.",

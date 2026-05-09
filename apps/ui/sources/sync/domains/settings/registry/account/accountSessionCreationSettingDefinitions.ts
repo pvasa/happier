@@ -132,6 +132,12 @@ export const ACCOUNT_SESSION_CREATION_SETTING_DEFINITIONS = defineSettingDefinit
         description: 'Per-section presentation mode for new-session wizard selectors',
         storageScope: 'account',
     },
+    newSessionWizardColumnsEnabled: {
+        schema: z.boolean(),
+        default: false,
+        description: 'Arrange new-session wizard selectors in columns on wide screens',
+        storageScope: 'account',
+    },
 });
 
 export const ACCOUNT_SESSION_CREATION_SETTING_ARTIFACTS = buildSettingArtifacts(ACCOUNT_SESSION_CREATION_SETTING_DEFINITIONS);

@@ -47,6 +47,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     newSessionBottomPadding: number;
     shouldBottomAnchor: boolean;
     sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
+    useColumnLayout?: boolean;
 
     // Profiles section
     useProfiles: boolean;
@@ -155,6 +156,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     machine: NewSessionWizardMachineProps;
     footer: NewSessionWizardFooterProps;
     sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
+    useColumnLayout?: boolean;
 }> {
     const wizardLayoutProps = React.useMemo((): NewSessionWizardLayoutProps => {
         return {
@@ -484,6 +486,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     return {
         layout: wizardLayoutProps,
         sectionPresentation: params.sectionPresentation,
+        useColumnLayout: params.useColumnLayout,
         profiles: wizardProfilesProps,
         agent: wizardAgentProps,
         machine: wizardMachineProps,

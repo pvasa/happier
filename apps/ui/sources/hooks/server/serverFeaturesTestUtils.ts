@@ -13,6 +13,7 @@ type FixtureOverrides = {
     connectedServicesEnabled?: boolean;
     connectedServicesQuotasEnabled?: boolean;
     updatesOtaEnabled?: boolean;
+    sessionMediaGeneratedEnabled?: boolean;
     petsCompanionEnabled?: boolean;
     petsSyncEnabled?: boolean;
     pairingDesktopQrMobileScanEnabled?: boolean;
@@ -62,6 +63,11 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
             },
             attachments: {
                 uploads: { enabled: true },
+            },
+            session: {
+                media: {
+                    generated: { enabled: overrides.sessionMediaGeneratedEnabled ?? false },
+                },
             },
             pets: {
                 companion: { enabled: overrides.petsCompanionEnabled ?? false },

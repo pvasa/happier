@@ -235,6 +235,9 @@ export const UI_FEATURE_REGISTRY = {
             icon: { ioniconName: 'attach-outline', color: '#007AFF' },
         },
     },
+    'session.media.generated': {
+        settingsToggle: undefined,
+    },
     'scm.writeOperations': {
         settingsToggle: {
             showInSettings: true,

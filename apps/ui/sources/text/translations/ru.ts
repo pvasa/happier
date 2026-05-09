@@ -5413,6 +5413,11 @@ export const ru: TranslationStructure = {
         `Загрузка ${fileName}...`,
         binaryFile: "Бинарный файл",
         imagePreviewTooLarge: "Предпросмотр изображения слишком большой для отображения",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `Открыть сгенерированное изображение ${name}`,
+          attachmentImageA11y: ({ name }: { name: string }) => `Открыть прикрепленное изображение ${name}`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `Открыть изображение артефакта инструмента ${name}`,
+        },
         cannotDisplayBinary: "Невозможно отобразить содержимое бинарного файла",
         diff: "Различия",
       file: "Файл",
@@ -6124,6 +6129,9 @@ settingsSession: {
         modalModeSimpleSubtitle: "Открывает компактное окно с фокусом на поле ввода.",
         modalModeWizardTitle: "Мастер",
         modalModeWizardSubtitle: "Открывает пошаговую настройку с отдельными селекторами.",
+        wizardModeTitle: "Режим мастера",
+        wizardModeEnabledSubtitle: "Открывает пошаговую настройку с отдельными селекторами.",
+        wizardModeDisabledSubtitle: "Использует компактное окно с фокусом на поле ввода.",
         rememberLastProjectSelectionsTitle: "Запоминать последние выборы сессии проекта",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Быстрые действия проекта повторно используют машину, папку, движок, модель и параметры самой новой сессии.",
@@ -6133,6 +6141,11 @@ settingsSession: {
         wizardSettingsSubtitle: "Выберите, показывать каждый селектор мастера списком или выпадающим меню.",
         wizardDispositionTitle: "Расположение мастера",
         wizardDispositionSubtitle: "Выберите, какие селекторы мастера показывать списками или выпадающими меню.",
+        wizardLayoutTitle: "Макет мастера",
+        wizardLayoutFooter: "Управляет расположением разделов мастера на широких экранах.",
+        wizardColumnsTitle: "Макет в две колонки",
+        wizardColumnsEnabledSubtitle: "Размещает связанные селекторы рядом на широких экранах.",
+        wizardColumnsDisabledSubtitle: "Размещает все селекторы мастера в одной колонке.",
         wizardPresentationTitle: "Макет селекторов мастера",
         wizardPresentationFooter:
           "Auto оставляет короткие разделы списками и переключает длинные разделы на выпадающие меню с поиском.",

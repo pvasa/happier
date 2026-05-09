@@ -76,7 +76,6 @@ export default React.memo(function SessionSettingsScreen() {
     const [openHistoryScopeMenu, setOpenHistoryScopeMenu] = React.useState<boolean>(false);
     const [openReplayMenu, setOpenReplayMenu] = React.useState<boolean>(false);
     const [openGroupingMenu, setOpenGroupingMenu] = React.useState<null | 'active' | 'inactive'>(null);
-    const [openNewSessionModalModeMenu, setOpenNewSessionModalModeMenu] = React.useState(false);
     const [openSessionListDensityMenu, setOpenSessionListDensityMenu] = React.useState(false);
     const [openMobileWorkspaceExperienceMenu, setOpenMobileWorkspaceExperienceMenu] = React.useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = React.useState(false);
@@ -89,23 +88,6 @@ export default React.memo(function SessionSettingsScreen() {
             : t('settingsSession.inputBehavior.enterToSendEnabledNativeSubtitle')
         : t('settingsFeatures.enterToSendDisabled');
     const rememberProjectSelectionsEnabled = rememberLastProjectSessionSelections !== false;
-    const newSessionModalMode = useEnhancedSessionWizard === true ? 'wizard' : 'simple';
-    const newSessionModalModeItems = React.useMemo(() => [
-        {
-            id: 'simple',
-            title: t('settingsSession.sessionCreation.modalModeSimpleTitle'),
-            subtitle: t('settingsSession.sessionCreation.modalModeSimpleSubtitle'),
-            icon: <Ionicons name="chatbox-outline" size={22} color={theme.colors.textSecondary} />,
-        },
-        {
-            id: 'wizard',
-            title: t('settingsSession.sessionCreation.modalModeWizardTitle'),
-            subtitle: t('settingsSession.sessionCreation.modalModeWizardSubtitle'),
-            icon: <Ionicons name="sparkles-outline" size={22} color={theme.colors.textSecondary} />,
-        },
-    ], [theme.colors.textSecondary]);
-    const selectedNewSessionModalModeItem = newSessionModalModeItems.find((item) => item.id === newSessionModalMode)
-        ?? newSessionModalModeItems[0];
     const normalizedCodingPromptBehavior = React.useMemo<CodingPromptBehaviorV1>(() => {
         const raw = codingPromptBehavior && typeof codingPromptBehavior === 'object' && !Array.isArray(codingPromptBehavior)
             ? codingPromptBehavior as Partial<CodingPromptBehaviorV1>
@@ -260,31 +242,23 @@ export default React.memo(function SessionSettingsScreen() {
     return (
         <ItemList ref={popoverBoundaryRef} style={{ paddingTop: 0 }}>
             <ItemGroup title={t('settingsSession.sessionCreation.title')} footer={t('settingsSession.sessionCreation.footer')}>
-                <DropdownMenu
-                    open={openNewSessionModalModeMenu}
-                    onOpenChange={setOpenNewSessionModalModeMenu}
-                    variant="selectable"
-                    search={false}
-                    selectedId={newSessionModalMode}
-                    showCategoryTitles={false}
-                    matchTriggerWidth={true}
-                    connectToTrigger={true}
-                    rowKind="item"
-                    popoverBoundaryRef={popoverBoundaryRef}
-                    itemTrigger={{
-                        title: t('settingsSession.sessionCreation.modalModeTitle'),
-                        subtitle: selectedNewSessionModalModeItem?.title,
-                        showSelectedDetail: false,
-                        showSelectedSubtitle: false,
-                        icon: <Ionicons name="albums-outline" size={29} color={theme.colors.accent.indigo} />,
-                        itemProps: { testID: 'settings-new-session-modal-mode' },
-                    }}
-                    items={newSessionModalModeItems}
-                    onSelect={(id) => {
-                        if (id !== 'simple' && id !== 'wizard') return;
-                        setUseEnhancedSessionWizard(id === 'wizard');
-                        setOpenNewSessionModalModeMenu(false);
-                    }}
+                <Item
+                    testID="settings-new-session-wizard-mode"
+                    title={t('settingsSession.sessionCreation.wizardModeTitle')}
+                    subtitle={t(
+                        useEnhancedSessionWizard === true
+                            ? 'settingsSession.sessionCreation.wizardModeEnabledSubtitle'
+                            : 'settingsSession.sessionCreation.wizardModeDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="sparkles-outline" size={29} color={theme.colors.accent.indigo} />}
+                    rightElement={
+                        <Switch
+                            value={useEnhancedSessionWizard === true}
+                            onValueChange={(next) => setUseEnhancedSessionWizard(Boolean(next))}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setUseEnhancedSessionWizard(useEnhancedSessionWizard !== true)}
                 />
                 {useEnhancedSessionWizard === true ? (
                     <Item

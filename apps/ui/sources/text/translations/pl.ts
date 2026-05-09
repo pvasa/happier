@@ -5427,6 +5427,11 @@ export const pl: TranslationStructure = {
         `Ładowanie ${fileName}...`,
         binaryFile: "Plik binarny",
         imagePreviewTooLarge: "Podgląd obrazu jest zbyt duży, aby go wyświetlić",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `Otwórz wygenerowany obraz ${name}`,
+          attachmentImageA11y: ({ name }: { name: string }) => `Otwórz załączony obraz ${name}`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `Otwórz obraz artefaktu narzędzia ${name}`,
+        },
         cannotDisplayBinary: "Nie można wyświetlić zawartości pliku binarnego",
         diff: "Różnice",
       file: "Plik",
@@ -6139,6 +6144,9 @@ settingsSession: {
         modalModeSimpleSubtitle: "Otwiera kompaktowy modal z kompozytorem na pierwszym planie.",
         modalModeWizardTitle: "Kreator",
         modalModeWizardSubtitle: "Otwiera konfigurację krokową z oddzielnymi selektorami.",
+        wizardModeTitle: "Tryb kreatora",
+        wizardModeEnabledSubtitle: "Otwiera konfigurację krokową z oddzielnymi selektorami.",
+        wizardModeDisabledSubtitle: "Używa kompaktowego modalu z kompozytorem na pierwszym planie.",
         rememberLastProjectSelectionsTitle: "Pamiętaj ostatnie wybory sesji projektu",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Skróty projektu używają ponownie maszyny, folderu, silnika, modelu i opcji najnowszej sesji.",
@@ -6148,6 +6156,11 @@ settingsSession: {
         wizardSettingsSubtitle: "Wybierz, czy każdy selektor kreatora ma być listą czy menu rozwijanym.",
         wizardDispositionTitle: "Układ kreatora",
         wizardDispositionSubtitle: "Wybierz, które selektory kreatora są listami lub menu rozwijanymi.",
+        wizardLayoutTitle: "Układ kreatora",
+        wizardLayoutFooter: "Określa rozmieszczenie sekcji kreatora na szerokich ekranach.",
+        wizardColumnsTitle: "Układ dwukolumnowy",
+        wizardColumnsEnabledSubtitle: "Umieszcza powiązane selektory obok siebie na szerokich ekranach.",
+        wizardColumnsDisabledSubtitle: "Układa wszystkie selektory kreatora w jednej kolumnie.",
         wizardPresentationTitle: "Układ selektorów kreatora",
         wizardPresentationFooter:
           "Auto zostawia krótkie sekcje jako listy i przełącza długie sekcje na przeszukiwalne menu rozwijane.",

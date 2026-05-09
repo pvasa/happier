@@ -40,6 +40,7 @@ import {
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
 import { normalizeSpawnSessionResult } from './_shared';
+import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
 import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
 import {
     canUseSessionRpc,
@@ -217,48 +218,48 @@ export interface ResumeSessionOptions {
  * to the existing Happy session and resumes the agent.
  */
 export async function resumeSession(options: ResumeSessionOptions): Promise<ResumeSessionResult> {
-    const accountSettingsPreparation = typeof options.accountSettingsVersionHint === 'number'
-        ? {}
-        : await prepareAccountSettingsForDaemonSpawnIfNeeded(options.accountSettingsVersionHint);
-    const preparedOptions = {
-        ...options,
-        ...accountSettingsPreparation,
-    };
-    const {
-        sessionId,
-        machineId: rawMachineId,
-        directory: rawDirectory,
-        backendTarget,
-        resume,
-        environmentVariables,
-        connectedServices,
-        transcriptStorage,
-        attachMetadataIdentityPolicy,
-        permissionMode,
-        permissionModeUpdatedAt,
-        modelId,
-        modelUpdatedAt,
-        experimentalCodexAcp,
-        codexBackendMode,
-        agentRuntimeDescriptorV1,
-        accountSettingsVersionHint,
-        preferRequestedMachineTarget,
-        preferScopedMachineRpc,
-    } = preparedOptions;
-    const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
-
-    const machineTarget = readMachineTargetForSession(sessionId);
-    const machineId = preferRequestedMachineTarget ? rawMachineId.trim() : machineTarget?.machineId ?? rawMachineId.trim();
-    const directory = preferRequestedMachineTarget ? rawDirectory.trim() : machineTarget?.basePath ?? rawDirectory.trim();
-    if (!machineId || !directory) {
-        return {
-            type: 'error',
-            errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
-            errorMessage: 'No reachable machine target found to resume session',
-        };
-    }
-
     try {
+        const accountSettingsPreparation = typeof options.accountSettingsVersionHint === 'number'
+            ? {}
+            : await prepareAccountSettingsForDaemonSpawnIfNeeded(options.accountSettingsVersionHint);
+        const preparedOptions = {
+            ...options,
+            ...accountSettingsPreparation,
+        };
+        const {
+            sessionId,
+            machineId: rawMachineId,
+            directory: rawDirectory,
+            backendTarget,
+            resume,
+            environmentVariables,
+            connectedServices,
+            transcriptStorage,
+            attachMetadataIdentityPolicy,
+            permissionMode,
+            permissionModeUpdatedAt,
+            modelId,
+            modelUpdatedAt,
+            experimentalCodexAcp,
+            codexBackendMode,
+            agentRuntimeDescriptorV1,
+            accountSettingsVersionHint,
+            preferRequestedMachineTarget,
+            preferScopedMachineRpc,
+        } = preparedOptions;
+        const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
+
+        const machineTarget = readMachineTargetForSession(sessionId);
+        const machineId = preferRequestedMachineTarget ? rawMachineId.trim() : machineTarget?.machineId ?? rawMachineId.trim();
+        const directory = preferRequestedMachineTarget ? rawDirectory.trim() : machineTarget?.basePath ?? rawDirectory.trim();
+        if (!machineId || !directory) {
+            return {
+                type: 'error',
+                errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+                errorMessage: 'No reachable machine target found to resume session',
+            };
+        }
+
         const parsedConnectedServicesRaw: SessionAuthoringValueV1['connectedServices'] | undefined =
             connectedServices === undefined
                 ? undefined
@@ -293,6 +294,13 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
         });
         return normalizeSpawnSessionResult(result);
     } catch (error) {
+        if (isAccountSettingsScopeChangedDuringSpawnPreparationError(error)) {
+            return {
+                type: 'error',
+                errorCode: SPAWN_SESSION_ERROR_CODES.ACCOUNT_SCOPE_CHANGED,
+                errorMessage: 'Account changed while syncing settings. Please retry from the current account.',
+            };
+        }
         if (isRpcMethodNotAvailableError(error as any) || readSessionRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
             return {
                 type: 'error',

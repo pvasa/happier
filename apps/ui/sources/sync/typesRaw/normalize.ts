@@ -1,4 +1,5 @@
 import type { MessageMeta } from '../domains/messages/messageMetaTypes';
+import { hasSessionMediaRenderItems } from '../domains/sessionMedia/sessionMediaMessageMeta';
 import { rawRecordSchema, type AgentEvent, type RawAgentContent, type RawRecord, type UsageData } from './schemas';
 import { buildUsageDataFromTokenCountMessage } from './tokenCountUsage';
 
@@ -99,6 +100,32 @@ function readFiniteNumber(value: unknown): number | undefined {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function firstMessageText(value: unknown): string | null {
+    if (!isPlainRecord(value)) return null;
+    if (value.type === 'text' && typeof value.text === 'string') return value.text;
+    const message = value.message;
+    if (!isPlainRecord(message)) return null;
+    const content = message.content;
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return null;
+    for (const item of content) {
+        if (!isPlainRecord(item)) continue;
+        if (typeof item.text === 'string') return item.text;
+    }
+    return null;
+}
+
+function isCompactHookLocalCommandStdoutText(text: unknown): boolean {
+    if (typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('<local-command-stdout>')) return false;
+    return /\b(?:PreCompact|PostCompact)\b/.test(trimmed);
+}
+
+function isCompactHookLocalCommandStdout(value: unknown): boolean {
+    return isCompactHookLocalCommandStdoutText(firstMessageText(value));
 }
 
 function readOriginalStructuredContentData(rawInput: unknown, contentType: 'event' | 'acp'): Record<string, unknown> | null {
@@ -339,6 +366,9 @@ export function normalizeRawMessage(
     };
 
     if (raw.role === 'user') {
+        if (isCompactHookLocalCommandStdout(raw.content)) {
+            return null;
+        }
         return {
             id,
             ...(seq !== undefined ? { seq } : {}),
@@ -444,6 +474,10 @@ export function normalizeRawMessage(
                 return null;
             }
 
+            if (isCompactHookLocalCommandStdout(raw.content.data)) {
+                return null;
+            }
+
             // Progress records are transport-level status updates and are not rendered in transcript.
             if (raw.content.data.type === 'progress') {
                 return null;
@@ -510,6 +544,14 @@ export function normalizeRawMessage(
 	                        }
 	                    }
 	                }
+                    if (content.length === 0 && hasSessionMediaRenderItems(raw.meta)) {
+                        content.push({
+                            type: 'text',
+                            text: '',
+                            uuid: outputUuid,
+                            parentUUID: raw.content.data.parentUuid ?? null,
+                        });
+                    }
                     const sidechainId = metaSidechainId ?? getOutputSidechainId(raw.content.data) ?? claudeParentToolUseId;
                     const legacyIsSidechain = getOutputIsSidechain(raw.content.data);
 	                  return {

@@ -5671,6 +5671,11 @@ localTailscale: {
         `${fileName}を読み込み中...`,
         binaryFile: "バイナリファイル",
         imagePreviewTooLarge: "画像プレビューが大きすぎて表示できません",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `生成画像 ${name} を開く`,
+          attachmentImageA11y: ({ name }: { name: string }) => `添付画像 ${name} を開く`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `ツール成果物画像 ${name} を開く`,
+        },
         cannotDisplayBinary: "バイナリファイルの内容を表示できません",
         diff: "差分",
       file: "ファイル",
@@ -6378,6 +6383,9 @@ settingsSession: {
         modalModeSimpleSubtitle: "コンパクトな入力中心のモーダルを開きます。",
         modalModeWizardTitle: "ウィザード",
         modalModeWizardSubtitle: "個別の選択欄を備えたガイド形式の設定を開きます。",
+        wizardModeTitle: "ウィザードモード",
+        wizardModeEnabledSubtitle: "個別の選択欄を備えたガイド形式の設定を開きます。",
+        wizardModeDisabledSubtitle: "コンパクトな入力中心のモーダルを使います。",
         rememberLastProjectSelectionsTitle: "プロジェクトの最後のセッション選択を記憶",
         rememberLastProjectSelectionsEnabledSubtitle:
           "プロジェクトのショートカットは、最新セッションのマシン、フォルダ、エンジン、モデル、セッションオプションを再利用します。",
@@ -6387,6 +6395,11 @@ settingsSession: {
         wizardSettingsSubtitle: "各ウィザード選択欄をリストまたはドロップダウンで表示するかを選びます。",
         wizardDispositionTitle: "ウィザード配置",
         wizardDispositionSubtitle: "各ウィザード選択欄をリストまたはドロップダウンで表示するかを選びます。",
+        wizardLayoutTitle: "ウィザードレイアウト",
+        wizardLayoutFooter: "広い画面でウィザードセクションをどう配置するかを制御します。",
+        wizardColumnsTitle: "2列レイアウト",
+        wizardColumnsEnabledSubtitle: "広い画面で関連する選択欄を横に並べます。",
+        wizardColumnsDisabledSubtitle: "すべてのウィザード選択欄を1列に積みます。",
         wizardPresentationTitle: "ウィザード選択欄のレイアウト",
         wizardPresentationFooter:
           "Auto は短いセクションをリストのままにし、長いセクションを検索可能なドロップダウンに切り替えます。",

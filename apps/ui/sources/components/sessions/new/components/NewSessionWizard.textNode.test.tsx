@@ -1515,6 +1515,143 @@ describe('NewSessionWizard', () => {
         });
     });
 
+    it('only uses wizard selector columns on wide web when the column layout preference is enabled', async () => {
+        mockEnv.windowWidth = 1200;
+        const { NewSessionWizard } = await import('./NewSessionWizard');
+        const machine = {
+            id: 'machine-1',
+            seq: 1,
+            createdAt: 0,
+            updatedAt: 0,
+            active: true,
+            activeAt: 0,
+            revokedAt: null,
+            metadata: {
+                host: 'box.local',
+                platform: 'test',
+                happyCliVersion: '0.0.0-test',
+                happyHomeDir: '/tmp/happy-home',
+                homeDir: '/tmp',
+                displayName: 'Box',
+            },
+            metadataVersion: 1,
+            daemonState: null,
+            daemonStateVersion: 0,
+        };
+        const renderWizard = (useColumnLayout?: boolean) => renderScreen(<NewSessionWizard
+            popoverBoundaryRef={{ current: null } as any}
+            useColumnLayout={useColumnLayout}
+            layout={{
+                theme: {
+                    colors: {
+                        divider: '#ddd',
+                        shadow: { color: '#000' },
+                        groupped: { background: '#fff' },
+                        text: '#000',
+                        textSecondary: '#666',
+                        input: { background: '#fff' },
+                        button: { secondary: { tint: '#000' } },
+                        warning: '#d97706',
+                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
+                    },
+                } as any,
+                styles: {
+                    wizardSelectionPair: { testColumnPair: true },
+                    wizardSelectionPairColumn: { testColumnPairColumn: true },
+                } as any,
+                safeAreaBottom: 0,
+                headerHeight: 44,
+                newSessionSidePadding: 0,
+                newSessionBottomPadding: 0,
+            }}
+            profiles={{
+                useProfiles: false,
+                profiles: [],
+                favoriteProfileIds: [],
+                setFavoriteProfileIds: () => {},
+                selectedProfileId: null,
+                onPressDefaultEnvironment: () => {},
+                onPressProfile: () => {},
+                selectedMachineId: 'machine-1',
+                getProfileDisabled: () => false,
+                getProfileSubtitleExtra: () => null,
+                handleAddProfile: () => {},
+                openProfileEdit: () => {},
+                handleDuplicateProfile: () => {},
+                handleDeleteProfile: () => {},
+                openProfileEnvVarsPreview: () => {},
+                suppressNextSecretAutoPromptKeyRef: { current: null },
+                openSecretRequirementModal: () => {},
+                profilesGroupTitles: { favorites: '', custom: '', builtIn: '' },
+                getSecretOverrideReady: () => false,
+                getSecretSatisfactionForProfile: () => ({ isSatisfied: true, hasSecretRequirements: false, items: [] }),
+                getSecretMachineEnvOverride: () => null,
+                secretBindingsByProfileId: {},
+                selectedSecretIdByProfileIdByEnvVarName: {},
+                setSecretBindingChoice: () => {},
+                setSessionOnlySecretValueEnc: () => {},
+            } as any}
+            agent={{
+                cliAvailability: { available: true },
+                tmuxRequested: false,
+                enabledAgentIds: ['codex'],
+                isAgentSelectable: () => true,
+                isCliBannerDismissed: () => true,
+                dismissCliBanner: () => {},
+                agentType: 'codex',
+                setAgentType: () => {},
+                selectedIndicatorColor: '#000',
+                permissionMode: 'default',
+                handlePermissionModeChange: () => {},
+                modelOptions: [
+                    { value: 'default', label: 'Use CLI settings', description: 'Use configured model' },
+                    { value: 'opus', label: 'Opus', description: 'High capability' },
+                ],
+                modelMode: 'default',
+                setModelMode: () => {},
+            } as any}
+            machine={{
+                machines: [machine],
+                serverId: 'server-1',
+                selectedMachine: machine,
+                recentMachines: [],
+                favoriteMachineItems: [],
+                useMachinePickerSearch: false,
+                onRefreshMachines: () => {},
+                setSelectedMachineId: () => {},
+                getBestPathForMachine: () => '/tmp',
+                setSelectedPath: () => {},
+                favoriteMachines: [],
+                setFavoriteMachines: () => {},
+                selectedPath: '/tmp',
+                recentPaths: [],
+                usePathPickerSearch: false,
+                favoriteDirectories: [],
+                setFavoriteDirectories: () => {},
+            } as any}
+            footer={{
+                sessionPrompt: '',
+                setSessionPrompt: () => {},
+                handleCreateSession: () => {},
+                canCreate: false,
+                isCreating: false,
+                emptyAutocompletePrefixes: [],
+                emptyAutocompleteSuggestions: async () => [],
+                agentInputExtraActionChips: [],
+            }}
+        />);
+        const countColumnPairs = (screen: Awaited<ReturnType<typeof renderWizard>>) => screen
+            .findAllByType('View')
+            .filter((node) => flattenStyle(node.props.style).testColumnPair === true)
+            .length;
+
+        const defaultScreen = await renderWizard();
+        expect(countColumnPairs(defaultScreen)).toBe(0);
+
+        const enabledScreen = await renderWizard(true);
+        expect(countColumnPairs(enabledScreen)).toBeGreaterThan(0);
+    });
+
     it('renders stable wizard model testIDs for inline model options', async () => {
         const { NewSessionWizard } = await import('./NewSessionWizard');
 

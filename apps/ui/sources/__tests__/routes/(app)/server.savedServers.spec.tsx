@@ -13,6 +13,9 @@ const SLOW_TEST_TIMEOUT_MS = 60_000;
 vi.mock('@/hooks/server/useServerRetentionPolicies', () => ({
     useServerRetentionPolicies: () => ({}),
 }));
+vi.mock('@/components/settings/server/hooks/useServerAuthStatusByServerId', () => ({
+    useServerAuthStatusByServerId: () => ({}),
+}));
 
 const routerReplaceMock = vi.fn();
 let localSearchParamsMock: Record<string, any> = {};
@@ -87,6 +90,27 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
     switchConnectionToActiveServer: switchConnectionToActiveServerSpy,
 }));
 
+vi.mock('expo-modules-core/src/index.ts', () => ({
+    requireOptionalNativeModule: () => null,
+    requireNativeModule: () => null,
+}));
+vi.mock('expo-modules-core', () => ({
+    requireOptionalNativeModule: () => null,
+    requireNativeModule: () => null,
+}));
+
+vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    getActiveServerSnapshot: () => ({
+        serverId: 'server-a',
+        serverUrl: 'https://server-a.example.test',
+        generation: 1,
+    }),
+    subscribeActiveServer: () => () => {},
+    setActiveServer: vi.fn(),
+    upsertAndActivateServer: vi.fn(),
+    setActiveShareableServerUrl: vi.fn(),
+}));
+
 vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => ({ isAuthenticated: true, refreshFromActiveServer: refreshFromActiveServerSpy }),
 }));
@@ -111,6 +135,12 @@ vi.mock('@/sync/domains/pending/pendingNotificationNav', () => ({
         clearPendingNotificationNavSpy();
         pendingNotificationNavValue = null;
     },
+}));
+
+vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
+    getServerFeaturesSnapshot: vi.fn(async () => ({ status: 'error', reason: 'network' })),
+    getCachedServerFeaturesSnapshot: vi.fn(() => ({ status: 'error', reason: 'network' })),
+    resetServerFeaturesClientForTests: vi.fn(),
 }));
 
 vi.mock('@/components/ui/lists/ItemList', () => ({

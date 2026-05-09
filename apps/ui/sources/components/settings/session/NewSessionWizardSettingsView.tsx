@@ -3,6 +3,8 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Switch } from '@/components/ui/forms/Switch';
+import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { useSettingMutable } from '@/sync/domains/state/storage';
@@ -94,8 +96,10 @@ function WizardPresentationDropdown(props: Readonly<{
 }
 
 export const NewSessionWizardSettingsView = React.memo(function NewSessionWizardSettingsView() {
+    const { theme } = useUnistyles();
     const popoverBoundaryRef = React.useRef<any>(null);
     const [presentationBySection, setPresentationBySection] = useSettingMutable('newSessionWizardSectionPresentationV1');
+    const [columnsEnabled, setColumnsEnabled] = useSettingMutable('newSessionWizardColumnsEnabled');
 
     const normalizedPresentationBySection = React.useMemo(() => {
         const record = presentationBySection && typeof presentationBySection === 'object' && !Array.isArray(presentationBySection)
@@ -126,6 +130,29 @@ export const NewSessionWizardSettingsView = React.memo(function NewSessionWizard
 
     return (
         <ItemList ref={popoverBoundaryRef} style={{ paddingTop: 0 }}>
+            <ItemGroup
+                title={t('settingsSession.sessionCreation.wizardLayoutTitle')}
+                footer={t('settingsSession.sessionCreation.wizardLayoutFooter')}
+            >
+                <Item
+                    testID="settings-new-session-wizard-columns"
+                    title={t('settingsSession.sessionCreation.wizardColumnsTitle')}
+                    subtitle={t(
+                        columnsEnabled === true
+                            ? 'settingsSession.sessionCreation.wizardColumnsEnabledSubtitle'
+                            : 'settingsSession.sessionCreation.wizardColumnsDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="grid-outline" size={29} color={theme.colors.textSecondary} />}
+                    rightElement={(
+                        <Switch
+                            value={columnsEnabled === true}
+                            onValueChange={(next) => setColumnsEnabled(Boolean(next))}
+                        />
+                    )}
+                    showChevron={false}
+                    onPress={() => setColumnsEnabled(columnsEnabled !== true)}
+                />
+            </ItemGroup>
             <ItemGroup
                 title={t('settingsSession.sessionCreation.wizardPresentationTitle')}
                 footer={t('settingsSession.sessionCreation.wizardPresentationFooter')}

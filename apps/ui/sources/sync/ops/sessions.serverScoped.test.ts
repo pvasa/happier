@@ -9,7 +9,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
     machineRpcWithServerScope: machineRpcWithServerScopeMock,
 }));
 
-vi.mock('./accountSettingsDaemonSpawnPreparation', () => ({
+vi.mock('./accountSettingsDaemonSpawnPreparation', async (importOriginal) => ({
+    ...await importOriginal<typeof import('./accountSettingsDaemonSpawnPreparation')>(),
     prepareAccountSettingsForDaemonSpawnIfNeeded: prepareAccountSettingsForDaemonSpawnMock,
     registerAccountSettingsDaemonSpawnPreparation: vi.fn(() => vi.fn()),
 }));
@@ -116,6 +117,26 @@ describe('sessions ops server-scoped routing', () => {
                 accountSettingsVersionHint: 22,
             }),
         }));
+    });
+
+    it('does not resume-spawn when account settings scope changes during preparation', async () => {
+        prepareAccountSettingsForDaemonSpawnMock.mockRejectedValueOnce(
+            new Error('Account settings scope changed while preparing session spawn'),
+        );
+        const { resumeSession } = await sessionsModulePromise;
+
+        const result = await resumeSession({
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            serverId: 'server-b',
+        } as any);
+
+        expect(result.type).toBe('error');
+        if (result.type !== 'error') throw new Error('expected an error result');
+        expect(result.errorCode).toBe('ACCOUNT_SCOPE_CHANGED');
+        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
     });
 
     it('passes connectedServices through resumeSession when requested', async () => {

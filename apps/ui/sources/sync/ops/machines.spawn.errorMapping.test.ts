@@ -10,7 +10,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
   machineRpcWithServerScope: machineRpcWithServerScopeMock,
 }));
 
-vi.mock('./accountSettingsDaemonSpawnPreparation', () => ({
+vi.mock('./accountSettingsDaemonSpawnPreparation', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./accountSettingsDaemonSpawnPreparation')>(),
   prepareAccountSettingsForDaemonSpawnIfNeeded: prepareAccountSettingsForDaemonSpawnMock,
   registerAccountSettingsDaemonSpawnPreparation: vi.fn(() => vi.fn()),
 }));
@@ -97,6 +98,25 @@ describe('machineSpawnNewSession error mapping', () => {
         accountSettingsVersionHint: 22,
       }),
     }));
+  });
+
+  it('does not spawn when account settings scope changes during preparation', async () => {
+    prepareAccountSettingsForDaemonSpawnMock.mockRejectedValueOnce(
+      new Error('Account settings scope changed while preparing session spawn'),
+    );
+
+    const { machineSpawnNewSession } = await import('./machines');
+    const result = await machineSpawnNewSession({
+      machineId: 'machine-1',
+      directory: '/tmp',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      serverId: 'server-b',
+    });
+
+    expect(result.type).toBe('error');
+    if (result.type !== 'error') throw new Error('expected an error result');
+    expect(result.errorCode).toBe('ACCOUNT_SCOPE_CHANGED');
+    expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
   });
 
   it('does not override an explicit account settings version hint', async () => {

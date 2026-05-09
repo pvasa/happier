@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 
 const setPresentation = vi.fn();
+const setColumnsEnabled = vi.fn();
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -17,6 +18,9 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             useSettingMutable: (name: string) => {
                 if (name === 'newSessionWizardSectionPresentationV1') {
                     return [{ models: 'dropdown' }, setPresentation];
+                }
+                if (name === 'newSessionWizardColumnsEnabled') {
+                    return [false, setColumnsEnabled];
                 }
                 return [null, vi.fn()];
             },
@@ -63,6 +67,7 @@ describe('NewSessionWizardSettingsView', () => {
 
         const rows = screen.findAllByType('Item' as any).filter((item) => typeof item.props.testID === 'string');
         expect(rows.map((row) => [row.props.testID, row.props.subtitle])).toEqual([
+            ['settings-new-session-wizard-columns', 'Stack every wizard selector in one column.'],
             ['settings-new-session-wizard-profiles', 'Auto'],
             ['settings-new-session-wizard-backends', 'Auto'],
             ['settings-new-session-wizard-models', 'Dropdown'],
@@ -76,5 +81,9 @@ describe('NewSessionWizardSettingsView', () => {
             models: 'dropdown',
             machines: 'dropdown',
         });
+
+        expect(screen.findRowByTitle('Two-column layout')).toBeTruthy();
+        screen.pressRowByTitle('Two-column layout');
+        expect(setColumnsEnabled).toHaveBeenCalledWith(true);
     });
 });

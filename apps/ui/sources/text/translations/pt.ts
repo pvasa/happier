@@ -5547,6 +5547,11 @@ export const pt: TranslationStructure = {
         `Carregando ${fileName}...`,
         binaryFile: "Arquivo binário",
         imagePreviewTooLarge: "A pré-visualização da imagem é grande demais para ser exibida",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `Abrir imagem gerada ${name}`,
+          attachmentImageA11y: ({ name }: { name: string }) => `Abrir imagem anexada ${name}`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `Abrir imagem de artefato da ferramenta ${name}`,
+        },
         cannotDisplayBinary: "Não é possível exibir o conteúdo do arquivo binário",
         diff: "Diferenças",
       file: "Arquivo",
@@ -6260,6 +6265,9 @@ settingsSession: {
         modalModeSimpleSubtitle: "Abre o modal compacto centrado no compositor.",
         modalModeWizardTitle: "Assistente",
         modalModeWizardSubtitle: "Abre a configuração guiada com seletores separados.",
+        wizardModeTitle: "Modo assistente",
+        wizardModeEnabledSubtitle: "Abre a configuração guiada com seletores separados.",
+        wizardModeDisabledSubtitle: "Usa o modal compacto centrado no compositor.",
         rememberLastProjectSelectionsTitle: "Lembrar as últimas seleções de sessão do projeto",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Os atalhos do projeto reutilizam a máquina, pasta, motor, modelo e opções da sessão mais recente.",
@@ -6269,6 +6277,11 @@ settingsSession: {
         wizardSettingsSubtitle: "Escolha se cada seletor do assistente aparece como lista ou menu suspenso.",
         wizardDispositionTitle: "Disposição do assistente",
         wizardDispositionSubtitle: "Escolha quais seletores do assistente aparecem como listas ou menus suspensos.",
+        wizardLayoutTitle: "Layout do assistente",
+        wizardLayoutFooter: "Controla como as seções do assistente são organizadas em telas largas.",
+        wizardColumnsTitle: "Layout em duas colunas",
+        wizardColumnsEnabledSubtitle: "Coloca seletores relacionados lado a lado em telas largas.",
+        wizardColumnsDisabledSubtitle: "Empilha todos os seletores do assistente em uma coluna.",
         wizardPresentationTitle: "Layout dos seletores do assistente",
         wizardPresentationFooter:
           "Auto mantém seções curtas como listas e muda seções longas para menus suspensos pesquisáveis.",

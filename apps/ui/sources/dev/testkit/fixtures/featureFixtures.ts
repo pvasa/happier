@@ -13,6 +13,7 @@ type RootLayoutFeaturesOverrides = Omit<Partial<RootLayoutFeatures>, 'features' 
         | 'connectedServices'
         | 'updates'
         | 'sharing'
+        | 'session'
         | 'sessions'
         | 'machines'
         | 'terminal'
@@ -30,6 +31,7 @@ type RootLayoutFeaturesOverrides = Omit<Partial<RootLayoutFeatures>, 'features' 
             connectedServices?: Partial<RootLayoutFeatures['features']['connectedServices']>;
             updates?: Partial<RootLayoutFeatures['features']['updates']>;
             sharing?: Partial<RootLayoutFeatures['features']['sharing']>;
+            session?: Partial<RootLayoutFeatures['features']['session']>;
             sessions?: Partial<RootLayoutFeatures['features']['sessions']>;
             machines?: Partial<RootLayoutFeatures['features']['machines']>;
             terminal?: Partial<RootLayoutFeatures['features']['terminal']>;
@@ -61,6 +63,11 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
         },
         attachments: {
             uploads: { enabled: true },
+        },
+        session: {
+            media: {
+                generated: { enabled: false },
+            },
         },
         pets: {
             companion: { enabled: false },
@@ -203,6 +210,8 @@ export function createRootLayoutFeaturesResponse(overrides?: RootLayoutFeaturesO
     const nextAuth: Partial<RootLayoutFeatures['features']['auth']> = nextFeatures.auth ?? {};
     const nextSocial: Partial<RootLayoutFeatures['features']['social']> = nextFeatures.social ?? {};
     const nextSharing: Partial<RootLayoutFeatures['features']['sharing']> = nextFeatures.sharing ?? {};
+    const nextSession: Partial<RootLayoutFeatures['features']['session']> = nextFeatures.session ?? {};
+    const nextSessionMedia: Partial<RootLayoutFeatures['features']['session']['media']> = nextSession.media ?? {};
     const nextSessions: Partial<RootLayoutFeatures['features']['sessions']> = nextFeatures.sessions ?? {};
     const nextMachines: Partial<RootLayoutFeatures['features']['machines']> = nextFeatures.machines ?? {};
     const nextTerminal: Partial<RootLayoutFeatures['features']['terminal']> = nextFeatures.terminal ?? {};
@@ -254,6 +263,18 @@ export function createRootLayoutFeaturesResponse(overrides?: RootLayoutFeaturesO
             attachments: {
                 ...BASE_ROOT_LAYOUT_FEATURES.features.attachments,
                 ...nextAttachments,
+            },
+            session: {
+                ...BASE_ROOT_LAYOUT_FEATURES.features.session,
+                ...nextSession,
+                media: {
+                    ...BASE_ROOT_LAYOUT_FEATURES.features.session.media,
+                    ...nextSessionMedia,
+                    generated: {
+                        ...BASE_ROOT_LAYOUT_FEATURES.features.session.media.generated,
+                        ...(nextSessionMedia.generated ?? {}),
+                    },
+                },
             },
             channelBridges: {
                 ...BASE_ROOT_LAYOUT_FEATURES.features.channelBridges,

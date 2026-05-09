@@ -1,13 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     prepareAccountSettingsForDaemonSpawnIfNeeded,
     registerAccountSettingsDaemonSpawnPreparation,
 } from './accountSettingsDaemonSpawnPreparation';
+import { AccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
 
 describe('account settings daemon spawn preparation registry', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
     beforeEach(() => {
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         registerAccountSettingsDaemonSpawnPreparation(async () => ({}))();
+    });
+
+    afterEach(() => {
+        warnSpy.mockRestore();
     });
 
     it('returns no hint when no preparation provider is registered', async () => {
@@ -21,6 +29,36 @@ describe('account settings daemon spawn preparation registry', () => {
         await expect(prepareAccountSettingsForDaemonSpawnIfNeeded(undefined)).resolves.toEqual({
             accountSettingsVersionHint: 7,
         });
+        expect(prepare).toHaveBeenCalledTimes(1);
+
+        unregister();
+    });
+
+    it('returns no hint when the registered preparation provider fails', async () => {
+        const prepare = vi.fn(async () => {
+            throw new Error('settings sync unavailable');
+        });
+        const unregister = registerAccountSettingsDaemonSpawnPreparation(prepare);
+
+        await expect(prepareAccountSettingsForDaemonSpawnIfNeeded(undefined)).resolves.toEqual({});
+        expect(prepare).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(
+            expect.stringContaining('Failed to prepare account settings before daemon spawn'),
+            expect.any(Error),
+        );
+
+        unregister();
+    });
+
+    it('propagates account settings scope changes during preparation', async () => {
+        const prepare = vi.fn(async () => {
+            throw new AccountSettingsScopeChangedDuringSpawnPreparationError();
+        });
+        const unregister = registerAccountSettingsDaemonSpawnPreparation(prepare);
+
+        await expect(prepareAccountSettingsForDaemonSpawnIfNeeded(undefined)).rejects.toThrow(
+            AccountSettingsScopeChangedDuringSpawnPreparationError,
+        );
         expect(prepare).toHaveBeenCalledTimes(1);
 
         unregister();

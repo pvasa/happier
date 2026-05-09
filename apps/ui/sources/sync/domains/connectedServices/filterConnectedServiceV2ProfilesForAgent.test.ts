@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { UNSUPPORTED_AGENT_SESSION_CAPABILITIES, type AgentCore } from '@happier-dev/agents';
+import { getAgentMediaCapabilities, UNSUPPORTED_AGENT_SESSION_CAPABILITIES, type AgentCore } from '@happier-dev/agents';
 
 import { filterConnectedServiceV2ProfilesForAgent } from './filterConnectedServiceV2ProfilesForAgent';
 
@@ -22,6 +22,7 @@ describe('filterConnectedServiceV2ProfilesForAgent', () => {
       sessionCapabilities: UNSUPPORTED_AGENT_SESSION_CAPABILITIES,
       handoff: { vendorStateTransfer: 'unsupported' },
       tools: { delivery: 'shell_bridge', support: 'experimental' },
+      media: getAgentMediaCapabilities('pi'),
     };
 
     const profiles = [
@@ -53,6 +54,7 @@ describe('filterConnectedServiceV2ProfilesForAgent', () => {
       sessionCapabilities: UNSUPPORTED_AGENT_SESSION_CAPABILITIES,
       handoff: { vendorStateTransfer: 'unsupported' },
       tools: { delivery: 'shell_bridge', support: 'experimental' },
+      media: getAgentMediaCapabilities('pi'),
     };
 
     const profiles = [

@@ -31,6 +31,7 @@ export type NewSessionScreenModel =
         wizardProps: Readonly<{
             layout: NewSessionWizardLayoutProps;
             sectionPresentation?: Partial<Record<NewSessionWizardSelectionSectionId, NewSessionWizardSectionPresentation>>;
+            useColumnLayout?: boolean;
             profiles: NewSessionWizardProfilesProps;
             agent: NewSessionWizardAgentProps;
             machine: NewSessionWizardMachineProps;

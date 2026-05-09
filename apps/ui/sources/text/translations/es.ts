@@ -5418,6 +5418,11 @@ export const es: TranslationStructure = {
         `Cargando ${fileName}...`,
         binaryFile: "Archivo binario",
         imagePreviewTooLarge: "La vista previa de la imagen es demasiado grande para mostrarse",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `Abrir imagen generada ${name}`,
+          attachmentImageA11y: ({ name }: { name: string }) => `Abrir imagen adjunta ${name}`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `Abrir imagen de artefacto de herramienta ${name}`,
+        },
         cannotDisplayBinary: "No se puede mostrar el contenido del archivo binario",
         diff: "Diferencias",
       file: "Archivo",
@@ -6165,6 +6170,9 @@ settingsSession: {
         modalModeSimpleSubtitle: "Abre el modal compacto centrado en el compositor.",
         modalModeWizardTitle: "Asistente",
         modalModeWizardSubtitle: "Abre la configuración guiada con selectores separados.",
+        wizardModeTitle: "Modo asistente",
+        wizardModeEnabledSubtitle: "Abre la configuración guiada con selectores separados.",
+        wizardModeDisabledSubtitle: "Usa el modal compacto centrado en el compositor.",
         rememberLastProjectSelectionsTitle: "Recordar las últimas selecciones de sesión del proyecto",
         rememberLastProjectSelectionsEnabledSubtitle:
           "Los atajos de proyecto reutilizan la máquina, la carpeta, el motor, el modelo y las opciones de la sesión más reciente.",
@@ -6174,6 +6182,11 @@ settingsSession: {
         wizardSettingsSubtitle: "Elige si cada selector del asistente aparece como lista o desplegable.",
         wizardDispositionTitle: "Disposición del asistente",
         wizardDispositionSubtitle: "Elige qué selectores del asistente aparecen como listas o desplegables.",
+        wizardLayoutTitle: "Diseño del asistente",
+        wizardLayoutFooter: "Controla cómo se organizan las secciones del asistente en pantallas anchas.",
+        wizardColumnsTitle: "Diseño en dos columnas",
+        wizardColumnsEnabledSubtitle: "Coloca selectores relacionados uno al lado del otro en pantallas anchas.",
+        wizardColumnsDisabledSubtitle: "Apila todos los selectores del asistente en una columna.",
         wizardPresentationTitle: "Diseño de selectores del asistente",
         wizardPresentationFooter:
           "Auto mantiene las secciones cortas como listas y cambia las largas a desplegables con búsqueda.",

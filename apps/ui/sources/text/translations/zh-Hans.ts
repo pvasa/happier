@@ -5200,6 +5200,11 @@ export const zhHans: TranslationStructure = {
         `正在加载 ${fileName}...`,
         binaryFile: "二进制文件",
         imagePreviewTooLarge: "图片预览过大，无法显示",
+        sessionMedia: {
+          generatedImageA11y: ({ name }: { name: string }) => `打开生成的图片 ${name}`,
+          attachmentImageA11y: ({ name }: { name: string }) => `打开附件图片 ${name}`,
+          toolArtifactImageA11y: ({ name }: { name: string }) => `打开工具产物图片 ${name}`,
+        },
         cannotDisplayBinary: "无法显示二进制文件内容",
         diff: "差异",
       file: "文件",
@@ -5870,6 +5875,9 @@ settingsSession: {
       modalModeSimpleSubtitle: "打开以输入框为中心的紧凑弹窗。",
       modalModeWizardTitle: "向导",
       modalModeWizardSubtitle: "打开带有独立选择器的引导式设置。",
+      wizardModeTitle: "向导模式",
+      wizardModeEnabledSubtitle: "打开带有独立选择器的引导式设置。",
+      wizardModeDisabledSubtitle: "使用以输入框为中心的紧凑弹窗。",
       rememberLastProjectSelectionsTitle: "记住项目上次会话选择",
       rememberLastProjectSelectionsEnabledSubtitle:
         "项目快捷方式会复用最新会话的机器、文件夹、引擎、模型和会话选项。",
@@ -5879,6 +5887,11 @@ settingsSession: {
       wizardSettingsSubtitle: "选择每个向导选择器显示为列表还是下拉菜单。",
       wizardDispositionTitle: "向导布局",
       wizardDispositionSubtitle: "选择哪些向导选择器显示为列表或下拉菜单。",
+      wizardLayoutTitle: "向导布局",
+      wizardLayoutFooter: "控制宽屏上向导区段的排列方式。",
+      wizardColumnsTitle: "双列布局",
+      wizardColumnsEnabledSubtitle: "在宽屏上并排显示相关选择器。",
+      wizardColumnsDisabledSubtitle: "将所有向导选择器堆叠在一列中。",
       wizardPresentationTitle: "向导选择器布局",
       wizardPresentationFooter:
         "Auto 会将短区段保留为列表，并将长区段切换为可搜索下拉菜单。",

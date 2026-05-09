@@ -11,6 +11,10 @@ describe('account session creation setting definitions', () => {
         expect(resolveNewSessionWizardSectionPresentation({}, 'models')).toBe('auto');
     });
 
+    it('defaults the new-session wizard column layout preference to disabled', () => {
+        expect(ACCOUNT_SESSION_CREATION_SETTING_DEFINITIONS.newSessionWizardColumnsEnabled.default).toBe(false);
+    });
+
     it('keeps valid wizard presentation overrides and drops unknown section or presentation values', () => {
         const schema = ACCOUNT_SESSION_CREATION_SETTING_DEFINITIONS.newSessionWizardSectionPresentationV1.schema;
         const parsed = schema.parse({

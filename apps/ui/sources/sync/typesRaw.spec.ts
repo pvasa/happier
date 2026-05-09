@@ -496,6 +496,62 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                 expect((first as any).uuid).toBe('server-message-id-1');
             }
         });
+
+        it('normalizeRawMessage() preserves media-only assistant output with session media metadata', () => {
+            const mediaOnlyAssistantMessage = {
+                role: 'agent',
+                content: {
+                    type: 'output',
+                    data: {
+                        type: 'assistant',
+                        message: {
+                            role: 'assistant',
+                            model: 'claude-3',
+                            content: [],
+                        },
+                    },
+                },
+                meta: {
+                    happier: {
+                        kind: 'session_media.v1',
+                        payload: {
+                            media: [
+                                {
+                                    id: 'media-1',
+                                    role: 'output',
+                                    category: 'generated',
+                                    mediaKind: 'image',
+                                    name: 'generated.png',
+                                    path: '.happier/uploads/generated/m1/generated.png',
+                                    mimeType: 'image/png',
+                                    sizeBytes: 10,
+                                    origin: { source: 'provider-generated' },
+                                },
+                            ],
+                        },
+                    },
+                },
+            };
+
+            const normalized = normalizeRawMessage(
+                'server-message-id-media',
+                null,
+                1710000000000,
+                mediaOnlyAssistantMessage as any,
+            );
+
+            expect(normalized).not.toBeNull();
+            if (normalized && normalized.role === 'agent') {
+                expect(normalized.content).toEqual([
+                    {
+                        type: 'text',
+                        text: '',
+                        uuid: 'server-message-id-media',
+                        parentUUID: null,
+                    },
+                ]);
+            }
+        });
     });
 
     describe('Codex/Gemini messages use native hyphenated schema (no transformation)', () => {
@@ -1349,6 +1405,53 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                 expect(result.data.content.data.parentUuid).toBe('parent-uuid-456');
                 expect(result.data.content.data.isSidechain).toBe(true);
             }
+        });
+
+        it('drops compact hook stdout assistant output at read time', () => {
+            const raw = {
+                role: 'agent',
+                content: {
+                    type: 'output',
+                    data: {
+                        type: 'assistant',
+                        uuid: 'hook-stdout',
+                        message: {
+                            role: 'assistant',
+                            model: 'claude-3',
+                            content: [{
+                                type: 'text',
+                                text: [
+                                    '<local-command-stdout>Compacted PreCompact [/Users/leeroy/.vibe-island/bin/vibe-island-bridge --source claude] completed successfully',
+                                    "PreCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully",
+                                    "PostCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully</local-command-stdout>",
+                                ].join('\n'),
+                            }],
+                        },
+                    },
+                },
+            };
+
+            expect(normalizeRawMessage('msg-compact-hook-stdout', null, Date.now(), raw)).toBeNull();
+        });
+
+        it('drops compact hook stdout user text at read time', () => {
+            const raw = {
+                role: 'user',
+                content: {
+                    type: 'text',
+                    text: [
+                        '<local-command-stdout>Compacted PreCompact [/Users/leeroy/.vibe-island/bin/vibe-island-bridge --source claude] completed successfully',
+                        "PreCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully",
+                        "PostCompact [python3 '/Users/leeroy/.claude/hooks/claude-island-state.py'] completed successfully</local-command-stdout>",
+                    ].join('\n'),
+                },
+                meta: {
+                    sentFrom: 'cli',
+                    source: 'cli',
+                },
+            };
+
+            expect(normalizeRawMessage('msg-compact-hook-stdout-user', null, Date.now(), raw)).toBeNull();
         });
     });
 
