@@ -125,7 +125,7 @@ interface AgentInputProps {
     placeholder: string;
     onChangeText: (text: string) => void;
     sessionId?: string;
-    onSend: () => void;
+    onSend: (options?: Readonly<{ forceImmediate?: boolean }>) => void;
     submitAccessibilityLabel?: string;
     sendIcon?: React.ReactNode;
     onMicPress?: () => void;
@@ -854,7 +854,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const sendActionDisabled = Boolean(props.disabled || props.isSendDisabled || props.isSending);
     const inputRef = React.useRef<MultiTextInputHandle>(null);
 
-    const handleSend = React.useCallback(() => {
+    const handleSend = React.useCallback((options?: Readonly<{ forceImmediate?: boolean }>) => {
         if (sendActionDisabled) {
             return;
         }
@@ -867,7 +867,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             props.onChangeText('');
         }
         messageHistory.reset();
-        props.onSend();
+        props.onSend(options?.forceImmediate === true ? { forceImmediate: true } : undefined);
     }, [messageHistory, props.hasSendableAttachments, props.onChangeText, props.onSend, props.sessionId, props.value, sendActionDisabled]);
 
     const effectiveChipDensity = React.useMemo<'auto' | 'labels' | 'icons'>(() => {
@@ -1635,6 +1635,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
+        const forceImmediateSend = event.key === 'Enter' && event.shiftKey !== true && (event.metaKey === true || event.ctrlKey === true);
+        if (forceImmediateSend) {
+            const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
+            if (!sendActionDisabled && hasSendableInput) {
+                handleSend({ forceImmediate: true });
+                return true;
+            }
+        }
+
         // Handle autocomplete navigation first
         if (suggestions.length > 0) {
             if (event.key === 'ArrowUp') {

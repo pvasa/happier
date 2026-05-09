@@ -9,6 +9,8 @@ export type SupportedKey = 'Enter' | 'Escape' | 'ArrowUp' | 'ArrowDown' | 'Arrow
 export interface KeyPressEvent {
     key: SupportedKey;
     shiftKey: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
 }
 
 export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
@@ -109,7 +111,9 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         if (normalizedKey) {
             const keyEvent: KeyPressEvent = {
                 key: normalizedKey,
-                shiftKey: e.shiftKey
+                shiftKey: e.shiftKey,
+                ctrlKey: e.ctrlKey,
+                metaKey: e.metaKey,
             };
             
             const handled = onKeyPress(keyEvent);

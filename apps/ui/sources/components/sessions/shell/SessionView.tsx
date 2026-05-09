@@ -1006,6 +1006,7 @@ function SessionViewLoaded({
 
     const isResumable = canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions);
     const [isResuming, setIsResuming] = React.useState(false);
+    const [isPendingQueueWakeResuming, setIsPendingQueueWakeResuming] = React.useState(false);
     const persistedVoiceComposerRouting = React.useMemo(
         () => resolveVoiceSessionComposerRouting({
             conversationSessionId: sessionId,
@@ -1801,21 +1802,26 @@ function SessionViewLoaded({
                     );
                 } : undefined}
                 connectionStatus={{
-                    text: isResuming ? t('session.resuming') : (inactiveStatusText || sessionStatus.statusText),
+                    text: (isResuming || isPendingQueueWakeResuming) ? t('session.resuming') : (inactiveStatusText || sessionStatus.statusText),
                     color: sessionStatus.statusColor,
                     dotColor: sessionStatus.statusDotColor,
-                    isPulsing: isResuming || sessionStatus.isPulsing
+                    isPulsing: isResuming || isPendingQueueWakeResuming || sessionStatus.isPulsing
                 }}
-                onSend={() => {
+                onSend={(sendOptions) => {
                     if (!hasWriteAccess) {
                         Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
                         return;
                     }
 
-                    const sendComposerText = (messageToSend: string, composerTextBeforeSend: string) => {
+                    const sendComposerText = (
+                        messageToSend: string,
+                        composerTextBeforeSend: string,
+                        sendIntent?: Readonly<{ forceImmediate?: boolean }>,
+                    ) => {
                         const configuredMode = storage.getState().settings.sessionMessageSendMode;
                         const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
                         const submitMode = chooseSubmitMode({ configuredMode, busySteerSendPolicy, session });
+                        const forceImmediateSend = sendIntent?.forceImmediate === true;
 
                         const additionalMessage = messageToSend;
                         const trimmedText = messageToSend.trim();
@@ -2025,7 +2031,7 @@ function SessionViewLoaded({
                             return;
                         }
 
-                        if (submitMode === 'server_pending') {
+                        if (submitMode === 'server_pending' && !forceImmediateSend) {
                             fireAndForget((async () => {
                                 markComposerSent();
                                 const readyForSend = await directSessionTakeover.ensureReadyForSend();
@@ -2067,6 +2073,7 @@ function SessionViewLoaded({
                                 }
 
                                 try {
+                                    setIsPendingQueueWakeResuming(true);
                                     const result = await resumeSession({
                                         ...wakeOpts,
                                         serverId: capabilityServerId,
@@ -2082,6 +2089,8 @@ function SessionViewLoaded({
                                     if (!isSessionActive && isResumable) {
                                         setPendingQueueResumeFailed(true);
                                     }
+                                } finally {
+                                    setIsPendingQueueWakeResuming(false);
                                 }
 
                                 if (shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null)) {
@@ -2106,7 +2115,7 @@ function SessionViewLoaded({
 
                                 try {
                                     const supportsPendingQueueV2 = typeof session.pendingVersion === 'number';
-                                    if (supportsPendingQueueV2) {
+                                    if (supportsPendingQueueV2 && !forceImmediateSend) {
                                         await sync.enqueuePendingMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
                                         if (shouldSendReviewComments) {
                                             clearSentReviewCommentDrafts();
@@ -2175,7 +2184,7 @@ function SessionViewLoaded({
                                     return;
                                 }
 
-                                sendComposerText(expanded, composerTextBeforeSend);
+                                sendComposerText(expanded, composerTextBeforeSend, sendOptions);
                             } catch (e) {
                                 Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
                             }
@@ -2214,7 +2223,7 @@ function SessionViewLoaded({
                     }
 
                     if (resolved.kind !== 'send') return;
-                    sendComposerText(resolved.text, message);
+                    sendComposerText(resolved.text, message, sendOptions);
                 }}
                 isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
                 onMicPress={micButtonState.onMicPress}

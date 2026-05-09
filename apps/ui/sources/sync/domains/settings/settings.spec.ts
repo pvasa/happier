@@ -542,6 +542,11 @@ describe('settings', () => {
             expect((parsed as any).sessionReplaySummaryRunnerV1).toBe(null);
         });
 
+        it('defaults session message sending to server pending queue mode', () => {
+            const parsed = settingsParse({} as any);
+            expect((parsed as any).sessionMessageSendMode).toBe('server_pending');
+        });
+
         it('defaults voice settings', () => {
             const parsed = settingsParse({} as any);
             expect((parsed as any).voice.providerId).toBe('realtime_elevenlabs');
@@ -949,6 +954,7 @@ describe('settings', () => {
             expect((settingsDefaults as any).backendCliSourcePreferenceById).toEqual({});
             expect(settingsDefaults.codexBackendMode).toBe('appServer');
             expect(settingsDefaults.sessionReplayMaxSeedChars).toBe(120_000);
+            expect(settingsDefaults.sessionMessageSendMode).toBe('server_pending');
             expect(settingsDefaults.sessionDefaultPermissionModeByTargetKey).toMatchObject({
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: 'default',
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: 'default',

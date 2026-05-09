@@ -328,6 +328,65 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         expect(get().sessionListViewData).toBe(initialListViewData);
     });
 
+    it('keeps store collection references stable for active session heartbeat updates', async () => {
+        vi.doMock('../../runtime/orchestration/projectManager', () => ({
+            projectManager: { updateSessions: vi.fn() },
+        }));
+        mockSessionPersistenceBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain);
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+            } as any,
+        ]);
+
+        const initialSession = get().sessions.s1;
+        const initialSessions = get().sessions;
+        const initialRenderables = get().sessionListRenderables;
+        const initialMessages = get().sessionMessages;
+        const initialListViewData = get().sessionListViewData;
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 2,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+            } as any,
+        ]);
+
+        expect(get().sessions.s1).toBe(initialSession);
+        expect(get().sessions.s1?.activeAt).toBe(1);
+        expect(get().sessions).toBe(initialSessions);
+        expect(get().sessionListRenderables).toBe(initialRenderables);
+        expect(get().sessionMessages).toBe(initialMessages);
+        expect(get().sessionListViewData).toBe(initialListViewData);
+    });
+
     it('preserves transient renderable visibility flags across applySessions refreshes', async () => {
         vi.doMock('../../runtime/orchestration/projectManager', () => ({
             projectManager: { updateSessions: vi.fn() },
