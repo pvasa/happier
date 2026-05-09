@@ -349,7 +349,7 @@ describe('claudeLocalLauncher', () => {
 
       await expect(launcherPromise).resolves.toEqual({ type: 'exit', code: 0 });
       expect(mockClaudeLocal).toHaveBeenCalledTimes(1);
-      expect(client.peekPendingMessageQueueV2Count).toHaveBeenCalledTimes(2);
+      expect(client.discardPendingMessageQueueV2All).toHaveBeenCalledTimes(1);
     } finally {
       process.env.HAPPIER_E2E_PROVIDERS = previousE2e;
       vi.useRealTimers();

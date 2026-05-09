@@ -13,6 +13,7 @@ const envKeys = [
   'PATH',
   'HOME',
   'USERPROFILE',
+  'CODEX_HOME',
   'HAPPIER_PNPM_BIN',
   'HAPPIER_CODEX_CLI_AUTH_PROBE_TIMEOUT_MS',
   'OPENAI_API_KEY',
@@ -55,6 +56,7 @@ describe('codexCliAuthSpec', () => {
       PATH: '',
       HOME: dir,
       USERPROFILE: dir,
+      CODEX_HOME: join(dir, '.codex'),
       OPENAI_API_KEY: undefined,
     });
     process.env.HAPPIER_PNPM_BIN = await writePnpmNodeBridge({ dir, pathLookup: systemPath });
@@ -96,6 +98,7 @@ describe('codexCliAuthSpec', () => {
       PATH: '',
       HOME: dir,
       USERPROFILE: dir,
+      CODEX_HOME: join(dir, '.codex'),
     });
     process.env.HAPPIER_PNPM_BIN = await writePnpmNodeBridge({ dir, pathLookup: systemPath });
 
@@ -157,6 +160,7 @@ describe('codexCliAuthSpec', () => {
       PATH: '',
       HOME: dir,
       USERPROFILE: dir,
+      CODEX_HOME: join(dir, '.codex'),
       HAPPIER_CODEX_CLI_AUTH_PROBE_TIMEOUT_MS: '3_000',
     });
     process.env.HAPPIER_PNPM_BIN = await writePnpmNodeBridge({ dir, pathLookup: systemPath });
@@ -199,6 +203,7 @@ describe('codexCliAuthSpec', () => {
       PATH: '',
       HOME: dir,
       USERPROFILE: dir,
+      CODEX_HOME: join(dir, '.codex'),
       OPENAI_API_KEY: undefined,
     });
     process.env.HAPPIER_PNPM_BIN = await writePnpmNodeBridge({ dir, pathLookup: systemPath });
@@ -256,6 +261,7 @@ describe('codexCliAuthSpec', () => {
       PATH: '',
       HOME: dir,
       USERPROFILE: dir,
+      CODEX_HOME: join(dir, '.codex'),
       OPENAI_API_KEY: 'sk-test-codex',
     });
     process.env.HAPPIER_PNPM_BIN = await writePnpmNodeBridge({ dir, pathLookup: systemPath });
@@ -314,6 +320,7 @@ describe('codexCliAuthSpec', () => {
       PATH: '',
       HOME: dir,
       USERPROFILE: dir,
+      CODEX_HOME: join(dir, '.codex'),
       OPENAI_API_KEY: undefined,
       CODEX_API_KEY: 'codex-test-key',
     });

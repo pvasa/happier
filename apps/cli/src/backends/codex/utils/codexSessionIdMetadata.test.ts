@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import type { Metadata } from '@/api/types';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { maybeUpdateCodexSessionIdMetadata, publishCodexSessionIdMetadata } from './codexSessionIdMetadata';
+import { resolveConfiguredCodexHome } from './resolveConfiguredCodexHome';
 
-const DEFAULT_CODEX_HOME_PATH = resolve(join(homedir(), '.codex'));
+const TEST_HOME_PATH = resolve(join('/tmp', 'happier-codex-home'));
+const TEST_CODEX_HOME_ENV: NodeJS.ProcessEnv = {
+  HOME: TEST_HOME_PATH,
+  USERPROFILE: TEST_HOME_PATH,
+  CODEX_HOME: '',
+};
+const DEFAULT_CODEX_HOME_PATH = resolveConfiguredCodexHome(TEST_CODEX_HOME_ENV);
 
 describe('maybeUpdateCodexSessionIdMetadata', () => {
   it('no-ops when thread id is missing', () => {
@@ -81,6 +87,7 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
     maybeUpdateCodexSessionIdMetadata({
       getCodexThreadId: () => 'thread-app-server',
       backendMode: 'appServer',
+      processEnv: TEST_CODEX_HOME_ENV,
       updateHappySessionMetadata: (updater: (metadata: Metadata) => Metadata) => {
         updates.push(updater(createTestMetadata({ path: '/tmp' })));
       },
@@ -127,6 +134,7 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
     maybeUpdateCodexSessionIdMetadata({
       getCodexThreadId: () => 'thread-1',
       backendMode: 'mcp',
+      processEnv: TEST_CODEX_HOME_ENV,
       updateHappySessionMetadata: apply,
       lastPublished,
     } as any);
@@ -134,6 +142,7 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
     maybeUpdateCodexSessionIdMetadata({
       getCodexThreadId: () => 'thread-1',
       backendMode: 'appServer',
+      processEnv: TEST_CODEX_HOME_ENV,
       updateHappySessionMetadata: apply,
       lastPublished,
     } as any);

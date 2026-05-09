@@ -389,8 +389,6 @@ describe('repairClaudeTranscriptAfterInterrupt', () => {
                 ).catch(() => {});
             }, 5);
 
-            setTimeout(() => clearInterval(interval), 150).unref?.();
-
             vi.resetModules();
             const { repairClaudeTranscriptAfterInterrupt } = await import('./repairClaudeTranscriptAfterInterrupt');
             await repairClaudeTranscriptAfterInterrupt({
@@ -400,6 +398,7 @@ describe('repairClaudeTranscriptAfterInterrupt', () => {
                 claudeConfigDir,
             });
 
+            clearInterval(interval);
             await new Promise((resolve) => setTimeout(resolve, 175));
 
             const updated = await readFile(transcriptPath, 'utf8');

@@ -119,6 +119,7 @@ describe('probeCodexAppServerExecutionRunAvailability', () => {
         env: {
           HOME: homeDir,
           HAPPIER_CODEX_APP_SERVER_BIN: '~/bin/codex-app-server',
+          HAPPIER_CODEX_APP_SERVER_PROBE_TIMEOUT_MS: '5000',
         } as NodeJS.ProcessEnv,
       })).toBe(true);
     } finally {
