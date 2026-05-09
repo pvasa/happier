@@ -186,6 +186,47 @@ describe('resolveGitWorkspaceTransferEntries', () => {
         }
     });
 
+    it('includes only exact ignored paths selected with literal pathspecs', async () => {
+        const repoRoot = await makeTempDir('git-transfer-ignored-literal-');
+
+        try {
+            await runGit(repoRoot, ['init']);
+            await configureGitRepo(repoRoot);
+            await mkdir(join(repoRoot, '.happier', 'uploads', 'generated', 'message-1'), { recursive: true });
+            await mkdir(join(repoRoot, '.happier', 'uploads', 'generated', 'message-2'), { recursive: true });
+            await writeFile(join(repoRoot, '.gitignore'), '.happier/uploads/**\n', 'utf8');
+            await writeFile(join(repoRoot, 'README.md'), 'hello\n', 'utf8');
+            await writeFile(join(repoRoot, '.happier', 'uploads', 'generated', 'message-1', 'image[1].png'), 'referenced\n', 'utf8');
+            await writeFile(join(repoRoot, '.happier', 'uploads', 'generated', 'message-2', 'image1.png'), 'unrelated\n', 'utf8');
+            await runGit(repoRoot, ['add', 'README.md', '.gitignore']);
+            await runGit(repoRoot, ['commit', '-m', 'initial']);
+
+            const entries = await resolveGitWorkspaceTransferEntries({
+                context: {
+                    cwd: repoRoot,
+                    projectKey: `test:${repoRoot}`,
+                    detection: {
+                        isRepo: true,
+                        rootPath: repoRoot,
+                        mode: '.git',
+                    },
+                },
+                workspaceTransfer: {
+                    strategy: 'transfer_snapshot',
+                    includeIgnoredMode: 'include_selected',
+                    ignoredIncludeGlobs: [':(literal).happier/uploads/generated/message-1/image[1].png'],
+                },
+            });
+
+            expect(entries).toEqual(expect.arrayContaining([
+                expect.objectContaining({ relativePath: '.happier/uploads/generated/message-1/image[1].png' }),
+            ]));
+            expect(entries.some((entry) => entry.relativePath === '.happier/uploads/generated/message-2/image1.png')).toBe(false);
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('falls back when git metadata discovery cannot use path-format absolute', async () => {
         const repoRoot = await makeTempDir('git-transfer-path-fallback-');
         const wrapperRoot = await makeTempDir('git-transfer-path-wrapper-');

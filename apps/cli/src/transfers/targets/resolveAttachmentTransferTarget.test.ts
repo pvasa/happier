@@ -4,6 +4,7 @@ import {
   resolveAttachmentTransferTarget,
   resolveConfiguredAttachmentTransferTarget,
 } from './resolveAttachmentTransferTarget';
+import { resolveConfiguredSessionMediaTransferTarget } from '../sessionMedia/resolveSessionMediaTransferTarget';
 
 describe('resolveAttachmentTransferTarget', () => {
   it('keeps workspace uploads inside the workspace transfer substrate', () => {
@@ -73,6 +74,89 @@ describe('resolveAttachmentTransferTarget', () => {
         additionalAllowedWriteDirs: ['/tmp/happier/uploads/session-2'],
       },
       uploadBasePath: '/tmp/happier/uploads/session-2/messages',
+    });
+  });
+
+  it('resolves generated media into the workspace generated media directory', () => {
+    expect(resolveConfiguredSessionMediaTransferTarget({
+      category: 'generated',
+      config: {
+        uploadLocation: 'workspace',
+        workspaceRelativeDir: '.happier/uploads',
+        vcsIgnoreStrategy: 'git_info_exclude',
+        vcsIgnoreWritesEnabled: true,
+      },
+      tempUploadRoot: '/tmp/happier/uploads/session-3',
+      workingDirectory: '/repo',
+    })).toEqual({
+      success: true,
+      target: {
+        uploadBasePath: '.happier/uploads/generated',
+        additionalAllowedReadDirs: [],
+        additionalAllowedWriteDirs: [],
+      },
+      uploadBasePath: '.happier/uploads/generated',
+    });
+  });
+
+  it('resolves artifact media into the workspace artifacts media directory', () => {
+    expect(resolveConfiguredSessionMediaTransferTarget({
+      category: 'artifacts',
+      config: {
+        uploadLocation: 'workspace',
+        workspaceRelativeDir: ' .happier\\uploads ',
+        vcsIgnoreStrategy: 'git_info_exclude',
+        vcsIgnoreWritesEnabled: true,
+      },
+      tempUploadRoot: '/tmp/happier/uploads/session-4',
+      workingDirectory: '/repo',
+    })).toEqual({
+      success: true,
+      target: {
+        uploadBasePath: '.happier/uploads/artifacts',
+        additionalAllowedReadDirs: [],
+        additionalAllowedWriteDirs: [],
+      },
+      uploadBasePath: '.happier/uploads/artifacts',
+    });
+  });
+
+  it('rejects Windows drive-root workspace media directories', () => {
+    expect(resolveConfiguredSessionMediaTransferTarget({
+      category: 'generated',
+      config: {
+        uploadLocation: 'workspace',
+        workspaceRelativeDir: 'C:\\Users\\alice\\.happier\\uploads',
+        vcsIgnoreStrategy: 'git_info_exclude',
+        vcsIgnoreWritesEnabled: true,
+      },
+      tempUploadRoot: '/tmp/happier/uploads/session-windows',
+      workingDirectory: '/repo',
+    })).toMatchObject({
+      success: false,
+      error: 'Invalid workspaceRelativeDir',
+    });
+  });
+
+  it('rejects os_temp storage for durable generated media categories', () => {
+    expect(resolveConfiguredSessionMediaTransferTarget({
+      category: 'generated',
+      config: {
+        uploadLocation: 'os_temp',
+        workspaceRelativeDir: '.happier/uploads',
+        vcsIgnoreStrategy: 'none',
+        vcsIgnoreWritesEnabled: false,
+      },
+      tempUploadRoot: '/tmp/happier/uploads/session-5',
+      workingDirectory: '/repo',
+    })).toEqual({
+      success: false,
+      target: {
+        uploadBasePath: '/tmp/happier/uploads/session-5/generated',
+        additionalAllowedReadDirs: ['/tmp/happier/uploads/session-5'],
+        additionalAllowedWriteDirs: ['/tmp/happier/uploads/session-5'],
+      },
+      error: 'Session media category generated must use workspace storage',
     });
   });
 });

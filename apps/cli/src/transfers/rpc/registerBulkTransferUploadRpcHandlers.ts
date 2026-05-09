@@ -7,6 +7,10 @@ import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPol
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { TransferSessionStore } from '../core/transferSessionStore';
+import {
+  normalizeSessionMediaPathSegment,
+  sanitizeSessionMediaFileName,
+} from '../sessionMedia/sanitizeSessionMediaFileName';
 import type { TransferPathAllowanceRegistry } from '../targets/createTransferPathAllowanceRegistry';
 import { ensureAttachmentIgnoreRule } from '../targets/ensureAttachmentIgnoreRule';
 import {
@@ -72,24 +76,11 @@ function resolveAttachmentTransferConfig(request: Extract<BulkTransferUploadInit
 }
 
 function sanitizeAttachmentFileName(value: string): string {
-  const raw = String(value ?? '');
-  const base = raw.split(/[/\\]/g).pop() ?? '';
-  const trimmed = base.trim() || 'file';
-  const safe = trimmed.replace(/[^\w.\- ()]/g, '_');
-  const collapsed = safe.replace(/_+/g, '_');
-  const finalName = collapsed === '.' || collapsed === '..' ? 'file' : collapsed;
-  return finalName.length > 200 ? finalName.slice(-200) : finalName;
+  return sanitizeSessionMediaFileName(value);
 }
 
 function normalizeMessageLocalIdSegment(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed === '.' || trimmed === '..') return null;
-  if (trimmed.includes('\0')) return null;
-  // Must be a single safe path segment.
-  if (trimmed.includes('/') || trimmed.includes('\\')) return null;
-  return trimmed;
+  return normalizeSessionMediaPathSegment(value);
 }
 
 function joinAttachmentPath(...segments: readonly string[]): string {

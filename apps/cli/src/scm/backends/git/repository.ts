@@ -147,6 +147,12 @@ export async function getGitSnapshot(input: {
         args: ['remote', '-v'],
         timeoutMs: 10_000,
     });
+    const remoteHeadRefsResult = await runScmCommand({
+        bin: 'git',
+        cwd: repoRoot,
+        args: ['for-each-ref', '--format=%(refname:short)%09%(symref:short)', 'refs/remotes/*/HEAD'],
+        timeoutMs: 10_000,
+    });
     const checkoutIdentity = await inspectGitCheckoutIdentity({ cwd: context.cwd });
     const operationState = await readGitBranchOperationState(context);
 
@@ -175,6 +181,7 @@ export async function getGitSnapshot(input: {
         untrackedStatsByPath,
         worktreesOutput: worktreesResult.success ? (worktreesResult.stdout ?? '') : '',
         remotesOutput,
+        remoteHeadRefsOutput: remoteHeadRefsResult.success ? (remoteHeadRefsResult.stdout ?? '') : '',
         operationState,
         hostingProvider,
         prStatusCache: defaultPrStatusCache,

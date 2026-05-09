@@ -200,6 +200,35 @@ describe('git status snapshot parser', () => {
         ]);
     });
 
+    it('projects the default branch from the upstream remote HEAD ref', () => {
+        const statusOutput =
+            '# branch.oid 1111111111111111111111111111111111111111\0' +
+            '# branch.head feature/update\0' +
+            '# branch.upstream upstream/feature/update\0';
+        const input: Parameters<typeof buildGitSnapshot>[0] & { remoteHeadRefsOutput: string } = {
+            projectKey: 'machine-1:/repo',
+            fetchedAt: 123,
+            rootPath: '/repo',
+            statusOutput,
+            includedNumStatOutput: '',
+            pendingNumStatOutput: '',
+            remotesOutput:
+                'origin\tgit@github.com:happier-dev/fork.git (fetch)\n' +
+                'origin\tgit@github.com:happier-dev/fork.git (push)\n' +
+                'upstream\tgit@github.com:happier-dev/happier.git (fetch)\n' +
+                'upstream\tgit@github.com:happier-dev/happier.git (push)\n',
+            remoteHeadRefsOutput:
+                'origin/HEAD\torigin/main\n' +
+                'upstream/HEAD\tupstream/release/2026\n',
+        };
+
+        const snapshot = buildGitSnapshot(input);
+
+        expect(snapshot.repo).toMatchObject({
+            defaultBranch: 'release/2026',
+        });
+    });
+
     it('projects the detected hosting provider from git remotes', () => {
         const statusOutput =
             '# branch.oid 1111111111111111111111111111111111111111\0' +

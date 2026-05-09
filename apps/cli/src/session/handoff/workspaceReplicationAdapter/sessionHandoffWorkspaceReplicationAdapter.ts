@@ -40,6 +40,12 @@ import {
   parseSessionHandoffWorkspaceBlobPackTransferId,
 } from './sessionHandoffWorkspaceReplicationServerRouted';
 import type { SessionHandoffProviderBundleTransferPublication } from '../sessionHandoffProviderBundleTransferPublication';
+import type { SessionHandoffProviderBundle } from '../types';
+import {
+  collectSessionMediaHandoffPaths,
+  collectSessionMediaHandoffPathsFromProviderBundle,
+} from '../sessionMedia/collectSessionMediaHandoffPaths';
+import { mergeSessionMediaIgnoredIncludeGlobs } from '../sessionMedia/mergeSessionMediaIgnoredIncludeGlobs';
 
 type DirectPeerTransferPublisher = Readonly<{
   publishTransfer: (input: Readonly<{
@@ -123,12 +129,22 @@ export async function createSessionHandoffWorkspaceReplicationState(input: Reado
   sourceRootPath: string;
   activeServerDir: string;
   workspaceTransfer: SessionHandoffWorkspaceTransfer;
+  sessionTranscriptRecords?: readonly unknown[];
+  providerBundle?: SessionHandoffProviderBundle;
 }>): Promise<Readonly<{
   workspaceReplicationMetadata?: SessionHandoffWorkspaceReplicationMetadata;
 }>> {
+  const referencedMediaPaths = [
+    ...collectSessionMediaHandoffPaths(input.sessionTranscriptRecords ?? []),
+    ...collectSessionMediaHandoffPathsFromProviderBundle(input.providerBundle),
+  ];
+  const workspaceTransfer = mergeSessionMediaIgnoredIncludeGlobs({
+    workspaceTransfer: input.workspaceTransfer,
+    referencedMediaPaths,
+  });
   const workspaceExportArtifacts = await buildWorkspaceExportArtifactsWithSourceController({
     sourcePath: input.sourceRootPath,
-    workspaceTransfer: input.workspaceTransfer,
+    workspaceTransfer,
   });
   const workspaceReplicationMetadata = createSessionHandoffWorkspaceReplicationMetadata({
     sourceRootPath: input.sourceRootPath,
@@ -423,6 +439,8 @@ export async function prepareSessionHandoffSourceWorkspaceTransfer(input: Readon
   directPeerTransfer?: DirectPeerTransferPublisher;
   sourceRootPath: string;
   providerBundleTransferPublication?: SessionHandoffProviderBundleTransferPublication;
+  sessionTranscriptRecords?: readonly unknown[];
+  providerBundle?: SessionHandoffProviderBundle;
 }>): Promise<Readonly<{
   workspaceReplicationMetadata?: SessionHandoffWorkspaceReplicationMetadata;
   handoffMetadataV2?: SessionHandoffMetadataV2;
@@ -434,6 +452,8 @@ export async function prepareSessionHandoffSourceWorkspaceTransfer(input: Readon
       sourceRootPath: input.sourceRootPath,
       activeServerDir: input.activeServerDir,
       workspaceTransfer: input.workspaceTransfer,
+      sessionTranscriptRecords: input.sessionTranscriptRecords ?? [],
+      providerBundle: input.providerBundle,
     })
     : null;
   const workspaceReplicationMetadata = workspaceReplicationState?.workspaceReplicationMetadata;
