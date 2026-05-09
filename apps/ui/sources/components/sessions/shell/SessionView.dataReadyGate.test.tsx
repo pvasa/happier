@@ -130,6 +130,7 @@ installSessionShellCommonModuleMocks({
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
             useSessionReviewCommentsDrafts: () => [],
+            useWorkspaceReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
             useSyncError: () => syncErrorState,
             useLocalSetting: <K extends keyof LocalSettings>(key: K) => localSettingsDefaults[key],

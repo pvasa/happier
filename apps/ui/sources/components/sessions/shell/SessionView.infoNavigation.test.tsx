@@ -128,6 +128,7 @@ installSessionShellCommonModuleMocks({
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
             useSessionReviewCommentsDrafts: () => [],
+            useWorkspaceReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
             useLocalSetting: <K extends keyof LocalSettings>(key: K) => localSettingsDefaults[key],
             useLocalSettingMutable: <K extends keyof LocalSettings>(key: K) => [
@@ -146,9 +147,16 @@ installSessionShellCommonModuleMocks({
     },
 });
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', () => ({
-    resolveServerIdForSessionIdFromLocalCache: (sessionId: string) => resolveServerIdForSessionIdFromLocalCacheSpy(sessionId),
-}));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', async (importOriginal) => {
+    const actual = await importOriginal<
+        typeof import('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache')
+    >();
+    return {
+        ...actual,
+        resolveServerIdForSessionIdFromLocalCache: (sessionId: string) =>
+            resolveServerIdForSessionIdFromLocalCacheSpy(sessionId),
+    };
+});
 
 vi.mock('react-native-reanimated', () => ({ __esModule: true, default: {} }));
 vi.mock('react-native-reanimated/lib/module', () => ({ __esModule: true, default: {} }));
