@@ -15,6 +15,7 @@ export type SessionFileDetailsFileContent = Readonly<{
     isBinary: boolean;
     binaryBase64?: string | null;
     binaryMime?: string | null;
+    binarySizeBytes?: number | null;
 }>;
 
 export type SessionFileDetailsRefreshResult =
@@ -40,6 +41,7 @@ export async function refreshSessionFileDetails(input: Readonly<{
     sessionPath: string | null;
     sessionsReady: boolean;
     fileEntryKind?: ScmEntryKind | null;
+    imagePreviewMaxBytes?: number | null;
 }>): Promise<SessionFileDetailsRefreshResult> {
     const sessionState = resolveSessionPathState({
         sessionId: input.sessionId,
@@ -78,22 +80,51 @@ export async function refreshSessionFileDetails(input: Readonly<{
         const imageMime = getImageMimeTypeFromPath(input.filePath);
         const wantsBinaryPreview = typeof imageMime === 'string' && imageMime.trim().length > 0;
 
-        const maxPreviewBytesRaw = config.filesPreviewMaxBytes;
-        const maxPreviewBytes =
-            typeof maxPreviewBytesRaw === 'number' && Number.isFinite(maxPreviewBytesRaw) && maxPreviewBytesRaw > 0
-                ? Math.floor(maxPreviewBytesRaw)
+        const genericMaxPreviewBytesRaw = config.filesPreviewMaxBytes;
+        const genericMaxPreviewBytes =
+            typeof genericMaxPreviewBytesRaw === 'number' && Number.isFinite(genericMaxPreviewBytesRaw) && genericMaxPreviewBytesRaw > 0
+                ? Math.floor(genericMaxPreviewBytesRaw)
                 : null;
-        if (maxPreviewBytes != null) {
+        const imageMaxPreviewBytesRaw = input.imagePreviewMaxBytes;
+        const imageMaxPreviewBytes =
+            typeof imageMaxPreviewBytesRaw === 'number' && Number.isFinite(imageMaxPreviewBytesRaw) && imageMaxPreviewBytesRaw > 0
+                ? Math.floor(imageMaxPreviewBytesRaw)
+                : null;
+        const maxPreviewBytes = wantsBinaryPreview && imageMaxPreviewBytes != null
+            ? imageMaxPreviewBytes
+            : genericMaxPreviewBytes;
+
+        const readOptions = maxPreviewBytes != null ? { maxBytes: maxPreviewBytes } : undefined;
+        const statLimitBytes =
+            typeof maxPreviewBytes === 'number' && Number.isFinite(maxPreviewBytes) && maxPreviewBytes > 0
+                ? maxPreviewBytes
+                : null;
+        let statSizeBytes: number | null = null;
+        if (statLimitBytes != null) {
             const stat = await sessionStatFile(input.sessionId, input.filePath);
-            if (stat.success && stat.exists === true && typeof stat.sizeBytes === 'number' && stat.sizeBytes > maxPreviewBytes) {
-                return {
-                    status: 'ready',
-                    error: t('files.fileTooLargeToPreview'),
-                    diffContent,
-                    fileContent: null,
-                    fileWriteSupported: false,
-                };
+            if (stat.success && stat.exists === true && typeof stat.sizeBytes === 'number') {
+                statSizeBytes = Math.max(0, Math.floor(stat.sizeBytes));
+                if (stat.sizeBytes > statLimitBytes) {
+                    return {
+                        status: 'ready',
+                        error: t('files.fileTooLargeToPreview'),
+                        diffContent,
+                        fileContent: null,
+                        fileWriteSupported: false,
+                    };
+                }
             }
+        }
+
+        if (wantsBinaryPreview) {
+            fileContent = { content: '', isBinary: true, binaryMime: imageMime, binarySizeBytes: statSizeBytes };
+            return {
+                status: 'ready',
+                error: null,
+                diffContent,
+                fileContent,
+                fileWriteSupported: true,
+            };
         }
 
         if (isKnownBinaryPath(input.filePath) && !wantsBinaryPreview) {
@@ -107,7 +138,7 @@ export async function refreshSessionFileDetails(input: Readonly<{
             };
         }
 
-        const readResponse = await sessionReadFile(input.sessionId, input.filePath);
+        const readResponse = await sessionReadFile(input.sessionId, input.filePath, readOptions);
         if (!readResponse.success) {
             failedReadError = readResponse.error || t('files.fileReadFailed');
             error = failedReadError;
@@ -122,17 +153,6 @@ export async function refreshSessionFileDetails(input: Readonly<{
         }
 
         const encodedContent = readResponse.content || '';
-
-        if (wantsBinaryPreview) {
-            fileContent = { content: '', isBinary: true, binaryBase64: encodedContent, binaryMime: imageMime };
-            return {
-                status: 'ready',
-                error: null,
-                diffContent,
-                fileContent,
-                fileWriteSupported: true,
-            };
-        }
 
         const decodedContent = decodeUtf8Base64(encodedContent);
         if (isBinaryContent(decodedContent)) {

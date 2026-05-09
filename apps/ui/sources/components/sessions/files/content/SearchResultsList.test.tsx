@@ -57,6 +57,16 @@ vi.mock('@/components/ui/lists/Item', () => ({
     Item: 'Item',
 }));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
+}
+
 describe('SearchResultsList', () => {
     it('does not render string children under View when searchQuery is empty', async () => {
         const { SearchResultsList } = await import('./SearchResultsList');
@@ -110,7 +120,7 @@ describe('SearchResultsList', () => {
         expect(onFilePress).toHaveBeenCalledTimes(0);
     });
 
-    it('renders file path on the left and file name on the right (matches changed-files layout)', async () => {
+    it('right-aligns the directory segment against the file name (matches changed-files layout)', async () => {
         const { SearchResultsList } = await import('./SearchResultsList');
 
         const file = {
@@ -130,8 +140,19 @@ describe('SearchResultsList', () => {
                 />)).tree;
 
         const item = tree!.findByType('Item' as any);
-        expect(item.props.title).toBe('src/');
-        expect(item.props.rightElement?.type).toBe('Text');
-        expect(String(item.props.rightElement?.props?.children)).toBe('a.ts');
+        expect(item.props.rightElement).toBeNull();
+
+        const titleScreen = await renderScreen(item.props.title);
+        const textNodes = titleScreen.tree.findAllByType('Text' as any);
+        const pathWrapper = textNodes.find((node) => flattenStyle(node.props.style).writingDirection === 'rtl')!;
+        const pathContent = textNodes.find((node) => node.props.children === 'src/')!;
+
+        expect(pathWrapper.props.ellipsizeMode).toBeUndefined();
+        expect(flattenStyle(pathWrapper.props.style).textAlign).toBe('right');
+        expect(flattenStyle(pathContent.props.style)).toMatchObject({
+            writingDirection: 'ltr',
+            unicodeBidi: 'isolate',
+        });
+        expect(textNodes.some((node) => node.props.children === 'a.ts')).toBe(true);
     });
 });

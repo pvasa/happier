@@ -78,6 +78,7 @@ export function mapProtocolSnapshotToUiSnapshot(
             rootPath: snapshot.repo.rootPath,
             backendId: snapshot.repo.backendId,
             mode: snapshot.repo.mode,
+            defaultBranch: snapshot.repo.defaultBranch ?? null,
             worktrees: snapshot.repo.worktrees,
             remotes: snapshot.repo.remotes ?? [],
         },

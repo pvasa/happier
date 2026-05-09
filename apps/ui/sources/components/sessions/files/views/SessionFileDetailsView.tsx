@@ -45,6 +45,7 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
 import { useSessionFileDownloadAvailability } from '@/components/sessions/files/useSessionFileDownloadAvailability';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
+import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
 export type SessionFileDeepLinkAnchor = Readonly<{
     source: ReviewCommentSource;
     anchor: ReviewCommentAnchor;
@@ -100,6 +101,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const filesEditorChangeDebounceMs = useSetting('filesEditorChangeDebounceMs');
     const filesEditorMaxFileBytes = useSetting('filesEditorMaxFileBytes');
     const filesEditorBridgeMaxChunkBytes = useSetting('filesEditorBridgeMaxChunkBytes');
+    const filesImagePreviewMaxBytes = useSetting('filesImagePreviewMaxBytes');
     const scrollFades = useScrollEdgeFades({
         enabledEdges: { top: true, bottom: true },
         overflowThreshold: 1,
@@ -201,6 +203,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                 sessionsReady,
                 sessionPath,
                 fileEntryKind: fileEntry?.kind ?? null,
+                imagePreviewMaxBytes: filesImagePreviewMaxBytes,
             });
 
             if (result.status === 'waiting') {
@@ -229,7 +232,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                 }
             }
         }
-    }, [diffMode, filePath, sessionId, sessionPath, sessionsReady]);
+    }, [diffMode, fileEntry?.kind, filePath, filesImagePreviewMaxBytes, sessionId, sessionPath, sessionsReady]);
 
     React.useEffect(() => {
         void refreshAll();
@@ -401,6 +404,14 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 
     const previewTooLarge = error === t('files.fileTooLargeToPreview');
     const fatalError = Boolean(error) && !previewTooLarge;
+    const binaryImagePreview = useSessionImagePreview({
+        sessionId,
+        filePath,
+        enabled: fileContent?.isBinary === true && typeof fileContent.binaryMime === 'string' && fileContent.binaryMime.startsWith('image/'),
+        cacheKey: lineSelectionFingerprint,
+        mimeType: fileContent?.binaryMime ?? null,
+        sizeBytes: fileContent?.binarySizeBytes ?? null,
+    });
 
     React.useEffect(() => {
         if (!previewTooLarge) return;
@@ -417,13 +428,8 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }
     const isBinaryFile = fileContent?.isBinary === true;
     const showDownloadAction = downloadActionsAvailable && (previewTooLarge || isBinaryFile);
-    const imagePreviewUri = (() => {
-        const base64 = fileContent?.binaryBase64 ?? null;
-        const mime = fileContent?.binaryMime ?? null;
-        if (typeof base64 !== 'string' || base64.trim().length === 0) return null;
-        if (typeof mime !== 'string' || mime.trim().length === 0) return null;
-        return `data:${mime};base64,${base64}`;
-    })();
+    const imagePreviewUri = binaryImagePreview.status === 'loaded' ? binaryImagePreview.uri : null;
+    const imagePreviewSvgXml = binaryImagePreview.status === 'loaded' ? binaryImagePreview.svgXml : null;
     const fileHeaderRightElement =
         showDownloadAction || (fileStatusForHeaderActions && scmWriteEnabled && (scmSnapshot?.capabilities?.writeDiscard === true)) ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -547,7 +553,12 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                         onScroll={scrollFades.onScroll}
                         scrollEventThrottle={16}
                     >
-                        <FileBinaryState theme={theme} filePath={filePath} imagePreviewUri={imagePreviewUri} />
+                        <FileBinaryState
+                            theme={theme}
+                            filePath={filePath}
+                            imagePreviewUri={imagePreviewUri}
+                            imagePreviewSvgXml={imagePreviewSvgXml}
+                        />
                     </ScrollView>
                 ) : (
                     <FileContentPanel

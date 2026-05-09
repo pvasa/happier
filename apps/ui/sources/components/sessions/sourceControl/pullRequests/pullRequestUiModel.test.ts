@@ -181,6 +181,7 @@ describe('buildPullRequestUiModel', () => {
                 rootPath: '/repo',
                 backendId: 'git',
                 mode: '.git',
+                defaultBranch: 'develop',
                 remotes: [],
                 worktrees: [{ path: '/repo', branch: 'develop', isCurrent: true, isMain: true }],
             },
@@ -197,6 +198,34 @@ describe('buildPullRequestUiModel', () => {
         if (model.kind !== 'ready_to_create') return;
         expect(model.baseBranch).toBe('develop');
         expect(model.createBlockedReason).toBe('default_branch_requires_feature');
+    });
+
+    it('uses the detected remote default branch even when it is not a conventional branch name', () => {
+        const model = buildPullRequestUiModel(snapshot({
+            repo: {
+                isRepo: true,
+                rootPath: '/repo',
+                backendId: 'git',
+                mode: '.git',
+                defaultBranch: 'release/2026',
+                remotes: [],
+                worktrees: [{ path: '/repo', branch: 'feature/dev-update', isCurrent: true, isMain: true }],
+            },
+            branch: {
+                head: 'feature/dev-update',
+                upstream: null,
+                ahead: 1,
+                behind: 0,
+                detached: false,
+            },
+        }));
+
+        expect(model.kind).toBe('ready_to_create');
+        if (model.kind !== 'ready_to_create') return;
+        expect(model.baseBranch).toBe('release/2026');
+        expect(model.headBranch).toBe('feature/dev-update');
+        expect(model.createBlockedReason).toBeNull();
+        expect(model.defaultBranchAction).toBeNull();
     });
 
     it('uses the repository default branch when a feature branch has no upstream', () => {
@@ -225,6 +254,33 @@ describe('buildPullRequestUiModel', () => {
         if (model.kind !== 'ready_to_create') return;
         expect(model.baseBranch).toBe('develop');
         expect(model.createBlockedReason).toBeNull();
+    });
+
+    it('does not treat the current main worktree branch as the repository default after creating a feature branch', () => {
+        const model = buildPullRequestUiModel(snapshot({
+            repo: {
+                isRepo: true,
+                rootPath: '/repo',
+                backendId: 'git',
+                mode: '.git',
+                remotes: [],
+                worktrees: [{ path: '/repo', branch: 'feature/dev-update', isCurrent: true, isMain: true }],
+            },
+            branch: {
+                head: 'feature/dev-update',
+                upstream: null,
+                ahead: 1,
+                behind: 0,
+                detached: false,
+            },
+        }));
+
+        expect(model.kind).toBe('ready_to_create');
+        if (model.kind !== 'ready_to_create') return;
+        expect(model.baseBranch).toBe('main');
+        expect(model.headBranch).toBe('feature/dev-update');
+        expect(model.createBlockedReason).toBeNull();
+        expect(model.defaultBranchAction).toBeNull();
     });
 
     it('keeps PR creation disabled in the ready model when the backend does not allow PR creation', () => {

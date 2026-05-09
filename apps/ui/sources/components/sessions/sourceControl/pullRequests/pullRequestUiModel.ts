@@ -124,9 +124,16 @@ function resolvePullRequestBaseBranch(snapshot: ScmWorkingSnapshot, headBranch: 
 }
 
 function resolveRepositoryDefaultBranch(snapshot: ScmWorkingSnapshot): string | null {
-    const defaultWorktree = snapshot.repo.worktrees?.find((worktree) => worktree.isMain === true);
+    const detectedDefaultBranch = snapshot.repo.defaultBranch?.trim();
+    if (detectedDefaultBranch) return detectedDefaultBranch;
+
+    const defaultWorktree = snapshot.repo.worktrees?.find((worktree) => (
+        worktree.isMain === true && worktree.isCurrent !== true
+    ));
     const branch = defaultWorktree?.branch?.trim();
-    return branch ? branch : null;
+    if (branch) return branch;
+
+    return null;
 }
 
 function resolveCreateStrategy(snapshot: ScmWorkingSnapshot): PullRequestCreateStrategy {

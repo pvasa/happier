@@ -41,6 +41,7 @@ export function buildSnapshotSignature(snapshot: ScmWorkingSnapshot): string {
 
     return [
         snapshot.repo.rootPath ?? '',
+        snapshot.repo.defaultBranch ?? '',
         snapshot.branch.head ?? '',
         snapshot.branch.upstream ?? '',
         String(snapshot.branch.ahead),

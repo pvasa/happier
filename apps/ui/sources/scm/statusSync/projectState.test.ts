@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { getRepoScopeSessionIds } from './projectState';
+import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
+
+import { EMPTY_SCM_CAPABILITIES } from '../core/snapshotMappers';
+import { buildSnapshotSignature, getRepoScopeSessionIds } from './projectState';
 
 const getStateMock = vi.hoisted(() => vi.fn());
 
@@ -11,6 +14,48 @@ vi.mock('@/sync/domains/state/storage', async () => {
     getState: getStateMock,
   },
 });
+});
+
+function snapshot(defaultBranch?: string | null): ScmWorkingSnapshot {
+    return {
+        projectKey: 'machine:/repo',
+        fetchedAt: 1,
+        repo: {
+            isRepo: true,
+            rootPath: '/repo',
+            backendId: 'git',
+            mode: '.git',
+            ...(defaultBranch === undefined ? {} : { defaultBranch }),
+        },
+        capabilities: EMPTY_SCM_CAPABILITIES,
+        branch: {
+            head: 'feature/update',
+            upstream: null,
+            ahead: 0,
+            behind: 0,
+            detached: false,
+        },
+        stashCount: 0,
+        hasConflicts: false,
+        entries: [],
+        totals: {
+            includedFiles: 0,
+            pendingFiles: 0,
+            untrackedFiles: 0,
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 0,
+            pendingRemoved: 0,
+        },
+    };
+}
+
+describe('buildSnapshotSignature', () => {
+  it('changes when the repository default branch is detected later', () => {
+    expect(buildSnapshotSignature(snapshot())).not.toBe(
+      buildSnapshotSignature(snapshot('release/2026')),
+    );
+  });
 });
 
 describe('getRepoScopeSessionIds', () => {

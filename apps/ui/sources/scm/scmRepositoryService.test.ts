@@ -189,6 +189,9 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
     it('preserves hosting provider and pull request projections from protocol snapshots', async () => {
         const normalized = await Promise.resolve(
             makeScmSnapshot({
+                repo: {
+                    defaultBranch: 'release/2026',
+                },
                 hostingProvider: {
                     kind: 'github',
                     name: 'GitHub',
@@ -217,6 +220,7 @@ describe('ScmRepositoryService.fetchSnapshotForSession', () => {
         const { normalizeWorkingSnapshotForUi } = await import('./scmRepositoryService');
         const result = normalizeWorkingSnapshotForUi(normalized, 'machine:/repo');
 
+        expect(result.repo.defaultBranch).toBe('release/2026');
         expect((result as { hostingProvider?: unknown }).hostingProvider).toEqual({
             kind: 'github',
             name: 'GitHub',

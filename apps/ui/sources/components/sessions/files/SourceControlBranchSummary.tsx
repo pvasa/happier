@@ -99,13 +99,20 @@ export function SourceControlBranchSummary({
             >
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                        <Octicons name="git-branch" size={15} color={theme.colors.textSecondary} />
+                        <Octicons
+                            name="git-branch"
+                            size={15}
+                            color={theme.colors.textSecondary}
+                            style={{ flexShrink: 0 }}
+                        />
                         {canShowBranchMenu && sessionId ? (
                             <React.Suspense
                                 fallback={(
                                     <Text
                                         numberOfLines={1}
                                         style={{
+                                            flexShrink: 1,
+                                            minWidth: 0,
                                             fontSize: 14,
                                             color: theme.colors.text,
                                             ...Typography.default('semiBold'),
@@ -128,6 +135,8 @@ export function SourceControlBranchSummary({
                             <Text
                                 numberOfLines={1}
                                 style={{
+                                    flexShrink: 1,
+                                    minWidth: 0,
                                     fontSize: 14,
                                     color: theme.colors.text,
                                     ...Typography.default('semiBold'),

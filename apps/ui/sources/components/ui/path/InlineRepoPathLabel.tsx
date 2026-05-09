@@ -10,6 +10,10 @@ import { normalizeRepoPathParts } from '@/utils/path/normalizeRepoPathParts';
 
 const PATH_SEPARATOR = '/';
 const ROOT_FILE_ALIGNMENT_SPACER_STYLE = { flex: 1, minWidth: 0 } satisfies ViewStyle;
+const WEB_INLINE_PATH_TEXT_STYLE = {
+    ...WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE,
+    textAlign: 'right' as const,
+} satisfies TextStyle;
 
 export type InlineRepoPathLabelProps = Readonly<{
     fileName?: string | null;
@@ -52,7 +56,7 @@ export const InlineRepoPathLabel = React.memo(function InlineRepoPathLabel(props
                 minWidth: 0,
             } satisfies TextStyle,
             isWeb
-                ? WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE
+                ? WEB_INLINE_PATH_TEXT_STYLE
                 : { textAlign: 'right' } satisfies TextStyle,
             props.pathTextStyle,
         ];

@@ -468,14 +468,31 @@ export function SourceControlBranchMenu(props: SourceControlBranchMenuProps): Re
                     style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
+                        flexShrink: 1,
                         gap: 6,
+                        minWidth: 0,
                         opacity: disabled ? 0.6 : pressed ? 0.82 : 1,
                     })}
                 >
-                    <Text numberOfLines={1} style={{ fontSize: 14, color: theme.colors.text, ...Typography.default('semiBold') }}>
+                    <Text
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        style={{
+                            flexShrink: 1,
+                            minWidth: 0,
+                            fontSize: 14,
+                            color: theme.colors.text,
+                            ...Typography.default('semiBold'),
+                        }}
+                    >
                         {currentBranch || t('files.detachedHead')}
                     </Text>
-                    <Octicons name={open ? 'chevron-up' : 'chevron-down'} size={14} color={theme.colors.textSecondary} />
+                    <Octicons
+                        name={open ? 'chevron-up' : 'chevron-down'}
+                        size={14}
+                        color={theme.colors.textSecondary}
+                        style={{ flexShrink: 0 }}
+                    />
                 </Pressable>
             )}
         />

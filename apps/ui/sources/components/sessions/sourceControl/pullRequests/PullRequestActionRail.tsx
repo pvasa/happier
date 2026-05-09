@@ -87,7 +87,7 @@ export function PullRequestActionRail(props: Readonly<{
                     || props.model.createBlockedReason !== null
                     || (
                         props.model.createStrategy.kind === 'open_or_reuse'
-                        && props.model.createStrategy.disabledReason !== null
+                        && props.model.createStrategy.disabledReason != null
                     )
                 }
                 kind="primary"

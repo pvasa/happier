@@ -195,7 +195,7 @@ describe('ScmChangeRow', () => {
 
     expect(pathLabel.props.ellipsizeMode).toBeUndefined();
     expect(flattenStyle(pathLabel.props.style)).toMatchObject({
-      textAlign: 'left',
+      textAlign: 'right',
       writingDirection: 'rtl',
     });
     expect(flattenStyle(pathText.props.style)).toMatchObject({

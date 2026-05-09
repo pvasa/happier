@@ -42,7 +42,7 @@ describe('InlineRepoPathLabel', () => {
         expect(flattenStyle(labels[0]!.props.style)).toMatchObject({
             color: 'path',
             writingDirection: 'rtl',
-            textAlign: 'left',
+            textAlign: 'right',
         });
         expect(flattenStyle(labels[1]!.props.style)).toMatchObject({
             writingDirection: 'ltr',

@@ -106,8 +106,15 @@ export function FileErrorState({ theme, filePath, error, onRetry }: FileStatePro
     );
 }
 
-export function FileBinaryState({ theme, filePath, imagePreviewUri }: FileStateProps & { filePath: string; imagePreviewUri?: string | null }) {
+export function FileBinaryState({ theme, filePath, imagePreviewUri, imagePreviewSvgXml }: FileStateProps & {
+    filePath: string;
+    imagePreviewUri?: string | null;
+    imagePreviewSvgXml?: string | null;
+}) {
     const svgXml = React.useMemo(() => {
+        if (typeof imagePreviewSvgXml === 'string' && imagePreviewSvgXml.trim().length > 0) {
+            return imagePreviewSvgXml;
+        }
         if (Platform.OS === 'web') return null;
         if (typeof imagePreviewUri !== 'string') return null;
         if (!imagePreviewUri.startsWith('data:image/svg+xml')) return null;
@@ -122,7 +129,7 @@ export function FileBinaryState({ theme, filePath, imagePreviewUri }: FileStateP
         } catch {
             return null;
         }
-    }, [imagePreviewUri]);
+    }, [imagePreviewSvgXml, imagePreviewUri]);
 
     return (
         <View
