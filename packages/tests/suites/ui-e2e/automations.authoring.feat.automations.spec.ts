@@ -11,6 +11,7 @@ import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticate
 import { createSessionFromNewSessionComposer, openNewSessionMachineSelection } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -27,8 +28,8 @@ async function ensureSwitchEnabled(toggle: Locator) {
 }
 
 async function enableAutomationsInSettings(params: Readonly<{ baseUrl: string; page: Page }>) {
+    await enableEnhancedSessionWizard({ page: params.page, baseUrl: params.baseUrl, timeoutMs: 180_000 });
     await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/settings/features?happier_hmr=0`, 180_000);
-    await ensureSwitchEnabled(params.page.getByTestId('settings-feature-toggle-useEnhancedSessionWizard'));
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-experiments-toggle'));
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-toggle-automations'));
 }

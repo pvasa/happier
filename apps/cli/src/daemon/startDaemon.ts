@@ -7,6 +7,7 @@ import { getReleaseRingCatalogEntry } from '@happier-dev/release-runtime/release
 
 import { ApiClient, isMachineContentPublicKeyMismatchError } from '@/api/api';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
+import { materializeNextPendingQueueV2MessageViaHttp } from '@/api/session/pendingQueueV2Transport';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import { TrackedSession } from './types';
@@ -172,6 +173,26 @@ function resolveCliSubcommandFromBackendTarget(target: BackendTargetRefV1 | unde
     return 'acp-catalog';
   }
   return resolveAgentCliSubcommand(readBuiltInCatalogAgentIdFromBackendTarget(target));
+}
+
+async function nudgeAlreadyRunningExistingSessionPendingQueue(params: Readonly<{
+  sessionId: string;
+  daemonToken: string;
+}>): Promise<void> {
+  const token = params.daemonToken.trim();
+  if (!token) return;
+
+  try {
+    await materializeNextPendingQueueV2MessageViaHttp({
+      token,
+      sessionId: params.sessionId,
+    });
+  } catch (error) {
+    logger.debug('[DAEMON RUN] Failed to nudge pending queue for already-running session resume', {
+      sessionId: params.sessionId,
+      error: serializeAxiosErrorForLog(error),
+    });
+  }
 }
 
 function readAccountSettingsChangedHintVersion(update: unknown): number | null {
@@ -617,6 +638,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
 
                 if (await isSessionRunnerActive(normalizedExistingSessionId)) {
                   logger.debug(`[DAEMON RUN] Resume requested for ${normalizedExistingSessionId}, but session is already running`);
+                  await nudgeAlreadyRunningExistingSessionPendingQueue({
+                    sessionId: normalizedExistingSessionId,
+                    daemonToken: credentials.token,
+                  });
                   return { type: 'success', sessionId: normalizedExistingSessionId };
                 }
               }

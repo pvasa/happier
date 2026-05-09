@@ -10,17 +10,9 @@ import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } f
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
-
-async function enableEnhancedSessionWizardInSettings(page: Page, baseUrl: string) {
-    await page.goto(`${baseUrl}/settings/features`, { waitUntil: 'domcontentloaded' });
-    const enhancedWizardToggle = page.getByTestId('settings-feature-toggle-useEnhancedSessionWizard');
-    if ((await enhancedWizardToggle.count()) === 0) {
-        return;
-    }
-    await enhancedWizardToggle.click();
-}
 
 async function ensureSignedInAndConnected(params: Readonly<{
     page: Page;
@@ -308,7 +300,7 @@ test.describe('ui e2e: directory path browser reuse', () => {
             flowDirName: 'connect-daemon-new-session',
         });
 
-        await enableEnhancedSessionWizardInSettings(page, uiBaseUrl);
+        await enableEnhancedSessionWizard({ page, baseUrl: uiBaseUrl });
 
         await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new`);
         await ensureNewSessionBackendIsReady(page);

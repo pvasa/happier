@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -12,6 +12,7 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { openNewSessionMachineSelection } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 import { selectNewSessionAgent } from '../../src/testkit/uiE2e/selectNewSessionAgent';
+import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -49,13 +50,6 @@ async function waitForLatestMachineId(params: { suiteDir: string; timeoutMs?: nu
     }
   }
   return readLatestMachineIdFromServerLightDb({ suiteDir: params.suiteDir });
-}
-
-async function enableEnhancedSessionWizardInSettings(page: Page, baseUrl: string) {
-  await page.goto(`${baseUrl}/settings/features`, { waitUntil: 'domcontentloaded' });
-  const enhancedWizardToggle = page.getByTestId('settings-feature-toggle-useEnhancedSessionWizard');
-  await expect(enhancedWizardToggle).toHaveCount(1, { timeout: 60_000 });
-  await enhancedWizardToggle.click();
 }
 
 test.describe('ui e2e: /new resume id browse fills from direct sessions', () => {
@@ -185,20 +179,21 @@ test.describe('ui e2e: /new resume id browse fills from direct sessions', () => 
     });
     const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
 
-    await enableEnhancedSessionWizardInSettings(page, uiBaseUrl);
+    await enableEnhancedSessionWizard({ page, baseUrl: uiBaseUrl });
 
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new?happier_hmr=0`, 180_000);
     await expect(page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 180_000 });
 
-    // Select the Codex engine so the resume browse can find seeded Codex sessions.
-    await selectNewSessionAgent({ page, agentId: 'codex' });
-
-    // Scope the browse modal to the daemon-backed machine that just connected.
+    // Scope the browse modal to the daemon-backed machine that just connected. Agent availability can be machine-scoped,
+    // so select the machine before choosing Codex.
     await expect(page.getByTestId('agent-input-machine-chip')).toHaveCount(1, { timeout: 60_000 });
     await openNewSessionMachineSelection({ page, uiBaseUrl });
     await expect(page.getByTestId(`new-session-machine:${machineId}`)).not.toHaveCount(0, { timeout: 120_000 });
     await page.getByTestId(`new-session-machine:${machineId}`).first().click();
     await page.waitForURL((url: URL) => url.pathname.endsWith('/new'), { timeout: 60_000 });
+
+    // Select the Codex engine so the resume browse can find seeded Codex sessions.
+    await selectNewSessionAgent({ page, agentId: 'codex' });
 
     // Open the resume chip popover and browse sessions.
     await expect(page.getByTestId('agent-input-resume-chip')).toHaveCount(1, { timeout: 60_000 });
