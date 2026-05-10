@@ -8,6 +8,21 @@ import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let lastMultiTextInputProps: any = null;
+let backdropBlurEnabled = true;
+
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (style == null) return {};
+    if (Array.isArray(style)) {
+        return style.reduce<Record<string, unknown>>((acc, value) => ({
+            ...acc,
+            ...flattenStyle(value),
+        }), {});
+    }
+    if (typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
+}
 
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
@@ -92,7 +107,10 @@ vi.mock('@/sync/domains/state/storageStore', () => ({
 }));
 
 vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
+    useLocalSetting: (key: string) => {
+        if (key === 'uiBackdropBlurEnabled') return backdropBlurEnabled;
+        return 1;
+    },
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
@@ -115,7 +133,36 @@ vi.mock('@/agents/catalog/catalog', () => ({
 }));
 
 describe('AgentInput (attachments drag overlay)', () => {
+    it('does not apply backdrop blur when the local backdrop blur appearance setting is disabled', async () => {
+        backdropBlurEnabled = false;
+        const { AgentInput } = await import('./AgentInput');
+
+        lastMultiTextInputProps = null;
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: '',
+            placeholder: 'placeholder',
+            onChangeText: () => { },
+            onSend: () => { },
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            onAttachmentsAdded: () => { },
+            hasSendableAttachments: false,
+        }));
+
+        await act(async () => {
+            lastMultiTextInputProps?.onFileDragActiveChange?.(true);
+        });
+
+        const overlay = screen.findByTestId('agent-input-drop-overlay');
+        const overlayStyle = flattenStyle(overlay?.props.style);
+        expect(overlayStyle.backdropFilter).toBeUndefined();
+        expect(overlayStyle.backgroundColor).toBe('rgba(0, 0, 0, 0.6)');
+        backdropBlurEnabled = true;
+    }, 120_000);
+
     it('renders a drop overlay when files are dragged over the input', async () => {
+        backdropBlurEnabled = true;
         const { AgentInput } = await import('./AgentInput');
 
         lastMultiTextInputProps = null;
@@ -142,6 +189,7 @@ describe('AgentInput (attachments drag overlay)', () => {
             throw new Error('expected agent-input-drop-overlay to render');
         }
         expect(overlay.props.pointerEvents).toBe('none');
-        expect(overlay.props.style.backgroundColor).toBe('rgba(0, 0, 0, 0.45)');
+        const overlayStyle = flattenStyle(overlay.props.style);
+        expect(overlayStyle.backgroundColor).toBe('rgba(0, 0, 0, 0.45)');
     }, 120_000);
 });

@@ -56,10 +56,12 @@ describe('createAttachmentActionChip', () => {
         try {
             const onPickFile = vi.fn();
             const onPickImage = vi.fn();
+            const onPasteImage = vi.fn();
 
             const chip = createAttachmentActionChip({
                 onPickFile,
                 onPickImage,
+                onPasteImage,
             } as any);
 
             expect(chip.collapsedContentPopover).toBeTruthy();
@@ -115,6 +117,17 @@ describe('createAttachmentActionChip', () => {
             expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 250);
             queuedTimeoutCallbacks.shift()?.();
             expect(onPickFile).toHaveBeenCalledTimes(1);
+
+            requestClose.mockClear();
+            await contentScreen.pressByTestIdAsync('attachments-action-paste-image');
+            expect(requestClose).toHaveBeenCalled();
+            expect(onPasteImage).not.toHaveBeenCalled();
+            expect(runAfterInteractionsSpy).toHaveBeenCalledTimes(3);
+            queuedInteractionCallbacks.shift()?.();
+            expect(onPasteImage).not.toHaveBeenCalled();
+            expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 250);
+            queuedTimeoutCallbacks.shift()?.();
+            expect(onPasteImage).toHaveBeenCalledTimes(1);
         } finally {
             setTimeoutSpy.mockRestore();
             runAfterInteractionsSpy.mockRestore();

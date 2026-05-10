@@ -25,6 +25,7 @@ function runAfterNativePopoverDismiss(action: () => void): void {
 export function createAttachmentActionChip(params: Readonly<{
     onPickFile: () => void;
     onPickImage: () => void;
+    onPasteImage?: () => void;
     disabled?: boolean;
 }>): AgentInputExtraActionChip {
     const showChooser = Platform.OS === 'ios' || Platform.OS === 'android';
@@ -62,30 +63,42 @@ export function createAttachmentActionChip(params: Readonly<{
                 label: t('common.attach'),
                 icon: (tint: string) =>
                     normalizeNodeForView(<Ionicons name="attach-outline" size={16} color={tint} />),
-                renderContent: ({ requestClose }) => (
-                    <ActionListSection
-                        actions={[
-                            {
-                                id: 'add-image',
-                                testID: 'attachments-action-add-image',
-                                label: t('common.addImage'),
-                                onPress: () => {
-                                    requestClose();
-                                    runAfterNativePopoverDismiss(params.onPickImage);
+                renderContent: ({ requestClose }) => {
+                    const pasteImage = params.onPasteImage;
+                    return (
+                        <ActionListSection
+                            actions={[
+                                ...(pasteImage ? [{
+                                    id: 'paste-image',
+                                    testID: 'attachments-action-paste-image',
+                                    label: t('common.pasteImage'),
+                                    onPress: () => {
+                                        requestClose();
+                                        runAfterNativePopoverDismiss(pasteImage);
+                                    },
+                                }] : []),
+                                {
+                                    id: 'add-image',
+                                    testID: 'attachments-action-add-image',
+                                    label: t('common.addImage'),
+                                    onPress: () => {
+                                        requestClose();
+                                        runAfterNativePopoverDismiss(params.onPickImage);
+                                    },
                                 },
-                            },
-                            {
-                                id: 'add-file',
-                                testID: 'attachments-action-add-file',
-                                label: t('common.addFile'),
-                                onPress: () => {
-                                    requestClose();
-                                    runAfterNativePopoverDismiss(params.onPickFile);
+                                {
+                                    id: 'add-file',
+                                    testID: 'attachments-action-add-file',
+                                    label: t('common.addFile'),
+                                    onPress: () => {
+                                        requestClose();
+                                        runAfterNativePopoverDismiss(params.onPickFile);
+                                    },
                                 },
-                            },
-                        ]}
-                    />
-                ),
+                            ]}
+                        />
+                    );
+                },
                 maxWidthCap: 360,
                 maxHeightCap: 260,
                 scrollEnabled: false,

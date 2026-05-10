@@ -63,6 +63,7 @@ import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveT
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboardImageAttachment';
 import { ensureAgentInstallablesBackground } from '@/capabilities/ensureAgentInstallablesBackground';
 import type { ModelMode, PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
@@ -962,6 +963,20 @@ function SessionViewLoaded({
     const agentInputAttachments = attachmentDraftManager.agentInputAttachments;
     const addAttachments = attachmentDraftManager.addWebFiles;
     const addPickedAttachments = attachmentDraftManager.addPickedAttachments;
+    const pasteAttachmentImage = React.useCallback(() => {
+        fireAndForget((async () => {
+            const picked = await nativeReadClipboardImageAttachment();
+            if (picked.length === 0) {
+                Modal.alert(t('attachments.alerts.noClipboardImageTitle'), t('attachments.alerts.noClipboardImageBody'));
+                return;
+            }
+            addPickedAttachments(picked);
+        })(), {
+            onError: () => {
+                Modal.alert(t('attachments.alerts.noClipboardImageTitle'), t('attachments.alerts.noClipboardImageBody'));
+            },
+        });
+    }, [addPickedAttachments]);
     const [isUploadingAttachments, setIsUploadingAttachments] = React.useState(false);
     const recipientState = useSessionRecipientState({ targets: participantTargets, autoRecipient: null });
 
@@ -1658,6 +1673,7 @@ function SessionViewLoaded({
             onPickAttachmentImage: () => {
                 openAttachmentFilePickerImages(filePickerRef.current);
             },
+            onPasteAttachmentImage: pasteAttachmentImage,
             onAppendLinkedPath: (path) => {
                 setMessage((prev) => {
                     const base = prev ?? '';

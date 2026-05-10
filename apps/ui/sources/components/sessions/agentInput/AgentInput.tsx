@@ -95,6 +95,7 @@ import {
 } from '@/utils/sessions/permissions/permissionPromptPolicy';
 import { buildSessionMessageRouteId } from '@/sync/domains/messages/messageRouteIds';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
+import { useLocalSetting } from '@/sync/store/hooks';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
 import type {
     AgentInputAttachment,
@@ -585,12 +586,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderWidth: 1,
         borderColor: theme.colors.divider,
         borderRadius: Platform.select({ default: 16, android: 20 }),
-        ...(Platform.OS === 'web'
-            ? ({
-                // RN-web supports `backdropFilter`; native platforms ignore it.
-                backdropFilter: 'blur(2px)',
-            } as any)
-            : null),
     },
     fileDropOverlayContent: {
         flexDirection: 'row',
@@ -622,6 +617,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
     const keyboardHeight = useKeyboardHeight();
     const voiceEnabled = useFeatureEnabled('voice');
+    const uiBackdropBlurEnabled = useLocalSetting('uiBackdropBlurEnabled') !== false;
     const renderIoniconNode = React.useCallback(
         (
             name: React.ComponentProps<typeof Ionicons>['name'],
@@ -2078,7 +2074,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     }}
                 >
                     {fileDragActive && typeof props.onAttachmentsAdded === 'function' ? (
-                        <View testID="agent-input-drop-overlay" pointerEvents="none" style={styles.fileDropOverlay}>
+                        <View
+                            testID="agent-input-drop-overlay"
+                            pointerEvents="none"
+                            style={[
+                                styles.fileDropOverlay,
+                                Platform.OS === 'web' && !uiBackdropBlurEnabled
+                                    ? ({ backgroundColor: theme.colors.overlay.scrimStrong } as ViewStyle)
+                                    : null,
+                                Platform.OS === 'web' && uiBackdropBlurEnabled
+                                    ? ({ backdropFilter: 'blur(2px)' } as unknown as ViewStyle)
+                                    : null,
+                            ]}
+                        >
                             <View style={styles.fileDropOverlayContent}>
                                 {renderIoniconNode('attach-outline', 18, theme.colors.text)}
                                 <Text style={styles.fileDropOverlayText}>{t('agentInput.dropToAttach')}</Text>

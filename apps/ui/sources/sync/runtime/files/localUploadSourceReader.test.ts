@@ -53,6 +53,26 @@ afterEach(() => {
 });
 
 describe('localUploadSourceReader', () => {
+    it('reads in-memory attachment bytes without opening a native handle', async () => {
+        const { openLocalUploadSourceReader, resolveLocalUploadSourceSizeBytes } = await import('./localUploadSourceReader');
+        const bytes = new TextEncoder().encode('abcdef');
+
+        const source = {
+            kind: 'memory',
+            bytes,
+            name: 'pasted-image.png',
+            mimeType: 'image/png',
+        } as any;
+
+        await expect(resolveLocalUploadSourceSizeBytes(source)).resolves.toBe(6);
+
+        const reader = await openLocalUploadSourceReader(source);
+        expect(reader.sizeBytes).toBe(6);
+        expect(new TextDecoder().decode(await reader.readBytes(1, 3))).toBe('bcd');
+        await reader.close();
+        expect(nativeOpenSpy).not.toHaveBeenCalled();
+    });
+
     it('reads web file bytes without opening a native handle', async () => {
         const { openLocalUploadSourceReader } = await import('./localUploadSourceReader');
         const bytes = new TextEncoder().encode('hello');
