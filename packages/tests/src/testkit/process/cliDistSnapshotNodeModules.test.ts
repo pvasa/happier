@@ -599,6 +599,57 @@ describe('ensureCliDistSnapshotNodeModules', () => {
     expect(readFileSync(snapshotPackageJson, 'utf8')).toContain('@happier-dev/connection-supervisor');
   });
 
+  it('overwrites stale bundled workspace manifests with canonical package manifests', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'happier-cli-dist-snapshot-stale-manifest-'));
+    createdDirs.push(rootDir);
+    mkdirSync(join(rootDir, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents', 'dist'), { recursive: true });
+    mkdirSync(join(rootDir, 'packages', 'agents', 'dist'), { recursive: true });
+    mkdirSync(join(rootDir, 'node_modules'), { recursive: true });
+
+    writeFileSync(
+      join(rootDir, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents', 'package.json'),
+      JSON.stringify({
+        name: '@happier-dev/agents',
+        version: '0.0.0',
+        type: 'module',
+        main: './index.js',
+        exports: { '.': { default: './index.js' } },
+      }, null, 2),
+      'utf8',
+    );
+    writeFileSync(
+      join(rootDir, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents', 'dist', 'index.js'),
+      'export const bundled = true;\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(rootDir, 'packages', 'agents', 'package.json'),
+      JSON.stringify({
+        name: '@happier-dev/agents',
+        version: '0.0.0',
+        type: 'module',
+        main: './dist/index.js',
+        types: './dist/index.d.ts',
+        exports: { '.': { default: './dist/index.js', types: './dist/index.d.ts' } },
+      }, null, 2),
+      'utf8',
+    );
+    writeFileSync(join(rootDir, 'packages', 'agents', 'dist', 'index.js'), 'export const workspace = true;\n', 'utf8');
+
+    const snapshotDir = mkdtempSync(join(tmpdir(), 'happier-cli-dist-snapshot-stale-manifest-out-'));
+    createdDirs.push(snapshotDir);
+    const snapshotDistDir = resolve(snapshotDir, 'dist');
+    mkdirSync(snapshotDistDir, { recursive: true });
+
+    ensureCliDistSnapshotNodeModules({ snapshotDir, snapshotDistDir, rootDir });
+
+    const snapshotPackageJson = JSON.parse(
+      readFileSync(join(snapshotDir, 'node_modules', '@happier-dev', 'agents', 'package.json'), 'utf8'),
+    ) as { main?: unknown; exports?: { '.': { default?: unknown } } };
+    expect(snapshotPackageJson.main).toBe('./dist/index.js');
+    expect(snapshotPackageJson.exports?.['.']?.default).toBe('./dist/index.js');
+  });
+
   it('repairs missing workspace dist files from the source package tree', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'happier-cli-dist-snapshot-dist-'));
     createdDirs.push(rootDir);

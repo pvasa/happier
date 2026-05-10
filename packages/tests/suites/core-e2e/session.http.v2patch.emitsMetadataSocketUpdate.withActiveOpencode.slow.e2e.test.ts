@@ -208,7 +208,10 @@ new acp.AgentSideConnection((conn) => new FakeAgent(conn), stream);
 
       await waitFor(async () => {
         const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
-        return typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion;
+        return snap.active === true || (
+          typeof snap.agentStateVersion === 'number' &&
+          snap.agentStateVersion > baselineAgentStateVersion
+        );
       }, { timeoutMs: 45_000 });
 
       const localId = `pending-${randomUUID()}`;

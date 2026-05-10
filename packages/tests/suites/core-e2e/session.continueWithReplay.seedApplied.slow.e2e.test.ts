@@ -287,6 +287,7 @@ describe('core e2e: replaySeedV1 is applied to the first provider prompt but not
         HAPPIER_WEBAPP_URL: server.baseUrl,
         HAPPIER_CLAUDE_PATH: fakeClaudePath,
         HAPPIER_E2E_FAKE_CLAUDE_LOG: fakeChildLogPath,
+        HAPPIER_E2E_DAEMON_CLI_SNAPSHOT_MODE: 'testdir',
       },
     });
 
