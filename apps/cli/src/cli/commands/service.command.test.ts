@@ -16,6 +16,10 @@ vi.mock('./serviceRepair/handleServiceRepairCliCommand', () => ({
   handleServiceRepairCliCommand: handleServiceRepairCliCommandMock,
 }));
 
+vi.mock('@/cli/runtime/resolveInvokerName', () => ({
+  resolveInvokerName: () => 'happier',
+}));
+
 import { handleServiceCliCommand } from './service';
 
 describe('service command routing', () => {
@@ -28,6 +32,7 @@ describe('service command routing', () => {
 
     expect(runDaemonServiceCliCommandMock).toHaveBeenCalledWith({
       argv: ['install', '--json'],
+      commandPath: 'happier service',
     });
   });
 
@@ -40,7 +45,7 @@ describe('service command routing', () => {
 
     expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
       argv: ['repair', '--json'],
-      commandPath: 'happier doctor',
+      commandPath: 'happier service',
     });
     expect(runDaemonServiceCliCommandMock).not.toHaveBeenCalledWith({
       argv: ['repair', '--json'],

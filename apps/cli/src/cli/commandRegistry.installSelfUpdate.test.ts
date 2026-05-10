@@ -44,6 +44,10 @@ describe('commandRegistry install/update aliases', () => {
     expect(commandRegistry.service).toBeTypeOf('function');
   });
 
+  it('registers status top-level command', () => {
+    expect(commandRegistry.status).toBeTypeOf('function');
+  });
+
   it('registers bridge command namespace', () => {
     expect(commandRegistry.bridge).toBeTypeOf('function');
   });

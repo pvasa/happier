@@ -62,6 +62,12 @@ const COMMAND_SURFACE_MANIFEST: readonly CliCommandSurfaceEntry[] = [
     allowTmux: false,
   },
   {
+    command: 'status',
+    rootHelpLabel: 'happier status',
+    rootHelpDescription: 'Show system status and recommended repairs',
+    allowTmux: false,
+  },
+  {
     command: 'service',
     rootHelpLabel: 'happier service',
     rootHelpDescription: 'Manage automatic startup',
