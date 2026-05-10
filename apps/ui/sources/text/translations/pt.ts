@@ -955,6 +955,7 @@ export const pt: TranslationStructure = {
     copy: "Copiar",
     copyWithLabel: ({ label }: { label: string }) => `Copiar ${label}`,
     paste: "Colar",
+    pasteImage: "Colar imagem",
     expand: "Expandir",
     collapse: "Recolher",
     command: "Comando",
@@ -2384,6 +2385,8 @@ export const pt: TranslationStructure = {
       fileTooLargeTitle: "Arquivo muito grande",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `Ignorados ${count} ${plural({ count, singular: "arquivo", plural: "arquivos" })} que excedem o tamanho máximo de anexo.`,
+      noClipboardImageTitle: "Nenhuma imagem na área de transferência",
+      noClipboardImageBody: "Copie uma imagem e cole-a como anexo.",
     },
   },
 
@@ -3325,6 +3328,9 @@ export const pt: TranslationStructure = {
     },
     display: "Exibição",
     displayDescription: "Controle layout e espaçamento",
+    backdropBlur: "Desfoque de fundo",
+    backdropBlurDescription:
+      "Use desfoque de fundo atrás de modais e menus. Desative para melhorar o desempenho do navegador.",
     multiPanePanels: "Painéis à direita",
     multiPanePanelsDescription:
       "Mostre painéis laterais redimensionáveis para arquivos e controle de código fonte (web/tablet)",
@@ -7335,6 +7341,109 @@ settingsSession: {
     noEntriesAvailable: "Nenhuma entrada de changelog disponível.",
   },
 
+  releaseNotes: {
+    viewFullChangelog: "Ver notas de versão completas",
+    mediaUnavailable: "Multimédia indisponível",
+    storyDeck: {
+      dragToDismiss: "Arrasta para fechar",
+      slideAnnouncement: ({ title, current, total }: { title: string; current: number; total: number }) => `${title} - ${current} / ${total}`,
+    },
+    defaultTitle: "Novidades",
+    onboardingShowcase: {
+      title: "Bem-vindo ao Happier",
+      subtitle: "Sessões de programação que te acompanham para todo o lado.",
+      cards: {
+        welcome: {
+          title: "Pensado para ritmo",
+          row1Title: "Sessões em qualquer dispositivo",
+          row1Body: "Continua onde paraste — telemóvel, tablet, web ou desktop.",
+          row2Title: "Avança rápido, entrega mais cedo",
+          row2Body: "A sincronização em tempo real mantém terminal, agentes e ficheiros alinhados.",
+          row3Title: "Privado por defeito",
+          row3Body: "Cifragem ponta a ponta para que o teu trabalho continue a ser teu.",
+        },
+        cockpit: {
+            title: "Seu centro de comando móvel",
+            body: "Uma visão móvel focada para agentes ativos, com acesso em um toque a chat, arquivos, Git, terminal e detalhes.",
+            alt: "Imagem abstrata de espaço reservado para o centro de comando.",
+            row1Title: "Modo cockpit",
+            row1Body: "Acompanhe agentes ativos em uma visão móvel focada.",
+            row2Title: "Pule com um toque",
+            row2Body: "Alterne entre chat, arquivos, Git, terminal e detalhes sem o layout desktop.",
+            row3Title: "Envie rápido",
+            row3Body: "Responda pelo cockpit quando um agente precisar de um empurrão.",
+        },
+        reviewComments: {
+            title: "Revise e corrija código facilmente",
+            body: "Comente linhas exatas de arquivos ou diffs, escolha o que incluir e envie contexto estruturado a um agente.",
+            alt: "Imagem abstrata de espaço reservado para comentários de revisão.",
+            row1Title: "Comente linhas exatas",
+            row1Body: "Deixe feedback diretamente em linhas de arquivos e diffs.",
+            row2Title: "Escolha o que enviar",
+            row2Body: "Revise, edite, remova ou inclua comentários antes de pedir a um agente.",
+            row3Title: "Mantenha o contexto",
+            row3Body: "Envie contexto de revisão estruturado para a sessão atual ou uma nova sessão.",
+        },
+        sourceControl: {
+            title: "Construa e publique",
+            body: "Crie e publique branches, gerencie remotos, revise arquivos alterados e abra pull requests sem sair do Happier.",
+            alt: "Imagem abstrata de espaço reservado para controle de código-fonte.",
+            row1Title: "Branches e publicação",
+            row1Body: "Crie branches, gerencie remotos e envie mudanças sem sair do Happier.",
+            row2Title: "Abra pull requests",
+            row2Body: "Reutilize PRs existentes ou crie um novo pela sessão.",
+            row3Title: "Revise arquivos alterados",
+            row3Body: "Foque em arquivos selecionados quando o changeset ficar grande.",
+        },
+        markdown: {
+            title: "Streaming mais suave, markdown mais rico",
+            body: "Respostas em streaming parecem mais suaves, e o Markdown mais rico torna respostas longas, código, listas e diagramas mais fáceis de ler.",
+            alt: "Imagem abstrata de espaço reservado para renderização Markdown.",
+            row1Title: "A saída acompanha",
+            row1Body: "Respostas em streaming parecem mais fluidas enquanto os agentes escrevem.",
+            row2Title: "Markdown mais forte",
+            row2Body: "Blocos de código, listas, tabelas e respostas longas renderizam com mais confiança.",
+            row3Title: "Compactação mais clara",
+            row3Body: "Eventos do ciclo de vida ficam mais fáceis de seguir na transcrição.",
+        },
+        media: {
+            title: "Imagens direto na transcrição",
+            body: "Peça ao Codex e a agentes compatíveis para gerar imagens, depois pré-visualize os resultados diretamente no Happier.",
+            alt: "Imagem abstrata de espaço reservado para mídia gerada.",
+            row1Title: "Gere imagens",
+            row1Body: "Peça ao Codex e a agentes compatíveis para criar imagens.",
+            row2Title: "Prévia inline",
+            row2Body: "Imagens geradas aparecem diretamente nas conversas do Happier.",
+            row3Title: "Salvas com a sessão",
+            row3Body: "Mídia passa pelo mesmo pipeline de sessão que seu trabalho.",
+        },
+        desktop: {
+            title: "Um app desktop mais polido",
+            body: "Um shell desktop mais limpo, com chrome mais polido, espaçamento mais seguro e status de atualização no lugar certo.",
+            alt: "Imagem abstrata de espaço reservado para app desktop.",
+            row1Title: "Chrome mais limpo",
+            row1Body: "Controles da barra lateral e status de atualização se integram melhor.",
+            row2Title: "Mais foco",
+            row2Body: "Janelas e superfícies de sessão ficam fora do caminho.",
+            row3Title: "Layout mais seguro",
+            row3Body: "Espaçamento desktop lida melhor com chrome de plataforma e telas com notch.",
+        },
+        pets: {
+            title: "Conheça Pets",
+            body: "Um pequeno companheiro que ajuda você a manter o ritmo entre sessões. Útil? Talvez. Charmoso? Com certeza.",
+            alt: "Imagem abstrata de espaço reservado para o companheiro pet.",
+            row1Title: "Um pequeno companheiro",
+            row1Body: "Ajuda você a manter o ritmo entre sessões.",
+            row2Title: "Acompanha atividade",
+            row2Body: "Mostra atividade da sessão no desktop e no mobile.",
+            row3Title: "Útil? Talvez.",
+            row3Body: "Charmoso? Com certeza.",
+        },
+
+      },
+    },
+  },
+
   terminal: {
     // Used by terminal connection screens
     webBrowserRequired: "Navegador web necessário",
@@ -7872,7 +7981,7 @@ settingsSession: {
       codeLabel: "Código",
     },
 
-  artifacts: {
+    artifacts: {
     title: "Artefatos",
     countSingular: "1 artefato",
     countPlural: ({ count }: { count: number }) => `${count} artefatos`,

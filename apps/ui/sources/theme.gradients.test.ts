@@ -51,4 +51,11 @@ describe('control gradient theme tokens', () => {
             expectVerticalGradientToBeLighterAtTop(theme.colors.segmentedControl.activeGradient.colors);
         }
     });
+
+    it('keeps wizard scrim aligned for modal and route overlays across light and dark themes', () => {
+        expect(lightTheme.colors.overlay.scrimWizard).toBe('rgba(255, 255, 255, 0.52)');
+        expect(darkTheme.colors.overlay.scrimWizard).toBe('rgba(0, 0, 0, 0.42)');
+        expect(lightTheme.colors.overlay.scrimStrong).toBe('rgba(255, 255, 255, 0.68)');
+        expect(darkTheme.colors.overlay.scrimStrong).toBe('rgba(0, 0, 0, 0.58)');
+    });
 });

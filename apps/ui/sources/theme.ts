@@ -30,6 +30,7 @@ const sharedSpacing = {
         lg: 10,  // Input fields (matches "new session panel input fields")
         xl: 12,  // Cards, containers (20 uses)
         xxl: 16, // Main containers
+        modalCard: 14, // Modal card surfaces (wizard shell, story deck)
     },
 
     // Icon sizes (based on actual usage patterns)
@@ -75,7 +76,7 @@ export const lightTheme = {
         overlay: {
             scrimSoft: 'rgba(0, 0, 0, 0.18)',
             scrim: 'rgba(0, 0, 0, 0.45)',
-            scrimStrong: 'rgba(0, 0, 0, 0.6)',
+            scrimStrong: 'rgba(255, 255, 255, 0.68)',
             scrimWizard: 'rgba(255, 255, 255, 0.52)',
             text: '#FFFFFF',
             textSecondary: 'rgba(255, 255, 255, 0.9)',
@@ -329,8 +330,8 @@ export const darkTheme = {
         overlay: {
             scrimSoft: 'rgba(0, 0, 0, 0.45)',
             scrim: 'rgba(0, 0, 0, 0.45)',
-            scrimStrong: 'rgba(0, 0, 0, 0.6)',
-            scrimWizard: 'rgba(0, 0, 0, 0.16)',
+            scrimStrong: 'rgba(0, 0, 0, 0.58)',
+            scrimWizard: 'rgba(0, 0, 0, 0.42)',
             text: '#FFFFFF',
             textSecondary: 'rgba(255, 255, 255, 0.9)',
         },

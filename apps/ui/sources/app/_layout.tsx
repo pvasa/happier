@@ -44,6 +44,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { AsyncLock } from '@/utils/system/lock';
 import { useWebUiFontScale } from '@/components/ui/text/useWebUiFontScale';
 import { usePierreDiffWorkerPoolWarmup } from '@/components/ui/code/diff/pierre/usePierreDiffWorkerPoolWarmup';
+import { useWebBackdropBlurPreference } from '@/components/ui/overlays/useWebBackdropBlurPreference';
 import { initializeSentryOnce, wrapWithSentryIfEnabled } from '@/utils/system/sentry';
 import { t } from '@/text';
 import { AppCrashRecoveryBoundary } from '@/components/appShell/AppCrashRecoveryBoundary';
@@ -62,6 +63,7 @@ import { isTauriDesktop } from '@/utils/platform/tauri';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { ThemePreferenceTransitionHost } from '@/components/settings/appearance/ThemePreferenceTransitionHost';
 import { useTauriMainWindowBackgroundColor } from '@/desktop/window/useTauriMainWindowBackgroundColor';
+import { OnboardingShowcaseAutoShowMount } from '@/onboarding/showcase';
 
 initializeSentryOnce();
 installTauriMcpBridgeOnce();
@@ -611,6 +613,7 @@ function RootLayout() {
     const { theme } = useUnistyles();
     const isDesktopPetOverlayWindow = isDesktopPetOverlayWindowContext();
     useWebUiFontScale();
+    useWebBackdropBlurPreference();
     usePierreDiffWorkerPoolWarmup();
     const background = isDesktopPetOverlayWindow ? 'transparent' : theme.colors.groupped.background;
     const navigationTheme = React.useMemo(() => {
@@ -842,6 +845,7 @@ function RootAppShell(props: Readonly<{
 
     return (
         <View style={{ flex: 1, position: 'relative' }}>
+            {!props.isDesktopPetOverlayWindow ? <OnboardingShowcaseAutoShowMount /> : null}
             {appShellChromeHost === 'narrow-desktop-fallback' || appShellChromeHost === 'unauth-shell' ? (
                 <DesktopFallbackShellChrome safeArea={props.safeArea} />
             ) : appShellChromeHost === 'web-top-right' ? (

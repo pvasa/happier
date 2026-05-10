@@ -52,6 +52,7 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [uiFontScale, setUiFontScale] = useLocalSettingMutable('uiFontScale');
     const [uiItemDensity, setUiItemDensity] = useLocalSettingMutable('uiItemDensity');
     const [uiMultiPanePanelsEnabled, setUiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
+    const [uiBackdropBlurEnabled, setUiBackdropBlurEnabled] = useLocalSettingMutable('uiBackdropBlurEnabled');
     const [detailsPaneTabsBehavior, setDetailsPaneTabsBehavior] = useLocalSettingMutable('detailsPaneTabsBehavior');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
@@ -289,6 +290,18 @@ export default React.memo(function AppearanceSettingsScreen() {
                         />
                     }
                     disabled={!panelsSupported}
+                    showChevron={false}
+                />
+                <Item
+                    title={t('settingsAppearance.backdropBlur')}
+                    subtitle={t('settingsAppearance.backdropBlurDescription')}
+                    icon={<Ionicons name="layers-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            value={uiBackdropBlurEnabled !== false}
+                            onValueChange={setUiBackdropBlurEnabled}
+                        />
+                    }
                     showChevron={false}
                 />
                 <DropdownMenu

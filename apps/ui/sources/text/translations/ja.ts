@@ -888,6 +888,7 @@ export const ja: TranslationStructure = {
     copy: "コピー",
     copyWithLabel: ({ label }: { label: string }) => `${label} をコピー`,
     paste: "貼り付け",
+    pasteImage: "画像を貼り付け",
     expand: "展開",
     collapse: "折りたたむ",
     command: "コマンド",
@@ -2554,6 +2555,8 @@ localTailscale: {
       fileTooLargeTitle: "ファイルが大きすぎます",
       fileTooLargeBody: ({ count }: { count: number }) =>
         `最大添付サイズを超えるため、${count} 件のファイルをスキップしました。`,
+      noClipboardImageTitle: "クリップボードに画像がありません",
+      noClipboardImageBody: "画像をコピーしてから、添付ファイルとして貼り付けてください。",
     },
   },
 
@@ -3486,6 +3489,9 @@ localTailscale: {
     },
     display: "表示",
     displayDescription: "レイアウトと間隔を調整",
+    backdropBlur: "背景ぼかし",
+    backdropBlurDescription:
+      "モーダルやメニューの背後に背景ぼかしを適用します。ブラウザー性能を優先する場合は無効にしてください。",
     multiPanePanels: "右パネル",
     multiPanePanelsDescription:
       "ファイルとソース管理のための右側パネルを表示（Web/タブレット）",
@@ -7446,6 +7452,109 @@ settingsSession: {
     noEntriesAvailable: "変更履歴はありません。",
   },
 
+  releaseNotes: {
+    viewFullChangelog: "リリースノートをすべて表示",
+    mediaUnavailable: "メディアを利用できません",
+    storyDeck: {
+      dragToDismiss: "ドラッグして閉じる",
+      slideAnnouncement: ({ title, current, total }: { title: string; current: number; total: number }) => `${title} - ${current} / ${total}`,
+    },
+    defaultTitle: "新着情報",
+    onboardingShowcase: {
+      title: "Happier へようこそ",
+      subtitle: "どこにいてもついてくるコーディングセッション。",
+      cards: {
+        welcome: {
+          title: "勢いを保つために",
+          row1Title: "あらゆるデバイスでセッションを継続",
+          row1Body: "携帯、タブレット、ウェブ、デスクトップのどれでも続きから再開できます。",
+          row2Title: "速く動き、早く届ける",
+          row2Body: "リアルタイム同期がターミナル、エージェント、ファイルを揃えて保ちます。",
+          row3Title: "標準でプライベート",
+          row3Body: "エンドツーエンド暗号化により、作業はあなただけのものです。",
+        },
+        cockpit: {
+            title: "モバイルの司令塔",
+            body: "アクティブなエージェント向けの集中したモバイル表示。チャット、ファイル、Git、ターミナル、詳細へワンタップで移動できます。",
+            alt: "コマンドセンター用の抽象プレースホルダー画像。",
+            row1Title: "Cockpit モード",
+            row1Body: "集中したモバイル表示で、動作中のエージェントを追えます。",
+            row2Title: "ワンタップで移動",
+            row2Body: "チャット、ファイル、Git、ターミナル、詳細をデスクトップ表示なしで切り替えられます。",
+            row3Title: "すばやく送信",
+            row3Body: "エージェントに一押しが必要なとき、cockpit から返信できます。",
+        },
+        reviewComments: {
+            title: "コードレビューと修正を簡単に",
+            body: "ファイルや diff の正確な行にコメントし、含める内容を選んで、構造化された文脈をエージェントへ送れます。",
+            alt: "レビューコメント用の抽象プレースホルダー画像。",
+            row1Title: "正確な行にコメント",
+            row1Body: "ファイルや diff の行へ直接フィードバックを残せます。",
+            row2Title: "送る内容を選択",
+            row2Body: "エージェントに頼む前に、コメントを確認、編集、除外、追加できます。",
+            row3Title: "文脈を添えて送信",
+            row3Body: "構造化されたレビュー文脈を現在のセッションまたは新しいセッションへ送れます。",
+        },
+        sourceControl: {
+            title: "作って、そのまま出荷",
+            body: "Happier を離れずに、ブランチの作成と公開、リモート管理、変更ファイルの確認、pull request 作成ができます。",
+            alt: "ソース管理用の抽象プレースホルダー画像。",
+            row1Title: "ブランチと公開",
+            row1Body: "Happier を離れずにブランチ作成、リモート管理、push ができます。",
+            row2Title: "Pull request を開く",
+            row2Body: "既存 PR を再利用するか、セッションから新しい PR を作成できます。",
+            row3Title: "変更ファイルを確認",
+            row3Body: "大きな変更でも、選んだファイルに集中できます。",
+        },
+        markdown: {
+            title: "より滑らかなストリーミング、より豊かな Markdown",
+            body: "ストリーミング応答はより滑らかに感じられ、豊かな Markdown で長い回答、コード、リスト、図が読みやすくなります。",
+            alt: "Markdown 表示用の抽象プレースホルダー画像。",
+            row1Title: "出力が追いつく",
+            row1Body: "エージェントが書いている間のストリーミング応答がより滑らかに感じられます。",
+            row2Title: "Markdown が強化",
+            row2Body: "コードフェンス、リスト、表、長い回答をより確実に表示します。",
+            row3Title: "圧縮がわかりやすく",
+            row3Body: "トランスクリプト内のライフサイクルイベントを追いやすくなりました。",
+        },
+        media: {
+            title: "画像もトランスクリプト内で",
+            body: "Codex と対応エージェントに画像生成を依頼し、結果を Happier 内で直接プレビューできます。",
+            alt: "生成メディア用の抽象プレースホルダー画像。",
+            row1Title: "画像を生成",
+            row1Body: "Codex と対応エージェントに画像生成を依頼できます。",
+            row2Title: "インラインでプレビュー",
+            row2Body: "生成画像は Happier の会話内に直接表示されます。",
+            row3Title: "セッションと一緒に保存",
+            row3Body: "メディアも作業と同じセッションパイプラインを通ります。",
+        },
+        desktop: {
+            title: "より磨かれたデスクトップアプリ",
+            body: "よりクリーンなデスクトップシェル。磨かれた chrome、安全な余白、適切な場所の更新ステータスを備えています。",
+            alt: "デスクトップアプリ用の抽象プレースホルダー画像。",
+            row1Title: "よりクリーンな Chrome",
+            row1Body: "サイドバー操作と更新ステータスがより自然に収まります。",
+            row2Title: "集中しやすく",
+            row2Body: "ウィンドウとセッション面が作業の邪魔をしにくくなりました。",
+            row3Title: "安全なレイアウト",
+            row3Body: "プラットフォーム chrome とノッチ付き画面の余白をより適切に扱います。",
+        },
+        pets: {
+            title: "Pets に会いましょう",
+            body: "セッションをまたいで集中を保つ小さな相棒。便利？たぶん。魅力的？間違いなく。",
+            alt: "ペット相棒用の抽象プレースホルダー画像。",
+            row1Title: "小さな相棒",
+            row1Body: "セッションをまたいで集中を保つ手助けをします。",
+            row2Title: "活動を追跡",
+            row2Body: "デスクトップとモバイルでセッション活動を表示します。",
+            row3Title: "便利？たぶん。",
+            row3Body: "魅力的？間違いなく。",
+        },
+
+      },
+    },
+  },
+
   terminal: {
     // Used by terminal connection screens
     webBrowserRequired: "Webブラウザが必要です",
@@ -7981,7 +8090,7 @@ settingsSession: {
     codeLabel: "コード",
   },
 
-  artifacts: {
+    artifacts: {
     // Artifacts feature
     title: "アーティファクト",
     countSingular: "1件のアーティファクト",

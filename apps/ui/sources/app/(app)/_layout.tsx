@@ -26,6 +26,7 @@ import {
 import { ActivityBadgeRuntime } from '@/activity/badges/ActivityBadgeRuntime';
 import { ActivityLocalNotificationRuntime } from '@/activity/notifications/runtime/ActivityLocalNotificationRuntime';
 import { DesktopTrayRuntime } from '@/desktop/tray/DesktopTrayRuntime';
+import { ReleaseNotesAutoShowMount } from '@/changelog/releaseNotes';
 import { useNotificationResponseRouting } from '@/activity/notifications/runtime/useNotificationResponseRouting';
 import { createAppStackScreenOptions } from '@/components/navigation/createAppStackScreenOptions';
 import { MobileBottomChromeHost } from '@/components/navigation/mobile/chrome/MobileBottomChromeHost';
@@ -320,6 +321,7 @@ export default function RootLayout() {
                 <>
                     <DesktopPetOverlayRuntimeMount />
                     <PetAppShellCompanionMount />
+                    <ReleaseNotesAutoShowMount />
                 </>
             ) : null}
             {debugRouterEnabled && Platform.OS === 'web' ? (

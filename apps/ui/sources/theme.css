@@ -78,6 +78,12 @@
     backdrop-filter: blur(2px);
 }
 
+html[data-happy-backdrop-blur="off"] [data-vaul-overlay] {
+    --expo-router-modal-overlay-background: var(--colors-overlay-scrim-strong, rgba(0, 0, 0, 0.58));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+
 /* Ensure scrollbars are visible on hover for macOS */
 ::-webkit-scrollbar:horizontal {
     height: 12px;

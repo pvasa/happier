@@ -11,6 +11,23 @@ const reactActEnvironment = globalThis as typeof globalThis & {
 
 reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
 
+const localSettingState = vi.hoisted(() => ({
+    uiBackdropBlurEnabled: true,
+}));
+
+vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
+    return {
+        ...actual,
+        useLocalSetting: ((name: string) => {
+            if (name === 'uiBackdropBlurEnabled') {
+                return localSettingState.uiBackdropBlurEnabled;
+            }
+            return null;
+        }) as typeof import('@/sync/domains/state/storage')['useLocalSetting'],
+    };
+});
+
 function createRadixHostComponent(tagName: string) {
     return (props: Record<string, unknown>) => {
         const { children, ...rest } = props as Record<string, unknown> & { children?: React.ReactNode };
@@ -91,6 +108,21 @@ describe('BaseModal (web)', () => {
         });
         expect(overlay?.props.style.opacity).toBeUndefined();
         expect(overlay?.props.style.transition).not.toContain('opacity');
+    });
+
+    it('omits backdrop blur styles when blur is disabled in local appearance settings', async () => {
+        localSettingState.uiBackdropBlurEnabled = false;
+        const { BaseModal } = await import('./BaseModal');
+        const screen = await renderBaseModalScreen(BaseModal);
+
+        const overlay = screen.findAllByType('DialogOverlay' as any)?.[0];
+        expect(overlay?.props.style.backgroundColor).toBe('rgba(255, 255, 255, 0.68)');
+        expect(overlay?.props.style.backdropFilter).toBeUndefined();
+        expect(overlay?.props.style.WebkitBackdropFilter).toBeUndefined();
+        expect(String(overlay?.props.style.transition ?? '')).not.toContain('backdrop-filter');
+        expect(String(overlay?.props.style.transition ?? '')).not.toContain('-webkit-backdrop-filter');
+
+        localSettingState.uiBackdropBlurEnabled = true;
     });
 
     it('keeps the web modal mounted until the shared exit animation finishes', async () => {
