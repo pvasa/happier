@@ -32,7 +32,8 @@ test('install.ps1 uses HAPPIER_HOME_DIR as the managed install dir when HAPPIER_
     raw,
     /\$InstallDir\s*=\s*if\s*\(\$env:HAPPIER_INSTALL_DIR\)\s*\{\s*\$env:HAPPIER_INSTALL_DIR\s*\}\s*elseif\s*\(\$env:HAPPIER_HOME_DIR\)\s*\{\s*\$env:HAPPIER_HOME_DIR\s*\}\s*else\s*\{\s*Join-Path \$env:USERPROFILE "\.happier"\s*\}/i,
   );
-  assert.match(raw, /\$env:HAPPIER_HOME_DIR = \$InstallDir/i);
+  assert.match(raw, /\$DaemonServiceStateHomeDir\s*=\s*if\s*\(\$env:HAPPIER_HOME_DIR\)\s*\{\s*\$env:HAPPIER_HOME_DIR\s*\}\s*else\s*\{\s*\$InstallDir\s*\}/i);
+  assert.match(raw, /\$env:HAPPIER_HOME_DIR\s*=\s*\$HomeDir/i);
 });
 
 test('install.ps1 calls Resolve-WithDaemonPreference with the renamed Entries parameter', async () => {

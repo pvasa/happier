@@ -27,7 +27,7 @@ test('expo native-build supports local mode and writes build metadata json', () 
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "CWD=$(pwd)"',
-      'if [ ! -d "../../.git" ]; then echo "MISSING_GIT_REPO" >&2; exit 1; fi',
+      'if [ ! -e "../../.git" ]; then echo "MISSING_GIT_REPO" >&2; exit 1; fi',
       'if [ ! -e "../../node_modules" ]; then echo "MISSING_NODE_MODULES" >&2; exit 1; fi',
       'if [ ! -e "./node_modules" ]; then echo "MISSING_UI_NODE_MODULES" >&2; exit 1; fi',
       'echo "NPX $*"',
