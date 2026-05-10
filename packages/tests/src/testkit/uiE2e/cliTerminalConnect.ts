@@ -59,10 +59,6 @@ async function ensureActiveServerSelection(params: Readonly<{
   webappUrl: string;
 }>): Promise<void> {
   const serverId = deriveServerIdFromUrl(params.serverUrl);
-  const accessKeyPath = resolvePath(params.cliHomeDir, 'servers', serverId, 'access.key');
-  const hasScopedAccessKey = await readFile(accessKeyPath, 'utf8').then(() => true).catch(() => false);
-  if (!hasScopedAccessKey) return;
-
   const settingsPath = resolvePath(params.cliHomeDir, 'settings.json');
   const raw = await readFile(settingsPath, 'utf8').catch(() => '');
   const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : {};
@@ -144,6 +140,7 @@ export async function startCliAuthLoginForTerminalConnect(params: Readonly<{
   cliHomeDir: string;
   serverUrl: string;
   webappUrl: string;
+  connectUrlTimeoutMs?: number;
   env: NodeJS.ProcessEnv;
 }>): Promise<StartedCliTerminalConnect> {
   const currentOwnerInspection = inspectOwnedProcess(process.pid);
@@ -161,6 +158,12 @@ export async function startCliAuthLoginForTerminalConnect(params: Readonly<{
     { testDir: params.testDir, env: params.env },
     { snapshotDir: resolvePath(params.testDir, 'cli-dist') },
   );
+
+  await ensureActiveServerSelection({
+    cliHomeDir: params.cliHomeDir,
+    serverUrl: params.serverUrl,
+    webappUrl: params.webappUrl,
+  });
 
   const stdoutPath = resolvePath(params.testDir, 'cli.auth.login.stdout.log');
   const stderrPath = resolvePath(params.testDir, 'cli.auth.login.stderr.log');
@@ -200,7 +203,7 @@ export async function startCliAuthLoginForTerminalConnect(params: Readonly<{
     const match = await waitForRegexInFile({
       path: stdoutPath,
       regex: /https?:\/\/[^\s)]+\/terminal\/connect#key=[^\s]+/,
-      timeoutMs: 90_000,
+      timeoutMs: params.connectUrlTimeoutMs ?? 90_000,
       pollMs: 100,
       context: 'CLI terminal connect URL',
     });

@@ -144,6 +144,7 @@ describe('core e2e: CLI update continuity reattaches the existing fake Claude se
             controlToken: daemon.state.controlToken,
             body: {
                 directory: workspaceDir,
+                backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
                 terminal: { mode: 'plain' },
                 environmentVariables: launchEnv,
             },

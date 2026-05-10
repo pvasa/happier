@@ -16,7 +16,7 @@ import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
 import { ensureCliDistBuilt } from '../../src/testkit/process/cliDist';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
 import { enqueuePendingQueueV2 } from '../../src/testkit/pendingQueueV2';
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 
@@ -209,6 +209,7 @@ try {
     const cliEnv: NodeJS.ProcessEnv = {
       ...process.env,
       CI: '1',
+      HAPPIER_SESSION_AUTOSTART_DAEMON: '0',
       HAPPIER_VARIANT: 'dev',
       HAPPIER_CODEX_BACKEND_MODE: 'mcp',
       HAPPIER_HOME_DIR: cliHome,
@@ -222,13 +223,15 @@ try {
 
     await ensureCliDistBuilt({ testDir, env: cliEnv });
 
+    const cliLaunchSpec = await resolveCliTestLaunchSpec(
+      { testDir, env: cliEnv },
+      { snapshotDir: resolve(join(testDir, 'cli-dist')) },
+    );
+
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: cliLaunchSpec.command,
       args: [
-        '-s',
-        'workspace',
-        '@happier-dev/cli',
-        'dev',
+        ...cliLaunchSpec.args,
         'codex',
         '--existing-session',
         sessionId,
@@ -238,7 +241,10 @@ try {
         'remote',
       ],
       cwd: repoRootDir(),
-      env: cliEnv,
+      env: {
+        ...cliEnv,
+        ...(cliLaunchSpec.env ?? {}),
+      },
       stdoutPath: resolve(join(testDir, 'cli.stdout.log')),
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });
@@ -251,6 +257,13 @@ try {
         const snap: any = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
         return snap.active === true || (typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion);
       }, { timeoutMs: 45_000 });
+
+      await waitFor(async () => {
+        if (!existsSync(fakeCodexLog)) return false;
+        const raw = await readFile(fakeCodexLog, 'utf8').catch(() => '');
+        const events = parseJsonl(raw);
+        return events.some((e) => e.kind === 'init');
+      }, { timeoutMs: 60_000 });
 
       // Send first message - should trigger startSession (codex tool) exactly once.
       const localId1 = `pending-${randomUUID()}`;
@@ -276,7 +289,7 @@ try {
         const raw = await readFile(fakeCodexLog, 'utf8').catch(() => '');
         const events = parseJsonl(raw);
         return events.some((e) => e.kind === 'tool' && e.name === 'codex');
-      }, { timeoutMs: 30_000 });
+      }, { timeoutMs: 60_000 });
 
       // Patch metadata to a newer permission mode.
       const snap1 = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);

@@ -15,7 +15,8 @@ import { decryptLegacyBase64Normalized } from '../../src/testkit/decryptLegacyBa
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { ensureCliDistBuilt } from '../../src/testkit/process/cliDist';
+import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
 import { createUserScopedSocketCollector } from '../../src/testkit/socketClient';
 import { requestSessionSwitchRpc } from '../../src/testkit/sessionSwitchRpc';
 import { writeCliSessionAttachFile } from '../../src/testkit/cliAttachFile';
@@ -207,6 +208,7 @@ async function runRemoteToLocalMirroringScenario(): Promise<void> {
     const cliEnv: NodeJS.ProcessEnv = {
       ...process.env,
       CI: '1',
+      HAPPIER_SESSION_AUTOSTART_DAEMON: '0',
       HAPPIER_VARIANT: 'dev',
       HAPPIER_HOME_DIR: cliHome,
       HAPPIER_SERVER_URL: server.baseUrl,
@@ -221,13 +223,16 @@ async function runRemoteToLocalMirroringScenario(): Promise<void> {
       HAPPIER_EXPERIMENTAL_CODEX_ACP: '1',
     };
 
+    await ensureCliDistBuilt({ testDir, env: cliEnv }, { skipSourceFreshnessCheck: true });
+    const cliLaunchSpec = await resolveCliTestLaunchSpec(
+      { testDir, env: cliEnv },
+      { snapshotDir: resolve(join(testDir, 'cli-dist')) },
+    );
+
     proc = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: cliLaunchSpec.command,
       args: [
-        '-s',
-        'workspace',
-        '@happier-dev/cli',
-        'dev',
+        ...cliLaunchSpec.args,
         'codex',
         '--existing-session',
         sessionId,
@@ -237,7 +242,10 @@ async function runRemoteToLocalMirroringScenario(): Promise<void> {
         'remote',
       ],
       cwd: repoRootDir(),
-      env: cliEnv,
+      env: {
+        ...cliEnv,
+        ...(cliLaunchSpec.env ?? {}),
+      },
       stdoutPath: resolve(join(testDir, 'cli.stdout.log')),
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });
@@ -246,6 +254,12 @@ async function runRemoteToLocalMirroringScenario(): Promise<void> {
     ui.connect();
 
     await waitFor(() => ui?.isConnected() === true, { timeoutMs: 20_000 });
+    const baseline = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+    const baselineAgentStateVersion = baseline.agentStateVersion;
+    await waitFor(async () => {
+      const snap = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+      return snap.active === true || (typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion);
+    }, { timeoutMs: 45_000 });
 
     const switched = await requestSessionSwitchRpc({ ui, sessionId, to: 'local', secret, timeoutMs: 20_000 });
   expect(switched).toBe(true);

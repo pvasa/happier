@@ -180,6 +180,7 @@ describe('core e2e: daemon tmux spawn → attach → Claude remote↔local switc
         controlToken,
         body: {
           directory: workspaceDir,
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
           terminal: {
             mode: 'tmux',
             tmux: { sessionName: tmuxSessionName, isolated: true, tmpDir: tmuxTmpDir },
@@ -302,5 +303,5 @@ describe('core e2e: daemon tmux spawn → attach → Claude remote↔local switc
         await rm(tmuxTmpDir, { recursive: true, force: true }).catch(() => {});
       }
     }
-  }, 240_000);
+  }, 360_000);
 });

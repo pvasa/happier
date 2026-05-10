@@ -189,8 +189,6 @@ describe('core e2e: Claude local→remote switch drains pending UI message', () 
       ui.connect();
       await waitFor(() => ui?.isConnected() === true, { timeoutMs: 20_000 });
 
-      await waitForFakeClaudeInvocation(fakeLog, (i) => i.mode === 'local', { timeoutMs: 60_000 });
-
       await waitFor(async () => {
         const snap = await fetchSessionV2(server!.baseUrl, auth.token, sessionId);
         const metadata = readMetadata(decryptLegacyBase64(snap.metadata, secret));

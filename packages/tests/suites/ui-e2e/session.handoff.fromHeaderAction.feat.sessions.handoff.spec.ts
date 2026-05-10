@@ -10,8 +10,9 @@ import { fetchJson } from '../../src/testkit/http';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
+import { approveTerminalConnect } from '../../src/testkit/uiE2e/approveTerminalConnect';
 import { createSessionFromNewSessionComposer } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
-import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { gotoDomContentLoadedWithPathFallback, gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
@@ -190,6 +191,7 @@ async function connectTerminalForHome(params: {
     cliHomeDir: params.cliHomeDir,
     serverUrl: params.serverBaseUrl,
     webappUrl: params.uiBaseUrl,
+    connectUrlTimeoutMs: 180_000,
     env: {
       ...process.env,
       HOME: params.cliHomeDir,
@@ -205,17 +207,14 @@ async function connectTerminalForHome(params: {
       connectUrl: cliLogin.connectUrl,
       uiBaseUrl: params.uiBaseUrl,
     });
-    await gotoDomContentLoadedWithRetries(params.page, connectUrlForBrowser);
-    const approveButton = params.page.getByTestId('terminal-connect-approve');
-    await expect(approveButton).toHaveCount(1, { timeout: 60_000 });
-    await expect(approveButton).toBeEnabled({ timeout: 60_000 });
-    await approveButton.click({ noWaitAfter: true });
+    await gotoDomContentLoadedWithPathFallback(params.page, connectUrlForBrowser, '/terminal/connect', 180_000);
+    await approveTerminalConnect({ page: params.page });
     await cliLogin.waitForSuccess();
   } finally {
     await cliLogin.stop().catch(() => {});
   }
 
-  await gotoDomContentLoadedWithRetries(params.page, `${params.uiBaseUrl}/`);
+  await gotoDomContentLoadedWithPathFallback(params.page, `${params.uiBaseUrl}/`, '/', 180_000);
 }
 
 async function spawnClaudeSessionInWorkspace(params: Readonly<{

@@ -14,6 +14,7 @@ export async function authenticateAndStartDaemon(params: Readonly<{
   serverUrl: string;
   uiBaseUrl: string;
   createAccount?: boolean;
+  terminalConnectUrlTimeoutMs?: number;
   daemonStartupTimeoutMs?: number;
   extraEnv?: NodeJS.ProcessEnv;
 }>): Promise<StartedDaemon> {
@@ -29,6 +30,7 @@ export async function authenticateAndStartDaemon(params: Readonly<{
     cliHomeDir: params.cliHomeDir,
     serverUrl: params.serverUrl,
     webappUrl: params.uiBaseUrl,
+    connectUrlTimeoutMs: params.terminalConnectUrlTimeoutMs,
     env: {
       ...process.env,
       ...(params.extraEnv ?? {}),

@@ -16,7 +16,8 @@ import { writeCliSessionAttachFile } from '../../src/testkit/cliAttachFile';
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
-import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
+import { ensureCliSharedDepsBuilt } from '../../src/testkit/process/cliDist';
+import { yarnCommand } from '../../src/testkit/process/commands';
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 import { hasToolCall, parseToolTraceJsonl } from '../../src/testkit/toolTraceJsonl';
 
@@ -122,6 +123,7 @@ setInterval(() => {}, 1000);
     const cliEnv: NodeJS.ProcessEnv = {
       ...process.env,
       CI: '1',
+      HAPPIER_SESSION_AUTOSTART_DAEMON: '0',
       HAPPIER_VARIANT: 'dev',
       HAPPIER_HOME_DIR: cliHome,
       HAPPIER_SERVER_URL: serverBaseUrl,
@@ -134,18 +136,17 @@ setInterval(() => {}, 1000);
       HAPPIER_E2E_CODEX_SESSION_ID: codexSessionId,
       // Ensure Codex local-control gating doesn't block local-control in dev tests.
       HAPPIER_EXPERIMENTAL_CODEX_ACP: '1',
-      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '0',
     };
 
-    const cliLaunchSpec = await resolveCliTestLaunchSpec(
-      { testDir, env: cliEnv },
-      { snapshotDir: resolve(join(testDir, 'cli-dist')) },
-    );
+    await ensureCliSharedDepsBuilt({ testDir, env: cliEnv });
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: cliLaunchSpec.command,
+      command: yarnCommand(),
       args: [
-        ...cliLaunchSpec.args,
+        '-s',
+        'workspace',
+        '@happier-dev/cli',
+        'dev',
         'codex',
         '--existing-session',
         sessionId,
@@ -155,16 +156,26 @@ setInterval(() => {}, 1000);
         'local',
       ],
       cwd: repoRootDir(),
-      env: {
-        ...cliEnv,
-        ...(cliLaunchSpec.env ?? {}),
-      },
+      env: cliEnv,
       stdoutPath: resolve(join(testDir, 'cli.stdout.log')),
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });
 
     try {
-      await waitFor(async () => existsSync(rolloutPath), { timeoutMs: 20_000 });
+      const baseline = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
+      const baselineAgentStateVersion = baseline.agentStateVersion;
+      await waitFor(async () => {
+        const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
+        return snap.active === true || (typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion);
+      }, { timeoutMs: 45_000 });
+
+      await waitFor(async () => {
+        const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
+        const agentState = snap.agentState ? (decryptLegacyBase64Normalized(snap.agentState, secret) as any) : null;
+        return agentState?.controlledByUser === true;
+      }, { timeoutMs: 60_000 });
+
+      await waitFor(async () => existsSync(rolloutPath), { timeoutMs: 60_000 });
 
       await waitFor(async () => {
         if (!existsSync(toolTraceFile)) return false;
