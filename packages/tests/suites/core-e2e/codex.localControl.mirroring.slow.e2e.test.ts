@@ -16,8 +16,7 @@ import { writeCliSessionAttachFile } from '../../src/testkit/cliAttachFile';
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
-import { ensureCliSharedDepsBuilt } from '../../src/testkit/process/cliDist';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 import { hasToolCall, parseToolTraceJsonl } from '../../src/testkit/toolTraceJsonl';
 
@@ -135,17 +134,18 @@ setInterval(() => {}, 1000);
       HAPPIER_E2E_CODEX_SESSION_ID: codexSessionId,
       // Ensure Codex local-control gating doesn't block local-control in dev tests.
       HAPPIER_EXPERIMENTAL_CODEX_ACP: '1',
+      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '0',
     };
 
-    await ensureCliSharedDepsBuilt({ testDir, env: cliEnv });
+    const cliLaunchSpec = await resolveCliTestLaunchSpec(
+      { testDir, env: cliEnv },
+      { snapshotDir: resolve(join(testDir, 'cli-dist')) },
+    );
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: cliLaunchSpec.command,
       args: [
-        '-s',
-        'workspace',
-        '@happier-dev/cli',
-        'dev',
+        ...cliLaunchSpec.args,
         'codex',
         '--existing-session',
         sessionId,
@@ -155,7 +155,10 @@ setInterval(() => {}, 1000);
         'local',
       ],
       cwd: repoRootDir(),
-      env: cliEnv,
+      env: {
+        ...cliEnv,
+        ...(cliLaunchSpec.env ?? {}),
+      },
       stdoutPath: resolve(join(testDir, 'cli.stdout.log')),
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });

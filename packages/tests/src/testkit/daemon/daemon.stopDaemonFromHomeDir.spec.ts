@@ -162,7 +162,7 @@ describe('stopDaemonFromHomeDir', () => {
       expect(command).toContain('setInterval');
       const processCommandHash = createHash('sha256').update(command).digest('hex');
 
-      const markerDir = join(homeDir, 'tmp', 'daemon-sessions');
+      const markerDir = join(homeDir, 'tmp', 'daemon-sessions.dev');
       await mkdir(markerDir, { recursive: true });
       await writeFile(
         join(markerDir, `pid-${sessionPid}.json`),

@@ -19,7 +19,6 @@ import { createDataKeyRpcClient, unwrapDataKeyRpcResult } from '../../src/testki
 import { waitFor } from '../../src/testkit/timing';
 // @ts-expect-error - This CJS helper is consumed directly by the runtime test fixture.
 import { resolveClaudeProjectId } from '../../src/testkit/claudeProjectId.cjs';
-import { waitForDaemonSessionWebhookMarker } from '../../src/testkit/daemon/waitForDaemonSessionWebhookMarker';
 
 const run = createRunDirs({ runLabel: 'core' });
 
@@ -189,12 +188,28 @@ async function waitForReadyHandoffPrepareResult(params: Readonly<{
       throw new Error(`${params.context} result get failed: ${polledErrorCode}`);
     }
 
-    const status = unwrapDataKeyRpcResult(
-      await params.machineRpc.call(`${params.machineId}:${RPC_METHODS.DAEMON_SESSION_HANDOFF_STATUS_GET}`, {
-        handoffId: params.handoffId,
-      }),
-      `${params.context} status get`,
-    ) as HandoffStatusResult;
+    const statusEnvelope = await params.machineRpc.call(`${params.machineId}:${RPC_METHODS.DAEMON_SESSION_HANDOFF_STATUS_GET}`, {
+      handoffId: params.handoffId,
+    });
+    if (statusEnvelope.ok !== true) {
+      const statusError = statusEnvelope.errorCode ?? statusEnvelope.error ?? 'rpc_failed';
+      if (statusError === 'not_found') {
+        return false;
+      }
+      throw new Error(`${params.context} status get failed: ${statusError}`);
+    }
+    const statusRaw = statusEnvelope.result;
+    const statusErrorCode = readInnerRpcErrorCode(statusRaw);
+    if (statusErrorCode) {
+      if (statusErrorCode === 'not_found') {
+        return false;
+      }
+      throw new Error(`${params.context} status get failed: ${statusErrorCode}`);
+    }
+    if (!statusRaw || typeof statusRaw !== 'object' || !('status' in statusRaw)) {
+      throw new Error(`${params.context} status get returned malformed payload`);
+    }
+    const status = statusRaw as HandoffStatusResult;
     if (status.status.status === 'awaiting_recovery' || status.status.status === 'failed' || status.status.status === 'aborted') {
       const lastError = typeof status.status.lastErrorMessage === 'string' && status.status.lastErrorMessage.trim().length > 0
         ? `; lastErrorMessage: ${status.status.lastErrorMessage}`
@@ -573,10 +588,10 @@ describe('core e2e: session handoff via direct peer', () => {
     await writeFile(resolve(join(preparedResume.directory, 'README.md')), 'session handoff test after second pass\n', 'utf8');
     await writeFile(resolve(join(preparedResume.directory, 'added-after-first-handoff.txt')), 'added after first handoff\n', 'utf8');
     await rm(resolve(join(preparedResume.directory, 'deleted-after-first-handoff.txt')));
-    await waitForDaemonSessionWebhookMarker({
-      happyHomeDir: targetHomeDir,
-      sessionId,
-      machineId: targetSeed.machineId,
+    await waitFor(async () => (await listDaemonSessions(targetDaemon!)).includes(sessionId) === true, {
+      timeoutMs: 30_000,
+      intervalMs: 100,
+      context: 'target daemon session listed before direct-peer handoff-back',
     });
 
     const secondStarted = requireHandoffStartOk(unwrapDataKeyRpcResult(
@@ -660,10 +675,10 @@ describe('core e2e: session handoff via direct peer', () => {
     expect(sourceRespawnResult.status).toBe(200);
     expect(sourceRespawnResult.data.success).toBe(true);
     expect(sourceRespawnResult.data.sessionId).toBe(sessionId);
-    await waitForDaemonSessionWebhookMarker({
-      happyHomeDir: sourceHomeDir,
-      sessionId,
-      machineId: sourceSeed.machineId,
+    await waitFor(async () => (await listDaemonSessions(sourceDaemon!)).includes(sessionId) === true, {
+      timeoutMs: 30_000,
+      intervalMs: 100,
+      context: 'source daemon session listed before final direct-peer commit',
     });
     const secondCommitted = unwrapDataKeyRpcResult(
       await targetMachineRpc.call(`${targetSeed.machineId}:${RPC_METHODS.DAEMON_SESSION_HANDOFF_COMMIT}`, {

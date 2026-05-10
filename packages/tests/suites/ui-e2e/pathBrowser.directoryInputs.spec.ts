@@ -104,7 +104,7 @@ async function selectDirectoryFromPathBrowser(
             const button = page.getByRole('button', { name: new RegExp(candidate.replace(/\//g, '\\/')) }).first();
             if (await button.count()) {
                 await button.click();
-                await expect(inlinePathTextbox).toHaveCount(0, { timeout: 30_000 });
+                await expect(inlinePathTextbox).toHaveValue(candidate, { timeout: 30_000 });
                 return candidate;
             }
         }
@@ -114,7 +114,7 @@ async function selectDirectoryFromPathBrowser(
         const firstSuggestedText = (await firstSuggested.textContent()) ?? '';
         const selectedPath = firstSuggestedText.match(/\/Users\/[^\s]+/)?.[0] ?? '/Users/leeroy';
         await firstSuggested.click();
-        await expect(inlinePathTextbox).toHaveCount(0, { timeout: 30_000 });
+        await expect(inlinePathTextbox).toHaveValue(selectedPath, { timeout: 30_000 });
         return selectedPath;
     }
 

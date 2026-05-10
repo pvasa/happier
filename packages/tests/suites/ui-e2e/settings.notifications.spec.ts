@@ -6,14 +6,14 @@ import { startServerLight, type StartedServer } from '../../src/testkit/process/
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 async function createAccountIfNeeded(page: Page): Promise<void> {
     const createAccount = page.getByTestId('welcome-create-account');
     if (await createAccount.count()) {
-        await createAccount.click({ timeout: 60_000, force: true });
-        await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+        await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
     }
 }
 

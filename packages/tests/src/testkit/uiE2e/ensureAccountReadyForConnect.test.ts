@@ -6,13 +6,16 @@ import { ensureAccountReadyForConnect, type EnsureAccountReadyForConnectPage } f
 function createFakePage(params: Readonly<{
   testIdCounts?: Record<string, number[]>;
   roleCounts?: Record<string, number[]>;
+  clickErrors?: Record<string, (Error | undefined)[]>;
 }>): EnsureAccountReadyForConnectPage & {
   clickCalls: Record<string, number>;
 } {
   const testIdCalls = new Map<string, number>();
   const roleCalls = new Map<string, number>();
+  const clickErrorCalls = new Map<string, number>();
   const testIdCounts = params.testIdCounts ?? {};
   const roleCounts = params.roleCounts ?? {};
+  const clickErrors = params.clickErrors ?? {};
   const clickCalls: Record<string, number> = {};
 
   const nextCount = (map: Map<string, number>, source: Record<string, number[]>, key: string): number => {
@@ -26,7 +29,13 @@ function createFakePage(params: Readonly<{
     count: async () => nextCount(calls, source, key),
     click: async () => {
       clickCalls[key] = (clickCalls[key] ?? 0) + 1;
+      const idx = clickErrorCalls.get(key) ?? 0;
+      clickErrorCalls.set(key, idx + 1);
+      const errorSequence = clickErrors[key] ?? [];
+      const maybeError = errorSequence[Math.min(idx, Math.max(errorSequence.length - 1, 0))];
+      if (maybeError) throw maybeError;
     },
+    first: () => makeLocator(key, source, calls),
   } as unknown as Locator);
 
   return {
@@ -68,7 +77,7 @@ describe('ensureAccountReadyForConnect', () => {
     const page = createFakePage({
       testIdCounts: {
         'welcome-create-account': [1],
-        'session-getting-started-kind-connect_machine': [0, 1],
+        'session-getting-started-kind-connect_machine': [0, 0, 1],
       },
     });
 
@@ -82,12 +91,41 @@ describe('ensureAccountReadyForConnect', () => {
         'Create account': [1],
       },
       testIdCounts: {
-        'session-getting-started-kind-connect_machine': [0, 1],
+        'session-getting-started-kind-connect_machine': [0, 0, 1],
       },
     });
 
     await expect(ensureAccountReadyForConnect({ page, timeoutMs: 250 })).resolves.toBeUndefined();
     expect(page.clickCalls['Create account'] ?? 0).toBe(1);
+  });
+
+  it('continues when the create-account CTA is temporarily blocked by an overlay', async () => {
+    const page = createFakePage({
+      testIdCounts: {
+        'welcome-create-account': [1],
+        'session-getting-started-kind-connect_machine': [1],
+      },
+      clickErrors: {
+        'welcome-create-account': [new Error('intercepts pointer events')],
+      },
+    });
+
+    await expect(ensureAccountReadyForConnect({ page, timeoutMs: 250 })).resolves.toBeUndefined();
+  });
+
+  it('retries create-account with a second click when the first attempt is intercepted', async () => {
+    const page = createFakePage({
+      testIdCounts: {
+        'welcome-create-account': [1, 1],
+        'session-getting-started-kind-connect_machine': [0, 0, 0, 1],
+      },
+      clickErrors: {
+        'welcome-create-account': [new Error('intercepts pointer events')],
+      },
+    });
+
+    await expect(ensureAccountReadyForConnect({ page, timeoutMs: 250 })).resolves.toBeUndefined();
+    expect(page.clickCalls['welcome-create-account'] ?? 0).toBe(2);
   });
 
   it('throws when no ready state appears in time', async () => {
@@ -101,5 +139,17 @@ describe('ensureAccountReadyForConnect', () => {
     await expect(ensureAccountReadyForConnect({ page, timeoutMs: 250 })).rejects.toThrow(
       'Account did not reach a ready UI state within 250ms.',
     );
+  });
+
+  it('advances onboarding story cards until a ready signal appears', async () => {
+    const page = createFakePage({
+      testIdCounts: {
+        'onboarding-showcase-primary': [1, 1, 1, 0],
+        'session-getting-started-kind-connect_machine': [0, 0, 1],
+      },
+    });
+
+    await expect(ensureAccountReadyForConnect({ page, timeoutMs: 400 })).resolves.toBeUndefined();
+    expect(page.clickCalls['onboarding-showcase-primary'] ?? 0).toBeGreaterThan(0);
   });
 });

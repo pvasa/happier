@@ -8,6 +8,7 @@ import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '.
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const fakeCodexPath = resolve(new URL('../../src/fixtures/fake-codex-auth-cli.js', import.meta.url).pathname);
@@ -27,7 +28,7 @@ async function writeExecutableCodexWrapper(params: Readonly<{
   }
 }
 
-test.describe('ui e2e: provider settings auth terminal', () => {
+test.describe('ui e2e: provider settings auth status', () => {
   test.describe.configure({ mode: 'serial' });
 
   const suiteDir = run.testDir('settings-providers-auth-terminal-suite');
@@ -75,9 +76,10 @@ test.describe('ui e2e: provider settings auth terminal', () => {
     await server?.stop().catch(() => {});
   });
 
-  test('opens provider login terminal and refreshes auth state', async ({ page }) => {
+  test('shows provider auth status in web settings and refreshes auth state', async ({ page }) => {
     test.setTimeout(420_000);
     if (!server || !uiBaseUrl) throw new Error('missing fixtures');
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     const testDir = resolve(join(suiteDir, 't1-provider-auth-terminal'));
     await mkdir(testDir, { recursive: true });
@@ -93,8 +95,7 @@ test.describe('ui e2e: provider settings auth terminal', () => {
     let cliLogin: StartedCliTerminalConnect | null = null;
     try {
       await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-      await page.getByTestId('welcome-create-account').click();
-      await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+      await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       cliLogin = await startCliAuthLoginForTerminalConnect({
         testDir,
@@ -148,28 +149,14 @@ test.describe('ui e2e: provider settings auth terminal', () => {
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/settings/providers/codex`);
       await expect(page.getByTestId('settings-provider-detected-cli')).not.toContainText('Unknown', { timeout: 120_000 });
       const authStatus = page.getByTestId('settings-provider-auth-status');
-      await expect(page.getByTestId('settings-provider-auth-check-now')).toHaveCount(1, { timeout: 60_000 });
+      await expect(authStatus).toHaveCount(1, { timeout: 60_000 });
       await expect
         .poll(async () => (await authStatus.textContent()) ?? '', { timeout: 120_000 })
         .toMatch(/Unknown|Logged out/);
-      await expect(page.getByTestId('settings-provider-auth-login')).toHaveCount(1, { timeout: 60_000 });
-
-      await page.getByTestId('settings-provider-auth-login').click();
-      await expect(page.getByTestId('provider-auth-terminal-root')).toHaveCount(1, { timeout: 60_000 });
-      await expect
-        .poll(
-          async () => ((await authStatus.textContent()) ?? '').includes('Logged in'),
-          { timeout: 120_000 },
-        )
-        .toBe(true);
-      await expect(page.getByTestId('provider-auth-terminal-root')).toHaveCount(0, { timeout: 120_000 });
-
-      await expect(authStatus).toContainText('Logged in', { timeout: 120_000 });
-      await expect(page.getByTestId('settings-provider-auth-login')).toContainText('Reauthenticate', { timeout: 60_000 });
-      const accountRow = page.getByTestId('settings-provider-auth-account');
-      if (await accountRow.count()) {
-        await expect(accountRow).toContainText('fake-codex@example.test', { timeout: 60_000 });
-      }
+      await expect(page.getByTestId('settings-provider-auth-check-now')).toHaveCount(0, { timeout: 60_000 });
+      await expect(page.getByTestId('settings-provider-auth-login')).toHaveCount(0, { timeout: 60_000 });
+      await expect(page.getByTestId('provider-auth-terminal-root')).toHaveCount(0, { timeout: 30_000 });
+      await expect(page.getByTestId('settings-provider-auth-reason')).toContainText('Missing credentials', { timeout: 60_000 });
     } finally {
       await cliLogin?.stop().catch(() => {});
     }

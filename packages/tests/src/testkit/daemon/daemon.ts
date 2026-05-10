@@ -14,6 +14,7 @@ import {
 import { spawnLoggedProcess, type SpawnedProcess } from '../process/spawnProcess';
 import { resolveCliTestLaunchSpec } from '../process/cliLaunchSpec';
 import { terminateProcessTreeByPid } from '../process/processTree';
+import { resolveDaemonSessionMarkerDirs } from './sessionMarkerDirs';
 
 export type DaemonState = {
   pid: number;
@@ -187,10 +188,6 @@ type DaemonSessionMarkerCandidate = Readonly<{
   processCommandHash: string;
 }>;
 
-function daemonSessionMarkersDir(happyHomeDir: string): string {
-  return join(happyHomeDir, 'tmp', 'daemon-sessions');
-}
-
 function hashCommand(command: string): string {
   return createHash('sha256').update(command).digest('hex');
 }
@@ -212,39 +209,41 @@ function inspectProcessCommand(pid: number): string | null {
 }
 
 async function listDaemonSessionMarkerCandidates(happyHomeDir: string): Promise<DaemonSessionMarkerCandidate[]> {
-  const dir = daemonSessionMarkersDir(happyHomeDir);
-  let entries: string[] = [];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return [];
-  }
-
+  const markerDirs = await resolveDaemonSessionMarkerDirs(happyHomeDir);
   const candidates: DaemonSessionMarkerCandidate[] = [];
-  for (const name of entries) {
-    if (!name.startsWith('pid-') || !name.endsWith('.json')) continue;
-    const markerPath = join(dir, name);
+  for (const markerDir of markerDirs) {
+    let entries: string[] = [];
     try {
-      const raw = await readFile(markerPath, 'utf8');
-      const parsed = JSON.parse(raw) as any;
-      const pid = typeof parsed?.pid === 'number' ? parsed.pid : Number(parsed?.pid);
-      const startedBy = typeof parsed?.startedBy === 'string' ? parsed.startedBy.trim() : '';
-      const processCommandHash = typeof parsed?.processCommandHash === 'string' ? parsed.processCommandHash.trim() : '';
-      const markerHomeDir = typeof parsed?.happyHomeDir === 'string' ? parsed.happyHomeDir.trim() : '';
-
-      if (!Number.isInteger(pid) || pid <= 1) continue;
-      if (markerHomeDir && markerHomeDir !== happyHomeDir) continue;
-      if (!startedBy) continue;
-      if (!processCommandHash) continue;
-
-      candidates.push({
-        pid,
-        markerPath,
-        startedBy,
-        processCommandHash,
-      });
+      entries = await readdir(markerDir);
     } catch {
-      // ignore unreadable markers
+      continue;
+    }
+
+    for (const name of entries) {
+      if (!name.startsWith('pid-') || !name.endsWith('.json')) continue;
+      const markerPath = join(markerDir, name);
+      try {
+        const raw = await readFile(markerPath, 'utf8');
+        const parsed = JSON.parse(raw) as any;
+        const pid = typeof parsed?.pid === 'number' ? parsed.pid : Number(parsed?.pid);
+        const startedBy = typeof parsed?.startedBy === 'string' ? parsed.startedBy.trim() : '';
+        const processCommandHash = typeof parsed?.processCommandHash === 'string' ? parsed.processCommandHash.trim() : '';
+        const markerHomeDir = typeof parsed?.happyHomeDir === 'string' ? parsed.happyHomeDir.trim() : '';
+
+        if (!Number.isInteger(pid) || pid <= 1) continue;
+        if (markerHomeDir && markerHomeDir !== happyHomeDir) continue;
+        if (!startedBy) continue;
+        if (!processCommandHash) continue;
+
+        candidates.push({
+          pid,
+          markerPath,
+          startedBy,
+          processCommandHash,
+        });
+      } catch {
+        // ignore unreadable markers
+      }
     }
   }
   return candidates;

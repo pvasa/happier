@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-
 import { waitFor } from '../timing';
+import { resolveDaemonSessionMarkerDirs } from './sessionMarkerDirs';
 
 type DaemonSessionMarkerLike = Readonly<{
   happySessionId?: unknown;
@@ -18,32 +18,44 @@ export async function waitForDaemonSessionWebhookMarker(params: Readonly<{
   timeoutMs?: number;
   intervalMs?: number;
 }>): Promise<void> {
-  const markerDir = join(params.happyHomeDir, 'tmp', 'daemon-sessions');
+  const sessionExitDir = join(params.happyHomeDir, 'logs', 'session-exit');
+  const sessionExitPrefix = `session-${params.sessionId}-pid-`;
   await waitFor(async () => {
-    let entries: string[] = [];
-    try {
-      entries = await readdir(markerDir);
-    } catch {
-      return false;
-    }
+    const markerDirs = await resolveDaemonSessionMarkerDirs(params.happyHomeDir);
 
-    for (const name of entries) {
-      if (!name.startsWith('pid-') || !name.endsWith('.json')) continue;
-
-      let parsed: DaemonSessionMarkerLike | null = null;
+    for (const markerDir of markerDirs) {
+      let entries: string[] = [];
       try {
-        parsed = JSON.parse(await readFile(join(markerDir, name), 'utf8')) as DaemonSessionMarkerLike;
+        entries = await readdir(markerDir);
       } catch {
         continue;
       }
 
-      const sessionId = typeof parsed.happySessionId === 'string' ? parsed.happySessionId.trim() : '';
-      const machineId = typeof parsed.metadata?.machineId === 'string' ? parsed.metadata.machineId.trim() : '';
-      const lifecycleState = typeof parsed.metadata?.lifecycleState === 'string' ? parsed.metadata.lifecycleState.trim() : '';
-      if (sessionId !== params.sessionId || machineId !== params.machineId) continue;
-      if (lifecycleState.length === 0 || lifecycleState === 'running') {
+      for (const name of entries) {
+        if (!name.startsWith('pid-') || !name.endsWith('.json')) continue;
+
+        let parsed: DaemonSessionMarkerLike | null = null;
+        try {
+          parsed = JSON.parse(await readFile(join(markerDir, name), 'utf8')) as DaemonSessionMarkerLike;
+        } catch {
+          continue;
+        }
+
+        const sessionId = typeof parsed.happySessionId === 'string' ? parsed.happySessionId.trim() : '';
+        const machineId = typeof parsed.metadata?.machineId === 'string' ? parsed.metadata.machineId.trim() : '';
+        if (sessionId !== params.sessionId) continue;
+        if (machineId.length > 0 && machineId !== params.machineId) continue;
         return true;
       }
+    }
+
+    try {
+      const exitEntries = await readdir(sessionExitDir);
+      if (exitEntries.some((name) => name.startsWith(sessionExitPrefix) && name.endsWith('.json'))) {
+        return true;
+      }
+    } catch {
+      // session-exit dir may not exist yet
     }
 
     return false;

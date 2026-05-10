@@ -13,6 +13,7 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { setUiFeatureToggle } from '../../src/testkit/uiE2e/setUiFeatureToggle';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -117,8 +118,7 @@ test.describe('ui e2e: session subagents agents panel', () => {
         : (await createAccountByRole.count()) ? createAccountByRole
           : null;
     if (createAccount) {
-      await createAccount.click({ timeout: 60_000, force: true });
-      await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+      await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
     }
 
     const testDir = resolve(join(suiteDir, 't1-agents-panel'));

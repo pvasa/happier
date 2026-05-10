@@ -12,6 +12,7 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/uiE2e/acknowledgeTerminalConnectSuccessIfPresent';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -147,8 +148,7 @@ test.describe('ui e2e: embedded terminal (PTY)', () => {
             // If we landed on the welcome screen, click through to getting started
             const welcomeButton = page.getByTestId('welcome-create-account');
             if ((await welcomeButton.count()) > 0) {
-                await welcomeButton.click();
-                await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+                await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
             }
 
             await mkdir(testDir, { recursive: true });

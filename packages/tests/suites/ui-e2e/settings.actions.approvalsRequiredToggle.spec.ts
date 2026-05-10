@@ -6,14 +6,14 @@ import { startServerLight, type StartedServer } from '../../src/testkit/process/
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 async function createAccountIfNeeded(baseUrl: string, page: Page): Promise<void> {
     const createAccount = page.getByTestId('welcome-create-account');
     if (await createAccount.count()) {
-        await createAccount.click({ timeout: 60_000, force: true });
-        await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+        await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
         await gotoDomContentLoadedWithRetries(page, `${baseUrl}/settings/actions?happier_hmr=0`, 180_000);
     }
 }
@@ -108,9 +108,10 @@ test.describe('ui e2e: actions settings approvals-required toggle', () => {
         const tileAfterReload = page.getByTestId(tileId);
         await expect(tileAfterReload).toHaveCount(1, { timeout: 120_000 });
         await tileAfterReload.scrollIntoViewIfNeeded();
-        await tileAfterReload.click({ timeout: 60_000 });
-
         const requireAfterReload = page.getByTestId(requireApprovalId);
+        if ((await requireAfterReload.count()) === 0) {
+            await tileAfterReload.click({ timeout: 60_000 });
+        }
         await expect(requireAfterReload).toHaveCount(1, { timeout: 60_000 });
         await expect.poll(async () => readWebSwitchChecked(requireAfterReload)).toBe(after);
     });

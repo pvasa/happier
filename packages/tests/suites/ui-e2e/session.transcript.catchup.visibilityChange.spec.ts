@@ -12,6 +12,7 @@ import { createSessionFromNewSessionComposer } from '../../src/testkit/uiE2e/cre
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { runCliJson } from '../../src/testkit/uiE2e/cliJson';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -139,8 +140,7 @@ test.describe('ui e2e: transcript background/foreground catch-up (visibility)', 
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
 
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const testDir = resolve(join(suiteDir, 't1-visibility-catchup'));
     await mkdir(testDir, { recursive: true });

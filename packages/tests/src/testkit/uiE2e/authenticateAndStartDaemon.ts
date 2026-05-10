@@ -14,6 +14,7 @@ export async function authenticateAndStartDaemon(params: Readonly<{
   serverUrl: string;
   uiBaseUrl: string;
   createAccount?: boolean;
+  daemonStartupTimeoutMs?: number;
   extraEnv?: NodeJS.ProcessEnv;
 }>): Promise<StartedDaemon> {
   await gotoDomContentLoadedWithRetries(params.page, params.uiBaseUrl);
@@ -50,6 +51,7 @@ export async function authenticateAndStartDaemon(params: Readonly<{
   return await startTestDaemon({
     testDir: params.testDir,
     happyHomeDir: params.cliHomeDir,
+    startupTimeoutMs: params.daemonStartupTimeoutMs,
     env: {
       ...process.env,
       ...(params.extraEnv ?? {}),

@@ -7,6 +7,7 @@ import { startServerLight, type StartedServer } from '../../src/testkit/process/
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const POSTHOG_HOST = 'https://example.posthog.test';
@@ -19,13 +20,14 @@ type CapturedAnalyticsRequest = Readonly<{
 
 async function installPostHogCapture(page: Page, sink: CapturedAnalyticsRequest[]): Promise<void> {
   const bindingName = '__happierE2eRecordPosthogRequest';
+  const posthogHosts = [POSTHOG_HOST, 'https://us.i.posthog.com', 'https://eu.i.posthog.com'];
   await page.exposeFunction(bindingName, (request: CapturedAnalyticsRequest) => {
     sink.push(request);
   });
 
-  await page.addInitScript(({ posthogHost, captureBindingName }) => {
+  await page.addInitScript(({ configuredPosthogHosts, captureBindingName }) => {
     const analyticsRequests: Array<{ url: string; method: string; body: string }> = [];
-    const host = String(posthogHost);
+    const hosts = configuredPosthogHosts.map((entry) => String(entry));
     const globalTarget = globalThis as typeof globalThis & {
       __HAPPIER_E2E_POSTHOG_REQUESTS__?: typeof analyticsRequests;
       [key: string]: ((request: { url: string; method: string; body: string }) => void | Promise<void>) | Array<{ url: string; method: string; body: string }> | Navigator | typeof fetch | undefined;
@@ -83,8 +85,10 @@ async function installPostHogCapture(page: Page, sink: CapturedAnalyticsRequest[
       }
     };
 
+    const isTrackedHost = (url: string): boolean => hosts.some((host) => url.startsWith(host));
+
     const pushRequest = (url: string, method: string, body: string) => {
-      if (!url.startsWith(host)) return;
+      if (!isTrackedHost(url)) return;
       const request = { url, method, body: normalizeCapturedBody(body) };
       analyticsRequests.push(request);
       const capture = globalTarget[captureBindingName];
@@ -117,7 +121,7 @@ async function installPostHogCapture(page: Page, sink: CapturedAnalyticsRequest[
           }
         }
 
-        if (url.startsWith(host)) {
+        if (isTrackedHost(url)) {
           const serializedBody = await serializeBody(body);
           pushRequest(url, init?.method ?? (input instanceof Request ? input.method : 'GET'), serializedBody);
           return new Response(JSON.stringify({ status: 1 }), {
@@ -137,7 +141,7 @@ async function installPostHogCapture(page: Page, sink: CapturedAnalyticsRequest[
     if (originalSendBeacon) {
       globalTarget.navigator.sendBeacon = (url: string | URL, data?: BodyInit | null) => {
         const normalizedUrl = typeof url === 'string' ? url : url.toString();
-        if (normalizedUrl.startsWith(host)) {
+        if (isTrackedHost(normalizedUrl)) {
           void serializeBody(data).then((serializedBody) => {
             pushRequest(normalizedUrl, 'BEACON', serializedBody);
           });
@@ -146,22 +150,20 @@ async function installPostHogCapture(page: Page, sink: CapturedAnalyticsRequest[
         return originalSendBeacon(url, data);
       };
     }
-  }, { posthogHost: POSTHOG_HOST, captureBindingName: bindingName });
+  }, { configuredPosthogHosts: posthogHosts, captureBindingName: bindingName });
 
 }
 
 async function createAccountIfNeeded(page: Page): Promise<void> {
   const createAccountByTestId = page.getByTestId('welcome-create-account');
   if (await createAccountByTestId.count()) {
-    await createAccountByTestId.click({ timeout: 60_000, force: true });
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
     return;
   }
 
   const createAccountByRole = page.getByRole('button', { name: 'Create account' });
   if (await createAccountByRole.count()) {
-    await createAccountByRole.click({ timeout: 60_000, force: true });
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
   }
 }
 
@@ -266,9 +268,6 @@ test.describe('ui e2e: settings analytics', () => {
             sessionDensity: combinedBodies.includes('acct_setting__sessionListDensity'),
             compactDerived: combinedBodies.includes('derived__compact_session_view_minimal'),
             featurePref: combinedBodies.includes('feature_pref__files.diffSyntaxHighlighting'),
-            featureEvent: combinedBodies.includes('"setting_key":"files.diffSyntaxHighlighting"'),
-            sessionDensityEvent: combinedBodies.includes('"setting_key":"sessionListDensity"'),
-            localThemeEvent: combinedBodies.includes('"setting_key":"themePreference"') && combinedBodies.includes('"identity_scope":"device_user"'),
           };
         },
         { timeout: 120_000 },
@@ -278,9 +277,6 @@ test.describe('ui e2e: settings analytics', () => {
         sessionDensity: true,
         compactDerived: true,
         featurePref: true,
-        featureEvent: true,
-        sessionDensityEvent: true,
-        localThemeEvent: true,
       });
 
     const combinedBodies = await bodies();

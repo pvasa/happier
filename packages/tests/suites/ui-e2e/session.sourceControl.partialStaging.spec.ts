@@ -13,6 +13,7 @@ import { clickScopedButtonByTestIdOrRole } from '../../src/testkit/uiE2e/clickSc
 import { createGitRepoForPartialStagingFixture } from '../../src/testkit/uiE2e/gitRepoFixtures';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { toTestIdSafeValue } from '../../src/testkit/uiE2e/testIdSafeValue';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -125,8 +126,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
 
-      await page.getByTestId('welcome-create-account').click();
-      await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+      await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       await mkdir(testDir, { recursive: true });
 

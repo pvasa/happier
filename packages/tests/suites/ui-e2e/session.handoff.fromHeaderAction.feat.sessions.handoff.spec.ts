@@ -13,6 +13,7 @@ import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } f
 import { createSessionFromNewSessionComposer } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const uiWebExportTimeoutMs = process.env.HAPPIER_E2E_UI_WEB_EXPORT_TIMEOUT_MS ?? '900000';
@@ -311,8 +312,7 @@ test.describe('ui e2e: session handoff from header action menu via direct peer',
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const sourceDir = resolve(join(suiteDir, 't1-source'));
     const targetDir = resolve(join(suiteDir, 't1-target'));
@@ -512,8 +512,7 @@ test.describe('ui e2e: session handoff from header action menu via forced server
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const sourceDir = resolve(join(suiteDir, 't1-source'));
     const targetDir = resolve(join(suiteDir, 't1-target'));
@@ -709,8 +708,7 @@ test.describe('ui e2e: session handoff failure recovery from header action menu'
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const sourceDir = resolve(join(suiteDir, 't1-source'));
     const targetDir = resolve(join(suiteDir, 't1-target'));

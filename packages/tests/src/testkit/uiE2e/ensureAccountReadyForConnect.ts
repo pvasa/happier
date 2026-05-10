@@ -20,6 +20,11 @@ const READY_ROLE_BUTTON_NAMES = [
   'Home',
 ] as const;
 
+const STORY_DECK_PRIMARY_TEST_IDS = [
+  'onboarding-showcase-primary',
+  'release-notes-primary',
+] as const;
+
 async function countReadySignals(page: EnsureAccountReadyForConnectPage): Promise<number> {
   let total = 0;
   for (const testId of READY_TEST_IDS) {
@@ -31,17 +36,68 @@ async function countReadySignals(page: EnsureAccountReadyForConnectPage): Promis
   return total;
 }
 
-async function clickCreateAccountIfPresent(page: EnsureAccountReadyForConnectPage): Promise<void> {
-  const byTestId = page.getByTestId('welcome-create-account');
-  if ((await byTestId.count()) > 0) {
-    await byTestId.click();
-    return;
+async function clickLocatorWithFallback(params: Readonly<{
+  page: EnsureAccountReadyForConnectPage;
+  testId: string;
+}>): Promise<boolean> {
+  const byTestId = params.page.getByTestId(params.testId).first();
+  if ((await byTestId.count()) <= 0) return false;
+  try {
+    await byTestId.click({ timeout: 1_500 });
+    return true;
+  } catch {
+    // Some startup overlays can intercept pointer events. Retry with force to
+    // keep startup deterministic when the CTA is otherwise visible.
+    try {
+      await byTestId.click({ timeout: 1_500, force: true });
+      return true;
+    } catch {
+      return false;
+    }
   }
+}
 
-  const byRole = page.getByRole('button', { name: 'Create account' });
-  if ((await byRole.count()) > 0) {
-    await byRole.click();
+async function clickRoleButtonWithFallback(params: Readonly<{
+  page: EnsureAccountReadyForConnectPage;
+  name: string;
+}>): Promise<boolean> {
+  const byRole = params.page.getByRole('button', { name: params.name }).first();
+  if ((await byRole.count()) <= 0) return false;
+  try {
+    await byRole.click({ timeout: 1_500 });
+    return true;
+  } catch {
+    try {
+      await byRole.click({ timeout: 1_500, force: true });
+      return true;
+    } catch {
+      return false;
+    }
   }
+}
+
+async function clickCreateAccountIfPresent(page: EnsureAccountReadyForConnectPage): Promise<void> {
+  if (await clickLocatorWithFallback({ page, testId: 'welcome-create-account' })) return;
+  if (await clickRoleButtonWithFallback({ page, name: 'Create account' })) return;
+}
+
+async function advanceStoryDeckIfPresent(page: EnsureAccountReadyForConnectPage): Promise<boolean> {
+  for (const testId of STORY_DECK_PRIMARY_TEST_IDS) {
+    if (await clickLocatorWithFallback({ page, testId })) return true;
+  }
+  return false;
+}
+
+async function ensureReadyOrProgress(params: Readonly<{
+  page: EnsureAccountReadyForConnectPage;
+  clickCreateAccount: boolean;
+}>): Promise<boolean> {
+  if ((await countReadySignals(params.page)) > 0) return true;
+  await advanceStoryDeckIfPresent(params.page);
+  if ((await countReadySignals(params.page)) > 0) return true;
+  if (!params.clickCreateAccount) return false;
+  await clickCreateAccountIfPresent(params.page);
+  return (await countReadySignals(params.page)) > 0;
 }
 
 export async function ensureAccountReadyForConnect(params: Readonly<{
@@ -52,14 +108,11 @@ export async function ensureAccountReadyForConnect(params: Readonly<{
   const timeoutMs = typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
     ? params.timeoutMs
     : 120_000;
-
-  if (params.clickCreateAccount !== false) {
-    await clickCreateAccountIfPresent(params.page);
-  }
+  const clickCreateAccount = params.clickCreateAccount !== false;
 
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if ((await countReadySignals(params.page)) > 0) return;
+    if (await ensureReadyOrProgress({ page: params.page, clickCreateAccount })) return;
     await params.page.waitForTimeout(250);
   }
 

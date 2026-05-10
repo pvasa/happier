@@ -6,13 +6,13 @@ import { join, resolve } from 'node:path';
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { createTestAuth } from '../../src/testkit/auth';
-import { createSessionWithCiphertexts, fetchAllMessages, fetchMessagesPage, type SessionMessageRow } from '../../src/testkit/sessions';
+import { createSessionWithCiphertexts, fetchAllMessages, fetchMessagesPage, fetchSessionV2, type SessionMessageRow } from '../../src/testkit/sessions';
 import { spawnLoggedProcess, type SpawnedProcess } from '../../src/testkit/process/spawnProcess';
 import { createUserScopedSocketCollector } from '../../src/testkit/socketClient';
 import { decryptLegacyBase64, encryptLegacyBase64 } from '../../src/testkit/messageCrypto';
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
-import { stopDaemonFromHomeDir, waitForDaemonState } from '../../src/testkit/daemon/daemon';
+import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
 import { ensureCliSharedDepsBuilt } from '../../src/testkit/process/cliDist';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { postEncryptedUiTextMessage } from '../../src/testkit/uiMessages';
@@ -206,10 +206,17 @@ describe('core e2e: Claude TaskOutput sidechains are imported with sidechainId +
 
     const ui = createUserScopedSocketCollector(server.baseUrl, auth.token);
     ui.connect();
+    const baseline = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+    const baselineAgentStateVersion = baseline.agentStateVersion;
 
     try {
       await waitFor(() => ui.isConnected(), { timeoutMs: 20_000 });
-      await waitForDaemonState(cliHome, { timeoutMs: 90_000 });
+
+      // Attachment readiness is the stable contract for this flow; daemon startup can be optional.
+      await waitFor(async () => {
+        const snap = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+        return typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion;
+      }, { timeoutMs: 90_000 });
 
       await requestSessionSwitchRpc({ ui, sessionId, to: 'remote', secret, timeoutMs: 20_000 });
 

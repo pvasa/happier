@@ -15,6 +15,7 @@ import { createGitRepoForBranchPublishAndStashFixture, execGit } from '../../src
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { toTestIdSafeValue } from '../../src/testkit/uiE2e/testIdSafeValue';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -130,8 +131,7 @@ test.describe('ui e2e: SCM branch publish + switch-with-changes + stash restore'
       await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
 
       await waitForInitialAppUi({ page, browserDiagnostics });
-      await page.getByTestId('welcome-create-account').click();
-      await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+      await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       await mkdir(testDir, { recursive: true });
 

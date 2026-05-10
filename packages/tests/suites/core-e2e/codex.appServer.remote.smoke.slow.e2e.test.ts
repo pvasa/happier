@@ -29,6 +29,9 @@ describe('core e2e: Codex app-server remote smoke', () => {
       testDir,
       runId: run.runId,
       testName: 'codex-app-server-remote-smoke',
+      cliEnvOverrides: {
+        HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '0',
+      },
     });
     const { auth, requestLogPath, secret, serverBaseUrl, sessionId } = harness;
 

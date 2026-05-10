@@ -14,6 +14,7 @@ import { createGitRepoWithChanges } from '../../src/testkit/uiE2e/gitRepoFixture
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { toTestIdSafeValue } from '../../src/testkit/uiE2e/testIdSafeValue';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -243,10 +244,7 @@ test.describe('ui e2e: SCM review scroll + tab state', () => {
           : (await createAccountByRole.count()) ? createAccountByRole
             : null;
       if (createAccount) {
-        await createAccount.click({ timeout: 60_000, force: true });
-        await expect(createAccountByTestId).toHaveCount(0, { timeout: 120_000 });
-        await expect(createAccountByRole).toHaveCount(0, { timeout: 120_000 });
-        await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+        await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
       }
 
       const testDir = resolve(join(suiteDir, 't1-review-scroll'));

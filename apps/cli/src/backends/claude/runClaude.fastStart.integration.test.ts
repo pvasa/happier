@@ -84,6 +84,7 @@ vi.mock('@/backends/claude/loop', () => ({
     if (autoSessionReady) {
       opts?.onSessionReady?.({
         cleanup: vi.fn(),
+        drainCriticalMetadataWrites: vi.fn(async () => {}),
         setPushSender: vi.fn(),
         client: {
           getMetadataSnapshot: vi.fn(() => ({})),
@@ -298,7 +299,6 @@ describe('runClaude fast-start', () => {
     reloadConfiguration();
     exitSpy.mockRestore();
   });
-
   it('invokes vendor spawn without waiting for backend API initialization', async () => {
     loopStarted = createDeferred<void>();
     loopExit = createDeferred<number>();
@@ -369,7 +369,11 @@ describe('runClaude fast-start', () => {
     const { runClaude } = await import('./runClaude');
     const credentials = createLegacyCredentials();
     let testError: unknown = null;
-    const runPromise = runClaude(credentials, { startedBy: 'terminal', startingMode: 'local' }).catch((e) => {
+    const runPromise = runClaude(credentials, {
+      startedBy: 'terminal',
+      startingMode: 'local',
+      claudeRemoteMetaDefaults: { claudeLocalPermissionBridgeEnabled: true },
+    }).catch((e) => {
       testError = e;
     });
 
@@ -387,6 +391,13 @@ describe('runClaude fast-start', () => {
         }),
         5_000,
       );
+      lastLoopOpts?.onSessionReady?.({
+        cleanup: vi.fn(),
+        drainCriticalMetadataWrites: vi.fn(async () => {}),
+        setPushSender: vi.fn(),
+        client: { getMetadataSnapshot: vi.fn(() => ({})) },
+        getOrCreatePermissionRpcRouter: () => ({ registerConsumer: vi.fn() }),
+      });
     } catch (e) {
       testError = e;
     } finally {
@@ -636,6 +647,7 @@ describe('runClaude fast-start', () => {
 
     const sessionReady = {
       cleanup: vi.fn(),
+      drainCriticalMetadataWrites: vi.fn(async () => {}),
       setPushSender: vi.fn(),
       client: {
         getMetadataSnapshot: vi.fn(() => ({})),

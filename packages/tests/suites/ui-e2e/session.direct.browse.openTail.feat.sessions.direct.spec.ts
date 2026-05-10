@@ -10,6 +10,7 @@ import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } f
 import { enableDirectSessionsFeature } from '../../src/testkit/uiE2e/enableDirectSessionsFeature';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { fakeClaudeFixturePath, waitForFakeClaudeInvocation } from '../../src/testkit/fakeClaude';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -94,8 +95,7 @@ test.describe('ui e2e: direct sessions browse/open/tail', () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(uiBaseUrl, { waitUntil: 'domcontentloaded' });
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const cliLogin: StartedCliTerminalConnect = await startCliAuthLoginForTerminalConnect({
       testDir,
@@ -185,8 +185,7 @@ test.describe('ui e2e: direct sessions browse/open/tail', () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(uiBaseUrl, { waitUntil: 'domcontentloaded' });
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const cliLogin: StartedCliTerminalConnect = await startCliAuthLoginForTerminalConnect({
       testDir,

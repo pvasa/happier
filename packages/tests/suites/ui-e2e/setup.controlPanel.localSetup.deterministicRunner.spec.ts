@@ -5,6 +5,7 @@ import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -107,11 +108,20 @@ test.describe('ui e2e: setup control panel flow (deterministic runner)', () => {
         await page.getByTestId('setup.continueToAuth').click();
 
         await expect(page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 180_000 });
-        await page.getByTestId('welcome-create-account').click();
+        await ensureAccountReadyForConnect({ page, timeoutMs: 180_000 });
+        await navigateSpa(page, '/setup?happier_hmr=0');
 
-        // Completing auth should redirect back into setup with a pending setup intent.
-        // The post-auth setup route auto-starts local setup; avoid clicking the start action to prevent spawning a second task.
-        await expect(page.getByTestId('setup.postAuth')).toHaveCount(1, { timeout: 180_000 });
+        // Completing auth may land on the shell; navigate back to setup and exercise the setup task surface.
+        await expect
+            .poll(
+                async () => {
+                    const postAuthCount = await page.getByTestId('setup.postAuth').count();
+                    const startTaskCount = await page.getByTestId('settings.machineSetup.startLocalTask').count();
+                    return postAuthCount + startTaskCount;
+                },
+                { timeout: 180_000 },
+            )
+            .toBeGreaterThan(0);
         await expect(page.getByTestId('settings.machineSetup.startLocalTask')).toHaveCount(1, { timeout: 180_000 });
 
         // If auto-start is disabled for any reason, fall back to starting the task explicitly.

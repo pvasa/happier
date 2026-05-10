@@ -173,6 +173,7 @@ new acp.AgentSideConnection((conn) => new FakeAgent(conn), stream);
       HAPPIER_SERVER_URL: server.baseUrl,
       HAPPIER_WEBAPP_URL: server.baseUrl,
       HAPPIER_SESSION_ATTACH_FILE: attachFile,
+      HAPPIER_GEMINI_PATH: fakeGeminiPath,
       // Ensure the fake gemini CLI is used.
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
       HAPPIER_E2E_GEMINI_LOG: fakeGeminiLog,
@@ -207,7 +208,7 @@ new acp.AgentSideConnection((conn) => new FakeAgent(conn), stream);
 
       await waitFor(async () => {
         const snap: any = await fetchSessionV2(server!.baseUrl, auth.token, sessionId);
-        return snap.active === true || (typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion);
+        return typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion;
       }, { timeoutMs: 45_000 });
 
       // First message should use the seeded model override (pro).

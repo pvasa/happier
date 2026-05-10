@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createServerUrlComparableKey } from '@happier-dev/protocol';
 
 let stopCalls = 0;
 
@@ -66,6 +67,23 @@ function readProcessStartTime(pid: number): string {
     return String(res.stdout ?? '').trim();
 }
 
+function deriveServerIdFromUrl(url: string): string {
+    const comparableKey = (() => {
+        try {
+            return createServerUrlComparableKey(url);
+        } catch {
+            return '';
+        }
+    })();
+    const value = comparableKey || url;
+    let h = 2166136261;
+    for (let i = 0; i < value.length; i += 1) {
+        h ^= value.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return `env_${(h >>> 0).toString(16)}`;
+}
+
 describe('startCliAuthLoginForTerminalConnect', () => {
     it('reclaims stale terminal-connect auth helpers from dead owners before starting a new one', async () => {
         if (process.platform === 'win32') return;
@@ -122,6 +140,58 @@ describe('startCliAuthLoginForTerminalConnect', () => {
                     // ignore
                 }
             }
+            await rm(testDir, { recursive: true, force: true });
+        }
+    });
+
+    it('switches active server to the relay profile after successful auth when scoped credentials exist', async () => {
+        const testDir = await mkdtemp(join(tmpdir(), 'happier-cli-terminal-connect-active-server-'));
+        const cliHomeDir = resolve(testDir, 'cli-home');
+        const serverUrl = 'http://127.0.0.1:4011';
+        const webappUrl = 'http://127.0.0.1:19006';
+        const serverId = deriveServerIdFromUrl(serverUrl);
+        const settingsPath = resolve(cliHomeDir, 'settings.json');
+
+        try {
+            await mkdir(resolve(cliHomeDir, 'servers', serverId), { recursive: true });
+            writeFileSync(resolve(cliHomeDir, 'servers', serverId, 'access.key'), '{"token":"fake"}\n', 'utf8');
+            writeFileSync(settingsPath, JSON.stringify({
+                schemaVersion: 6,
+                activeServerId: 'cloud',
+                servers: {
+                    cloud: {
+                        id: 'cloud',
+                        name: 'Happier Cloud',
+                        serverUrl: 'https://api.happier.dev',
+                        webappUrl: 'https://app.happier.dev',
+                        createdAt: 0,
+                        updatedAt: 0,
+                        lastUsedAt: 0,
+                    },
+                },
+            }) + '\n', 'utf8');
+
+            const started = await startCliAuthLoginForTerminalConnect({
+                testDir,
+                cliHomeDir,
+                serverUrl,
+                webappUrl,
+                env: {},
+            });
+
+            started.proc.child.exitCode = 0;
+            started.proc.child.emit('exit', 0, null);
+            await started.waitForSuccess();
+
+            const updated = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+                activeServerId?: string;
+                servers?: Record<string, { serverUrl?: string }>;
+            };
+            expect(updated.activeServerId).toBe(serverId);
+            expect(updated.servers?.[serverId]?.serverUrl).toBe(serverUrl);
+
+            await started.stop();
+        } finally {
             await rm(testDir, { recursive: true, force: true });
         }
     });

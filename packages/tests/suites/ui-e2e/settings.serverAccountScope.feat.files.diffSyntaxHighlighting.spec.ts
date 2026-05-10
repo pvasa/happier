@@ -11,6 +11,7 @@ import {
   normalizeLoopbackBaseUrl,
 } from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const DIFF_SYNTAX_TOGGLE_ID = 'settings-feature-toggle-files.diffSyntaxHighlighting';
@@ -27,15 +28,14 @@ async function createAccountWithoutDaemon(params: Readonly<{
 async function createAccountIfNeeded(page: Page): Promise<void> {
   const welcomeCreateAccount = page.getByTestId('welcome-create-account');
   if (await welcomeCreateAccount.count()) {
-    await welcomeCreateAccount.click({ timeout: 60_000, force: true });
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
     return;
   }
 
   const welcomeSignupProvider = page.getByTestId('welcome-signup-provider');
   if (await welcomeSignupProvider.count()) {
     await welcomeSignupProvider.click({ timeout: 60_000, force: true });
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000, clickCreateAccount: false });
   }
 }
 

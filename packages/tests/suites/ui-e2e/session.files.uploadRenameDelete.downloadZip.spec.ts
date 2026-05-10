@@ -14,6 +14,7 @@ import { clickScopedButtonByTestIdOrRole } from '../../src/testkit/uiE2e/clickSc
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { toTestIdSafeValue } from '../../src/testkit/uiE2e/testIdSafeValue';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -265,8 +266,7 @@ test.describe('ui e2e: Files upload + rename/delete + download (+ zip)', () => {
         await waitForInitialAppUi({ page, browserDiagnostics });
         await maybeDismissDetectedClisModal(page, 1_000).catch(() => {});
         await maybeDismissAgentPickerPopover(page).catch(() => {});
-        await page.getByTestId('welcome-create-account').first().click();
-        await expect(page.getByTestId('session-getting-started-kind-connect_machine')).toHaveCount(1, { timeout: 120_000 });
+        await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       await mkdir(testDir, { recursive: true });
 

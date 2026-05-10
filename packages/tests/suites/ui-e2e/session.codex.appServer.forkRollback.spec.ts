@@ -11,6 +11,7 @@ import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } f
 import { openNewSessionMachineSelection } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { approveTerminalConnect } from '../../src/testkit/uiE2e/approveTerminalConnect';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -326,8 +327,7 @@ test.describe('ui e2e: Codex app-server fork and rollback', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
 
-    await page.getByTestId('welcome-create-account').click();
-    await expect(page.getByTestId('session-getting-started-kind-connect_machine')).not.toHaveCount(0, { timeout: 120_000 });
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     const testDir = resolve(join(suiteDir, 't1-codex-app-server-fork-rollback'));
     await mkdir(testDir, { recursive: true });

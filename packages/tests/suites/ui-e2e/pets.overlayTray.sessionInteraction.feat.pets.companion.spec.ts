@@ -145,6 +145,8 @@ test.describe('ui e2e: pets desktop overlay tray session interaction', () => {
     test.setTimeout(540_000);
     if (!server || !uiBaseUrl) throw new Error('missing fixtures');
 
+    await page.setViewportSize({ width: 1440, height: 900 });
+
     const testDir = resolve(join(suiteDir, 'tray-session-interaction'));
     const fakeLogPath = resolve(join(testDir, 'fake-claude.jsonl'));
     const delayedFakeClaudePath = resolve(join(testDir, 'fake-claude-delayed.cjs'));
