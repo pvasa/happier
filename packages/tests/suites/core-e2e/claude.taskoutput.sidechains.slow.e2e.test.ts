@@ -13,14 +13,12 @@ import { decryptLegacyBase64, encryptLegacyBase64 } from '../../src/testkit/mess
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
-import { ensureCliSharedDepsBuilt } from '../../src/testkit/process/cliDist';
+import { ensureCliDistBuilt } from '../../src/testkit/process/cliDist';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { postEncryptedUiTextMessage } from '../../src/testkit/uiMessages';
-import { requestSessionSwitchRpc } from '../../src/testkit/sessionSwitchRpc';
 import { writeCliSessionAttachFile } from '../../src/testkit/cliAttachFile';
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 import { repoRootDir } from '../../src/testkit/paths';
-import { resolveCliTestLaunchSpec } from '../../src/testkit/process/cliLaunchSpec';
 
 const run = createRunDirs({ runLabel: 'core' });
 
@@ -185,21 +183,13 @@ describe('core e2e: Claude TaskOutput sidechains are imported with sidechainId +
       HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
     };
 
-    await ensureCliSharedDepsBuilt({ testDir, env: cliEnv }, { skipSourceFreshnessCheck: true });
-
-    const cliLaunchSpec = await resolveCliTestLaunchSpec(
-      { testDir, env: cliEnv },
-      { snapshotDir: resolve(join(testDir, 'cli-dist')), preferSourceEntrypoint: true },
-    );
+    const cliDistEntrypoint = await ensureCliDistBuilt({ testDir, env: cliEnv });
 
     const proc: SpawnedProcess = spawnLoggedProcess({
-      command: cliLaunchSpec.command,
-      args: [...cliLaunchSpec.args, 'claude', '--existing-session', sessionId, '--started-by', 'terminal'],
-      cwd: cliLaunchSpec.cwd ?? repoRootDir(),
-      env: {
-        ...cliEnv,
-        ...(cliLaunchSpec.env ?? {}),
-      },
+      command: process.execPath,
+      args: [cliDistEntrypoint, 'claude', '--existing-session', sessionId, '--started-by', 'terminal', '--happy-starting-mode', 'remote'],
+      cwd: repoRootDir(),
+      env: cliEnv,
       stdoutPath: resolve(join(testDir, 'cli.stdout.log')),
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });
@@ -214,11 +204,12 @@ describe('core e2e: Claude TaskOutput sidechains are imported with sidechainId +
 
       // Attachment readiness is the stable contract for this flow; daemon startup can be optional.
       await waitFor(async () => {
-        const snap = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
-        return typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion;
+        const snap = await fetchSessionV2(server!.baseUrl, auth.token, sessionId);
+        return snap.active === true || (
+          typeof snap.agentStateVersion === 'number' &&
+          snap.agentStateVersion > baselineAgentStateVersion
+        );
       }, { timeoutMs: 90_000 });
-
-      await requestSessionSwitchRpc({ ui, sessionId, to: 'remote', secret, timeoutMs: 20_000 });
 
       await postEncryptedUiTextMessage({
         baseUrl: server.baseUrl,
