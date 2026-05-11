@@ -22,7 +22,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MemorySearchResultV1Schema, MemoryWindowV1Schema, type MemorySearchResultV1, type MemoryWindowV1 } from '@happier-dev/protocol';
-import { createMcpActionEnablement } from '@/mcp/server/createMcpActionEnablement';
+import { createMcpActionApprovalRequirement, createMcpActionEnablement } from '@/mcp/server/createMcpActionEnablement';
 
 export function createHappierMcpServer(
   client: HappyMcpSessionClient,
@@ -34,6 +34,10 @@ export function createHappierMcpServer(
   const toolSurface = 'session_agent' as const;
   const credentials = opts?.credentials ?? null;
   const isActionEnabled = createMcpActionEnablement({
+    accountSettings: opts?.accountSettings ?? null,
+    surface: toolSurface,
+  });
+  const isActionApprovalRequired = createMcpActionApprovalRequirement({
     accountSettings: opts?.accountSettings ?? null,
     surface: toolSurface,
   });
@@ -156,6 +160,8 @@ export function createHappierMcpServer(
       },
 
       resetGlobalVoiceAgent: async () => {},
+      isActionEnabled: (id) => isActionEnabled(id),
+      isActionApprovalRequired: (id) => isActionApprovalRequired(id),
     },
   );
 
