@@ -414,6 +414,7 @@ export async function runCodex(opts: {
                     messageQueue,
                     permissionMode: initialPermissionMode,
                     resumeId: resumeIdFromArgs,
+                    codexArgs: opts.codexArgs ?? [],
                 });
             },
         };
@@ -672,6 +673,7 @@ export async function runCodex(opts: {
                 messageQueue,
                 permissionMode: initialPermissionMode,
                 resumeId: resumeIdFromArgs,
+                codexArgs: opts.codexArgs ?? [],
             }));
         if (localResult.type === 'exit') {
             clearInterval(keepAliveInterval);
