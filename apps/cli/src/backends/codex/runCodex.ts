@@ -44,6 +44,7 @@ import { createCodexAcpRuntime } from './acp/runtime';
 import { createCodexAppServerRuntime } from './appServer/runtime';
 import { resolveConfiguredCodexHome } from './utils/resolveConfiguredCodexHome';
 import { buildCodexAppServerConfigOverrides } from './appServer/buildCodexAppServerConfigOverrides';
+import { reconcileCodexAppServerOverridesBeforeTurn } from './appServer/reconcileCodexAppServerOverridesBeforeTurn';
 import { seedCodexAppServerPendingSessionOverrides } from './appServer/seedPendingSessionOverrides';
 import { SessionRollbackRpcParamsSchema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -1747,6 +1748,14 @@ export async function runCodex(opts: {
                         } catch (e) {
                             logger.debug('[CodexACP] Failed to sync session mode before prompt (non-fatal)', e);
                         }
+                    } else if (useCodexAppServer) {
+                        await reconcileCodexAppServerOverridesBeforeTurn({
+                            session,
+                            syncOverridesFromMetadata,
+                            sessionModeSync,
+                            configOptionSync,
+                            modelSync,
+                        });
                     }
                     const systemPromptText = startedFreshSessionForTurn
                         ? await resolveFreshSessionSystemPrompt(
