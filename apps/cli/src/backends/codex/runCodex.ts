@@ -142,6 +142,7 @@ export async function runCodex(opts: {
     modelUpdatedAt?: number;
     existingSessionId?: string;
     resume?: string;
+    codexArgs?: string[];
     startingMode?: 'local' | 'remote';
     experimentalCodexAcp?: boolean;
     codexBackendMode?: CodexBackendMode;
@@ -1348,6 +1349,7 @@ export async function runCodex(opts: {
                     api,
                     permissionMode: currentPermissionMode ?? initialPermissionMode,
                     resumeId: storedSessionIdForResume,
+                    codexArgs: opts.codexArgs ?? [],
                     formatError: formatErrorForUi,
                     launchLocal: codexLocalLauncher,
                 });
