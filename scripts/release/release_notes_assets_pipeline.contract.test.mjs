@@ -46,6 +46,24 @@ function makeFixtureBundle() {
   return { root, manifest, assetsDir, outDir };
 }
 
+function makeEmptyPublishBundle() {
+  const root = mkdtempSync(join(tmpdir(), 'happier-release-notes-assets-empty-'));
+  writeFileSync(join(root, 'release-notes__manifest.json'), `${JSON.stringify({
+    schemaVersion: 'v1',
+    latestReleaseId: null,
+    generatedAt: '2026-05-11T00:00:00.000Z',
+    assetBaseUrl: 'https://github.com/happier-dev/happier-assets/releases/download/release-notes/',
+    releases: [],
+  }, null, 2)}\n`);
+  writeFileSync(join(root, 'release-notes__assets-index.json'), `${JSON.stringify({
+    schemaVersion: 'v1',
+    generatedAt: '2026-05-11T00:00:00.000Z',
+    assetsBaseUrl: 'https://github.com/happier-dev/happier-assets/releases/download/release-notes/',
+    assets: {},
+  }, null, 2)}\n`);
+  return root;
+}
+
 test('release notes asset build emits manifest, asset index, and prefixed media from explicit inputs', () => {
   const fixture = makeFixtureBundle();
 
@@ -144,6 +162,21 @@ test('release notes asset publish dry-run targets happier-assets release-notes w
   assert.match(out, /release-notes__assets-index\.json/);
   assert.match(out, /release-notes__v9\.9\.9__hero\.webp/);
   assert.match(out, /--repo happier-dev\/happier-assets --clobber/);
+});
+
+test('release notes asset publish skips gh when the generated bundle has no authored releases or assets', () => {
+  const outDir = makeEmptyPublishBundle();
+
+  const result = spawnSync(
+    process.execPath,
+    [publishScript, '--in-dir', outDir, '--dry-run'],
+    { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 },
+  );
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /no authored release notes or media assets/i);
+  assert.doesNotMatch(result.stdout, /gh release/);
+  assert.equal(result.stderr, '');
 });
 
 test('release notes asset publish fails before gh when the required bundle files are missing', () => {
