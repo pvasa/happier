@@ -12,11 +12,12 @@
 
 import { readFile, unlink } from 'node:fs/promises';
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { callMcpToolWithResolvedTimeout } from '@/mcp/mcpToolCallRequestOptions';
@@ -38,11 +39,6 @@ function writeStderr(line: string): void {
   } catch {
     // ignore
   }
-}
-
-function parseArgsValue(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  return value as Record<string, unknown>;
 }
 
 async function connectRemoteClient(config: RemoteBridgeConfig): Promise<Client> {
@@ -87,34 +83,57 @@ async function main(): Promise<void> {
 
   const remoteClient = await connectRemoteClient(config);
 
-  const toolList = await remoteClient.listTools();
-  const tools = Array.isArray((toolList as any)?.tools) ? ((toolList as any).tools as any[]) : [];
+  const server = new Server(
+    { name: 'Happier MCP Remote Bridge', version: '1.0.0' },
+    { capabilities: { tools: {} } },
+  );
 
-  const server = new McpServer({ name: 'Happier MCP Remote Bridge', version: '1.0.0' });
+  server.setRequestHandler(ListToolsRequestSchema, async (request) => await remoteClient.listTools(request.params));
 
-  for (const tool of tools) {
-    const name = typeof tool?.name === 'string' ? tool.name : '';
-    if (!name) continue;
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const progressToken = request.params._meta?.progressToken;
+    const onprogress = typeof progressToken === 'string' || typeof progressToken === 'number'
+      ? (progress: Readonly<{ progress: number; total?: number; message?: string }>) => {
+        void extra.sendNotification({
+          method: 'notifications/progress',
+          params: {
+            ...progress,
+            progressToken,
+          },
+        }).catch((err) => {
+          writeStderr(`[happier-mcp-remote-bridge] Failed to forward progress: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+      : undefined;
 
-    server.registerTool(
-      name,
-      {
-        description: typeof tool?.description === 'string' ? tool.description : undefined,
-        title: typeof tool?.title === 'string' ? tool.title : undefined,
-        // The SDK expects a Zod schema for input validation. Remote `listTools` returns JSON schema.
-        // Prefer permissive validation here and let the remote server enforce its own schema.
-        inputSchema: z.any(),
-        _meta: tool?.inputSchema ? { remoteInputSchema: tool.inputSchema } : undefined,
-      } as any,
-      (async (argsOrExtra: unknown, extra?: unknown) => {
-        const toolArgs = parseArgsValue(argsOrExtra) ?? parseArgsValue(extra);
-        return await callMcpToolWithResolvedTimeout({ client: remoteClient, toolName: name, args: toolArgs });
-      }) as any,
-    );
-  }
+    return await callMcpToolWithResolvedTimeout({
+      client: remoteClient,
+      toolName: request.params.name,
+      args: request.params.arguments,
+      requestMetadata: request.params._meta,
+      onprogress,
+    });
+  });
+
+  let didCloseRemoteClient = false;
+  const closeRemoteClientOnce = async (): Promise<void> => {
+    if (didCloseRemoteClient) return;
+    didCloseRemoteClient = true;
+    await remoteClient.close().catch(() => {});
+  };
 
   const stdio = new StdioServerTransport();
   await server.connect(stdio);
+  const previousOnClose = stdio.onclose;
+  stdio.onclose = () => {
+    previousOnClose?.();
+    void closeRemoteClientOnce();
+  };
+  process.stdin.once('end', () => {
+    void server.close().catch((err) => {
+      writeStderr(`[happier-mcp-remote-bridge] Failed to close stdio server: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  });
 }
 
 main().catch((err) => {
