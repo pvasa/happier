@@ -1,9 +1,12 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type TextStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import TextareaAutosize from 'react-textarea-autosize';
 import { Typography } from '@/constants/Typography';
+import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
+import { useLocalSetting } from '@/sync/store/hooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
+import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
 
 export type SupportedKey = 'Enter' | 'Escape' | 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | 'Tab';
 
@@ -33,6 +36,7 @@ export interface MultiTextInputHandle {
 export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
 
 interface MultiTextInputProps {
+    textStyle?: TextStyle;
     testID?: string;
     value: string;
     onChangeText: (text: string) => void;
@@ -55,6 +59,44 @@ interface MultiTextInputProps {
     onFileDragActiveChange?: (active: boolean) => void;
 }
 
+const DEFAULT_TEXT_STYLE: TextStyle = { fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE };
+
+type WebTextStyleOverride = Readonly<{
+    color?: string;
+    fontFamily?: string;
+    fontSize?: string;
+    fontStyle?: TextStyle['fontStyle'];
+    fontWeight?: TextStyle['fontWeight'];
+    letterSpacing?: string;
+    lineHeight?: string;
+}>;
+
+function toCssLength(value: TextStyle['fontSize'] | TextStyle['lineHeight'] | TextStyle['letterSpacing']) {
+    if (typeof value === 'number') return `${value}px`;
+    if (typeof value === 'string') return value;
+    return undefined;
+}
+
+function resolveWebTextStyle(textStyle: TextStyle | undefined, uiFontScale: number): WebTextStyleOverride {
+    const scaledStyle = scaleTextStyle(textStyle ?? DEFAULT_TEXT_STYLE, uiFontScale);
+    const next: Record<string, string | TextStyle['fontStyle'] | TextStyle['fontWeight']> = {};
+    const color = typeof scaledStyle.color === 'string' ? scaledStyle.color : undefined;
+    const fontFamily = typeof scaledStyle.fontFamily === 'string' ? scaledStyle.fontFamily : undefined;
+    const fontSize = toCssLength(scaledStyle.fontSize);
+    const letterSpacing = toCssLength(scaledStyle.letterSpacing);
+    const lineHeight = toCssLength(scaledStyle.lineHeight);
+
+    if (color) next.color = color;
+    if (fontFamily) next.fontFamily = fontFamily;
+    if (fontSize) next.fontSize = fontSize;
+    if (scaledStyle.fontStyle) next.fontStyle = scaledStyle.fontStyle;
+    if (scaledStyle.fontWeight) next.fontWeight = scaledStyle.fontWeight;
+    if (letterSpacing) next.letterSpacing = letterSpacing;
+    if (lineHeight) next.lineHeight = lineHeight;
+
+    return next;
+}
+
 export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextInputProps>((props, ref) => {
     const {
         value,
@@ -67,7 +109,12 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     } = props;
     
     const { theme } = useUnistyles();
+    const uiFontScale = useLocalSetting('uiFontScale');
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+    const scaledTextStyle = React.useMemo(
+        () => resolveWebTextStyle(props.textStyle, uiFontScale),
+        [props.textStyle, uiFontScale],
+    );
 
     // Convert maxHeight to approximate maxRows (assuming ~24px line height)
     const maxRows = Math.floor(maxHeight / 24);
@@ -242,7 +289,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                 style={{
                     width: '100%',
                     padding: '0',
-                    fontSize: '16px',
+                    fontSize: `${MULTI_TEXT_INPUT_BASE_FONT_SIZE}px`,
                     color: theme.colors.input.text,
                     border: 'none',
                     outline: 'none',
@@ -255,6 +302,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                     paddingBottom: props.paddingBottom,
                     paddingLeft: props.paddingLeft,
                     paddingRight: props.paddingRight,
+                    ...scaledTextStyle,
                 }}
                 placeholder={placeholder}
                 value={value}

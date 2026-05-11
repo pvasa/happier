@@ -105,6 +105,12 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         description: 'Enable backdrop blur effects behind modals and overlay menus',
         storageScope: 'local',
     },
+    uiContentWidthMode: {
+        schema: z.enum(['compact', 'medium', 'full']),
+        default: 'compact',
+        description: 'Preferred maximum width for main app content',
+        storageScope: 'local',
+    },
     uiFontScale: {
         schema: z.number(),
         default: 1,

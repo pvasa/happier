@@ -32,6 +32,7 @@ beforeEach(() => {
         themePreference: 'adaptive',
         uiFontScale: 1,
         uiItemDensity: 'comfortable',
+        uiContentWidthMode: 'compact',
         detailsPaneTabsBehavior: 'preview',
     };
 });
@@ -57,6 +58,7 @@ describe('AppearanceSettingsScreen (focused groups after redistribution)', () =>
         expect(titles).toContain('settingsAppearance.multiPanePanels');
         expect(dropdownTitles).toContain('settingsAppearance.textSize');
         expect(dropdownTitles).toContain('settingsAppearance.itemDensity');
+        expect(dropdownTitles).toContain('settingsAppearance.contentWidth');
 
         // Session list settings moved to session.tsx — should NOT be here
         expect(titles).not.toContain('settingsFeatures.hideInactiveSessions');

@@ -15,7 +15,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 
 import { useAllMachines, useSessions, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
 import { getRecentMachinesFromSessions } from '@/utils/sessions/recentMachines';
-import { getRecentPathsForMachine } from '@/utils/sessions/recentPaths';
+import { useStableRecentPathsForMachine } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { resolvePreferredMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { Text } from '@/components/ui/text/Text';
@@ -93,14 +93,11 @@ export function VoiceSessionSpawnPickerModal(props: Props) {
     return machines.find((m: any) => m?.id === selectedMachineId) ?? null;
   }, [machines, selectedMachineId]);
 
-  const recentPaths = React.useMemo(() => {
-    if (!selectedMachineId) return [];
-    return getRecentPathsForMachine({
-      machineId: selectedMachineId,
-      recentMachinePaths: Array.isArray(recentMachinePaths) ? recentMachinePaths : [],
-      sessions,
-    });
-  }, [recentMachinePaths, selectedMachineId, sessions]);
+  const recentPaths = useStableRecentPathsForMachine({
+    machineId: selectedMachineId,
+    recentMachinePaths: Array.isArray(recentMachinePaths) ? recentMachinePaths : [],
+    sessions,
+  });
 
   const favoriteDirectories = Array.isArray(favoriteDirectoriesRaw) ? favoriteDirectoriesRaw : [];
 

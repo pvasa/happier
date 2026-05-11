@@ -81,7 +81,7 @@ function LegacyOnRequestCloseModal(
 
 async function renderCustomModal(config: Omit<CustomModalConfig<any>, 'id'>, onClose = vi.fn()) {
     const { CustomModal } = await import('./CustomModal');
-    return renderScreen(React.createElement(CustomModal, { config: { id: 'test-modal', ...config }, onClose }));
+    return renderScreen(React.createElement(CustomModal, { config: { id: 'test-modal', ...config }, onClose, visible: true }));
 }
 
 describe('CustomModal', () => {
@@ -200,6 +200,7 @@ describe('CustomModal', () => {
                 },
             },
             onClose: vi.fn(),
+            visible: true,
         }));
 
         await screen.update(React.createElement(CustomModal, {
@@ -213,6 +214,7 @@ describe('CustomModal', () => {
                 },
             },
             onClose: vi.fn(),
+            visible: true,
         }));
 
         const modalCardFrame = screen.findByType(ModalCardFrame);

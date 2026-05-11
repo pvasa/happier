@@ -110,10 +110,13 @@ describe('SegmentedTabBar', () => {
         // Tabs should expose the selected state for accessibility (web: aria-selected).
         expect(screen.findByTestId('seg:beta')?.props.accessibilityRole).toBe('tab');
         expect(screen.findByTestId('seg:beta')?.props.accessibilityState).toEqual({ selected: true });
+        expect(screen.findByTestId('seg:beta')?.props['aria-selected']).toBe(true);
         expect(screen.findByTestId('seg:alpha')?.props.accessibilityRole).toBe('tab');
         expect(screen.findByTestId('seg:alpha')?.props.accessibilityState).toEqual({ selected: false });
+        expect(screen.findByTestId('seg:alpha')?.props['aria-selected']).toBe(false);
         expect(screen.findByTestId('seg:gamma')?.props.accessibilityRole).toBe('tab');
         expect(screen.findByTestId('seg:gamma')?.props.accessibilityState).toEqual({ selected: false });
+        expect(screen.findByTestId('seg:gamma')?.props['aria-selected']).toBe(false);
 
         // The active tab ("beta") should include the tabActive background color.
         const activeFlat = flattenStyle(screen.findByTestId('seg:beta')?.props.style);

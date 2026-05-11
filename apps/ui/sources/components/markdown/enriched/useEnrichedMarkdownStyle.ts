@@ -75,20 +75,8 @@ function blockFontFace(style: TextStyle): { fontFamily?: string; fontWeight?: st
     };
 }
 
-function withBlockMargins<T extends Record<string, unknown>>(
-    style: T,
-    defaults: Readonly<{ marginTop?: number; marginBottom?: number }>,
-    overrides: Readonly<{ marginTop?: number; marginBottom?: number }>,
-): T & Readonly<{ marginTop?: number; marginBottom?: number }> {
-    return {
-        ...style,
-        ...(typeof (overrides.marginTop ?? defaults.marginTop) === 'number'
-            ? { marginTop: overrides.marginTop ?? defaults.marginTop }
-            : {}),
-        ...(typeof (overrides.marginBottom ?? defaults.marginBottom) === 'number'
-            ? { marginBottom: overrides.marginBottom ?? defaults.marginBottom }
-            : {}),
-    };
+function scaledMetric(base: number, multiplier: number): number {
+    return roundTo2(base * multiplier);
 }
 
 export function buildEnrichedMarkdownStyle(params: Readonly<{
@@ -107,10 +95,14 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
     const baseLineHeight = readNumber(flattenedTextStyle.lineHeight, roundTo2(24 * uiFontScale));
     const inlineCodeFontSize = roundTo2(baseFontSize * 0.88);
     const baseColor = readString(flattenedTextStyle.color, params.colors.text);
-    const marginOverrides = {
-        marginTop: typeof flattenedTextStyle.marginTop === 'number' ? flattenedTextStyle.marginTop : undefined,
-        marginBottom: typeof flattenedTextStyle.marginBottom === 'number' ? flattenedTextStyle.marginBottom : undefined,
-    };
+    const h1FontSize = scaledMetric(baseFontSize, 1.5);
+    const h2FontSize = scaledMetric(baseFontSize, 1.25);
+    const h3FontSize = scaledMetric(baseFontSize, 1.125);
+    const h6FontSize = scaledMetric(baseFontSize, 0.875);
+    const h1LineHeight = Math.max(baseLineHeight, scaledMetric(h1FontSize, 1.3));
+    const h2LineHeight = Math.max(baseLineHeight, scaledMetric(h2FontSize, 1.35));
+    const h3LineHeight = Math.max(baseLineHeight, scaledMetric(h3FontSize, 1.4));
+    const h6LineHeight = Math.max(scaledMetric(baseLineHeight, 0.875), scaledMetric(h6FontSize, 1.4));
     const defaultTypography = Typography.default();
     const semiBoldTypography = Typography.default('semiBold');
     const italicTypography = Typography.default('italic');
@@ -124,42 +116,56 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
     };
 
     const markdownStyle: MarkdownStyle = {
-        paragraph: withBlockMargins({
+        paragraph: {
             ...defaultFace,
             fontSize: baseFontSize,
             lineHeight: baseLineHeight,
             color: baseColor,
-        }, { marginTop: 0, marginBottom: 8 }, marginOverrides),
-        h1: withBlockMargins({
+            marginTop: 0,
+            marginBottom: 8,
+        },
+        h1: {
+            ...headingBase,
+            fontSize: h1FontSize,
+            lineHeight: h1LineHeight,
+            marginTop: 18,
+            marginBottom: 10,
+        },
+        h2: {
+            ...headingBase,
+            fontSize: h2FontSize,
+            lineHeight: h2LineHeight,
+            marginTop: 16,
+            marginBottom: 8,
+        },
+        h3: {
+            ...headingBase,
+            fontSize: h3FontSize,
+            lineHeight: h3LineHeight,
+            marginTop: 14,
+            marginBottom: 8,
+        },
+        h4: {
             ...headingBase,
             fontSize: baseFontSize,
             lineHeight: baseLineHeight,
-        }, { marginTop: 16, marginBottom: 8 }, marginOverrides),
-        h2: withBlockMargins({
-            ...headingBase,
-            fontSize: readNumber(flattenedTextStyle.fontSize, roundTo2(20 * uiFontScale)),
-            lineHeight: baseLineHeight,
-        }, { marginTop: 16, marginBottom: 8 }, marginOverrides),
-        h3: withBlockMargins({
-            ...headingBase,
-            fontSize: baseFontSize,
-            lineHeight: readNumber(flattenedTextStyle.lineHeight, roundTo2(28 * uiFontScale)),
-        }, { marginTop: 16, marginBottom: 8 }, marginOverrides),
-        h4: withBlockMargins({
+            marginTop: 10,
+            marginBottom: 6,
+        },
+        h5: {
             ...headingBase,
             fontSize: baseFontSize,
             lineHeight: baseLineHeight,
-        }, { marginTop: 8, marginBottom: 8 }, marginOverrides),
-        h5: withBlockMargins({
+            marginTop: 8,
+            marginBottom: 6,
+        },
+        h6: {
             ...headingBase,
-            fontSize: baseFontSize,
-            lineHeight: baseLineHeight,
-        }, {}, marginOverrides),
-        h6: withBlockMargins({
-            ...headingBase,
-            fontSize: baseFontSize,
-            lineHeight: baseLineHeight,
-        }, {}, marginOverrides),
+            fontSize: h6FontSize,
+            lineHeight: h6LineHeight,
+            marginTop: 8,
+            marginBottom: 6,
+        },
         strong: {
             fontFamily: readFontFamily(semiBoldTypography),
             fontWeight: readFontFamily(semiBoldTypography) ? 'normal' : 'bold',
@@ -214,17 +220,21 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             gapWidth: 8,
             marginLeft: roundTo2(28 * uiFontScale),
         },
-        thematicBreak: withBlockMargins({
+        thematicBreak: {
             color: params.colors.divider,
             height: 1,
-        }, { marginTop: 8, marginBottom: 8 }, marginOverrides),
-        math: withBlockMargins({
+            marginTop: 8,
+            marginBottom: 8,
+        },
+        math: {
             fontSize: baseFontSize,
             color: baseColor,
             backgroundColor: 'transparent',
             padding: 0,
             textAlign: 'center' as const,
-        }, { marginTop: 8, marginBottom: 8 }, marginOverrides),
+            marginTop: 8,
+            marginBottom: 8,
+        },
         inlineMath: {
             color: baseColor,
         },

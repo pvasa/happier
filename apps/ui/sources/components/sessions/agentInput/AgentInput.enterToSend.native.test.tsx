@@ -229,6 +229,40 @@ describe('AgentInput (enter to send on native)', () => {
         vi.clearAllMocks();
     });
 
+    it('uses a 16 point input text base for existing sessions and new sessions', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const existingSessionScreen = await renderScreen(
+            <AgentInput
+                sessionId="session-1"
+                value=""
+                onChangeText={mocks.onChangeText}
+                placeholder="p"
+                onSend={mocks.onSend}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                isSendDisabled={false}
+                disabled={false}
+                showAbortButton={false}
+            />
+        );
+        const newSessionScreen = await renderScreen(
+            <AgentInput
+                value=""
+                onChangeText={mocks.onChangeText}
+                placeholder="p"
+                onSend={mocks.onSend}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                isSendDisabled={false}
+                disabled={false}
+                showAbortButton={false}
+            />
+        );
+
+        expect(findMultiTextInput(existingSessionScreen).props.textStyle).toMatchObject({ fontSize: 16 });
+        expect(findMultiTextInput(newSessionScreen).props.textStyle).toMatchObject({ fontSize: 16 });
+    });
+
     it('sends and blurs on Enter for existing sessions when native enter-to-send is enabled', async () => {
         const { AgentInput } = await import('./AgentInput');
         const screen = await renderScreen(

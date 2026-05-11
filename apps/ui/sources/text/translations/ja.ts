@@ -3489,6 +3489,16 @@ localTailscale: {
     },
     display: "表示",
     displayDescription: "レイアウトと間隔を調整",
+    contentWidth: "コンテンツ幅",
+    contentWidthDescription: "メインコンテンツの最大幅を選択します",
+    contentWidthOptions: {
+      compact: "コンパクト",
+      compactDescription: "メインコンテンツを850 pxまでに制限します",
+      medium: "中",
+      mediumDescription: "メインコンテンツを960 pxまで許可します",
+      full: "全幅",
+      fullDescription: "利用可能なウィンドウ幅を使用します",
+    },
     backdropBlur: "背景ぼかし",
     backdropBlurDescription:
       "モーダルやメニューの背後に背景ぼかしを適用します。ブラウザー性能を優先する場合は無効にしてください。",
@@ -5695,6 +5705,7 @@ localTailscale: {
       selectForCommit: "コミット対象に選択",
       stageFile: "ファイルをステージ",
       removeFromSelection: "選択から削除",
+      removeFromCommitSelection: "コミット選択から削除",
       unstageFile: "ステージ解除",
       selectionHint:
         "行選択を有効にするには「含めた」または「保留中」を選択してください。",
@@ -5984,9 +5995,18 @@ localTailscale: {
       aboutSubtitle: "各アクションをアプリ、音声、統合のどこに表示するかを選択します。利用不可のタイルは表示したままにして、機能、プライバシー、ランタイムのどれでブロックされているかを分かるようにします。",
       aboutFooter: "これらの設定はアカウント既定にグローバルに適用されます。利用不可のタイルは、対象が現在ブロックされている理由を示します。",
       searchPlaceholder: "アクションを検索",
+      detailSearchPlaceholder: "サーフェスを検索",
       noResults: "現在の検索に一致するアクションはありません。",
+      noTargetsMatch: "現在の検索に一致するサーフェスはありません。",
       noDescription: "まだ説明はありません。",
       requireApproval: "承認を必須にする",
+      invalidActionTitle: "アクションが見つかりません",
+      invalidActionSubtitle: "このアクションはこのビルドでは利用できなくなりました。",
+      modes: {
+          off: "オフ",
+          askFirst: "先に確認",
+          allowed: "許可",
+      },
         sections: {
             app: "アプリ内",
             voice: "音声",
@@ -7457,102 +7477,126 @@ settingsSession: {
     mediaUnavailable: "メディアを利用できません",
     storyDeck: {
       dragToDismiss: "ドラッグして閉じる",
+      letsGo: "始めましょう！",
       slideAnnouncement: ({ title, current, total }: { title: string; current: number; total: number }) => `${title} - ${current} / ${total}`,
     },
     defaultTitle: "新着情報",
     onboardingShowcase: {
-      title: "Happier へようこそ",
-      subtitle: "どこにいてもついてくるコーディングセッション。",
-      cards: {
-        welcome: {
-          title: "勢いを保つために",
-          row1Title: "あらゆるデバイスでセッションを継続",
-          row1Body: "携帯、タブレット、ウェブ、デスクトップのどれでも続きから再開できます。",
-          row2Title: "速く動き、早く届ける",
-          row2Body: "リアルタイム同期がターミナル、エージェント、ファイルを揃えて保ちます。",
-          row3Title: "標準でプライベート",
-          row3Body: "エンドツーエンド暗号化により、作業はあなただけのものです。",
-        },
-        cockpit: {
-            title: "モバイルの司令塔",
-            body: "アクティブなエージェント向けの集中したモバイル表示。チャット、ファイル、Git、ターミナル、詳細へワンタップで移動できます。",
-            alt: "コマンドセンター用の抽象プレースホルダー画像。",
-            row1Title: "Cockpit モード",
-            row1Body: "集中したモバイル表示で、動作中のエージェントを追えます。",
-            row2Title: "ワンタップで移動",
-            row2Body: "チャット、ファイル、Git、ターミナル、詳細をデスクトップ表示なしで切り替えられます。",
-            row3Title: "すばやく送信",
-            row3Body: "エージェントに一押しが必要なとき、cockpit から返信できます。",
-        },
-        reviewComments: {
-            title: "コードレビューと修正を簡単に",
-            body: "ファイルや diff の正確な行にコメントし、含める内容を選んで、構造化された文脈をエージェントへ送れます。",
-            alt: "レビューコメント用の抽象プレースホルダー画像。",
-            row1Title: "正確な行にコメント",
-            row1Body: "ファイルや diff の行へ直接フィードバックを残せます。",
-            row2Title: "送る内容を選択",
-            row2Body: "エージェントに頼む前に、コメントを確認、編集、除外、追加できます。",
-            row3Title: "文脈を添えて送信",
-            row3Body: "構造化されたレビュー文脈を現在のセッションまたは新しいセッションへ送れます。",
-        },
-        sourceControl: {
-            title: "作って、そのまま出荷",
-            body: "Happier を離れずに、ブランチの作成と公開、リモート管理、変更ファイルの確認、pull request 作成ができます。",
-            alt: "ソース管理用の抽象プレースホルダー画像。",
-            row1Title: "ブランチと公開",
-            row1Body: "Happier を離れずにブランチ作成、リモート管理、push ができます。",
-            row2Title: "Pull request を開く",
-            row2Body: "既存 PR を再利用するか、セッションから新しい PR を作成できます。",
-            row3Title: "変更ファイルを確認",
-            row3Body: "大きな変更でも、選んだファイルに集中できます。",
-        },
-        markdown: {
-            title: "より滑らかなストリーミング、より豊かな Markdown",
-            body: "ストリーミング応答はより滑らかに感じられ、豊かな Markdown で長い回答、コード、リスト、図が読みやすくなります。",
-            alt: "Markdown 表示用の抽象プレースホルダー画像。",
-            row1Title: "出力が追いつく",
-            row1Body: "エージェントが書いている間のストリーミング応答がより滑らかに感じられます。",
-            row2Title: "Markdown が強化",
-            row2Body: "コードフェンス、リスト、表、長い回答をより確実に表示します。",
-            row3Title: "圧縮がわかりやすく",
-            row3Body: "トランスクリプト内のライフサイクルイベントを追いやすくなりました。",
-        },
-        media: {
-            title: "画像もトランスクリプト内で",
-            body: "Codex と対応エージェントに画像生成を依頼し、結果を Happier 内で直接プレビューできます。",
-            alt: "生成メディア用の抽象プレースホルダー画像。",
-            row1Title: "画像を生成",
-            row1Body: "Codex と対応エージェントに画像生成を依頼できます。",
-            row2Title: "インラインでプレビュー",
-            row2Body: "生成画像は Happier の会話内に直接表示されます。",
-            row3Title: "セッションと一緒に保存",
-            row3Body: "メディアも作業と同じセッションパイプラインを通ります。",
-        },
-        desktop: {
-            title: "より磨かれたデスクトップアプリ",
-            body: "よりクリーンなデスクトップシェル。磨かれた chrome、安全な余白、適切な場所の更新ステータスを備えています。",
-            alt: "デスクトップアプリ用の抽象プレースホルダー画像。",
-            row1Title: "よりクリーンな Chrome",
-            row1Body: "サイドバー操作と更新ステータスがより自然に収まります。",
-            row2Title: "集中しやすく",
-            row2Body: "ウィンドウとセッション面が作業の邪魔をしにくくなりました。",
-            row3Title: "安全なレイアウト",
-            row3Body: "プラットフォーム chrome とノッチ付き画面の余白をより適切に扱います。",
-        },
-        pets: {
-            title: "Pets に会いましょう",
-            body: "セッションをまたいで集中を保つ小さな相棒。便利？たぶん。魅力的？間違いなく。",
-            alt: "ペット相棒用の抽象プレースホルダー画像。",
-            row1Title: "小さな相棒",
-            row1Body: "セッションをまたいで集中を保つ手助けをします。",
-            row2Title: "活動を追跡",
-            row2Body: "デスクトップとモバイルでセッション活動を表示します。",
-            row3Title: "便利？たぶん。",
-            row3Body: "魅力的？間違いなく。",
-        },
-
-      },
-    },
+                "title": "Happierへようこそ",
+                "subtitle": "あなたのAIエージェントを、働くすべての場所で。",
+                "cards": {
+                    "welcome": {
+                        "title": "Happierへようこそ",
+                        "everywhereTitle": "あなたのAIエージェントを、働くすべての場所で",
+                        "everywhereBody": "Claude Code、Codex、OpenCode、Piなどを、スマートフォン、タブレット、ブラウザ、デスクトップで使えます。",
+                        "cockpitTitle": "モバイル cockpit",
+                        "cockpitBody": "チャット、ファイル、Git、エディタ、ターミナル。次のプロジェクトを作って出荷するために必要なものが、すべて手元にあります。",
+                        "existingTitle": "既存のセッションも、そのまま表示",
+                        "existingBody": "あなたのマシンで動いているClaude、Codex、OpenCodeのセッションを、Happierでライブに開けます。",
+                        "voiceTitle": "一緒に考えられる音声アシスタント",
+                        "voiceBody": "エージェントが何をしているかを聞き、権限リクエストを承認し、メッセージを送信できます。ハンズフリーで。",
+                        "reviewTitle": "diffをレビューしてコメント",
+                        "reviewBody": "ファイルやdiffの特定行をマークし、送るメモを選び、そのままエージェントに渡せます。",
+                        "subagentsTitle": "プロバイダー横断のsubagents",
+                        "subagentsBody": "ClaudeセッションからCodex subagentsを起動できます。作業をエージェント間で分担し、セッション間でメッセージをルーティングできます。",
+                        "tuisTitle": "お気に入りのTUIをそのまま使う",
+                        "tuisBody": "Claude Code、Codex、OpenCodeをネイティブなターミナルUIで実行できます。Happierがそれをキャプチャし、すべてのデバイスへ同期します。",
+                        "inboxTitle": "1つのinbox。すべてのセッション。",
+                        "inboxBody": "すべての保留中の承認、権限リクエスト、未読アクティビティを、すべてのセッションとマシンから1か所に集約します。",
+                        "mcpTitle": "1つのMCP設定。すべてのプロバイダー。",
+                        "mcpBody": "MCPサーバーは一度定義するだけ。MCPをネイティブ対応していないプロバイダーを含め、すべてのbackendで動作します。",
+                        "controlTitle": "キュー、steer、fork、rollback",
+                        "controlBody": "エージェントが忙しい間にメッセージをキューへ。実行中のturnをsteer。任意のメッセージからfork。必要なら元に戻せます。",
+                        "automationsTitle": "自動化",
+                        "automationsBody": "PRの監視、issueの確認、定期タスクの実行のために、エージェントセッションをスケジュールできます。",
+                        "accountsTitle": "複数アカウントとクォータ追跡",
+                        "accountsBody": "個人、仕事、チーム用など複数のClaudeまたはOpenAIアカウントを連携。各アカウントの使用量をアプリ内で確認できます。",
+                        "promptsTitle": "Prompts、skills、profiles",
+                        "promptsBody": "再利用できるprompts、skill bundles、backend profilesを、すべてのセッションとデバイスで同期します。",
+                        "privacyTitle": "オープンソース。エンドツーエンド暗号化。セルフホスト可能。",
+                        "privacyBody": "あなたのセッションはプライベートに保たれます。ソースは公開されています。1コマンドでセルフホストできます。",
+                        "petsTitle": "Petsに会う",
+                        "petsBody": "長いセッションのための小さな相棒。役に立つ？たぶん。魅力的？もちろん。"
+                    },
+                    "anywhere": {
+                        "title": "どこでも始めて、どこでも続ける。",
+                        "wideTitle": "どこでも始めて。\nどこでも続ける。",
+                        "body": "どこからでもセッションを起動できます。スマートフォン、ブラウザ、デスクトップからライブで追跡し、メッセージを送り、権限を承認できます。",
+                        "alt": "デバイス横断のエージェントセッション用の抽象的なプレースホルダー画像。"
+                    },
+                    "terminalTuis": {
+                        "title": "ターミナルが好き？私たちもです！",
+                        "wideTitle": "ターミナルが好き？\n私たちもです！",
+                        "body": "Claude Code、Codex、OpenCodeをネイティブなターミナルUIで実行できます。スマートフォンから追跡し、メッセージを送り、権限を承認できます。",
+                        "alt": "ターミナルTUI同期用の抽象的なプレースホルダー画像。"
+                    },
+                    "cockpit": {
+                        "title": "必要なものを、ワンタップで。",
+                        "wideTitle": "必要なものを。\nワンタップで",
+                        "body": "チャット、ファイル、Git、エディタ、ターミナル。エージェントとやり取りし、ファイルを閲覧・編集し、diffをレビューし、Gitブランチを管理し、PRを開き、ライブターミナルを開けます。",
+                        "alt": "モバイルcockpit用の抽象的なプレースホルダー画像。"
+                    },
+                    "existingSessions": {
+                        "title": "既存のClaude、Codex、OpenCodeセッション？もうあります。",
+                        "body": "実行中かどうかに関係なく、Claude、Codex、OpenCodeのセッションを参照できます。",
+                        "alt": "既存プロバイダーセッション用の抽象的なプレースホルダー画像。"
+                    },
+                    "voiceAssistant": {
+                        "title": "話しかけられる同僚",
+                        "wideTitle": "音声アシスタント：話しかけられる同僚",
+                        "body": "音声アシスタントが実行中のすべてのセッションを監視します。次の変更を一緒に考え、権限を承認し、さらに多くのことをハンズフリーで行えます。",
+                        "alt": "音声アシスタント用の抽象的なプレースホルダー画像。"
+                    },
+                    "reviewComments": {
+                        "title": "コードをレビューしてコメントを残す",
+                        "body": "エージェントの変更とdiffを確認できます。対応したい正確な行をマークし、現在のセッションまたは新しいセッションのエージェントへ送信できます。",
+                        "alt": "レビューコメント用の抽象的なプレースホルダー画像。"
+                    },
+                    "subagents": {
+                        "title": "1つのセッションで、マルチプロバイダーsubagents",
+                        "body": "任意のセッションでCodex、Claude、その他のsubagentsを開始できます。それぞれの強みを活かし、同じセッション内で一緒に作業させられます。",
+                        "alt": "プロバイダー横断subagents用の抽象的なプレースホルダー画像。"
+                    },
+                    "inbox": {
+                        "title": "もう流れを見失わない",
+                        "body": "10個のセッションを同時に動かして、何に注意すべきか見失っていませんか？Inboxが、すべてのセッションとマシンのアクティビティを表示します。",
+                        "alt": "グローバルinbox用の抽象的なプレースホルダー画像。"
+                    },
+                    "mcp": {
+                        "title": "1つの設定。すべてのプロバイダー。",
+                        "wideTitle": "1つの設定。\nすべてのプロバイダー。",
+                        "body": "HappierでMCPを一度定義すれば、MCPをネイティブ対応していないものを含むすべてのbackendで動作します。Skills、promptsなどを管理できます！",
+                        "alt": "共有MCP設定用の抽象的なプレースホルダー画像。"
+                    },
+                    "queue": {
+                        "title": "キュー、steer、fork、rollback",
+                        "body": "エージェントが忙しい間にメッセージをキューに入れられます。実行中のセッションをsteerできます。任意のメッセージからforkできます。うまくいかなければrollbackできます。",
+                        "alt": "セッション制御ツール用の抽象的なプレースホルダー画像。"
+                    },
+                    "automations": {
+                        "title": "エージェントをスケジュールで",
+                        "body": "Pull requestの監視、issueの確認、定期タスクの実行のために、繰り返しセッションをスケジュールできます。",
+                        "alt": "スケジュールされたエージェント自動化用の抽象的なプレースホルダー画像。"
+                    },
+                    "accounts": {
+                        "title": "複数アカウントとクォータ追跡",
+                        "body": "複数のOpenAIまたはClaudeアカウントを連携できます。各アカウントの使用量とクォータをアプリ内で確認できます。",
+                        "alt": "連携アカウントとクォータ用の抽象的なプレースホルダー画像。"
+                    },
+                    "privacy": {
+                        "title": "オープンソース。エンドツーエンド暗号化。",
+                        "wideTitle": "オープンソース。\nエンドツーエンド暗号化。",
+                        "body": "コード、prompts、セッション内容は、サーバーに届く前にあなたのデバイス上で暗号化されます。Private by design. Open by default.",
+                        "alt": "プライバシーとセルフホスト用の抽象的なプレースホルダー画像。"
+                    },
+                    "pets": {
+                        "title": "一人で作業しなくていい。Petsに会おう。",
+                        "wideTitle": "一人で作業しなくていい。\nPetsに会おう。",
+                        "body": "セッションをまたいで集中を保つのを助ける小さな相棒。役に立つ？たぶん。魅力的？もちろん。",
+                        "alt": "Pets用の抽象的なプレースホルダー画像。"
+                    }
+                }
+            },
   },
 
   terminal: {

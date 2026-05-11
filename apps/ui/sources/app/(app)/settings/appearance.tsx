@@ -51,12 +51,14 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [themePreference, setThemePreference] = useLocalSettingMutable('themePreference');
     const [uiFontScale, setUiFontScale] = useLocalSettingMutable('uiFontScale');
     const [uiItemDensity, setUiItemDensity] = useLocalSettingMutable('uiItemDensity');
+    const [uiContentWidthMode, setUiContentWidthMode] = useLocalSettingMutable('uiContentWidthMode');
     const [uiMultiPanePanelsEnabled, setUiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
     const [uiBackdropBlurEnabled, setUiBackdropBlurEnabled] = useLocalSettingMutable('uiBackdropBlurEnabled');
     const [detailsPaneTabsBehavior, setDetailsPaneTabsBehavior] = useLocalSettingMutable('detailsPaneTabsBehavior');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
     const [openItemDensityMenu, setOpenItemDensityMenu] = React.useState(false);
+    const [openContentWidthMenu, setOpenContentWidthMenu] = React.useState(false);
     const [openDetailsTabsMenu, setOpenDetailsTabsMenu] = React.useState(false);
     const [openAvatarStyleMenu, setOpenAvatarStyleMenu] = React.useState(false);
 
@@ -115,6 +117,26 @@ export default React.memo(function AppearanceSettingsScreen() {
                 id: 'compact',
                 title: t('settingsAppearance.itemDensityOptions.compact'),
                 subtitle: t('settingsAppearance.itemDensityOptions.compactDescription'),
+            },
+        ];
+    }, []);
+
+    const contentWidthMenuItems = React.useMemo(() => {
+        return [
+            {
+                id: 'compact',
+                title: t('settingsAppearance.contentWidthOptions.compact'),
+                subtitle: t('settingsAppearance.contentWidthOptions.compactDescription'),
+            },
+            {
+                id: 'medium',
+                title: t('settingsAppearance.contentWidthOptions.medium'),
+                subtitle: t('settingsAppearance.contentWidthOptions.mediumDescription'),
+            },
+            {
+                id: 'full',
+                title: t('settingsAppearance.contentWidthOptions.full'),
+                subtitle: t('settingsAppearance.contentWidthOptions.fullDescription'),
             },
         ];
     }, []);
@@ -278,6 +300,28 @@ export default React.memo(function AppearanceSettingsScreen() {
 
             {/* Layout */}
             <ItemGroup title={t('settingsAppearance.display')} footer={t('settingsAppearance.displayDescription')}>
+                <DropdownMenu
+                    open={openContentWidthMenu}
+                    onOpenChange={setOpenContentWidthMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={uiContentWidthMode}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    itemTrigger={{
+                        title: t('settingsAppearance.contentWidth'),
+                        subtitle: t('settingsAppearance.contentWidthDescription'),
+                        icon: <Ionicons name="resize-outline" size={29} color={theme.colors.accent.blue} />,
+                        showSelectedSubtitle: false,
+                    }}
+                    items={contentWidthMenuItems}
+                    onSelect={(itemId) => {
+                        if (itemId !== 'compact' && itemId !== 'medium' && itemId !== 'full') return;
+                        setUiContentWidthMode(itemId);
+                    }}
+                />
                 <Item
                     title={t('settingsAppearance.multiPanePanels')}
                     subtitle={t('settingsAppearance.multiPanePanelsDescription')}

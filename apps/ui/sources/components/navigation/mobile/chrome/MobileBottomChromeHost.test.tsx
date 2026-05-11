@@ -5,7 +5,6 @@ import { act } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
-import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { clearPendingMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -52,6 +51,14 @@ const navigationState = vi.hoisted(() => ({
     canGoBack: null as boolean | null,
     goBack: vi.fn(),
 }));
+const animatedTimingState = vi.hoisted(() => ({
+    timings: [] as Array<{
+        start: ReturnType<typeof vi.fn>;
+        stop: ReturnType<typeof vi.fn>;
+        toValue: number;
+        finish: (finished?: boolean) => void;
+    }>,
+}));
 
 const expoRouterMock = createExpoRouterMock({
     pathname: () => pathState.pathname,
@@ -89,9 +96,21 @@ vi.mock('react-native', async () => {
                     return { __type: 'interpolate', value: this._value, config };
                 }
             },
-            timing: vi.fn(() => ({
-                start: (cb?: (result: { finished: boolean }) => void) => cb?.({ finished: true }),
-            })),
+            timing: vi.fn((_value: unknown, config: { toValue: number }) => {
+                let complete: ((result: { finished: boolean }) => void) | undefined;
+                const timing = {
+                    toValue: config.toValue,
+                    start: vi.fn((callback?: (result: { finished: boolean }) => void) => {
+                        complete = callback;
+                    }),
+                    stop: vi.fn(),
+                    finish: (finished = true) => {
+                        complete?.({ finished });
+                    },
+                };
+                animatedTimingState.timings.push(timing);
+                return timing;
+            }),
             View: ({ children, ...props }: any) => React.createElement('AnimatedView', props, children),
         },
         View: ({ children, ...props }: any) => React.createElement('View', props, children),
@@ -210,6 +229,7 @@ describe('MobileBottomChromeHost', () => {
         routerState.back.mockReset();
         navigationState.canGoBack = null;
         navigationState.goBack.mockReset();
+        animatedTimingState.timings = [];
         tabState.setActiveTab.mockReset();
         storageMutators.setSessionLastMobileSurfaceBySessionId.mockReset();
         storageListeners.listeners.clear();
@@ -646,7 +666,7 @@ describe('MobileBottomChromeHost', () => {
         }
     });
 
-    it('animates from session cockpit chrome to main app tabs when returning to the sessions list', async () => {
+    it('shows the target chrome immediately when returning to the sessions list', async () => {
         vi.useFakeTimers();
         try {
             pathState.pathname = '/session/session-1/files';
@@ -662,18 +682,68 @@ describe('MobileBottomChromeHost', () => {
                 notifyStorageListeners();
             });
 
-            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(1);
-            expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
-
-            await act(async () => {
-                vi.advanceTimersByTime(motionTokens.durationMs.fast);
-            });
-
             expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
             const bar = screen.tree.findByType('TabBar' as never);
             expect(bar.props.activeTab).toBe('sessions');
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('stops in-flight chrome animations before switching chrome keys again', async () => {
+        vi.useFakeTimers();
+        try {
+            pathState.pathname = '/session/session-1/files';
+
+            const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+            await renderScreen(<MobileBottomChromeHost />);
+
+            pathState.pathname = '/';
+            await act(async () => {
+                settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+                notifyStorageListeners();
+            });
+
+            const firstTransition = animatedTimingState.timings[0];
+            expect(firstTransition).toBeTruthy();
+            expect(firstTransition.stop).not.toHaveBeenCalled();
+
+            pathState.pathname = '/session/session-1/git';
+            settingsState.sessionLastMobileSurfaceBySessionId = { 'session-1': 'git' };
+            await act(async () => {
+                notifyStorageListeners();
+            });
+
+            expect(firstTransition.stop).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('settles chrome opacity when the target chrome enter animation finishes', async () => {
+        pathState.pathname = '/session/session-1/files';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+
+        const initialAnimatedChrome = screen.tree.findByType('AnimatedView' as never);
+        expect(initialAnimatedChrome.props.style.opacity._value).toBe(1);
+
+        pathState.pathname = '/';
+        await act(async () => {
+            settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+            notifyStorageListeners();
+        });
+
+        const animatedChrome = screen.tree.findByType('AnimatedView' as never);
+        expect(animatedChrome.props.style.opacity._value).toBe(0);
+        expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(1);
+        expect(animatedTimingState.timings).toHaveLength(1);
+
+        await act(async () => {
+            animatedTimingState.timings[0]?.finish();
+        });
+
+        expect(animatedChrome.props.style.opacity._value).toBe(1);
     });
 });

@@ -2867,6 +2867,16 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         },
         display: '顯示',
         displayDescription: '控制版面配置和間距',
+        contentWidth: '內容寬度',
+        contentWidthDescription: '選擇主內容可擴展到的最大寬度',
+        contentWidthOptions: {
+            compact: '緊湊',
+            compactDescription: '將主內容限制在 850 px',
+            medium: '中等',
+            mediumDescription: '允許主內容擴展到 960 px',
+            full: '全寬',
+            fullDescription: '使用可用視窗寬度',
+        },
         backdropBlur: '背景模糊',
         backdropBlurDescription: '在彈窗與選單後方使用背景模糊。關閉後可提升瀏覽器效能。',
         multiPanePanels: '右側面板',
@@ -4317,6 +4327,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             selectForCommit: '選擇用於提交',
             stageFile: '暫存檔案',
             removeFromSelection: '從選擇中移除',
+            removeFromCommitSelection: '從提交選擇中移除',
             unstageFile: '取消暫存',
             selectionHint: '選擇「已包含」或「待處理」以啟用行選擇。',
             selectedLines: {
@@ -4572,9 +4583,18 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         aboutSubtitle: '選擇每個操作在 app、語音與整合中的呈現位置。不可用的卡片仍會顯示，讓你了解有哪些內容因功能、隱私或執行階段支援而被阻擋。',
         aboutFooter: '這些設定會全域套用到你的帳戶預設。不可用的卡片會說明目標目前為何被阻擋。',
         searchPlaceholder: '搜尋操作',
+        detailSearchPlaceholder: '搜尋介面',
         noResults: '沒有操作符合目前的搜尋。',
+        noTargetsMatch: '沒有介面與目前搜尋相符。',
         noDescription: '尚無描述。',
         requireApproval: '需要核准',
+        invalidActionTitle: '找不到動作',
+        invalidActionSubtitle: '此動作在此版本中不再可用。',
+        modes: {
+            off: '關閉',
+            askFirst: '先詢問',
+            allowed: '允許',
+        },
         sections: {
             app: '在 app 中',
             voice: '語音',
@@ -5429,102 +5449,126 @@ settingsSession: {
         mediaUnavailable: '媒體不可用',
         storyDeck: {
           dragToDismiss: '拖動關閉',
+          letsGo: '開始吧！',
           slideAnnouncement: ({ title, current, total }: { title: string; current: number; total: number }) => `${title} - ${current} / ${total}`,
         },
         defaultTitle: '新功能',
         onboardingShowcase: {
-            title: '歡迎使用 Happier',
-            subtitle: '隨處可繼續的編碼工作階段。',
-            cards: {
-                welcome: {
-                    title: '為節奏而生',
-                    row1Title: '任何裝置上的工作階段',
-                    row1Body: '在手機、平板、網頁或桌面端繼續上次的工作。',
-                    row2Title: '更快推進,更早交付',
-                    row2Body: '即時同步讓終端機、代理和檔案保持一致。',
-                    row3Title: '預設私密',
-                    row3Body: '端對端加密,讓你的工作只屬於你。',
-                },
-                cockpit: {
-                    title: "你的行動指揮中心",
-                    body: "面向活躍代理的專注行動視圖，一鍵進入聊天、檔案、Git、終端機和詳情。",
-                    alt: "指揮中心抽象佔位圖。",
-                    row1Title: "Cockpit 模式",
-                    row1Body: "用專注的行動視圖跟進活躍代理。",
-                    row2Title: "一鍵切換",
-                    row2Body: "在聊天、檔案、Git、終端機和詳情之間切換，不需要桌面版配置。",
-                    row3Title: "快速送出",
-                    row3Body: "當代理需要一點推進時，直接從 cockpit 回覆。",
-                },
-                reviewComments: {
-                    title: "輕鬆審查與修復程式碼",
-                    body: "在檔案或 diff 的精確行上評論，選擇要包含的內容，並把結構化上下文送給代理。",
-                    alt: "審查評論抽象佔位圖。",
-                    row1Title: "評論精確行",
-                    row1Body: "直接在檔案和 diff 行上留下回饋。",
-                    row2Title: "選擇要送出的內容",
-                    row2Body: "在提示代理前，審查、編輯、移除或包含評論。",
-                    row3Title: "保留結構化上下文",
-                    row3Body: "把結構化 review 上下文送到目前工作階段或新的工作階段。",
-                },
-                sourceControl: {
-                    title: "建置，然後發布",
-                    body: "無需離開 Happier，即可建立和發布分支、管理遠端、審查變更檔案並開啟 pull request。",
-                    alt: "原始碼控制抽象佔位圖。",
-                    row1Title: "分支和發布",
-                    row1Body: "無需離開 Happier，即可建立分支、管理遠端並推送修改。",
-                    row2Title: "開啟 pull request",
-                    row2Body: "重用既有 PR，或從工作階段建立新的 PR。",
-                    row3Title: "審查變更檔案",
-                    row3Body: "當變更集很大時，專注查看選定檔案。",
-                },
-                markdown: {
-                    title: "更順滑的串流輸出，更豐富的 Markdown",
-                    body: "串流回應更順滑，更豐富的 Markdown 讓長回答、程式碼、清單和圖表更容易閱讀。",
-                    alt: "Markdown 顯示抽象佔位圖。",
-                    row1Title: "輸出跟得上",
-                    row1Body: "代理寫作時，串流回應感覺更順滑。",
-                    row2Title: "Markdown 更可靠",
-                    row2Body: "程式碼區塊、清單、表格和長回答顯示更穩定。",
-                    row3Title: "壓縮更清楚",
-                    row3Body: "轉錄中的生命週期事件更容易追蹤。",
-                },
-                media: {
-                    title: "圖片直接進入轉錄",
-                    body: "讓 Codex 和支援的代理生成圖片，然後直接在 Happier 中預覽結果。",
-                    alt: "生成媒體抽象佔位圖。",
-                    row1Title: "生成圖片",
-                    row1Body: "讓 Codex 和支援的代理建立圖片。",
-                    row2Title: "內嵌預覽",
-                    row2Body: "生成的圖片直接出現在 Happier 對話中。",
-                    row3Title: "隨工作階段保存",
-                    row3Body: "媒體和你的工作使用同一套工作階段 pipeline。",
-                },
-                desktop: {
-                    title: "更精緻的桌面應用程式",
-                    body: "更乾淨的桌面外殼，更精緻的 chrome，更安全的間距，以及放在合適位置的更新狀態。",
-                    alt: "桌面應用程式抽象佔位圖。",
-                    row1Title: "更乾淨的介面",
-                    row1Body: "側邊欄控制和更新狀態更自然。",
-                    row2Title: "更專注",
-                    row2Body: "視窗和工作階段介面更少打擾工作。",
-                    row3Title: "更安全的版面",
-                    row3Body: "桌面間距更好處理平台 chrome 和瀏海螢幕。",
-                },
-                pets: {
-                    title: "認識 Pets",
-                    body: "一個小夥伴，幫助你在不同工作階段之間保持節奏。有用？也許。可愛？當然。",
-                    alt: "寵物夥伴抽象佔位圖。",
-                    row1Title: "一個小夥伴",
-                    row1Body: "幫助你在不同工作階段之間保持節奏。",
-                    row2Title: "跟隨活動",
-                    row2Body: "在桌面和行動端顯示工作階段活動。",
-                    row3Title: "有用？也許。",
-                    row3Body: "可愛？當然。",
-                },
-
+                "title": "歡迎使用 Happier",
+                "subtitle": "你的 AI 代理，出現在每個工作場景。",
+                "cards": {
+                    "welcome": {
+                        "title": "歡迎使用 Happier",
+                        "everywhereTitle": "你的 AI 代理，出現在每個工作場景",
+                        "everywhereBody": "Claude Code、Codex、OpenCode、Pi，以及更多：手機、平板、瀏覽器或桌面端都能使用。",
+                        "cockpitTitle": "你的行動 cockpit",
+                        "cockpitBody": "聊天、檔案、Git、編輯器、終端機。打造並發布下一個專案所需的一切，都在指尖。",
+                        "existingTitle": "既有工作階段，已經在那裡",
+                        "existingBody": "任何在你機器上執行的 Claude、Codex 或 OpenCode 工作階段，都可以在 Happier 中即時開啟。",
+                        "voiceTitle": "可以一起腦力激盪的語音助理",
+                        "voiceBody": "詢問代理正在做什麼，核准權限請求，並傳送訊息。全程免手動。",
+                        "reviewTitle": "檢視 diff 並留下評論",
+                        "reviewBody": "在檔案或 diff 的特定行做標記，選擇要傳送的備註，並直接交給代理。",
+                        "subagentsTitle": "跨 provider 的 subagents",
+                        "subagentsBody": "從 Claude 工作階段啟動 Codex subagents。把工作拆給多個代理。讓訊息在工作階段之間流轉。",
+                        "tuisTitle": "使用你喜歡的 TUI",
+                        "tuisBody": "在原生終端機 UI 中執行 Claude Code、Codex 或 OpenCode。Happier 會擷取它，並同步到每台裝置。",
+                        "inboxTitle": "一個 inbox。所有工作階段。",
+                        "inboxBody": "所有待核准事項、權限請求與未讀活動，跨所有工作階段和機器，集中在一個地方。",
+                        "mcpTitle": "一個 MCP 設定。所有 provider。",
+                        "mcpBody": "MCP 伺服器只需定義一次。它們可用於所有 backend，包括不原生支援 MCP 的 provider。",
+                        "controlTitle": "排隊、steer、fork、rollback",
+                        "controlBody": "代理忙碌時先排隊訊息。Steer 正在執行的 turn。從任意訊息 fork。需要時回滾。",
+                        "automationsTitle": "自動化",
+                        "automationsBody": "定期排程代理工作階段，用於監控 PR、檢查 issue，或按固定頻率執行任何任務。",
+                        "accountsTitle": "多帳號與配額追蹤",
+                        "accountsBody": "連結多個 Claude 或 OpenAI 帳號：個人、工作、團隊。直接在應用程式中監控每個帳號的使用量。",
+                        "promptsTitle": "Prompts、skills 和 profiles",
+                        "promptsBody": "可重複使用的 prompts、skill bundles 和 backend profiles，在每個工作階段與裝置之間同步。",
+                        "privacyTitle": "開源。端對端加密。可自行託管。",
+                        "privacyBody": "你的工作階段保持私密。原始碼開放。一個指令即可自行託管。",
+                        "petsTitle": "認識 Pets",
+                        "petsBody": "長時間工作階段裡的小夥伴。有用嗎？也許。迷人嗎？當然。"
+                    },
+                    "anywhere": {
+                        "title": "隨時開始。到處繼續。",
+                        "wideTitle": "隨時開始。\n到處繼續。",
+                        "body": "從任何地方啟動工作階段。透過手機、瀏覽器或桌面端即時跟進、傳送訊息並核准權限。",
+                        "alt": "跨裝置代理工作階段的抽象佔位圖。"
+                    },
+                    "terminalTuis": {
+                        "title": "你喜歡終端機？我們也是！",
+                        "wideTitle": "你喜歡終端機？\n我們也是！",
+                        "body": "在原生終端機 UI 中執行 Claude Code、Codex 或 OpenCode。透過手機跟進、傳送訊息並核准權限。",
+                        "alt": "終端機 TUI 同步的抽象佔位圖。"
+                    },
+                    "cockpit": {
+                        "title": "你需要的一切。一點即達。",
+                        "wideTitle": "你需要的一切。\n一點即達",
+                        "body": "聊天、檔案、Git、編輯器、終端機。和代理互動，瀏覽並編輯檔案，檢視 diff，管理 Git 分支，開啟 PR，並開啟即時終端機。",
+                        "alt": "行動 cockpit 的抽象佔位圖。"
+                    },
+                    "existingSessions": {
+                        "title": "既有 Claude、Codex、OpenCode 工作階段？已經在那裡。",
+                        "body": "瀏覽任何 Claude、Codex 或 OpenCode 工作階段，無論目前是否執行。",
+                        "alt": "既有 provider 工作階段的抽象佔位圖。"
+                    },
+                    "voiceAssistant": {
+                        "title": "一位可以交談的同事",
+                        "wideTitle": "語音助手：一位可以交談的同事",
+                        "body": "語音助理會監控所有正在執行的工作階段。一起腦力激盪下一步修改、核准權限，還有更多，全程免手動。",
+                        "alt": "語音助理的抽象佔位圖。"
+                    },
+                    "reviewComments": {
+                        "title": "檢視程式碼並留下評論",
+                        "body": "瀏覽代理的修改和 diff。標記你想處理的精確行。把它們傳送給目前工作階段中的代理，或傳送到一個新工作階段。",
+                        "alt": "檢視評論的抽象佔位圖。"
+                    },
+                    "subagents": {
+                        "title": "一個工作階段，多 provider subagents",
+                        "body": "在任何工作階段中啟動 Codex、Claude 或其他 subagents。運用每一個的優勢，讓它們一起在同一個工作階段中工作。",
+                        "alt": "跨 provider subagents 的抽象佔位圖。"
+                    },
+                    "inbox": {
+                        "title": "再也不會失去脈絡",
+                        "body": "同時執行 10 個工作階段，不知道哪裡需要你關注？Inbox 會顯示所有工作階段和機器上的全部活動。",
+                        "alt": "全域 inbox 的抽象佔位圖。"
+                    },
+                    "mcp": {
+                        "title": "一個設定。所有 provider。",
+                        "wideTitle": "一個設定。\n所有 provider。",
+                        "body": "在 Happier 中定義一次 MCP，它們即可跨所有 backend 工作，甚至包括不原生支援 MCP 的 backend。管理 skills、prompts 等等！",
+                        "alt": "共享 MCP 設定的抽象佔位圖。"
+                    },
+                    "queue": {
+                        "title": "排隊、steer、fork、rollback",
+                        "body": "代理忙碌時先排隊訊息。Steer 正在執行的工作階段。從任意訊息 fork。情況不對就 rollback。",
+                        "alt": "工作階段控制工具的抽象佔位圖。"
+                    },
+                    "automations": {
+                        "title": "你的代理，按排程執行",
+                        "body": "排程週期性工作階段來監控 pull request、檢查 issue，或定期執行任何任務。",
+                        "alt": "排程代理自動化的抽象佔位圖。"
+                    },
+                    "accounts": {
+                        "title": "多帳號與配額追蹤",
+                        "body": "連結多個 OpenAI 或 Claude 帳號。直接在應用程式中監控每個帳號的使用量和配額。",
+                        "alt": "已連結帳號與配額的抽象佔位圖。"
+                    },
+                    "privacy": {
+                        "title": "開源。端對端加密。",
+                        "wideTitle": "開源。\n端對端加密。",
+                        "body": "你的程式碼、prompts 和工作階段內容會先在裝置上加密，才會到達任何伺服器。Private by design. Open by default.",
+                        "alt": "隱私與自行託管的抽象佔位圖。"
+                    },
+                    "pets": {
+                        "title": "別再一個人撐著。認識 Pets。",
+                        "wideTitle": "別再一個人撐著。\n認識 Pets。",
+                        "body": "一個小夥伴，幫助你在多個工作階段之間保持節奏。有用嗎？也許。迷人嗎？當然。",
+                        "alt": "Pets 的抽象佔位圖。"
+                    }
+                }
             },
-        },
     },
 
     terminal: {

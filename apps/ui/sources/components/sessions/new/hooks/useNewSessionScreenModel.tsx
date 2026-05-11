@@ -515,6 +515,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         pathParam: effectivePathParam,
         persistedMachineId: persistedDraft?.selectedMachineId ?? null,
         persistedPath: hydratedPersistedAuthoringDraft?.directory ?? null,
+        cacheScopeKey: capabilityServerId,
     });
     const [pathPickerSearchQuery, setPathPickerSearchQuery] = React.useState('');
     const repoScmSnapshot = useNewSessionRepoScmSnapshot({

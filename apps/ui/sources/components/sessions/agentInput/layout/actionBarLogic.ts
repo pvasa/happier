@@ -44,3 +44,20 @@ export function shouldShowSecondaryControlRow(
 export function shouldShowPathAndResumeRow(actionBarLayout: AgentInputActionBarLayout): boolean {
     return shouldShowSecondaryControlRow(actionBarLayout, true);
 }
+
+export function resolveAgentInputActionBarLayout(params: Readonly<{
+    configuredLayout: AgentInputActionBarLayout | 'auto' | null | undefined;
+    platform: string;
+    isMobileLayout: boolean;
+}>): AgentInputActionBarLayout {
+    if (
+        params.configuredLayout === 'wrap'
+        || params.configuredLayout === 'scroll'
+        || params.configuredLayout === 'collapsed'
+    ) {
+        return params.configuredLayout;
+    }
+
+    if (params.platform === 'web') return 'scroll';
+    return params.isMobileLayout ? 'scroll' : 'wrap';
+}

@@ -3,6 +3,7 @@ import * as React from 'react';
 import { View, Platform, useWindowDimensions, ViewStyle, ActivityIndicator, Pressable, ScrollView } from 'react-native';
 import { layout } from '@/components/ui/layout/layout';
 import { MultiTextInput, KeyPressEvent, type MultiTextInputSubmitBehavior } from '@/components/ui/forms/MultiTextInput';
+import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from '@/components/ui/forms/multiTextInputTypography';
 import { Typography } from '@/constants/Typography';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import { getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption } from '@/sync/domains/models/modelOptions';
@@ -46,7 +47,11 @@ import { getProfileDisplayName } from '@/components/profiles/profileDisplay';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { AgentInputScrollableChipRow } from './layout/AgentInputScrollableChipRow';
 import { PathAndResumeRow } from './layout/PathAndResumeRow';
-import { getHasAnyAgentInputActions, shouldShowSecondaryControlRow } from './layout/actionBarLogic';
+import {
+    getHasAnyAgentInputActions,
+    resolveAgentInputActionBarLayout,
+    shouldShowSecondaryControlRow,
+} from './layout/actionBarLogic';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import {
@@ -108,9 +113,9 @@ import { insertTextAtSelection } from './insertTextAtSelection';
 import { subscribeToIosHardwareShiftEnter } from './subscribeToIosHardwareShiftEnter';
 
 const NATIVE_ACTION_CHIP_GAP_Y = 1;
-const NATIVE_ACTION_BAR_SECTION_GAP_Y = 6;
-const WEB_ACTION_BAR_ROW_GAP_Y = 2;
-const WEB_ACTION_BAR_ROW_GAP_MOBILE_Y = 1;
+const NATIVE_ACTION_BAR_SECTION_GAP_Y = 0;
+const WEB_ACTION_BAR_ROW_GAP_Y = 0;
+const WEB_ACTION_BAR_ROW_GAP_MOBILE_Y = 0;
 const ACTION_BAR_SCROLL_CONTENT_PADDING_RIGHT = 30;
 
 const AGENT_INPUT_TEST_IDS = {
@@ -436,6 +441,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flex: 1,
         overflow: 'visible',
     },
+    actionButtonsSecondaryScroll: {
+        alignSelf: 'stretch',
+        flexGrow: 0,
+        flexShrink: 0,
+        minHeight: 32,
+        overflow: 'visible',
+    },
     actionButtonsScrollViewportContent: {
         paddingRight: ACTION_BAR_SCROLL_CONTENT_PADDING_RIGHT,
     },
@@ -604,10 +616,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...Typography.default('semiBold'),
     },
     sessionInputText: {
-        fontSize: 14,
+        fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE,
     },
     newSessionInputText: {
-        fontSize: 16,
+        fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE,
     },
 }));
 
@@ -654,12 +666,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const [panelHeightPx, setPanelHeightPx] = React.useState<number | null>(null);
     const [inputContainerHeightPx, setInputContainerHeightPx] = React.useState<number | null>(null);
     const [inputViewportHeightPx, setInputViewportHeightPx] = React.useState<number | null>(null);
-    const [actionFooterHeightPx, setActionFooterHeightPx] = React.useState<number | null>(null);
+    const [actionFooterHeightPx, setActionFooterHeightPx] = React.useState<number>(0);
     const nativeKeyboardVariableSectionMaxHeight = React.useMemo(() => {
         if (typeof keyboardOpenPanelMaxHeight !== 'number') return undefined;
         return computeAgentInputKeyboardOpenVariableSectionMaxHeight({
             panelMaxHeight: keyboardOpenPanelMaxHeight,
-            footerHeight: actionFooterHeightPx ?? 0,
+            footerHeight: actionFooterHeightPx,
         });
     }, [actionFooterHeightPx, keyboardOpenPanelMaxHeight]);
     const fallbackInputMaxHeight = props.inputMaxHeight ?? defaultInputMaxHeight;
@@ -878,12 +890,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [agentInputChipDensity]);
 
     const effectiveActionBarLayout = React.useMemo<'wrap' | 'scroll' | 'collapsed'>(() => {
-        if (agentInputActionBarLayout === 'wrap' || agentInputActionBarLayout === 'scroll' || agentInputActionBarLayout === 'collapsed') {
-            return agentInputActionBarLayout;
-        }
-        // auto
-        // Treat sub-tablet widths as "mobile": prefer a horizontally scrollable action bar.
-        return isMobileLayoutWidth(screenWidth) ? 'scroll' : 'wrap';
+        return resolveAgentInputActionBarLayout({
+            configuredLayout: agentInputActionBarLayout,
+            platform: Platform.OS,
+            isMobileLayout: isMobileLayoutWidth(screenWidth),
+        });
     }, [agentInputActionBarLayout, screenWidth]);
 
     // In labels mode: always show; in icons mode: never show; in auto: show for 'always' policy chips.
@@ -1854,7 +1865,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     actionBarShouldScroll ? (
                         <AgentInputScrollableChipRow
                             key="row2"
-                            containerStyle={styles.actionButtonsLeftScroll}
+                            containerStyle={styles.actionButtonsSecondaryScroll}
                             contentStyle={styles.actionButtonsScrollViewportContent}
                             fadeColor={actionBarFadeColor}
                             indicatorColor={theme.colors.button.secondary.tint}

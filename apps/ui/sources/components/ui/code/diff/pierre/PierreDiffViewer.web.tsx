@@ -351,12 +351,31 @@ export function resolvePierreTypographyStyle(): React.CSSProperties {
     };
 }
 
+export function resolvePierreSelectionStyle(theme: { colors?: Record<string, any> } | null | undefined): React.CSSProperties {
+    const colors = theme?.colors ?? {};
+    const surface = typeof colors.surface === 'string' ? colors.surface : undefined;
+    const surfaceHigh = typeof colors.surfaceHigh === 'string' ? colors.surfaceHigh : undefined;
+    const selectionBase = typeof colors.success === 'string'
+        ? colors.success
+        : typeof colors.textLink === 'string'
+            ? colors.textLink
+            : surfaceHigh;
+
+    return {
+        ['--diffs-bg-selection' as any]: surfaceHigh,
+        ['--diffs-selection-number-fg' as any]: surface,
+        ['--diffs-bg-selection-number' as any]: selectionBase,
+        ['--diffs-selection-base' as any]: selectionBase,
+    };
+}
+
 export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     const { theme } = useUnistyles();
     const isDark = theme.dark === true;
     const sharedVirtualizer = useVirtualizer();
     const containerRef = React.useRef<HTMLDivElement | null>(null);
     const typographyStyle = React.useMemo(() => resolvePierreTypographyStyle(), []);
+    const selectionStyle = React.useMemo(() => resolvePierreSelectionStyle(theme), [theme]);
 
     const tokenizeMaxLineLengthSetting = useSetting('filesDiffTokenizationMaxLineLength');
     const intraLineDiffEnabledSetting = useSetting('filesDiffIntraLineWordDiffEnabled');
@@ -813,8 +832,8 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
     );
 
     const wrapperStyle = props.virtualized
-        ? ({ ...typographyStyle, maxHeight: 'inherit' } as React.CSSProperties)
-        : typographyStyle;
+        ? ({ ...typographyStyle, ...selectionStyle, maxHeight: 'inherit' } as React.CSSProperties)
+        : ({ ...typographyStyle, ...selectionStyle } as React.CSSProperties);
 
     return (
         <div

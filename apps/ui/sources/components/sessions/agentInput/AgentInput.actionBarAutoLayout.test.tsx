@@ -17,6 +17,12 @@ const keyboardMockState = vi.hoisted(() => ({
     height: 0,
 }));
 
+const layoutMockState = vi.hoisted(() => ({
+    platform: 'ios' as 'ios' | 'web',
+    width: 700,
+    height: 800,
+}));
+
 vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
     useKeyboardHeight: () => keyboardMockState.height,
 }));
@@ -43,13 +49,12 @@ installAgentInputCommonModuleMocks({
             ScrollView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
                 React.createElement('ScrollView', props, props.children),
             Platform: {
-                OS: 'ios',
-                select: (v: any) => v.ios,
+                OS: layoutMockState.platform,
+                select: (v: any) => v?.[layoutMockState.platform] ?? v?.default,
             },
-            // 700px should be treated as "mobile-ish" for action bar auto layout.
-            useWindowDimensions: () => ({ width: 700, height: 800 }),
+            useWindowDimensions: () => ({ width: layoutMockState.width, height: layoutMockState.height }),
             Dimensions: {
-                get: () => ({ width: 700, height: 800, scale: 1, fontScale: 1 }),
+                get: () => ({ width: layoutMockState.width, height: layoutMockState.height, scale: 1, fontScale: 1 }),
             },
             Keyboard: {
                 addListener: () => ({ remove: () => {} }),
@@ -85,6 +90,9 @@ installAgentInputCommonModuleMocks({
 describe('AgentInput (action bar auto layout)', () => {
     beforeEach(() => {
         keyboardMockState.height = 0;
+        layoutMockState.platform = 'ios';
+        layoutMockState.width = 700;
+        layoutMockState.height = 800;
         storageSettings = {
             ...storageSettings,
             agentInputActionBarLayout: 'auto',
@@ -120,8 +128,8 @@ describe('AgentInput (action bar auto layout)', () => {
         expect(scrollViews[0]?.props?.scrollEnabled).toBe(true);
     });
 
-    it('keeps mobile keyboard action controls in a footer with two scrollable chip rows', async () => {
-        keyboardMockState.height = 280;
+    it('keeps mobile action controls in two visible scrollable chip rows without the keyboard', async () => {
+        keyboardMockState.height = 0;
         vi.resetModules();
         const { AgentInput } = await import('./AgentInput');
 
@@ -150,6 +158,19 @@ describe('AgentInput (action bar auto layout)', () => {
             node?.type === 'ScrollView' && node?.props?.horizontal === true
         ));
         expect(horizontalScrollViews).toHaveLength(2);
+
+        let secondScrollWrapper: any = horizontalScrollViews[1]?.parent ?? null;
+        while (secondScrollWrapper && secondScrollWrapper.type !== 'View') {
+            secondScrollWrapper = secondScrollWrapper.parent;
+        }
+        const secondScrollWrapperStyle = Array.isArray(secondScrollWrapper?.props?.style)
+            ? secondScrollWrapper?.props?.style
+            : [secondScrollWrapper?.props?.style];
+        expect(secondScrollWrapperStyle).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                minHeight: expect.any(Number),
+            }),
+        ]));
     });
 
     it('keeps the path chip label visible even when chip density is icons', async () => {

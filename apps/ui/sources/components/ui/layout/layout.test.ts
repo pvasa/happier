@@ -7,6 +7,9 @@ const layoutState = vi.hoisted(() => ({
     isTauriDesktop: false,
     platformOs: 'web' as 'ios' | 'android' | 'web',
     windowDimensions: { width: 2048, height: 687 },
+    localSettings: {
+        uiContentWidthMode: 'compact' as 'compact' | 'medium' | 'full',
+    },
 }));
 
 vi.mock('react-native', async () => {
@@ -38,6 +41,14 @@ vi.mock('@/utils/platform/tauri', () => ({
     isTauriDesktop: () => layoutState.isTauriDesktop,
 }));
 
+vi.mock('@/sync/domains/state/storageStore', () => ({
+    getStorage: () => ({
+        getState: () => ({
+            localSettings: layoutState.localSettings,
+        }),
+    }),
+}));
+
 describe('layout', () => {
     beforeEach(() => {
         vi.resetModules();
@@ -45,13 +56,48 @@ describe('layout', () => {
         layoutState.isTauriDesktop = false;
         layoutState.platformOs = 'web';
         layoutState.windowDimensions = { width: 2048, height: 687 };
+        layoutState.localSettings = { uiContentWidthMode: 'compact' };
     });
 
-    it('uses the viewport class content width in Tauri desktop windows', async () => {
+    it('uses compact content width by default in Tauri desktop windows', async () => {
         layoutState.isTauriDesktop = true;
 
         const { layout } = await import('./layout');
 
+        expect(layout.maxWidth).toBe(850);
+    });
+
+    it('uses compact content width for desktop headers', async () => {
+        layoutState.isTauriDesktop = true;
+
+        const { layout } = await import('./layout');
+
+        expect(layout.maxWidth).toBe(850);
+        expect(layout.headerMaxWidth).toBe(850);
+    });
+
+    it('uses compact content width for web headers regardless of viewport class', async () => {
+        layoutState.windowDimensions = { width: 2400, height: 1400 };
+
+        const { layout } = await import('./layout');
+
+        expect(layout.maxWidth).toBe(850);
+        expect(layout.headerMaxWidth).toBe(850);
+    });
+
+    it('uses medium content width when selected', async () => {
+        layoutState.localSettings = { uiContentWidthMode: 'medium' };
+
+        const { layout } = await import('./layout');
+
         expect(layout.maxWidth).toBe(CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS.medium);
+    });
+
+    it('removes the content width cap when full width is selected', async () => {
+        layoutState.localSettings = { uiContentWidthMode: 'full' };
+
+        const { layout } = await import('./layout');
+
+        expect(layout.maxWidth).toBe(Number.POSITIVE_INFINITY);
     });
 });

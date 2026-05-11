@@ -7,6 +7,7 @@ interface CustomModalProps {
     config: CustomModalConfig;
     onClose: () => void;
     showBackdrop?: boolean;
+    visible: boolean;
     zIndexBase?: number;
 }
 
@@ -88,7 +89,7 @@ function mergeChromeConfig(
     return override;
 }
 
-export function CustomModal({ config, onClose, showBackdrop = true, zIndexBase }: CustomModalProps) {
+export function CustomModal({ config, onClose, showBackdrop = true, visible, zIndexBase }: CustomModalProps) {
     const Component = config.component;
     const [chromeOverride, setChromeOverride] = React.useState<CustomModalChromeConfig | null | undefined>(undefined);
     const effectiveChrome = chromeOverride === undefined ? config.chrome : chromeOverride;
@@ -116,7 +117,7 @@ export function CustomModal({ config, onClose, showBackdrop = true, zIndexBase }
 
     return (
         <BaseModal
-            visible={true}
+            visible={visible}
             onClose={handleClose}
             closeOnBackdrop={config.closeOnBackdrop ?? true}
             showBackdrop={showBackdrop}

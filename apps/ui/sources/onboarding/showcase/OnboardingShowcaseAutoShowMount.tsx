@@ -1,11 +1,19 @@
 import * as React from 'react';
 
 import { useAuth } from '@/auth/context/AuthContext';
+import { getCurrentReleaseId } from '@/changelog/releaseNotes/manifestRuntime';
+import { setLastSeenReleaseId } from '@/changelog/releaseNotes/storage';
 import { OnboardingShowcaseStorySurface } from '@/components/onboarding/showcase';
 import { Modal, useModal } from '@/modal';
 
 import { isOnboardingShowcaseFeatureEnabled } from './featureGate';
 import { useOnboardingShowcaseState } from './useOnboardingShowcaseState';
+
+function markCurrentReleaseNotesSeen(): void {
+    const releaseId = getCurrentReleaseId();
+    if (!releaseId) return;
+    setLastSeenReleaseId(releaseId);
+}
 
 /**
  * First-open showcase trigger.
@@ -43,6 +51,7 @@ export function OnboardingShowcaseAutoShowMount(): null {
             };
             const markSeenAndClose = () => {
                 showcase.markSeen();
+                markCurrentReleaseNotesSeen();
                 close();
             };
 

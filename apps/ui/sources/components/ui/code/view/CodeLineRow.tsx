@@ -39,8 +39,8 @@ export function CodeLineRow(props: {
     const [isHovered, setIsHovered] = React.useState(false);
     const commentActive = props.commentActive === true;
     const highlighted = props.highlighted === true;
-    const canShowCommentAffordance = isWeb && Boolean(onPressAddComment) && !line.renderIsHeaderLine;
-    const commentAffordanceVisible = isHovered || commentActive;
+    const canShowCommentAffordance = Boolean(onPressAddComment) && !line.renderIsHeaderLine;
+    const commentAffordanceVisible = isWeb ? (isHovered || commentActive) : true;
 
     const intraLineSegments = (Array.isArray(line.renderIntraLineDiffSegments) && line.renderIntraLineDiffSegments.length > 0)
         ? line.renderIntraLineDiffSegments
@@ -143,6 +143,7 @@ export function CodeLineRow(props: {
                 styles.row,
                 highlighted ? styles.rowHighlighted : null,
                 { backgroundColor },
+                selected ? styles.rowSelected : null,
             ]}
         >
             <Pressable
@@ -257,6 +258,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowHighlighted: {
         borderLeftWidth: 3,
         borderLeftColor: theme.colors.textLink ?? theme.colors.textSecondary,
+        paddingLeft: 5,
+    },
+    rowSelected: {
+        borderLeftWidth: 3,
+        borderLeftColor: theme.colors.success,
         paddingLeft: 5,
     },
     rowPressable: {

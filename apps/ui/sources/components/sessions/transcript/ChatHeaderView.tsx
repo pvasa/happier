@@ -6,7 +6,7 @@ import { useNavigation } from '@react-navigation/native';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Typography } from '@/constants/Typography';
 import { useHeaderHeight } from '@/utils/platform/responsive';
-import { layout } from '@/components/ui/layout/layout';
+import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
@@ -48,6 +48,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     const navigation = useNavigation();
     const insets = useSafeAreaInsets();
     const headerHeight = useHeaderHeight();
+    const maxWidth = useLayoutMaxWidth();
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
     const backButtonTestId = resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-header-back');
     const avatarButtonTestId = resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-header-avatar');
@@ -64,7 +65,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     return (
         <View style={[styles.container, { paddingTop: includeTopInset ? insets.top : 0, backgroundColor: theme.colors.header.background }]}>
             <View style={[styles.contentWrapper, constrainWidth ? null : { alignItems: 'stretch' }]}>
-                <View style={[styles.content, { height: headerHeight }, constrainWidth ? null : { maxWidth: '100%' }]}>
+                <View style={[styles.content, { height: headerHeight, maxWidth }, constrainWidth ? null : { maxWidth: '100%' }]}>
                 <Pressable
                     onPress={handleBackPress}
                     testID={backButtonTestId}
@@ -191,7 +192,6 @@ const styles = StyleSheet.create(() => ({
         alignItems: 'center',
         paddingHorizontal: Platform.OS === 'ios' ? 8 : 16,
         width: '100%',
-        maxWidth: layout.headerMaxWidth,
     },
     backButton: {
         marginRight: 8,

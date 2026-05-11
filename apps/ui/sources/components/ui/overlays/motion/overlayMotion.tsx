@@ -125,7 +125,7 @@ export function useOverlayMotionAnimation(params: Readonly<{
     const reducedMotion = useReducedMotionPreference();
     const progress = React.useRef(new Animated.Value(0)).current;
 
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
         Animated.timing(progress, {
             toValue: params.visible ? 1 : 0,
             duration: reducedMotion

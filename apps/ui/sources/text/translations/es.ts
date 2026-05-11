@@ -3204,6 +3204,17 @@ export const es: TranslationStructure = {
     },
     display: "Pantalla",
     displayDescription: "Controla diseño y espaciado",
+    contentWidth: "Ancho del contenido",
+    contentWidthDescription:
+      "Elige hasta qué ancho puede crecer el contenido principal",
+    contentWidthOptions: {
+      compact: "Compacto",
+      compactDescription: "Mantén el contenido principal limitado a 850 px",
+      medium: "Medio",
+      mediumDescription: "Permite que el contenido principal llegue a 960 px",
+      full: "Ancho completo",
+      fullDescription: "Usa el ancho disponible de la ventana",
+    },
     backdropBlur: "Desenfoque de fondo",
     backdropBlurDescription:
       "Usa desenfoque de fondo detrás de modales y menús. Desactívalo para mejorar el rendimiento del navegador.",
@@ -5442,6 +5453,7 @@ export const es: TranslationStructure = {
       selectForCommit: "Seleccionar para el commit",
       stageFile: "Preparar archivo",
       removeFromSelection: "Quitar de la selección",
+      removeFromCommitSelection: "Quitar de la selección del commit",
       unstageFile: "Quitar de preparación",
       selectionHint:
         "Selecciona Incluido o Pendiente para habilitar la selección de líneas.",
@@ -5732,9 +5744,18 @@ export const es: TranslationStructure = {
         aboutSubtitle: 'Elige dónde se muestra cada acción en la app, la voz y las integraciones. Los elementos no disponibles siguen visibles para que entiendas qué bloquean las funciones, la privacidad o el soporte en tiempo de ejecución.',
         aboutFooter: 'Estos ajustes se aplican globalmente a los valores predeterminados de tu cuenta. Los elementos no disponibles explican por qué un destino está bloqueado actualmente.',
         searchPlaceholder: 'Buscar acciones',
+        detailSearchPlaceholder: 'Buscar superficies',
         noResults: 'Ninguna acción coincide con tu búsqueda actual.',
+        noTargetsMatch: 'Ninguna superficie coincide con tu búsqueda actual.',
         noDescription: 'Todavía no hay descripción disponible.',
         requireApproval: 'Requerir aprobación',
+        invalidActionTitle: 'Acción no encontrada',
+        invalidActionSubtitle: 'Esta acción ya no está disponible en esta compilación.',
+        modes: {
+            off: 'Desactivado',
+            askFirst: 'Preguntar primero',
+            allowed: 'Permitido',
+        },
         sections: {
             app: 'En la app',
             voice: 'Voz',
@@ -7225,102 +7246,126 @@ settingsSession: {
     mediaUnavailable: "Contenido multimedia no disponible",
     storyDeck: {
       dragToDismiss: "Arrastra para cerrar",
+      letsGo: "¡Vamos!",
       slideAnnouncement: ({ title, current, total }: { title: string; current: number; total: number }) => `${title} - ${current} / ${total}`,
     },
     defaultTitle: "Novedades",
     onboardingShowcase: {
-      title: "Te damos la bienvenida a Happier",
-      subtitle: "Sesiones de programación que te siguen a todas partes.",
-      cards: {
-        welcome: {
-          title: "Diseñado para el ritmo",
-          row1Title: "Sesiones en cualquier dispositivo",
-          row1Body: "Retoma donde lo dejaste: móvil, tablet, web o escritorio.",
-          row2Title: "Avanza rápido, entrega antes",
-          row2Body: "La sincronización en tiempo real mantiene tu terminal, agentes y archivos al día.",
-          row3Title: "Privado por defecto",
-          row3Body: "Cifrado de extremo a extremo para que tu trabajo siga siendo tuyo.",
-        },
-        cockpit: {
-            title: "Tu centro de mando móvil",
-            body: "Una vista móvil enfocada para agentes activos, con acceso en un toque a chat, archivos, Git, terminal y detalles.",
-            alt: "Imagen abstracta de marcador para el centro de mando.",
-            row1Title: "Modo cockpit",
-            row1Body: "Sigue a los agentes activos desde una vista móvil enfocada.",
-            row2Title: "Salta en un toque",
-            row2Body: "Muévete entre chat, archivos, Git, terminal y detalles sin el diseño de escritorio.",
-            row3Title: "Envía rápido",
-            row3Body: "Responde desde cockpit cuando un agente necesita un empujón.",
-        },
-        reviewComments: {
-            title: "Revisa y arregla código fácilmente",
-            body: "Deja comentarios en líneas exactas de archivos o diffs, elige qué incluir y envía contexto estructurado a un agente.",
-            alt: "Imagen abstracta de marcador para comentarios de revisión.",
-            row1Title: "Comenta líneas exactas",
-            row1Body: "Deja feedback directamente en líneas de archivos y diffs.",
-            row2Title: "Elige qué enviar",
-            row2Body: "Revisa, edita, quita o incluye comentarios antes de pedir ayuda a un agente.",
-            row3Title: "Mantén el contexto",
-            row3Body: "Envía contexto de revisión estructurado a la sesión actual o a una nueva sesión.",
-        },
-        sourceControl: {
-            title: "Constrúyelo, publícalo",
-            body: "Crea y publica ramas, gestiona remotos, revisa archivos cambiados y abre pull requests sin salir de Happier.",
-            alt: "Imagen abstracta de marcador para control de código fuente.",
-            row1Title: "Ramas y publicación",
-            row1Body: "Crea ramas, gestiona remotos y sube cambios sin salir de Happier.",
-            row2Title: "Abre pull requests",
-            row2Body: "Reutiliza PR existentes o crea uno nuevo desde la sesión.",
-            row3Title: "Revisa archivos cambiados",
-            row3Body: "Concéntrate en archivos seleccionados cuando el cambio es grande.",
-        },
-        markdown: {
-            title: "Streaming más suave, markdown más rico",
-            body: "Las respuestas en streaming se sienten más fluidas, y el Markdown más rico hace que respuestas largas, código, listas y diagramas sean más fáciles de leer.",
-            alt: "Imagen abstracta de marcador para renderizado Markdown.",
-            row1Title: "La salida sigue el ritmo",
-            row1Body: "Las respuestas en streaming se sienten más fluidas mientras los agentes escriben.",
-            row2Title: "Markdown más sólido",
-            row2Body: "Bloques de código, listas, tablas y respuestas largas se renderizan con más fiabilidad.",
-            row3Title: "Compactación más clara",
-            row3Body: "Los eventos del ciclo de vida son más fáciles de seguir en la transcripción.",
-        },
-        media: {
-            title: "Imágenes dentro de la conversación",
-            body: "Pide a Codex y a agentes compatibles que generen imágenes, y previsualiza los resultados directamente en Happier.",
-            alt: "Imagen abstracta de marcador para medios generados.",
-            row1Title: "Genera imágenes",
-            row1Body: "Pide a Codex y a agentes compatibles que creen imágenes.",
-            row2Title: "Vista previa inline",
-            row2Body: "Las imágenes generadas aparecen directamente en las conversaciones de Happier.",
-            row3Title: "Guardadas con la sesión",
-            row3Body: "Los medios viajan por el mismo pipeline de sesión que tu trabajo.",
-        },
-        desktop: {
-            title: "Una app de escritorio más pulida",
-            body: "Un shell de escritorio más limpio, con chrome más pulido, espaciado más seguro y estado de actualización donde corresponde.",
-            alt: "Imagen abstracta de marcador para la app de escritorio.",
-            row1Title: "Chrome más limpio",
-            row1Body: "Los controles de la barra lateral y el estado de actualización encajan mejor.",
-            row2Title: "Más foco",
-            row2Body: "Las ventanas y superficies de sesión se apartan cuando hace falta.",
-            row3Title: "Diseño más seguro",
-            row3Body: "El espaciado de escritorio gestiona mejor el chrome de plataforma y las pantallas con notch.",
-        },
-        pets: {
-            title: "Conoce a Pets",
-            body: "Un pequeño compañero que te ayuda a mantener el foco entre sesiones. ¿Útil? Quizá. ¿Encantador? Sin duda.",
-            alt: "Imagen abstracta de marcador para el compañero pet.",
-            row1Title: "Un pequeño compañero",
-            row1Body: "Te ayuda a mantener el foco entre sesiones.",
-            row2Title: "Sigue la actividad",
-            row2Body: "Muestra actividad de sesión en escritorio y móvil.",
-            row3Title: "¿Útil? Quizá.",
-            row3Body: "¿Encantador? Sin duda.",
-        },
-
-      },
-    },
+                "title": "Bienvenido a Happier",
+                "subtitle": "Tus agentes de IA, dondequiera que trabajes.",
+                "cards": {
+                    "welcome": {
+                        "title": "Bienvenido a Happier",
+                        "everywhereTitle": "Tus agentes de IA, dondequiera que trabajes",
+                        "everywhereBody": "Claude Code, Codex, OpenCode, Pi y mucho más: en tu teléfono, tablet, navegador o escritorio.",
+                        "cockpitTitle": "Tu cockpit móvil",
+                        "cockpitBody": "Chat, archivos, Git, editor, terminal. Todo lo que necesitas para crear y lanzar tu próximo proyecto, al alcance de la mano.",
+                        "existingTitle": "Sesiones existentes, ya disponibles",
+                        "existingBody": "Cualquier sesión de Claude, Codex u OpenCode que se esté ejecutando en tu máquina, ábrela en Happier en directo.",
+                        "voiceTitle": "Un asistente de voz para pensar juntos",
+                        "voiceBody": "Pregunta qué están haciendo tus agentes, aprueba solicitudes de permiso y envía mensajes. Sin manos.",
+                        "reviewTitle": "Revisa diffs y deja comentarios",
+                        "reviewBody": "Marca líneas concretas en archivos o diffs, elige qué notas enviar y pásalas directamente a un agente.",
+                        "subagentsTitle": "Subagentes entre proveedores",
+                        "subagentsBody": "Lanza subagentes de Codex desde una sesión de Claude. Divide el trabajo entre agentes. Enruta mensajes entre sesiones.",
+                        "tuisTitle": "Usa tus TUI favoritas",
+                        "tuisBody": "Ejecuta Claude Code, Codex u OpenCode en su interfaz de terminal nativa. Happier lo captura y lo sincroniza con todos tus dispositivos.",
+                        "inboxTitle": "Una bandeja. Todas las sesiones.",
+                        "inboxBody": "Todas las aprobaciones pendientes, solicitudes de permiso y actividad sin leer, de cada sesión y máquina, en un solo lugar.",
+                        "mcpTitle": "Una configuración MCP. Todos los proveedores.",
+                        "mcpBody": "Define servidores MCP una sola vez. Funcionan en todos los backends, incluso con proveedores que no admiten MCP de forma nativa.",
+                        "controlTitle": "Encola, guía, bifurca, revierte",
+                        "controlBody": "Encola mensajes mientras el agente está ocupado. Guía un turno en curso. Bifurca desde cualquier mensaje. Deshaz si hace falta.",
+                        "automationsTitle": "Automatizaciones",
+                        "automationsBody": "Programa sesiones recurrentes de agentes para vigilar PRs, revisar issues o ejecutar cualquier tarea con regularidad.",
+                        "accountsTitle": "Varias cuentas y seguimiento de cuota",
+                        "accountsBody": "Conecta varias cuentas de Claude u OpenAI: personal, trabajo, equipo. Supervisa el uso de cada una directamente en la app.",
+                        "promptsTitle": "Prompts, skills y perfiles",
+                        "promptsBody": "Prompts reutilizables, paquetes de skills y perfiles de backend, sincronizados en cada sesión y dispositivo.",
+                        "privacyTitle": "Código abierto. Cifrado de extremo a extremo. Autoalojable.",
+                        "privacyBody": "Tus sesiones se mantienen privadas. El código es abierto. Autoalójalo con un solo comando.",
+                        "petsTitle": "Conoce Pets",
+                        "petsBody": "Un pequeño compañero para las sesiones largas. ¿Útil? Quizá. ¿Encantador? Sin duda."
+                    },
+                    "anywhere": {
+                        "title": "Empieza donde quieras. Continúa en todas partes.",
+                        "wideTitle": "Empieza donde quieras.\nContinúa en todas partes.",
+                        "body": "Lanza una sesión desde cualquier lugar. Síguela en directo, envía mensajes y aprueba permisos desde tu teléfono, navegador o escritorio.",
+                        "alt": "Abstract placeholder image for cross-device agent sessions."
+                    },
+                    "terminalTuis": {
+                        "title": "¿Te encanta el terminal? ¡A nosotros también!",
+                        "wideTitle": "¿Te encanta el terminal?\n¡A nosotros también!",
+                        "body": "Ejecuta Claude Code, Codex u OpenCode en su interfaz de terminal nativa. Síguelo, envía mensajes y aprueba permisos desde tu teléfono.",
+                        "alt": "Abstract placeholder image for terminal UI syncing."
+                    },
+                    "cockpit": {
+                        "title": "Todo lo que necesitas. A un toque.",
+                        "wideTitle": "Todo lo que necesitas.\nA un toque",
+                        "body": "Chat, archivos, Git, editor, terminal. Interactúa con tu agente, navega y edita archivos, revisa diffs, gestiona ramas Git, abre PRs y abre un terminal en vivo.",
+                        "alt": "Abstract placeholder image for the mobile cockpit."
+                    },
+                    "existingSessions": {
+                        "title": "¿Sesiones de Claude, Codex, OpenCode? Ya están ahí.",
+                        "body": "Explora cualquier sesión de Claude, Codex u OpenCode, esté ejecutándose o no.",
+                        "alt": "Abstract placeholder image for existing provider sessions."
+                    },
+                    "voiceAssistant": {
+                        "title": "Un colega con quien hablar",
+                        "wideTitle": "Asistente de voz: un colega con quien hablar",
+                        "body": "El asistente de voz supervisa todas tus sesiones en ejecución. Piensa tus próximos cambios en voz alta, aprueba permisos y mucho más, sin manos.",
+                        "alt": "Abstract placeholder image for the voice assistant."
+                    },
+                    "reviewComments": {
+                        "title": "Revisa código y deja comentarios",
+                        "body": "Explora los cambios y diffs de tu agente. Marca las líneas exactas que quieres abordar. Envíalas a un agente en la sesión actual o en una nueva.",
+                        "alt": "Abstract placeholder image for review comments."
+                    },
+                    "subagents": {
+                        "title": "Una sesión, subagentes multiproveedor",
+                        "body": "Inicia Codex, Claude o cualquier otro subagente en cualquier sesión. Usa la fortaleza de cada uno y haz que todos trabajen juntos en la misma sesión.",
+                        "alt": "Abstract placeholder image for cross-provider subagents."
+                    },
+                    "inbox": {
+                        "title": "No pierdas el hilo nunca más",
+                        "body": "¿Tienes 10 sesiones a la vez y pierdes de vista qué necesita tu atención? Tu bandeja muestra toda la actividad, de cada sesión y máquina.",
+                        "alt": "Abstract placeholder image for the global inbox."
+                    },
+                    "mcp": {
+                        "title": "Una configuración. Todos los proveedores.",
+                        "wideTitle": "Una configuración.\nTodos los proveedores.",
+                        "body": "Define MCPs una vez en Happier y funcionan en todos los backends, incluso los que no admiten MCP de forma nativa. Gestiona skills, prompts y más.",
+                        "alt": "Abstract placeholder image for shared MCP configuration."
+                    },
+                    "queue": {
+                        "title": "Encola, guía, bifurca, revierte",
+                        "body": "Encola mensajes mientras el agente está ocupado. Guía una sesión en curso. Bifurca desde cualquier mensaje. Revierte si algo se tuerce.",
+                        "alt": "Abstract placeholder image for session control tools."
+                    },
+                    "automations": {
+                        "title": "Tu agente, programado",
+                        "body": "Programa sesiones recurrentes para vigilar pull requests, revisar issues o ejecutar cualquier tarea con regularidad.",
+                        "alt": "Abstract placeholder image for scheduled agent automations."
+                    },
+                    "accounts": {
+                        "title": "Varias cuentas y seguimiento de cuota",
+                        "body": "Conecta varias cuentas de OpenAI o Claude. Monitoriza uso y cuotas de cada una directamente en la app.",
+                        "alt": "Abstract placeholder image for connected accounts and quotas."
+                    },
+                    "privacy": {
+                        "title": "Código abierto. Cifrado de extremo a extremo.",
+                        "wideTitle": "Código abierto.\nCifrado de extremo a extremo.",
+                        "body": "Tu código, prompts y contenido de sesión se cifran en tu dispositivo antes de llegar a cualquier servidor. Privado por diseño. Abierto por defecto.",
+                        "alt": "Abstract placeholder image for privacy and self-hosting."
+                    },
+                    "pets": {
+                        "title": "No te sientas solo. Conoce Pets.",
+                        "wideTitle": "No te sientas solo.\nConoce Pets.",
+                        "body": "Un pequeño compañero que te ayuda a mantener el rumbo entre sesiones. ¿Útil? Quizá. ¿Encantador? Sin duda.",
+                        "alt": "Abstract placeholder image for Pets."
+                    }
+                }
+            },
   },
 
   terminal: {

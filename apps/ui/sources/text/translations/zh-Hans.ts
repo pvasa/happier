@@ -3101,6 +3101,16 @@ export const zhHans: TranslationStructure = {
     },
     display: "显示",
     displayDescription: "控制布局和间距",
+    contentWidth: "内容宽度",
+    contentWidthDescription: "选择主内容可扩展到的最大宽度",
+    contentWidthOptions: {
+      compact: "紧凑",
+      compactDescription: "将主内容限制在 850 px",
+      medium: "中等",
+      mediumDescription: "允许主内容扩展到 960 px",
+      full: "全宽",
+      fullDescription: "使用可用窗口宽度",
+    },
     backdropBlur: "背景模糊",
     backdropBlurDescription: "在弹窗和菜单后使用背景模糊。关闭后可提升浏览器性能。",
     multiPanePanels: "右侧面板",
@@ -5223,6 +5233,7 @@ export const zhHans: TranslationStructure = {
       selectForCommit: "选择用于提交",
       stageFile: "暂存文件",
       removeFromSelection: "从选择中移除",
+      removeFromCommitSelection: "从提交选择中移除",
       unstageFile: "取消暂存",
       selectionHint: "选择“已包含”或“待处理”以启用行选择。",
       selectedLines: {
@@ -5505,9 +5516,18 @@ export const zhHans: TranslationStructure = {
         aboutSubtitle: "选择每个操作在应用、语音和集成中的显示位置。不可用卡片会保持可见，以便你了解哪些内容被功能、隐私或运行时支持所阻止。",
         aboutFooter: "这些设置会全局应用到你的账号默认值。不可用卡片会解释目标当前为何被阻止。",
         searchPlaceholder: "搜索操作",
+        detailSearchPlaceholder: "搜索界面",
         noResults: "没有操作匹配你当前的搜索。",
+        noTargetsMatch: "没有界面与当前搜索匹配。",
         noDescription: "暂时没有可用说明。",
         requireApproval: "需要批准",
+        invalidActionTitle: "未找到操作",
+        invalidActionSubtitle: "此操作在此版本中不再可用。",
+        modes: {
+            off: "关闭",
+            askFirst: "先询问",
+            allowed: "允许",
+        },
         sections: {
             app: '应用内',
             voice: '语音',
@@ -6874,102 +6894,126 @@ settingsSession: {
     mediaUnavailable: "媒体不可用",
     storyDeck: {
       dragToDismiss: "拖动关闭",
+      letsGo: "开始吧！",
       slideAnnouncement: ({ title, current, total }: { title: string; current: number; total: number }) => `${title} - ${current} / ${total}`,
     },
     defaultTitle: "新功能",
     onboardingShowcase: {
-      title: "欢迎使用 Happier",
-      subtitle: "随处可继续的编码会话。",
-      cards: {
-        welcome: {
-          title: "为节奏而生",
-          row1Title: "任何设备上的会话",
-          row1Body: "在手机、平板、网页或桌面端继续上次的工作。",
-          row2Title: "更快推进,更早交付",
-          row2Body: "实时同步让终端、代理和文件保持一致。",
-          row3Title: "默认私密",
-          row3Body: "端到端加密,让你的工作只属于你。",
-        },
-        cockpit: {
-            title: "你的移动指挥中心",
-            body: "面向活跃代理的专注移动视图，一键进入聊天、文件、Git、终端和详情。",
-            alt: "命令中心抽象占位图。",
-            row1Title: "Cockpit 模式",
-            row1Body: "用专注的移动视图跟进活跃代理。",
-            row2Title: "一键切换",
-            row2Body: "在聊天、文件、Git、终端和详情之间切换，不需要桌面布局。",
-            row3Title: "快速发送",
-            row3Body: "当代理需要一点推进时，直接从 cockpit 回复。",
-        },
-        reviewComments: {
-            title: "轻松审查和修复代码",
-            body: "在文件或 diff 的精确行上评论，选择要包含的内容，并把结构化上下文发送给代理。",
-            alt: "审查评论抽象占位图。",
-            row1Title: "评论精确行",
-            row1Body: "直接在文件和 diff 行上留下反馈。",
-            row2Title: "选择要发送的内容",
-            row2Body: "在提示代理前，审查、编辑、移除或包含评论。",
-            row3Title: "保留结构化上下文",
-            row3Body: "把结构化 review 上下文发送到当前会话或新的会话。",
-        },
-        sourceControl: {
-            title: "构建，然后发布",
-            body: "无需离开 Happier，即可创建和发布分支、管理远端、审查变更文件并打开 pull request。",
-            alt: "源码控制抽象占位图。",
-            row1Title: "分支和发布",
-            row1Body: "无需离开 Happier，即可创建分支、管理远端并推送修改。",
-            row2Title: "打开 pull request",
-            row2Body: "复用已有 PR，或从会话里创建新的 PR。",
-            row3Title: "审查变更文件",
-            row3Body: "当变更集很大时，专注查看选中的文件。",
-        },
-        markdown: {
-            title: "更顺滑的流式输出，更丰富的 Markdown",
-            body: "流式响应更顺滑，更丰富的 Markdown 让长回答、代码、列表和图表更容易阅读。",
-            alt: "Markdown 渲染抽象占位图。",
-            row1Title: "输出跟得上",
-            row1Body: "代理写作时，流式响应感觉更顺滑。",
-            row2Title: "Markdown 更可靠",
-            row2Body: "代码块、列表、表格和长回答渲染更稳定。",
-            row3Title: "压缩更清楚",
-            row3Body: "转录中的生命周期事件更容易跟踪。",
-        },
-        media: {
-            title: "图片直接进入转录",
-            body: "让 Codex 和支持的代理生成图片，然后直接在 Happier 中预览结果。",
-            alt: "生成媒体抽象占位图。",
-            row1Title: "生成图片",
-            row1Body: "让 Codex 和支持的代理创建图片。",
-            row2Title: "内联预览",
-            row2Body: "生成的图片直接出现在 Happier 对话中。",
-            row3Title: "随会话保存",
-            row3Body: "媒体和你的工作使用同一套会话 pipeline。",
-        },
-        desktop: {
-            title: "更精致的桌面应用",
-            body: "更干净的桌面外壳，更精致的 chrome，更安全的间距，以及放在合适位置的更新状态。",
-            alt: "桌面应用抽象占位图。",
-            row1Title: "更干净的界面",
-            row1Body: "侧边栏控制和更新状态更自然。",
-            row2Title: "更专注",
-            row2Body: "窗口和会话界面更少打扰工作。",
-            row3Title: "更安全的布局",
-            row3Body: "桌面间距更好处理平台 chrome 和刘海屏。",
-        },
-        pets: {
-            title: "认识 Pets",
-            body: "一个小伙伴，帮助你在不同会话之间保持节奏。有用？也许。可爱？当然。",
-            alt: "宠物伙伴抽象占位图。",
-            row1Title: "一个小伙伴",
-            row1Body: "帮助你在不同会话之间保持节奏。",
-            row2Title: "跟随活动",
-            row2Body: "在桌面和移动端显示会话活动。",
-            row3Title: "有用？也许。",
-            row3Body: "可爱？当然。",
-        },
-
-      },
-    },
+                "title": "欢迎使用 Happier",
+                "subtitle": "你的 AI 代理，覆盖每一个工作场景。",
+                "cards": {
+                    "welcome": {
+                        "title": "欢迎使用 Happier",
+                        "everywhereTitle": "你的 AI 代理，覆盖每一个工作场景",
+                        "everywhereBody": "Claude Code、Codex、OpenCode、Pi，以及更多：手机、平板、浏览器或桌面端都能使用。",
+                        "cockpitTitle": "你的移动 cockpit",
+                        "cockpitBody": "聊天、文件、Git、编辑器、终端。构建并发布下一个项目所需的一切，都在指尖。",
+                        "existingTitle": "已有会话，已经在那里",
+                        "existingBody": "任何在你机器上运行的 Claude、Codex 或 OpenCode 会话，都可以在 Happier 中实时打开。",
+                        "voiceTitle": "可以一起头脑风暴的语音助手",
+                        "voiceBody": "询问代理正在做什么，批准权限请求，并发送消息。全程免手动。",
+                        "reviewTitle": "审查 diff 并留下评论",
+                        "reviewBody": "在文件或 diff 的具体行上做标记，选择要发送的备注，并直接交给代理。",
+                        "subagentsTitle": "跨 provider 的 subagents",
+                        "subagentsBody": "从 Claude 会话启动 Codex subagents。把工作拆给多个代理。让消息在会话之间流转。",
+                        "tuisTitle": "使用你喜欢的 TUI",
+                        "tuisBody": "在原生终端 UI 中运行 Claude Code、Codex 或 OpenCode。Happier 会捕获它，并同步到每台设备。",
+                        "inboxTitle": "一个 inbox。所有会话。",
+                        "inboxBody": "所有待批准事项、权限请求和未读活动，跨所有会话和机器，集中在一个地方。",
+                        "mcpTitle": "一个 MCP 配置。所有 provider。",
+                        "mcpBody": "MCP 服务器只需定义一次。它们可用于所有 backend，包括不原生支持 MCP 的 provider。",
+                        "controlTitle": "排队、steer、fork、rollback",
+                        "controlBody": "代理忙碌时先排队消息。Steer 正在运行的 turn。从任意消息 fork。需要时回滚。",
+                        "automationsTitle": "自动化",
+                        "automationsBody": "定期调度代理会话，用于监控 PR、检查 issue，或按固定频率运行任何任务。",
+                        "accountsTitle": "多账号与配额追踪",
+                        "accountsBody": "连接多个 Claude 或 OpenAI 账号：个人、工作、团队。直接在应用中监控每个账号的使用量。",
+                        "promptsTitle": "Prompts、skills 和 profiles",
+                        "promptsBody": "可复用的 prompts、skill bundles 和 backend profiles，在每个会话与设备之间同步。",
+                        "privacyTitle": "开源。端到端加密。可自托管。",
+                        "privacyBody": "你的会话保持私密。源代码开放。一个命令即可自托管。",
+                        "petsTitle": "认识 Pets",
+                        "petsBody": "长时间会话里的小伙伴。有用吗？也许。可爱吗？当然。"
+                    },
+                    "anywhere": {
+                        "title": "随时开始。到处继续。",
+                        "wideTitle": "随时开始。\n到处继续。",
+                        "body": "从任何地方启动会话。通过手机、浏览器或桌面端实时跟进、发送消息并批准权限。",
+                        "alt": "跨设备代理会话的抽象占位图。"
+                    },
+                    "terminalTuis": {
+                        "title": "你喜欢终端？我们也是！",
+                        "wideTitle": "你喜欢终端？\n我们也是！",
+                        "body": "在原生终端 UI 中运行 Claude Code、Codex 或 OpenCode。通过手机跟进、发送消息并批准权限。",
+                        "alt": "终端 TUI 同步的抽象占位图。"
+                    },
+                    "cockpit": {
+                        "title": "你需要的一切。一点即达。",
+                        "wideTitle": "你需要的一切。\n一点即达",
+                        "body": "聊天、文件、Git、编辑器、终端。和代理互动，浏览并编辑文件，审查 diff，管理 Git 分支，打开 PR，并打开实时终端。",
+                        "alt": "移动 cockpit 的抽象占位图。"
+                    },
+                    "existingSessions": {
+                        "title": "已有 Claude、Codex、OpenCode 会话？已经在那里。",
+                        "body": "浏览任何 Claude、Codex 或 OpenCode 会话，无论当前是否运行。",
+                        "alt": "已有 provider 会话的抽象占位图。"
+                    },
+                    "voiceAssistant": {
+                        "title": "一个可以交谈的同事",
+                        "wideTitle": "语音助手：一个可以交谈的同事",
+                        "body": "语音助手会监控所有正在运行的会话。一起头脑风暴下一步修改、批准权限，还有更多，全程免手动。",
+                        "alt": "语音助手的抽象占位图。"
+                    },
+                    "reviewComments": {
+                        "title": "审查代码并留下评论",
+                        "body": "浏览代理的修改和 diff。标记你想处理的精确行。把它们发送给当前会话中的代理，或发送到一个新会话。",
+                        "alt": "审查评论的抽象占位图。"
+                    },
+                    "subagents": {
+                        "title": "一个会话，多 provider subagents",
+                        "body": "在任何会话中启动 Codex、Claude 或其他 subagents。利用每一个的优势，让它们一起在同一个会话中工作。",
+                        "alt": "跨 provider subagents 的抽象占位图。"
+                    },
+                    "inbox": {
+                        "title": "再也不会丢失上下文",
+                        "body": "同时运行 10 个会话，不知道哪里需要你关注？Inbox 会显示所有会话和机器上的全部活动。",
+                        "alt": "全局 inbox 的抽象占位图。"
+                    },
+                    "mcp": {
+                        "title": "一个配置。所有 provider。",
+                        "wideTitle": "一个配置。\n所有 provider。",
+                        "body": "在 Happier 中定义一次 MCP，它们即可跨所有 backend 工作，甚至包括不原生支持 MCP 的 backend。管理 skills、prompts 等等！",
+                        "alt": "共享 MCP 配置的抽象占位图。"
+                    },
+                    "queue": {
+                        "title": "排队、steer、fork、rollback",
+                        "body": "代理忙碌时先排队消息。Steer 正在运行的会话。从任意消息 fork。情况不对就 rollback。",
+                        "alt": "会话控制工具的抽象占位图。"
+                    },
+                    "automations": {
+                        "title": "你的代理，按计划运行",
+                        "body": "调度周期性会话来监控 pull request、检查 issue，或定期运行任何任务。",
+                        "alt": "计划代理自动化的抽象占位图。"
+                    },
+                    "accounts": {
+                        "title": "多账号与配额追踪",
+                        "body": "连接多个 OpenAI 或 Claude 账号。直接在应用中监控每个账号的使用量和配额。",
+                        "alt": "已连接账号与配额的抽象占位图。"
+                    },
+                    "privacy": {
+                        "title": "开源。端到端加密。",
+                        "wideTitle": "开源。\n端到端加密。",
+                        "body": "你的代码、prompts 和会话内容会在设备上加密，然后才到达任何服务器。Private by design. Open by default.",
+                        "alt": "隐私与自托管的抽象占位图。"
+                    },
+                    "pets": {
+                        "title": "别再一个人熬了。认识 Pets。",
+                        "wideTitle": "别再一个人熬了。\n认识 Pets。",
+                        "body": "一个小伙伴，帮助你在多个会话之间保持节奏。有用吗？也许。可爱吗？当然。",
+                        "alt": "Pets 的抽象占位图。"
+                    }
+                }
+            },
   },
 
   terminal: {

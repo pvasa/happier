@@ -220,6 +220,34 @@ describe('CodeLineRow', () => {
         expect(onPressAddComment).toHaveBeenCalledWith(line);
     });
 
+    it('uses a dedicated selection indicator when a diff line is selected for commit', async () => {
+        const { CodeLineRow } = await import('./CodeLineRow');
+
+        const screen = await renderScreen(<CodeLineRow
+            line={{
+                id: 'selected-line',
+                sourceIndex: 0,
+                kind: 'add',
+                oldLine: null,
+                newLine: 1,
+                renderPrefixText: '+',
+                renderCodeText: 'const selected = true;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            }}
+            selected
+            onPressLine={() => {}}
+        />);
+
+        const row = findTestInstanceByTypeWithProps(screen.tree, 'View' as any, { nativeID: 'selected-line' })!;
+        const theme = createThemeFixture() as any;
+
+        expect(flattenTestStyle(row.props.style)).toMatchObject({
+            borderLeftColor: theme.colors.success,
+            borderLeftWidth: 3,
+        });
+    });
+
     it('sets nativeID to enable deep-link line scrolling on web', async () => {
         const { CodeLineRow } = await import('./CodeLineRow');
 

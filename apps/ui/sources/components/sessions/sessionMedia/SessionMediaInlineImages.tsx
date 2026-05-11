@@ -1,5 +1,11 @@
 import * as React from 'react';
-import { Image, Platform, Pressable, View } from 'react-native';
+import {
+    Image,
+    Platform,
+    Pressable,
+    View,
+    type ImageLoadEvent,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { SvgXml } from 'react-native-svg';
@@ -15,6 +21,10 @@ import type { SessionMediaInlineImageSummary } from '@/sync/domains/sessionMedia
 
 import { resolveSessionMediaImageMimeType } from './sessionMediaPresentation';
 
+const FALLBACK_THUMBNAIL_SIZE = 84;
+const MAX_THUMBNAIL_WIDTH = 220;
+const MAX_THUMBNAIL_HEIGHT = 160;
+
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         marginTop: 2,
@@ -24,8 +34,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 8,
     },
     tile: {
-        width: 84,
-        height: 84,
         borderRadius: 12,
         overflow: 'hidden',
         borderWidth: 1,
@@ -44,6 +52,41 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+type ImageDimensions = Readonly<{
+    width: number;
+    height: number;
+}>;
+
+function readPositiveDimension(value: number | undefined): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    const normalized = Math.trunc(value);
+    return normalized > 0 ? normalized : null;
+}
+
+function resolveImageDimensions(value: Readonly<{ width?: number; height?: number }> | null): ImageDimensions | null {
+    const width = readPositiveDimension(value?.width);
+    const height = readPositiveDimension(value?.height);
+    return width && height ? { width, height } : null;
+}
+
+function resolveThumbnailSize(dimensions: ImageDimensions | null): ImageDimensions {
+    if (!dimensions) {
+        return {
+            width: FALLBACK_THUMBNAIL_SIZE,
+            height: FALLBACK_THUMBNAIL_SIZE,
+        };
+    }
+
+    const scale = Math.min(
+        MAX_THUMBNAIL_WIDTH / dimensions.width,
+        MAX_THUMBNAIL_HEIGHT / dimensions.height,
+    );
+    return {
+        width: Math.max(1, Math.round(dimensions.width * scale)),
+        height: Math.max(1, Math.round(dimensions.height * scale)),
+    };
+}
+
 function SessionMediaInlineImageTile(props: Readonly<{
     sessionId: string;
     media: SessionMediaInlineImageSummary;
@@ -56,6 +99,23 @@ function SessionMediaInlineImageTile(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
+    const metadataDimensions = resolveImageDimensions(props.media);
+    const [loadedDimensions, setLoadedDimensions] = React.useState<ImageDimensions | null>(null);
+    const thumbnailSize = resolveThumbnailSize(metadataDimensions ?? loadedDimensions);
+
+    React.useEffect(() => {
+        setLoadedDimensions(null);
+    }, [props.media.path, props.media.sha256]);
+
+    const handleImageLoad = React.useCallback((event: ImageLoadEvent) => {
+        const dimensions = resolveImageDimensions(event.nativeEvent.source);
+        if (!dimensions) return;
+        setLoadedDimensions((current) => (
+            current?.width === dimensions.width && current.height === dimensions.height
+                ? current
+                : dimensions
+        ));
+    }, []);
 
     const preview = useSessionImagePreview({
         sessionId: props.sessionId,
@@ -87,7 +147,7 @@ function SessionMediaInlineImageTile(props: Readonly<{
                 }
                 props.onOpenPreview(props.imageIndex);
             }}
-            style={styles.tile}
+            style={[styles.tile, thumbnailSize]}
         >
             {preview.status === 'loaded' ? (
                 Platform.OS !== 'web' && preview.svgXml ? (
@@ -98,7 +158,8 @@ function SessionMediaInlineImageTile(props: Readonly<{
                     <Image
                         testID={`${props.previewTestIDPrefix}:${props.media.path}`}
                         source={{ uri: preview.uri }}
-                        resizeMode="cover"
+                        resizeMode="contain"
+                        onLoad={handleImageLoad}
                         style={styles.image}
                     />
                 )

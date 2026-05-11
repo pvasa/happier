@@ -135,7 +135,7 @@ describe('buildAccountSettingsSnapshot', () => {
                         enabledPlacements: [],
                         disabledSurfaces: ['mcp'],
                         disabledPlacements: ['command_palette'],
-                        approvalRequiredSurfaces: [],
+                        approvalRequiredSurfaces: ['cli'],
                     },
                     'subagents.delegate.start': {
                         enabledPlacements: ['agent_input_chips'],
@@ -148,7 +148,7 @@ describe('buildAccountSettingsSnapshot', () => {
                         enabledPlacements: [],
                         disabledSurfaces: [],
                         disabledPlacements: ['command_palette', 'session_header'],
-                        approvalRequiredSurfaces: [],
+                        approvalRequiredSurfaces: ['mcp', 'session_agent'],
                     },
                 },
             },
@@ -159,6 +159,7 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__actionsSettingsV1__enabledPlacementCount).toBe(1);
         expect(snapshot.properties.acct_setting__actionsSettingsV1__disabledSurfaceCount).toBe(2);
         expect(snapshot.properties.acct_setting__actionsSettingsV1__disabledPlacementCount).toBe(3);
+        expect(snapshot.properties.acct_setting__actionsSettingsV1__approvalRequiredSurfaceCount).toBe(3);
     });
 
     it('tracks prompt library and context selection summaries through canonical analytics serializers', () => {

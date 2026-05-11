@@ -11,6 +11,8 @@ export type SessionMediaInlineImageSummary = Readonly<{
     path: string;
     mimeType?: string;
     sizeBytes: number;
+    width?: number;
+    height?: number;
     sha256?: string;
     category?: 'attachment' | 'generated' | 'tool-artifact';
     role?: 'input' | 'output';
@@ -34,6 +36,12 @@ function readEnvelope(meta: unknown, key: 'happier' | 'happierMedia' | 'happierA
 
 function readNonEmptyString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readPositiveInteger(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    const normalized = Math.trunc(value);
+    return normalized > 0 ? normalized : null;
 }
 
 function isSafeSessionMediaPath(path: string): boolean {
@@ -69,6 +77,8 @@ function normalizeSessionMediaItem(value: unknown): SessionMediaInlineImageSumma
     const mimeType = readNonEmptyString(value.mimeType);
     const sha256 = readNonEmptyString(value.sha256);
     const id = readNonEmptyString(value.id);
+    const width = readPositiveInteger(value.width);
+    const height = readPositiveInteger(value.height);
     const role = isSessionMediaRole(value.role) ? value.role : undefined;
     const category = isSessionMediaCategory(value.category) ? value.category : undefined;
 
@@ -78,6 +88,8 @@ function normalizeSessionMediaItem(value: unknown): SessionMediaInlineImageSumma
         path,
         ...(mimeType ? { mimeType } : {}),
         sizeBytes,
+        ...(width ? { width } : {}),
+        ...(height ? { height } : {}),
         ...(sha256 ? { sha256 } : {}),
         ...(category ? { category } : {}),
         ...(role ? { role } : {}),

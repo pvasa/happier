@@ -82,6 +82,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
                             style={[styles.tab, compact ? styles.tabCompact : null, active ? styles.tabActive : null]}
                             accessibilityRole="tab"
                             accessibilityState={{ selected: active }}
+                            aria-selected={active}
                         >
                             {active ? (
                                 <GradientSurface

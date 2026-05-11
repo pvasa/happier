@@ -3,7 +3,7 @@ import { View, Platform, StatusBar, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackHeaderProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { layout } from '../ui/layout/layout';
+import { useLayoutMaxWidth } from '../ui/layout/layout';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -29,6 +29,7 @@ interface HeaderProps {
 
 export const Header = React.memo((props: HeaderProps) => {
     const styles = stylesheet;
+    const maxWidth = useLayoutMaxWidth();
 
     const {
         title,
@@ -80,7 +81,7 @@ export const Header = React.memo((props: HeaderProps) => {
                 <View
                     testID="desktop-route-header-content"
                     pointerEvents="box-none"
-                    style={[styles.content, { height: headerHeight }]}
+                    style={[styles.content, { height: headerHeight, maxWidth }]}
                 >
                     <View pointerEvents="box-none" style={styles.leftContainer}>
                         {headerLeft && headerLeft()}
@@ -220,7 +221,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         paddingHorizontal: Platform.select({ ios: 8, default: 16 }),
         width: '100%',
-        maxWidth: layout.headerMaxWidth,
     },
     leftContainer: {
         flexGrow: 0,

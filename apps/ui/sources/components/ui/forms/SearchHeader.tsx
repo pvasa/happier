@@ -3,7 +3,8 @@ import { View, Platform, Pressable, StyleProp, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import { layout } from '@/components/ui/layout/layout';
+import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
+import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { t } from '@/text';
 import { TextInput } from '@/components/ui/text/Text';
@@ -22,18 +23,19 @@ export interface SearchHeaderProps {
 }
 
 const INPUT_BORDER_RADIUS = 10;
+const SEARCH_HEADER_PADDING_BOTTOM = 12;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         backgroundColor: theme.colors.surface,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingTop: 0,
+        paddingBottom: SEARCH_HEADER_PADDING_BOTTOM,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.divider,
     },
     content: {
         width: '100%',
-        maxWidth: layout.maxWidth,
+        paddingHorizontal: resolveItemGroupContentHorizontalInsetPx(),
         alignSelf: 'center',
     },
     inputWrapper: {
@@ -82,11 +84,12 @@ export function SearchHeader({
     onBlur,
 }: SearchHeaderProps) {
     const { theme } = useUnistyles();
+    const maxWidth = useLayoutMaxWidth();
     const styles = stylesheet;
 
     return (
         <View style={[styles.container, containerStyle]}>
-            <View style={styles.content}>
+            <View style={[styles.content, { maxWidth }]}>
                 <View style={styles.inputWrapper}>
                     {normalizeNodeForView(
                         <Ionicons

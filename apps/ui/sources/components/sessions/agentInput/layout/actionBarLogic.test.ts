@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getHasAnyAgentInputActions, shouldShowSecondaryControlRow } from './actionBarLogic';
+import {
+    getHasAnyAgentInputActions,
+    resolveAgentInputActionBarLayout,
+    shouldShowSecondaryControlRow,
+} from './actionBarLogic';
 
 describe('agentInput/actionBarLogic', () => {
     it('shows the secondary controls row in wrap and scroll modes when controls exist', () => {
@@ -8,6 +12,27 @@ describe('agentInput/actionBarLogic', () => {
         expect(shouldShowSecondaryControlRow('scroll', true)).toBe(true);
         expect(shouldShowSecondaryControlRow('scroll', false)).toBe(false);
         expect(shouldShowSecondaryControlRow('collapsed', true)).toBe(false);
+    });
+
+    it('resolves auto layout to scroll on web so controls stay in two compact rows', () => {
+        expect(resolveAgentInputActionBarLayout({
+            configuredLayout: 'auto',
+            platform: 'web',
+            isMobileLayout: false,
+        })).toBe('scroll');
+    });
+
+    it('preserves explicit action bar layout settings', () => {
+        expect(resolveAgentInputActionBarLayout({
+            configuredLayout: 'wrap',
+            platform: 'web',
+            isMobileLayout: false,
+        })).toBe('wrap');
+        expect(resolveAgentInputActionBarLayout({
+            configuredLayout: 'collapsed',
+            platform: 'ios',
+            isMobileLayout: true,
+        })).toBe('collapsed');
     });
 
     it('treats resume as an action (prevents collapsed menu from being empty)', () => {

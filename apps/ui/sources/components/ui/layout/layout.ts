@@ -1,22 +1,24 @@
 import { Dimensions, Platform } from 'react-native';
-import { isRunningOnMac } from '@/utils/platform/platform';
-import { isTauriDesktop } from '@/utils/platform/tauri';
 import {
-    CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS,
-    resolveViewportClass,
     resolveViewportMinEdgePx,
     VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX,
 } from '@/utils/platform/viewportClass';
+import { useLocalSetting } from '@/sync/domains/state/storage';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { resolveContentMaxWidthForMode } from './contentWidthMode';
 
-function resolveConstrainedMaxWidth(params: Readonly<{ variant: 'header' | 'content' }>): number {
-    if (params.variant === 'header' && (isRunningOnMac() || isTauriDesktop())) {
-        return Number.POSITIVE_INFINITY;
+function readPreferredContentWidthMode(): unknown {
+    try {
+        return getStorage().getState().localSettings.uiContentWidthMode;
+    } catch {
+        return 'compact';
     }
+}
 
-    if (isRunningOnMac()) {
-        return CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS.wide;
-    }
-
+function resolveConstrainedMaxWidth(params: Readonly<{
+    variant: 'header' | 'content';
+    preferredContentWidthMode?: unknown;
+}>): number {
     const { width, height } = Dimensions.get('window');
 
     if (Platform.OS !== 'web') {
@@ -25,8 +27,7 @@ function resolveConstrainedMaxWidth(params: Readonly<{ variant: 'header' | 'cont
         if (minEdge < VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX.tabletMin) return Math.max(width, height);
     }
 
-    const viewportClass = resolveViewportClass({ width, height });
-    return CONSTRAINED_MAX_WIDTH_PX_BY_VIEWPORT_CLASS[viewportClass];
+    return resolveContentMaxWidthForMode(params.preferredContentWidthMode ?? readPreferredContentWidthMode());
 }
 
 export const layout = {
@@ -37,3 +38,8 @@ export const layout = {
         return resolveConstrainedMaxWidth({ variant: 'header' });
     },
 };
+
+export function useLayoutMaxWidth(): number {
+    const preferredContentWidthMode = useLocalSetting('uiContentWidthMode');
+    return resolveConstrainedMaxWidth({ variant: 'content', preferredContentWidthMode });
+}

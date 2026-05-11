@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { getRecentPathsForMachine } from '@/utils/sessions/recentPaths';
+import { useStableRecentPathsForMachine } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { Text } from '@/components/ui/text/Text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { NewSessionScreenPortalScope } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
@@ -60,14 +60,12 @@ export default React.memo(function PathPickerScreen() {
     const machineHomeDir = machine?.metadata?.homeDir || '/home';
 
     // Get recent paths for this machine - prioritize from settings, then fall back to sessions
-    const recentPaths = useMemo(() => {
-        if (!params.machineId) return [];
-        return getRecentPathsForMachine({
-            machineId: params.machineId,
-            recentMachinePaths,
-            sessions,
-        });
-    }, [params.machineId, recentMachinePaths, sessions]);
+    const recentPaths = useStableRecentPathsForMachine({
+        machineId: params.machineId,
+        recentMachinePaths,
+        sessions,
+        cacheScopeKey: params.spawnServerId,
+    });
 
 
     const handleSelectPath = React.useCallback((pathOverride?: string) => {
