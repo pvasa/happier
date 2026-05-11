@@ -34,13 +34,14 @@ export async function resolveRunnerMcpServers(params: Readonly<{
   mcpServers: Record<string, McpServerConfig>;
 }>> {
   const env = params.env ?? process.env;
+  const accountSettings = params.accountSettings ?? null;
 
   const builtIn = await createHappierMcpBridge(params.session, {
     commandMode: params.commandMode,
     credentials: params.credentials,
+    accountSettings,
   });
 
-  const accountSettings = params.accountSettings ?? null;
   if (!accountSettings) {
     return { happierMcpServer: builtIn.happierMcpServer, mcpServers: builtIn.mcpServers };
   }

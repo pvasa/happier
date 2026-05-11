@@ -283,6 +283,7 @@ class Configuration {
   public readonly permissionRequestPushRetryDelaysMs: readonly number[]
   public readonly permissionRequestPushRetryMaxMs: number
   public readonly permissionRequestPushDedupeMaxEntries: number
+  public readonly readyNotificationAssistantTextMaxChars: number
 
   // Execution runs and ephemeral tasks (session-process budgets).
   public readonly executionRunsMaxConcurrentPerSession: number | null
@@ -588,6 +589,10 @@ class Configuration {
     this.permissionRequestPushDedupeMaxEntries = resolveIntEnvWithBounds(
       'HAPPIER_PERMISSION_REQUEST_PUSH_DEDUPE_MAX',
       { min: 0, max: 50_000, default: 2_000 },
+    );
+    this.readyNotificationAssistantTextMaxChars = resolveIntEnvWithBounds(
+      'HAPPIER_READY_NOTIFICATION_ASSISTANT_TEXT_MAX_CHARS',
+      { min: 1, max: 10_000, default: 4_096 },
     );
 
     this.transcriptLookupRequestTimeoutMs = resolveIntEnvWithBounds(

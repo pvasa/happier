@@ -33,6 +33,9 @@ function createHarness() {
     sendSessionEvent: vi.fn(),
     keepAlive: vi.fn(),
     getMetadataSnapshot: () => ({ path: '/tmp/workspace', permissionMode: 'default' }),
+    getLastObservedMessageSeq: vi.fn(() => 0),
+    beginTurnAssistantTextSnapshot: vi.fn(() => 'turn-1'),
+    getTurnAssistantTextSnapshot: vi.fn(() => null),
     updateMetadata: vi.fn(),
     sendSessionDeath: vi.fn(),
     flush: vi.fn(async () => undefined),
@@ -240,6 +243,59 @@ describe('runStandardAcpProvider', () => {
 
     expect(harness.metrics.lastReadyNotificationPayload).toMatchObject({
       assistantPreviewText: 'Structured final response',
+    });
+  });
+
+  it('falls back to the session-owned turn assistant snapshot for ready pushes', async () => {
+    const harness = createHarness();
+    harness.session.getTurnAssistantTextSnapshot = vi.fn(() => ({
+      turnToken: 'turn-1',
+      text: 'Central snapshot response',
+      observedAtMs: 123,
+      seq: 12,
+      localId: 'message-1',
+      sidechainId: null,
+      provider: 'qwen',
+      source: 'committed',
+    }));
+    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
+      params.sendReady({ turnToken: 'turn-1', startSeqExclusive: 10 });
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(harness.session.getTurnAssistantTextSnapshot).toHaveBeenCalledWith({
+      turnToken: 'turn-1',
+      startSeqExclusive: 10,
+    });
+    expect(harness.metrics.lastReadyNotificationPayload).toMatchObject({
+      assistantPreviewText: 'Central snapshot response',
+    });
+  });
+
+  it('does not read the session snapshot when ready message text is disabled', async () => {
+    const harness = createHarness();
+    harness.opts.accountSettingsContext = {
+      settings: {
+        notificationsSettingsV1: {
+          readyIncludeMessageText: false,
+        },
+      },
+      settingsSecretsReadKeys: [],
+    } as any;
+    harness.session.getTurnAssistantTextSnapshot = vi.fn(() => {
+      throw new Error('snapshot should not be read');
+    });
+    harness.deps.runPermissionModePromptLoopFn = async (params: any) => {
+      params.sendReady({ turnToken: 'turn-1', startSeqExclusive: 10 });
+    };
+
+    await runStandardAcpProvider(harness.opts, harness.config, harness.deps);
+
+    expect(harness.session.getTurnAssistantTextSnapshot).not.toHaveBeenCalled();
+    expect(harness.metrics.lastReadyNotificationPayload).toMatchObject({
+      assistantPreviewText: null,
+      includeAssistantPreviewText: false,
     });
   });
 

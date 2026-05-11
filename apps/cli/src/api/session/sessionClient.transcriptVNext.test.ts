@@ -56,6 +56,62 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
 }));
 
 describe('ApiSessionClient transcript vNext transport', () => {
+  it('uses ephemeral assistant transcript snapshots as the current turn fallback', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    const turnToken = client.beginTurnAssistantTextSnapshot({ turnToken: 'turn-1', startSeqExclusive: 0 });
+
+    client.sendAgentMessageEphemeral(
+      'codex' as any,
+      { type: 'message', message: 'Streaming answer' } as any,
+      { localId: 'stream-1', createdAt: 100 },
+    );
+
+    expect(client.getTurnAssistantTextSnapshot({ turnToken, startSeqExclusive: 0 })).toMatchObject({
+      turnToken,
+      text: 'Streaming answer',
+      source: 'ephemeral',
+      localId: 'stream-1',
+      provider: 'codex',
+    });
+  });
+
+  it('upgrades ephemeral assistant text with committed assistant text for the same turn', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 7, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    const turnToken = client.beginTurnAssistantTextSnapshot({ turnToken: 'turn-1', startSeqExclusive: 0 });
+
+    client.sendAgentMessageEphemeral(
+      'codex' as any,
+      { type: 'message', message: 'Streaming answer' } as any,
+      { localId: 'assistant-1', createdAt: 100 },
+    );
+    await client.sendAgentMessageCommitted(
+      'codex' as any,
+      { type: 'message', message: 'Final answer' } as any,
+      { localId: 'assistant-1' },
+    );
+
+    expect(client.getTurnAssistantTextSnapshot({ turnToken, startSeqExclusive: 0 })).toMatchObject({
+      turnToken,
+      text: 'Final answer',
+      source: 'committed',
+      seq: 7,
+      localId: 'assistant-1',
+      provider: 'codex',
+    });
+  });
+
   it('forwards sidechainId as plaintext metadata on durable commits', async () => {
     vi.resetModules();
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });

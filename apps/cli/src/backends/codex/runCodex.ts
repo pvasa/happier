@@ -55,6 +55,8 @@ import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendAp
 import { codexLocalLauncher, type CodexLauncherResult } from './codexLocalLauncher';
 import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { resolveReadyNotificationAssistantText } from '@/agent/runtime/readyNotificationAssistantText';
+import type { ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
 import { createTurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { applyLocalControlLaunchGating } from '@/agent/localControl/launchGating';
 import {
@@ -679,18 +681,25 @@ export async function runCodex(opts: {
         session.keepAlive(thinking, mode);
     }
 
-    const sendReady = () => {
+    const sendReady = (context?: ReadyNotificationTurnContext) => {
+        const includeAssistantPreviewText =
+            opts.accountSettingsContext?.settings?.notificationsSettingsV1?.readyIncludeMessageText !== false;
         sendReadyWithPushNotification({
             session,
             pushSender: api.push(),
             waitingForCommandLabel: 'Codex',
             logPrefix: '[Codex]',
             sessionTitle: getSessionNotificationTitle(session.getMetadataSnapshot.bind(session)),
-            assistantPreviewText: turnAssistantPreviewTracker.getPreview(),
+            assistantPreviewText: resolveReadyNotificationAssistantText({
+                includeMessageText: includeAssistantPreviewText,
+                explicitAssistantText: turnAssistantPreviewTracker.getPreview(),
+                session,
+                turnToken: context?.turnToken ?? null,
+                startSeqExclusive: context?.startSeqExclusive ?? null,
+            }),
             accountSettings: opts.accountSettingsContext?.settings ?? null,
             settingsSecretsReadKeys: opts.accountSettingsContext?.settingsSecretsReadKeys ?? [],
-            includeAssistantPreviewText:
-                opts.accountSettingsContext?.settings?.notificationsSettingsV1?.readyIncludeMessageText !== false,
+            includeAssistantPreviewText,
             shouldSendPush: () => shouldSendReadyPushNotification(opts.accountSettingsContext?.settings ?? null),
         });
     };
@@ -1547,11 +1556,15 @@ export async function runCodex(opts: {
                 continue;
             }
 
+            let readyTurnContext: ReadyNotificationTurnContext | undefined;
             try {
                 const localId =
                     typeof message.mode.localId === 'string' && message.mode.localId
                         ? message.mode.localId
                         : null;
+                const startSeqExclusive = session.getLastObservedMessageSeq();
+                const turnToken = session.beginTurnAssistantTextSnapshot({ startSeqExclusive });
+                readyTurnContext = { turnToken, startSeqExclusive };
                 let resolvedProviderPromptText: string | null = null;
                 const resolveProviderPromptText = async (): Promise<string> => {
                     if (resolvedProviderPromptText !== null) return resolvedProviderPromptText;
@@ -1869,7 +1882,7 @@ export async function runCodex(opts: {
                         pending,
                         queueSize: () => messageQueue.size(),
                         shouldExit,
-                        sendReady,
+                        sendReady: () => sendReady(readyTurnContext),
                     });
                 }
                 logActiveHandles('after-turn');

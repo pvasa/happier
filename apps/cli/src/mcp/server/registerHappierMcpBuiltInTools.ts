@@ -16,7 +16,10 @@ export function registerHappierMcpBuiltInTools(
         resolveSessionId?: (toolArgs: unknown) => string;
     }>,
 ): Readonly<{ toolNames: string[] }> {
-  const enabledTools = listBuiltInHappierTools({ surface: params.surface });
+  const enabledTools = listBuiltInHappierTools({
+    surface: params.surface,
+    isActionEnabled: params.deps.isActionEnabled,
+  });
 
     for (const tool of enabledTools) {
         server.registerTool(

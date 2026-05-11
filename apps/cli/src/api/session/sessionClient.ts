@@ -46,6 +46,12 @@ import { fetchChangesAccountId } from '../changes';
 import { handleSessionNewMessageUpdate } from './sessionNewMessageUpdate';
 import { handleSessionStateUpdate } from './sessionStateUpdateHandling';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
+import {
+    createTurnAssistantTextSnapshotStore,
+    extractTurnAssistantTextFromSessionContent,
+    type TurnAssistantTextCandidate,
+    type TurnAssistantTextSnapshot,
+} from './turnAssistantTextSnapshot';
 import { buildDaemonInitialPromptLocalId, consumeDaemonInitialPromptFromEnv } from '@/agent/runtime/daemonInitialPrompt';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { createKeyedSingleFlightScheduler, type KeyedSingleFlightScheduler } from './transcriptRecoveryScheduler';
@@ -168,6 +174,9 @@ export class ApiSessionClient extends EventEmitter {
     private readonly receivedMessageIds = new Set<string>();
     private lastObservedMessageSeq = 0;
     private lastObservedUserMessageSeq = 0;
+    private readonly turnAssistantTextSnapshotStore = createTurnAssistantTextSnapshotStore({
+        maxTextChars: configuration.readyNotificationAssistantTextMaxChars,
+    });
     private hasConnectedOnce = false;
     private changesSyncInFlight: Promise<void> | null = null;
     private accountIdPromise: Promise<string> | null = null;
@@ -243,6 +252,20 @@ export class ApiSessionClient extends EventEmitter {
         return this.agentState;
     }
 
+    beginTurnAssistantTextSnapshot(params?: {
+        turnToken?: string;
+        startSeqExclusive?: number | null;
+    }): string {
+        return this.turnAssistantTextSnapshotStore.beginTurn(params);
+    }
+
+    getTurnAssistantTextSnapshot(params: {
+        turnToken?: string | null;
+        startSeqExclusive?: number | null;
+    }): TurnAssistantTextSnapshot | null {
+        return this.turnAssistantTextSnapshotStore.getForTurn(params);
+    }
+
     private getExecutionRunServiceContext() {
         return {
             token: this.token,
@@ -262,6 +285,23 @@ export class ApiSessionClient extends EventEmitter {
             `[API] Socket not connected; queueing ${context} until supervised reconnect.`,
             details
         );
+    }
+
+    private observeTurnAssistantTextFromSessionContent(
+        content: unknown,
+        params: Omit<TurnAssistantTextCandidate, 'text' | 'provider' | 'sidechainId'> & {
+            provider?: string | null;
+            sidechainId?: string | null;
+        },
+    ): void {
+        const extracted = extractTurnAssistantTextFromSessionContent(content);
+        if (!extracted) return;
+        this.turnAssistantTextSnapshotStore.observe({
+            ...params,
+            text: extracted.text,
+            provider: params.provider ?? extracted.provider,
+            sidechainId: params.sidechainId ?? extracted.sidechainId,
+        });
     }
 
 	    constructor(token: string, session: Session) {
@@ -779,6 +819,15 @@ export class ApiSessionClient extends EventEmitter {
                     if (typeof createdAtMs !== 'number' || !Number.isFinite(createdAtMs)) return true;
                     return createdAtMs >= attachedAtMs - lookbackMs;
                 },
+                onObservedMessage: (message) => {
+                    this.observeTurnAssistantTextFromSessionContent(message.body, {
+                        source: 'transcript',
+                        seq: message.seq,
+                        localId: message.localId,
+                        sidechainId: message.sidechainId,
+                        observedAtMs: message.createdAt ?? Date.now(),
+                    });
+                },
                 emit: (event, payload) => this.emit(event, payload),
                 debug: (message, payload) => logger.debug(message, payload),
                 debugLargeJson: (message, payload) => logger.debugLargeJson(message, payload),
@@ -1237,13 +1286,13 @@ export class ApiSessionClient extends EventEmitter {
             requireCommit: boolean;
             markAsUserMessage?: boolean;
         },
-    ): Promise<void> {
+    ): Promise<number | null> {
         const localId = params.localId;
         if (localId.length === 0) {
             if (params.requireCommit) {
                 throw new Error('localId is required');
             }
-            return;
+            return null;
         }
         if (this.transcriptStorage === 'direct') {
             if (!this.socket.connected) {
@@ -1255,7 +1304,7 @@ export class ApiSessionClient extends EventEmitter {
                     localId,
                     sidechainId: params.sidechainId,
                 });
-                return;
+                return null;
             }
 
             if (!params.requireCommit) {
@@ -1294,7 +1343,7 @@ export class ApiSessionClient extends EventEmitter {
                 if (params.markAsUserMessage === true) {
                     this.lastObservedUserMessageSeq = Math.max(this.lastObservedUserMessageSeq, ack.seq);
                 }
-                return;
+                return ack.seq;
             }
             if (ack && ack.ok === false) {
                 this.pendingCommitRetryAttemptsByLocalId.delete(localId);
@@ -1311,7 +1360,7 @@ export class ApiSessionClient extends EventEmitter {
             }
             if (!params.requireCommit) {
                 this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId });
-                return;
+                return null;
             }
             logger.debug('[SOCKET] Direct transcript commit was not confirmed', {
                 localId,
@@ -1330,7 +1379,7 @@ export class ApiSessionClient extends EventEmitter {
                 localId,
                 sidechainId: params.sidechainId,
             });
-            return;
+            return null;
         }
 
         this.pendingMaterializedLocalIds.add(localId);
@@ -1367,7 +1416,7 @@ export class ApiSessionClient extends EventEmitter {
             if (params.markAsUserMessage === true) {
                 this.lastObservedUserMessageSeq = Math.max(this.lastObservedUserMessageSeq, ack.seq);
             }
-            return;
+            return ack.seq;
         }
 
         if (ack && ack.ok === false) {
@@ -1382,7 +1431,7 @@ export class ApiSessionClient extends EventEmitter {
             if (params.requireCommit) {
                 throw new Error(ack.error);
             }
-            return;
+            return null;
         }
 
         if (params.requireCommit) {
@@ -1395,11 +1444,12 @@ export class ApiSessionClient extends EventEmitter {
                 });
                 throw new Error('Message commit not confirmed (ACK timed out and transcript recovery failed)');
             }
-            return;
+            return null;
         }
 
         this.scheduleMaterializationRecovery(localId);
         this.scheduleCommitRetry({ message: params.message, localId, sidechainId: params.sidechainId });
+        return null;
     }
 
     private enqueueMessageCommit<T>(fn: () => Promise<T>): Promise<T> {
@@ -1540,6 +1590,12 @@ export class ApiSessionClient extends EventEmitter {
 
         const payload = this.buildOutboundSessionMessagePayload(content);
         const localId = randomUUID();
+        this.observeTurnAssistantTextFromSessionContent(content, {
+            source: 'ephemeral',
+            localId,
+            sidechainId,
+            provider: 'claude',
+        });
         this.commitSessionMessageBestEffort({
             message: payload,
             localId,
@@ -1598,6 +1654,12 @@ export class ApiSessionClient extends EventEmitter {
 
         const payload = this.buildOutboundSessionMessagePayload(content);
         const localId = randomUUID();
+        this.observeTurnAssistantTextFromSessionContent(content, {
+            source: 'ephemeral',
+            localId,
+            sidechainId: null,
+            provider: 'codex',
+        });
         this.commitSessionMessageBestEffort({
             message: payload,
             localId,
@@ -1688,6 +1750,12 @@ export class ApiSessionClient extends EventEmitter {
         logger.debug(`[SOCKET] Sending ACP message from ${provider}:`, { type: normalizedBody.type, hasMessage: 'message' in normalizedBody });
         this.logSendWhileDisconnected(`${provider} ACP message`, { type: normalizedBody.type });
         const payload = this.buildOutboundSessionMessagePayload(content);
+        this.observeTurnAssistantTextFromSessionContent(content, {
+            source: 'ephemeral',
+            localId,
+            sidechainId,
+            provider,
+        });
         this.commitSessionMessageBestEffort({
             message: payload,
             localId,
@@ -1744,6 +1812,13 @@ export class ApiSessionClient extends EventEmitter {
                 : typeof metaUpdatedAt === 'number'
                     ? Math.max(createdAt, metaUpdatedAt)
                     : Math.max(createdAt, Date.now());
+        this.observeTurnAssistantTextFromSessionContent(content, {
+            source: 'ephemeral',
+            localId,
+            sidechainId,
+            provider,
+            observedAtMs: updatedAt,
+        });
 
         try {
             this.socket.emit('transcript-stream-segment', {
@@ -1859,9 +1934,16 @@ export class ApiSessionClient extends EventEmitter {
         }
 
         const payload = this.buildOutboundSessionMessagePayload(content);
-        await this.enqueueMessageCommit(() =>
+        const seq = await this.enqueueMessageCommit(() =>
             this.commitSessionMessage({ message: payload, localId, sidechainId, requireCommit: true }),
         );
+        this.observeTurnAssistantTextFromSessionContent(content, {
+            source: 'committed',
+            seq,
+            localId,
+            sidechainId,
+            provider,
+        });
     }
 
     async fetchRecentTranscriptTextItemsForAcpImport(opts?: { take?: number }): Promise<Array<{ role: 'user' | 'agent'; text: string }>> {

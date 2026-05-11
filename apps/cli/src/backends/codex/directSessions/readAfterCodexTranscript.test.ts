@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile, appendFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, writeFile, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createCodexAppServerProcessEnv,
+  writeFakeCodexAppServerScript,
   writeFakeCodexAppServerThreadListScript,
 } from '@/backends/codex/appServer/testkit/fakeCodexAppServer';
 import { decodeCodexDirectForwardCursor } from './codexDirectForwardCursor';
@@ -435,6 +436,47 @@ describe('readAfterCodexTranscript', () => {
     expect(afterRolloutAppears.items).toHaveLength(0);
     expect(afterRolloutAppears.truncated).toBe(true);
     expect(afterRolloutAppears.nextCursor).toBeTruthy();
+  });
+
+  it('does not start the Codex app-server metadata fallback when tailing an existing rollout file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-tail-no-app-server-'));
+    const codexHome = join(root, 'codex-home');
+    const sessionsDir = join(codexHome, 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+
+    const sessionId = 'tail-existing-rollout-session';
+    const markerPath = join(root, 'app-server-started');
+    const fakeAppServer = await writeFakeCodexAppServerScript({
+      dir: root,
+      setupLines: [
+        'import("node:fs/promises").then(({ writeFile }) => writeFile(process.env.APP_SERVER_MARKER, "started"));',
+      ],
+      bodyLines: ['for await (const _line of rl) {}'],
+    });
+
+    const filePath = join(sessionsDir, `rollout-2026-01-02T00-00-00-${sessionId}.jsonl`);
+    await writeFile(
+      filePath,
+      sessionMetaLine({ id: sessionId, timestamp: '2026-01-02T00:00:00.000Z', cwd: '/repo/no-app-server' }),
+      'utf8',
+    );
+
+    const init = await readAfterCodexTranscript({
+      source: { kind: 'codexHome', home: 'user' },
+      env: createCodexAppServerProcessEnv(fakeAppServer, {
+        CODEX_HOME: codexHome,
+        APP_SERVER_MARKER: markerPath,
+      }),
+      activeServerDir: join(root, 'servers', 'cloud'),
+      remoteSessionId: sessionId,
+      cursor: 'tail',
+      maxBytes: 1024 * 1024,
+      maxItems: 100,
+    });
+
+    expect(init.items).toHaveLength(0);
+    expect(init.nextCursor).toBeTruthy();
+    await expect(access(markerPath)).rejects.toThrow();
   });
 
   it('returns appended synthetic SubAgent root rows when collaboration events are written after tail', async () => {

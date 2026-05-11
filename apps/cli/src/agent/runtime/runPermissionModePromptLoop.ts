@@ -38,6 +38,11 @@ type QueuedPermissionModeMessage = {
   hash: string;
 };
 
+export type ReadyNotificationTurnContext = Readonly<{
+  turnToken: string | null;
+  startSeqExclusive: number | null;
+}>;
+
 class StrictInitialResumeError extends Error {
   public readonly cause: unknown;
   constructor(message: string, cause: unknown) {
@@ -61,7 +66,7 @@ export async function runPermissionModePromptLoop(opts: {
   getAbortSignal: () => AbortSignal;
   keepAlive: () => void;
   setThinking: (value: boolean) => void;
-  sendReady: () => void;
+  sendReady: (context?: ReadyNotificationTurnContext) => void;
   currentPermissionModeUpdatedAt: number;
   setCurrentPermissionMode: (mode: PermissionMode) => void;
   setCurrentPermissionModeUpdatedAt: (updatedAt: number) => void;
@@ -266,10 +271,20 @@ export async function runPermissionModePromptLoop(opts: {
 
     let shouldSendReady = true;
     let suppressFlushTurnFailure = false;
+    let readyTurnContext: ReadyNotificationTurnContext | undefined;
     try {
       turnInFlight = true;
       let shouldApplyFreshSessionSystemPrompt = pendingFreshSessionSystemPrompt;
       pendingFreshSessionSystemPrompt = false;
+      const startSeqExclusive = typeof opts.session.getLastObservedMessageSeq === 'function'
+        ? opts.session.getLastObservedMessageSeq()
+        : null;
+      if (typeof opts.session.beginTurnAssistantTextSnapshot === 'function') {
+        const turnToken = opts.session.beginTurnAssistantTextSnapshot({
+          startSeqExclusive,
+        });
+        readyTurnContext = { turnToken, startSeqExclusive };
+      }
       opts.runtime.beginTurn();
       if (!wasStarted) {
         const runtimeStart = await ensureRuntimeStarted();
@@ -338,7 +353,7 @@ export async function runPermissionModePromptLoop(opts: {
       opts.setThinking(false);
       opts.keepAlive();
       if (shouldSendReady) {
-        opts.sendReady();
+        opts.sendReady(readyTurnContext);
       }
     }
   }

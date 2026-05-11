@@ -92,6 +92,42 @@ describe('createClaudeRemoteReadyHandler', () => {
     );
   });
 
+  it('falls back to the session-owned turn assistant snapshot when no structured preview exists', () => {
+    const sendSessionEvent = vi.fn();
+    const sendToAllDevices = vi.fn();
+    const getTurnAssistantTextSnapshot = vi.fn(() => ({
+      turnToken: 'turn-1',
+      text: 'Central Claude response',
+      observedAtMs: 123,
+      seq: 12,
+      localId: 'message-1',
+      sidechainId: null,
+      provider: 'claude',
+      source: 'committed' as const,
+    }));
+
+    const onReady = createClaudeRemoteReadyHandler({
+      session: { sessionId: 's_1', sendSessionEvent, getTurnAssistantTextSnapshot },
+      pushSender: { sendToAllDevices },
+      logPrefix: '[remote]',
+      waitingForCommandLabel: 'Claude',
+      getPending: () => null,
+      getQueueSize: () => 0,
+    });
+
+    onReady({ turnToken: 'turn-1', startSeqExclusive: 10 });
+
+    expect(getTurnAssistantTextSnapshot).toHaveBeenCalledWith({
+      turnToken: 'turn-1',
+      startSeqExclusive: 10,
+    });
+    expect(sendToAllDevices).toHaveBeenCalledWith(
+      'Claude',
+      'Central Claude response',
+      { sessionId: 's_1' },
+    );
+  });
+
   it('reads session titles from class-style metadata snapshot methods without losing this binding', () => {
     const sendSessionEvent = vi.fn();
     const sendToAllDevices = vi.fn();

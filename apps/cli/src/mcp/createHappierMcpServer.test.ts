@@ -31,6 +31,37 @@ describe('createHappierMcpServer', () => {
     expect(toolNames).toContain('subagents_plan_start');
   });
 
+  it('uses account action settings for the in-session MCP tool registry when provided', async () => {
+    process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
+      v: 1,
+      actions: {
+        'session.list': { enabled: true, disabledSurfaces: ['session_agent'], disabledPlacements: [] },
+      },
+    });
+
+    const { createHappierMcpServer } = await import('@/mcp/createHappierMcpServer');
+
+    const fakeClient = {
+      sessionId: 'sess_mcp_tool_names_account_settings_1',
+      rpcHandlerManager: { invokeLocal: async () => ({}) },
+      sendClaudeSessionMessage: () => {},
+      updateMetadata: () => {},
+    } as any;
+
+    const { toolNames } = createHappierMcpServer(fakeClient, {
+      accountSettings: {
+        actionsSettingsV1: {
+          v: 1,
+          actions: {
+            'session.list': { disabledSurfaces: [] },
+          },
+        },
+      },
+    } as any);
+
+    expect(toolNames).toContain('session_list');
+  });
+
   it('forwards execution.run.list request payloads through the shared action executor deps', async () => {
     const captured: { deps?: any } = {};
 

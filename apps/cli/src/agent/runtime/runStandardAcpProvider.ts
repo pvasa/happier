@@ -19,8 +19,9 @@ import { createStartupMetadataOverrides } from '@/agent/runtime/createStartupMet
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/runnerTerminationHandlers';
-import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
+import { runPermissionModePromptLoop, type ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { resolveReadyNotificationAssistantText } from '@/agent/runtime/readyNotificationAssistantText';
 import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
 import { createTurnAssistantPreviewTracker, type TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { resolveEffectiveCodingPromptText } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
@@ -117,7 +118,7 @@ export type StandardAcpProviderConfig = {
     turnAssistantPreviewTracker: TurnAssistantPreviewTracker;
   }) => RuntimeForLoop;
   resolveRuntimeDirectory?: (params: { session: ApiSessionClient; metadata: Metadata }) => string;
-  createSendReady?: (params: { session: ApiSessionClient; api: ApiClient }) => () => void;
+  createSendReady?: (params: { session: ApiSessionClient; api: ApiClient }) => (context?: ReadyNotificationTurnContext) => void;
   beforeInitializeSession?: (params: { metadata: Metadata; opts: StandardAcpProviderRunOptions }) => void;
   onAttachMetadataSnapshotMissing?: (error: unknown | null) => void;
   onAttachMetadataSnapshotError?: (error: unknown) => void;
@@ -411,18 +412,25 @@ export async function runStandardAcpProvider(
 
   const sendReady = config.createSendReady
     ? config.createSendReady({ session, api })
-    : (() => {
+    : ((context?: ReadyNotificationTurnContext) => {
+      const includeAssistantPreviewText =
+        opts.accountSettingsContext?.settings?.notificationsSettingsV1?.readyIncludeMessageText !== false;
       sendReadyWithPushNotificationFn({
         session,
         pushSender: api.push(),
         waitingForCommandLabel: config.waitingForCommandLabel,
         logPrefix: config.uiLogPrefix,
         sessionTitle: getSessionNotificationTitle(session.getMetadataSnapshot?.bind(session) ?? null),
-        assistantPreviewText: turnAssistantPreviewTracker.getPreview(),
+        assistantPreviewText: resolveReadyNotificationAssistantText({
+          includeMessageText: includeAssistantPreviewText,
+          explicitAssistantText: turnAssistantPreviewTracker.getPreview(),
+          session,
+          turnToken: context?.turnToken ?? null,
+          startSeqExclusive: context?.startSeqExclusive ?? null,
+        }),
         accountSettings: opts.accountSettingsContext?.settings ?? null,
         settingsSecretsReadKeys: opts.accountSettingsContext?.settingsSecretsReadKeys ?? [],
-        includeAssistantPreviewText:
-          opts.accountSettingsContext?.settings?.notificationsSettingsV1?.readyIncludeMessageText !== false,
+        includeAssistantPreviewText,
         shouldSendPush: () => shouldSendReadyPushNotification(opts.accountSettingsContext?.settings ?? null),
       });
     });

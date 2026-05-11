@@ -6,7 +6,7 @@ import { readJsonlFileBackwardPage } from '@/api/directSessions/filePaging/jsonl
 import { readJsonlFileForward } from '@/api/directSessions/filePaging/jsonlForwardReader';
 
 import { createCodexRolloutSemanticTracker } from '../rollout/createCodexRolloutSemanticTracker';
-import { collectCodexSessionRolloutFiles } from './collectCodexSessionRolloutFiles';
+import { collectCodexSessionRolloutFiles, type CodexRolloutFile } from './collectCodexSessionRolloutFiles';
 import { collectCodexDirectTranscriptRolloutStreams } from './collectCodexDirectTranscriptRolloutStreams';
 import {
   decodeCodexDirectBackwardCursor,
@@ -158,10 +158,12 @@ export async function readAfterCodexRolloutStreams(params: Readonly<{
   cursor: string;
   maxBytes: number;
   maxItems: number;
+  initialRolloutFiles?: readonly CodexRolloutFile[];
 }>): Promise<Readonly<{ items: DirectTranscriptRawMessageV1[]; nextCursor: string | null; truncated: boolean }>> {
   const streams = await collectCodexDirectTranscriptRolloutStreams({
     codexHome: params.codexHome,
     remoteSessionId: params.remoteSessionId,
+    initialRolloutFiles: params.initialRolloutFiles,
   });
 
   if (params.cursor === 'tail') {
@@ -229,6 +231,7 @@ export async function pageCodexRolloutStreams(params: Readonly<{
   cursor?: string;
   maxBytes: number;
   maxItems: number;
+  initialRolloutFiles?: readonly CodexRolloutFile[];
 }>): Promise<Readonly<{
   items: DirectTranscriptRawMessageV1[];
   nextCursor: string | null;
@@ -239,6 +242,7 @@ export async function pageCodexRolloutStreams(params: Readonly<{
   const streams = await collectCodexDirectTranscriptRolloutStreams({
     codexHome: params.codexHome,
     remoteSessionId: params.remoteSessionId,
+    initialRolloutFiles: params.initialRolloutFiles,
   });
   const tailCursor = await buildCodexStreamVectorTailCursor(streams);
 
@@ -252,10 +256,14 @@ export async function pageCodexRolloutStreams(params: Readonly<{
   const maxItems = Math.max(1, Math.trunc(params.maxItems));
   const candidateRecords: CodexProjectedTranscriptRecord[] = [];
   const reachedStartByStreamId = new Map<string, boolean>();
+  const initialEndByStreamId = new Map<string, number>();
+  const pageNextEndByStreamId = new Map<string, number>();
+  const hasLoadedCandidateByStreamId = new Map<string, boolean>();
 
   for (const stream of streams) {
     const fileSize = await statFileSize(stream.filePath);
     const endOffsetBytes = Math.min(fileSize, Math.max(0, Math.trunc(endByStreamId.get(stream.fileRelPath) ?? fileSize)));
+    initialEndByStreamId.set(stream.fileRelPath, endOffsetBytes);
     if (endOffsetBytes <= 0) continue;
     const page = await readJsonlFileBackwardPage({
       filePath: stream.filePath,
@@ -264,6 +272,7 @@ export async function pageCodexRolloutStreams(params: Readonly<{
       maxItems: maxItems * 2,
     });
     reachedStartByStreamId.set(stream.fileRelPath, page.reachedStart);
+    pageNextEndByStreamId.set(stream.fileRelPath, page.nextEndOffsetBytes);
     const semanticTracker = createCodexRolloutSemanticTracker();
     for (const line of page.items) {
       const projected = projectCodexRolloutLineToTranscriptRecords({
@@ -273,6 +282,9 @@ export async function pageCodexRolloutStreams(params: Readonly<{
         lineValue: line.value,
         semanticTracker,
       });
+      if (projected.records.length > 0) {
+        hasLoadedCandidateByStreamId.set(stream.fileRelPath, true);
+      }
       candidateRecords.push(...projected.records);
     }
   }
@@ -296,8 +308,14 @@ export async function pageCodexRolloutStreams(params: Readonly<{
   const selected = selectedReversed.reverse();
   const nextEndByStreamId = new Map<string, number>();
   for (const stream of streams) {
-    const fileSize = await statFileSize(stream.filePath);
-    nextEndByStreamId.set(stream.fileRelPath, Math.min(fileSize, Math.max(0, Math.trunc(endByStreamId.get(stream.fileRelPath) ?? fileSize))));
+    const initialEndOffsetBytes = initialEndByStreamId.get(stream.fileRelPath) ?? 0;
+    const pageNextEndOffsetBytes = pageNextEndByStreamId.get(stream.fileRelPath) ?? initialEndOffsetBytes;
+    nextEndByStreamId.set(
+      stream.fileRelPath,
+      hasLoadedCandidateByStreamId.get(stream.fileRelPath) === true
+        ? initialEndOffsetBytes
+        : pageNextEndOffsetBytes,
+    );
   }
   for (const record of selected) {
     const current = nextEndByStreamId.get(record.streamId);

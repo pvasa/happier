@@ -23,6 +23,13 @@ export function handleSessionNewMessageUpdate(params: {
     pendingMessageCallback: ((message: UserMessage) => void) | null;
     pendingMessages: UserMessage[];
     shouldDeliverUserMessageToAgentQueue?: (message: UserMessage, update: Update) => boolean;
+    onObservedMessage?: (message: {
+        body: unknown;
+        seq: number | null;
+        localId: string | null;
+        sidechainId: string | null;
+        createdAt: number | null;
+    }) => void;
     emit: (event: 'user-message' | 'message', payload: unknown) => void;
     debug: (message: string, data?: unknown) => void;
     debugLargeJson: (message: string, data: unknown) => void;
@@ -127,6 +134,13 @@ export function handleSessionNewMessageUpdate(params: {
     };
 
     params.debugLargeJson('[SOCKET] [UPDATE] Received update:', bodyWithTransportFields);
+    params.onObservedMessage?.({
+        body: bodyWithTransportFields,
+        seq: typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null,
+        localId,
+        sidechainId: typeof params.update.body.message.sidechainId === 'string' ? params.update.body.message.sidechainId : null,
+        createdAt: typeof params.update.createdAt === 'number' ? params.update.createdAt : null,
+    });
 
     // Try to parse as user message first.
     const userResult = UserMessageSchema.safeParse(bodyWithTransportFields);

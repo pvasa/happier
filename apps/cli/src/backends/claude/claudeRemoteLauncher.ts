@@ -1,5 +1,6 @@
 import { render } from "ink";
 import { Session } from "./session";
+import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { MessageBuffer } from "@/ui/ink/messageBuffer";
 import { RemoteModeDisplay } from "@/backends/claude/ui/RemoteModeDisplay";
 import React from "react";
@@ -32,6 +33,8 @@ import { createNonBlockingStdout } from '@/ui/ink/nonBlockingStdout';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { resolveReadyNotificationAssistantText } from '@/agent/runtime/readyNotificationAssistantText';
+import type { ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
 import { createTurnAssistantPreviewTracker, type TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { shouldSendReadyPushNotification } from '@/settings/notifications/notificationsPolicy';
 import {
@@ -220,6 +223,7 @@ type ClaudeRemoteReadySession = Readonly<{
     sessionId: string;
     sendSessionEvent: (event: { type: 'ready' }) => void;
     getMetadataSnapshot?: () => unknown;
+    getTurnAssistantTextSnapshot?: ApiSessionClient['getTurnAssistantTextSnapshot'];
 }>;
 
 type ClaudeRemotePushSender = Readonly<{
@@ -238,8 +242,8 @@ export function createClaudeRemoteReadyHandler(params: Readonly<{
     shouldSendPush?: () => boolean;
     accountSettings?: AccountSettings | null;
     settingsSecretsReadKeys?: readonly Uint8Array[];
-}>): () => void {
-    return () => {
+}>): (context?: ReadyNotificationTurnContext) => void {
+    return (context?: ReadyNotificationTurnContext) => {
         if (params.getPending()) return;
         if (params.getQueueSize() !== 0) return;
         if (!params.pushSender) {
@@ -256,7 +260,13 @@ export function createClaudeRemoteReadyHandler(params: Readonly<{
                     ? () => params.session.getMetadataSnapshot?.()
                     : null,
             ),
-            assistantPreviewText: params.assistantPreviewTracker?.getPreview() ?? null,
+            assistantPreviewText: resolveReadyNotificationAssistantText({
+                includeMessageText: params.includeAssistantPreviewText,
+                explicitAssistantText: params.assistantPreviewTracker?.getPreview() ?? null,
+                session: params.session,
+                turnToken: context?.turnToken ?? null,
+                startSeqExclusive: context?.startSeqExclusive ?? null,
+            }),
             accountSettings: params.accountSettings ?? null,
             settingsSecretsReadKeys: params.settingsSecretsReadKeys,
             includeAssistantPreviewText: params.includeAssistantPreviewText,
@@ -900,6 +910,15 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 	            let modeHash: string | null = null;
 	            let mode: EnhancedMode | null = null;
 	            let didReplaySeedBootstrap = false;
+                let readyTurnContext: ReadyNotificationTurnContext | undefined;
+                const beginReadyNotificationTurn = () => {
+                    if (typeof session.client.beginTurnAssistantTextSnapshot !== 'function') return;
+                    const startSeqExclusive = typeof session.client.getLastObservedMessageSeq === 'function'
+                        ? session.client.getLastObservedMessageSeq()
+                        : null;
+                    const turnToken = session.client.beginTurnAssistantTextSnapshot({ startSeqExclusive });
+                    readyTurnContext = { turnToken, startSeqExclusive };
+                };
 	            try {
                 const waitForNextBatch = async (): Promise<MessageBatch<EnhancedMode, string> | null> => {
                     return await waitForMessagesOrPending({
@@ -986,6 +1005,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                                 modeHash = p.hash;
                                 mode = p.mode;
                                 permissionHandler.handleModeChange(p.mode.permissionMode);
+                                beginReadyNotificationTurn();
                                 return { message: p.message, mode: p.mode };
                             }
 
@@ -1004,6 +1024,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             const nextMode = msg.mode;
                             mode = nextMode;
                             permissionHandler.handleModeChange(nextMode.permissionMode);
+                            beginReadyNotificationTurn();
                             const replaySeedResolution = await resolveClaudeRemoteQueuedPromptWithReplaySeed({
                                 sessionClient: session.client,
                                 batch: { message: msg.message, mode: msg.mode },
@@ -1068,7 +1089,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     },
                     onReady: async () => {
                         await messageQueue.flush();
-                        readyHandler();
+                        readyHandler(readyTurnContext);
                     },
                     onSubagentFlush: async () => {
                         await messageQueue.flush();

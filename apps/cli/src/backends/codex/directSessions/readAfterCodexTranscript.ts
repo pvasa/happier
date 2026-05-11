@@ -2,27 +2,32 @@ import type { DirectSessionsSource, DirectTranscriptRawMessageV1 } from '@happie
 
 import { resolveCodexHomesForDirectSessionsSource } from './resolveCodexHomesForDirectSessionsSource';
 import { decodeCodexDirectForwardCursor, encodeCodexDirectForwardCursor } from './codexDirectForwardCursor';
-import { collectCodexSessionRolloutFiles } from './collectCodexSessionRolloutFiles';
+import { collectCodexSessionRolloutFiles, type CodexRolloutFile } from './collectCodexSessionRolloutFiles';
 import { readAfterCodexRolloutStreams } from './codexDirectTranscriptStreamPaging';
 import {
   mapCodexDirectSessionAppServerPreviewToMessage,
   resolveCodexDirectSessionAppServerMetadata,
 } from './resolveCodexDirectSessionAppServerMetadata';
 
-function selectBestCodexHomeWithFiles(homes: readonly string[], perHomeFiles: readonly (readonly unknown[])[]): string | null {
+function selectBestCodexHomeWithFiles(
+  homes: readonly string[],
+  perHomeFiles: readonly (readonly CodexRolloutFile[])[],
+): Readonly<{ home: string; files: readonly CodexRolloutFile[] }> | null {
   let bestHome: string | null = null;
+  let bestFiles: readonly CodexRolloutFile[] = [];
   let bestLatestMtimeMs = -1;
   for (let index = 0; index < homes.length; index += 1) {
     const home = homes[index]!;
     const files = perHomeFiles[index] ?? [];
     if (files.length === 0) continue;
-    const latestMtimeMs = Math.max(...(files as { mtimeMs: number }[]).map((file) => file.mtimeMs));
+    const latestMtimeMs = Math.max(...files.map((file) => file.mtimeMs));
     if (latestMtimeMs > bestLatestMtimeMs) {
       bestLatestMtimeMs = latestMtimeMs;
       bestHome = home;
+      bestFiles = files;
     }
   }
-  return bestHome;
+  return bestHome ? { home: bestHome, files: bestFiles } : null;
 }
 
 export async function readAfterCodexTranscript(params: Readonly<{
@@ -43,7 +48,7 @@ export async function readAfterCodexTranscript(params: Readonly<{
 
   const perHomeFiles = await Promise.all(homes.map((home) => collectCodexSessionRolloutFiles({ codexHome: home, remoteSessionId: params.remoteSessionId })));
   const bestHome = selectBestCodexHomeWithFiles(homes, perHomeFiles);
-  const appServerMetadata = bestHome === null || params.cursor === 'tail'
+  const appServerMetadata = bestHome === null
     ? await resolveCodexDirectSessionAppServerMetadata({
       source: params.source,
       activeServerDir: params.activeServerDir,
@@ -88,10 +93,11 @@ export async function readAfterCodexTranscript(params: Readonly<{
   }
 
   return readAfterCodexRolloutStreams({
-    codexHome: bestHome,
+    codexHome: bestHome.home,
     remoteSessionId: params.remoteSessionId,
     cursor: params.cursor,
     maxBytes: params.maxBytes,
     maxItems: params.maxItems,
+    initialRolloutFiles: bestHome.files,
   });
 }

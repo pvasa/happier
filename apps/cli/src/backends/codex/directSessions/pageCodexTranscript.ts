@@ -2,27 +2,32 @@ import type { DirectSessionsSource, DirectTranscriptRawMessageV1 } from '@happie
 
 import { resolveCodexHomesForDirectSessionsSource } from './resolveCodexHomesForDirectSessionsSource';
 import { encodeCodexDirectForwardCursor } from './codexDirectForwardCursor';
-import { collectCodexSessionRolloutFiles } from './collectCodexSessionRolloutFiles';
+import { collectCodexSessionRolloutFiles, type CodexRolloutFile } from './collectCodexSessionRolloutFiles';
 import { pageCodexRolloutStreams } from './codexDirectTranscriptStreamPaging';
 import {
   mapCodexDirectSessionAppServerPreviewToMessage,
   resolveCodexDirectSessionAppServerMetadata,
 } from './resolveCodexDirectSessionAppServerMetadata';
 
-function selectBestCodexHomeWithFiles(homes: readonly string[], perHomeFiles: readonly (readonly unknown[])[]): string | null {
+function selectBestCodexHomeWithFiles(
+  homes: readonly string[],
+  perHomeFiles: readonly (readonly CodexRolloutFile[])[],
+): Readonly<{ home: string; files: readonly CodexRolloutFile[] }> | null {
   let bestHome: string | null = null;
+  let bestFiles: readonly CodexRolloutFile[] = [];
   let bestLatestMtimeMs = -1;
   for (let index = 0; index < homes.length; index += 1) {
     const home = homes[index]!;
     const files = perHomeFiles[index] ?? [];
     if (files.length === 0) continue;
-    const latestMtimeMs = Math.max(...(files as { mtimeMs: number }[]).map((file) => file.mtimeMs));
+    const latestMtimeMs = Math.max(...files.map((file) => file.mtimeMs));
     if (latestMtimeMs > bestLatestMtimeMs) {
       bestLatestMtimeMs = latestMtimeMs;
       bestHome = home;
+      bestFiles = files;
     }
   }
-  return bestHome;
+  return bestHome ? { home: bestHome, files: bestFiles } : null;
 }
 
 export async function pageCodexTranscript(params: Readonly<{
@@ -45,14 +50,13 @@ export async function pageCodexTranscript(params: Readonly<{
   const perHomeFiles = await Promise.all(homes.map((home) => collectCodexSessionRolloutFiles({ codexHome: home, remoteSessionId: params.remoteSessionId })));
   const bestHome = selectBestCodexHomeWithFiles(homes, perHomeFiles);
 
-  const appServerMetadata = await resolveCodexDirectSessionAppServerMetadata({
-    source: params.source,
-    activeServerDir: params.activeServerDir,
-    remoteSessionId: params.remoteSessionId,
-    env,
-  });
-
   if (bestHome === null) {
+    const appServerMetadata = await resolveCodexDirectSessionAppServerMetadata({
+      source: params.source,
+      activeServerDir: params.activeServerDir,
+      remoteSessionId: params.remoteSessionId,
+      env,
+    });
     const previewItem = appServerMetadata
       ? mapCodexDirectSessionAppServerPreviewToMessage({ remoteSessionId: params.remoteSessionId, metadata: appServerMetadata })
       : null;
@@ -68,11 +72,12 @@ export async function pageCodexTranscript(params: Readonly<{
   }
 
   return pageCodexRolloutStreams({
-    codexHome: bestHome,
+    codexHome: bestHome.home,
     remoteSessionId: params.remoteSessionId,
     direction: params.direction,
     cursor: params.cursor,
     maxBytes: params.maxBytes,
     maxItems: params.maxItems,
+    initialRolloutFiles: bestHome.files,
   });
 }

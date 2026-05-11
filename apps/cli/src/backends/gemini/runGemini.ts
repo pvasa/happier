@@ -23,6 +23,8 @@ import { hashObject } from '@/utils/deterministicJson';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
 import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
 import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
+import { resolveReadyNotificationAssistantText } from '@/agent/runtime/readyNotificationAssistantText';
+import type { ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
 import { createTurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { registerKillSessionHandler } from '@/rpc/handlers/killSession';
@@ -374,32 +376,26 @@ export async function runGemini(opts: {
   // Resumed ACP sessions must not re-append the shared prompt library prompt.
   let shouldPrependAppendSystemPromptOnNextFreshSessionPrompt = true;
 
-  const sendReady = () => {
+  const sendReady = (context?: ReadyNotificationTurnContext) => {
+    const includeAssistantPreviewText =
+      opts.accountSettingsContext?.settings?.notificationsSettingsV1?.readyIncludeMessageText !== false;
     sendReadyWithPushNotification({
       session,
       pushSender: api.push(),
       waitingForCommandLabel: 'Gemini',
       logPrefix: '[Gemini]',
       sessionTitle: getSessionNotificationTitle(session.getMetadataSnapshot.bind(session)),
-      assistantPreviewText: turnAssistantPreviewTracker.getPreview(),
+      assistantPreviewText: resolveReadyNotificationAssistantText({
+        includeMessageText: includeAssistantPreviewText,
+        explicitAssistantText: turnAssistantPreviewTracker.getPreview(),
+        session,
+        turnToken: context?.turnToken ?? null,
+        startSeqExclusive: context?.startSeqExclusive ?? null,
+      }),
       accountSettings: opts.accountSettingsContext?.settings ?? null,
       settingsSecretsReadKeys: opts.accountSettingsContext?.settingsSecretsReadKeys ?? [],
-      includeAssistantPreviewText:
-        opts.accountSettingsContext?.settings?.notificationsSettingsV1?.readyIncludeMessageText !== false,
+      includeAssistantPreviewText,
       shouldSendPush: () => shouldSendReadyPushNotification(opts.accountSettingsContext?.settings ?? null),
-    });
-  };
-
-  /**
-   * Check if we can emit ready event
-   * * Returns true when ready event was emitted
-   */
-  const emitReadyIfIdle = (): boolean => {
-    return emitReadyIfIdleShared({
-      pending: turnMessageState.thinking || turnMessageState.isResponseInProgress,
-      queueSize: () => messageQueue.size(),
-      shouldExit,
-      sendReady,
     });
   };
 
@@ -768,7 +764,11 @@ export async function runGemini(opts: {
       // Mark that we're processing a message to synchronize session swaps
       isProcessingMessage = true;
 
+      let readyTurnContext: ReadyNotificationTurnContext | undefined;
       try {
+        const startSeqExclusive = session.getLastObservedMessageSeq();
+        const turnToken = session.beginTurnAssistantTextSnapshot({ startSeqExclusive });
+        readyTurnContext = { turnToken, startSeqExclusive };
         if (first || !wasSessionCreated) {
           // First message or session not created yet - create backend and start session
           if (!geminiBackend) {
@@ -966,7 +966,12 @@ export async function runGemini(opts: {
         const popped = !shouldExit ? await session.popPendingMessage() : false;
         if (!popped) {
           // Use same logic as Codex - emit ready if idle (no pending operations, no queue)
-          emitReadyIfIdle();
+          emitReadyIfIdleShared({
+            pending: turnMessageState.thinking || turnMessageState.isResponseInProgress,
+            queueSize: () => messageQueue.size(),
+            shouldExit,
+            sendReady: () => sendReady(readyTurnContext),
+          });
         }
 
         // Message processing complete - safe to apply any pending session swap

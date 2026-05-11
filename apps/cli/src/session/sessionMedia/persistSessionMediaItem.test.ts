@@ -66,6 +66,8 @@ describe('persistSessionMediaItem', () => {
           mimeType: 'image/png',
           sizeBytes: pngBytes.byteLength,
           sha256: sha256Hex(pngBytes),
+          width: 1,
+          height: 1,
           createdAtMs: 123,
           origin: { source: 'provider-generated' },
         },

@@ -2,6 +2,7 @@ import type { RpcHandlerManagerLike } from '@/api/rpc/types';
 import type { RawJSONLines } from '@/backends/claude/types';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
 import type { AgentState, Metadata } from '../types';
+import type { TurnAssistantTextSnapshot } from './turnAssistantTextSnapshot';
 
 export interface SessionClientPort {
   sessionId: string;
@@ -23,6 +24,12 @@ export interface SessionClientPort {
   keepAlive(thinking: boolean, mode: 'local' | 'remote'): void;
 
   getMetadataSnapshot(): Metadata | null;
+  getLastObservedMessageSeq?(): number;
+  beginTurnAssistantTextSnapshot?(params?: { turnToken?: string; startSeqExclusive?: number | null }): string;
+  getTurnAssistantTextSnapshot?(params: {
+    turnToken?: string | null;
+    startSeqExclusive?: number | null;
+  }): TurnAssistantTextSnapshot | null;
   waitForMetadataUpdate(abortSignal?: AbortSignal): Promise<boolean>;
   popPendingMessage(): Promise<boolean>;
 

@@ -67,6 +67,11 @@ type PreparedMediaSource =
         suggestedName?: string;
     }>;
 
+type ImageDimensions = Readonly<{
+    width: number;
+    height: number;
+}>;
+
 function failure(code: string, error: string): PersistSessionMediaFailure {
     return { success: false, code, error };
 }
@@ -109,6 +114,27 @@ async function hashFile(path: string): Promise<string> {
         hash.update(chunk);
     }
     return hash.digest('hex');
+}
+
+function readPositiveImageDimension(value: number | undefined): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    const normalized = Math.trunc(value);
+    return normalized > 0 ? normalized : null;
+}
+
+async function readPreparedImageDimensions(source: PreparedMediaSource): Promise<ImageDimensions | null> {
+    try {
+        const sharp = (await import('sharp')).default;
+        const image = source.kind === 'buffer'
+            ? sharp(source.bytes, { failOn: 'none' })
+            : sharp(source.path, { failOn: 'none' });
+        const metadata = await image.metadata();
+        const width = readPositiveImageDimension(metadata.width);
+        const height = readPositiveImageDimension(metadata.height);
+        return width && height ? { width, height } : null;
+    } catch {
+        return null;
+    }
 }
 
 async function readFilePrefix(path: string, maxBytes: number): Promise<Buffer> {
@@ -338,6 +364,7 @@ export async function persistSessionMediaItem(params: Readonly<{
     const sha256 = prepared.kind === 'buffer'
         ? createHash('sha256').update(prepared.bytes).digest('hex')
         : await hashFile(uploadTarget.target.destPath);
+    const dimensions = await readPreparedImageDimensions(prepared);
 
     try {
         await ensureSessionMediaIgnoreRule({
@@ -362,6 +389,7 @@ export async function persistSessionMediaItem(params: Readonly<{
             name: fileName.slice(mediaId.length + 1),
             path: mediaPath,
             sizeBytes,
+            ...(dimensions ? { width: dimensions.width, height: dimensions.height } : {}),
             sha256,
             ...(typeof params.input.createdAtMs === 'number' ? { createdAtMs: params.input.createdAtMs } : {}),
             origin: sanitizeSessionMediaOrigin(params.input.origin),

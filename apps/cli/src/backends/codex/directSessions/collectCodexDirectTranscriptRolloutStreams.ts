@@ -43,6 +43,7 @@ async function discoverSpawnedThreadIdsFromFilesBounded(files: readonly CodexRol
 export async function collectCodexDirectTranscriptRolloutStreams(params: Readonly<{
   codexHome: string;
   remoteSessionId: string;
+  initialRolloutFiles?: readonly CodexRolloutFile[];
 }>): Promise<readonly CodexDirectTranscriptRolloutStream[]> {
   const queue = [{ threadId: params.remoteSessionId, sidechainId: null as string | null }];
   const seenThreadIds = new Set<string>();
@@ -53,10 +54,12 @@ export async function collectCodexDirectTranscriptRolloutStreams(params: Readonl
     if (seenThreadIds.has(current.threadId)) continue;
     seenThreadIds.add(current.threadId);
 
-    const files = await collectCodexSessionRolloutFiles({
-      codexHome: params.codexHome,
-      remoteSessionId: current.threadId,
-    });
+    const files = current.threadId === params.remoteSessionId && current.sidechainId === null && params.initialRolloutFiles
+      ? [...params.initialRolloutFiles]
+      : await collectCodexSessionRolloutFiles({
+        codexHome: params.codexHome,
+        remoteSessionId: current.threadId,
+      });
     if (files.length === 0) continue;
 
     streams.push(...files.map((file) => ({
