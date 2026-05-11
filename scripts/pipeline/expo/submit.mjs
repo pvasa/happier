@@ -2,7 +2,6 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 
@@ -22,6 +21,21 @@ import {
 function fail(message) {
   console.error(message);
   process.exit(1);
+}
+
+const ANDROID_RELEASE_STATUS_CHOICES = ['profile', 'completed', 'draft', 'halted', 'inProgress'];
+
+/**
+ * @param {unknown} value
+ */
+function normalizeAndroidReleaseStatus(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'draft';
+  const normalized = raw.toLowerCase();
+  if (normalized === 'inprogress' || normalized === 'in-progress' || normalized === 'in_progress') return 'inProgress';
+  const exact = ANDROID_RELEASE_STATUS_CHOICES.find((choice) => choice.toLowerCase() === normalized);
+  if (exact) return exact;
+  fail(`--android-release-status must be one of: ${ANDROID_RELEASE_STATUS_CHOICES.join(', ')} (got: ${raw})`);
 }
 
 /**
@@ -144,6 +158,57 @@ function ensureIosSubmitAscApiKeyFile(opts) {
   }
 }
 
+/**
+ * Temporarily applies the Android release status to the selected EAS submit profile.
+ * EAS exposes this through eas.json rather than a submit CLI flag, so the pipeline
+ * patches the profile for the duration of this submit invocation and restores it.
+ *
+ * @param {{ repoRoot: string; uiDir: string; submitProfile: string; androidReleaseStatus: string; dryRun: boolean }} opts
+ * @returns {() => void}
+ */
+function applyAndroidReleaseStatusOverride(opts) {
+  if (opts.androidReleaseStatus === 'profile') {
+    return () => {};
+  }
+
+  const easPath = path.join(opts.uiDir, 'eas.json');
+  if (!fs.existsSync(easPath)) {
+    fail(`Missing apps/ui/eas.json at: ${easPath}`);
+  }
+
+  const original = fs.readFileSync(easPath, 'utf8');
+  /** @type {any} */
+  const easJson = JSON.parse(original);
+  if (!easJson.submit || typeof easJson.submit !== 'object') {
+    fail('apps/ui/eas.json is missing submit profiles.');
+  }
+  if (!easJson.submit[opts.submitProfile] || typeof easJson.submit[opts.submitProfile] !== 'object') {
+    fail(`apps/ui/eas.json is missing submit.${opts.submitProfile}.`);
+  }
+
+  const submitProfileConfig = easJson.submit[opts.submitProfile];
+  if (!submitProfileConfig.android || typeof submitProfileConfig.android !== 'object') {
+    submitProfileConfig.android = {};
+  }
+  const androidSubmit = submitProfileConfig.android;
+  const androidReleaseStatus = opts.androidReleaseStatus;
+  androidSubmit.releaseStatus = androidReleaseStatus;
+  const next = `${JSON.stringify(easJson, null, 2)}\n`;
+  const printablePath = path.relative(opts.repoRoot, easPath) || easPath;
+
+  if (opts.dryRun) {
+    console.log(`[dry-run] set ${printablePath} submit.${opts.submitProfile}.android.releaseStatus=${opts.androidReleaseStatus}`);
+    return () => {};
+  }
+
+  fs.writeFileSync(easPath, next);
+  console.log(`[pipeline] set Android EAS submit releaseStatus=${opts.androidReleaseStatus} for profile '${opts.submitProfile}'`);
+
+  return () => {
+    fs.writeFileSync(easPath, original);
+  };
+}
+
 function main() {
   const repoRoot = path.resolve(process.cwd());
   const { values } = parseArgs({
@@ -155,6 +220,7 @@ function main() {
       profile: { type: 'string', default: '' },
       interactive: { type: 'string', default: 'auto' },
       'eas-cli-version': { type: 'string', default: '' },
+      'android-release-status': { type: 'string', default: 'draft' },
       wait: { type: 'string', default: 'true' },
       'dry-run': { type: 'boolean', default: false },
     },
@@ -202,6 +268,7 @@ function main() {
   const easCliVersion =
     String(values['eas-cli-version'] ?? '').trim() || String(process.env.EAS_CLI_VERSION ?? '').trim() || '18.0.1';
   const waitForSubmit = parseBool(values.wait, '--wait');
+  const androidReleaseStatus = normalizeAndroidReleaseStatus(values['android-release-status']);
 
   const platforms = platformRaw === 'all' ? ['ios', 'android'] : [platformRaw];
   console.log(`[pipeline] expo submit: environment=${formatMobileReleaseEnvironment(environment)} platform=${platformRaw}`);
@@ -262,34 +329,49 @@ function main() {
     ensureIosSubmitAscApiKeyFile({ repoRoot, uiDir, submitProfile, dryRun });
   }
 
-  let hadFailure = false;
-  for (const platform of platforms) {
-    const baseArgs = ['--yes', `eas-cli@${easCliVersion}`, 'submit', '--platform', platform, '--profile', submitProfile];
-    const submitArgs = submitIdRaw
-      ? [...baseArgs, '--id', submitIdRaw]
-      : submitPathAbs
-        ? [...baseArgs, '--path', submitPathAbs]
-        : [...baseArgs, '--latest'];
-    if (nonInteractive) submitArgs.push('--non-interactive');
-    submitArgs.push(waitForSubmit ? '--wait' : '--no-wait');
+  const restoreAndroidReleaseStatus =
+    platforms.includes('android')
+      ? applyAndroidReleaseStatusOverride({
+          repoRoot,
+          uiDir,
+          submitProfile,
+          androidReleaseStatus,
+          dryRun,
+        })
+      : () => {};
 
-    // CI workflows often set a repo-global APP_ENV (for example preview). For submit we must default
-    // to the requested pipeline environment, otherwise we can end up submitting a mismatched variant.
-    const appEnvOverride = String(process.env.HAPPIER_EXPO_SUBMIT_APP_ENV ?? '').trim();
-    const appEnv = appEnvOverride || formatMobileReleaseEnvironment(environment);
-    const result = run(opts, 'npx', submitArgs, {
-      cwd: uiDir,
-      env: {
-        // apps/ui/app.config.js selects bundle ids by APP_ENV; ensure submit uses the same variant
-        // as the intended pipeline environment unless the operator overrides it explicitly.
-        APP_ENV: appEnv,
-      },
-      allowFailure: allowsBestEffortSubmit(environment),
-    });
-    if (!result.ok) {
-      hadFailure = true;
-      console.log(`::warning::Expo submit failed for ${platform} in ${formatMobileReleaseEnvironment(environment)}; continuing so successful platform submissions are preserved.`);
+  let hadFailure = false;
+  try {
+    for (const platform of platforms) {
+      const baseArgs = ['--yes', `eas-cli@${easCliVersion}`, 'submit', '--platform', platform, '--profile', submitProfile];
+      const submitArgs = submitIdRaw
+        ? [...baseArgs, '--id', submitIdRaw]
+        : submitPathAbs
+          ? [...baseArgs, '--path', submitPathAbs]
+          : [...baseArgs, '--latest'];
+      if (nonInteractive) submitArgs.push('--non-interactive');
+      submitArgs.push(waitForSubmit ? '--wait' : '--no-wait');
+
+      // CI workflows often set a repo-global APP_ENV (for example preview). For submit we must default
+      // to the requested pipeline environment, otherwise we can end up submitting a mismatched variant.
+      const appEnvOverride = String(process.env.HAPPIER_EXPO_SUBMIT_APP_ENV ?? '').trim();
+      const appEnv = appEnvOverride || formatMobileReleaseEnvironment(environment);
+      const result = run(opts, 'npx', submitArgs, {
+        cwd: uiDir,
+        env: {
+          // apps/ui/app.config.js selects bundle ids by APP_ENV; ensure submit uses the same variant
+          // as the intended pipeline environment unless the operator overrides it explicitly.
+          APP_ENV: appEnv,
+        },
+        allowFailure: allowsBestEffortSubmit(environment),
+      });
+      if (!result.ok) {
+        hadFailure = true;
+        console.log(`::warning::Expo submit failed for ${platform} in ${formatMobileReleaseEnvironment(environment)}; continuing so successful platform submissions are preserved.`);
+      }
     }
+  } finally {
+    restoreAndroidReleaseStatus();
   }
 
   if (hadFailure) {

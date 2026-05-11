@@ -63,6 +63,17 @@ on:
           - auto
           - "true"
           - "false"
+      android_release_status:
+        description: "Deploy (Android store) — EAS submit releaseStatus"
+        required: true
+        type: choice
+        default: draft
+        options:
+          - draft
+          - profile
+          - completed
+          - halted
+          - inProgress
   workflow_call:
     inputs:
       source_ref:
@@ -87,6 +98,10 @@ on:
       publish_apk_release:
         required: false
         default: "false"
+        type: string
+      android_release_status:
+        required: false
+        default: draft
         type: string
     secrets:
       EXPO_TOKEN:
@@ -284,6 +299,7 @@ jobs:
             --build-json "/tmp/eas_build_${EAS_PLATFORM}.json" \
             --out-dir "dist/ui-mobile" \
             --publish-apk-release "${{ inputs.publish_apk_release }}" \
+            --android-release-status "${{ inputs.android_release_status }}" \
             --secrets-source env
 
       - name: Upload mobile build artifact
@@ -366,6 +382,7 @@ jobs:
             --build-json "/tmp/eas_build_${EAS_PLATFORM}.json" \
             --out-dir "dist/ui-mobile" \
             --publish-apk-release false \
+            --android-release-status "${{ inputs.android_release_status }}" \
             --secrets-source env
 
       - name: Upload mobile build artifact

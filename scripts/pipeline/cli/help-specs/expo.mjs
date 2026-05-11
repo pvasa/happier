@@ -27,6 +27,7 @@ export const COMMAND_HELP_EXPO = {
       '--platform <ios|android|all>        Required.',
       '--profile <name>                   Required for native/native_submit; must match the selected lane (internaldev*, internalpreview*, dev*, preview*, production*).',
       '--publish-apk-release <auto|true|false> (default: auto).',
+      '--android-release-status <status> Android EAS submit releaseStatus: profile|completed|draft|halted|inProgress (default: draft).',
       '--native-build-mode <cloud|local>  (default: cloud).',
       '--native-local-runtime <host|dagger> (default: host).',
       '--build-json <path>                (default: /tmp/eas_build.json).',
@@ -47,6 +48,7 @@ export const COMMAND_HELP_EXPO = {
     bullets: [
       'This command composes expo-ota / expo-native-build / expo-submit for convenience.',
       'native_submit is intentionally limited to dev, preview, and production because only those lanes have store submit profiles.',
+      'Android native_submit defaults to releaseStatus=draft so Play Store review can validate the upload before release rollout is approved.',
       'When APP_STORE_CONNECT_<ENV>_EXTERNAL_GROUPS is configured for the selected environment, native_submit also runs the App Store Connect external TestFlight distribution step from inside the shared pipeline.',
       'Expo OTA and submit default to interactive on a local TTY and non-interactive in CI or when output is piped.',
       'Cloud native builds use two unified paths: interactive local TTY runs schedule normally and then resolve the build via EAS list/view; CI/non-interactive runs keep the direct JSON path.',
@@ -166,6 +168,7 @@ export const COMMAND_HELP_EXPO = {
       '--path <path>                     Optional; submit a local artifact (IPA/AAB/APK).',
       '--interactive <auto|true|false>   (default: auto).',
       '--eas-cli-version <ver>           Optional; pins EAS CLI.',
+      '--android-release-status <status> Android EAS submit releaseStatus: profile|completed|draft|halted|inProgress (default: draft).',
       '--dry-run',
       '--secrets-source <auto|env|keychain>',
       '--keychain-service <name>          (default: happier/pipeline).',
@@ -173,6 +176,7 @@ export const COMMAND_HELP_EXPO = {
     ],
     bullets: [
       'Use --path to submit a locally-built artifact.',
+      'Android submit defaults to releaseStatus=draft; pass profile to leave eas.json unchanged.',
       'Submit defaults to interactive on a local TTY and non-interactive in CI or when output is piped.',
     ],
     examples: [

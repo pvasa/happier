@@ -73,16 +73,22 @@ const slugOverride = (process.env.EXPO_APP_SLUG || '').trim();
 const versionOverride = (process.env.EXPO_APP_VERSION || '').trim();
 const appVariantOverride = normalizeVariantOverride(process.env.HAPPIER_APP_VARIANT_OVERRIDE);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const packageJsonVersion = (() => {
+const packageJson = (() => {
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const pkg = require('./package.json');
-        const v = pkg && typeof pkg.version === 'string' ? pkg.version.trim() : '';
-        return v;
+        return require('./package.json');
     } catch {
-        return '';
+        return null;
     }
 })();
+const packageJsonVersion =
+    packageJson && typeof packageJson.version === 'string'
+        ? packageJson.version.trim()
+        : '';
+const packageJsonRuntimeVersion =
+    packageJson && typeof packageJson.happierExpoRuntimeVersion === 'string'
+        ? packageJson.happierExpoRuntimeVersion.trim()
+        : '';
 
 const rawAppEnvironment = process.env.APP_ENV || 'development';
 const appEnvironmentConfig = getAppEnvironmentConfig(rawAppEnvironment);
@@ -145,6 +151,28 @@ const parseOptionalBoolean = (raw) => {
 };
 
 const explicitRuntimeVersion = String(process.env.HAPPIER_EXPO_RUNTIME_VERSION ?? '').trim();
+
+function resolveDefaultExpoRuntimeVersion() {
+    const overrideRaw = String(process.env.HAPPIER_EXPO_RUNTIME_VERSION_POLICY ?? '').trim().toLowerCase();
+    const override =
+        overrideRaw === 'fingerprint' ? 'fingerprint' :
+        overrideRaw === 'appversion' || overrideRaw === 'app_version' || overrideRaw === 'app-version' ? 'appVersion' :
+        '';
+
+    if (override) {
+        return { policy: override };
+    }
+
+    if (appIdentityVariant === 'publicdev') {
+        return { policy: 'fingerprint' };
+    }
+
+    if (!packageJsonRuntimeVersion) {
+        throw new Error('apps/ui/package.json must define happierExpoRuntimeVersion for non-publicdev Expo lanes');
+    }
+
+    return packageJsonRuntimeVersion;
+}
 
 const devClientLaunchMode = (process.env.HAPPIER_EXPO_DEVCLIENT_LAUNCH_MODE || '').trim();
 const devClientSilentLaunch = parseOptionalBoolean(process.env.HAPPIER_EXPO_DEVCLIENT_SILENT_LAUNCH);
@@ -237,22 +265,7 @@ const baseExpoConfig = {
         name,
         slug,
         version: versionOverride || packageJsonVersion || "0.1.0",
-        runtimeVersion: explicitRuntimeVersion || (() => {
-            const overrideRaw = String(process.env.HAPPIER_EXPO_RUNTIME_VERSION_POLICY ?? '').trim().toLowerCase();
-            const override =
-                overrideRaw === 'fingerprint' ? 'fingerprint' :
-                overrideRaw === 'appversion' || overrideRaw === 'app_version' || overrideRaw === 'app-version' ? 'appVersion' :
-                '';
-
-            // Store-facing lanes (preview/production) should prefer the app version train so OTA behavior is
-            // easy to reason about for end users. Internal lanes keep the fingerprint policy so OTA safety
-            // follows native-compatible changes.
-            const resolved =
-                override ||
-                (appIdentityVariant === 'production' || appIdentityVariant === 'preview' ? 'appVersion' : 'fingerprint');
-
-            return { policy: resolved };
-        })(),
+        runtimeVersion: explicitRuntimeVersion || resolveDefaultExpoRuntimeVersion(),
         orientation: "default",
         icon: "./sources/assets/images/icon.png",
         scheme: resolvedScheme,

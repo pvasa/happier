@@ -19,5 +19,9 @@ test('ui-mobile-release native_submit submits explicit build ids and does not wa
 
   // Local native_submit should also avoid blocking.
   assert.match(src, /'--path'[^]*'--wait'[^]*'false'/, "expected local native_submit to pass '--wait false' to expo submit");
+  assert.match(
+    src,
+    /'--android-release-status'[^]*androidReleaseStatus/,
+    'expected native_submit to pass the Android release status through to expo submit',
+  );
 });
-

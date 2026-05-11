@@ -30,6 +30,7 @@ export const COMMAND_HELP_ORCHESTRATORS = {
       '--ui-expo-builder <builder>       eas_cloud|eas_local (default: eas_cloud).',
       '--ui-expo-profile <profile>       auto|preview|preview-apk|production|production-apk (default: auto).',
       '--ui-expo-platform <p>            ios|android|all (default: all).',
+      '--ui-expo-android-release-status <status> profile|completed|draft|halted|inProgress (default: draft).',
       '--desktop-mode <mode>             none|build_only|build_and_publish (default: none).',
       '--release-message <text>          Optional; included in GitHub releases.',
       '--npm-mode <mode>                 pack|pack+publish (default: pack+publish).',

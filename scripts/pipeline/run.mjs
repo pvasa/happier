@@ -50,6 +50,21 @@ const TAURI_RELEASE_ENVIRONMENT_CHOICES = formatPublicReleaseChannelChoices({
   stableAlias: 'production',
   preferredOrder: ['dev', 'preview', 'stable'],
 });
+const ANDROID_RELEASE_STATUS_CHOICES = ['profile', 'completed', 'draft', 'halted', 'inProgress'];
+
+/**
+ * @param {unknown} value
+ * @param {string} flagName
+ */
+function normalizeAndroidReleaseStatus(value, flagName) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'draft';
+  const normalized = raw.toLowerCase();
+  if (normalized === 'inprogress' || normalized === 'in-progress' || normalized === 'in_progress') return 'inProgress';
+  const exact = ANDROID_RELEASE_STATUS_CHOICES.find((choice) => choice.toLowerCase() === normalized);
+  if (exact) return exact;
+  fail(`${flagName} must be one of: ${ANDROID_RELEASE_STATUS_CHOICES.join(', ')} (got: ${raw})`);
+}
 
 /**
  * @param {string[]} rawArgv
@@ -2224,6 +2239,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           profile: { type: 'string', default: '' },
           interactive: { type: 'string', default: 'auto' },
           'eas-cli-version': { type: 'string', default: '' },
+          'android-release-status': { type: 'string', default: 'draft' },
           wait: { type: 'string', default: 'true' },
           'dry-run': { type: 'boolean', default: false },
           'secrets-source': { type: 'string', default: 'auto' },
@@ -2279,6 +2295,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
       const submitId = String(values.id ?? '').trim();
       const interactive = String(values.interactive ?? '').trim();
       const wait = String(values.wait ?? '').trim();
+      const androidReleaseStatus = normalizeAndroidReleaseStatus(values['android-release-status'], '--android-release-status');
       const dryRun = values['dry-run'] === true;
 
       runExpoSubmit({
@@ -2295,6 +2312,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           ...(profile ? ['--profile', profile] : []),
           ...(interactive ? ['--interactive', interactive] : []),
           ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
+          '--android-release-status',
+          androidReleaseStatus,
           ...(wait ? ['--wait', wait] : []),
           ...(dryRun ? ['--dry-run'] : []),
         ],
@@ -2624,6 +2643,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
         platform: { type: 'string' },
         profile: { type: 'string', default: '' },
         'publish-apk-release': { type: 'string', default: 'auto' },
+        'android-release-status': { type: 'string', default: 'draft' },
         'native-build-mode': { type: 'string', default: 'cloud' },
         'native-local-runtime': { type: 'string', default: 'host' },
         'build-json': { type: 'string', default: '/tmp/eas_build.json' },
@@ -2683,6 +2703,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
     if (publishApkReleaseMode !== 'auto' && publishApkReleaseMode !== 'true' && publishApkReleaseMode !== 'false') {
       fail(`--publish-apk-release must be 'auto', 'true', or 'false' (got: ${values['publish-apk-release']})`);
     }
+    const androidReleaseStatus = normalizeAndroidReleaseStatus(values['android-release-status'], '--android-release-status');
 
     const buildJson = String(values['build-json'] ?? '').trim() || '/tmp/eas_build.json';
     const outDir = String(values['out-dir'] ?? '').trim() || 'dist/ui-mobile';
@@ -3033,6 +3054,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
                 rel,
                 '--wait',
                 'false',
+                '--android-release-status',
+                androidReleaseStatus,
                 ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
                 ...(dryRun ? ['--dry-run'] : []),
               ],
@@ -3094,6 +3117,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
                 ...(explicitId ? ['--id', explicitId] : []),
                 '--wait',
                 'false',
+                '--android-release-status',
+                androidReleaseStatus,
                 ...(easCliVersion ? ['--eas-cli-version', easCliVersion] : []),
                 ...(dryRun ? ['--dry-run'] : []),
               ],
@@ -4098,6 +4123,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
               'ui-expo-builder': { type: 'string', default: 'eas_cloud' },
               'ui-expo-profile': { type: 'string', default: 'auto' },
               'ui-expo-platform': { type: 'string', default: 'all' },
+              'ui-expo-android-release-status': { type: 'string', default: 'draft' },
               'desktop-mode': { type: 'string', default: 'none' },
               'release-message': { type: 'string', default: '' },
               'npm-mode': { type: 'string', default: 'pack+publish' },
@@ -4172,6 +4198,10 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
           const uiExpoBuilder = String(values['ui-expo-builder'] ?? '').trim() || 'eas_cloud';
           const uiExpoProfileRaw = String(values['ui-expo-profile'] ?? '').trim() || 'auto';
           const uiExpoPlatform = String(values['ui-expo-platform'] ?? '').trim() || 'all';
+          const uiExpoAndroidReleaseStatus = normalizeAndroidReleaseStatus(
+            values['ui-expo-android-release-status'],
+            '--ui-expo-android-release-status',
+          );
           const desktopMode = String(values['desktop-mode'] ?? '').trim() || 'none';
           const syncDevFromMain = parseBoolString(values['sync-dev-from-main'], '--sync-dev-from-main');
 
@@ -4487,7 +4517,7 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
             }
             if (uiExpoAction !== 'none') {
               console.log(
-                `[pipeline] dry-run: ui expo action configured (action=${uiExpoAction} builder=${uiExpoBuilder} platform=${uiExpoPlatform} profile=${uiExpoProfile})`,
+                `[pipeline] dry-run: ui expo action configured (action=${uiExpoAction} builder=${uiExpoBuilder} platform=${uiExpoPlatform} profile=${uiExpoProfile} androidReleaseStatus=${uiExpoAndroidReleaseStatus})`,
               );
             }
             if (desktopMode !== 'none') {
@@ -4614,6 +4644,8 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
                   uiExpoProfile,
                   ...(buildMode === 'cloud' ? ['--native-build-mode', 'cloud'] : ['--native-build-mode', 'local']),
                   ...(buildMode === 'local' ? ['--native-local-runtime', localRuntime] : []),
+                  '--android-release-status',
+                  uiExpoAndroidReleaseStatus,
                   ...(releaseMessage ? ['--release-message', releaseMessage] : []),
                 ],
               });
