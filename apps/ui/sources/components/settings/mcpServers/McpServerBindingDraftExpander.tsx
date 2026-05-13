@@ -87,6 +87,7 @@ export const McpServerBindingDraftExpander = React.memo(function McpServerBindin
             props: {
                 machineId: target.machineId,
                 machineHomeDir: homeDir,
+                machinePlatform: machine?.metadata?.platform ?? null,
                 selectedPath: target.workspaceRoot,
                 onSelectPath: (workspaceRoot: string) =>
                     updateDraftBinding((current) => {
@@ -144,7 +145,7 @@ export const McpServerBindingDraftExpander = React.memo(function McpServerBindin
                 }}
                 title={t('settings.mcpServersAddApplyRule')}
                 subtitle={t('settings.mcpServersAddApplyRuleSubtitle')}
-                icon={<Ionicons name="add-circle-outline" size={29} color={theme.colors.success} />}
+                icon={<Ionicons name="add-circle-outline" size={29} color={theme.colors.state.success.foreground} />}
                 helpText={t('settings.mcpServersAddApplyRuleHelp')}
                 onCancel={handleCancel}
                 onSave={handleSave}
@@ -172,7 +173,7 @@ const styles = StyleSheet.create((theme) => ({
     draftBindingSummary: {
         fontSize: 14,
         lineHeight: 20,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginBottom: 12,
     },
 }));

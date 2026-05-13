@@ -26,7 +26,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     groupHeaderTitle: {
         ...Typography.default('regular'),
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         fontSize: 14,
         lineHeight: 20,
         textTransform: 'uppercase',
@@ -34,13 +34,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     groupHeaderSubtitle: {
         ...Typography.default('regular'),
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         fontSize: 14,
         lineHeight: 20,
     },
     groupHeaderSummary: {
         ...Typography.default('regular'),
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         fontSize: 14,
         lineHeight: 20,
         marginTop: 8,
@@ -111,6 +111,7 @@ export const McpServerBindingEditor = React.memo(function McpServerBindingEditor
             props: {
                 machineId: target.machineId,
                 machineHomeDir: homeDir,
+                machinePlatform: machine?.metadata?.platform ?? null,
                 selectedPath: target.workspaceRoot,
                 onSelectPath: setWorkspaceRoot,
                 favoriteDirectories,
@@ -200,7 +201,7 @@ export const McpServerBindingEditor = React.memo(function McpServerBindingEditor
             <Item
                 title={t('common.delete')}
                 subtitle={t('settings.mcpServersBindingDeleteSubtitle')}
-                icon={<Ionicons name="trash-outline" size={29} color={theme.colors.textDestructive} />}
+                icon={<Ionicons name="trash-outline" size={29} color={theme.colors.state.danger.foreground} />}
                 onPress={props.onDelete}
                 destructive
             />
