@@ -8,8 +8,18 @@ import type {
   AcpSessionModeOverrideV1,
   DirectSessionsSource,
   ModelOverrideV1,
+  MachineReplacementReason,
+  ContentPublicKeyFingerprint,
   SessionRollbackRangesV1,
   SessionTerminalMetadata,
+  PrimaryTurnStatusV1,
+  SessionRuntimeIssueV1,
+} from '@happier-dev/protocol'
+import {
+  ContentPublicKeyFingerprintSchema,
+  MachineInstallationPublicKeySchema,
+  MachineInstallationProofV1Schema,
+  MachineReplacementReasonSchema,
 } from '@happier-dev/protocol'
 import { SESSION_PERMISSION_MODES, createSessionPermissionModeSchema } from '@happier-dev/protocol'
 import { SessionStoredMessageContentSchema, type SessionStoredMessageContent } from '@happier-dev/protocol'
@@ -186,6 +196,10 @@ export interface ClientToServerEvents {
       pendingPermissionRequestCount: number,
       pendingUserActionRequestCount: number,
     },
+    runtimeIssueSummaryV1?: {
+      latestTurnStatus: PrimaryTurnStatusV1,
+      lastRuntimeIssue?: SessionRuntimeIssueV1 | null,
+    },
   }, cb: (answer: UpdateStateAckResponse) => void) => void,
   'update-read-cursor': (data: UpdateReadCursorPayload, cb: (answer: UpdateReadCursorAckResponse) => void) => void,
   'ping': (callback: () => void) => void
@@ -235,6 +249,24 @@ export const MachineMetadataSchema = z.object({
 })
 
 export type MachineMetadata = z.infer<typeof MachineMetadataSchema>
+
+export const MachineRegistrationIdentitySchema = z.object({
+  installationId: z.string().trim().min(1),
+  installationPublicKey: MachineInstallationPublicKeySchema,
+  installationProof: MachineInstallationProofV1Schema,
+  replacesMachineId: z.string().trim().min(1).optional(),
+  replacementReason: MachineReplacementReasonSchema.optional(),
+  contentPublicKeyFingerprint: ContentPublicKeyFingerprintSchema.optional(),
+  replacementCandidateAccountId: z.string().trim().min(1).optional(),
+});
+
+export type MachineRegistrationIdentity = Readonly<
+  Omit<z.infer<typeof MachineRegistrationIdentitySchema>, 'replacementReason' | 'contentPublicKeyFingerprint'>
+  & {
+    replacementReason?: MachineReplacementReason;
+    contentPublicKeyFingerprint?: ContentPublicKeyFingerprint;
+  }
+>
 
 /**
  * Daemon state - dynamic runtime information (frequently updated)

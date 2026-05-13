@@ -184,6 +184,79 @@ describe('ensureMachineRegistered', () => {
     }
   }, 15_000);
 
+  it('records the previous machine id as a rotation replacement candidate before retrying registration', async () => {
+    vi.useRealTimers();
+
+    const homeDir = mkdtempSync(join(tmpdir(), 'happier-cli-machine-conflict-replacement-candidate-'));
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_ACTIVE_SERVER_ID = 'cloud';
+
+    try {
+      const oldMachineId = 'machine-old';
+      writeFileSync(
+        join(homeDir, 'settings.json'),
+        JSON.stringify({
+          schemaVersion: 6,
+          onboardingCompleted: true,
+          activeServerId: 'cloud',
+          servers: {
+            cloud: {
+              id: 'cloud',
+              name: 'cloud',
+              serverUrl: 'https://api.happier.dev',
+              webappUrl: 'https://app.happier.dev',
+              createdAt: 0,
+              updatedAt: 0,
+              lastUsedAt: 0,
+            },
+          },
+          machineIdByServerId: { cloud: oldMachineId },
+          machineIdByServerIdByAccountId: { cloud: { 'account-1': oldMachineId } },
+          lastTokenSubByServerId: { cloud: 'account-1' },
+        }),
+        'utf8',
+      );
+
+      vi.resetModules();
+      const { readMachineReplacementCandidateForActiveServer } = await import('@/daemon/machineIdentity/machineReplacementCandidates');
+      const { ensureMachineRegistered } = await import('./ensureMachineRegistered');
+
+      let attempts = 0;
+      const candidatesBeforeRetry: unknown[] = [];
+      const api = {
+        getOrCreateMachine: async (opts: { machineId: string; metadata: MachineMetadata; daemonState?: DaemonState }): Promise<Machine> => {
+          attempts += 1;
+          if (attempts === 1) throw new MachineIdConflictError(opts.machineId);
+          candidatesBeforeRetry.push(await readMachineReplacementCandidateForActiveServer({ accountId: 'account-1' }));
+          return {
+            id: opts.machineId,
+            encryptionKey: new Uint8Array(),
+            encryptionVariant: 'legacy',
+            metadata: opts.metadata,
+            metadataVersion: 0,
+            daemonState: opts.daemonState ?? null,
+            daemonStateVersion: 0,
+          };
+        },
+      };
+
+      await ensureMachineRegistered({
+        api: api as any,
+        machineId: oldMachineId,
+        metadata: { host: 'host1' } as any,
+      });
+
+      expect(candidatesBeforeRetry).toEqual([
+        expect.objectContaining({
+          machineId: oldMachineId,
+          replacementReason: 'rotation',
+        }),
+      ]);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('does not rotate again if another process already rotated the active server machine id', async () => {
     // Defensive: other test files may enable fake timers and forget to restore them.
     vi.useRealTimers();

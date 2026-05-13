@@ -25,7 +25,7 @@ export const MachinesListSection = React.memo(function MachinesListSection(props
             <ItemGroup title={t('settings.machines')}>
                 <Item
                     title={title}
-                    icon={<Ionicons name="desktop-outline" size={29} color={theme.colors.textSecondary} />}
+                    icon={<Ionicons name="desktop-outline" size={29} color={theme.colors.text.secondary} />}
                     showChevron={false}
                 />
             </ItemGroup>
@@ -41,7 +41,7 @@ export const MachinesListSection = React.memo(function MachinesListSection(props
             activeServerId={props.viewModel.activeServerId}
             machinesTitle={t('settings.machines')}
             themeColors={{
-                textSecondary: theme.colors.textSecondary,
+                textSecondary: theme.colors.text.secondary,
                 status: {
                     connected: theme.colors.status.connected,
                     disconnected: theme.colors.status.disconnected,

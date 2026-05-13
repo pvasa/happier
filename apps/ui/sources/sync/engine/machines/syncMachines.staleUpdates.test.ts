@@ -10,6 +10,11 @@ type MachineUpdate = {
     active?: boolean
     activeAt?: number
     revokedAt?: number | null
+    replacedByMachineId?: string | null
+    replacedAt?: number | null
+    replacementReason?: string | null
+    replacementSource?: string | null
+    replacementActorUserId?: string | null
 }
 
 function buildMachine(overrides: Partial<Machine> = {}): Machine {
@@ -139,6 +144,36 @@ describe('buildUpdatedMachineFromSocketUpdate stale guards', () => {
         expect(updated).not.toBeNull()
         expect(updated?.active).toBe(false)
         expect(updated?.revokedAt).toBe(123)
+    })
+
+    it('applies replacement fields from the socket payload', async () => {
+        const updated = await buildUpdatedMachineFromSocketUpdate({
+            machineUpdate: {
+                machineId: 'm1',
+                active: false,
+                replacedByMachineId: 'm2',
+                replacedAt: 123,
+                replacementReason: 'reauth',
+                replacementSource: 'automatic',
+                replacementActorUserId: null,
+            } as MachineUpdate,
+            updateSeq: 999,
+            updateCreatedAt: 500,
+            existingMachine: buildMachine(),
+            getMachineEncryption: () => ({
+                decryptMetadata: vi.fn(async () => ({ m: true })),
+                decryptDaemonState: vi.fn(async () => ({ d: true })),
+            }),
+        })
+
+        expect(updated).toMatchObject({
+            active: false,
+            replacedByMachineId: 'm2',
+            replacedAt: 123,
+            replacementReason: 'reauth',
+            replacementSource: 'automatic',
+            replacementActorUserId: null,
+        })
     })
 
     it('keeps existing values when both metadata and daemonState updates are stale', async () => {

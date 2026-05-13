@@ -9,10 +9,28 @@ import { afterTx, inTx } from "@/storage/inTx";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { recordMachineAlive } from "@/app/presence/presenceRecorder";
 import { DirectSessionTranscriptDeltaEphemeralSchema } from "@happier-dev/protocol";
+import { validateCurrentMachineSocket } from "@/app/machines/validateCurrentMachineSocket";
+
+function readAuthenticatedMachineId(socket: Socket): string | null {
+    const clientType = typeof (socket.data as any)?.clientType === 'string'
+        ? (socket.data as any).clientType
+        : '';
+    const machineId = typeof (socket.data as any)?.machineId === 'string'
+        ? (socket.data as any).machineId
+        : '';
+    if (clientType !== 'machine-scoped' || !machineId) {
+        return null;
+    }
+    return machineId;
+}
+
+function payloadMachineIdMatches(socketMachineId: string, payloadMachineId: unknown): boolean {
+    return typeof payloadMachineId !== 'string' || !payloadMachineId || payloadMachineId === socketMachineId;
+}
 
 export function machineUpdateHandler(userId: string, socket: Socket) {
     socket.on('machine-alive', async (data: {
-        machineId: string;
+        machineId?: string;
         time: number;
     }) => {
         try {
@@ -20,8 +38,25 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
             websocketEventsCounter.inc({ event_type: 'machine-alive' });
             machineAliveEventsCounter.inc();
 
+            const machineId = readAuthenticatedMachineId(socket);
+            if (!machineId) {
+                return;
+            }
+
             // Basic validation
-            if (!data || typeof data.time !== 'number' || !data.machineId) {
+            if (!data || typeof data.time !== 'number') {
+                return;
+            }
+            if (!payloadMachineIdMatches(machineId, data.machineId)) {
+                log(
+                    {
+                        module: 'websocket',
+                        level: 'warn',
+                        socketMachineId: machineId,
+                        payloadMachineId: data.machineId,
+                    },
+                    'Ignoring machine-alive for mismatched machine id',
+                );
                 return;
             }
 
@@ -34,15 +69,20 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
             }
 
             // Check machine validity using cache
-            const isValid = await activityCache.isMachineValid(data.machineId, userId);
+            const isValid = await activityCache.isMachineValid(machineId, userId);
             if (!isValid) {
                 return;
             }
 
-            // Queue database update (will only update if time difference is significant)
-            await recordMachineAlive({ accountId: userId, machineId: data.machineId, timestamp: t });
+            const currentMachine = await validateCurrentMachineSocket({ accountId: userId, machineId });
+            if (!currentMachine.ok) {
+                return;
+            }
 
-            const machineActivity = buildMachineActivityEphemeral(data.machineId, true, t);
+            // Queue database update (will only update if time difference is significant)
+            await recordMachineAlive({ accountId: userId, machineId, timestamp: t });
+
+            const machineActivity = buildMachineActivityEphemeral(machineId, true, t);
             eventRouter.emitEphemeral({
                 userId,
                 payload: machineActivity,
@@ -85,10 +125,30 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
     // Machine metadata update with optimistic concurrency control
     socket.on('machine-update-metadata', async (data: any, callback: (response: any) => void) => {
         try {
-            const { machineId, metadata, expectedVersion } = data;
+            const authenticatedMachineId = readAuthenticatedMachineId(socket);
+            if (!authenticatedMachineId) {
+                callback?.({ result: 'error', message: 'Machine-scoped socket required' });
+                return;
+            }
+
+            const { machineId: payloadMachineId, metadata, expectedVersion } = data;
+            if (!payloadMachineIdMatches(authenticatedMachineId, payloadMachineId)) {
+                log(
+                    {
+                        module: 'websocket',
+                        level: 'warn',
+                        socketMachineId: authenticatedMachineId,
+                        payloadMachineId,
+                    },
+                    'Rejecting machine metadata update for mismatched machine id',
+                );
+                callback?.({ result: 'error', message: 'Machine id mismatch' });
+                return;
+            }
+            const machineId = authenticatedMachineId;
 
             // Validate input
-            if (!machineId || typeof metadata !== 'string' || typeof expectedVersion !== 'number') {
+            if (typeof metadata !== 'string' || typeof expectedVersion !== 'number') {
                 if (callback) {
                     callback({ result: 'error', message: 'Invalid parameters' });
                 }
@@ -98,7 +158,7 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
             await inTx(async (tx) => {
                 const machine = await tx.machine.findFirst({
                     where: { accountId: userId, id: machineId },
-                    select: { metadataVersion: true, metadata: true, revokedAt: true },
+                    select: { metadataVersion: true, metadata: true, revokedAt: true, replacedByMachineId: true },
                 });
                 if (!machine) {
                     afterTx(tx, () => callback?.({ result: 'error', message: 'Machine not found' }));
@@ -108,6 +168,10 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                     afterTx(tx, () => callback?.({ result: 'error', message: 'Machine revoked' }));
                     return null;
                 }
+                if (machine.replacedByMachineId) {
+                    afterTx(tx, () => callback?.({ result: 'error', message: 'Machine replaced' }));
+                    return null;
+                }
 
                 if (machine.metadataVersion !== expectedVersion) {
                     afterTx(tx, () => callback?.({ result: 'version-mismatch', version: machine.metadataVersion, metadata: machine.metadata }));
@@ -115,17 +179,21 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 }
 
                 const { count } = await tx.machine.updateMany({
-                    where: { accountId: userId, id: machineId, metadataVersion: expectedVersion, revokedAt: null },
+                    where: { accountId: userId, id: machineId, metadataVersion: expectedVersion, revokedAt: null, replacedByMachineId: null },
                     data: { metadata, metadataVersion: expectedVersion + 1 },
                 });
 
                 if (count === 0) {
                     const fresh = await tx.machine.findFirst({
                         where: { accountId: userId, id: machineId },
-                        select: { metadataVersion: true, metadata: true, revokedAt: true },
+                        select: { metadataVersion: true, metadata: true, revokedAt: true, replacedByMachineId: true },
                     });
                     if (fresh?.revokedAt) {
                         afterTx(tx, () => callback?.({ result: 'error', message: 'Machine revoked' }));
+                        return null;
+                    }
+                    if (fresh?.replacedByMachineId) {
+                        afterTx(tx, () => callback?.({ result: 'error', message: 'Machine replaced' }));
                         return null;
                     }
                     afterTx(tx, () => callback?.({ result: 'version-mismatch', version: fresh?.metadataVersion ?? expectedVersion, metadata: fresh?.metadata }));
@@ -156,10 +224,30 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
     // Machine daemon state update with optimistic concurrency control
     socket.on('machine-update-state', async (data: any, callback: (response: any) => void) => {
         try {
-            const { machineId, daemonState, expectedVersion } = data;
+            const authenticatedMachineId = readAuthenticatedMachineId(socket);
+            if (!authenticatedMachineId) {
+                callback?.({ result: 'error', message: 'Machine-scoped socket required' });
+                return;
+            }
+
+            const { machineId: payloadMachineId, daemonState, expectedVersion } = data;
+            if (!payloadMachineIdMatches(authenticatedMachineId, payloadMachineId)) {
+                log(
+                    {
+                        module: 'websocket',
+                        level: 'warn',
+                        socketMachineId: authenticatedMachineId,
+                        payloadMachineId,
+                    },
+                    'Rejecting machine daemon state update for mismatched machine id',
+                );
+                callback?.({ result: 'error', message: 'Machine id mismatch' });
+                return;
+            }
+            const machineId = authenticatedMachineId;
 
             // Validate input
-            if (!machineId || typeof daemonState !== 'string' || typeof expectedVersion !== 'number') {
+            if (typeof daemonState !== 'string' || typeof expectedVersion !== 'number') {
                 if (callback) {
                     callback({ result: 'error', message: 'Invalid parameters' });
                 }
@@ -169,7 +257,7 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
             await inTx(async (tx) => {
                 const machine = await tx.machine.findFirst({
                     where: { accountId: userId, id: machineId },
-                    select: { daemonStateVersion: true, daemonState: true, revokedAt: true },
+                    select: { daemonStateVersion: true, daemonState: true, revokedAt: true, replacedByMachineId: true },
                 });
                 if (!machine) {
                     afterTx(tx, () => callback?.({ result: 'error', message: 'Machine not found' }));
@@ -179,6 +267,10 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                     afterTx(tx, () => callback?.({ result: 'error', message: 'Machine revoked' }));
                     return null;
                 }
+                if (machine.replacedByMachineId) {
+                    afterTx(tx, () => callback?.({ result: 'error', message: 'Machine replaced' }));
+                    return null;
+                }
 
                 if (machine.daemonStateVersion !== expectedVersion) {
                     afterTx(tx, () => callback?.({ result: 'version-mismatch', version: machine.daemonStateVersion, daemonState: machine.daemonState }));
@@ -186,7 +278,7 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 }
 
                 const { count } = await tx.machine.updateMany({
-                    where: { accountId: userId, id: machineId, daemonStateVersion: expectedVersion, revokedAt: null },
+                    where: { accountId: userId, id: machineId, daemonStateVersion: expectedVersion, revokedAt: null, replacedByMachineId: null },
                     data: {
                         daemonState,
                         daemonStateVersion: expectedVersion + 1,
@@ -198,10 +290,14 @@ export function machineUpdateHandler(userId: string, socket: Socket) {
                 if (count === 0) {
                     const fresh = await tx.machine.findFirst({
                         where: { accountId: userId, id: machineId },
-                        select: { daemonStateVersion: true, daemonState: true, revokedAt: true },
+                        select: { daemonStateVersion: true, daemonState: true, revokedAt: true, replacedByMachineId: true },
                     });
                     if (fresh?.revokedAt) {
                         afterTx(tx, () => callback?.({ result: 'error', message: 'Machine revoked' }));
+                        return null;
+                    }
+                    if (fresh?.replacedByMachineId) {
+                        afterTx(tx, () => callback?.({ result: 'error', message: 'Machine replaced' }));
                         return null;
                     }
                     afterTx(tx, () => callback?.({ result: 'version-mismatch', version: fresh?.daemonStateVersion ?? expectedVersion, daemonState: fresh?.daemonState }));

@@ -53,4 +53,46 @@ describe('resolveMachinesForActiveServerFromState', () => {
 
         expect(machine).toBe(null);
     });
+
+    it('applies canonical replacement fields from machine records before filtering active server lists', async () => {
+        activeServerId = 'server-b';
+        const { resolveVisibleMachinesForActiveServerFromState } = await import('./resolveMachinesForActiveServerFromState');
+
+        const machines = resolveVisibleMachinesForActiveServerFromState({
+            machines: {
+                'machine-old': {
+                    id: 'machine-old',
+                    active: false,
+                    createdAt: 1,
+                    revokedAt: null,
+                    replacedByMachineId: 'machine-new',
+                    replacedAt: 3,
+                },
+                'machine-new': {
+                    id: 'machine-new',
+                    active: true,
+                    createdAt: 2,
+                    revokedAt: null,
+                },
+            },
+            machineListByServerId: {
+                'server-b': [
+                    {
+                        id: 'machine-old',
+                        active: true,
+                        createdAt: 1,
+                        revokedAt: null,
+                    },
+                    {
+                        id: 'machine-new',
+                        active: true,
+                        createdAt: 2,
+                        revokedAt: null,
+                    },
+                ],
+            },
+        });
+
+        expect(machines.map((machine) => machine.id)).toEqual(['machine-new']);
+    });
 });

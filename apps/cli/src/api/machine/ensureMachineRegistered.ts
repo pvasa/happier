@@ -47,11 +47,22 @@ async function rotateMachineIdForActiveServer(opts: Readonly<{ expectedCurrentMa
 
     const nextConfirmed = { ...(settings.machineIdConfirmedByServerByServerId ?? {}) };
     if (activeServerId in nextConfirmed) delete nextConfirmed[activeServerId];
+    const nextReplacementCandidates = { ...(settings.machineReplacementCandidatesByServerIdByAccountId ?? {}) };
+    if (normalizedTokenSub && opts.expectedCurrentMachineId) {
+      const nextForServer = { ...(nextReplacementCandidates[activeServerId] ?? {}) };
+      nextForServer[normalizedTokenSub] = {
+        machineId: opts.expectedCurrentMachineId,
+        replacementReason: 'rotation',
+        createdAt: Date.now(),
+      };
+      nextReplacementCandidates[activeServerId] = nextForServer;
+    }
 
     return {
       ...settings,
       machineIdByServerId: nextByServerId,
       ...(nextByServerIdByAccountId ? { machineIdByServerIdByAccountId: nextByServerIdByAccountId } : {}),
+      machineReplacementCandidatesByServerIdByAccountId: nextReplacementCandidates,
       machineIdConfirmedByServerByServerId: nextConfirmed,
       // derived (not persisted in v5+)
       machineId: nextMachineId,

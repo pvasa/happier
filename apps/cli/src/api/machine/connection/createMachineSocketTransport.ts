@@ -2,6 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 
 import type { ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
 import { buildMachineScopedSocketAuth } from '@happier-dev/protocol';
+import type { MachineInstallationProofV1 } from '@happier-dev/protocol';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from '@/api/machine/socketTypes';
 import { createSocketTransportAdapter } from '@/api/connection/createSocketTransportAdapter';
@@ -17,6 +18,9 @@ export function createMachineSocketTransport(params: Readonly<{
   startupSource?: string;
   serviceManaged?: boolean;
   serviceLabel?: string;
+  installationId?: string;
+  installationPublicKey?: string;
+  installationProof?: MachineInstallationProofV1;
   takeover?: boolean;
   transports?: string[];
   env: NodeJS.ProcessEnv;

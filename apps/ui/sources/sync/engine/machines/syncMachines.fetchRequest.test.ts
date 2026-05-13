@@ -14,6 +14,11 @@ type RawMachine = {
     active: boolean;
     activeAt: number;
     revokedAt: number | null;
+    replacedByMachineId?: string | null;
+    replacedAt?: number | null;
+    replacementReason?: string | null;
+    replacementSource?: string | null;
+    replacementActorUserId?: string | null;
     createdAt: number;
     updatedAt: number;
 };
@@ -108,6 +113,56 @@ describe('fetchAndApplyMachines request override', () => {
         expect(applied).toHaveLength(1);
         expect((applied[0] as any[])[0]?.id).toBe('m1');
         expect((applied[0] as any[])[0]?.revokedAt).toBe(null);
+    });
+
+    it('applies machine replacement fields from machine fetch responses', async () => {
+        const fetchAndApplyMachines = await loadFetchAndApplyMachines();
+        const requestSpy = vi.fn(async (_path: string, _init?: RequestInit) =>
+            jsonResponse([
+                {
+                    id: 'm_old',
+                    metadata: 'meta-old',
+                    metadataVersion: 1,
+                    daemonState: null,
+                    daemonStateVersion: 0,
+                    dataEncryptionKey: null,
+                    seq: 1,
+                    active: false,
+                    activeAt: 10,
+                    revokedAt: null,
+                    replacedByMachineId: 'm_new',
+                    replacedAt: 20,
+                    replacementReason: 'reauth',
+                    replacementSource: 'automatic',
+                    replacementActorUserId: null,
+                    createdAt: 1,
+                    updatedAt: 20,
+                } satisfies RawMachine,
+            ]),
+        );
+
+        const encryption = createEncryptionHarness();
+        const applied: unknown[][] = [];
+
+        await fetchAndApplyMachines({
+            credentials: { token: 't', secret: 's' } satisfies AuthCredentials,
+            encryption,
+            machineDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applyMachines: (machines) => {
+                applied.push(machines);
+            },
+        });
+
+        expect(applied).toHaveLength(1);
+        expect((applied[0] as any[])[0]).toMatchObject({
+            id: 'm_old',
+            replacedByMachineId: 'm_new',
+            replacedAt: 20,
+            replacementReason: 'reauth',
+            replacementSource: 'automatic',
+            replacementActorUserId: null,
+        });
     });
 
     it('reuses warm cache machine display data when metadata version matches', async () => {

@@ -19,6 +19,11 @@ type SyncEncryption = {
 
 const warnedMachineDataEncryptionKeyFailuresByEncryption = new WeakMap<SyncEncryption, Set<string>>();
 
+type MachineReplacementFields = Pick<
+    Machine,
+    'replacedByMachineId' | 'replacedAt' | 'replacementReason' | 'replacementSource' | 'replacementActorUserId'
+>;
+
 function warnMachineDataEncryptionKeyDecryptFailureOnce(encryption: SyncEncryption, machineId: string): void {
     let warnedMachineIds = warnedMachineDataEncryptionKeyFailuresByEncryption.get(encryption);
     if (!warnedMachineIds) {
@@ -28,6 +33,48 @@ function warnMachineDataEncryptionKeyDecryptFailureOnce(encryption: SyncEncrypti
     if (warnedMachineIds.has(machineId)) return;
     warnedMachineIds.add(machineId);
     console.warn(`Failed to decrypt data encryption key for machine ${machineId}; falling back to legacy machine encryption.`);
+}
+
+function hasOwnField(source: object, field: string): boolean {
+    return Object.prototype.hasOwnProperty.call(source, field);
+}
+
+function readReplacementField<T>(
+    source: object,
+    field: string,
+    current: T | null | undefined,
+): T | null {
+    if (!hasOwnField(source, field)) return current ?? null;
+    return (source as Record<string, T | null | undefined>)[field] ?? null;
+}
+
+function readReplacementFieldsFromSocketUpdate(
+    update: object,
+    existingMachine: Machine | undefined,
+): MachineReplacementFields {
+    return {
+        replacedByMachineId: readReplacementField<string>(update, 'replacedByMachineId', existingMachine?.replacedByMachineId),
+        replacedAt: readReplacementField<Machine['replacedAt']>(update, 'replacedAt', existingMachine?.replacedAt),
+        replacementReason: readReplacementField<string>(update, 'replacementReason', existingMachine?.replacementReason),
+        replacementSource: readReplacementField<string>(update, 'replacementSource', existingMachine?.replacementSource),
+        replacementActorUserId: readReplacementField<string>(update, 'replacementActorUserId', existingMachine?.replacementActorUserId),
+    };
+}
+
+function readReplacementFieldsFromMachineRow(machine: {
+    replacedByMachineId?: string | null;
+    replacedAt?: number | string | null;
+    replacementReason?: string | null;
+    replacementSource?: string | null;
+    replacementActorUserId?: string | null;
+}): MachineReplacementFields {
+    return {
+        replacedByMachineId: machine.replacedByMachineId ?? null,
+        replacedAt: machine.replacedAt ?? null,
+        replacementReason: machine.replacementReason ?? null,
+        replacementSource: machine.replacementSource ?? null,
+        replacementActorUserId: machine.replacementActorUserId ?? null,
+    };
 }
 
 export async function buildUpdatedMachineFromSocketUpdate(params: {
@@ -58,6 +105,7 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
         active: nextRevokedAt ? false : (machineUpdate.active ?? existingMachine?.active ?? false),
         activeAt: machineUpdate.activeAt ?? existingMachine?.activeAt ?? updateCreatedAt,
         revokedAt: nextRevokedAt,
+        ...readReplacementFieldsFromSocketUpdate(machineUpdate, existingMachine),
         metadata: existingMachine?.metadata ?? null,
         metadataVersion: existingMachine?.metadataVersion ?? 0,
         daemonState: existingMachine?.daemonState ?? null,
@@ -197,6 +245,11 @@ export async function fetchAndApplyMachines(params: {
         active: boolean;
         activeAt: number; // Changed from lastActiveAt
         revokedAt?: number | null;
+        replacedByMachineId?: string | null;
+        replacedAt?: number | string | null;
+        replacementReason?: string | null;
+        replacementSource?: string | null;
+        replacementActorUserId?: string | null;
         createdAt: number;
         updatedAt: number;
     }>;
@@ -261,6 +314,7 @@ export async function fetchAndApplyMachines(params: {
         active: machine.active,
         activeAt: machine.activeAt,
         revokedAt: machine.revokedAt ?? null,
+        ...readReplacementFieldsFromMachineRow(machine),
         metadataVersion: machine.metadataVersion,
         metadata: cachedEntry?.metadataVersion === machine.metadataVersion
             ? {
@@ -293,6 +347,7 @@ export async function fetchAndApplyMachines(params: {
             active: machine.active,
             activeAt: machine.activeAt,
             revokedAt: machine.revokedAt ?? null,
+            ...readReplacementFieldsFromMachineRow(machine),
             metadataVersion: machine.metadataVersion,
             metadata,
             daemonState: hasEncryptedDaemonState ? existingMachine?.daemonState ?? null : null,
@@ -314,6 +369,7 @@ export async function fetchAndApplyMachines(params: {
                 active: machine.active,
                 activeAt: machine.activeAt,
                 revokedAt: machine.revokedAt ?? null,
+                ...readReplacementFieldsFromMachineRow(machine),
                 metadata: null,
                 metadataVersion: machine.metadataVersion,
                 daemonState: null,
@@ -337,6 +393,7 @@ export async function fetchAndApplyMachines(params: {
                 active: machine.active,
                 activeAt: machine.activeAt,
                 revokedAt: machine.revokedAt ?? null,
+                ...readReplacementFieldsFromMachineRow(machine),
                 metadata,
                 metadataVersion: machine.metadataVersion,
                 daemonState,
@@ -352,6 +409,7 @@ export async function fetchAndApplyMachines(params: {
                 active: machine.active,
                 activeAt: machine.activeAt,
                 revokedAt: machine.revokedAt ?? null,
+                ...readReplacementFieldsFromMachineRow(machine),
                 metadata: null,
                 metadataVersion: machine.metadataVersion,
                 daemonState: null,

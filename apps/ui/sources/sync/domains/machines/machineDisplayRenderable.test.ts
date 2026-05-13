@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { MachineDisplayRenderable } from './machineDisplayRenderable';
-import { resolveBestMachineDisplayRenderableForHost } from './machineDisplayRenderable';
+import { getMachineDisplaySubtitle } from './machineDisplayRenderable';
 
 function makeMachineDisplay(partial: Partial<MachineDisplayRenderable> & Pick<MachineDisplayRenderable, 'id'>): MachineDisplayRenderable {
     const updatedAt = partial.updatedAt ?? 0;
@@ -17,26 +17,13 @@ function makeMachineDisplay(partial: Partial<MachineDisplayRenderable> & Pick<Ma
     };
 }
 
-describe('resolveBestMachineDisplayRenderableForHost', () => {
-    it('prefers higher metadataVersion over updatedAt when hosts match', () => {
-        const host = 'example-host';
-        const machines = {
-            a: makeMachineDisplay({ id: 'a', updatedAt: 999, metadataVersion: 1, metadata: { host } }),
-            b: makeMachineDisplay({ id: 'b', updatedAt: 1, metadataVersion: 2, metadata: { host } }),
-        };
+describe('getMachineDisplaySubtitle', () => {
+    it('uses display fields without resolving a machine by host identity', () => {
+        const machine = makeMachineDisplay({
+            id: 'machine-a',
+            metadata: { displayName: null, host: 'example-host' },
+        });
 
-        const best = resolveBestMachineDisplayRenderableForHost(machines, host);
-        expect(best?.id).toBe('b');
-    });
-
-    it('does not drift based on updatedAt when metadataVersion ties', () => {
-        const host = 'example-host';
-        const machines = {
-            a: makeMachineDisplay({ id: 'a', updatedAt: 999, metadataVersion: 1, metadata: { host } }),
-            b: makeMachineDisplay({ id: 'b', updatedAt: 1, metadataVersion: 1, metadata: { host } }),
-        };
-
-        const best = resolveBestMachineDisplayRenderableForHost(machines, host);
-        expect(best?.id).toBe('b');
+        expect(getMachineDisplaySubtitle(machine, 'machine-a')).toBe('example-host');
     });
 });
