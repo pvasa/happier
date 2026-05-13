@@ -33,7 +33,7 @@ const styles = StyleSheet.create((theme) => ({
         position: 'absolute',
         bottom: -2,
         right: -2,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         borderRadius: 100,
         padding: 2,
         ...shadowLevelStyle(theme.colors.shadowLevels[2]),
@@ -42,10 +42,10 @@ const styles = StyleSheet.create((theme) => ({
         position: 'absolute',
         top: -2,
         left: -2,
-        backgroundColor: theme.colors.textLink,
+        backgroundColor: theme.colors.text.link,
         borderRadius: 100,
         borderWidth: 1.5,
-        borderColor: theme.colors.surface,
+        borderColor: theme.colors.surface.base,
     },
 }));
 

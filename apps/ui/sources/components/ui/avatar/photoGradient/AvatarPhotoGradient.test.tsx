@@ -19,10 +19,14 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock({
         theme: {
             colors: {
-                surface: '#ffffff',
-                surfaceHigh: '#f8f8f8',
-                surfaceHighest: '#eeeeee',
-                textSecondary: '#6c6c70',
+                surface: {
+                    base: '#ffffff',
+                    inset: '#f8f8f8',
+                    elevated: '#eeeeee',
+                },
+                text: {
+                    secondary: '#6c6c70',
+                },
                 accent: {
                     blue: '#007aff',
                     green: '#34c759',
@@ -63,10 +67,10 @@ describe('AvatarPhotoGradient', () => {
         const { AvatarPhotoGradient } = await import('./AvatarPhotoGradient');
         const id = 'session-photo-cached-component';
         const theme = {
-            surface: '#ffffff',
-            surfaceHigh: '#f8f8f8',
-            surfaceHighest: '#eeeeee',
-            textSecondary: '#6c6c70',
+            surfaceBase: '#ffffff',
+            surfaceInset: '#f8f8f8',
+            surfaceElevated: '#eeeeee',
+            secondaryForeground: '#6c6c70',
             accentColors: ['#007aff', '#34c759', '#ff9500', '#ffcc00', '#ff3b30', '#5856d6', '#af52de'],
         };
         await generateAndCachePhotoGradientAvatarDataUri({

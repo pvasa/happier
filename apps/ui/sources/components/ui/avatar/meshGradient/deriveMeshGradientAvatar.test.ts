@@ -4,18 +4,18 @@ import { deriveMeshGradientAvatar } from './deriveMeshGradientAvatar';
 import type { MeshGradientThemeInput } from './meshGradientTypes';
 
 const themeInput = {
-    surface: '#ffffff',
-    surfaceHigh: '#f8f8f8',
-    surfaceHighest: '#eeeeee',
-    textSecondary: '#6c6c70',
+    surfaceBase: '#ffffff',
+    surfaceInset: '#f8f8f8',
+    surfaceElevated: '#eeeeee',
+    secondaryForeground: '#6c6c70',
     accentColors: ['#007aff', '#34c759', '#ff9500', '#ffcc00', '#ff3b30', '#5856d6'],
 } satisfies MeshGradientThemeInput;
 
 const darkThemeInput = {
-    surface: '#18171c',
-    surfaceHigh: '#2c2c2e',
-    surfaceHighest: '#38383a',
-    textSecondary: '#99999d',
+    surfaceBase: '#18171c',
+    surfaceInset: '#2c2c2e',
+    surfaceElevated: '#38383a',
+    secondaryForeground: '#99999d',
     accentColors: ['#0a84ff', '#32d74b', '#ff9f0a', '#ffd60a', '#ff453a', '#5e5ce6', '#bf5af2'],
 } satisfies MeshGradientThemeInput;
 

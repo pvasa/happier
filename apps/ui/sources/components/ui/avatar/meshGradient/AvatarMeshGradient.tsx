@@ -21,10 +21,10 @@ export const AvatarMeshGradient = React.memo((props: AvatarMeshGradientProps) =>
     const { id, styleId, square, size = 48, monochrome = false } = props;
     const { theme } = useUnistyles();
     const themeInput: MeshGradientThemeInput = React.useMemo(() => ({
-        surface: theme.colors.surface,
-        surfaceHigh: theme.colors.surfaceHigh,
-        surfaceHighest: theme.colors.surfaceHighest,
-        textSecondary: theme.colors.textSecondary,
+        surfaceBase: theme.colors.surface.base,
+        surfaceInset: theme.colors.surface.inset,
+        surfaceElevated: theme.colors.surface.elevated,
+        secondaryForeground: theme.colors.text.secondary,
         accentColors: [
             theme.colors.accent.blue,
             theme.colors.accent.green,

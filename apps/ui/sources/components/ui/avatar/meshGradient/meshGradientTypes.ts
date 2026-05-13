@@ -1,8 +1,8 @@
 export type MeshGradientThemeInput = Readonly<{
-    surface: string;
-    surfaceHigh: string;
-    surfaceHighest: string;
-    textSecondary: string;
+    surfaceBase: string;
+    surfaceInset: string;
+    surfaceElevated: string;
+    secondaryForeground: string;
     accentColors: readonly string[];
 }>;
 

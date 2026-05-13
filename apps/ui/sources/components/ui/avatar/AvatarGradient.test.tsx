@@ -14,7 +14,9 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock({
         theme: {
             colors: {
-                textSecondary: '#6c6c70',
+                text: {
+                    secondary: '#6c6c70',
+                },
             },
         },
     });

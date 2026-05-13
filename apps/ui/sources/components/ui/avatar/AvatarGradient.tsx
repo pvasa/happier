@@ -131,7 +131,7 @@ export const AvatarGradient = React.memo((props: AvatarGradientProps) => {
                 borderRadius: square ? 0 : size / 2,
             }}
             contentFit="cover"
-            tintColor={monochrome ? theme.colors.textSecondary : undefined}
+            tintColor={monochrome ? theme.colors.text.secondary : undefined}
         />
     );
 });

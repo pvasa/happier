@@ -27,10 +27,10 @@ type Params = Readonly<{
 
 function themeSignature(theme: MeshGradientThemeInput): string {
     return [
-        theme.surface,
-        theme.surfaceHigh,
-        theme.surfaceHighest,
-        theme.textSecondary,
+        theme.surfaceBase,
+        theme.surfaceInset,
+        theme.surfaceElevated,
+        theme.secondaryForeground,
         ...theme.accentColors,
     ].join('|');
 }

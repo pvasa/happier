@@ -94,7 +94,7 @@ function keepWarmBalanced(color: PhotoGradientRgbColor): PhotoGradientRgbColor {
 
 function buildPalette(theme: MeshGradientThemeInput, random: () => number, monochrome: boolean): PhotoGradientRgbColor[] {
     const photoPalette = pickSeeded(PHOTO_GRADIENT_PALETTES, random).map(parseColor);
-    const surface = parseColor(theme.surface);
+    const surface = parseColor(theme.surfaceBase);
     const themeAccents = theme.accentColors.map(parseColor);
     const mixed = photoPalette.map((color, index) => {
         const accent = themeAccents[index % themeAccents.length] ?? color;
@@ -134,7 +134,7 @@ export function derivePhotoGradientAvatar(params: Params): PhotoGradientAvatarMo
         size: params.size,
         seed,
         backgroundColor: mixColor(
-            parseColor(params.theme.surface),
+            parseColor(params.theme.surfaceBase),
             palette[palette.length - 1] ?? { r: 238, g: 232, b: 218 },
             0.16,
         ),

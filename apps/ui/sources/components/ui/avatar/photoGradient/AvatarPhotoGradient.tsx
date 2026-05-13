@@ -54,10 +54,10 @@ export const AvatarPhotoGradient = React.memo((props: AvatarPhotoGradientProps) 
     const { theme } = useUnistyles();
     const fallbackStyleId = getPhotoGradientFallbackStyleId(styleId);
     const themeInput: MeshGradientThemeInput = React.useMemo(() => ({
-        surface: theme.colors.surface,
-        surfaceHigh: theme.colors.surfaceHigh,
-        surfaceHighest: theme.colors.surfaceHighest,
-        textSecondary: theme.colors.textSecondary,
+        surfaceBase: theme.colors.surface.base,
+        surfaceInset: theme.colors.surface.inset,
+        surfaceElevated: theme.colors.surface.elevated,
+        secondaryForeground: theme.colors.text.secondary,
         accentColors: [
             theme.colors.accent.blue,
             theme.colors.accent.green,

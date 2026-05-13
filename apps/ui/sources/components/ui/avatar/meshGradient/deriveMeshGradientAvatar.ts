@@ -125,12 +125,12 @@ function getColorLuminance(color: RgbColor): number {
 }
 
 function isDarkThemeInput(theme: MeshGradientThemeInput): boolean {
-    const surfaceColor = parseColor(theme.surface);
+    const surfaceColor = parseColor(theme.surfaceBase);
     return surfaceColor ? getColorLuminance(surfaceColor) < DARK_THEME_LUMINANCE_THRESHOLD : false;
 }
 
 function getAccentColor(theme: MeshGradientThemeInput, index: number, fallbackIndex: number): string {
-    return theme.accentColors[index] ?? theme.accentColors[fallbackIndex] ?? theme.textSecondary;
+    return theme.accentColors[index] ?? theme.accentColors[fallbackIndex] ?? theme.secondaryForeground;
 }
 
 function mixRgbColor(from: RgbColor, to: RgbColor, amount: number): RgbColor {
@@ -305,18 +305,18 @@ function buildPhotoGradientPaletteRoles(
     const indigo = getAccentColor(theme, 5, 0);
     const purple = getAccentColor(theme, 6, 5);
     const liftedNeutral = isDarkTheme
-        ? mixColor(theme.surfaceHigh, theme.textSecondary, DARK_LIFTED_NEUTRAL_MIX)
-        : darkenColor(theme.surfaceHigh, LIGHT_LIFTED_NEUTRAL_DARKEN);
+        ? mixColor(theme.surfaceInset, theme.secondaryForeground, DARK_LIFTED_NEUTRAL_MIX)
+        : darkenColor(theme.surfaceInset, LIGHT_LIFTED_NEUTRAL_DARKEN);
     const groundedNeutral = isDarkTheme
-        ? mixColor(theme.surfaceHighest, theme.textSecondary, DARK_GROUNDED_NEUTRAL_MIX)
-        : darkenColor(theme.surfaceHighest, LIGHT_GROUNDED_NEUTRAL_DARKEN);
+        ? mixColor(theme.surfaceElevated, theme.secondaryForeground, DARK_GROUNDED_NEUTRAL_MIX)
+        : darkenColor(theme.surfaceElevated, LIGHT_GROUNDED_NEUTRAL_DARKEN);
     const darkToneBoost = isDarkTheme ? DARK_ACCENT_NEUTRAL_BOOST : 0;
     const tealBase = mixColor(blue, green, 0.46);
     const goldBase = mixColor(yellow, orange, 0.42);
-    const forestBase = mixColor(green, theme.textSecondary, 0.48);
+    const forestBase = mixColor(green, theme.secondaryForeground, 0.48);
     const clayBase = mixColor(orange, red, 0.42);
     const sageBase = mixColor(green, blue, 0.36);
-    const slateBase = mixColor(blue, theme.textSecondary, 0.46);
+    const slateBase = mixColor(blue, theme.secondaryForeground, 0.46);
     const roseBase = mixColor(red, purple, 0.3);
     const lavenderBase = mixColor(indigo, purple, 0.45);
 
@@ -391,7 +391,7 @@ export function deriveMeshGradientAvatar(params: DeriveMeshGradientAvatarParams)
     const startColor = pickSeeded(palette, random);
     const endColor = pickSeeded(palette, random);
     const depthSourceColor = pickSeeded(palette, random);
-    const highlightSourceColor = mixColor(params.theme.surface, pickSeeded(palette, random), 0.12);
+    const highlightSourceColor = mixColor(params.theme.surfaceBase, pickSeeded(palette, random), 0.12);
     const fieldCount = COLOR_FIELD_MIN_COUNT + (seed % COLOR_FIELD_COUNT_VARIANCE);
     const anchors = shuffleAnchors(random);
 
