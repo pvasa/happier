@@ -134,6 +134,56 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onLinkPress).toHaveBeenCalledWith('file:///Users/leeroy/project/src/index.ts:8');
     });
 
+    it('lets callers handle markdown source ranges without changing normal enriched rendering', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onPressSourceRange = vi.fn();
+
+        const screen = await renderScreen(
+            React.createElement(MarkdownView as any, {
+                markdown: '# Title',
+                selectable: true,
+                profile: 'transcript',
+                onPressSourceRange,
+            }),
+        );
+
+        const trigger = screen.findByProps({ testID: 'markdown-source-range-trigger:1-1' });
+        trigger.props.onPress();
+
+        expect(onPressSourceRange).toHaveBeenCalledWith({
+            sourceRange: { startLine: 1, endLine: 1 },
+            markdown: '# Title',
+        });
+        expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(1);
+    });
+
+    it('passes the original markdown source for special block source range actions', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const onPressSourceRange = vi.fn();
+        const markdown = [
+            '```ts',
+            'const value = 1;',
+            '```',
+        ].join('\n');
+
+        const screen = await renderScreen(
+            React.createElement(MarkdownView as any, {
+                markdown,
+                selectable: true,
+                profile: 'transcript',
+                onPressSourceRange,
+            }),
+        );
+
+        const trigger = screen.findByProps({ testID: 'markdown-source-range-trigger:1-3' });
+        trigger.props.onPress();
+
+        expect(onPressSourceRange).toHaveBeenCalledWith({
+            sourceRange: { startLine: 1, endLine: 3 },
+            markdown,
+        });
+    });
+
     it('sanitizes enriched markdown link destinations before rendering them', async () => {
         const { MarkdownView } = await import('./MarkdownView');
 

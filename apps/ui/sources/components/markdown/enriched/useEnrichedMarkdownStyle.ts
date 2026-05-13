@@ -9,13 +9,19 @@ import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
 import type { MarkdownRenderingProfile } from '../rendering/MarkdownRenderingProfile';
 
 type ThemeColors = Readonly<{
-    text: string;
-    textSecondary: string;
-    textLink: string;
-    surfaceHigh: string;
-    surfaceHighest: string;
-    surfaceSelected: string;
-    divider: string;
+    text: Readonly<{
+        primary: string;
+        secondary: string;
+        link: string;
+    }>;
+    surface: Readonly<{
+        inset: string;
+        elevated: string;
+        selected: string;
+    }>;
+    border: Readonly<{
+        default: string;
+    }>;
 }>;
 
 export type EnrichedMarkdownStyleBundle = Readonly<{
@@ -94,7 +100,7 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
     const baseFontSize = readNumber(flattenedTextStyle.fontSize, roundTo2(16 * uiFontScale));
     const baseLineHeight = readNumber(flattenedTextStyle.lineHeight, roundTo2(24 * uiFontScale));
     const inlineCodeFontSize = roundTo2(baseFontSize * 0.88);
-    const baseColor = readString(flattenedTextStyle.color, params.colors.text);
+    const baseColor = readString(flattenedTextStyle.color, params.colors.text.primary);
     const h1FontSize = scaledMetric(baseFontSize, 1.5);
     const h2FontSize = scaledMetric(baseFontSize, 1.25);
     const h3FontSize = scaledMetric(baseFontSize, 1.125);
@@ -178,14 +184,14 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
         },
         link: {
             fontFamily: readFontFamily(defaultTypography),
-            color: params.colors.textLink,
+            color: params.colors.text.link,
             underline: true,
         },
         code: {
             fontFamily: monoTypography.fontFamily,
             fontSize: inlineCodeFontSize,
             color: baseColor,
-            backgroundColor: params.profile === 'thinking' ? 'transparent' : params.colors.surfaceSelected,
+            backgroundColor: params.profile === 'thinking' ? 'transparent' : params.colors.surface.selected,
             borderColor: 'transparent',
         },
         codeBlock: {
@@ -193,8 +199,8 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             fontSize: roundTo2(14 * uiFontScale),
             lineHeight: roundTo2(20 * uiFontScale),
             color: baseColor,
-            backgroundColor: params.profile === 'thinking' ? 'transparent' : params.colors.surfaceHighest,
-            borderColor: params.colors.divider,
+            backgroundColor: params.profile === 'thinking' ? 'transparent' : params.colors.surface.elevated,
+            borderColor: params.colors.border.default,
             borderRadius: 8,
             borderWidth: params.profile === 'thinking' ? 0 : 1,
             padding: 12,
@@ -203,8 +209,8 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             ...defaultFace,
             fontSize: baseFontSize,
             lineHeight: baseLineHeight,
-            color: params.colors.textSecondary,
-            borderColor: params.colors.divider,
+            color: params.colors.text.secondary,
+            borderColor: params.colors.border.default,
             borderWidth: 2,
             gapWidth: 10,
             backgroundColor: 'transparent',
@@ -221,7 +227,7 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             marginLeft: roundTo2(28 * uiFontScale),
         },
         thematicBreak: {
-            color: params.colors.divider,
+            color: params.colors.border.default,
             height: 1,
             marginTop: 8,
             marginBottom: 8,
@@ -244,23 +250,23 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             lineHeight: baseLineHeight,
             color: baseColor,
             headerFontFamily: readFontFamily(semiBoldTypography),
-            headerBackgroundColor: params.colors.surfaceHigh,
+            headerBackgroundColor: params.colors.surface.inset,
             headerTextColor: baseColor,
             rowEvenBackgroundColor: 'transparent',
             rowOddBackgroundColor: 'transparent',
-            borderColor: params.colors.divider,
+            borderColor: params.colors.border.default,
             borderWidth: 1,
             borderRadius: 8,
             cellPaddingHorizontal: 16,
             cellPaddingVertical: 10,
         },
         taskList: {
-            checkedColor: params.colors.textLink,
-            borderColor: params.colors.divider,
+            checkedColor: params.colors.text.link,
+            borderColor: params.colors.border.default,
             checkboxSize: roundTo2(18 * uiFontScale),
             checkboxBorderRadius: 4,
-            checkmarkColor: params.colors.text,
-            checkedTextColor: params.colors.textSecondary,
+            checkmarkColor: params.colors.text.primary,
+            checkedTextColor: params.colors.text.secondary,
             checkedStrikethrough: true,
         },
         strikethrough: {
@@ -270,7 +276,7 @@ export function buildEnrichedMarkdownStyle(params: Readonly<{
             color: baseColor,
         },
         spoiler: {
-            color: params.colors.surfaceHighest,
+            color: params.colors.surface.elevated,
         },
     };
 

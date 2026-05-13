@@ -1,4 +1,5 @@
 import type { MarkdownBlock } from '../parseMarkdown';
+import type { MarkdownSourceRange } from '../parseMarkdown';
 
 export type MarkdownRenderSegment = Readonly<{
     type: 'enriched-markdown';
@@ -6,6 +7,7 @@ export type MarkdownRenderSegment = Readonly<{
     sourceStart: number;
     sourceLength: number;
     sourceHash: string;
+    sourceRange: MarkdownSourceRange;
     markdown: string;
     first: boolean;
     last: boolean;
@@ -15,6 +17,8 @@ export type MarkdownRenderSegment = Readonly<{
     sourceStart: number;
     sourceLength: number;
     sourceHash: string;
+    sourceRange: MarkdownSourceRange;
+    markdown: string;
     blocks: readonly MarkdownBlock[];
     first: boolean;
     last: boolean;

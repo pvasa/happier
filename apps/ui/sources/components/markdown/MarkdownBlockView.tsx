@@ -327,7 +327,7 @@ const style = StyleSheet.create((theme) => ({
         lineHeight: 24, // Reduced from 28 to 24
         marginTop: 8,
         marginBottom: 8,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontWeight: '400',
     },
 
@@ -344,7 +344,7 @@ const style = StyleSheet.create((theme) => ({
         ...Typography.mono(),
         fontSize: 14,
         lineHeight: 20,
-        backgroundColor: theme.colors.surfaceSelected,
+        backgroundColor: theme.colors.surface.selected,
     },
     thinkingInlineCode: {
         ...Typography.mono(),
@@ -352,7 +352,7 @@ const style = StyleSheet.create((theme) => ({
     },
     link: {
         ...Typography.default(),
-        color: theme.colors.textLink,
+        color: theme.colors.text.link,
         fontWeight: '400',
     },
 
@@ -360,7 +360,7 @@ const style = StyleSheet.create((theme) => ({
 
     header: {
         ...Typography.default('semiBold'),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     header1: {
         fontSize: 16,
@@ -421,13 +421,13 @@ const style = StyleSheet.create((theme) => ({
     },
     listText: {
         ...Typography.default(),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         marginTop: 0,
         marginBottom: 0,
     },
     listMarker: {
         ...Typography.default(),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         width: 20,
         flexShrink: 0,
         textAlign: 'center',
@@ -436,7 +436,7 @@ const style = StyleSheet.create((theme) => ({
     },
     numberedListMarker: {
         ...Typography.default(),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         minWidth: 28,
         paddingRight: 4,
         flexShrink: 0,
@@ -461,7 +461,7 @@ const style = StyleSheet.create((theme) => ({
     //
 
     codeBlock: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
         borderRadius: 8,
         marginVertical: 8,
         width: '100%',
@@ -484,7 +484,7 @@ const style = StyleSheet.create((theme) => ({
     },
     codeLanguage: {
         ...Typography.mono(),
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 12,
         marginTop: 8,
         paddingHorizontal: 16,
@@ -492,7 +492,7 @@ const style = StyleSheet.create((theme) => ({
     },
     codeText: {
         ...Typography.mono(),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 14,
         lineHeight: 20,
     },
@@ -507,7 +507,7 @@ const style = StyleSheet.create((theme) => ({
     },
     horizontalRule: {
         height: 1,
-        backgroundColor: theme.colors.divider,
+        backgroundColor: theme.colors.border.default,
         marginTop: 8,
         marginBottom: 8,
     },
@@ -523,25 +523,25 @@ const style = StyleSheet.create((theme) => ({
         opacity: 0,
     },
     copyButton: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 4,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         cursor: 'pointer',
     },
     copyButtonHidden: {
         display: 'none',
     },
     copyButtonCopied: {
-        backgroundColor: theme.colors.success,
-        borderColor: theme.colors.success,
+        backgroundColor: theme.colors.state.success.foreground,
+        borderColor: theme.colors.state.success.foreground,
         opacity: 1,
     },
     copyButtonText: {
         ...Typography.default(),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 12,
         lineHeight: 16,
     },
@@ -556,22 +556,22 @@ const style = StyleSheet.create((theme) => ({
         marginVertical: 8,
     },
     optionItem: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
         borderRadius: 8,
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
     },
     optionItemPressed: {
         opacity: 0.7,
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
     },
     optionText: {
         ...Typography.default(),
         fontSize: 16,
         lineHeight: 24,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
 
     //
@@ -581,7 +581,7 @@ const style = StyleSheet.create((theme) => ({
     tableContainer: {
         marginVertical: 8,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         borderRadius: 8,
         alignSelf: 'flex-start',
         maxWidth: '100%',
@@ -598,7 +598,7 @@ const style = StyleSheet.create((theme) => ({
     tableColumn: {
         flexDirection: 'column',
         borderRightWidth: 1,
-        borderRightColor: theme.colors.divider,
+        borderRightColor: theme.colors.border.default,
     },
     tableColumnLast: {
         borderRightWidth: 0,
@@ -607,7 +607,7 @@ const style = StyleSheet.create((theme) => ({
         paddingHorizontal: 16,
         paddingVertical: 10,
         borderBottomWidth: 1,
-        borderBottomColor: theme.colors.divider,
+        borderBottomColor: theme.colors.border.default,
         minWidth: 40,
     },
     tableCellAlignLeft: {
@@ -635,17 +635,17 @@ const style = StyleSheet.create((theme) => ({
         borderBottomWidth: 0,
     },
     tableHeaderCell: {
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
     },
     tableHeaderText: {
         ...Typography.default('semiBold'),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 16,
         lineHeight: 24,
     },
     tableCellText: {
         ...Typography.default(),
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 16,
         lineHeight: 24,
     },

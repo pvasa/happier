@@ -1,4 +1,4 @@
-import type { MarkdownBlock, MarkdownTableAlignment } from "./parseMarkdown";
+import type { MarkdownBlock, MarkdownSourceRange, MarkdownTableAlignment } from "./parseMarkdown";
 import { parseMarkdownSpans } from "./parseMarkdownSpans";
 
 const MIN_CODE_FENCE_LENGTH = 3;
@@ -12,6 +12,38 @@ type OpeningCodeFence = {
     indent: number;
     language: string | null;
 };
+
+type ParseMarkdownBlockOptions = Readonly<{
+    includeSourceRanges?: boolean;
+}>;
+
+function buildSourceRange(startIndex: number, endExclusiveIndex: number): MarkdownSourceRange {
+    return {
+        startLine: startIndex + 1,
+        endLine: Math.max(startIndex + 1, endExclusiveIndex),
+    };
+}
+
+function withSourceRange<T extends MarkdownBlock>(
+    block: T,
+    options: ParseMarkdownBlockOptions,
+    startIndex: number,
+    endExclusiveIndex: number,
+): T {
+    if (options.includeSourceRanges !== true) return block;
+    return {
+        ...block,
+        sourceRange: buildSourceRange(startIndex, endExclusiveIndex),
+    };
+}
+
+function maybeSourceRange(
+    options: ParseMarkdownBlockOptions,
+    startIndex: number,
+    endExclusiveIndex: number,
+): MarkdownSourceRange | undefined {
+    return options.includeSourceRanges === true ? buildSourceRange(startIndex, endExclusiveIndex) : undefined;
+}
 
 function getListIndentDepth(rawLine: string): number {
     const leadingSpaces = rawLine.match(/^\s*/)?.[0].length ?? 0;
@@ -89,7 +121,7 @@ function parseTableAlignment(separatorCell: string): MarkdownTableAlignment {
     return 'default';
 }
 
-function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock | null; nextIndex: number } {
+function parseTable(lines: string[], startIndex: number, options: ParseMarkdownBlockOptions): { table: MarkdownBlock | null; nextIndex: number } {
     let index = startIndex;
     const tableLines: string[] = [];
 
@@ -147,28 +179,33 @@ function parseTable(lines: string[], startIndex: number): { table: MarkdownBlock
         }
     }
 
-    const table: MarkdownBlock = {
+    const table: MarkdownBlock = withSourceRange({
         type: 'table',
         headers,
         rows,
         alignments,
-    };
+    }, options, startIndex, index);
 
     return { table, nextIndex: index };
 }
 
-export function parseMarkdownBlock(markdown: string) {
+export function parseMarkdownBlock(markdown: string, options: ParseMarkdownBlockOptions = {}) {
     const blocks: MarkdownBlock[] = [];
     const lines = markdown.split('\n');
     let index = 0;
     outer: while (index < lines.length) {
+        const startIndex = index;
         const line = lines[index];
         index++;
 
         // Headers
         for (let i = 1; i <= 6; i++) {
             if (line.startsWith(`${'#'.repeat(i)} `)) {
-                blocks.push({ type: 'header', level: i as 1 | 2 | 3 | 4 | 5 | 6, content: parseMarkdownSpans(line.slice(i + 1).trim(), true) });
+                blocks.push(withSourceRange({
+                    type: 'header',
+                    level: i as 1 | 2 | 3 | 4 | 5 | 6,
+                    content: parseMarkdownSpans(line.slice(i + 1).trim(), true),
+                }, options, startIndex, index));
                 continue outer;
             }
         }
@@ -193,16 +230,20 @@ export function parseMarkdownBlock(markdown: string) {
 
             // Detect mermaid diagram language and route to appropriate block type
             if (openingCodeFence.language === 'mermaid') {
-                blocks.push({ type: 'mermaid', content: contentString });
+                blocks.push(withSourceRange({ type: 'mermaid', content: contentString }, options, startIndex, index));
             } else {
-                blocks.push({ type: 'code-block', language: openingCodeFence.language, content: contentString });
+                blocks.push(withSourceRange({
+                    type: 'code-block',
+                    language: openingCodeFence.language,
+                    content: contentString,
+                }, options, startIndex, index));
             }
             continue;
         }
 
         // Horizontal rule
         if (trimmed === '---') {
-            blocks.push({ type: 'horizontal-rule' });
+            blocks.push(withSourceRange({ type: 'horizontal-rule' }, options, startIndex, index));
             continue;
         }
 
@@ -223,7 +264,7 @@ export function parseMarkdownBlock(markdown: string) {
                 index++;
             }
             if (items.length > 0) {
-                blocks.push({ type: 'options', items });
+                blocks.push(withSourceRange({ type: 'options', items }, options, startIndex, index));
             }
             continue;
         }
@@ -235,6 +276,7 @@ export function parseMarkdownBlock(markdown: string) {
                 depth: getListIndentDepth(line),
                 number: parseInt(numberedListMatch[2]),
                 content: numberedListMatch[3],
+                sourceIndex: startIndex,
             }];
             while (index < lines.length) {
                 const nextLine = lines[index];
@@ -244,37 +286,47 @@ export function parseMarkdownBlock(markdown: string) {
                     depth: getListIndentDepth(nextLine),
                     number: parseInt(nextMatch[2]),
                     content: nextMatch[3],
+                    sourceIndex: index,
                 });
                 index++;
             }
-            blocks.push({
+            blocks.push(withSourceRange({
                 type: 'numbered-list',
-                items: allLines.map((l) => ({ depth: l.depth, number: l.number, spans: parseMarkdownSpans(l.content, false) })),
-            });
+                items: allLines.map((l) => ({
+                    depth: l.depth,
+                    number: l.number,
+                    spans: parseMarkdownSpans(l.content, false),
+                    sourceRange: maybeSourceRange(options, l.sourceIndex, l.sourceIndex + 1),
+                })),
+            }, options, startIndex, index));
             continue;
         }
 
         // If it is a list
         const bulletListMatch = line.match(/^(\s*)-\s+(.*)$/);
         if (bulletListMatch) {
-            let allLines = [{ depth: getListIndentDepth(line), content: bulletListMatch[2] }];
+            let allLines = [{ depth: getListIndentDepth(line), content: bulletListMatch[2], sourceIndex: startIndex }];
             while (index < lines.length) {
                 const nextLine = lines[index];
                 const nextMatch = nextLine.match(/^(\s*)-\s+(.*)$/);
                 if (!nextMatch) break;
-                allLines.push({ depth: getListIndentDepth(nextLine), content: nextMatch[2] });
+                allLines.push({ depth: getListIndentDepth(nextLine), content: nextMatch[2], sourceIndex: index });
                 index++;
             }
-            blocks.push({
+            blocks.push(withSourceRange({
                 type: 'list',
-                items: allLines.map((l) => ({ depth: l.depth, spans: parseMarkdownSpans(l.content, false) })),
-            });
+                items: allLines.map((l) => ({
+                    depth: l.depth,
+                    spans: parseMarkdownSpans(l.content, false),
+                    sourceRange: maybeSourceRange(options, l.sourceIndex, l.sourceIndex + 1),
+                })),
+            }, options, startIndex, index));
             continue;
         }
 
         // Check for table
         if (trimmed.includes('|') && !trimmed.startsWith('```')) {
-            const { table, nextIndex } = parseTable(lines, index - 1);
+            const { table, nextIndex } = parseTable(lines, index - 1, options);
             if (table) {
                 blocks.push(table);
                 index = nextIndex;
@@ -284,7 +336,10 @@ export function parseMarkdownBlock(markdown: string) {
 
         // Fallback
         if (trimmed.length > 0) {
-            blocks.push({ type: 'text', content: parseMarkdownSpans(trimmed, false) });
+            blocks.push(withSourceRange({
+                type: 'text',
+                content: parseMarkdownSpans(trimmed, false),
+            }, options, startIndex, index));
         }
     }
     return blocks;
