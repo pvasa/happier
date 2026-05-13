@@ -1,6 +1,10 @@
 import { MachineTransferSendEnvelopeSchema } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { Server, Socket } from 'socket.io';
+import {
+  formatCurrentMachineSocketError,
+  validateCurrentMachineSocket,
+} from '@/app/machines/validateCurrentMachineSocket';
 
 const MACHINE_TRANSFER_MAX_BYTES_ERROR = 'Server-routed machine transfer exceeds the configured max-bytes limit';
 const MACHINE_TRANSFER_MAX_ACTIVE_TRANSFERS_ERROR =
@@ -124,6 +128,15 @@ export function machineTransferHandler(
       return;
     }
 
+    const currentMachine = await validateCurrentMachineSocket({ accountId: userId, machineId: sourceMachineId });
+    if (!currentMachine.ok) {
+      socket.emit(SOCKET_RPC_EVENTS.ERROR, {
+        type: 'machine-transfer',
+        error: formatCurrentMachineSocketError(currentMachine.reason),
+      });
+      return;
+    }
+
     const parsed = MachineTransferSendEnvelopeSchema.safeParse(raw);
     if (!parsed.success) {
       socket.emit(SOCKET_RPC_EVENTS.ERROR, {
@@ -146,6 +159,15 @@ export function machineTransferHandler(
       socket.emit(SOCKET_RPC_EVENTS.ERROR, {
         type: 'machine-transfer',
         error: 'Server-routed machine transfer is disabled on this server',
+      });
+      return;
+    }
+
+    const targetMachine = await validateCurrentMachineSocket({ accountId: userId, machineId: parsed.data.targetMachineId });
+    if (!targetMachine.ok) {
+      socket.emit(SOCKET_RPC_EVENTS.ERROR, {
+        type: 'machine-transfer',
+        error: formatCurrentMachineSocketError(targetMachine.reason),
       });
       return;
     }

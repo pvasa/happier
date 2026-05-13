@@ -38,6 +38,7 @@ vi.mock("@/app/presence/sessionCache", () => ({
 }));
 
 let machineRevokedAt: Date | null = null;
+let machineReplacedByMachineId: string | null = null;
 const txDbMocks = createDbMocks({
     machine: ["findFirst", "updateMany"],
 } as const);
@@ -56,13 +57,24 @@ describe("machineUpdateHandler (AccountChange integration)", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         machineRevokedAt = null;
+        machineReplacedByMachineId = null;
         txDbMocks.reset();
         txDbMocks.db.machine.findFirst.mockImplementation(async (args: any) => {
             if (args?.select?.metadataVersion) {
-                return { metadataVersion: 1, metadata: "old-meta", revokedAt: machineRevokedAt };
+                return {
+                    metadataVersion: 1,
+                    metadata: "old-meta",
+                    revokedAt: machineRevokedAt,
+                    replacedByMachineId: machineReplacedByMachineId,
+                };
             }
             if (args?.select?.daemonStateVersion) {
-                return { daemonStateVersion: 2, daemonState: "old-state", revokedAt: machineRevokedAt };
+                return {
+                    daemonStateVersion: 2,
+                    daemonState: "old-state",
+                    revokedAt: machineRevokedAt,
+                    replacedByMachineId: machineReplacedByMachineId,
+                };
             }
             return null;
         });
@@ -72,13 +84,21 @@ describe("machineUpdateHandler (AccountChange integration)", () => {
     it("marks machine metadata changes and emits updates using the returned cursor", async () => {
         const { machineUpdateHandler } = await import("./machineUpdateHandler");
 
-        const socket = createFakeSocket();
+        const socket = createFakeSocket({
+            data: {
+                clientType: "machine-scoped",
+                machineId: "m1",
+            },
+        });
         machineUpdateHandler("u1", socket as any);
         const handler = getSocketHandler(socket, "machine-update-metadata");
 
         const callback = vi.fn();
         await handler({ machineId: "m1", metadata: "new-meta", expectedVersion: 1 }, callback);
 
+        expect(txDbMocks.db.machine.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({ replacedByMachineId: null }),
+        }));
         expect(markAccountChanged).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({
@@ -96,13 +116,21 @@ describe("machineUpdateHandler (AccountChange integration)", () => {
     it("marks machine daemonState changes and emits updates using the returned cursor", async () => {
         const { machineUpdateHandler } = await import("./machineUpdateHandler");
 
-        const socket = createFakeSocket();
+        const socket = createFakeSocket({
+            data: {
+                clientType: "machine-scoped",
+                machineId: "m2",
+            },
+        });
         machineUpdateHandler("u1", socket as any);
         const handler = getSocketHandler(socket, "machine-update-state");
 
         const callback = vi.fn();
         await handler({ machineId: "m2", daemonState: "new-state", expectedVersion: 2 }, callback);
 
+        expect(txDbMocks.db.machine.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({ replacedByMachineId: null }),
+        }));
         expect(markAccountChanged).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({
@@ -128,13 +156,67 @@ describe("machineUpdateHandler (AccountChange integration)", () => {
 
         const { machineUpdateHandler } = await import("./machineUpdateHandler");
 
-        const socket = createFakeSocket();
+        const socket = createFakeSocket({
+            data: {
+                clientType: "machine-scoped",
+                machineId: "m1",
+            },
+        });
         machineUpdateHandler("u1", socket as any);
         const handler = getSocketHandler(socket, "machine-update-metadata");
 
         const callback = vi.fn();
         await handler({ machineId: "m1", metadata: "new-meta", expectedVersion: 1 }, callback);
 
+        expect(txDbMocks.db.machine.updateMany).not.toHaveBeenCalled();
+        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(emitUpdate).not.toHaveBeenCalled();
+        expect(callback).toHaveBeenCalledWith(expect.objectContaining({ result: "error" }));
+    });
+
+    it("rejects metadata updates from already-connected replaced daemons", async () => {
+        machineReplacedByMachineId = "m-current";
+
+        const { machineUpdateHandler } = await import("./machineUpdateHandler");
+
+        const socket = createFakeSocket({
+            data: {
+                clientType: "machine-scoped",
+                machineId: "m1",
+            },
+        });
+        machineUpdateHandler("u1", socket as any);
+        const handler = getSocketHandler(socket, "machine-update-metadata");
+
+        const callback = vi.fn();
+        await handler({ machineId: "m1", metadata: "new-meta", expectedVersion: 1 }, callback);
+
+        expect(txDbMocks.db.machine.updateMany).not.toHaveBeenCalled();
+        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(emitUpdate).not.toHaveBeenCalled();
+        expect(callback).toHaveBeenCalledWith(expect.objectContaining({ result: "error" }));
+    });
+
+    it("rejects daemonState updates from already-connected replaced daemons", async () => {
+        machineReplacedByMachineId = "m-current";
+
+        const { machineUpdateHandler } = await import("./machineUpdateHandler");
+
+        const socket = createFakeSocket({
+            data: {
+                clientType: "machine-scoped",
+                machineId: "m1",
+            },
+        });
+        machineUpdateHandler("u1", socket as any);
+        const handler = getSocketHandler(socket, "machine-update-state");
+
+        const callback = vi.fn();
+        await handler({ machineId: "m1", daemonState: "new-state", expectedVersion: 2 }, callback);
+
+        expect(txDbMocks.db.machine.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+            data: expect.objectContaining({ active: true }),
+        }));
         expect(txDbMocks.db.machine.updateMany).not.toHaveBeenCalled();
         expect(markAccountChanged).not.toHaveBeenCalled();
         expect(emitUpdate).not.toHaveBeenCalled();

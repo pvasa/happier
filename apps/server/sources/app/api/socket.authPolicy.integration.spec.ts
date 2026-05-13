@@ -289,6 +289,78 @@ describe("startSocket (auth policy enforcement)", () => {
         });
     }, 30_000);
 
+    it("disconnects a machine-scoped socket when the machine has been replaced", async () => {
+        const account = await db.account.create({
+            data: { publicKey: `pk-replaced-${Date.now()}` },
+            select: { id: true },
+        });
+
+        await db.machine.create({
+            data: {
+                id: "m-current",
+                accountId: account.id,
+                metadata: "metadata-current",
+                metadataVersion: 1,
+                daemonState: null,
+                daemonStateVersion: 0,
+                active: false,
+            },
+            select: { id: true },
+        });
+        await db.machine.create({
+            data: {
+                id: "m-replaced",
+                accountId: account.id,
+                metadata: "metadata",
+                metadataVersion: 1,
+                daemonState: null,
+                daemonStateVersion: 0,
+                active: false,
+                replacedByMachineId: "m-current",
+                replacedAt: new Date(),
+                replacementReason: "manual_repair",
+                replacementSource: "manual",
+                replacementActorUserId: account.id,
+            },
+            select: { id: true },
+        });
+
+        const token = await auth.createToken(account.id);
+
+        const app = Fastify({ logger: false }) as unknown as AppFastify;
+        startSocket(app);
+        await app.listen({ port: 0, host: "127.0.0.1" });
+        const address = app.server.address();
+        const port = typeof address === "object" && address ? address.port : null;
+        if (!port) {
+            await app.close();
+            throw new Error("Failed to bind socket server");
+        }
+
+        const socket = ioClient(`http://127.0.0.1:${port}`, {
+            path: "/v1/updates",
+            transports: ["websocket"],
+            reconnection: false,
+            auth: { token, clientType: "machine-scoped", machineId: "m-replaced" },
+        });
+
+        let payload: ProviderRequiredErrorPayload;
+        try {
+            payload = await waitForConnectionFailure(socket);
+        } finally {
+            socket.close();
+            await app.close();
+        }
+
+        expect(payload.message).toBe("machine-replaced");
+        expect(payload.data).toEqual({
+            error: "machine-replaced",
+            provider: undefined,
+            statusCode: 410,
+            owner: undefined,
+        });
+    }, 30_000);
+
     it("rejects a second machine-scoped socket when another live owner already holds the machine", async () => {
         const account = await db.account.create({
             data: { publicKey: `pk-${Date.now()}` },

@@ -2,11 +2,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeSocket, getSocketHandler } from "../testkit/socketHarness";
 
 const createSessionMessage = vi.fn(async () => ({ ok: false, error: "invalid-params" }));
+const updateSessionAgentState = vi.fn(async (): Promise<unknown> => ({ ok: false, error: "internal" }));
 const emitEphemeral = vi.fn();
 vi.mock("@/app/session/sessionWriteService", () => ({
     createSessionMessage,
     updateSessionMetadata: vi.fn(async () => ({ ok: false, error: "internal" })),
-    updateSessionAgentState: vi.fn(async () => ({ ok: false, error: "internal" })),
+    updateSessionAgentState,
 }));
 vi.mock("@/app/events/eventRouter", () => ({
     eventRouter: {
@@ -47,6 +48,7 @@ describe("sessionUpdateHandler", () => {
 
     beforeEach(() => {
         createSessionMessage.mockClear();
+        updateSessionAgentState.mockClear();
         emitEphemeral.mockClear();
         checkSessionAccess.mockClear();
         requireAccessLevel.mockClear();
@@ -137,6 +139,43 @@ describe("sessionUpdateHandler", () => {
             sidechainId: null,
         });
         expect(callback).toHaveBeenCalledWith(expect.objectContaining({ ok: false, error: "invalid-params" }));
+    });
+
+    it("drops malformed runtime issue projections from socket update-state payloads", async () => {
+        updateSessionAgentState.mockResolvedValueOnce({
+            ok: true,
+            agentState: "{}",
+            version: 2,
+            participantCursors: [],
+            badgeAttentionChanged: false,
+        });
+        const socket = createFakeSocket();
+
+        registerSessionUpdateHandler(
+            "user-1",
+            socket as any,
+            { connectionType: "session-scoped", socket: socket as any, userId: "user-1", sessionId: "s-1" } as any,
+        );
+
+        const handler = getSocketHandler(socket, "update-state");
+        const callback = vi.fn();
+        await handler({
+            sid: "s-1",
+            agentState: "{}",
+            expectedVersion: 1,
+            runtimeIssueSummaryV1: {
+                latestTurnStatus: "failed",
+                lastRuntimeIssue: { v: 1, status: "failed" },
+            },
+        }, callback);
+
+        expect(updateSessionAgentState).toHaveBeenCalledWith({
+            actorUserId: "user-1",
+            sessionId: "s-1",
+            expectedVersion: 1,
+            agentStateCiphertext: "{}",
+        });
+        expect(callback).toHaveBeenCalledWith({ result: "success", version: 2, agentState: "{}" });
     });
 
 });

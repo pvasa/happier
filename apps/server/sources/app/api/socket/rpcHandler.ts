@@ -7,6 +7,10 @@ import { resolveRpcMethodAvailabilityGraceMs, resolveRpcMethodAvailabilityPollMs
 import { createRpcRedisRegistryCoordinator, type RpcRedisRegistryConfig } from "./rpcRedisRegistryCoordinator";
 import { resolveRpcCallTarget } from "./resolveRpcCallTarget";
 import { canRegisterSessionScopedRpcMethod } from "./sessionScopedBinding";
+import {
+    formatCurrentMachineSocketError,
+    validateCurrentMachineSocket,
+} from "@/app/machines/validateCurrentMachineSocket";
 
 const MAX_RPC_METHOD_NAME_LENGTH = 512;
 
@@ -77,6 +81,22 @@ function pruneUserRpcListenerMapIfEmpty(
     }
 }
 
+function readMachineScopedSocketMachineId(socket: Socket): string | null {
+    const clientType = typeof (socket.data as any)?.clientType === 'string'
+        ? (socket.data as any).clientType
+        : '';
+    const machineId = typeof (socket.data as any)?.machineId === 'string'
+        ? (socket.data as any).machineId
+        : '';
+    return clientType === 'machine-scoped' && machineId ? machineId : null;
+}
+
+function readMachineIdPrefix(method: string): string | null {
+    const separatorIndex = method.indexOf(':');
+    if (separatorIndex <= 0) return null;
+    return method.slice(0, separatorIndex);
+}
+
 export function rpcHandler(
     userId: string,
     socket: Socket,
@@ -114,6 +134,18 @@ export function rpcHandler(
             if (!canRegisterSessionScopedRpcMethod({ socket, method })) {
                 socket.emit(SOCKET_RPC_EVENTS.ERROR, { type: 'register', error: 'Forbidden' });
                 return;
+            }
+
+            const machineId = readMachineScopedSocketMachineId(socket);
+            if (machineId) {
+                const currentMachine = await validateCurrentMachineSocket({ accountId: userId, machineId });
+                if (!currentMachine.ok) {
+                    socket.emit(SOCKET_RPC_EVENTS.ERROR, {
+                        type: 'register',
+                        error: formatCurrentMachineSocketError(currentMachine.reason),
+                    });
+                    return;
+                }
             }
 
             // Register this socket as the listener for this method
@@ -199,6 +231,24 @@ export function rpcHandler(
             };
 
             try {
+                const targetMachineIdPrefix = readMachineIdPrefix(method);
+                if (targetMachineIdPrefix) {
+                    const targetMachine = await validateCurrentMachineSocket({
+                        accountId: targetUserId,
+                        machineId: targetMachineIdPrefix,
+                    });
+                    if (!targetMachine.ok && targetMachine.reason !== "machine_not_found") {
+                        if (callback) {
+                            callback({
+                                ok: false,
+                                error: formatCurrentMachineSocketError(targetMachine.reason),
+                                errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                            });
+                        }
+                        return;
+                    }
+                }
+
                 if (redisRegistry.enabled) {
                     let targetSocketId = await redisRegistry.lookupSocketId(targetUserId, method);
                     if (!targetSocket?.connected || !targetSocketId) {
@@ -225,6 +275,24 @@ export function rpcHandler(
                                 });
                             }
                             return;
+                        }
+
+                        const fallbackMachineId = readMachineScopedSocketMachineId(fallbackSocket);
+                        if (fallbackMachineId) {
+                            const fallbackMachine = await validateCurrentMachineSocket({
+                                accountId: targetUserId,
+                                machineId: fallbackMachineId,
+                            });
+                            if (!fallbackMachine.ok) {
+                                if (callback) {
+                                    callback({
+                                        ok: false,
+                                        error: formatCurrentMachineSocketError(fallbackMachine.reason),
+                                        errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                                    });
+                                }
+                                return;
+                            }
                         }
 
                         const response = await fallbackSocket.timeout(forwardTimeoutMs).emitWithAck(SOCKET_RPC_EVENTS.REQUEST, {
@@ -324,6 +392,24 @@ export function rpcHandler(
                         });
                     }
                     return;
+                }
+
+                const targetMachineId = readMachineScopedSocketMachineId(targetSocket);
+                if (targetMachineId) {
+                    const targetMachine = await validateCurrentMachineSocket({
+                        accountId: targetUserId,
+                        machineId: targetMachineId,
+                    });
+                    if (!targetMachine.ok) {
+                        if (callback) {
+                            callback({
+                                ok: false,
+                                error: formatCurrentMachineSocketError(targetMachine.reason),
+                                errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+                            });
+                        }
+                        return;
+                    }
                 }
 
                 // Forward the RPC request to the target socket using emitWithAck (single-process path).

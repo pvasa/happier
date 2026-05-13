@@ -8,6 +8,13 @@ const createRpcRedisRegistryCoordinatorMock = vi.fn();
 const resolveRpcCallTargetMock = vi.fn();
 const resolveRpcMethodAvailabilityGraceMsMock = vi.fn<(method: string) => number>(() => 0);
 const resolveRpcMethodAvailabilityPollMsMock = vi.fn<() => number>(() => 1);
+const dbMockFns = vi.hoisted(() => ({
+    machineFindFirst: vi.fn(async (): Promise<{ revokedAt: Date | null; replacedByMachineId: string | null }> => ({
+        revokedAt: null,
+        replacedByMachineId: null,
+    })),
+    sessionFindUnique: vi.fn(),
+}));
 
 vi.mock("@/utils/logging/log", () => ({
     log: vi.fn(),
@@ -28,6 +35,13 @@ vi.mock("./resolveRpcCallTarget", () => ({
 
 vi.mock("./rpcRedisRegistryCoordinator", () => ({
     createRpcRedisRegistryCoordinator: (...args: unknown[]) => createRpcRedisRegistryCoordinatorMock(...args),
+}));
+
+vi.mock("@/storage/db", () => ({
+    db: {
+        machine: { findFirst: dbMockFns.machineFindFirst },
+        session: { findUnique: dbMockFns.sessionFindUnique },
+    },
 }));
 
 import { rpcHandler } from "./rpcHandler";
@@ -65,6 +79,9 @@ describe("rpcHandler", () => {
         resolveRpcMethodAvailabilityGraceMsMock.mockReturnValue(0);
         resolveRpcMethodAvailabilityPollMsMock.mockReset();
         resolveRpcMethodAvailabilityPollMsMock.mockReturnValue(1);
+        dbMockFns.machineFindFirst.mockReset();
+        dbMockFns.machineFindFirst.mockResolvedValue({ revokedAt: null, replacedByMachineId: null });
+        dbMockFns.sessionFindUnique.mockReset();
         vi.unstubAllEnvs();
         vi.useRealTimers();
     });
@@ -155,6 +172,40 @@ describe("rpcHandler", () => {
         expect(socket.emit).toHaveBeenCalledWith(
             SOCKET_RPC_EVENTS.ERROR,
             expect.objectContaining({ type: "register", error: "Invalid method name" }),
+        );
+    });
+
+    it("rejects RPC registration from a replaced machine-scoped socket", async () => {
+        const redisCoordinator = createRedisCoordinator();
+        createRpcRedisRegistryCoordinatorMock.mockReturnValue(redisCoordinator);
+        dbMockFns.machineFindFirst.mockResolvedValueOnce({ revokedAt: null, replacedByMachineId: "machine-current" });
+
+        const socket = createSocket({
+            id: "socket-1",
+            data: {
+                clientType: "machine-scoped",
+                machineId: "machine-old",
+            },
+        });
+        const userRpcListeners = new Map<string, Socket>();
+        const allRpcListeners = new Map<string, Map<string, Socket>>();
+
+        rpcHandler("user-1", socket as unknown as Socket, userRpcListeners, allRpcListeners, {
+            io: {} as Server,
+            redisRegistry: { enabled: false },
+        });
+
+        await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.REGISTER, { method: "machine-old:spawn-happy-session" });
+
+        expect(dbMockFns.machineFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+            where: { accountId: "user-1", id: "machine-old" },
+            select: { revokedAt: true, replacedByMachineId: true },
+        }));
+        expect(userRpcListeners.size).toBe(0);
+        expect(redisCoordinator.registerMethod).not.toHaveBeenCalled();
+        expect(socket.emit).toHaveBeenCalledWith(
+            SOCKET_RPC_EVENTS.ERROR,
+            expect.objectContaining({ type: "register", error: "Machine replaced" }),
         );
     });
     it("removes only the socket mapping that failed during a forwarded RPC call", async () => {

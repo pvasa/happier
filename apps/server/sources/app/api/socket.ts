@@ -139,10 +139,16 @@ export function startSocket(app: Fastify) {
         if (clientType === 'machine-scoped') {
             const machine = await db.machine.findFirst({
                 where: { accountId: verified.userId, id: machineId },
-                select: { id: true },
+                select: { id: true, revokedAt: true, replacedByMachineId: true },
             });
             if (!machine) {
                 return next(rejectSocket({ statusCode: 403, error: 'invalid-machine' }));
+            }
+            if (machine.revokedAt) {
+                return next(rejectSocket({ statusCode: 410, error: 'machine-revoked' }));
+            }
+            if (machine.replacedByMachineId) {
+                return next(rejectSocket({ statusCode: 410, error: 'machine-replaced' }));
             }
 
             const ownershipResult = await machineSocketOwnershipRegistry.claimOwner({

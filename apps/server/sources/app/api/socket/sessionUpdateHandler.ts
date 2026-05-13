@@ -22,7 +22,7 @@ import { checkSessionAccess, requireAccessLevel } from "@/app/share/accessContro
 import { getSessionParticipantUserIds } from "@/app/share/sessionParticipants";
 import { parseIntEnv } from "@/config/env";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
-import { ExecutionRunPublicStateSchema } from "@happier-dev/protocol";
+import { ExecutionRunPublicStateSchema, PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema } from "@happier-dev/protocol";
 import { TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/protocol/updates";
 import { refreshSessionParticipantBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { didSessionActivityBadgeContributionChange } from "@/app/activity/accountActivityBadge";
@@ -120,6 +120,26 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 typeof activitySummaryV1?.pendingUserActionRequestCount === "number" && Number.isFinite(activitySummaryV1.pendingUserActionRequestCount)
                     ? Math.max(0, Math.floor(activitySummaryV1.pendingUserActionRequestCount))
                     : undefined;
+            const runtimeIssueSummaryV1Raw = (data as any)?.runtimeIssueSummaryV1;
+            const latestTurnStatus = PrimaryTurnStatusV1Schema.safeParse(runtimeIssueSummaryV1Raw?.latestTurnStatus);
+            const hasRuntimeIssueProjection = runtimeIssueSummaryV1Raw
+                && typeof runtimeIssueSummaryV1Raw === "object"
+                && !Array.isArray(runtimeIssueSummaryV1Raw)
+                && "lastRuntimeIssue" in runtimeIssueSummaryV1Raw;
+            const lastRuntimeIssue = hasRuntimeIssueProjection
+                ? runtimeIssueSummaryV1Raw.lastRuntimeIssue === null
+                    ? null
+                    : SessionRuntimeIssueV1Schema.safeParse(runtimeIssueSummaryV1Raw.lastRuntimeIssue)
+                : undefined;
+            const runtimeIssueSummaryV1 =
+                latestTurnStatus.success && (lastRuntimeIssue == null || lastRuntimeIssue.success)
+                    ? {
+                        latestTurnStatus: latestTurnStatus.data,
+                        ...(hasRuntimeIssueProjection
+                            ? { lastRuntimeIssue: lastRuntimeIssue === null ? null : lastRuntimeIssue?.data }
+                            : {}),
+                    }
+                    : null;
 
             // Validate input
             if (!sid || (typeof agentState !== 'string' && agentState !== null) || typeof expectedVersion !== 'number') {
@@ -136,6 +156,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 agentStateCiphertext: agentState,
                 ...(typeof pendingPermissionRequestCount === "number" ? { pendingPermissionRequestCount } : {}),
                 ...(typeof pendingUserActionRequestCount === "number" ? { pendingUserActionRequestCount } : {}),
+                ...(runtimeIssueSummaryV1 ? { runtimeIssueSummaryV1 } : {}),
             });
 
             if (!result.ok) {
@@ -167,6 +188,8 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                     (
                         typeof result.pendingPermissionRequestCount === 'number'
                         || typeof result.pendingUserActionRequestCount === 'number'
+                        || result.latestTurnStatus !== undefined
+                        || result.lastRuntimeIssue !== undefined
                     )
                         ? {
                             ...(typeof result.pendingPermissionRequestCount === 'number'
@@ -174,6 +197,12 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                                 : {}),
                             ...(typeof result.pendingUserActionRequestCount === 'number'
                                 ? { pendingUserActionRequestCount: result.pendingUserActionRequestCount }
+                                : {}),
+                            ...(result.latestTurnStatus !== undefined
+                                ? { latestTurnStatus: result.latestTurnStatus }
+                                : {}),
+                            ...(result.lastRuntimeIssue !== undefined
+                                ? { lastRuntimeIssue: result.lastRuntimeIssue }
                                 : {}),
                         }
                         : undefined,
