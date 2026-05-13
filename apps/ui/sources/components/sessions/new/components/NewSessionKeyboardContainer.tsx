@@ -15,7 +15,7 @@ export function NewSessionKeyboardContainer(props: Readonly<{
     return (
         <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? props.headerHeight + props.safeAreaBottom + 16 : 0}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? props.headerHeight : 0}
             style={props.style}
         >
             {props.children}

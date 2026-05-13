@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { readKeyboardContextFromEventTarget } from '@/keyboard/runtime';
+
 export type StoryDeckKeyboardShortcutsProps = Readonly<{
     onAdvance: () => void;
     onBack?: () => void;
@@ -19,6 +21,8 @@ export function StoryDeckKeyboardShortcuts(props: StoryDeckKeyboardShortcutsProp
 
         const handler = (event: KeyboardEvent) => {
             if (event.defaultPrevented) return;
+            if (event.isComposing === true) return;
+            if (readKeyboardContextFromEventTarget(event.target).isEditableTarget) return;
             if (event.metaKey || event.ctrlKey || event.altKey) return;
             switch (event.key) {
                 case 'ArrowRight':

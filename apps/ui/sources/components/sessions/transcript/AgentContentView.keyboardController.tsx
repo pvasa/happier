@@ -1,9 +1,9 @@
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import * as React from 'react';
-import { View } from 'react-native';
-import { useKeyboardHandler, useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import { ScrollView, View } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useUnistyles } from 'react-native-unistyles';
 import { useKeyboardDismissOnTap } from './useKeyboardDismissOnTap';
 
 interface AgentContentViewProps {
@@ -13,71 +13,45 @@ interface AgentContentViewProps {
 }
 
 export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({ input, content, placeholder }) => {
+    const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
-    const keyboard = useReanimatedKeyboardAnimation();
     const headerHeight = useHeaderHeight();
-    const animatedPadding = useSharedValue(0);
     const keyboardDismissOnTapHandlers = useKeyboardDismissOnTap();
 
-    useKeyboardHandler(
-        {
-            onEnd(e) {
-                'worklet';
-                animatedPadding.value = e.progress === 1 ? (-keyboard.height.value - safeArea.bottom) : 0;
-            },
-            onStart() {
-                'worklet';
-                animatedPadding.value = 0;
-            },
-        },
-        [safeArea.bottom],
-    );
-
-    const animatedStyle = useAnimatedStyle(() => ({
-        paddingTop: animatedPadding.value,
-        transform: [{ translateY: keyboard.height.value + safeArea.bottom * keyboard.progress.value }],
-    }), [safeArea.bottom]);
-
-    const animatedInputStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: keyboard.height.value + safeArea.bottom * keyboard.progress.value }],
-    }), [safeArea.bottom]);
-
-    const animatePlaceholderStyle = useAnimatedStyle(() => ({
-        paddingTop: keyboard.progress.value === 1 ? keyboard.height.value : 0,
-        transform: [{ translateY: (keyboard.height.value + safeArea.bottom * keyboard.progress.value) / 2 }],
-    }), [safeArea.bottom]);
-
     return (
-        <View style={{ flexBasis: 0, flexGrow: 1 }}>
+        <KeyboardAvoidingView
+            testID="agent-content-keyboard-host"
+            behavior="padding"
+            keyboardVerticalOffset={0}
+            style={{ flex: 1, minHeight: 0, backgroundColor: theme.colors.surface.base }}
+        >
             <View
-                style={{ flexBasis: 0, flexGrow: 1 }}
+                testID="agent-content-scroll-region"
+                style={{ flex: 1, minHeight: 0 }}
                 {...keyboardDismissOnTapHandlers}
             >
                 {content ? (
-                    <Animated.View
-                        pointerEvents="box-none"
-                        style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }, animatedStyle]}
-                    >
+                    <View style={{ flex: 1, minHeight: 0 }}>
                         {content}
-                    </Animated.View>
+                    </View>
                 ) : null}
                 {placeholder ? (
-                    <Animated.ScrollView
-                        style={[
-                            { position: 'absolute', top: safeArea.top + headerHeight, left: 0, right: 0, bottom: 0 },
-                            animatePlaceholderStyle,
-                        ]}
+                    <ScrollView
+                        style={{ position: 'absolute', top: safeArea.top + headerHeight, left: 0, right: 0, bottom: 0 }}
                         contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}
                         keyboardShouldPersistTaps="handled"
                         alwaysBounceVertical={false}
                     >
                         {placeholder}
-                    </Animated.ScrollView>
+                    </ScrollView>
                 ) : null}
             </View>
-            <Animated.View style={[animatedInputStyle]}>
+            <View
+                testID="agent-content-input-footer"
+                style={{ backgroundColor: theme.colors.surface.base }}
+            >
                 {input}
-            </Animated.View>
-        </View>
+            </View>
+        </KeyboardAvoidingView>
     );
 });

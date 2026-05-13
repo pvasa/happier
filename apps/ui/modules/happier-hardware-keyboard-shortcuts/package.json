@@ -2,8 +2,10 @@
     "name": "happier-hardware-keyboard-shortcuts",
     "version": "0.0.0",
     "private": true,
-    "description": "Local Expo module for iOS hardware keyboard shortcuts.",
+    "description": "Local Expo module for native hardware keyboard shortcuts.",
     "files": [
+        "android",
+        "app.plugin.js",
         "ios",
         "expo-module.config.json",
         "package.json"

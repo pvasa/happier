@@ -1,0 +1,67 @@
+import type { TranslationKey } from '@/text';
+
+export type KeyboardPlatform = 'macos' | 'ios' | 'windows' | 'linux' | 'android' | 'web';
+
+export type KeyboardCommandId =
+    | 'composer.abortConfirm'
+    | 'composer.focus'
+    | 'composer.sendImmediate'
+    | 'commandPalette.open'
+    | 'mode.cycle'
+    | 'permission.cycle'
+    | 'shortcutsHelp.open'
+    | 'session.new'
+    | 'session.mru.next'
+    | 'session.mru.previous'
+    | 'session.visible.next'
+    | 'session.visible.previous'
+    | 'settings.open'
+    | 'transcript.message.next'
+    | 'transcript.message.previous'
+    | 'transcript.scroll.bottom'
+    | 'transcript.scroll.pageDown'
+    | 'transcript.scroll.pageUp'
+    | 'transcript.scroll.top';
+
+export type KeyboardContext = Readonly<{
+    isEditableTarget: boolean;
+    isComposing: boolean;
+}>;
+
+export type NormalizedKeyboardEvent = Readonly<{
+    key: string;
+    code: string;
+    altKey: boolean;
+    ctrlKey: boolean;
+    metaKey: boolean;
+    shiftKey: boolean;
+    repeat: boolean;
+    isComposing: boolean;
+}>;
+
+export type KeybindingRule = Readonly<{
+    binding: string;
+    platforms?: readonly KeyboardPlatform[];
+    blockedSurfaces?: readonly KeyboardSurface[];
+    allowInEditable?: boolean;
+}>;
+
+export type KeyboardSurface = 'native' | 'web';
+
+export type ParsedKeybindingRule = KeybindingRule & Readonly<{
+    key?: string;
+    code?: string;
+    mod?: boolean;
+    alt?: boolean;
+    ctrl?: boolean;
+    meta?: boolean;
+    shift?: boolean;
+}>;
+
+export type KeyboardCommand = Readonly<{
+    id: KeyboardCommandId;
+    defaultBinding?: KeybindingRule;
+    defaultBindings?: readonly KeybindingRule[];
+    settingsTitleKey?: TranslationKey;
+    when?: (context: KeyboardContext) => boolean;
+}>;
