@@ -6,6 +6,11 @@ import { voiceSettingsParse } from '../settings/voiceSettings';
 import { LocalSettings, localSettingsDefaults, localSettingsParse } from '../settings/localSettings';
 import { Purchases, purchasesDefaults, purchasesParse } from '../purchases/purchases';
 import { Profile, profileDefaults, profileParse } from '../profiles/profile';
+import {
+    migrateThemeProfileLocalStateTokenIds,
+    parseThemeProfilesLocalState,
+} from '@/theme/profiles/themeProfilePersistence';
+import type { ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
 import { isModelMode, isPermissionMode, type PermissionMode, type ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import { DEFAULT_AGENT_ID, isAgentId, type AgentId } from '@/agents/registry/registryCore';
 import { SecretStringSchema, type SecretString } from '../../encryption/secretSettings';
@@ -401,6 +406,61 @@ export function saveLocalSettings(settings: LocalSettings) {
     mmkv.set('local-settings', JSON.stringify(settings));
 }
 
+export type ThemeRuntimeLocalState = Readonly<{
+    themePreference: LocalSettings['themePreference'];
+    themeProfiles: ThemeProfilesLocalStateV1;
+}>;
+
+function readLocalSettingsJsonForThemeRuntime(raw: string): unknown | null {
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        console.error('Failed to parse local settings for theme runtime', e);
+        return null;
+    }
+}
+
+export function loadThemeRuntimeLocalState(): ThemeRuntimeLocalState {
+    const mmkv = getPersistenceStorage();
+    const localSettingsRaw = mmkv.getString('local-settings');
+    if (!localSettingsRaw) {
+        return {
+            themePreference: localSettingsDefaults.themePreference,
+            themeProfiles: localSettingsDefaults.themeProfiles,
+        };
+    }
+
+    const parsed = readLocalSettingsJsonForThemeRuntime(localSettingsRaw);
+    if (parsed === null) {
+        return {
+            themePreference: localSettingsDefaults.themePreference,
+            themeProfiles: localSettingsDefaults.themeProfiles,
+        };
+    }
+
+    const settings = localSettingsParse(parsed);
+    const parsedProfiles = parseThemeProfilesLocalState(
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Readonly<Record<string, unknown>>).themeProfiles
+            : undefined,
+    );
+    const migratedProfiles = migrateThemeProfileLocalStateTokenIds(parsedProfiles.state);
+    const themeProfiles = migratedProfiles.state;
+
+    if (parsedProfiles.changed || migratedProfiles.changed) {
+        const healedSettings = localSettingsParse({
+            ...(typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {}),
+            themeProfiles,
+        });
+        mmkv.set('local-settings', JSON.stringify(healedSettings));
+    }
+
+    return {
+        themePreference: settings.themePreference,
+        themeProfiles,
+    };
+}
+
 const LocalPetSourceMetadataSchema = z
     .object({
         kind: z.enum(['detectedCodexHome', 'happierManagedLocal']),
@@ -467,19 +527,7 @@ export function saveLocalPetSourcesBySourceKey(sources: Record<string, LocalPetS
 }
 
 export function loadThemePreference(): 'light' | 'dark' | 'adaptive' {
-    const mmkv = getPersistenceStorage();
-    const localSettings = mmkv.getString('local-settings');
-    if (localSettings) {
-        try {
-            const parsed = JSON.parse(localSettings);
-            const settings = localSettingsParse(parsed);
-            return settings.themePreference;
-        } catch (e) {
-            console.error('Failed to parse local settings for theme preference', e);
-            return localSettingsDefaults.themePreference;
-        }
-    }
-    return localSettingsDefaults.themePreference;
+    return loadThemeRuntimeLocalState().themePreference;
 }
 
 export function loadPurchases(): Purchases {

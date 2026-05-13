@@ -9,6 +9,8 @@ import {
     createSessionRollbackRangesV1Schema,
     createSessionTerminalMetadataSchema,
     createSessionSystemSessionV1Schema,
+    type PrimaryTurnStatusV1,
+    type SessionRuntimeIssueV1,
     WindowsRemoteSessionLaunchModeSchema,
     type ScmDefaultBranchPushPolicy,
     type ScmHostingProvider,
@@ -377,6 +379,8 @@ export interface Session {
     lastViewedSessionSeq?: number | null,
     pendingPermissionRequestCount?: number,
     pendingUserActionRequestCount?: number,
+    latestTurnStatus?: PrimaryTurnStatusV1 | null,
+    lastRuntimeIssue?: SessionRuntimeIssueV1 | null,
     metadata: Metadata | null,
     metadataVersion: number,
     agentState: AgentState | null,
@@ -484,6 +488,13 @@ export interface Machine {
     metadataVersion: number;
     daemonState: any | null;  // Dynamic daemon state (runtime info)
     daemonStateVersion: number;
+    installationId?: string | null;
+    contentPublicKeyFingerprint?: string | null;
+    replacedByMachineId?: string | null;
+    replacedAt?: number | string | null;
+    replacementReason?: string | null;
+    replacementSource?: 'automatic' | 'manual' | string | null;
+    replacementActorUserId?: string | null;
 }
 
 //
@@ -624,6 +635,10 @@ export interface ScmWorkingSnapshot {
             branch: string | null;
             isCurrent: boolean;
             isMain?: boolean;
+            /** Total working-tree changes; populated when SCM enrichment was requested. */
+            changeCount?: number;
+            /** Epoch ms of the most recent activity; populated when SCM enrichment was requested. */
+            lastActivityAt?: number;
         }>;
         remotes?: ScmRemoteInfo[];
     };

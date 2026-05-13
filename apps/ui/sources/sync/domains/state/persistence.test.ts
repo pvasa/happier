@@ -82,6 +82,7 @@ import {
     saveSessionActionDrafts,
     loadLocalPetSourcesBySourceKey,
     saveLocalPetSourcesBySourceKey,
+    loadThemeRuntimeLocalState,
     type ChangesCursorScope,
 } from './persistence';
 
@@ -142,6 +143,67 @@ describe('persistence', () => {
                 JSON.stringify({ abc: 'gemini-2.5-pro', custom: 'claude-3-5-sonnet-latest', bad: '   ' }),
             );
             expect(loadSessionModelModes()).toEqual({ abc: 'gemini-2.5-pro', custom: 'claude-3-5-sonnet-latest' });
+        });
+    });
+
+    describe('theme runtime local state', () => {
+        it('returns default theme runtime state when local settings JSON is malformed', () => {
+            store.set('local-settings', '{not json');
+            const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+            expect(loadThemeRuntimeLocalState()).toEqual({
+                themePreference: 'adaptive',
+                themeProfiles: {
+                    profiles: [],
+                    activeProfileId: null,
+                },
+            });
+            consoleError.mockRestore();
+        });
+
+        it('drops malformed profile state while preserving theme preference at startup', () => {
+            store.set('local-settings', JSON.stringify({
+                themePreference: 'dark',
+                themeProfiles: 'bad',
+            }));
+
+            expect(loadThemeRuntimeLocalState()).toEqual({
+                themePreference: 'dark',
+                themeProfiles: {
+                    profiles: [],
+                    activeProfileId: null,
+                },
+            });
+        });
+
+        it('heals deprecated theme profile token ids in persisted local settings at startup', () => {
+            store.set('local-settings', JSON.stringify({
+                themePreference: 'light',
+                themeProfiles: {
+                    activeProfileId: 'ocean',
+                    profiles: [{
+                        schemaVersion: 1,
+                        id: 'ocean',
+                        name: 'Ocean',
+                        createdAt: '2026-05-11T00:00:00.000Z',
+                        updatedAt: '2026-05-11T00:00:00.000Z',
+                        base: { light: 'light', dark: 'dark' },
+                        overrides: {
+                            light: { 'groupped.background': '#fafafa' },
+                            dark: { surfaceHigh: '#111111' },
+                        },
+                    }],
+                },
+            }));
+
+            const state = loadThemeRuntimeLocalState();
+            const healed = JSON.parse(store.get('local-settings') ?? '{}');
+
+            expect(state.themeProfiles.profiles[0]?.overrides).toEqual({
+                light: { 'background.canvas': '#fafafa' },
+                dark: { 'surface.inset': '#111111' },
+            });
+            expect(healed.themeProfiles.profiles[0].overrides).toEqual(state.themeProfiles.profiles[0]?.overrides);
         });
     });
 

@@ -112,6 +112,29 @@ describe('accountSettingsPersistence', () => {
         expect(store.has('pending-settings')).toBe(false);
     });
 
+    it('ignores obsolete local keyboard shortcut preferences during account scope activation', async () => {
+        const mod = await loadAccountSettingsPersistenceModule();
+        expect(mod, 'account settings persistence module should exist').not.toBeNull();
+        if (!mod) return;
+
+        store.set('local-settings', JSON.stringify({
+            commandPaletteEnabled: true,
+            keyboardShortcutsV2Enabled: true,
+            keyboardSingleKeyShortcutsEnabled: true,
+            keyboardShortcutDisabledCommandIdsV1: ['session.new', '', 42],
+            keyboardShortcutOverridesV1: {
+                'commandPalette.open': [{ binding: 'Alt+K' }],
+                'bad.command': [{ binding: '' }],
+            },
+            sessionMruOrderV1: ['server-a:session-a'],
+        }));
+
+        mod.prepareAccountSettingsScopeForActivation(scopeA);
+
+        expect(mod.loadAccountSettings(scopeA)).toEqual({ settings: {}, version: null });
+        expect(mod.loadPendingAccountSettings(scopeA)).toEqual({});
+    });
+
     it('keeps existing scoped pending settings when activation sees legacy pending settings', async () => {
         const mod = await loadAccountSettingsPersistenceModule();
         expect(mod, 'account settings persistence module should exist').not.toBeNull();
