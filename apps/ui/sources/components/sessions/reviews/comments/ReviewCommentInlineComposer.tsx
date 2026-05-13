@@ -22,7 +22,7 @@ export function ReviewCommentInlineComposer(props: {
                 value={props.value}
                 onChangeText={props.onChange}
                 placeholder={t('files.reviewComments.placeholder')}
-                placeholderTextColor={theme.colors.textSecondary}
+                placeholderTextColor={theme.colors.text.secondary}
                 multiline
                 style={styles.input}
             />
@@ -53,15 +53,15 @@ const styles = StyleSheet.create((theme) => ({
         padding: 10,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: theme.colors.divider ?? '#ddd',
-        backgroundColor: theme.colors.surfaceHighest ?? theme.colors.surface ?? '#fff',
+        borderColor: theme.colors.border.default ?? '#ddd',
+        backgroundColor: theme.colors.surface.elevated ?? theme.colors.surface.base ?? '#fff',
         gap: 10,
     },
     input: {
         minHeight: 54,
         maxHeight: 160,
         padding: 0,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default(),
         fontSize: 13,
         lineHeight: 18,
@@ -87,10 +87,10 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 8,
-        backgroundColor: theme.colors.button?.primary?.background ?? theme.colors.text ?? '#000',
+        backgroundColor: theme.colors.button?.primary?.background ?? theme.colors.text.primary ?? '#000',
     },
     primaryText: {
-        color: theme.colors.button?.primary?.tint ?? theme.colors.surface ?? '#fff',
+        color: theme.colors.button?.primary?.tint ?? theme.colors.surface.base ?? '#fff',
         fontSize: 12,
         fontWeight: '700',
         ...Typography.default('semiBold'),
@@ -99,12 +99,12 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 8,
-        backgroundColor: theme.colors.surfacePressed ?? theme.colors.surface ?? '#fff',
+        backgroundColor: theme.colors.surface.pressed ?? theme.colors.surface.base ?? '#fff',
         borderWidth: 1,
-        borderColor: theme.colors.divider ?? '#ddd',
+        borderColor: theme.colors.border.default ?? '#ddd',
     },
     secondaryText: {
-        color: theme.colors.button?.secondary?.tint ?? theme.colors.textSecondary ?? '#666',
+        color: theme.colors.button?.secondary?.tint ?? theme.colors.text.secondary ?? '#666',
         fontSize: 12,
         fontWeight: '700',
         ...Typography.default('semiBold'),
@@ -113,10 +113,10 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 10,
         paddingVertical: 8,
         borderRadius: 8,
-        backgroundColor: theme.colors.surfacePressed,
+        backgroundColor: theme.colors.surface.pressed,
     },
     dangerText: {
-        color: theme.colors.textDestructive,
+        color: theme.colors.state.danger.foreground,
         fontSize: 12,
         fontWeight: '700',
         ...Typography.default('semiBold'),

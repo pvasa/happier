@@ -110,6 +110,66 @@ describe('useCodeLinesReviewComments', () => {
         });
     });
 
+    it('opens a range composer after the final selected line', async () => {
+        const { useCodeLinesReviewComments } = await import('./useCodeLinesReviewComments');
+
+        const lines = [
+            {
+                id: 'f:1',
+                sourceIndex: 0,
+                kind: 'file',
+                oldLine: null,
+                newLine: 1,
+                renderPrefixText: '',
+                renderCodeText: 'const first = 1;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+            {
+                id: 'f:2',
+                sourceIndex: 1,
+                kind: 'file',
+                oldLine: null,
+                newLine: 2,
+                renderPrefixText: '',
+                renderCodeText: 'const second = 2;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+        ] as any;
+
+        function Harness() {
+            const controls = useCodeLinesReviewComments({
+                enabled: true,
+                filePath: 'src/a.ts',
+                source: 'file',
+                lines,
+                drafts: [],
+            });
+
+            return (
+                <React.Fragment>
+                    <Pressable testID="add-range-comment-trigger" onPress={() => controls!.onPressAddCommentRange([lines[0], lines[1]])} />
+                    <View testID="first-line">{controls!.renderAfterLine(lines[0])}</View>
+                    <View testID="second-line">{controls!.renderAfterLine(lines[1])}</View>
+                </React.Fragment>
+            );
+        }
+
+        const screen = await renderScreen(<Harness />);
+
+        await act(async () => {
+            await screen.pressByTestIdAsync('add-range-comment-trigger');
+        });
+
+        const firstLine = screen.findByTestId('first-line');
+        const secondLine = screen.findByTestId('second-line');
+        if (!firstLine || !secondLine) throw new Error('Expected rendered line containers');
+
+        expect(firstLine.findAllByType('TextInput' as any)).toHaveLength(0);
+        expect(secondLine.findAllByType('TextInput' as any)).toHaveLength(1);
+    });
+
     it('renders an existing draft on a moved file line by matching the stored line hash', async () => {
         const { useCodeLinesReviewComments } = await import('./useCodeLinesReviewComments');
         const { computeLineContentHash } = await import('@/utils/text/lineContentHash');
@@ -186,6 +246,81 @@ describe('useCodeLinesReviewComments', () => {
         expect(secondLineText).toContain('Keep the moved line anchored.');
     });
 
+    it('renders an existing normalized range draft at the first resolved range line', async () => {
+        const { useCodeLinesReviewComments } = await import('./useCodeLinesReviewComments');
+
+        const lines = [
+            {
+                id: 'f:1',
+                sourceIndex: 0,
+                kind: 'file',
+                oldLine: null,
+                newLine: 1,
+                renderPrefixText: '',
+                renderCodeText: 'const first = 1;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+            {
+                id: 'f:2',
+                sourceIndex: 1,
+                kind: 'file',
+                oldLine: null,
+                newLine: 2,
+                renderPrefixText: '',
+                renderCodeText: 'const second = 2;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+        ] as any;
+
+        function Harness() {
+            const controls = useCodeLinesReviewComments({
+                enabled: true,
+                filePath: 'src/a.ts',
+                source: 'file',
+                lines,
+                drafts: [{
+                    id: 'draft-1',
+                    filePath: 'src/a.ts',
+                    source: 'file',
+                    anchor: {
+                        kind: 'range',
+                        filePath: 'src/a.ts',
+                        startLine: 1,
+                        endLine: 2,
+                    },
+                    snapshot: {
+                        selectedLines: ['const first = 1;', 'const second = 2;'],
+                        beforeContext: [],
+                        afterContext: [],
+                    },
+                    body: 'Review the whole range.',
+                    createdAt: 1,
+                }],
+            });
+
+            return (
+                <React.Fragment>
+                    <View testID="first-line">{controls!.renderAfterLine(lines[0])}</View>
+                    <View testID="second-line">{controls!.renderAfterLine(lines[1])}</View>
+                </React.Fragment>
+            );
+        }
+
+        const screen = await renderScreen(<Harness />);
+
+        const firstLine = screen.findByTestId('first-line');
+        const secondLine = screen.findByTestId('second-line');
+        if (!firstLine || !secondLine) throw new Error('Expected rendered line containers');
+
+        const firstLineText = firstLine.findAllByType('Text' as any).map((n) => n.props.children).join(' ');
+        const secondLineText = secondLine.findAllByType('Text' as any).map((n) => n.props.children).join(' ');
+
+        expect(firstLineText).toContain('Review the whole range.');
+        expect(secondLineText).not.toContain('Review the whole range.');
+    });
+
     it('renders saved comments flush with the diff body and lets users edit them', async () => {
         const { useCodeLinesReviewComments } = await import('./useCodeLinesReviewComments');
 
@@ -245,5 +380,97 @@ describe('useCodeLinesReviewComments', () => {
         const inputs = screen.findAllByType('TextInput' as any);
         expect(inputs).toHaveLength(1);
         expect(inputs[0]!.props.value).toBe('Update the secret handling.');
+    });
+
+    it('preserves an existing range anchor when editing a saved range comment', async () => {
+        const { useCodeLinesReviewComments } = await import('./useCodeLinesReviewComments');
+        const onUpsertDraft = vi.fn();
+
+        const lines = [
+            {
+                id: 'f:1',
+                sourceIndex: 0,
+                kind: 'file',
+                oldLine: null,
+                newLine: 1,
+                renderPrefixText: '',
+                renderCodeText: 'const first = 1;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+            {
+                id: 'f:2',
+                sourceIndex: 1,
+                kind: 'file',
+                oldLine: null,
+                newLine: 2,
+                renderPrefixText: '',
+                renderCodeText: 'const second = 2;',
+                renderIsHeaderLine: false,
+                selectable: true,
+            },
+        ] as any;
+
+        function Harness() {
+            const controls = useCodeLinesReviewComments({
+                enabled: true,
+                filePath: 'src/a.ts',
+                source: 'file',
+                lines,
+                drafts: [{
+                    id: 'draft-range',
+                    filePath: 'src/a.ts',
+                    source: 'file',
+                    anchor: {
+                        kind: 'range',
+                        filePath: 'src/a.ts',
+                        startLine: 1,
+                        endLine: 2,
+                    },
+                    snapshot: {
+                        selectedLines: ['const first = 1;', 'const second = 2;'],
+                        beforeContext: [],
+                        afterContext: [],
+                    },
+                    body: 'Review the range.',
+                    createdAt: 1,
+                }],
+                onUpsertDraft,
+            });
+
+            return <View testID="line">{controls!.renderAfterLine(lines[0])}</View>;
+        }
+
+        const screen = await renderScreen(<Harness />);
+
+        await act(async () => {
+            await screen.pressByTestIdAsync('review-comment-draft-edit:draft-range');
+        });
+
+        const input = screen.findAllByType('TextInput' as any)[0];
+        await act(async () => {
+            input!.props.onChangeText('Review the range again.');
+        });
+
+        const saveButton = screen.findAllByType('Pressable' as any).find((node) => {
+            const text = node.findAllByType('Text' as any).map((child) => child.props.children).join(' ');
+            return text.includes('Save');
+        });
+        if (!saveButton) throw new Error('Expected save button');
+
+        await act(async () => {
+            saveButton.props.onPress();
+        });
+
+        expect(onUpsertDraft).toHaveBeenCalledWith(expect.objectContaining({
+            id: 'draft-range',
+            createdAt: 1,
+            body: 'Review the range again.',
+            anchor: expect.objectContaining({
+                kind: 'range',
+                startLine: 1,
+                endLine: 2,
+            }),
+        }));
     });
 });
