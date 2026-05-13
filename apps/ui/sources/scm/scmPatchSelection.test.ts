@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildPatchFromSelectedDiffLines } from './scmPatchSelection';
+import { buildPatchFromSelectedDiffLines, extractSelectedDiffLineKeysFromPatch } from './scmPatchSelection';
 
 const sampleDiff = [
     'diff --git a/src/a.ts b/src/a.ts',
@@ -102,5 +102,12 @@ describe('buildPatchFromSelectedDiffLines', () => {
         expect(patch).toContain('+new-c');
         const hunkCount = (patch?.match(/^@@/gm) ?? []).length;
         expect(hunkCount).toBe(2);
+    });
+
+    it('extracts selected line keys from a stored partial commit patch', () => {
+        const patch = buildPatchFromSelectedDiffLines(sampleDiff, new Set(['deletions:2', 'additions:2']));
+        expect(patch).toBeTruthy();
+
+        expect(extractSelectedDiffLineKeysFromPatch(patch ?? '')).toEqual(new Set(['deletions:2', 'additions:2']));
     });
 });
