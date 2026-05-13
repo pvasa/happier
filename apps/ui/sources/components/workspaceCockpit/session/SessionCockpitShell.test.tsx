@@ -5,8 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { clearPendingMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { SessionCockpitSurfaceNavigationProvider } from './SessionCockpitSurfaceNavigation';
+import {
+    SessionCockpitSurfaceScreen,
+    type SessionCockpitSurfaceScreenProps,
+} from './SessionCockpitSurfaceScreen';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -20,6 +24,12 @@ const safeAreaInsetsMock = vi.hoisted(() => ({
     left: 0,
     right: 0,
 }));
+const navigationFocusState = vi.hoisted(() => ({
+    isFocused: true,
+}));
+const bottomTabsState = vi.hoisted(() => ({
+    navigations: [] as string[],
+}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -31,17 +41,18 @@ vi.mock('expo-router', async () => {
     }).module;
 });
 
+vi.mock('@react-navigation/native', () => ({
+    useIsFocused: () => navigationFocusState.isFocused,
+}));
+
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => safeAreaInsetsMock,
 }));
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            useLocalSetting: (() => null) as unknown as typeof import('@/sync/domains/state/storage')['useLocalSetting'],
-        },
+vi.mock('@/sync/domains/state/storage', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({
+        useLocalSetting: () => null,
     });
 });
 
@@ -67,6 +78,10 @@ vi.mock('@/components/sessions/panes/surfaces/SessionGitSurface', () => ({
 
 vi.mock('@/components/sessions/panes/surfaces/SessionTerminalSurface', () => ({
     SessionTerminalSurface: (props: Record<string, unknown>) => React.createElement('SessionTerminalSurface', props),
+}));
+
+vi.mock('@/components/navigation/mobile/chrome/bars/SessionCockpitTabBar', () => ({
+    SessionCockpitTabBar: (props: Record<string, unknown>) => React.createElement('SessionCockpitTabBar', props),
 }));
 
 function PaneScopeProbe(props: Readonly<{ scopeId: string }>) {
@@ -97,6 +112,24 @@ function DeepLinkDetailsProbe(props: Readonly<{ scopeId: string; path: string }>
     return null;
 }
 
+function CockpitSurfaceHarness(props: SessionCockpitSurfaceScreenProps) {
+    const [surface, setSurface] = React.useState(props.surface);
+    React.useEffect(() => {
+        setSurface(props.surface);
+    }, [props.surface]);
+
+    const switchSurface = React.useCallback((nextSurface: typeof surface) => {
+        bottomTabsState.navigations.push(nextSurface);
+        setSurface(nextSurface);
+    }, []);
+
+    return (
+        <SessionCockpitSurfaceNavigationProvider value={{ switchSurface }}>
+            <SessionCockpitSurfaceScreen {...props} surface={surface} />
+        </SessionCockpitSurfaceNavigationProvider>
+    );
+}
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
@@ -107,11 +140,12 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return {};
 }
 
-describe('SessionCockpitShell', () => {
+describe('SessionCockpitSurfaceScreen', () => {
     beforeEach(() => {
-        clearPendingMobileSurfaceTransition();
         standardCleanup();
         pathnameState.pathname = '/session/s_1/git';
+        bottomTabsState.navigations = [];
+        navigationFocusState.isFocused = true;
         safeAreaInsetsMock.top = 0;
         safeAreaInsetsMock.bottom = 0;
         safeAreaInsetsMock.left = 0;
@@ -120,10 +154,9 @@ describe('SessionCockpitShell', () => {
     });
 
     it('closes an already-open right pane when the chat surface becomes active', async () => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="terminal"
@@ -137,7 +170,7 @@ describe('SessionCockpitShell', () => {
         await act(async () => {
             await screen.update(
                 <AppPaneProvider>
-                    <SessionCockpitShell
+                    <CockpitSurfaceHarness
                         sessionId="s_1"
                         scopeId="session:s_1"
                         surface="chat"
@@ -160,14 +193,56 @@ describe('SessionCockpitShell', () => {
         expect(sessionView.props.chatBottomSpacing).toBe('none');
     });
 
+    it('does not let an inactive chat surface close the active cockpit pane state', async () => {
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <CockpitSurfaceHarness
+                    sessionId="s_1"
+                    scopeId="session:s_1"
+                    surface="terminal"
+                    routeServerId="server-b"
+                    terminalTabAvailable
+                />
+                <PaneScopeProbe scopeId="session:s_1" />
+            </AppPaneProvider>,
+        );
+
+        let probe = screen.tree.findByType('PaneScopeProbe' as never);
+        expect(probe.props.scopeState?.right).toEqual(expect.objectContaining({
+            isOpen: true,
+            activeTabId: 'terminal',
+        }));
+
+        navigationFocusState.isFocused = false;
+        await act(async () => {
+            await screen.update(
+                <AppPaneProvider>
+                    <CockpitSurfaceHarness
+                        sessionId="s_1"
+                        scopeId="session:s_1"
+                        surface="chat"
+                        routeServerId="server-b"
+                        terminalTabAvailable
+                    />
+                    <PaneScopeProbe scopeId="session:s_1" />
+                </AppPaneProvider>,
+            );
+        });
+
+        probe = screen.tree.findByType('PaneScopeProbe' as never);
+        expect(probe.props.scopeState?.right).toEqual(expect.objectContaining({
+            isOpen: true,
+            activeTabId: 'terminal',
+        }));
+    });
+
     it('reuses the session chrome for fullscreen cockpit surfaces', async () => {
         safeAreaInsetsMock.top = 24;
         safeAreaInsetsMock.bottom = 12;
 
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="terminal"
@@ -197,10 +272,9 @@ describe('SessionCockpitShell', () => {
         ['terminal', 'SessionTerminalSurface'],
         ['tabs', 'SessionDetailsPanel'],
     ] as const)('renders the %s surface inside shared session chrome', async (surface, expectedType) => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface={surface}
@@ -218,10 +292,9 @@ describe('SessionCockpitShell', () => {
     });
 
     it('uses screen presentation for details when the route owns safe-area padding', async () => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="tabs"
@@ -236,18 +309,18 @@ describe('SessionCockpitShell', () => {
         expect(detailsPanel.props.showHeaderActions).toBe(false);
     });
 
-    it('navigates to scoped file details when a browse surface file opens', async () => {
+    it('opens file details on the internal details tab without pushing a sibling stack route', async () => {
         pathnameState.pathname = '/session/s_1/files';
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="browse"
                     routeServerId="server-b"
                     terminalTabAvailable
                 />
+                <PaneScopeProbe scopeId="session:s_1" />
             </AppPaneProvider>,
         );
 
@@ -257,22 +330,19 @@ describe('SessionCockpitShell', () => {
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/s_1/details?serverId=server-b&details=file&path=src%2Fexample.ts&sourceSurface=browse');
-        const {
-            resolvePendingMobileSurfaceTransitionStackOptions,
-        } = await import('@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent');
-        expect(resolvePendingMobileSurfaceTransitionStackOptions({
-            routeName: 'session/[id]/details',
-        })).toEqual({
-            animation: 'slide_from_right',
-        });
+        expect(routerPushSpy).not.toHaveBeenCalled();
+        expect(bottomTabsState.navigations).toContain('tabs');
+        const probe = screen.tree.findByType('PaneScopeProbe' as never);
+        expect(probe.props.scopeState?.details).toEqual(expect.objectContaining({
+            isOpen: true,
+            activeTabKey: 'file:src/example.ts',
+        }));
     });
 
-    it('navigates to scoped commit details when a git surface commit opens', async () => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+    it('opens commit details on the internal details tab without pushing a sibling stack route', async () => {
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="git"
@@ -288,14 +358,14 @@ describe('SessionCockpitShell', () => {
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/s_1/details?serverId=server-b&details=commit&sha=abc1234&sourceSurface=git');
+        expect(routerPushSpy).not.toHaveBeenCalled();
+        expect(bottomTabsState.navigations).toContain('tabs');
     });
 
-    it('navigates to scoped review details when a git surface review opens', async () => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+    it('opens review details on the internal details tab without pushing a sibling stack route', async () => {
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="git"
@@ -311,22 +381,14 @@ describe('SessionCockpitShell', () => {
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/session/s_1/details?serverId=server-b&details=scmReview&sourceSurface=git');
-        const {
-            resolvePendingMobileSurfaceTransitionStackOptions,
-        } = await import('@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent');
-        expect(resolvePendingMobileSurfaceTransitionStackOptions({
-            routeName: 'session/[id]/details',
-        })).toEqual({
-            animation: 'slide_from_right',
-        });
+        expect(routerPushSpy).not.toHaveBeenCalled();
+        expect(bottomTabsState.navigations).toContain('tabs');
     });
 
     it('closes the details presentation when returning to chat from an opened review', async () => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="git"
@@ -352,7 +414,7 @@ describe('SessionCockpitShell', () => {
         await act(async () => {
             await screen.update(
                 <AppPaneProvider>
-                    <SessionCockpitShell
+                    <CockpitSurfaceHarness
                         sessionId="s_1"
                         scopeId="session:s_1"
                         surface="chat"
@@ -373,10 +435,9 @@ describe('SessionCockpitShell', () => {
     });
 
     it('keeps root-route deep-linked details open while the chat surface settles', async () => {
-        const { SessionCockpitShell } = await import('./SessionCockpitShell');
         const screen = await renderScreen(
             <AppPaneProvider>
-                <SessionCockpitShell
+                <CockpitSurfaceHarness
                     sessionId="s_1"
                     scopeId="session:s_1"
                     surface="chat"
