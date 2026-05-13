@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { installToolShellPresentationCommonModuleMocks } from './toolShellPresentationTestHelpers';
@@ -11,6 +11,7 @@ const diffViewerSpy = vi.fn();
 let wrapLinesSetting: boolean = true;
 let inlineVirtualizationThresholdSetting: number | undefined = undefined;
 let inlineVirtualizationByteThresholdSetting: number | undefined = undefined;
+let reviewCommentsFeatureEnabled = false;
 
 installToolShellPresentationCommonModuleMocks({
     reactNative: async () => {
@@ -36,6 +37,18 @@ installToolShellPresentationCommonModuleMocks({
     },
 });
 
+vi.mock('@/hooks/server/useFeatureEnabled', () => ({
+    useFeatureEnabled: (featureId: string) => featureId === 'files.reviewComments' && reviewCommentsFeatureEnabled,
+}));
+
+vi.mock('@/sync/domains/session/resolveWorkspaceScopeForSession', () => ({
+    useWorkspaceScopeForSession: (sessionId: string | null | undefined) => (
+        sessionId === 'session-1'
+            ? { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' }
+            : null
+    ),
+}));
+
 vi.mock('@/components/ui/code/diff/DiffViewer', () => ({
     DiffViewer: (props: any) => {
         diffViewerSpy(props);
@@ -46,9 +59,15 @@ vi.mock('@/components/ui/code/diff/DiffViewer', () => ({
 const toolDiffViewModule = import('./ToolDiffView');
 
 describe('ToolDiffView', () => {
-    it('plumbs filePath and wrapLines into DiffViewer', async () => {
+    beforeEach(() => {
+        reviewCommentsFeatureEnabled = false;
         wrapLinesSetting = true;
+        inlineVirtualizationThresholdSetting = undefined;
+        inlineVirtualizationByteThresholdSetting = undefined;
         diffViewerSpy.mockClear();
+    });
+
+    it('plumbs filePath and wrapLines into DiffViewer', async () => {
         const { ToolDiffView } = await toolDiffViewModule;
 
         await renderScreen(React.createElement(ToolDiffView, {
@@ -68,7 +87,6 @@ describe('ToolDiffView', () => {
 
     it('passes wrapLines=false through to DiffViewer', async () => {
         wrapLinesSetting = false;
-        diffViewerSpy.mockClear();
         const { ToolDiffView } = await toolDiffViewModule;
 
         await renderScreen(React.createElement(ToolDiffView, {
@@ -81,9 +99,7 @@ describe('ToolDiffView', () => {
     });
 
     it('virtualizes large tool diffs to avoid rendering thousands of rows inline', async () => {
-        wrapLinesSetting = true;
         inlineVirtualizationThresholdSetting = 400;
-        diffViewerSpy.mockClear();
         const { ToolDiffView } = await toolDiffViewModule;
 
         const oldLines: string[] = [];
@@ -103,10 +119,8 @@ describe('ToolDiffView', () => {
     });
 
     it('respects the inline virtualization threshold setting', async () => {
-        wrapLinesSetting = true;
         inlineVirtualizationThresholdSetting = 2_000;
         inlineVirtualizationByteThresholdSetting = undefined;
-        diffViewerSpy.mockClear();
         const { ToolDiffView } = await toolDiffViewModule;
 
         const oldLines: string[] = [];
@@ -126,10 +140,8 @@ describe('ToolDiffView', () => {
     });
 
     it('virtualizes diffs above the byte threshold even when line count is below the line threshold', async () => {
-        wrapLinesSetting = true;
         inlineVirtualizationThresholdSetting = 50_000;
         inlineVirtualizationByteThresholdSetting = 100;
-        diffViewerSpy.mockClear();
         const { ToolDiffView } = await toolDiffViewModule;
 
         await renderScreen(React.createElement(ToolDiffView, {
@@ -142,8 +154,6 @@ describe('ToolDiffView', () => {
     });
 
     it('forces unified presentation for creation/deletion diffs to avoid empty split columns', async () => {
-        wrapLinesSetting = true;
-        diffViewerSpy.mockClear();
         const { ToolDiffView } = await toolDiffViewModule;
 
         await renderScreen(React.createElement(ToolDiffView, {
@@ -153,5 +163,47 @@ describe('ToolDiffView', () => {
                 }));
 
         expect(diffViewerSpy).toHaveBeenCalledWith(expect.objectContaining({ presentationStyleOverride: 'unified' }));
+    });
+
+    it('enables review comments for scoped transcript tool diffs with a file path', async () => {
+        reviewCommentsFeatureEnabled = true;
+        const { ToolDiffView } = await toolDiffViewModule;
+
+        await renderScreen(React.createElement(ToolDiffView, {
+                    sessionId: 'session-1',
+                    filePath: 'src/foo.ts',
+                    oldText: 'const x = 1;\n',
+                    newText: 'const x = 2;\n',
+                }));
+
+        expect(diffViewerSpy).toHaveBeenCalledWith(expect.objectContaining({
+            filePath: 'src/foo.ts',
+            onPressLine: expect.any(Function),
+            onPressLineRange: expect.any(Function),
+            pressLineWhenNotSelectable: true,
+            onPressAddComment: expect.any(Function),
+            isCommentActive: expect.any(Function),
+            renderAfterLine: expect.any(Function),
+        }));
+    });
+
+    it('does not enable review comments when the tool diff has no file path', async () => {
+        reviewCommentsFeatureEnabled = true;
+        const { ToolDiffView } = await toolDiffViewModule;
+
+        await renderScreen(React.createElement(ToolDiffView, {
+                    sessionId: 'session-1',
+                    oldText: 'const x = 1;\n',
+                    newText: 'const x = 2;\n',
+                }));
+
+        expect(diffViewerSpy).toHaveBeenCalledWith(expect.objectContaining({
+            onPressLine: undefined,
+            onPressLineRange: undefined,
+            pressLineWhenNotSelectable: false,
+            onPressAddComment: undefined,
+            isCommentActive: undefined,
+            renderAfterLine: undefined,
+        }));
     });
 });
