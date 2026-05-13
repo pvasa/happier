@@ -25,6 +25,7 @@ import { getAgentModelConfig, type AgentId } from '@happier-dev/agents';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
 import type { TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
+import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { resolveSessionMediaDedupeKey } from '@/session/sessionMedia/sessionMediaDedupeKey';
 import {
   SESSION_MEDIA_MESSAGE_META_KIND_V1,
@@ -318,6 +319,13 @@ export function createAcpRuntime(params: {
      */
     drainDuringTurn?: boolean;
     /**
+     * Whether the runtime should pop server-pending messages once after session start/load.
+     *
+     * This covers inactive-session resume: the process is awake again, but no turn has started
+     * until the server-backed pending message is materialized into the normal transcript.
+     */
+    drainAfterStartOrLoad?: boolean;
+    /**
      * Fallback polling interval used while a steer-capable turn is in-flight.
      *
      * Some pending-queue updates may not publish metadata wake signals, so polling avoids
@@ -403,6 +411,30 @@ export function createAcpRuntime(params: {
     pendingPumpController = null;
   };
 
+  const drainPendingMessagesOnce = async (controller?: AbortController): Promise<void> => {
+    if (!params.pendingQueue) return;
+    const maxPopPerWake = Math.max(1, params.pendingQueue.maxPopPerWake ?? 25);
+    // Best-effort: materialize a bounded number of pending messages per wake to avoid tight loops.
+    for (let i = 0; i < maxPopPerWake; i += 1) {
+      if (controller?.signal.aborted) break;
+      let did = false;
+      try {
+        did = await params.pendingQueue.popPendingMessage();
+      } catch (error) {
+        const terminalAuthStatus = readAuthenticationStatus(error);
+        if (terminalAuthStatus !== null) {
+          logger.debug('[ACP] Stopping pending pump after terminal auth failure', {
+            status: terminalAuthStatus,
+          });
+          stopPendingPump();
+          break;
+        }
+        did = false;
+      }
+      if (!did) break;
+    }
+  };
+
   const startPendingPumpIfNeeded = () => {
     if (!inFlightSteerEnabled) return;
     if (!params.pendingQueue) return;
@@ -411,7 +443,6 @@ export function createAcpRuntime(params: {
 
     const controller = new AbortController();
     pendingPumpController = controller;
-    const maxPopPerWake = Math.max(1, params.pendingQueue.maxPopPerWake ?? 25);
     const pollIntervalMs = Math.max(5, params.pendingQueue.pollIntervalMs ?? 2_000);
 
     const waitForPollWake = async (): Promise<boolean> =>
@@ -430,31 +461,9 @@ export function createAcpRuntime(params: {
       });
 
     void (async () => {
-      const drainPendingOnce = async (): Promise<void> => {
-        // Best-effort: materialize a bounded number of pending messages per wake to avoid tight loops.
-        for (let i = 0; i < maxPopPerWake; i += 1) {
-          if (controller.signal.aborted) break;
-          let did = false;
-          try {
-            did = await params.pendingQueue!.popPendingMessage();
-          } catch (error) {
-            const terminalAuthStatus = readAuthenticationStatus(error);
-            if (terminalAuthStatus !== null) {
-              logger.debug('[ACP] Stopping pending pump after terminal auth failure', {
-                status: terminalAuthStatus,
-              });
-              stopPendingPump();
-              break;
-            }
-            did = false;
-          }
-          if (!did) break;
-        }
-      };
-
       // Drain immediately once to avoid stranding already-enqueued pending messages while we wait
       // for a "metadata update" wake signal.
-      await drainPendingOnce();
+      await drainPendingMessagesOnce(controller);
 
       while (!controller.signal.aborted) {
         // Pending queue updates do not always publish a metadata wake signal (version skew / transport races).
@@ -486,7 +495,7 @@ export function createAcpRuntime(params: {
         }
         if (controller.signal.aborted) break;
 
-        await drainPendingOnce();
+        await drainPendingMessagesOnce(controller);
       }
     })();
   };
@@ -699,11 +708,17 @@ export function createAcpRuntime(params: {
     params.onSessionIdChange?.(sessionId);
   };
 
-  const surfaceStatusErrorDetail = (detailRaw: unknown) => {
-    const detail = typeof detailRaw === 'string' ? detailRaw.trim() : '';
-    if (!detail || isAbortLikeError(detail)) return;
-    const message = /^error[:\\s]/i.test(detail) ? detail : `Error: ${detail}`;
-    params.session.sendAgentMessage(params.provider as Parameters<AcpRuntimeSessionClient['sendAgentMessage']>[0], { type: 'message', message });
+  const surfaceStatusError = (detailRaw: unknown) => {
+    if (isAbortLikeError(detailRaw)) return false;
+    void surfacePrimarySessionRuntimeIssue({
+      cause: 'status_error',
+      provider: params.provider,
+      error: detailRaw,
+      session: params.session,
+    }).catch((error) => {
+      logger.debug(`[${params.provider}] Failed to persist primary session runtime issue (non-fatal)`, error);
+    });
+    return true;
   };
 
   const attachMessageHandler = (b: AcpRuntimeBackend) => {
@@ -716,9 +731,10 @@ export function createAcpRuntime(params: {
     b.onMessage((msg: AgentMessage) => {
       if (loadingSession) {
         if (msg.type === 'status' && msg.status === 'error') {
-          surfaceStatusErrorDetail(msg.detail);
           turnAborted = true;
-          params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: randomUUID() });
+          if (!surfaceStatusError(msg.detail)) {
+            params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: randomUUID() });
+          }
         }
         return;
       }
@@ -788,11 +804,13 @@ export function createAcpRuntime(params: {
           }
 
           if (msg.status === 'error') {
-            if (!turnAborted) {
-              surfaceStatusErrorDetail(msg.detail);
-            }
+            const shouldSurfaceFailure = !turnAborted && !isAbortLikeError(msg.detail);
             void streamedTranscriptWriter.flushAll({ reason: 'abort', interruptedReason: 'status-error' }).finally(() => {
-              params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: randomUUID() });
+              if (shouldSurfaceFailure) {
+                surfaceStatusError(msg.detail);
+              } else {
+                params.session.sendAgentMessage(params.provider, { type: 'turn_aborted', id: randomUUID() });
+              }
             });
             turnAborted = true;
             clearToolCallCache();
@@ -1317,6 +1335,9 @@ export function createAcpRuntime(params: {
       }
 
       publishSessionId();
+      if (params.pendingQueue?.drainAfterStartOrLoad === true) {
+        await drainPendingMessagesOnce();
+      }
       return sessionId!;
     },
 

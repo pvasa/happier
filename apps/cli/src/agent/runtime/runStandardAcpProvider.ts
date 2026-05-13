@@ -45,6 +45,11 @@ type RuntimeForLoop = {
   startOrLoad: (opts: { resumeId?: string }) => Promise<unknown>;
   sendPrompt: (message: string) => Promise<void>;
   compactContext?: (command: string) => Promise<void>;
+  refreshGoal?: () => Promise<void>;
+  setGoal?: (objective: string) => Promise<void>;
+  clearGoal?: () => Promise<void>;
+  listVendorPlugins?: () => Promise<unknown>;
+  listSkills?: () => Promise<unknown>;
   supportsInFlightSteer?: () => boolean;
   isTurnInFlight?: () => boolean;
   steerPrompt?: (message: string) => Promise<void>;
@@ -205,6 +210,9 @@ export async function runStandardAcpProvider(
   let permissionHandler: ProviderEnforcedPermissionHandler;
   let rebindPermissionModeQueueSession: ((session: ApiSessionClient) => void) | null = null;
   let pendingPermissionModeQueueSessionSwap: ApiSessionClient | null = null;
+  // Used by the message-queue binding to optionally steer additional user input into an in-flight turn.
+  // This is late-bound because the queue binding is initialized before the runtime is created.
+  let runtimeForInFlightSteer: RuntimeForLoop | null = null;
   const initializedSession = await initializeBackendRunSessionFn({
     api,
     sessionTag,
@@ -222,6 +230,9 @@ export async function runStandardAcpProvider(
         rebindPermissionModeQueueSession(newSession);
       } else {
         pendingPermissionModeQueueSessionSwap = newSession;
+      }
+      if (runtimeForInFlightSteer) {
+        newSession.setSessionRuntimeControls?.(runtimeForInFlightSteer);
       }
       await config.onSessionSwap?.({ session: newSession });
     },
@@ -244,9 +255,6 @@ export async function runStandardAcpProvider(
   });
   permissionHandler.setPermissionMode(initialPermissionMode);
 
-  // Used by the message-queue binding to optionally steer additional user input into an in-flight turn.
-  // This is late-bound because the queue binding is initialized before the runtime is created.
-  let runtimeForInFlightSteer: RuntimeForLoop | null = null;
   const inFlightSteerController: InFlightSteerController = {
     supportsInFlightSteer: () => runtimeForInFlightSteer?.supportsInFlightSteer?.() === true,
     isTurnInFlight: () => runtimeForInFlightSteer?.isTurnInFlight?.() === true,
@@ -346,6 +354,7 @@ export async function runStandardAcpProvider(
     turnAssistantPreviewTracker,
   });
   runtimeForInFlightSteer = runtime;
+  session.setSessionRuntimeControls?.(runtime);
 
   let cleanupRan = false;
   const cleanupOnce = async () => {

@@ -19,7 +19,7 @@ type PromptRuntime = {
   beginTurn: () => void;
   startOrLoad: (opts: { resumeId?: string; importHistory?: boolean }) => Promise<unknown>;
   sendPrompt: (message: string) => Promise<void>;
-  sendPromptWithMeta?: (params: { text: string; localId?: string | null }) => Promise<void>;
+  sendPromptWithMeta?: (params: { text: string; localId?: string | null; meta?: Record<string, unknown> }) => Promise<void>;
   compactContext?: (command: string) => Promise<void>;
   flushTurn: () => void | Promise<void>;
   reset: () => Promise<void>;
@@ -326,7 +326,11 @@ export async function runPermissionModePromptLoop(opts: {
           : seedResolution.providerPrompt;
 
       if (typeof opts.runtime.sendPromptWithMeta === 'function') {
-        await opts.runtime.sendPromptWithMeta({ text: providerPrompt, localId });
+        await opts.runtime.sendPromptWithMeta({
+          text: providerPrompt,
+          localId,
+          ...(message.message.meta ? { meta: message.message.meta } : {}),
+        });
       } else {
         await opts.runtime.sendPrompt(providerPrompt);
       }

@@ -18,7 +18,11 @@ import {
   type PermissionResult,
 } from '@/agent/permissions/BasePermissionHandler';
 import type { ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
-import type { AccountSettings } from '@happier-dev/protocol';
+import {
+  resolveHappierActionForMcpToolName,
+  shouldSuppressProviderPermissionForHappierApproval,
+} from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
+import type { AccountSettings, ActionId } from '@happier-dev/protocol';
 import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2';
 import { shouldDenyAgentSessionTitleToolCall } from './codingPromptTitlePermission';
 
@@ -37,7 +41,6 @@ type HandlerOpts = Readonly<{
 const DEFAULT_ALWAYS_AUTO_APPROVE_TOOL_NAME_INCLUDES = [
   'change_title',
   'session_title_set',
-  'action_execute',
   // Action-spec discovery tools are read-only and used by several providers before invoking actions/tools.
   // Auto-approve to avoid blocking harmless capability discovery behind provider-native permission prompts.
   'action_spec_search',
@@ -56,9 +59,15 @@ const DEFAULT_ALWAYS_AUTO_APPROVE_TOOL_NAME_INCLUDES = [
 const DEFAULT_ALWAYS_AUTO_APPROVE_TOOL_CALL_ID_INCLUDES = [
   'change_title',
   'session_title_set',
-  'action_execute',
   'save_memory',
 ] as const;
+
+const ALWAYS_AUTO_APPROVE_HAPPIER_ACTION_IDS = new Set<ActionId>([
+  'session.title.set',
+  'action.spec.search',
+  'action.spec.get',
+  'action.options.resolve',
+]);
 
 export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
   private readonly logPrefix: string;
@@ -113,8 +122,10 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     return lowerValue === lowerCandidate || lowerValue.endsWith(`_${lowerCandidate}`);
   }
 
-  private isAlwaysAutoApprove(toolName: string, toolCallId: string): boolean {
+  private isAlwaysAutoApprove(toolName: string, toolCallId: string, input: unknown): boolean {
     if (isChangeTitleToolLikeName(toolName)) return true;
+    const happierActionId = resolveHappierActionForMcpToolName({ toolName, input });
+    if (happierActionId && ALWAYS_AUTO_APPROVE_HAPPIER_ACTION_IDS.has(happierActionId)) return true;
     const toolNameTokens = this.splitNameTokens(toolName);
     const toolCallIdTokens = this.splitNameTokens(toolCallId);
     if (this.alwaysAutoApproveToolCallIdIncludes.some((n) => toolCallId.toLowerCase().includes(n.toLowerCase()))) return true;
@@ -133,10 +144,16 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     })) {
       return { decision: 'denied' };
     }
-    if (!this.isAlwaysAutoApprove(toolName, toolCallId)) {
-      return null;
+    if (this.isAlwaysAutoApprove(toolName, toolCallId, input)) {
+      return { decision: 'approved' };
     }
-    return { decision: 'approved' };
+    const approvalSuppression = shouldSuppressProviderPermissionForHappierApproval({
+      toolName,
+      input,
+      accountSettings: this.getAccountSettingsSnapshot(),
+      surface: 'session_agent',
+    });
+    return approvalSuppression.suppress ? { decision: 'approved' } : null;
   }
 
   async handleToolCall(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {

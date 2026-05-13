@@ -65,6 +65,7 @@ export function createConfiguredAcpRuntime(params: CreateConfiguredAcpRuntimePar
       },
     },
     pendingQueue: {
+      drainAfterStartOrLoad: true,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
       popPendingMessage: () => params.session.popPendingMessage(),
     },

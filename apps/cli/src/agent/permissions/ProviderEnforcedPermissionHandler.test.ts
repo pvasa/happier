@@ -133,6 +133,96 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     expect(handler.getImmediateDecision('perm-1', 'bash', { command: 'pwd' })).toBeNull();
   });
 
+  it('suppresses provider-enforced prompts for first-party Happier tools when action approval is required', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as any, {
+      logPrefix: '[Test]',
+      getAccountSettings: () => ({
+        actionsSettingsV1: {
+          v: 1,
+          actions: {
+            'session.list': {
+              disabledSurfaces: [],
+              approvalRequiredSurfaces: ['session_agent'],
+            },
+          },
+        },
+      } as any),
+    });
+
+    await expect(handler.handleToolCall('happier-session-list-1', 'mcp__happier__session_list', {})).resolves.toEqual({
+      decision: 'approved',
+    });
+    expect(session.agentState.requests['happier-session-list-1']).toBeFalsy();
+
+    const pending = handler.handleToolCall('custom-session-list-1', 'mcp__custom__session_list', {});
+    expect(session.agentState.requests['custom-session-list-1']).toBeTruthy();
+    await session.rpcHandlerManager.handlers.get('permission')?.({
+      id: 'custom-session-list-1',
+      approved: true,
+      decision: 'approved',
+    });
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
+  });
+
+  it('prompts for action_execute when Happier approval is not required', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as any, {
+      logPrefix: '[Test]',
+      getAccountSettings: () => ({
+        actionsSettingsV1: {
+          v: 1,
+          actions: {
+            'session.list': {
+              disabledSurfaces: [],
+              approvalRequiredSurfaces: [],
+            },
+          },
+        },
+      } as any),
+    });
+
+    expect(handler.getImmediateDecision('action-execute-1', 'happier_action_execute', {
+      actionId: 'session.list',
+    })).toBeNull();
+
+    const pending = handler.handleToolCall('action-execute-1', 'happier_action_execute', {
+      actionId: 'session.list',
+    });
+    expect(session.agentState.requests['action-execute-1']).toEqual(
+      expect.objectContaining({ tool: 'happier_action_execute' }),
+    );
+    await session.rpcHandlerManager.handlers.get('permission')?.({
+      id: 'action-execute-1',
+      approved: true,
+      decision: 'approved',
+    });
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
+  });
+
+  it('suppresses action_execute provider prompts when Happier approval is required', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as any, {
+      logPrefix: '[Test]',
+      getAccountSettings: () => ({
+        actionsSettingsV1: {
+          v: 1,
+          actions: {
+            'session.list': {
+              disabledSurfaces: [],
+              approvalRequiredSurfaces: ['session_agent'],
+            },
+          },
+        },
+      } as any),
+    });
+
+    await expect(handler.handleToolCall('action-execute-approval-1', 'happier_action_execute', {
+      actionId: 'session.list',
+    })).resolves.toEqual({ decision: 'approved' });
+    expect(session.agentState.requests['action-execute-approval-1']).toBeFalsy();
+  });
+
   it('keeps the immediate-decision probe side-effect free until handleToolCall records the approval', async () => {
     const session = new FakeSession();
     const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });

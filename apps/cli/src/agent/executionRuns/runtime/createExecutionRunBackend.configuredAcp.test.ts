@@ -223,6 +223,51 @@ describe('createExecutionRunBackend (configured ACP)', () => {
     expect(configuredBackend.loadSessionWithReplayCapture).toBeUndefined();
   });
 
+  it('forwards structured prompt payloads through the lazy configured ACP backend', async () => {
+    const sendPromptPayload = vi.fn(async () => {});
+    const backend = {
+      ...createStubBackend(),
+      sendPromptPayload,
+    };
+    createConfiguredAcpBackendMock.mockReturnValue(backend);
+    materializeConfiguredAcpEnvironmentMock.mockReturnValue({ ACP_TOKEN: 'token-1' });
+    resolveConfiguredAcpBackendFromAccountSettingsMock.mockReturnValue({
+      backendId: 'review-bot',
+      name: 'review-bot',
+      title: 'Review Bot',
+      command: 'review-bot',
+      args: ['--stdio'],
+      env: {},
+      transportProfile: { kind: 'stdio' },
+      capabilities: {},
+    });
+    readCredentialsMock.mockResolvedValue({ token: 'cred-1' });
+    readSettingsMock.mockResolvedValue({ machineId: 'machine-1' });
+    bootstrapAccountSettingsContextMock.mockResolvedValue({ settings: { acpCatalog: { backends: [] } } });
+    resolveCustomHappierToolsContextMock.mockResolvedValue({ mcpServers: {} });
+
+    const { createExecutionRunBackend } = await import('./createExecutionRunBackend');
+    const configuredBackend = createExecutionRunBackend({
+      cwd: '/tmp/workspace',
+      backendId: 'customAcp',
+      backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
+      permissionMode: 'read_only',
+    }) as AgentBackend & {
+      sendPromptPayload?: (sessionId: SessionId, payload: { text: string; meta?: Record<string, unknown> }) => Promise<void>;
+    };
+
+    await configuredBackend.startSession();
+    await configuredBackend.sendPromptPayload?.('configured-session-1' as SessionId, {
+      text: 'hello',
+      meta: { sessionWorkStateRequestV1: { refresh: true } },
+    });
+
+    expect(sendPromptPayload).toHaveBeenCalledWith('configured-session-1', {
+      text: 'hello',
+      meta: { sessionWorkStateRequestV1: { refresh: true } },
+    });
+  });
+
   it('rejects disabled configured ACP backends when account settings are passed directly', async () => {
     const { createExecutionRunBackend } = await import('./createExecutionRunBackend');
     expect(() => createExecutionRunBackend({

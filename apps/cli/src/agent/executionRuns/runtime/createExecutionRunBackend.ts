@@ -1,7 +1,9 @@
 import type { AgentBackend } from '@/agent/core/AgentBackend';
+import type { AgentPromptPayload } from '@/agent/core/AgentPromptPayload';
 import type { AgentId } from '@happier-dev/agents';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
 
+import { sendAgentPromptPayload, sendAgentSteerPromptPayload } from '@/agent/core/AgentPromptPayload';
 import { createConfiguredAcpBackend } from '@/agent/acp/catalog/configured/createConfiguredAcpBackend';
 import { materializeConfiguredAcpEnvironment } from '@/agent/acp/catalog/configured/materializeConfiguredAcpEnvironment';
 import { resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveConfiguredAcpBackendFromAccountSettings';
@@ -131,12 +133,20 @@ function createLazyConfiguredAcpExecutionRunBackend(opts: Readonly<{
       const backend = await resolveBackend();
       await backend.sendPrompt(sessionId, prompt);
     },
+    async sendPromptPayload(sessionId: string, payload: AgentPromptPayload) {
+      const backend = await resolveBackend();
+      await sendAgentPromptPayload(backend, sessionId, payload);
+    },
     async sendSteerPrompt(sessionId, prompt) {
       const backend = await resolveBackend();
       if (typeof backend.sendSteerPrompt !== 'function') {
         throw new Error('Backend does not support steering');
       }
       await backend.sendSteerPrompt(sessionId, prompt);
+    },
+    async sendSteerPromptPayload(sessionId: string, payload: AgentPromptPayload) {
+      const backend = await resolveBackend();
+      await sendAgentSteerPromptPayload(backend, sessionId, payload);
     },
     async cancel(sessionId) {
       const backend = await resolveBackend();

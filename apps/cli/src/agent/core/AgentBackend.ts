@@ -14,6 +14,7 @@
 
 import type { AgentId as CatalogAgentId } from '@happier-dev/agents';
 import type { AgentMessageHandler, SessionId } from './AgentMessage';
+import type { AgentPromptPayload } from './AgentPromptPayload';
 
 export type { AgentMessage, AgentMessageHandler, SessionId, ToolCallId } from './AgentMessage';
 
@@ -112,6 +113,14 @@ export interface AgentBackend {
   sendPrompt(sessionId: SessionId, prompt: string): Promise<void>;
 
   /**
+   * Send a structured prompt payload to an existing session.
+   *
+   * Providers without structured input support can omit this method; shared callers
+   * must fall back to sendPrompt(payload.text).
+   */
+  sendPromptPayload?(sessionId: SessionId, payload: AgentPromptPayload): Promise<void>;
+
+  /**
    * Trigger provider-native context compaction when supported.
    *
    * Backends that expose a native control command should implement this instead of relying
@@ -128,6 +137,11 @@ export interface AgentBackend {
    * When unsupported, callers should fall back to queueing the message for the next turn.
    */
   sendSteerPrompt?(sessionId: SessionId, prompt: string): Promise<void>;
+
+  /**
+   * Send structured steering input into an already in-flight turn, when supported.
+   */
+  sendSteerPromptPayload?(sessionId: SessionId, payload: AgentPromptPayload): Promise<void>;
   
   /**
    * Cancel the current operation in a session.

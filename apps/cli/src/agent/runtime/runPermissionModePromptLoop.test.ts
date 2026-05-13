@@ -74,7 +74,11 @@ describe('runPermissionModePromptLoop', () => {
       reset: vi.fn(),
     } as any;
 
-    queue.push({ text: 'hello', localId: 'local-1' }, { permissionMode: 'default' });
+    queue.push({
+      text: 'hello',
+      localId: 'local-1',
+      meta: { sessionWorkStateRequestV1: { refresh: true } },
+    } as any, { permissionMode: 'default' });
 
     let shouldExit = false;
     let readyCount = 0;
@@ -126,7 +130,11 @@ describe('runPermissionModePromptLoop', () => {
       reset: vi.fn(),
     } as any;
 
-    queue.push({ text: 'hello', localId: 'local-1' }, { permissionMode: 'default' });
+    queue.push({
+      text: 'hello',
+      localId: 'local-1',
+      meta: { sessionWorkStateRequestV1: { refresh: true } },
+    }, { permissionMode: 'default' });
 
     let shouldExit = false;
     const readySpy = vi.fn(() => {
@@ -271,7 +279,11 @@ describe('runPermissionModePromptLoop', () => {
       reset: vi.fn(),
     } as any;
 
-    queue.push({ text: 'hello', localId: 'local-1' }, { permissionMode: 'default' });
+    queue.push({
+      text: 'hello',
+      localId: 'local-1',
+      meta: { sessionWorkStateRequestV1: { refresh: true } },
+    }, { permissionMode: 'default' });
 
     let shouldExit = false;
     const readySpy = vi.fn(() => {
@@ -299,7 +311,11 @@ describe('runPermissionModePromptLoop', () => {
       formatPromptErrorMessage: (error) => `Error: ${String(error)}`,
     });
 
-    expect(runtime.sendPromptWithMeta).toHaveBeenCalledWith({ text: 'hello', localId: 'local-1' });
+    expect(runtime.sendPromptWithMeta).toHaveBeenCalledWith({
+      text: 'hello',
+      localId: 'local-1',
+      meta: { sessionWorkStateRequestV1: { refresh: true } },
+    });
     expect(runtime.sendPrompt).not.toHaveBeenCalled();
   });
 

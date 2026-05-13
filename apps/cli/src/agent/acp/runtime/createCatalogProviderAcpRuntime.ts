@@ -91,6 +91,7 @@ export function createCatalogProviderAcpRuntime<TBackendOptions extends object =
     inFlightSteer: params.inFlightSteer,
     memoryRecallGuidance: params.memoryRecallGuidance,
     pendingQueue: {
+      drainAfterStartOrLoad: true,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
       popPendingMessage: () => params.session.popPendingMessage(),
     },

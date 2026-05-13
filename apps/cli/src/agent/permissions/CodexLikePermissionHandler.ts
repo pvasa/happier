@@ -18,6 +18,7 @@ import {
   type PendingRequest,
 } from '@/agent/permissions/BasePermissionHandler';
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permission/permissionModeFromMetadata';
+import { shouldSuppressProviderPermissionForHappierApproval } from '@/agent/tools/happierTools/resolveHappierActionForMcpToolName';
 import type { ToolTraceProtocol } from '@/agent/tools/trace/toolTrace';
 import type { AccountSettings } from '@happier-dev/protocol';
 import { parseHappierToolsShellBridgeCommand } from '@happier-dev/protocol';
@@ -113,6 +114,10 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
       return { decision: 'denied' };
     }
 
+    if (this.shouldSuppressForHappierActionApproval(toolName, input)) {
+      return { decision: 'approved' };
+    }
+
     if (this.isAllowedForSession(toolName, input)) {
       logger.debug(`${this.getLogPrefix()} Auto-approving (allowed for session) tool ${toolName} (${toolCallId})`);
       return { decision: 'approved_for_session' };
@@ -164,6 +169,15 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
 
   private isFullAutoApproveMode(): boolean {
     return this.currentPermissionMode === 'yolo' || this.currentPermissionMode === 'bypassPermissions';
+  }
+
+  private shouldSuppressForHappierActionApproval(toolName: string, input: unknown): boolean {
+    return shouldSuppressProviderPermissionForHappierApproval({
+      toolName,
+      input,
+      accountSettings: this.getAccountSettingsSnapshot(),
+      surface: 'session_agent',
+    }).suppress;
   }
 
   private shouldAutoApprove(toolName: string, toolCallId: string, input: unknown): boolean {
@@ -226,6 +240,12 @@ export class CodexLikePermissionHandler extends BasePermissionHandler {
       logger.debug(`${this.getLogPrefix()} Denying tool ${toolName} (${toolCallId}) in ${this.currentPermissionMode} mode`);
       this.recordAutoDecision(toolCallId, toolName, input, 'denied');
       return { decision: 'denied' };
+    }
+
+    if (this.shouldSuppressForHappierActionApproval(toolName, input)) {
+      logger.debug(`${this.getLogPrefix()} Auto-approving Happier MCP tool ${toolName} (${toolCallId}) because Happier action approval is required`);
+      this.recordAutoDecision(toolCallId, toolName, input, 'approved');
+      return { decision: 'approved' };
     }
 
     // Respect user "don't ask again for session" choices captured via our permission UI.

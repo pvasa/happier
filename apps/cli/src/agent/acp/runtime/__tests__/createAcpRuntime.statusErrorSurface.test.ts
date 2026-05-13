@@ -10,15 +10,21 @@ import { createApprovedPermissionHandler } from '@/testkit/backends/permissionHa
 import { createBasicSessionClientWithOverrides } from '@/testkit/backends/sessionFixtures';
 
 describe('createAcpRuntime (status error surfacing)', () => {
-  it('surfaces status:error detail as an ACP message so the UI is not silent', async () => {
+  it('surfaces non-abort status:error as sanitized primary-session failure', async () => {
     const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_main' });
 
     const sent: ACPMessageData[] = [];
-    const session = createBasicSessionClientWithOverrides({
-      sendAgentMessage: (_provider, body) => {
-        sent.push(body);
+    const runtimeUpdates: unknown[] = [];
+    const session = {
+      ...createBasicSessionClientWithOverrides({
+        sendAgentMessage: (_provider, body) => {
+          sent.push(body);
+        },
+      }),
+      updatePrimaryTurnRuntimeState: async (record: unknown) => {
+        runtimeUpdates.push(record);
       },
-    });
+    };
 
     const runtime = createAcpRuntime({
       provider: 'pi',
@@ -38,8 +44,19 @@ describe('createAcpRuntime (status error surfacing)', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(sent.some((msg) => msg.type === 'message' && msg.message.includes('Model not found'))).toBe(true);
-    expect(sent.some((msg) => msg.type === 'turn_aborted')).toBe(true);
+    expect(sent.some((msg) => msg.type === 'message' && msg.message.includes('Model not found'))).toBe(false);
+    expect(sent.some((msg) => msg.type === 'turn_failed')).toBe(true);
+    expect(sent.some((msg) => msg.type === 'turn_aborted')).toBe(false);
+    expect(runtimeUpdates).toEqual([
+      expect.objectContaining({
+        latestTurnStatus: 'failed',
+        lastRuntimeIssue: expect.objectContaining({
+          source: 'provider_status_error',
+          sanitizedPreview: 'Provider reported an error',
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(runtimeUpdates)).not.toContain('Model not found');
   });
 
   it('does not surface abort-like status:error detail as a transcript message', async () => {

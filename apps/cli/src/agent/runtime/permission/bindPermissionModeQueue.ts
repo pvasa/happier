@@ -101,7 +101,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
           try {
             pushMessageToQueueWithSpecialCommands({
               queue: opts.queue,
-              message: { text, localId: message.localId ?? null },
+              message: { text, localId: message.localId ?? null, ...(message.meta ? { meta: message.meta } : {}) },
               text,
               mode: {
                 permissionMode: resolvedMode.queuePermissionMode,
@@ -118,7 +118,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
 
     pushMessageToQueueWithSpecialCommands({
       queue: opts.queue,
-      message: { text, localId: message.localId ?? null },
+      message: { text, localId: message.localId ?? null, ...(message.meta ? { meta: message.meta } : {}) },
       text,
       mode: {
         permissionMode: resolvedMode.queuePermissionMode,

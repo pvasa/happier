@@ -24,6 +24,9 @@ export type {
   StartSessionResult,
 } from './AgentBackend';
 
+export type { AgentPromptPayload } from './AgentPromptPayload';
+export { normalizeAgentPromptPayload, sendAgentPromptPayload, sendAgentSteerPromptPayload } from './AgentPromptPayload';
+
 // ============================================================================
 // AgentFactory - Factory types (catalog-driven)
 // ============================================================================

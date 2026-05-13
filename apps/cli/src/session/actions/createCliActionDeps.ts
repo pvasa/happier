@@ -56,6 +56,7 @@ import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/execution
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { fetchSessionById, fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 function notSupported(): never {
@@ -364,6 +365,46 @@ export function createCliActionDeps(params: Readonly<{
     return { ok: true, ...cached };
   };
 
+  const callResolvedSessionRpc = async (
+    sessionId: string,
+    methodSuffix: string,
+    request: unknown,
+  ): Promise<unknown> => {
+    if (!params.credentials) {
+      return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+    }
+
+    const transport = await resolveTransportForSession(sessionId);
+    if (!transport.ok) {
+      return {
+        ok: false,
+        errorCode: transport.code,
+        error: transport.code,
+        ...(transport.candidates ? { candidates: transport.candidates } : {}),
+      };
+    }
+
+    try {
+      return await callSessionRpc({
+        token: params.credentials.token,
+        sessionId: transport.sessionId,
+        ctx: transport.ctx,
+        mode: transport.mode,
+        method: `${transport.sessionId}:${methodSuffix}`,
+        request,
+      });
+    } catch (error) {
+      const errorCode = readRpcErrorCode(error) ?? 'session_rpc_failed';
+      return {
+        ok: false,
+        errorCode,
+        error: errorCode,
+        errorMessage: error instanceof Error ? error.message : errorCode,
+        sessionId: transport.sessionId,
+      };
+    }
+  };
+
   return {
     executionRunStart: async (sessionId, request) => {
       const transport = await resolveTransportForSession(sessionId);
@@ -662,6 +703,38 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       return await getSessionStatus({ credentials: params.credentials, idOrPrefix: sessionId, live: live === true });
+    },
+
+    sessionWorkStateGet: async ({ sessionId }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_WORK_STATE_GET, {});
+    },
+
+    sessionGoalGet: async ({ sessionId }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_GOAL_GET, {});
+    },
+
+    sessionGoalSet: async ({ sessionId, objective, status, tokenBudget }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_GOAL_SET, {
+        objective,
+        ...(typeof status === 'string' && status.trim().length > 0 ? { status: status.trim() } : {}),
+        ...(typeof tokenBudget !== 'undefined' ? { tokenBudget: tokenBudget ?? null } : {}),
+      });
+    },
+
+    sessionGoalClear: async ({ sessionId }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_GOAL_CLEAR, {});
+    },
+
+    sessionVendorPluginCatalogList: async ({ sessionId, cwd }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST, {
+        ...(typeof cwd === 'string' && cwd.trim().length > 0 ? { cwd: cwd.trim() } : {}),
+      });
+    },
+
+    sessionSkillCatalogList: async ({ sessionId, cwd }) => {
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST, {
+        ...(typeof cwd === 'string' && cwd.trim().length > 0 ? { cwd: cwd.trim() } : {}),
+      });
     },
 
 	    sessionHistoryGet: async ({ sessionId, limit, format, includeMeta, includeStructuredPayload }) => {
