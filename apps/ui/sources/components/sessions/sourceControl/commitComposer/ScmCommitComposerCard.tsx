@@ -199,7 +199,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                     editable={!props.busy}
                     multiline
                     placeholder={t('files.commitMessageEditor.placeholder')}
-                    placeholderTextColor={props.theme.colors.text.secondary}
+                    placeholderTextColor={props.theme.colors.input.placeholder}
                     style={{
                         fontSize: 13,
                         color: props.theme.colors.text.primary,

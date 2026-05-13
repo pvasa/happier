@@ -300,7 +300,7 @@ export const SessionExecutionRunDetailsView = React.memo(React.forwardRef<Sessio
                             value={sendText}
                             onChangeText={setSendText}
                             placeholder={t('runs.send.placeholder')}
-                            placeholderTextColor={theme.colors.text.secondary}
+                            placeholderTextColor={theme.colors.input.placeholder}
                             style={{
                                 flex: 1,
                                 paddingVertical: 10,

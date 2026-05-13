@@ -22,7 +22,7 @@ export function ReviewCommentInlineComposer(props: {
                 value={props.value}
                 onChangeText={props.onChange}
                 placeholder={t('files.reviewComments.placeholder')}
-                placeholderTextColor={theme.colors.text.secondary}
+                placeholderTextColor={theme.colors.input.placeholder}
                 multiline
                 style={styles.input}
             />

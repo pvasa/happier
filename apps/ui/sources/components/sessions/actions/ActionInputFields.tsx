@@ -215,7 +215,7 @@ export function ActionInputFields(props: Readonly<{
                                     props.onPatch(setValueAtTopLevelPatch(props.input, path, next));
                                 }}
                                 multiline={field?.listSeparator === 'newline'}
-                                placeholderTextColor={theme.colors.text.secondary}
+                                placeholderTextColor={theme.colors.input.placeholder}
                                 style={{
                                     borderWidth: 1,
                                     borderColor: theme.colors.border.default,
@@ -241,7 +241,7 @@ export function ActionInputFields(props: Readonly<{
                                 value={displayValue}
                                 onChangeText={(text) => props.onPatch(setValueAtTopLevelPatch(props.input, path, text))}
                                 multiline={multiline}
-                                placeholderTextColor={theme.colors.text.secondary}
+                                placeholderTextColor={theme.colors.input.placeholder}
                                 style={{
                                     borderWidth: 1,
                                     borderColor: theme.colors.border.default,

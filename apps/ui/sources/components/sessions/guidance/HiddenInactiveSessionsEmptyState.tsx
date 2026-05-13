@@ -25,7 +25,7 @@ export function HiddenInactiveSessionsEmptyState(): React.ReactElement {
                         testID="session-empty-state-icon"
                         name="chatbubbles-outline"
                         size={48}
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                         style={{ marginBottom: 12 }}
                     />
                 )}
@@ -35,7 +35,7 @@ export function HiddenInactiveSessionsEmptyState(): React.ReactElement {
                 <Item
                     testID="sessions-hidden-inactive-empty-state-open-archived"
                     title={t('sessionInfo.inactiveAndArchivedSessions')}
-                    icon={<Ionicons name="archive-outline" size={22} color={theme.colors.textSecondary} />}
+                    icon={<Ionicons name="archive-outline" size={22} color={theme.colors.text.secondary} />}
                     onPress={() => router.push('/session/archived' as any)}
                 />
             </ItemGroup>

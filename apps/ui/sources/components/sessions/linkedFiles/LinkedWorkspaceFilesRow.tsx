@@ -2,12 +2,11 @@ import * as React from 'react';
 import { Pressable, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { usePathname, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { resolvePaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
 import { useDeviceType } from '@/utils/platform/responsive';
@@ -32,8 +31,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: 6,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHigh,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.inset,
         paddingHorizontal: 10,
         paddingVertical: 6,
         borderRadius: 999,
@@ -43,12 +42,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         opacity: 0.8,
     },
     chipText: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 12,
         ...Typography.default('semiBold'),
     },
     chipSubtle: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 12,
         ...Typography.default(),
     },
@@ -64,7 +63,6 @@ export const LinkedWorkspaceFilesRow = React.memo((props: LinkedWorkspaceFilesRo
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
-    const pathname = usePathname();
     const { width: windowWidth } = useWindowDimensions();
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
@@ -86,11 +84,6 @@ export const LinkedWorkspaceFilesRow = React.memo((props: LinkedWorkspaceFilesRo
 
         if (layoutIfOpened.kind === 'single') {
             const href = `/session/${props.sessionId}/file?path=${encodeURIComponent(path)}`;
-            prepareMobileSurfaceTransition({
-                currentPathname: pathname,
-                targetHref: href,
-                operation: 'push',
-            });
             router.push(href as never);
             return;
         }
@@ -101,7 +94,7 @@ export const LinkedWorkspaceFilesRow = React.memo((props: LinkedWorkspaceFilesRo
             title: getBasename(path),
             resource: { kind: 'file', path },
         });
-    }, [deviceType, multiPaneEnabled, pane, pathname, props.sessionId, router, windowWidth]);
+    }, [deviceType, multiPaneEnabled, pane, props.sessionId, router, windowWidth]);
 
     if (props.paths.length === 0) return null;
 
@@ -115,7 +108,7 @@ export const LinkedWorkspaceFilesRow = React.memo((props: LinkedWorkspaceFilesRo
                     style={({ pressed }) => [styles.chip, pressed ? styles.chipPressed : null]}
                     accessibilityRole="button"
                 >
-                    <Ionicons name="document-text-outline" size={14} color={theme.colors.textSecondary} />
+                    <Ionicons name="document-text-outline" size={14} color={theme.colors.text.secondary} />
                     <Text style={styles.chipSubtle}>{LINKED_FILE_PREFIX}</Text>
                     <Text style={styles.chipText} numberOfLines={1}>
                         {getBasename(path)}

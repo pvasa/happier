@@ -45,6 +45,17 @@ function findElementByTestId(node: React.ReactNode, testID: string): React.React
     return findElementByTestId(props.children, testID);
 }
 
+function makeReadyTargetMachine(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+        id: 'machine_target',
+        active: true,
+        activeAt: Date.now(),
+        spawnReadinessStatus: 'ready',
+        metadata: { displayName: 'Target machine', host: 'target.local' },
+        ...overrides,
+    };
+}
+
 vi.mock('@happier-dev/protocol', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
     return {
@@ -142,11 +153,11 @@ describe('SessionHandoffPickerModal', () => {
         credentialsReady = true;
         machineListByServerIdState = {
             server_a: [
-                { id: 'machine_target', metadata: { displayName: 'Target machine', host: 'target.local' } },
+                makeReadyTargetMachine(),
             ],
         };
         allMachinesState = [
-            { id: 'machine_target', metadata: { displayName: 'Target machine', host: 'target.local' } },
+            makeReadyTargetMachine(),
         ];
         sessionsByIdState = {
             sess_1: {
@@ -237,6 +248,54 @@ describe('SessionHandoffPickerModal', () => {
             },
         });
         expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('does not resolve handoff when selected machine exact readiness is unknown', async () => {
+        const unknownTarget = {
+            id: 'machine_target',
+            active: true,
+            activeAt: Date.now(),
+            metadata: { displayName: 'Target machine', host: 'target.local' },
+        };
+        machineListByServerIdState = { server_a: [unknownTarget] };
+        allMachinesState = [unknownTarget];
+        const onResolve = vi.fn();
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        let chrome: CustomModalChromeConfig | null = null;
+        const setChrome = vi.fn((next: CustomModalChromeConfig | null) => {
+            chrome = next;
+        });
+
+        const tree = (await renderScreen(<SessionHandoffPickerModal
+            onClose={() => {}}
+            setChrome={setChrome}
+            onResolve={onResolve}
+            sessionId="sess_1"
+            sourceMachineId="machine_source"
+            serverId="server_a"
+        />)).tree;
+
+        const machineSelector = tree.findByType('MachineSelector' as any);
+        await act(async () => {
+            invokeTestInstanceHandler(machineSelector, 'onSelect', unknownTarget);
+        });
+
+        const footer = requireCardChrome(chrome).footer;
+        const startButton = findElementByTestId(footer, 'session-handoff-start') as React.ReactElement<{
+            disabled?: boolean;
+            onPress?: () => unknown;
+        }> | null;
+        expect(startButton?.props.disabled).toBe(true);
+
+        await act(async () => {
+            const onPress = startButton?.props.onPress;
+            if (typeof onPress !== 'function') {
+                throw new Error('expected start button to have an onPress handler');
+            }
+            await onPress();
+        });
+
+        expect(onResolve).not.toHaveBeenCalled();
     });
 
     it('forces conflictPolicy=replace_existing when workspace transfer strategy is sync_changes', async () => {

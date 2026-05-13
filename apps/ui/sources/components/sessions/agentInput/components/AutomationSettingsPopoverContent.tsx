@@ -23,6 +23,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { Item } from '@/components/ui/lists/Item';
 import { Switch } from '@/components/ui/forms/Switch';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { usePopoverBoundaryRef } from '@/components/ui/popover';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -31,6 +32,14 @@ type Props = Readonly<{
     value: AutomationSettingsValue;
     onChange: (next: AutomationSettingsValue) => void;
 }>;
+
+const CRON_FIELD_GUIDE = [
+    { id: 'minute', symbol: 'm', labelKey: 'automations.form.sentence.cronFieldGuide.minute' },
+    { id: 'hour', symbol: 'h', labelKey: 'automations.form.sentence.cronFieldGuide.hour' },
+    { id: 'dayOfMonth', symbol: 'dom', labelKey: 'automations.form.sentence.cronFieldGuide.dayOfMonth' },
+    { id: 'month', symbol: 'mon', labelKey: 'automations.form.sentence.cronFieldGuide.month' },
+    { id: 'weekday', symbol: 'dow', labelKey: 'automations.form.sentence.cronFieldGuide.weekday' },
+] as const;
 
 function updateCronExpr(value: AutomationSettingsValue, cronExpr: string): AutomationSettingsValue {
     return {
@@ -47,6 +56,7 @@ function formatTimezoneHint(value: AutomationSettingsValue): string {
 
 export function AutomationSettingsPopoverContent(props: Props) {
     const { theme } = useUnistyles();
+    const popoverBoundaryRef = usePopoverBoundaryRef();
     const [scheduleEditorOpen, setScheduleEditorOpen] = React.useState(false);
     const [intervalUnitMenuOpen, setIntervalUnitMenuOpen] = React.useState(false);
     const [notesOpen, setNotesOpen] = React.useState(() => props.value.description.trim().length > 0);
@@ -146,6 +156,25 @@ export function AutomationSettingsPopoverContent(props: Props) {
                                                     autoCapitalize="none"
                                                     autoCorrect={false}
                                                 />
+                                                <View
+                                                    testID="automation-cron-field-guide"
+                                                    style={styles.cronFieldGuide}
+                                                >
+                                                    {CRON_FIELD_GUIDE.map((field) => (
+                                                        <View
+                                                            key={field.id}
+                                                            testID={`automation-cron-field-guide-item-${field.id}`}
+                                                            style={styles.cronFieldGuideItem}
+                                                        >
+                                                            <Text style={styles.cronFieldGuideSymbol}>
+                                                                {field.symbol}
+                                                            </Text>
+                                                            <Text style={styles.cronFieldGuideLabel}>
+                                                                {t(field.labelKey)}
+                                                            </Text>
+                                                        </View>
+                                                    ))}
+                                                </View>
                                             </View>
                                             <View style={styles.cronPresetGroup}>
                                                 <Text style={styles.panelLabel}>
@@ -215,10 +244,13 @@ export function AutomationSettingsPopoverContent(props: Props) {
                                                             if (!unit) return;
                                                             props.onChange(applyAutomationIntervalUnit(props.value, unit.id));
                                                         }}
-                                                        matchTriggerWidth={false}
+                                                        rowKind="item"
+                                                        variant="selectable"
+                                                        matchTriggerWidth={true}
                                                         maxWidthCap={180}
                                                         placement="bottom"
-                                                        popoverPortalWebTarget="body"
+                                                        connectToTrigger={true}
+                                                        popoverBoundaryRef={popoverBoundaryRef}
                                                         trigger={({ open, toggle }) => (
                                                             <Pressable
                                                                 testID="automation-interval-unit-trigger"
@@ -545,6 +577,34 @@ const styles = StyleSheet.create((theme) => ({
         flexGrow: 1,
         flexShrink: 1,
         gap: 8,
+    },
+    cronFieldGuide: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+        paddingTop: 2,
+    },
+    cronFieldGuideItem: {
+        minHeight: 30,
+        alignItems: 'center',
+        flexDirection: 'row',
+        gap: 6,
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        borderRadius: 8,
+        backgroundColor: theme.colors.surface.base,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+    },
+    cronFieldGuideSymbol: {
+        ...Typography.mono(),
+        ...Typography.tabular(),
+        minWidth: 26,
+        color: theme.colors.text.primary,
+    },
+    cronFieldGuideLabel: {
+        ...Typography.rowMeta(),
+        color: theme.colors.text.secondary,
     },
     cronPresetGroup: {
         flexBasis: 260,

@@ -37,8 +37,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 12,
         overflow: 'hidden',
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHighest,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.elevated,
     },
     image: {
         width: '100%',
@@ -48,7 +48,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
     },
 }));
 
@@ -168,7 +168,7 @@ function SessionMediaInlineImageTile(props: Readonly<{
                     <Ionicons
                         name={preview.status === 'error' ? 'alert-circle-outline' : 'image-outline'}
                         size={22}
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                     />
                 </View>
             )}

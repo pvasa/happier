@@ -194,7 +194,7 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
                                     value={draft.body}
                                     onChangeText={(body) => updateDraft(draft.id, (current) => ({ ...current, body }))}
                                     placeholder={t('files.reviewComments.placeholder')}
-                                    placeholderTextColor={theme.colors.text.secondary}
+                                    placeholderTextColor={theme.colors.input.placeholder}
                                     style={styles.commentInput}
                                     testID={`review-comment-draft-body:${draft.id}`}
                                 />

@@ -6,6 +6,7 @@ import {
 } from '@/components/sessions/new/modules/automationFeatureGate';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 
 import type {
     NewSessionAuthoringContext,
@@ -40,6 +41,7 @@ export function buildNewSessionAuthoringContext(params: Readonly<{
     automationFeatureEnabled: boolean;
     selectedMachineId: string | null;
     selectedMachine: Machine | null;
+    selectedMachineSpawnReadiness?: MachineSpawnReadiness | null;
     selectedPath: string;
     automationEditId: string | null;
     buildDraft: (effectiveAutomationDraft: NewSessionAutomationDraft) => SessionAuthoringDraft;
@@ -65,6 +67,7 @@ export function buildNewSessionAuthoringContext(params: Readonly<{
             selectedMachine: params.selectedMachine,
             selectedPath: params.selectedPath,
             allowOfflineMachine: effectiveAutomationDraft.enabled,
+            spawnReadiness: params.selectedMachineSpawnReadiness ?? null,
         }),
         submissionMode,
         submitAccessibilityLabelKey: resolveSubmitAccessibilityLabelKey(submissionMode),

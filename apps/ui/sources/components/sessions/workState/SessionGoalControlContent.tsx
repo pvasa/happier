@@ -30,7 +30,7 @@ export function SessionGoalControlContent(props: Readonly<{
                 onChangeText={props.onDraftObjectiveChange}
                 multiline
                 placeholder={t('session.workState.goal.placeholder')}
-                placeholderTextColor={theme.colors.text.secondary}
+                placeholderTextColor={theme.colors.input.placeholder}
                 style={[
                     styles.input,
                     {

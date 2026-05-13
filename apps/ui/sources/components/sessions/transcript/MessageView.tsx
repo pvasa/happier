@@ -51,9 +51,7 @@ import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMet
 import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
 import {
   resolveTranscriptMarkdownFileLink,
-  type ResolvedTranscriptMarkdownFileLink,
 } from '@/components/sessions/transcript/resolveTranscriptMarkdownFileLink';
-import type { ReviewCommentAnchor } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 
 type StreamSegmentStateForRendering = 'streaming' | 'complete' | 'interrupted';
 type SessionFileDeepLinkParams = Parameters<typeof buildSessionFileDeepLink>[0];
@@ -66,19 +64,6 @@ function pushSessionFileDeepLink(
 ): void {
   const href = buildSessionFileDeepLink(params);
   router.push(href as never);
-}
-
-function buildTranscriptFileLinkAnchor(resolved: ResolvedTranscriptMarkdownFileLink): ReviewCommentAnchor | null {
-  if (typeof resolved.line !== 'number') return null;
-  if (typeof resolved.endLine === 'number' && resolved.endLine > resolved.line) {
-    return {
-      kind: 'range',
-      filePath: resolved.filePath,
-      startLine: resolved.line,
-      endLine: resolved.endLine,
-    };
-  }
-  return { kind: 'line', filePath: resolved.filePath, line: resolved.line };
 }
 
 function shouldEnableFallbackTextNativeSelection(platformOS: typeof Platform.OS): boolean {
@@ -349,7 +334,7 @@ function UserTextBlock(props: {
   const handleMarkdownLinkPress = React.useCallback((url: string) => {
     const resolved = resolveTranscriptMarkdownFileLink({ url, workspacePath });
     if (!resolved) return false;
-    const anchor = buildTranscriptFileLinkAnchor(resolved);
+    const anchor = resolved.anchor ?? null;
     pushSessionFileDeepLink(router, pathname, {
       sessionId: props.sessionId,
       filePath: resolved.filePath,
@@ -652,7 +637,7 @@ function AgentTextBlock(props: {
   const handleMarkdownLinkPress = React.useCallback((url: string) => {
     const resolved = resolveTranscriptMarkdownFileLink({ url, workspacePath });
     if (!resolved) return false;
-    const anchor = buildTranscriptFileLinkAnchor(resolved);
+    const anchor = resolved.anchor ?? null;
     pushSessionFileDeepLink(router, pathname, {
       sessionId: props.sessionId,
       filePath: resolved.filePath,
