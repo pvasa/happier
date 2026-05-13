@@ -5,12 +5,14 @@ import { act } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
-import { clearPendingMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const pathState = vi.hoisted(() => ({
     pathname: '/',
+}));
+const pathListeners = vi.hoisted(() => ({
+    listeners: new Set<() => void>(),
 }));
 const searchParamsState = vi.hoisted(() => ({
     id: undefined as string | string[] | undefined,
@@ -41,6 +43,7 @@ const featureState = vi.hoisted(() => ({
     resolvedServerId: 'server-session' as string | null,
 }));
 const storageMutators = vi.hoisted(() => ({
+    setMobileWorkspaceExperience: vi.fn(),
     setSessionLastMobileSurfaceBySessionId: vi.fn(),
 }));
 const routerState = vi.hoisted(() => ({
@@ -57,6 +60,18 @@ const animatedTimingState = vi.hoisted(() => ({
         stop: ReturnType<typeof vi.fn>;
         toValue: number;
         finish: (finished?: boolean) => void;
+    }>,
+}));
+const keyboardHeightState = vi.hoisted(() => ({
+    value: 0,
+}));
+const gestureHandlerState = vi.hoisted(() => ({
+    gestures: [] as Array<{
+        kind: string;
+        config: Record<string, unknown>;
+        handlers: {
+            onEnd?: (event: { translationY: number; velocityY: number }) => void;
+        };
     }>,
 }));
 
@@ -78,7 +93,21 @@ const expoRouterMock = createExpoRouterMock({
     },
 });
 
-vi.mock('expo-router', () => expoRouterMock.module);
+const expoRouterModule = {
+    ...expoRouterMock.module,
+    usePathname: () => React.useSyncExternalStore(
+        (listener) => {
+            pathListeners.listeners.add(listener);
+            return () => {
+                pathListeners.listeners.delete(listener);
+            };
+        },
+        () => pathState.pathname,
+        () => pathState.pathname,
+    ),
+};
+
+vi.mock('expo-router', () => expoRouterModule);
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -119,6 +148,44 @@ vi.mock('react-native', async () => {
     });
 });
 
+vi.mock('react-native-gesture-handler', () => {
+    function createGesture(kind: string) {
+        const gesture = {
+            kind,
+            config: {} as Record<string, unknown>,
+            handlers: {} as {
+                onEnd?: (event: { translationY: number; velocityY: number }) => void;
+            },
+            minDistance(value: number) {
+                gesture.config.minDistance = value;
+                return gesture;
+            },
+            activeOffsetY(value: readonly [number, number]) {
+                gesture.config.activeOffsetY = value;
+                return gesture;
+            },
+            onEnd(handler: (event: { translationY: number; velocityY: number }) => void) {
+                gesture.handlers.onEnd = handler;
+                return gesture;
+            },
+        };
+        gestureHandlerState.gestures.push(gesture);
+        return gesture;
+    }
+
+    return {
+        Gesture: {
+            Pan: () => createGesture('pan'),
+        },
+        GestureDetector: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
+            React.createElement('GestureDetector', props, props.children),
+    };
+});
+
+vi.mock('react-native-worklets', () => ({
+    scheduleOnRN: (fn: (...args: unknown[]) => void, ...args: unknown[]) => fn(...args),
+}));
+
 vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => authState,
 }));
@@ -146,6 +213,10 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 
 vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
     useReducedMotionPreference: () => false,
+}));
+
+vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
+    useKeyboardHeight: () => keyboardHeightState.value,
 }));
 
 vi.mock('@/components/ui/navigation/TabBar', () => ({
@@ -190,6 +261,19 @@ const storageMock = createStorageModuleStub({
         }
         return [null, vi.fn()];
     },
+    useSettingMutable: (key: string) => {
+        if (key === 'mobileWorkspaceExperienceV1') {
+            return [
+                settingsState.mobileWorkspaceExperienceV1,
+                (value: 'classic' | 'cockpit') => {
+                    settingsState.mobileWorkspaceExperienceV1 = value;
+                    storageMutators.setMobileWorkspaceExperience(value);
+                    notifyStorageListeners();
+                },
+            ];
+        }
+        return [readSettingValue(key), vi.fn()];
+    },
 });
 
 vi.mock('@/sync/domains/state/storage', () => storageMock);
@@ -221,9 +305,14 @@ function notifyStorageListeners(): void {
     }
 }
 
+function notifyPathListeners(): void {
+    for (const listener of pathListeners.listeners) {
+        listener();
+    }
+}
+
 describe('MobileBottomChromeHost', () => {
     afterEach(() => {
-        clearPendingMobileSurfaceTransition();
         standardCleanup();
         routerState.replace.mockReset();
         routerState.back.mockReset();
@@ -232,7 +321,10 @@ describe('MobileBottomChromeHost', () => {
         animatedTimingState.timings = [];
         tabState.setActiveTab.mockReset();
         storageMutators.setSessionLastMobileSurfaceBySessionId.mockReset();
+        storageMutators.setMobileWorkspaceExperience.mockReset();
+        gestureHandlerState.gestures = [];
         storageListeners.listeners.clear();
+        pathListeners.listeners.clear();
         pathState.pathname = '/';
         searchParamsState.id = undefined;
         searchParamsState.mobileSurface = undefined;
@@ -246,17 +338,16 @@ describe('MobileBottomChromeHost', () => {
         featureState.terminalEmbeddedPtyEnabled = true;
         featureState.terminalEmbeddedPtyServerId = null;
         featureState.resolvedServerId = 'server-session';
+        keyboardHeightState.value = 0;
     });
 
-    it('renders the animated main app tab bar on the root sessions route', async () => {
+    it('renders the main app tab bar on the root sessions route', async () => {
         pathState.pathname = '/';
 
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
         const screen = await renderScreen(<MobileBottomChromeHost />);
 
-        const animatedChrome = screen.tree.findByType('AnimatedView' as never);
         const bar = screen.tree.findByType('TabBar' as never);
-        expect(animatedChrome).toBeTruthy();
         expect(bar.props.activeTab).toBe('sessions');
     });
 
@@ -293,17 +384,8 @@ describe('MobileBottomChromeHost', () => {
         });
 
         try {
-            const {
-                resolvePendingMobileSurfaceTransitionStackOptions,
-            } = await import('@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent');
             expect(tabState.setActiveTab).toHaveBeenCalledWith('sessions');
             expect(routerState.replace).toHaveBeenCalledWith('/');
-            expect(resolvePendingMobileSurfaceTransitionStackOptions({
-                routeName: 'index',
-            })).toEqual({
-                animation: 'slide_from_left',
-                animationTypeForReplace: 'pop',
-            });
         } finally {
             resolvePersistence();
             await act(async () => {
@@ -353,296 +435,52 @@ describe('MobileBottomChromeHost', () => {
         expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
     });
 
-    it('renders the session cockpit bar by default on phone session routes', async () => {
+    it('renders session cockpit chrome from the global host on session routes', async () => {
         pathState.pathname = '/session/session-1/files';
         searchParamsState.id = 'session-1';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
 
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
         const screen = await renderScreen(<MobileBottomChromeHost />);
 
-        const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-        expect(bar.props.sessionId).toBe('session-1');
-        expect(bar.props.activeSurface).toBe('browse');
-        expect(bar.props.terminalTabAvailable).toBe(true);
+        expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        expect(cockpitBar.props.sessionId).toBe('session-1');
+        expect(cockpitBar.props.activeSurface).toBe('browse');
     });
 
-    it('keeps the terminal tab available when the dock setting is missing', async () => {
+    it('falls back to route replacement for cockpit tab presses before the navigator bridge is ready', async () => {
         pathState.pathname = '/session/session-1/files';
         searchParamsState.id = 'session-1';
-        settingsState.embeddedTerminalDockLocation = null;
+        searchParamsState.serverId = 'server-session';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
 
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
         const screen = await renderScreen(<MobileBottomChromeHost />);
 
-        const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-        expect(bar.props.terminalTabAvailable).toBe(true);
-    });
-
-    it('keeps the cockpit terminal tab available when the viewed session server enables terminal', async () => {
-        pathState.pathname = '/session/session-1/files';
-        searchParamsState.serverId = 'server-b';
-        featureState.terminalEmbeddedPtyServerId = 'server-b';
-
-        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-        const screen = await renderScreen(<MobileBottomChromeHost />);
-
-        const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-        expect(bar.props.terminalTabAvailable).toBe(true);
-    });
-
-    it('hides session cockpit chrome when classic mode is explicitly selected', async () => {
-        pathState.pathname = '/session/session-1/files';
-        searchParamsState.id = 'session-1';
-        settingsState.mobileWorkspaceExperienceV1 = 'classic';
-
-        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-        const screen = await renderScreen(<MobileBottomChromeHost />);
-
-        expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
-    });
-
-    it('persists selected session cockpit surface and preserves server scope before navigating', async () => {
-        pathState.pathname = '/session/session-1';
-        searchParamsState.id = 'session-1';
-        searchParamsState.serverId = 'server-a';
-        settingsState.sessionLastMobileSurfaceBySessionId = { 'session-1': 'terminal' };
-
-        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-        const screen = await renderScreen(<MobileBottomChromeHost />);
-
-        const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-        await act(async () => {
-            bar.props.onSurfacePress('git');
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        act(() => {
+            cockpitBar.props.onSurfacePress('git');
         });
 
-        const {
-            resolvePendingMobileSurfaceTransitionStackOptions,
-        } = await import('@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent');
         expect(storageMutators.setSessionLastMobileSurfaceBySessionId).toHaveBeenCalledWith({
             'session-1': 'git',
         });
-        expect(routerState.replace).toHaveBeenCalledWith('/session/session-1/git?serverId=server-a');
-        expect(resolvePendingMobileSurfaceTransitionStackOptions({
-            routeName: 'session/[id]/git',
-        })).toEqual({
-            animation: 'slide_from_right',
-            animationTypeForReplace: 'push',
-        });
+        expect(routerState.replace).toHaveBeenCalledWith('/session/session-1/git?serverId=server-session');
     });
 
-    it('waits for the sourced details route to collapse before persisting and replacing its source surface', async () => {
-        vi.useFakeTimers();
-        try {
-            pathState.pathname = '/session/session-1/details';
-            searchParamsState.id = 'session-1';
-            searchParamsState.serverId = 'server-a';
-            searchParamsState.sourceSurface = 'browse';
-            settingsState.sessionLastMobileSurfaceBySessionId = {
-                'session-1': 'browse',
-                'session-2': 'chat',
-            };
-
-            const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-            const screen = await renderScreen(<MobileBottomChromeHost />);
-
-            const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-            await act(async () => {
-                bar.props.onSurfacePress('git');
-            });
-
-            const {
-                resolvePendingMobileSurfaceTransitionStackOptions,
-            } = await import('@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent');
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).not.toHaveBeenCalled();
-            expect(routerState.back).toHaveBeenCalledTimes(1);
-            expect(routerState.replace).not.toHaveBeenCalled();
-            expect(resolvePendingMobileSurfaceTransitionStackOptions({
-                routeName: 'session/[id]/git',
-            })).toEqual({
-                animation: 'slide_from_left',
-                animationTypeForReplace: 'pop',
-            });
-
-            await act(async () => {
-                vi.advanceTimersByTime(99);
-            });
-            expect(routerState.replace).not.toHaveBeenCalled();
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).not.toHaveBeenCalled();
-
-            settingsState.sessionLastMobileSurfaceBySessionId = {
-                'session-1': 'browse',
-                'session-2': 'terminal',
-                'session-3': 'git',
-            };
-
-            pathState.pathname = '/session/session-1/files';
-            searchParamsState.sourceSurface = undefined;
-            await act(async () => {
-                notifyStorageListeners();
-            });
-
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).toHaveBeenCalledWith({
-                'session-1': 'git',
-                'session-2': 'terminal',
-                'session-3': 'git',
-            });
-            expect(routerState.replace).toHaveBeenCalledWith('/session/session-1/git?serverId=server-a');
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('merges the latest session surface map when the details-collapse fallback timer completes', async () => {
-        vi.useFakeTimers();
-        try {
-            pathState.pathname = '/session/session-1/details';
-            searchParamsState.id = 'session-1';
-            searchParamsState.serverId = 'server-a';
-            searchParamsState.sourceSurface = 'browse';
-            settingsState.sessionLastMobileSurfaceBySessionId = {
-                'session-1': 'browse',
-                'session-2': 'chat',
-            };
-
-            const {
-                MobileBottomChromeHost,
-                SESSION_DETAILS_COLLAPSE_FALLBACK_MS,
-            } = await import('./MobileBottomChromeHost');
-            const screen = await renderScreen(<MobileBottomChromeHost />);
-
-            const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-            await act(async () => {
-                bar.props.onSurfacePress('git');
-            });
-
-            settingsState.sessionLastMobileSurfaceBySessionId = {
-                'session-1': 'browse',
-                'session-2': 'terminal',
-                'session-3': 'git',
-            };
-            await act(async () => {
-                notifyStorageListeners();
-            });
-
-            await act(async () => {
-                vi.advanceTimersByTime(SESSION_DETAILS_COLLAPSE_FALLBACK_MS);
-            });
-
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).toHaveBeenCalledWith({
-                'session-1': 'git',
-                'session-2': 'terminal',
-                'session-3': 'git',
-            });
-            expect(routerState.replace).toHaveBeenCalledWith('/session/session-1/git?serverId=server-a');
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('cancels a pending details-collapse switch when pathname changes to an unrelated route', async () => {
-        vi.useFakeTimers();
-        try {
-            pathState.pathname = '/session/session-1/details';
-            searchParamsState.id = 'session-1';
-            searchParamsState.serverId = 'server-a';
-            searchParamsState.sourceSurface = 'browse';
-
-            const {
-                MobileBottomChromeHost,
-                SESSION_DETAILS_COLLAPSE_FALLBACK_MS,
-            } = await import('./MobileBottomChromeHost');
-            const screen = await renderScreen(<MobileBottomChromeHost />);
-
-            const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-            await act(async () => {
-                bar.props.onSurfacePress('git');
-            });
-
-            expect(routerState.back).toHaveBeenCalledTimes(1);
-            expect(routerState.replace).not.toHaveBeenCalled();
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).not.toHaveBeenCalled();
-
-            pathState.pathname = '/settings';
-            searchParamsState.sourceSurface = undefined;
-            await act(async () => {
-                settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
-                notifyStorageListeners();
-            });
-
-            expect(routerState.replace).not.toHaveBeenCalled();
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).not.toHaveBeenCalled();
-
-            pathState.pathname = '/session/session-1/files';
-            await act(async () => {
-                notifyStorageListeners();
-            });
-
-            await act(async () => {
-                vi.advanceTimersByTime(SESSION_DETAILS_COLLAPSE_FALLBACK_MS);
-            });
-
-            expect(routerState.replace).not.toHaveBeenCalled();
-            expect(storageMutators.setSessionLastMobileSurfaceBySessionId).not.toHaveBeenCalled();
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('keeps cockpit terminal availability scoped to the viewed session server', async () => {
-        pathState.pathname = '/session/session-1/files';
-        searchParamsState.serverId = 'server-session';
-        featureState.terminalEmbeddedPtyServerId = 'server-session';
+    it('hides main app chrome while the software keyboard is visible', async () => {
+        pathState.pathname = '/';
+        keyboardHeightState.value = 260;
 
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
         const screen = await renderScreen(<MobileBottomChromeHost />);
 
-        const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-        expect(bar.props.terminalTabAvailable).toBe(true);
+        expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
+        expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
     });
 
-    it('falls back to replacing the sourced details route when navigation cannot go back', async () => {
-        pathState.pathname = '/session/session-1/details';
-        searchParamsState.serverId = 'server-a';
-        searchParamsState.sourceSurface = 'git';
-        navigationState.canGoBack = false;
-
-        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-        const screen = await renderScreen(<MobileBottomChromeHost />);
-
-        const bar = screen.tree.findByType('SessionCockpitTabBar' as never);
-        await act(async () => {
-            bar.props.onSurfacePress('chat');
-        });
-
-        expect(routerState.back).not.toHaveBeenCalled();
-        expect(routerState.replace).toHaveBeenCalledWith('/session/session-1?serverId=server-a&mobileSurface=chat');
-        expect(storageMutators.setSessionLastMobileSurfaceBySessionId).toHaveBeenCalledWith({
-            'session-1': 'chat',
-        });
-    });
-
-    it('hides session cockpit chrome after switching to classic', async () => {
-        vi.useFakeTimers();
-        try {
-            pathState.pathname = '/session/session-1/files';
-
-            const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-            const screen = await renderScreen(<MobileBottomChromeHost />);
-
-            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(1);
-
-            await act(async () => {
-                settingsState.mobileWorkspaceExperienceV1 = 'classic';
-                notifyStorageListeners();
-            });
-
-            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('does not keep the main app tab bar mounted while opening a classic session route', async () => {
+    it('keeps both main and cockpit bars in the global host during the route swap animation', async () => {
         vi.useFakeTimers();
         try {
             pathState.pathname = '/';
@@ -655,12 +493,12 @@ describe('MobileBottomChromeHost', () => {
             pathState.pathname = '/session/session-1';
             searchParamsState.id = 'session-1';
             await act(async () => {
-                settingsState.mobileWorkspaceExperienceV1 = 'classic';
-                notifyStorageListeners();
+                notifyPathListeners();
             });
 
-            expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
-            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
+            expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(1);
+            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(1);
+            expect(animatedTimingState.timings.find((timing) => timing.toValue === 1)).toBeTruthy();
         } finally {
             vi.useRealTimers();
         }
@@ -678,11 +516,10 @@ describe('MobileBottomChromeHost', () => {
 
             pathState.pathname = '/';
             await act(async () => {
-                settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
-                notifyStorageListeners();
+                notifyPathListeners();
             });
 
-            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
+            expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(1);
             const bar = screen.tree.findByType('TabBar' as never);
             expect(bar.props.activeTab).toBe('sessions');
         } finally {
@@ -690,60 +527,18 @@ describe('MobileBottomChromeHost', () => {
         }
     });
 
-    it('stops in-flight chrome animations before switching chrome keys again', async () => {
-        vi.useFakeTimers();
-        try {
-            pathState.pathname = '/session/session-1/files';
-
-            const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
-            await renderScreen(<MobileBottomChromeHost />);
-
-            pathState.pathname = '/';
-            await act(async () => {
-                settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
-                notifyStorageListeners();
-            });
-
-            const firstTransition = animatedTimingState.timings[0];
-            expect(firstTransition).toBeTruthy();
-            expect(firstTransition.stop).not.toHaveBeenCalled();
-
-            pathState.pathname = '/session/session-1/git';
-            settingsState.sessionLastMobileSurfaceBySessionId = { 'session-1': 'git' };
-            await act(async () => {
-                notifyStorageListeners();
-            });
-
-            expect(firstTransition.stop).toHaveBeenCalledTimes(1);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
-    it('settles chrome opacity when the target chrome enter animation finishes', async () => {
-        pathState.pathname = '/session/session-1/files';
+    it('does not schedule chrome animations while switching within main app tabs', async () => {
+        pathState.pathname = '/settings';
 
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
         const screen = await renderScreen(<MobileBottomChromeHost />);
 
-        const initialAnimatedChrome = screen.tree.findByType('AnimatedView' as never);
-        expect(initialAnimatedChrome.props.style.opacity._value).toBe(1);
-
-        pathState.pathname = '/';
+        pathState.pathname = '/friends';
         await act(async () => {
-            settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
-            notifyStorageListeners();
+            notifyPathListeners();
         });
 
-        const animatedChrome = screen.tree.findByType('AnimatedView' as never);
-        expect(animatedChrome.props.style.opacity._value).toBe(0);
         expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(1);
-        expect(animatedTimingState.timings).toHaveLength(1);
-
-        await act(async () => {
-            animatedTimingState.timings[0]?.finish();
-        });
-
-        expect(animatedChrome.props.style.opacity._value).toBe(1);
+        expect(animatedTimingState.timings).toHaveLength(0);
     });
 });
