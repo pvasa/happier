@@ -46,6 +46,7 @@ import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessi
 import { useSessionFileDownloadAvailability } from '@/components/sessions/files/useSessionFileDownloadAvailability';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
+import { extractSelectedDiffLineKeysFromPatch } from '@/scm/scmPatchSelection';
 export type SessionFileDeepLinkAnchor = Readonly<{
     source: ReviewCommentSource;
     anchor: ReviewCommentAnchor;
@@ -87,7 +88,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         if (!deepLinkAnchor) return '';
         const a = deepLinkAnchor.anchor;
         if (a.kind === 'fileLine') return `file:fileLine:${a.startLine}`;
-        return `diff:diffLine:${a.startLine}:${a.side}:${a.oldLine ?? ''}:${a.newLine ?? ''}`;
+        if (a.kind === 'diffLine') return `diff:diffLine:${a.startLine}:${a.side}:${a.oldLine ?? ''}:${a.newLine ?? ''}`;
+        if (a.kind === 'line') return `${deepLinkAnchor.source}:line:${a.line}:${a.side ?? ''}:${a.lineHash ?? ''}`;
+        return `${deepLinkAnchor.source}:range:${a.startLine}:${a.endLine}:${a.side ?? ''}:${a.startLineHash ?? ''}:${a.endLineHash ?? ''}`;
     }, [deepLinkAnchor]);
 
     const scmCommitStrategy = useSetting('scmCommitStrategy');
@@ -136,6 +139,8 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const [diffMode, setDiffMode] = React.useState<FileDiffMode>('pending');
     const [isLoading, setIsLoading] = React.useState(true);
     const [selectedLineKeys, setSelectedLineKeys] = React.useState<Set<string>>(new Set());
+    const [commitSelectionModeActive, setCommitSelectionModeActive] = React.useState(false);
+    const [reviewCommentModeActive, setReviewCommentModeActive] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [fileWriteSupported, setFileWriteSupported] = React.useState(true);
     const [jumpToAnchor, setJumpToAnchor] = React.useState<ReviewCommentAnchor | null>(deepLinkAnchor?.anchor ?? null);
@@ -152,6 +157,10 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         && scmSnapshot?.capabilities?.writeCommitLineSelection === true;
     const isSelectedForCommit = commitSelectionPaths.includes(filePath)
         || commitSelectionPatches.some((p) => p.path === filePath);
+    const appliedLineSelectionKeys = React.useMemo(() => {
+        const patch = commitSelectionPatches.find((entry) => entry.path === filePath)?.patch ?? null;
+        return patch ? extractSelectedDiffLineKeysFromPatch(patch) : new Set<string>();
+    }, [commitSelectionPatches, filePath]);
     const lineSelectionFingerprint = React.useMemo(
         () => buildFileLineSelectionFingerprint(fileEntry),
         [fileEntry]
@@ -165,6 +174,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         diffMode,
         diffContent,
     });
+    const effectiveLineSelectionEnabled = lineSelectionEnabled && commitSelectionModeActive;
 
     React.useEffect(() => {
         const resolved = resolveDefaultDiffModeForFile({
@@ -178,11 +188,13 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 
     React.useEffect(() => {
         setSelectedLineKeys(new Set());
+        setCommitSelectionModeActive(false);
     }, [diffMode, diffContent, lineSelectionFingerprint]);
 
     React.useEffect(() => {
         if (!lineSelectionEnabled) {
             setSelectedLineKeys(new Set());
+            setCommitSelectionModeActive(false);
         }
     }, [lineSelectionEnabled]);
 
@@ -238,6 +250,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         void refreshAll();
     }, [refreshAll]);
 
+    const isBinaryFile = fileContent?.isBinary === true;
     const lastFingerprintRef = React.useRef<string | null>(null);
     React.useEffect(() => {
         const fingerprint = lineSelectionFingerprint ?? null;
@@ -259,14 +272,20 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         const markdownPreviewAvailable = (language === 'markdown' || language === 'mdx')
             && fileContent?.isBinary !== true
             && typeof fileContent?.content === 'string';
+        const hasRenderableDiff = resolveShowDiffToggle({
+            diffContent,
+            hasPendingDelta,
+            hasIncludedDelta,
+            fileIsBinary: isBinaryFile,
+        });
         setDisplayMode(resolveFileDetailsDisplayMode({
             persistedEditing: persistedDraft?.isEditingFile === true,
             deepLinkSource: deepLinkAnchor?.source ?? null,
-            hasDiffContent: Boolean(diffContent),
+            hasRenderableDiff,
             hasFileContent: Boolean(fileContent),
             markdownPreviewAvailable,
         }));
-    }, [deepLinkAnchor?.source, diffContent, fileContent, filePath, persistedDraft?.isEditingFile]);
+    }, [deepLinkAnchor?.source, diffContent, fileContent, filePath, hasIncludedDelta, hasPendingDelta, isBinaryFile, persistedDraft?.isEditingFile]);
 
     React.useEffect(() => {
         if (!deepLinkAnchor) {
@@ -296,7 +315,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         scmCommitStrategy,
         diffMode,
         diffContent,
-        lineSelectionEnabled,
+        lineSelectionEnabled: effectiveLineSelectionEnabled,
         includeExcludeEnabled,
         selectedLineKeys,
         refreshAll,
@@ -304,7 +323,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     });
 
     const toggleSelectedLine = React.useCallback((key: string) => {
-        if (!lineSelectionEnabled) return;
+        if (!effectiveLineSelectionEnabled) return;
         setSelectedLineKeys((previous) => {
             const next = new Set(previous);
             if (next.has(key)) {
@@ -314,7 +333,16 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
             }
             return next;
         });
-    }, [lineSelectionEnabled]);
+    }, [effectiveLineSelectionEnabled]);
+
+    const selectLineRange = React.useCallback((keys: readonly string[]) => {
+        if (!effectiveLineSelectionEnabled) return;
+        setSelectedLineKeys((previous) => {
+            const next = new Set(previous);
+            for (const key of keys) next.add(key);
+            return next;
+        });
+    }, [effectiveLineSelectionEnabled]);
 
     const fileName = filePath.split('/').pop() || filePath;
     const filePathDir = filePath.split('/').slice(0, -1).join('/');
@@ -373,10 +401,28 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 
     const onApplySelectedLines = React.useCallback(() => {
         void applySelectedLines();
+        setCommitSelectionModeActive(false);
     }, [applySelectedLines]);
 
     const onClearSelection = React.useCallback(() => {
         setSelectedLineKeys(new Set());
+        setCommitSelectionModeActive(false);
+    }, []);
+
+    const onStartLineSelection = React.useCallback(() => {
+        if (!lineSelectionEnabled) return;
+        setReviewCommentModeActive(false);
+        setDisplayMode('diff');
+        setSelectedLineKeys(new Set(appliedLineSelectionKeys));
+        setCommitSelectionModeActive(true);
+    }, [appliedLineSelectionKeys, lineSelectionEnabled]);
+
+    const onToggleReviewCommentMode = React.useCallback((active: boolean) => {
+        setReviewCommentModeActive(active);
+        if (active) {
+            setCommitSelectionModeActive(false);
+            setSelectedLineKeys(new Set());
+        }
     }, []);
 
     const onRefresh = React.useCallback(() => {
@@ -426,7 +472,6 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     if (fatalError) {
         return <FileErrorState theme={theme} filePath={filePath} error={error ?? t('common.error')} onRetry={onRefresh} />;
     }
-    const isBinaryFile = fileContent?.isBinary === true;
     const showDownloadAction = downloadActionsAvailable && (previewTooLarge || isBinaryFile);
     const imagePreviewUri = binaryImagePreview.status === 'loaded' ? binaryImagePreview.uri : null;
     const imagePreviewSvgXml = binaryImagePreview.status === 'loaded' ? binaryImagePreview.svgXml : null;
@@ -457,7 +502,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         ) : null;
 
     return (
-        <View style={[styles.container, { backgroundColor: theme.colors.surface }]}>
+        <View style={[styles.container, { backgroundColor: theme.colors.surface.base }]}>
             <View
                 style={{
                     width: '100%',
@@ -484,6 +529,9 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     virtualSelectionEnabled={virtualSelectionEnabled}
                     isSelectedForCommit={isSelectedForCommit}
                     lineSelectionEnabled={lineSelectionEnabled}
+                    lineSelectionActive={commitSelectionModeActive}
+                    reviewCommentsEnabled={reviewCommentsEnabled}
+                    commentModeActive={reviewCommentModeActive}
                     selectedLineCount={selectedLineKeys.size}
                     isApplyingStage={isApplyingStage}
                     inFlightScmOperation={inFlightScmOperation}
@@ -491,6 +539,8 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     onUnstageFile={onUnstageFile}
                     onApplySelectedLines={onApplySelectedLines}
                     onClearSelection={onClearSelection}
+                    onStartLineSelection={onStartLineSelection}
+                    onToggleCommentMode={onToggleReviewCommentMode}
                     fileEditorEnabled={editorSurfaceEnabled && !editorTooLarge && !editorChunkTooLarge && !isBinaryFile}
                     isEditingFile={isEditingFile}
                     fileEditorDirty={editorDirty}
@@ -512,11 +562,11 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                             paddingVertical: 10,
                             borderRadius: 12,
                             borderWidth: 1,
-                            borderColor: theme.colors.divider,
-                            backgroundColor: theme.colors.surfaceHigh,
+                            borderColor: theme.colors.border.default,
+                            backgroundColor: theme.colors.surface.inset,
                         }}
                     >
-                        <Text style={{ fontSize: 13, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {error}
                         </Text>
                     </View>
@@ -570,13 +620,15 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                         fileContent={fileContent?.isBinary ? null : (fileContent?.content ?? null)}
                         language={language}
                         syntaxHighlighting={syntaxHighlighting}
-                        selectedLineKeys={selectedLineKeys}
-                        lineSelectionEnabled={lineSelectionEnabled}
+                        selectedLineKeys={commitSelectionModeActive ? selectedLineKeys : appliedLineSelectionKeys}
+                        lineSelectionEnabled={effectiveLineSelectionEnabled}
                         onToggleLine={toggleSelectedLine}
+                        onSelectLineRange={selectLineRange}
                         wrapLines={wrapLinesInDiffs}
                         showLineNumbers={showLineNumbers}
                         showPrefix={showLineNumbers}
                         reviewCommentsEnabled={reviewCommentsEnabled}
+                        reviewCommentModeActive={reviewCommentModeActive}
                         reviewCommentDrafts={reviewCommentDrafts}
                         onUpsertReviewCommentDraft={reviewDraftHandlers.onUpsertReviewCommentDraft}
                         onDeleteReviewCommentDraft={reviewDraftHandlers.onDeleteReviewCommentDraft}
@@ -591,10 +643,10 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 
                 {displayMode === 'file' && isEditingFile ? null : (
                     <>
-                        <ScrollEdgeFades color={theme.colors.surface} size={18} edges={scrollFades.visibility} />
+                        <ScrollEdgeFades color={theme.colors.surface.base} size={18} edges={scrollFades.visibility} />
                         <ScrollEdgeIndicators
                             edges={scrollFades.visibility}
-                            color={theme.colors.textSecondary}
+                            color={theme.colors.text.secondary}
                             size={14}
                             opacity={0.35}
                         />
@@ -608,6 +660,6 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
 const styles = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
     },
 }));

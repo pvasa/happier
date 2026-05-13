@@ -7,27 +7,37 @@ describe('resolveFileDetailsDisplayMode', () => {
         expect(resolveFileDetailsDisplayMode({
             persistedEditing: false,
             deepLinkSource: null,
-            hasDiffContent: false,
+            hasRenderableDiff: false,
             hasFileContent: true,
             markdownPreviewAvailable: true,
         })).toBe('markdown');
     });
 
-    it('keeps diff mode ahead of markdown preview when a diff is available', () => {
+    it('keeps diff mode ahead of markdown preview when a renderable diff is available', () => {
         expect(resolveFileDetailsDisplayMode({
             persistedEditing: false,
             deepLinkSource: null,
-            hasDiffContent: true,
+            hasRenderableDiff: true,
             hasFileContent: true,
             markdownPreviewAvailable: true,
         })).toBe('diff');
+    });
+
+    it('uses markdown preview when only a placeholder diff is available', () => {
+        expect(resolveFileDetailsDisplayMode({
+            persistedEditing: false,
+            deepLinkSource: null,
+            hasRenderableDiff: false,
+            hasFileContent: true,
+            markdownPreviewAvailable: true,
+        })).toBe('markdown');
     });
 
     it('keeps explicit file deep links in source view for line anchoring', () => {
         expect(resolveFileDetailsDisplayMode({
             persistedEditing: false,
             deepLinkSource: 'file',
-            hasDiffContent: true,
+            hasRenderableDiff: true,
             hasFileContent: true,
             markdownPreviewAvailable: true,
         })).toBe('file');
@@ -37,7 +47,7 @@ describe('resolveFileDetailsDisplayMode', () => {
         expect(resolveFileDetailsDisplayMode({
             persistedEditing: true,
             deepLinkSource: null,
-            hasDiffContent: false,
+            hasRenderableDiff: false,
             hasFileContent: true,
             markdownPreviewAvailable: true,
         })).toBe('file');

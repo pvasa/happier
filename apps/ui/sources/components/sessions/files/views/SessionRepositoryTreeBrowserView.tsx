@@ -319,7 +319,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
             title: t('settingsAttachments.workspaceDirectory.uploadsDirectory.title'),
             subtitle: uploadDestinationDir || t('files.projectRoot'),
             category: t('common.path'),
-            icon: <Ionicons name="folder-open-outline" size={16} color={theme.colors.textSecondary} />,
+            icon: <Ionicons name="folder-open-outline" size={16} color={theme.colors.text.secondary} />,
             disabled: !uploadActionsAvailable,
         },
         ...uploadMenuConfig.items.map((item) => ({
@@ -327,10 +327,10 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
             title: t(item.titleKey),
             subtitle: uploadDestinationDir || t('files.projectRoot'),
             category: t('files.toolbar.upload'),
-            icon: <Ionicons name={item.iconName} size={16} color={theme.colors.textSecondary} />,
+            icon: <Ionicons name={item.iconName} size={16} color={theme.colors.text.secondary} />,
             disabled: item.disabled,
         })),
-    ], [theme.colors.textSecondary, uploadActionsAvailable, uploadDestinationDir, uploadMenuConfig.items]);
+    ], [theme.colors.text.secondary, uploadActionsAvailable, uploadDestinationDir, uploadMenuConfig.items]);
 
     const onSelectUploadMenuItem = React.useCallback((itemId: string) => {
         setUploadMenuOpen(false);
@@ -358,7 +358,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-filter-changed',
                 priority: 1,
                 order: 0,
-                icon: <Octicons name="filter" size={16} color={showChangedOnly ? theme.colors.textLink : theme.colors.textSecondary} />,
+                icon: <Octicons name="filter" size={16} color={showChangedOnly ? theme.colors.text.link : theme.colors.text.secondary} />,
                 menuIcon: 'funnel-outline',
                 accessibilityLabel: t('files.toolbar.changedFiles'),
                 selected: showChangedOnly,
@@ -368,7 +368,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-toggle-details',
                 priority: 2,
                 order: 1,
-                icon: <Ionicons name={detailsMode ? 'list' : 'list-outline'} size={16} color={detailsMode ? theme.colors.textLink : theme.colors.textSecondary} />,
+                icon: <Ionicons name={detailsMode ? 'list' : 'list-outline'} size={16} color={detailsMode ? theme.colors.text.link : theme.colors.text.secondary} />,
                 menuIcon: 'list-outline',
                 accessibilityLabel: t('common.details'),
                 selected: detailsMode,
@@ -378,7 +378,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-upload',
                 priority: 3,
                 order: 2,
-                icon: <Ionicons name="cloud-upload-outline" size={16} color={theme.colors.textSecondary} />,
+                icon: <Ionicons name="cloud-upload-outline" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'cloud-upload-outline',
                 accessibilityLabel: t('files.toolbar.upload'),
                 disabled: !uploadActionsAvailable,
@@ -389,7 +389,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-create-file',
                 priority: 5,
                 order: 3,
-                icon: <Ionicons name="document-text-outline" size={16} color={theme.colors.textSecondary} />,
+                icon: <Ionicons name="document-text-outline" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'document-text-outline',
                 accessibilityLabel: t('files.createFileA11y'),
                 disabled: !allowCreateActions,
@@ -399,7 +399,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-create-folder',
                 priority: 6,
                 order: 4,
-                icon: <Ionicons name="folder-outline" size={16} color={theme.colors.textSecondary} />,
+                icon: <Ionicons name="folder-outline" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'folder-outline',
                 accessibilityLabel: t('files.createFolderA11y'),
                 disabled: !allowCreateActions,
@@ -409,7 +409,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-clear-search',
                 priority: 4,
                 order: 5,
-                icon: <Octicons name="x" size={16} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="x" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'close-outline',
                 accessibilityLabel: t('files.clearSearchA11y'),
                 onPress: () => setSearchQuery(''),
@@ -419,8 +419,8 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 priority: 10,
                 order: 6,
                 icon: treeRootLoading
-                    ? <ActivityIndicator testID="repository-tree-refresh-loading" size="small" color={theme.colors.textSecondary} />
-                    : <Octicons name="sync" size={16} color={theme.colors.textSecondary} />,
+                    ? <ActivityIndicator testID="repository-tree-refresh-loading" size="small" color={theme.colors.text.secondary} />
+                    : <Octicons name="sync" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'refresh-outline',
                 accessibilityLabel: t('common.refresh'),
                 onPress: refresh,
@@ -432,7 +432,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-collapse-all',
                 priority: 0,
                 order: 7,
-                icon: <Ionicons name="contract-outline" size={16} color={theme.colors.textSecondary} />,
+                icon: <Ionicons name="contract-outline" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'contract-outline',
                 accessibilityLabel: t('files.repositoryCollapseAll'),
                 onPress: collapseAll,
@@ -444,7 +444,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 id: 'repository-tree-close',
                 priority: 8,
                 order: 8,
-                icon: <Octicons name="x" size={16} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="x" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'close-outline',
                 accessibilityLabel: t('common.close'),
                 onPress: props.onRequestClose,
@@ -470,8 +470,8 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
         showChangedOnly,
         uploadDestinationDir.length,
         props.onRequestClose,
-        theme.colors.textLink,
-        theme.colors.textSecondary,
+        theme.colors.text.link,
+        theme.colors.text.secondary,
         treeRootLoading,
     ]);
 
@@ -649,13 +649,13 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                         destinationLabel={webDropState.dropDestinationDir || t('files.projectRoot')}
                     />
                     <ScrollEdgeFades
-                        color={theme.colors.surface}
+                        color={theme.colors.surface.base}
                         size={18}
                         edges={scrollFades.visibility}
                     />
                     <ScrollEdgeIndicators
                         edges={scrollFades.visibility}
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                         size={14}
                         opacity={0.35}
                     />

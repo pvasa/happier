@@ -34,12 +34,12 @@ function readThemeToken(theme: any, path: readonly string[]): unknown {
 
 function areBranchSummaryThemeTokensEqual(previous: any, next: any): boolean {
     const tokenPaths: readonly (readonly string[])[] = [
-        ['colors', 'divider'],
+        ['colors', 'border', 'default'],
         ['colors', 'input', 'background'],
-        ['colors', 'surface'],
-        ['colors', 'surfaceHigh'],
-        ['colors', 'text'],
-        ['colors', 'textSecondary'],
+        ['colors', 'surface', 'base'],
+        ['colors', 'surface', 'inset'],
+        ['colors', 'text', 'primary'],
+        ['colors', 'text', 'secondary'],
     ];
     return tokenPaths.every((path) => Object.is(readThemeToken(previous, path), readThemeToken(next, path)));
 }
@@ -100,15 +100,15 @@ function SourceControlBranchSummaryImpl({
                     paddingVertical: 6,
                     borderRadius: 999,
                     borderWidth: 1,
-                    borderColor: theme.colors.divider,
-                    backgroundColor: theme.colors.surfaceHigh ?? theme.colors.input.background,
+                    borderColor: theme.colors.border.default,
+                    backgroundColor: theme.colors.surface.inset ?? theme.colors.input.background,
                 }}
             >
-                <Octicons name={iconName as any} size={14} color={theme.colors.textSecondary} />
-                <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                <Octicons name={iconName as any} size={14} color={theme.colors.text.secondary} />
+                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                     {label}
                 </Text>
-                <Text style={{ fontSize: 12, color: theme.colors.text, ...Typography.mono('semiBold') }}>
+                <Text style={{ fontSize: 12, color: theme.colors.text.primary, ...Typography.mono('semiBold') }}>
                     {String(value)}
                 </Text>
             </View>
@@ -132,13 +132,13 @@ function SourceControlBranchSummaryImpl({
                     style={{
                         fontSize: 11,
                         lineHeight: 13,
-                        color: theme.colors.text,
+                        color: theme.colors.text.primary,
                         ...Typography.mono('semiBold'),
                     }}
                 >
                     {String(value)}
                 </Text>
-                <Octicons name={iconName as any} size={14} color={theme.colors.textSecondary} />
+                <Octicons name={iconName as any} size={14} color={theme.colors.text.secondary} />
             </View>
         );
     };
@@ -157,8 +157,8 @@ function SourceControlBranchSummaryImpl({
                     paddingTop: 12,
                     paddingBottom: 10,
                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                    borderBottomColor: theme.colors.divider,
-                    backgroundColor: theme.colors.surface,
+                    borderBottomColor: theme.colors.border.default,
+                    backgroundColor: theme.colors.surface.base,
                     gap: 6,
                 }}
             >
@@ -168,7 +168,7 @@ function SourceControlBranchSummaryImpl({
                             <Octicons
                                 name="git-branch"
                                 size={15}
-                                color={theme.colors.textSecondary}
+                                color={theme.colors.text.secondary}
                                 style={{ flexShrink: 0 }}
                             />
                             {canShowBranchMenu && sessionId ? (
@@ -180,7 +180,7 @@ function SourceControlBranchSummaryImpl({
                                                 flexShrink: 1,
                                                 minWidth: 0,
                                                 fontSize: 14,
-                                                color: theme.colors.text,
+                                                color: theme.colors.text.primary,
                                                 ...Typography.default('semiBold'),
                                             }}
                                         >
@@ -204,7 +204,7 @@ function SourceControlBranchSummaryImpl({
                                         flexShrink: 1,
                                         minWidth: 0,
                                         fontSize: 14,
-                                        color: theme.colors.text,
+                                        color: theme.colors.text.primary,
                                         ...Typography.default('semiBold'),
                                     }}
                                 >
@@ -216,7 +216,7 @@ function SourceControlBranchSummaryImpl({
                         {showTracking ? (
                             <Text
                                 numberOfLines={1}
-                                style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}
+                                style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}
                             >
                                 {scmStatusFiles.upstream
                                     ? t('files.branchSummary.upstreamLabel', { upstream: scmStatusFiles.upstream })
@@ -241,7 +241,7 @@ function SourceControlBranchSummaryImpl({
             style={{
                 padding: 16,
                 borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                borderBottomColor: theme.colors.divider,
+                borderBottomColor: theme.colors.border.default,
             }}
         >
             <View
@@ -251,11 +251,11 @@ function SourceControlBranchSummaryImpl({
                     marginBottom: 8,
                 }}
             >
-                <Octicons name="git-branch" size={16} color={theme.colors.textSecondary} style={{ marginRight: 6 }} />
+                <Octicons name="git-branch" size={16} color={theme.colors.text.secondary} style={{ marginRight: 6 }} />
                 <Text
                     style={{
                         fontSize: 16,
-                        color: theme.colors.text,
+                        color: theme.colors.text.primary,
                         ...Typography.default('semiBold'),
                     }}
                 >
@@ -278,7 +278,7 @@ function SourceControlBranchSummaryImpl({
                     style={{
                         marginTop: 4,
                         fontSize: 12,
-                        color: theme.colors.textSecondary,
+                        color: theme.colors.text.secondary,
                         ...Typography.default(),
                     }}
                 >

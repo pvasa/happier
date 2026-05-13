@@ -38,6 +38,9 @@ type FileActionToolbarProps = {
     virtualSelectionEnabled: boolean;
     isSelectedForCommit: boolean;
     lineSelectionEnabled: boolean;
+    lineSelectionActive?: boolean;
+    reviewCommentsEnabled?: boolean;
+    commentModeActive?: boolean;
     selectedLineCount: number;
     isApplyingStage: boolean;
     inFlightScmOperation: ScmProjectInFlightOperation | null;
@@ -45,6 +48,8 @@ type FileActionToolbarProps = {
     onUnstageFile: () => void;
     onApplySelectedLines: () => void;
     onClearSelection: () => void;
+    onStartLineSelection?: () => void;
+    onToggleCommentMode?: (active: boolean) => void;
     fileEditorEnabled?: boolean;
     isEditingFile?: boolean;
     fileEditorDirty?: boolean;
@@ -75,6 +80,9 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         virtualSelectionEnabled,
         isSelectedForCommit,
         lineSelectionEnabled,
+        lineSelectionActive,
+        reviewCommentsEnabled,
+        commentModeActive,
         selectedLineCount,
         isApplyingStage,
         inFlightScmOperation,
@@ -82,6 +90,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         onUnstageFile,
         onApplySelectedLines,
         onClearSelection,
+        onStartLineSelection,
+        onToggleCommentMode,
         fileEditorEnabled,
         isEditingFile,
         fileEditorDirty,
@@ -110,9 +120,11 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     const stageLabel = virtualSelectionEnabled ? t('files.fileActions.selectForCommit') : t('files.fileActions.stageFile');
     const unstageLabel = virtualSelectionEnabled ? t('files.fileActions.removeFromCommitSelection') : t('files.fileActions.unstageFile');
     const commandIconSize = 14;
-    const hasSelectedLines = lineSelectionEnabled && selectedLineCount > 0;
+    const isLineSelectionActive = lineSelectionActive === true || selectedLineCount > 0;
+    const isCommentModeActive = commentModeActive === true;
+    const hasSelectedLines = isLineSelectionActive && lineSelectionEnabled && selectedLineCount > 0;
     const selectedLineActionIsRemoval = !virtualSelectionEnabled && diffMode === 'included';
-    const selectedLineActionColor = selectedLineActionIsRemoval ? theme.colors.warning : theme.colors.success;
+    const selectedLineActionColor = selectedLineActionIsRemoval ? theme.colors.state.neutral.foreground : theme.colors.state.success.foreground;
     const selectedLineActionLabel = virtualSelectionEnabled
         ? t('files.fileActions.selectedLines.selectLinesForCommit')
         : selectedLineActionIsRemoval
@@ -141,9 +153,9 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         paddingVertical: 5,
         paddingHorizontal: 10,
         borderRadius: 10,
-        backgroundColor: active ? theme.colors.surfaceHigh : theme.colors.surface,
+        backgroundColor: active ? theme.colors.surface.inset : theme.colors.surface.base,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         alignItems: 'center',
         justifyContent: 'center',
     }) as const;
@@ -154,25 +166,25 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             items.push({
                 id: 'diff',
                 title: t('files.diff'),
-                icon: <Octicons name="diff" size={commandIconSize} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="diff" size={commandIconSize} color={theme.colors.text.secondary} />,
             });
         }
         if (shouldShowFileToggle) {
             items.push({
                 id: 'file',
                 title: t('files.file'),
-                icon: <Octicons name="file" size={commandIconSize} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="file" size={commandIconSize} color={theme.colors.text.secondary} />,
             });
         }
         if (shouldShowMarkdownToggle) {
             items.push({
                 id: 'markdown',
                 title: t('files.markdown'),
-                icon: <Octicons name="markdown" size={commandIconSize} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="markdown" size={commandIconSize} color={theme.colors.text.secondary} />,
             });
         }
         return items;
-    }, [commandIconSize, shouldShowDiffToggle, shouldShowFileToggle, shouldShowMarkdownToggle, theme.colors.textSecondary]);
+    }, [commandIconSize, shouldShowDiffToggle, shouldShowFileToggle, shouldShowMarkdownToggle, theme.colors.text.secondary]);
 
     const diffAreaItems = React.useMemo<DropdownMenuItem[]>(() => {
         const items: DropdownMenuItem[] = [];
@@ -180,25 +192,25 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             items.push({
                 id: 'pending',
                 title: t('files.diffModes.pending'),
-                icon: <Octicons name="clock" size={commandIconSize} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="clock" size={commandIconSize} color={theme.colors.text.secondary} />,
             });
         }
         if (hasIncludedDelta) {
             items.push({
                 id: 'included',
                 title: t('files.diffModes.included'),
-                icon: <Octicons name="checklist" size={commandIconSize} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="checklist" size={commandIconSize} color={theme.colors.text.secondary} />,
             });
         }
         if (hasIncludedDelta && hasPendingDelta) {
             items.push({
                 id: 'both',
                 title: t('files.diffModes.combined'),
-                icon: <Octicons name="diff" size={commandIconSize} color={theme.colors.textSecondary} />,
+                icon: <Octicons name="diff" size={commandIconSize} color={theme.colors.text.secondary} />,
             });
         }
         return items;
-    }, [commandIconSize, hasIncludedDelta, hasPendingDelta, theme.colors.textSecondary]);
+    }, [commandIconSize, hasIncludedDelta, hasPendingDelta, theme.colors.text.secondary]);
 
     const selectedDisplayLabel = displayMode === 'diff'
         ? t('files.diff')
@@ -236,17 +248,17 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                     style={{
                         fontSize: 13,
                         fontWeight: '600',
-                        color: theme.colors.text,
+                        color: theme.colors.text.primary,
                         ...Typography.default(),
                     }}
                     numberOfLines={1}
                 >
                     {input.label}
                 </Text>
-                <Octicons name="chevron-down" size={12} color={theme.colors.textSecondary} />
+                <Octicons name="chevron-down" size={12} color={theme.colors.text.secondary} />
             </View>
         </Pressable>
-    ), [chipStyle, theme.colors.text, theme.colors.textSecondary]);
+    ), [chipStyle, theme.colors.text.primary, theme.colors.text.secondary]);
 
     const pathElement = pathLabel ? (
         <View
@@ -262,7 +274,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             <Text
                 style={{
                     fontSize: 12,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     ...(Typography.mono ? Typography.mono() : Typography.default()),
                 }}
                 numberOfLines={1}
@@ -300,7 +312,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                     popoverAnchorAlign="start"
                     trigger={({ toggle }) => renderDropdownTrigger({
                         label: selectedDisplayLabel,
-                        icon: <Octicons name={selectedDisplayIconName} size={commandIconSize} color={theme.colors.textSecondary} />,
+                        icon: <Octicons name={selectedDisplayIconName} size={commandIconSize} color={theme.colors.text.secondary} />,
                         selected: true,
                         testID: 'file-details-view-mode-menu',
                         toggle,
@@ -319,7 +331,23 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                     accessibilityRole="button"
                     accessibilityLabel={t('common.edit')}
                 >
-                    <Octicons name="pencil" size={commandIconSize} color={theme.colors.text} />
+                    <Octicons name="pencil" size={commandIconSize} color={theme.colors.text.primary} />
+                </Pressable>
+            ) : null}
+
+            {reviewCommentsEnabled === true && onToggleCommentMode ? (
+                <Pressable
+                    onPress={() => onToggleCommentMode(!isCommentModeActive)}
+                    testID="file-details-comment-mode"
+                    style={[chipStyle(isCommentModeActive), { width: 32, height: 32, paddingHorizontal: 0, paddingVertical: 0 }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('files.reviewComments.addCommentA11y')}
+                >
+                    <Octicons
+                        name="comment-discussion"
+                        size={commandIconSize}
+                        color={isCommentModeActive ? theme.colors.text.primary : theme.colors.text.secondary}
+                    />
                 </Pressable>
             ) : null}
 
@@ -333,7 +361,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                             paddingHorizontal: 12,
                             paddingVertical: 8,
                             borderRadius: 10,
-                            backgroundColor: theme.colors.textLink,
+                            backgroundColor: theme.colors.text.link,
                             opacity: Boolean(fileEditorBusy) || !fileEditorDirty ? 0.6 : 1,
                         }}
                     >
@@ -342,7 +370,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                         </Text>
                     </Pressable>
                     <Pressable onPress={onCancelEditingFile} testID="file-details-cancel" style={chipStyle(false)}>
-                        <Text style={{ color: theme.colors.text, fontSize: 13, ...Typography.default('semiBold') }}>
+                        <Text style={{ color: theme.colors.text.primary, fontSize: 13, ...Typography.default('semiBold') }}>
                             {t('common.cancel')}
                         </Text>
                     </Pressable>
@@ -366,7 +394,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                     popoverAnchorAlign="start"
                     trigger={({ toggle }) => renderDropdownTrigger({
                         label: selectedDiffAreaLabel,
-                        icon: <Octicons name="clock" size={commandIconSize} color={theme.colors.textSecondary} />,
+                        icon: <Octicons name="clock" size={commandIconSize} color={theme.colors.text.secondary} />,
                         selected: true,
                         testID: 'file-details-diff-area-menu',
                         toggle,
@@ -392,20 +420,20 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             {scmWriteEnabled && canUseSelectionActions && canIncludeFileInSelection && !hasSelectedLines && (
                 <Pressable
                     disabled={actionBusy}
-                    onPress={onStageFile}
+                    onPress={lineSelectionEnabled && !isLineSelectionActive ? (onStartLineSelection ?? onStageFile) : onStageFile}
                     testID="file-details-stage-file"
                     style={{
                         paddingHorizontal: 12,
                         paddingVertical: 6,
                         minHeight: 32,
                         borderRadius: 10,
-                        backgroundColor: theme.colors.surface,
+                        backgroundColor: theme.colors.surface.base,
                         borderWidth: 1,
-                        borderColor: theme.colors.success,
+                        borderColor: theme.colors.state.success.foreground,
                         opacity: actionBusy ? 0.6 : 1,
                     }}
                 >
-                    <Text style={{ color: theme.colors.success, fontSize: 13, ...Typography.default('semiBold') }}>
+                    <Text style={{ color: theme.colors.state.success.foreground, fontSize: 13, ...Typography.default('semiBold') }}>
                         {stageLabel}
                     </Text>
                 </Pressable>
@@ -421,13 +449,13 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                         paddingVertical: 6,
                         minHeight: 32,
                         borderRadius: 10,
-                        backgroundColor: theme.colors.surface,
+                        backgroundColor: theme.colors.surface.base,
                         borderWidth: 1,
-                        borderColor: theme.colors.warning,
+                        borderColor: theme.colors.state.neutral.foreground,
                         opacity: actionBusy ? 0.6 : 1,
                     }}
                 >
-                    <Text style={{ color: theme.colors.warning, fontSize: 13, ...Typography.default('semiBold') }}>
+                    <Text style={{ color: theme.colors.state.neutral.foreground, fontSize: 13, ...Typography.default('semiBold') }}>
                         {unstageLabel}
                     </Text>
                 </Pressable>
@@ -437,7 +465,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 <Text
                     style={{
                         fontSize: 12,
-                        color: theme.colors.textSecondary,
+                        color: theme.colors.text.secondary,
                         ...Typography.default(),
                     }}
                 >
@@ -456,7 +484,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                             paddingVertical: 6,
                             minHeight: 32,
                             borderRadius: 10,
-                            backgroundColor: theme.colors.surface,
+                            backgroundColor: theme.colors.surface.base,
                             borderWidth: 1,
                             borderColor: selectedLineActionColor,
                             opacity: actionBusy ? 0.6 : 1,
@@ -477,7 +505,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                         accessibilityRole="button"
                         accessibilityLabel={t('files.fileActions.clearSelection')}
                     >
-                        <Octicons name="x" size={commandIconSize} color={theme.colors.textSecondary} />
+                        <Octicons name="x" size={commandIconSize} color={theme.colors.text.secondary} />
                     </Pressable>
                 </>
             )}
@@ -500,8 +528,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 paddingHorizontal: toolbarHorizontalPadding,
                 paddingVertical: 12,
                 borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                borderBottomColor: theme.colors.divider,
-                backgroundColor: theme.colors.surface,
+                borderBottomColor: theme.colors.border.default,
+                backgroundColor: theme.colors.surface.base,
                 gap: actionGap,
             }}
         >
@@ -510,8 +538,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 <HorizontalScrollableRow
                     testID="file-details-compact-action-scroll"
                     contentTestID="file-details-compact-action-scroll-content"
-                    fadeColor={theme.colors.surface}
-                    indicatorColor={theme.colors.textSecondary}
+                    fadeColor={theme.colors.surface.base}
+                    indicatorColor={theme.colors.text.secondary}
                     containerStyle={{ marginHorizontal: -toolbarHorizontalPadding }}
                     contentStyle={{
                         flexDirection: 'row',

@@ -23,17 +23,17 @@ export function FileLoadingState({ theme, filePath }: FileStateProps & { filePat
         <View
             style={{
                 flex: 1,
-                backgroundColor: theme.colors.surface,
+                backgroundColor: theme.colors.surface.base,
                 justifyContent: 'center',
                 alignItems: 'center',
             }}
         >
-            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
             <Text
                 style={{
                     marginTop: 16,
                     fontSize: 16,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     ...Typography.default(),
                 }}
             >
@@ -48,7 +48,7 @@ export function FileErrorState({ theme, filePath, error, onRetry }: FileStatePro
         <View
             style={{
                 flex: 1,
-                backgroundColor: theme.colors.surface,
+                backgroundColor: theme.colors.surface.base,
                 justifyContent: 'center',
                 alignItems: 'center',
                 padding: 20,
@@ -57,7 +57,7 @@ export function FileErrorState({ theme, filePath, error, onRetry }: FileStatePro
             <Text
                 style={{
                     fontSize: 18,
-                    color: theme.colors.textDestructive,
+                    color: theme.colors.state.danger.foreground,
                     marginBottom: 8,
                     ...Typography.default('semiBold'),
                 }}
@@ -67,7 +67,7 @@ export function FileErrorState({ theme, filePath, error, onRetry }: FileStatePro
             <Text
                 style={{
                     fontSize: 16,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     textAlign: 'center',
                     ...Typography.default(),
                 }}
@@ -77,7 +77,7 @@ export function FileErrorState({ theme, filePath, error, onRetry }: FileStatePro
             <Text
                 style={{
                     fontSize: 14,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     textAlign: 'center',
                     marginTop: 8,
                     ...Typography.default(),
@@ -94,11 +94,11 @@ export function FileErrorState({ theme, filePath, error, onRetry }: FileStatePro
                     paddingVertical: 10,
                     borderRadius: 10,
                     borderWidth: 1,
-                    borderColor: theme.colors.divider,
-                    backgroundColor: theme.colors.surfaceHigh ?? theme.colors.surface,
+                    borderColor: theme.colors.border.default,
+                    backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
                 }}
             >
-                <Text style={{ fontSize: 14, color: theme.colors.text, ...Typography.default('semiBold') }}>
+                <Text style={{ fontSize: 14, color: theme.colors.text.primary, ...Typography.default('semiBold') }}>
                     {t('common.retry')}
                 </Text>
             </Pressable>
@@ -135,7 +135,7 @@ export function FileBinaryState({ theme, filePath, imagePreviewUri, imagePreview
         <View
             style={{
                 flex: 1,
-                backgroundColor: theme.colors.surface,
+                backgroundColor: theme.colors.surface.base,
                 justifyContent: 'center',
                 alignItems: 'center',
                 padding: 20,
@@ -150,8 +150,8 @@ export function FileBinaryState({ theme, filePath, imagePreviewUri, imagePreview
                         borderRadius: 12,
                         overflow: 'hidden',
                         borderWidth: 1,
-                        borderColor: theme.colors.divider,
-                        backgroundColor: theme.colors.surfaceHigh ?? theme.colors.surface,
+                        borderColor: theme.colors.border.default,
+                        backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
                         marginBottom: 14,
                     }}
                 >
@@ -170,7 +170,7 @@ export function FileBinaryState({ theme, filePath, imagePreviewUri, imagePreview
             <Text
                 style={{
                     fontSize: 18,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     marginBottom: 8,
                     ...Typography.default('semiBold'),
                 }}
@@ -180,7 +180,7 @@ export function FileBinaryState({ theme, filePath, imagePreviewUri, imagePreview
             <Text
                 style={{
                     fontSize: 16,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     textAlign: 'center',
                     ...Typography.default(),
                 }}
@@ -190,7 +190,7 @@ export function FileBinaryState({ theme, filePath, imagePreviewUri, imagePreview
             <Text
                 style={{
                     fontSize: 14,
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     textAlign: 'center',
                     marginTop: 8,
                     ...Typography.default(),

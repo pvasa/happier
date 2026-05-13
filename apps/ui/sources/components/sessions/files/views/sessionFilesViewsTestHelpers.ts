@@ -63,6 +63,8 @@ export function installSessionFilesViewCommonModuleMocks(
     vi.doMock('@/constants/Typography', () => ({
         Typography: {
             default: () => ({}),
+            eyebrow: () => ({}),
+            keyHint: () => ({}),
             mono: () => ({}),
         },
     }));

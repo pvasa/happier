@@ -4,7 +4,7 @@ import { ScrollView, useWindowDimensions, View } from 'react-native';
 import { Text } from '@/components/ui/text/Text';
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
-import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { MarkdownView, type MarkdownSourceRange, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { useCodeLinesReviewComments } from '@/components/sessions/reviews/comments/useCodeLinesReviewComments';
@@ -19,8 +19,10 @@ import { useInlineDiffVirtualizationThresholds } from '@/components/ui/code/diff
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { buildSelectedDiffLineKey } from '@/scm/scmPatchSelection';
 import {
+    buildReviewCommentDraftFromMarkdownRange,
     formatReviewCommentCodeLineContent,
 } from '@/components/sessions/reviews/comments/buildReviewCommentDraftFromCodeLine';
+import { ReviewCommentInlineComposer } from '@/components/sessions/reviews/comments/ReviewCommentInlineComposer';
 import { computeLineContentHash, findLineIndexByContentHash } from '@/utils/text/lineContentHash';
 import type { FileDisplayMode } from './FileActionToolbar';
 
@@ -42,10 +44,12 @@ type FileContentPanelProps = {
     selectedLineKeys: Set<string>;
     lineSelectionEnabled: boolean;
     onToggleLine: (key: string) => void;
+    onSelectLineRange?: (keys: readonly string[]) => void;
     wrapLines?: boolean;
     showLineNumbers?: boolean;
     showPrefix?: boolean;
     reviewCommentsEnabled?: boolean;
+    reviewCommentModeActive?: boolean;
     reviewCommentDrafts?: readonly ReviewCommentDraft[];
     onUpsertReviewCommentDraft?: (draft: ReviewCommentDraft) => void;
     onDeleteReviewCommentDraft?: (commentId: string) => void;
@@ -69,10 +73,12 @@ export function FileContentPanel({
     selectedLineKeys,
     lineSelectionEnabled,
     onToggleLine,
+    onSelectLineRange,
     wrapLines,
     showLineNumbers,
     showPrefix,
     reviewCommentsEnabled,
+    reviewCommentModeActive,
     reviewCommentDrafts,
     onUpsertReviewCommentDraft,
     onDeleteReviewCommentDraft,
@@ -100,7 +106,7 @@ export function FileContentPanel({
 
     const needsDiffCodeLines = displayMode === 'diff'
         && typeof diffContent === 'string'
-        && (lineSelectionEnabled === true || reviewCommentsEnabled === true || jumpToAnchor?.kind === 'diffLine');
+        && (lineSelectionEnabled === true || selectedLineKeys.size > 0 || reviewCommentsEnabled === true || Boolean(jumpToAnchor));
 
     const lines = React.useMemo(() => {
         if (displayMode === 'diff' && typeof diffContent === 'string') {
@@ -138,10 +144,18 @@ export function FileContentPanel({
         onDeleteDraft: onDeleteReviewCommentDraft,
         onError: onReviewCommentError,
     });
+    const reviewCommentLineActionsEnabled = reviewCommentsEnabled === true
+        && reviewCommentModeActive === true
+        && Boolean(reviewCommentControls);
+    const markdownSourceRangeActionsEnabled = reviewCommentsEnabled === true
+        && reviewCommentModeActive === true
+        && displayMode === 'markdown';
+    const [activeMarkdownRange, setActiveMarkdownRange] = React.useState<MarkdownSourceRange | null>(null);
+    const [activeMarkdownEditingDraftId, setActiveMarkdownEditingDraftId] = React.useState<string | null>(null);
+    const [markdownCommentBody, setMarkdownCommentBody] = React.useState('');
 
     const selectedLineIds = React.useMemo(() => {
         if (displayMode !== 'diff') return undefined;
-        if (!lineSelectionEnabled) return undefined;
         if (!selectedLineKeys || selectedLineKeys.size === 0) return undefined;
         const ids = new Set<string>();
         for (const line of lines) {
@@ -157,9 +171,26 @@ export function FileContentPanel({
         return ids;
     }, [displayMode, lineSelectionEnabled, lines, selectedLineKeys]);
 
-    const jumpToLineId = React.useMemo(() => {
+    const buildSelectedKeyForLine = React.useCallback((line: typeof lines[number]): string | null => {
+        return line.renderPrefixText === '-'
+            ? (typeof line.oldLine === 'number' ? buildSelectedDiffLineKey('deletions', line.oldLine) : null)
+            : line.renderPrefixText === '+'
+                ? (typeof line.newLine === 'number' ? buildSelectedDiffLineKey('additions', line.newLine) : null)
+                : null;
+    }, []);
+
+    const jumpTarget = React.useMemo(() => {
         const anchor = jumpToAnchor ?? null;
-        if (!anchor) return null;
+        if (!anchor) return { scrollToLineId: null, highlightLineIds: undefined as Set<string> | undefined };
+
+        const buildTarget = (matchedLines: readonly (typeof lines[number])[]) => {
+            const first = matchedLines[0] ?? null;
+            if (!first) return { scrollToLineId: null, highlightLineIds: undefined as Set<string> | undefined };
+            return {
+                scrollToLineId: first.id,
+                highlightLineIds: new Set(matchedLines.map((line) => line.id)),
+            };
+        };
 
         if (displayMode === 'file' && anchor.kind === 'fileLine') {
             const exactTarget = lines.find((l) => {
@@ -167,7 +198,7 @@ export function FileContentPanel({
                 if (!anchor.lineHash) return true;
                 return computeLineContentHash(formatReviewCommentCodeLineContent({ source: 'file', line: l })) === anchor.lineHash;
             });
-            if (exactTarget) return exactTarget.id;
+            if (exactTarget) return buildTarget([exactTarget]);
 
             const hashIndex = findLineIndexByContentHash({
                 lines,
@@ -175,7 +206,33 @@ export function FileContentPanel({
                 isCandidate: (line) => !line.renderIsHeaderLine,
                 getLineContent: (line) => formatReviewCommentCodeLineContent({ source: 'file', line }),
             });
-            return hashIndex >= 0 ? lines[hashIndex]?.id ?? null : null;
+            const hashTarget = hashIndex >= 0 ? lines[hashIndex] ?? null : null;
+            return hashTarget ? buildTarget([hashTarget]) : { scrollToLineId: null, highlightLineIds: undefined };
+        }
+
+        if (displayMode === 'file' && anchor.kind === 'line') {
+            const exactTarget = lines.find((l) => {
+                if (l.renderIsHeaderLine || l.newLine !== anchor.line) return false;
+                if (!anchor.lineHash) return true;
+                return computeLineContentHash(formatReviewCommentCodeLineContent({ source: 'file', line: l })) === anchor.lineHash;
+            });
+            if (exactTarget) return buildTarget([exactTarget]);
+
+            const hashIndex = findLineIndexByContentHash({
+                lines,
+                lineHash: anchor.lineHash,
+                isCandidate: (line) => !line.renderIsHeaderLine,
+                getLineContent: (line) => formatReviewCommentCodeLineContent({ source: 'file', line }),
+            });
+            const hashTarget = hashIndex >= 0 ? lines[hashIndex] ?? null : null;
+            return hashTarget ? buildTarget([hashTarget]) : { scrollToLineId: null, highlightLineIds: undefined };
+        }
+
+        if (displayMode === 'file' && anchor.kind === 'range') {
+            return buildTarget(lines.filter((line) => {
+                if (line.renderIsHeaderLine || typeof line.newLine !== 'number') return false;
+                return line.newLine >= anchor.startLine && line.newLine <= anchor.endLine;
+            }));
         }
 
         if (displayMode === 'diff' && anchor.kind === 'diffLine') {
@@ -189,7 +246,7 @@ export function FileContentPanel({
                 if (!anchor.lineHash) return true;
                 return computeLineContentHash(formatReviewCommentCodeLineContent({ source: 'diff', line: l })) === anchor.lineHash;
             });
-            if (exactTarget) return exactTarget.id;
+            if (exactTarget) return buildTarget([exactTarget]);
 
             const hashIndex = findLineIndexByContentHash({
                 lines,
@@ -197,24 +254,193 @@ export function FileContentPanel({
                 isCandidate: isSideCandidate,
                 getLineContent: (line) => formatReviewCommentCodeLineContent({ source: 'diff', line }),
             });
-            return hashIndex >= 0 ? lines[hashIndex]?.id ?? null : null;
+            const hashTarget = hashIndex >= 0 ? lines[hashIndex] ?? null : null;
+            return hashTarget ? buildTarget([hashTarget]) : { scrollToLineId: null, highlightLineIds: undefined };
         }
 
-        return null;
+        if (displayMode === 'diff' && (anchor.kind === 'line' || anchor.kind === 'range')) {
+            const side = anchor.side === 'before' ? 'before' : 'after';
+            const startLine = anchor.kind === 'line' ? anchor.line : anchor.startLine;
+            const endLine = anchor.kind === 'line' ? anchor.line : anchor.endLine;
+            return buildTarget(lines.filter((line) => {
+                if (line.renderIsHeaderLine) return false;
+                if (side === 'before') {
+                    return typeof line.oldLine === 'number' && line.oldLine >= startLine && line.oldLine <= endLine;
+                }
+                return typeof line.newLine === 'number' && line.newLine >= startLine && line.newLine <= endLine;
+            }));
+        }
+
+        return { scrollToLineId: null, highlightLineIds: undefined };
     }, [displayMode, jumpToAnchor, lines]);
+
+    const markdownHighlightRange = React.useMemo<MarkdownSourceRange | null>(() => {
+        if (displayMode !== 'markdown') return null;
+        const anchor = jumpToAnchor ?? null;
+        if (!anchor) return null;
+        if (anchor.kind === 'fileLine') return { startLine: anchor.startLine, endLine: anchor.startLine };
+        if (anchor.kind === 'line') return { startLine: anchor.line, endLine: anchor.line };
+        if (anchor.kind === 'range') return { startLine: anchor.startLine, endLine: anchor.endLine };
+        return null;
+    }, [displayMode, jumpToAnchor]);
+
+    const findMarkdownDraftsForRange = React.useCallback((range: MarkdownSourceRange): ReviewCommentDraft[] => {
+        return draftsForThisView.filter((draft) => {
+            const anchor = draft.anchor;
+            if (anchor.kind === 'fileLine') {
+                return anchor.startLine >= range.startLine && anchor.startLine <= range.endLine;
+            }
+            if (anchor.kind === 'line') {
+                return anchor.line >= range.startLine && anchor.line <= range.endLine;
+            }
+            if (anchor.kind === 'range') {
+                return anchor.startLine <= range.endLine && range.startLine <= anchor.endLine;
+            }
+            return false;
+        });
+    }, [draftsForThisView]);
+
+    const onPressMarkdownSourceRange = React.useCallback((action: MarkdownSourceRangeAction) => {
+        if (!markdownSourceRangeActionsEnabled) return;
+        const existingDraft = findMarkdownDraftsForRange(action.sourceRange)[0] ?? null;
+        setActiveMarkdownRange((prev) => (
+            prev?.startLine === action.sourceRange.startLine && prev?.endLine === action.sourceRange.endLine
+                ? null
+                : action.sourceRange
+        ));
+        setActiveMarkdownEditingDraftId(existingDraft?.id ?? null);
+        setMarkdownCommentBody(existingDraft?.body ?? '');
+    }, [findMarkdownDraftsForRange, markdownSourceRangeActionsEnabled]);
+
+    const renderAfterMarkdownSourceRange = React.useCallback((action: MarkdownSourceRangeAction) => {
+        if (reviewCommentsEnabled !== true) return null;
+        const drafts = findMarkdownDraftsForRange(action.sourceRange);
+        const isActive = activeMarkdownRange?.startLine === action.sourceRange.startLine
+            && activeMarkdownRange?.endLine === action.sourceRange.endLine;
+        if (!isActive && drafts.length === 0) return null;
+
+        const existing = activeMarkdownEditingDraftId
+            ? drafts.find((draft) => draft.id === activeMarkdownEditingDraftId) ?? null
+            : null;
+
+        return (
+            <View style={{ marginTop: 6, marginBottom: 8, gap: 6 }}>
+                {drafts.length > 0 && !isActive ? (
+                    <View style={{ gap: 6 }}>
+                        {drafts.map((draft) => (
+                            <View
+                                key={draft.id}
+                                style={{
+                                    padding: 10,
+                                    borderRadius: 10,
+                                    borderWidth: 1,
+                                    borderColor: theme.colors.border?.default ?? theme.colors.borderDefault ?? theme.colors.text.secondary,
+                                    backgroundColor: theme.colors.surface?.elevated ?? theme.colors.surfaceElevated ?? theme.colors.surface?.base,
+                                }}
+                            >
+                                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text.primary }}>
+                                    {draft.body}
+                                </Text>
+                            </View>
+                        ))}
+                    </View>
+                ) : null}
+                {isActive ? (
+                    <ReviewCommentInlineComposer
+                        value={markdownCommentBody}
+                        onChange={setMarkdownCommentBody}
+                        onCancel={() => {
+                            setActiveMarkdownRange(null);
+                            setActiveMarkdownEditingDraftId(null);
+                            setMarkdownCommentBody('');
+                        }}
+                        onDelete={existing ? () => {
+                            onDeleteReviewCommentDraft?.(existing.id);
+                            setActiveMarkdownRange(null);
+                            setActiveMarkdownEditingDraftId(null);
+                            setMarkdownCommentBody('');
+                        } : undefined}
+                        onSave={() => {
+                            const body = markdownCommentBody.trim();
+                            if (!body) {
+                                onReviewCommentError?.(t('files.reviewComments.errors.empty'));
+                                return;
+                            }
+                            const draft = buildReviewCommentDraftFromMarkdownRange({
+                                filePath,
+                                markdown: fileContent ?? '',
+                                sourceRange: action.sourceRange,
+                                body,
+                                contextRadius: 2,
+                                existing: existing ? { id: existing.id, createdAt: existing.createdAt } : null,
+                            });
+                            onUpsertReviewCommentDraft?.(draft);
+                            setActiveMarkdownRange(null);
+                            setActiveMarkdownEditingDraftId(null);
+                            setMarkdownCommentBody('');
+                        }}
+                    />
+                ) : null}
+            </View>
+        );
+    }, [
+        activeMarkdownEditingDraftId,
+        activeMarkdownRange,
+        fileContent,
+        filePath,
+        findMarkdownDraftsForRange,
+        markdownCommentBody,
+        onDeleteReviewCommentDraft,
+        onReviewCommentError,
+        onUpsertReviewCommentDraft,
+        reviewCommentsEnabled,
+        theme.colors.border?.default,
+        theme.colors.borderDefault,
+        theme.colors.surface?.base,
+        theme.colors.surface?.elevated,
+        theme.colors.surfaceElevated,
+        theme.colors.text.primary,
+        theme.colors.text.secondary,
+    ]);
 
     const handlePressLine = React.useCallback((line: any) => {
         if (!lineSelectionEnabled) return;
         if (!onToggleLine) return;
         if (!line?.selectable) return;
-        const key = line.renderPrefixText === '-'
-            ? (typeof line.oldLine === 'number' ? buildSelectedDiffLineKey('deletions', line.oldLine) : null)
-            : line.renderPrefixText === '+'
-                ? (typeof line.newLine === 'number' ? buildSelectedDiffLineKey('additions', line.newLine) : null)
-                : null;
+        const key = buildSelectedKeyForLine(line);
         if (!key) return;
         onToggleLine(key);
-    }, [lineSelectionEnabled, onToggleLine]);
+    }, [buildSelectedKeyForLine, lineSelectionEnabled, onToggleLine]);
+
+    const handlePressCommentLine = React.useCallback((line: any) => {
+        if (!reviewCommentLineActionsEnabled) return;
+        reviewCommentControls?.onPressAddComment(line);
+    }, [reviewCommentControls, reviewCommentLineActionsEnabled]);
+
+    const effectivePressLine = reviewCommentLineActionsEnabled
+        ? handlePressCommentLine
+        : lineSelectionEnabled
+            ? handlePressLine
+            : undefined;
+    const effectivePressLineRange = React.useCallback((rangeLines: readonly (typeof lines[number])[]) => {
+        if (reviewCommentLineActionsEnabled) {
+            reviewCommentControls?.onPressAddCommentRange(rangeLines);
+            return;
+        }
+        if (!lineSelectionEnabled) return;
+        const keys = rangeLines
+            .map((line) => buildSelectedKeyForLine(line))
+            .filter((key): key is string => Boolean(key));
+        if (keys.length === 0) return;
+        if (onSelectLineRange) {
+            onSelectLineRange(keys);
+            return;
+        }
+        for (const key of keys) onToggleLine(key);
+    }, [buildSelectedKeyForLine, lineSelectionEnabled, onSelectLineRange, onToggleLine, reviewCommentControls, reviewCommentLineActionsEnabled]);
+    const effectivePressLineRangeHandler = (reviewCommentLineActionsEnabled || lineSelectionEnabled) ? effectivePressLineRange : undefined;
+    const effectivePressLineWhenNotSelectable = reviewCommentLineActionsEnabled ? true : undefined;
+    const effectivePressAddComment = reviewCommentLineActionsEnabled ? reviewCommentControls?.onPressAddComment : undefined;
 
     const { lineThreshold, byteThreshold } = useInlineDiffVirtualizationThresholds();
     const virtualized = React.useMemo(() => {
@@ -254,15 +480,18 @@ export function FileContentPanel({
                         filePath={filePath}
                         unifiedDiff={diffContent}
                         selectedLineIds={selectedLineIds}
-                        onPressLine={handlePressLine}
-                        onPressAddComment={reviewCommentControls?.onPressAddComment}
+                        onPressLine={effectivePressLine}
+                        onPressLineRange={effectivePressLineRangeHandler}
+                        pressLineWhenNotSelectable={effectivePressLineWhenNotSelectable}
+                        onPressAddComment={effectivePressAddComment}
                         isCommentActive={reviewCommentControls?.isCommentActive}
                         renderAfterLine={reviewCommentControls?.renderAfterLine}
                         contentPaddingHorizontal={16}
                         contentPaddingVertical={16}
-                        virtualized={jumpToLineId ? false : virtualized}
-                        scrollToLineId={jumpToLineId ?? undefined}
-                        highlightLineId={jumpToLineId ?? undefined}
+                        virtualized={jumpTarget.scrollToLineId ? false : virtualized}
+                        scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
+                        highlightLineId={jumpTarget.scrollToLineId ?? undefined}
+                        highlightLineIds={jumpTarget.highlightLineIds}
                         wrapLines={effectiveWrapLines}
                         showLineNumbers={effectiveShowLineNumbers}
                         showPrefix={effectiveShowPrefix}
@@ -291,6 +520,9 @@ export function FileContentPanel({
                                 profile="default"
                                 streamingMode="static"
                                 selectable
+                                onPressSourceRange={markdownSourceRangeActionsEnabled ? onPressMarkdownSourceRange : undefined}
+                                renderAfterSourceRange={reviewCommentsEnabled === true ? renderAfterMarkdownSourceRange : undefined}
+                                highlightSourceRange={markdownHighlightRange}
                             />
                         </View>
                     </ScrollView>
@@ -298,7 +530,7 @@ export function FileContentPanel({
                     <Text
                         style={{
                             fontSize: 16,
-                            color: theme.colors.textSecondary,
+                            color: theme.colors.text.secondary,
                             fontStyle: 'italic',
                             padding: 16,
                             ...Typography.default(),
@@ -311,14 +543,18 @@ export function FileContentPanel({
                 fileContent.length > 0 ? (
                     <CodeLinesView
                         lines={lines}
-                        onPressAddComment={reviewCommentControls?.onPressAddComment}
+                        onPressLine={effectivePressLine}
+                        onPressLineRange={effectivePressLineRangeHandler}
+                        pressLineWhenNotSelectable={effectivePressLineWhenNotSelectable}
+                        onPressAddComment={effectivePressAddComment}
                         isCommentActive={reviewCommentControls?.isCommentActive}
                         renderAfterLine={reviewCommentControls?.renderAfterLine}
                         contentPaddingHorizontal={16}
                         contentPaddingVertical={16}
                         virtualized={virtualized}
-                        scrollToLineId={jumpToLineId ?? undefined}
-                        highlightLineId={jumpToLineId ?? undefined}
+                        scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
+                        highlightLineId={jumpTarget.scrollToLineId ?? undefined}
+                        highlightLineIds={jumpTarget.highlightLineIds}
                         wrapLines={effectiveWrapLines}
                         showLineNumbers={effectiveShowLineNumbers}
                         showPrefix={effectiveShowPrefix}
@@ -333,7 +569,7 @@ export function FileContentPanel({
                     <Text
                         style={{
                             fontSize: 16,
-                            color: theme.colors.textSecondary,
+                            color: theme.colors.text.secondary,
                             fontStyle: 'italic',
                             padding: 16,
                             ...Typography.default(),
@@ -346,7 +582,7 @@ export function FileContentPanel({
                 <Text
                     style={{
                         fontSize: 16,
-                        color: theme.colors.textSecondary,
+                        color: theme.colors.text.secondary,
                         fontStyle: 'italic',
                         padding: 16,
                         ...Typography.default(),

@@ -39,9 +39,23 @@ const ViewWithClick = View as unknown as React.ComponentType<
 
 type ChangedFilesReviewTheme = Readonly<{
     colors: Readonly<{
-        surfaceHigh: string;
-        divider: string;
-        textSecondary: string;
+        surface: Readonly<{
+            base?: string;
+            inset: string;
+        }>;
+        border: Readonly<{
+            default: string;
+        }>;
+        text: Readonly<{
+            primary: string;
+            secondary: string;
+            link?: string;
+        }>;
+        state: Readonly<{
+            success: Readonly<{ foreground: string }>;
+            neutral: Readonly<{ foreground: string }>;
+            danger: Readonly<{ foreground: string }>;
+        }>;
     }>;
 }>;
 
@@ -619,7 +633,7 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
 
                 {reviewFiles.length === 0 && (
                     <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 }}>
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {t('files.noChanges')}
                         </Text>
                     </View>
@@ -627,7 +641,7 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
 
                 {tooLarge && reviewFiles.length > 0 && (
                     <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 }}>
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {t('files.reviewLargeDiffOneAtATime')}
                         </Text>
                     </View>
@@ -636,20 +650,20 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
                 {changedFilesViewMode === 'session' && (
                     <View
                         style={{
-                            backgroundColor: theme.colors.surfaceHigh,
+                            backgroundColor: theme.colors.surface.inset,
                             paddingHorizontal: 16,
                             paddingVertical: 12,
                             borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                            borderBottomColor: theme.colors.divider,
+                            borderBottomColor: theme.colors.border.default,
                         }}
                     >
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {attributionReliability === 'high'
                                 ? t('files.attributionReliabilityHigh')
                                 : t('files.attributionReliabilityLimited')}
                         </Text>
                         {suppressedInferredCount > 0 && (
-                            <Text style={{ marginTop: 2, fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                            <Text style={{ marginTop: 2, fontSize: 11, color: theme.colors.text.secondary, ...Typography.default() }}>
                                 {t('files.inferredSuppressed', { count: suppressedInferredCount })}
                             </Text>
                         )}
@@ -667,9 +681,9 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
         reviewFiles.length,
         setDiffArea,
         suppressedInferredCount,
-        theme.colors.divider,
-        theme.colors.surfaceHigh,
-        theme.colors.textSecondary,
+        theme.colors.border.default,
+        theme.colors.surface.inset,
+        theme.colors.text.secondary,
         tooLarge,
     ]);
 
@@ -677,7 +691,7 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
         const title = sectionHeaderTitleByKey.get(file.key as string);
         if (!title) return null;
         return (
-            <ChangedFilesSectionHeader theme={theme} color={theme.colors.textSecondary}>
+            <ChangedFilesSectionHeader theme={theme} color={theme.colors.text.secondary}>
                 {title}
             </ChangedFilesSectionHeader>
         );
@@ -716,7 +730,7 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
                         tabIndex={0}
                         style={{ paddingHorizontal: 8, paddingVertical: 6 }}
                     >
-                        <Octicons name="link-external" size={14} color={theme.colors.textSecondary} />
+                        <Octicons name="link-external" size={14} color={theme.colors.text.secondary} />
                     </ViewWithClick>
                 )
                 : (
@@ -727,7 +741,7 @@ export function ChangedFilesReview(props: ChangedFilesReviewProps) {
                         accessibilityRole="button"
                         accessibilityLabel={t('common.open')}
                     >
-                        <Octicons name="link-external" size={14} color={theme.colors.textSecondary} />
+                        <Octicons name="link-external" size={14} color={theme.colors.text.secondary} />
                     </Pressable>
                 );
 

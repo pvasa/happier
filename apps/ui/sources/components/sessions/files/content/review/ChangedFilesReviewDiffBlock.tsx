@@ -108,14 +108,14 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
                             borderRadius: 12,
                             overflow: 'hidden',
                             borderWidth: 1,
-                            borderColor: theme.colors.divider,
+                            borderColor: theme.colors.border.default,
                             alignItems: 'center',
                             justifyContent: 'center',
                         },
                         loadingContainerStyle,
                     ]}
                 >
-                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                 </View>
             </View>
         );
@@ -123,7 +123,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
     if (state.status === 'error') {
         return (
             <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                     {state.error ?? t('files.reviewUnableToLoadDiff')}
                 </Text>
             </View>
@@ -134,7 +134,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
             if (imagePreview.status === 'loading') {
                 return (
                     <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                        <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                     </View>
                 );
             }
@@ -150,8 +150,8 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
                                 borderRadius: 12,
                                 overflow: 'hidden',
                                 borderWidth: 1,
-                                borderColor: theme.colors.divider,
-                                backgroundColor: theme.colors.surfaceHigh ?? theme.colors.surface,
+                                borderColor: theme.colors.border.default,
+                                backgroundColor: theme.colors.surface.inset ?? theme.colors.surface.base,
                             }}
                         >
                             {Platform.OS !== 'web' && imagePreview.svgXml ? (
@@ -165,7 +165,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
                                 />
                             )}
                         </View>
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {t('files.binaryFile')}
                         </Text>
                     </View>
@@ -175,7 +175,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
             if (imagePreview.status === 'error') {
                 return (
                     <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                             {imagePreview.error}
                         </Text>
                     </View>
@@ -186,7 +186,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
         if (fileIsBinary) {
             return (
                 <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                    <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                    <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                         {t('files.binaryFile')}
                     </Text>
                 </View>
@@ -195,7 +195,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
 
         return (
             <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
-                <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                     {t('files.noChanges')}
                 </Text>
             </View>
@@ -222,7 +222,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: Readonly<{
 
     return (
             <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor]}>
-            <View style={[{ borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.divider }, diffContainerStyle]}>
+            <View style={[{ borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
                 <DiffViewer
                     mode="unified"
                     unifiedDiff={state.diff}

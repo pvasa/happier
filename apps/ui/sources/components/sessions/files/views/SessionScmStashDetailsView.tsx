@@ -400,8 +400,8 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
     if (isLoadingStashes && managedStashes.length === 0) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 24 }}>
-                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                     {t('common.loading')}
                 </Text>
             </View>
@@ -413,7 +413,7 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                 testID="scm-stash-details-root"
                 style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}
             >
-                <Text style={{ fontSize: 13, color: theme.colors.textSecondary, ...Typography.default(), textAlign: 'center' }}>
+                <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default(), textAlign: 'center' }}>
                     {stashesError ? stashesError : t('files.stash.empty')}
                 </Text>
             </View>
@@ -428,23 +428,23 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                     paddingTop: 14,
                     paddingBottom: 12,
                     borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                    borderBottomColor: theme.colors.divider,
-                    backgroundColor: theme.colors.surfaceHigh,
+                    borderBottomColor: theme.colors.border.default,
+                    backgroundColor: theme.colors.surface.inset,
                     gap: 10,
                 }}
             >
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                     <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                             {t('files.stash.detailsTitle')}
                         </Text>
                         {selectedStash ? (
-                            <Text style={{ marginTop: 4, fontSize: 12, color: theme.colors.text, ...Typography.mono('semiBold') }}>
+                            <Text style={{ marginTop: 4, fontSize: 12, color: theme.colors.text.primary, ...Typography.mono('semiBold') }}>
                                 {selectedStash.branch ? `${selectedStash.branch} · ${selectedStash.stashRef}` : selectedStash.stashRef}
                             </Text>
                         ) : null}
                         {selectedStash?.createdAt ? (
-                            <Text style={{ marginTop: 4, fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                            <Text style={{ marginTop: 4, fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                                 {formatStashTimestamp(selectedStash.createdAt) ?? ''}
                             </Text>
                         ) : null}
@@ -466,13 +466,13 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                                 height: 32,
                                 borderRadius: 10,
                                 borderWidth: 1,
-                                borderColor: theme.colors.divider,
-                                backgroundColor: theme.colors.surface,
+                                borderColor: theme.colors.border.default,
+                                backgroundColor: theme.colors.surface.base,
                                 opacity: pressed || operationBusy ? 0.78 : 1,
                             })}
                         >
-                            <Octicons name="upload" size={14} color={theme.colors.textSecondary} />
-                            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                            <Octicons name="upload" size={14} color={theme.colors.text.secondary} />
+                            <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                                 {t('files.stash.restore')}
                             </Text>
                         </Pressable>
@@ -492,13 +492,13 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                                 height: 32,
                                 borderRadius: 10,
                                 borderWidth: 1,
-                                borderColor: theme.colors.divider,
-                                backgroundColor: theme.colors.surface,
+                                borderColor: theme.colors.border.default,
+                                backgroundColor: theme.colors.surface.base,
                                 opacity: pressed || operationBusy ? 0.78 : 1,
                             })}
                         >
-                            <Octicons name="trash" size={14} color={theme.colors.textSecondary} />
-                            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                            <Octicons name="trash" size={14} color={theme.colors.text.secondary} />
+                            <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                                 {t('files.stash.discard')}
                             </Text>
                         </Pressable>
@@ -530,19 +530,19 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                                         height: 28,
                                         borderRadius: 999,
                                         borderWidth: 1,
-                                        borderColor: isSelected ? theme.colors.textLink : theme.colors.divider,
-                                        backgroundColor: isSelected ? theme.colors.surfaceHighest ?? theme.colors.surfaceHigh : theme.colors.surface,
+                                        borderColor: isSelected ? theme.colors.text.link : theme.colors.border.default,
+                                        backgroundColor: isSelected ? theme.colors.surface.elevated ?? theme.colors.surface.inset : theme.colors.surface.base,
                                         opacity: pressed ? 0.85 : 1,
                                     })}
                                 >
                                     <Octicons
                                         name={stash.kind === 'transient' ? 'zap' : 'archive'}
                                         size={13}
-                                        color={theme.colors.textSecondary}
+                                        color={theme.colors.text.secondary}
                                     />
                                     <Text
                                         numberOfLines={1}
-                                        style={{ fontSize: 12, color: theme.colors.textSecondary, ...Typography.mono('semiBold') }}
+                                        style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.mono('semiBold') }}
                                     >
                                         {stash.branch ?? stash.stashRef}
                                     </Text>
@@ -553,7 +553,7 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                 ) : null}
 
                 {stashesError ? (
-                    <Text style={{ fontSize: 12, color: theme.colors.warning, ...Typography.default() }}>
+                    <Text style={{ fontSize: 12, color: theme.colors.state.neutral.foreground, ...Typography.default() }}>
                         {stashesError}
                     </Text>
                 ) : null}
@@ -567,14 +567,14 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
 
             {diffState.loading ? (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 24 }}>
-                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                    <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.textSecondary, ...Typography.default() }}>
+                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                    <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                         {t('common.loading')}
                     </Text>
                 </View>
             ) : diffState.error ? (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-                    <Text style={{ fontSize: 13, color: theme.colors.textSecondary, ...Typography.default(), textAlign: 'center' }}>
+                    <Text style={{ fontSize: 13, color: theme.colors.text.secondary, ...Typography.default(), textAlign: 'center' }}>
                         {diffState.error}
                     </Text>
                 </View>
@@ -595,7 +595,7 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                             diffState.truncated
                                 ? () => (
                                     <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 }}>
-                                        <Text style={{ fontSize: 12, color: theme.colors.warning, ...Typography.default('semiBold') }}>
+                                        <Text style={{ fontSize: 12, color: theme.colors.state.neutral.foreground, ...Typography.default('semiBold') }}>
                                             {t('files.stash.diffTruncated')}
                                         </Text>
                                     </View>
@@ -609,13 +609,13 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
                         scrollEventThrottle={16}
                     />
                     <ScrollEdgeFades
-                        color={theme.colors.surface}
+                        color={theme.colors.surface.base}
                         size={18}
                         edges={scrollFades.visibility}
                     />
                     <ScrollEdgeIndicators
                         edges={scrollFades.visibility}
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                         size={14}
                         opacity={0.35}
                     />

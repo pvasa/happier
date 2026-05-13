@@ -89,13 +89,26 @@ describe('FileActionToolbar', () => {
     const theme = {
         colors: {
             divider: '#ddd',
-            surface: '#fff',
+            surface: {
+                base: '#fff',
+                inset: '#f6f6f6',
+            },
             surfaceHigh: '#f6f6f6',
+            border: {
+                default: '#ddd',
+            },
             input: { background: '#f2f2f2' },
-            text: '#111',
+            text: {
+                primary: '#111',
+                secondary: '#666',
+            },
             textSecondary: '#666',
             textLink: '#007AFF',
             success: '#34C759',
+            state: {
+                success: { foreground: '#34C759' },
+                neutral: { foreground: '#666' },
+            },
             warning: '#FF9500',
         },
     };
@@ -262,6 +275,81 @@ describe('FileActionToolbar', () => {
 
         expect(onApplySelectedLines).toHaveBeenCalledTimes(1);
         expect(onClearSelection).toHaveBeenCalledTimes(1);
+    });
+
+    it('enters line selection mode instead of selecting the whole file when line selection is available', async () => {
+        const { FileActionToolbar } = await import('./FileActionToolbar');
+        const onStageFile = vi.fn();
+        const onStartLineSelection = vi.fn();
+
+        const screen = await renderScreen(
+            React.createElement(FileActionToolbar as any, {
+                theme,
+                displayMode: 'diff',
+                onDisplayMode: () => {},
+                diffMode: 'pending',
+                onDiffMode: () => {},
+                hasPendingDelta: true,
+                hasIncludedDelta: false,
+                scmWriteEnabled: true,
+                includeExcludeEnabled: false,
+                virtualSelectionEnabled: true,
+                isSelectedForCommit: false,
+                lineSelectionEnabled: true,
+                lineSelectionActive: false,
+                selectedLineCount: 0,
+                isApplyingStage: false,
+                inFlightScmOperation: null,
+                onStageFile,
+                onUnstageFile: () => {},
+                onApplySelectedLines: () => {},
+                onClearSelection: () => {},
+                onStartLineSelection,
+                isUntrackedFile: false,
+            }),
+        );
+
+        await screen.pressByTestIdAsync('file-details-stage-file');
+
+        expect(onStartLineSelection).toHaveBeenCalledTimes(1);
+        expect(onStageFile).not.toHaveBeenCalled();
+    });
+
+    it('renders a review comment mode toggle when review comments are available', async () => {
+        const { FileActionToolbar } = await import('./FileActionToolbar');
+        const onToggleCommentMode = vi.fn();
+
+        const screen = await renderScreen(
+            React.createElement(FileActionToolbar as any, {
+                theme,
+                displayMode: 'diff',
+                onDisplayMode: () => {},
+                diffMode: 'pending',
+                onDiffMode: () => {},
+                hasPendingDelta: true,
+                hasIncludedDelta: false,
+                scmWriteEnabled: true,
+                includeExcludeEnabled: true,
+                lineSelectionEnabled: false,
+                selectedLineCount: 0,
+                isApplyingStage: false,
+                inFlightScmOperation: null,
+                onStageFile: () => {},
+                onUnstageFile: () => {},
+                onApplySelectedLines: () => {},
+                onClearSelection: () => {},
+                reviewCommentsEnabled: true,
+                commentModeActive: false,
+                onToggleCommentMode,
+            }),
+        );
+
+        const button = screen.findByTestId('file-details-comment-mode');
+        expect(button).toBeTruthy();
+
+        button?.props.onPress();
+
+        expect(onToggleCommentMode).toHaveBeenCalledWith(true);
     });
 
     it('uses a horizontally scrollable compact action row when selected-line controls overflow', async () => {

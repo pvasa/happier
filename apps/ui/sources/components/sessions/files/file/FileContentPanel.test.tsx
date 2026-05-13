@@ -64,6 +64,9 @@ const markdownViewPropsState: { current: any | null } = { current: null };
 describe('FileContentPanel', () => {
     const theme = {
         colors: {
+            text: {
+                secondary: '#999',
+            },
             textSecondary: '#999',
         },
     };
@@ -205,6 +208,133 @@ describe('FileContentPanel', () => {
         expect(diffViewerPropsState.current?.virtualized).toBe(true);
     });
 
+    it('keeps review comment line actions disabled while reading', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        diffViewerPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={['@@ -1,1 +1,1 @@', '+const a = 1;', ''].join('\n')}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentModeActive={false}
+                    reviewCommentDrafts={[]}
+                />);
+
+        expect(diffViewerPropsState.current?.onPressAddComment).toBeUndefined();
+        expect(diffViewerPropsState.current?.onPressLine).toBeUndefined();
+        expect(diffViewerPropsState.current?.pressLineWhenNotSelectable).toBeUndefined();
+    });
+
+    it('turns the whole code line into a review-comment target in comment mode', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        diffViewerPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={['@@ -1,1 +1,1 @@', ' const a = 1;', ''].join('\n')}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentModeActive
+                    reviewCommentDrafts={[]}
+                />);
+
+        expect(diffViewerPropsState.current?.onPressAddComment).toEqual(expect.any(Function));
+        expect(diffViewerPropsState.current?.onPressLine).toEqual(expect.any(Function));
+        expect(diffViewerPropsState.current?.pressLineWhenNotSelectable).toBe(true);
+    });
+
+    it('turns rendered markdown source ranges into review-comment targets in comment mode', async () => {
+        const { FileContentPanel } = await import('./FileContentPanel');
+        markdownViewPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode={'markdown' as any}
+                    sessionId="s1"
+                    filePath="docs/readme.md"
+                    diffContent={null}
+                    fileContent={'# Title\n\nBody'}
+                    language="markdown"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentModeActive
+                    reviewCommentDrafts={[]}
+                />);
+
+        expect(markdownViewPropsState.current?.onPressSourceRange).toEqual(expect.any(Function));
+        expect(markdownViewPropsState.current?.renderAfterSourceRange).toEqual(expect.any(Function));
+    });
+
+    it('adds every changed line in a dragged range to commit selection mode', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        const { buildCodeLinesFromUnifiedDiff } = await import('@/components/ui/code/model/buildCodeLinesFromUnifiedDiff');
+        const onSelectLineRange = vi.fn();
+        diffViewerPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={['@@ -0,0 +1,2 @@', '+const a = 1;', '+const b = 2;', ''].join('\n')}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled
+                    onToggleLine={vi.fn()}
+                    onSelectLineRange={onSelectLineRange}
+                />);
+
+        const lines = buildCodeLinesFromUnifiedDiff({
+            unifiedDiff: ['@@ -0,0 +1,2 @@', '+const a = 1;', '+const b = 2;', ''].join('\n'),
+            hideFilePrelude: true,
+        }).filter((line) => line.kind === 'add');
+        diffViewerPropsState.current?.onPressLineRange(lines);
+
+        expect(onSelectLineRange).toHaveBeenCalledWith(['additions:1', 'additions:2']);
+    });
+
+    it('keeps applied partial commit-selection lines highlighted outside selection mode', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        diffViewerPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={['@@ -0,0 +1,1 @@', '+const a = 1;', ''].join('\n')}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set(['additions:1'])}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                />);
+
+        expect(Array.from(diffViewerPropsState.current?.selectedLineIds?.values() ?? [])).toContain('a:1');
+    });
+
     it('passes scroll/highlight target for fileLine anchors', async () => {
         thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
         const { FileContentPanel } = await import('./FileContentPanel');
@@ -227,6 +357,29 @@ describe('FileContentPanel', () => {
 
         expect(codeLinesViewPropsState.current?.scrollToLineId).toBe('f:2');
         expect(codeLinesViewPropsState.current?.highlightLineId).toBe('f:2');
+    });
+
+    it('passes scroll/highlight range targets for normalized file range anchors', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        codeLinesViewPropsState.current = null;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="file"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={null}
+                    fileContent={['one', 'two', 'three'].join('\n')}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    jumpToAnchor={{ kind: 'range', filePath: 'src/a.ts', startLine: 2, endLine: 3 }}
+                />);
+
+        expect(codeLinesViewPropsState.current?.scrollToLineId).toBe('f:2');
+        expect(Array.from(codeLinesViewPropsState.current?.highlightLineIds?.values() ?? [])).toEqual(['f:2', 'f:3']);
     });
 
     it('falls back to line hash when a fileLine anchor moved', async () => {
@@ -278,6 +431,32 @@ describe('FileContentPanel', () => {
 
         expect(diffViewerPropsState.current?.scrollToLineId).toBe('a:1');
         expect(diffViewerPropsState.current?.highlightLineId).toBe('a:1');
+        expect(diffViewerPropsState.current?.virtualized).toBe(false);
+    });
+
+    it('passes scroll/highlight range targets for normalized diff range anchors', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        diffViewerPropsState.current = null;
+
+        const diff = ['@@ -1,1 +1,2 @@', '+const a = 1;', '+const b = 2;', ''].join('\n');
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={diff}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    jumpToAnchor={{ kind: 'range', filePath: 'src/a.ts', startLine: 1, endLine: 2, side: 'after' }}
+                />);
+
+        expect(diffViewerPropsState.current?.scrollToLineId).toBe('a:1');
+        expect(Array.from(diffViewerPropsState.current?.highlightLineIds?.values() ?? [])).toEqual(['a:1', 'a:2']);
         expect(diffViewerPropsState.current?.virtualized).toBe(false);
     });
 

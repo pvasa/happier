@@ -1,6 +1,6 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPartialStorageModuleMock, renderScreen } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTestHelpers';
@@ -8,6 +8,8 @@ import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTes
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let mockSnapshot: any = null;
+let reviewCommentsFeatureEnabled = false;
+const changedFilesReviewSpy = vi.fn();
 
 const mockSession = {
     id: 'session-1',
@@ -16,7 +18,7 @@ const mockSession = {
     updatedAt: 0,
     active: false,
     activeAt: 0,
-    metadata: { path: '/tmp/repo', host: '' },
+    metadata: { path: '/tmp/repo', host: '', machineId: 'machine-1' },
     metadataVersion: 0,
     agentState: null,
     agentStateVersion: 0,
@@ -36,7 +38,10 @@ installSessionFilesViewCommonModuleMocks({
             useSessionProjectScmOperationLog: () => [],
             useProjectForSession: () => null,
             useProjectSessions: () => [],
+            useWorkspaceReviewCommentsDrafts: () => [],
             useSetting: () => 25,
+            upsertWorkspaceReviewCommentDraft: () => {},
+            deleteWorkspaceReviewCommentDraft: () => {},
         }),
 });
 
@@ -55,7 +60,15 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => false,
+    useFeatureEnabled: (featureId: string) => featureId === 'files.reviewComments' && reviewCommentsFeatureEnabled,
+}));
+
+vi.mock('@/sync/domains/session/resolveWorkspaceScopeForSession', () => ({
+    useWorkspaceScopeForSession: (sessionId: string | null | undefined) => (
+        sessionId === 's1'
+            ? { serverId: 'server-1', machineId: 'machine-1', rootPath: '/tmp/repo' }
+            : null
+    ),
 }));
 
 vi.mock('@/hooks/session/files/useChangedFilesData', () => ({
@@ -116,10 +129,19 @@ vi.mock('@/components/ui/scroll/ScrollEdgeIndicators', () => ({
 }));
 
 vi.mock('@/components/sessions/files/content/ChangedFilesReview', () => ({
-    ChangedFilesReview: () => React.createElement('ChangedFilesReview'),
+    ChangedFilesReview: (props: any) => {
+        changedFilesReviewSpy(props);
+        return React.createElement('ChangedFilesReview', props);
+    },
 }));
 
 describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
+    beforeEach(() => {
+        reviewCommentsFeatureEnabled = false;
+        changedFilesReviewSpy.mockClear();
+        mockSnapshot = null;
+    });
+
     it('keeps last-known review content visible while snapshot is revalidating', async () => {
         const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
 
@@ -159,5 +181,40 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
 
         expect(tree.findAllByType('ChangedFilesReview' as any)).toHaveLength(1);
         expect(tree.findAllByType('ActivityIndicator')).toHaveLength(0);
+    });
+
+    it('enables review comments for SCM review diffs when the session has a workspace scope', async () => {
+        reviewCommentsFeatureEnabled = true;
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        mockSnapshot = {
+            fetchedAt: 1,
+            projectKey: 'm1:/repo',
+            repo: { isRepo: true, rootPath: '/tmp/repo', backendId: 'git', mode: '.git' },
+            capabilities: { readLog: true },
+            branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+            stashCount: 0,
+            hasConflicts: false,
+            entries: [],
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 0,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 0,
+                pendingRemoved: 0,
+            },
+        };
+
+        await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+
+        expect(changedFilesReviewSpy).toHaveBeenCalledWith(expect.objectContaining({
+            reviewCommentsEnabled: true,
+            reviewCommentDrafts: expect.any(Array),
+            onUpsertReviewCommentDraft: expect.any(Function),
+            onDeleteReviewCommentDraft: expect.any(Function),
+            onReviewCommentError: expect.any(Function),
+        }));
     });
 });

@@ -7,7 +7,7 @@ import { Text } from '@/components/ui/text/Text';
 import { ChangedFilesReview } from '@/components/sessions/files/content/ChangedFilesReview';
 import { ChangedFilesViewModeMenu } from '@/components/sessions/files/ChangedFilesViewModeMenu';
 import { useChangedFilesData } from '@/hooks/session/files/useChangedFilesData';
-import { useProjectForSession, useProjectSessions, useSession, useSessionMessages, useSessionProjectScmOperationLog, useSessionProjectScmSnapshot, useSessionProjectScmSnapshotError, useSessionProjectScmTouchedPaths, useSetting } from '@/sync/domains/state/storage';
+import { useProjectForSession, useProjectSessions, useSession, useSessionMessages, useSessionProjectScmOperationLog, useSessionProjectScmSnapshot, useSessionProjectScmSnapshotError, useSessionProjectScmTouchedPaths, useSetting, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
@@ -25,6 +25,8 @@ import { t } from '@/text';
 import { useLastNonNullValue } from '@/hooks/ui/useLastNonNullValue';
 import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
 import { useDerivedSessionChangeSet } from '@/sync/domains/session/changes/hooks/useDerivedSessionChangeSet';
+import { useWorkspaceReviewCommentDraftHandlers } from '@/components/sessions/reviews/comments/useWorkspaceReviewCommentDraftHandlers';
+import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import {
     getDefaultChangedFilesViewMode,
     resolveChangedFilesViewMode,
@@ -101,6 +103,10 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
             : 'atomic';
     }, [scmCommitStrategySetting]);
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations');
+    const reviewScope = useWorkspaceScopeForSession(props.sessionId);
+    const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments') === true && Boolean(reviewScope);
+    const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
+    const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(reviewScope);
     const [diffRefreshToken, setDiffRefreshToken] = React.useState(0);
 
     useScmDiffCacheLimits(scmDiffCache);
@@ -200,8 +206,8 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
     if (!effectiveSnapshot && !snapshotError) {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 24 }}>
-                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.textSecondary }}>
+                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary }}>
                     {t('common.loading')}
                 </Text>
             </View>
@@ -240,8 +246,8 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
                         paddingTop: 10,
                         paddingBottom: 8,
                         borderBottomWidth: 1,
-                        borderBottomColor: theme.colors.divider,
-                        backgroundColor: theme.colors.surfaceHigh,
+                        borderBottomColor: theme.colors.border.default,
+                        backgroundColor: theme.colors.surface.inset,
                     }}
                 >
                     <ChangedFilesViewModeMenu
@@ -292,18 +298,23 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
                 rowDensity="compact"
                 diffRefreshToken={diffRefreshToken}
                 providerDiffByPath={reviewProviderDiffByPath}
+                reviewCommentsEnabled={reviewCommentsEnabled}
+                reviewCommentDrafts={reviewCommentDrafts}
+                onUpsertReviewCommentDraft={reviewDraftHandlers.onUpsertReviewCommentDraft}
+                onDeleteReviewCommentDraft={reviewDraftHandlers.onDeleteReviewCommentDraft}
+                onReviewCommentError={reviewDraftHandlers.onReviewCommentError}
                 onLayout={scrollFades.onViewportLayout}
                 onContentSizeChange={scrollFades.onContentSizeChange}
                 onScroll={scrollFades.onScroll}
             />
             <ScrollEdgeFades
-                color={theme.colors.surface}
+                color={theme.colors.surface.base}
                 size={18}
                 edges={scrollFades.visibility}
             />
             <ScrollEdgeIndicators
                 edges={scrollFades.visibility}
-                color={theme.colors.textSecondary}
+                color={theme.colors.text.secondary}
                 size={14}
                 opacity={0.35}
             />
