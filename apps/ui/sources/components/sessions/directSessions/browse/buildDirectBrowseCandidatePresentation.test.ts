@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { lightTheme } from '@/theme';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,19 +14,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: 'Text',
 }));
 
-vi.mock('@/theme', () => ({
-    lightTheme: {
-        colors: {
-            success: '#0f0',
-            textSecondary: '#666',
-            textTertiary: '#999',
-            divider: '#ddd',
-            surfaceHigh: '#f5f5f5',
-            accent: { orange: '#f90' },
-        },
-    },
-}));
-
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => {
@@ -33,20 +21,21 @@ vi.mock('@/text', async () => {
     } });
 });
 
+const mockTheme = {
+    ...lightTheme,
+    colors: {
+        ...lightTheme.colors,
+        text: {
+            ...lightTheme.colors.text,
+            secondary: '#666',
+            tertiary: '#999',
+        },
+    },
+};
+
 describe('buildDirectBrowseCandidatePresentation', () => {
     it('renders full-path metadata with item-aligned text hierarchy and hides remote ids when a meaningful title exists', async () => {
         const { buildDirectBrowseCandidateSubtitle } = await import('./buildDirectBrowseCandidatePresentation');
-        const mockTheme = {
-            colors: {
-                success: '#0f0',
-                textSecondary: '#666',
-                textTertiary: '#999',
-                divider: '#ddd',
-                surfaceHigh: '#f5f5f5',
-                accent: { orange: '#f90' },
-            },
-        } as any;
-
         const subtitle = buildDirectBrowseCandidateSubtitle({
             remoteSessionId: 'codex-session-1',
             title: 'Improve browse session UX',
@@ -71,17 +60,6 @@ describe('buildDirectBrowseCandidatePresentation', () => {
 
     it('falls back to the remote session id when there is no meaningful title or path', async () => {
         const { buildDirectBrowseCandidateDisplayTitle, buildDirectBrowseCandidateSubtitle } = await import('./buildDirectBrowseCandidatePresentation');
-        const mockTheme = {
-            colors: {
-                success: '#0f0',
-                textSecondary: '#666',
-                textTertiary: '#999',
-                divider: '#ddd',
-                surfaceHigh: '#f5f5f5',
-                accent: { orange: '#f90' },
-            },
-        } as any;
-
         expect(buildDirectBrowseCandidateDisplayTitle({
             remoteSessionId: 'sess_raw_1',
             updatedAtMs: 1_700_000_000_000,
@@ -98,17 +76,6 @@ describe('buildDirectBrowseCandidatePresentation', () => {
 
     it('shows running now instead of a stale relative timestamp for running sessions', async () => {
         const { buildDirectBrowseCandidateSubtitle } = await import('./buildDirectBrowseCandidatePresentation');
-        const mockTheme = {
-            colors: {
-                success: '#0f0',
-                textSecondary: '#666',
-                textTertiary: '#999',
-                divider: '#ddd',
-                surfaceHigh: '#f5f5f5',
-                accent: { orange: '#f90' },
-            },
-        } as any;
-
         const subtitle = buildDirectBrowseCandidateSubtitle({
             remoteSessionId: 'sess_live_1',
             title: 'Live codex session',

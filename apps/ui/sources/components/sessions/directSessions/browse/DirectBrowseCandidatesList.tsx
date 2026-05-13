@@ -6,7 +6,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
-import { lightTheme } from '@/theme';
+import type { Theme } from '@/theme';
 import { t } from '@/text';
 
 import {
@@ -17,13 +17,13 @@ import {
 } from './buildDirectBrowseCandidatePresentation';
 import type { DirectBrowseCandidate } from './useDirectBrowseCandidates';
 
-type AppTheme = typeof lightTheme;
+type AppTheme = Theme;
 
 const stylesheet = StyleSheet.create((theme: AppTheme) => ({
     helperText: {
         paddingHorizontal: 16,
         paddingVertical: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 13,
     },
     searchContainer: {
@@ -35,8 +35,8 @@ const stylesheet = StyleSheet.create((theme: AppTheme) => ({
         paddingHorizontal: 12,
         paddingVertical: 10,
         borderRadius: 10,
-        backgroundColor: theme.colors.surfaceHigh,
-        color: theme.colors.text,
+        backgroundColor: theme.colors.surface.inset,
+        color: theme.colors.text.primary,
         fontSize: 13,
     },
     loadingRow: {
@@ -76,14 +76,14 @@ export const DirectBrowseCandidatesList = React.memo(function DirectBrowseCandid
                     value={searchQuery}
                     onChangeText={setSearchQuery}
                     placeholder={t('directSessions.browseSearchPlaceholder')}
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.input.placeholder}
                     style={styles.searchInput}
                 />
             </View>
 
             {props.loading ? (
                 <View style={styles.loadingRow}>
-                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                 </View>
             ) : props.error ? (
                 <View>
@@ -123,4 +123,3 @@ export const DirectBrowseCandidatesList = React.memo(function DirectBrowseCandid
         </ItemGroup>
     );
 });
-

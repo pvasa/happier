@@ -7,11 +7,11 @@ import { ITEM_SUBTITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMet
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { lightTheme } from '@/theme';
+import type { Theme } from '@/theme';
 import { t } from '@/text';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
-type AppTheme = typeof lightTheme;
+type AppTheme = Theme;
 
 type DirectBrowseCandidate = Readonly<{
     remoteSessionId: string;
@@ -87,7 +87,7 @@ export function buildDirectBrowseCandidateSubtitle(
                     style={[
                         subtitleTextStyle,
                         {
-                            color: theme.colors.textSecondary,
+                            color: theme.colors.text.secondary,
                         },
                     ]}
                 >
@@ -99,7 +99,7 @@ export function buildDirectBrowseCandidateSubtitle(
                     style={[
                         subtitleTextStyle,
                         {
-                            color: theme.colors.textSecondary,
+                            color: theme.colors.text.secondary,
                         },
                     ]}
                 >
@@ -111,7 +111,7 @@ export function buildDirectBrowseCandidateSubtitle(
                     style={[
                         subtitleTextStyle,
                         {
-                            color: theme.colors.textTertiary,
+                            color: theme.colors.text.tertiary,
                         },
                     ]}
                 >
@@ -144,7 +144,7 @@ export function buildDirectBrowseCandidateRightElement(
         switch (candidate.activity) {
             case 'running':
                 return {
-                    color: theme.colors.success,
+                    color: theme.colors.state.success.foreground,
                     label: t('directSessions.browseActivityRunning'),
                     pulsing: true,
                 };
@@ -156,13 +156,13 @@ export function buildDirectBrowseCandidateRightElement(
                 };
             case 'idle':
                 return {
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     label: t('directSessions.browseActivityIdle'),
                     pulsing: false,
                 };
             case 'unknown':
                 return {
-                    color: theme.colors.textSecondary,
+                    color: theme.colors.text.secondary,
                     label: t('directSessions.browseActivityUnknown'),
                     pulsing: false,
                 };
@@ -179,7 +179,7 @@ export function buildDirectBrowseCandidateRightElement(
                 alignItems: 'center',
                 gap: 6,
                 borderRadius: 999,
-                backgroundColor: theme.colors.surfaceHigh,
+                backgroundColor: theme.colors.surface.inset,
                 paddingHorizontal: 7,
                 paddingVertical: 3,
             }}
