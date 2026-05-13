@@ -41,7 +41,7 @@ import { defaultPromptAssetTargetInput } from './promptAssetExportDefaults';
 const styles = StyleSheet.create((theme) => ({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.groupped.background,
+    backgroundColor: theme.colors.background.canvas,
   },
   content: {
     padding: 16,
@@ -213,9 +213,9 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
       id: machine.id,
       title: machine.metadata?.displayName || machine.metadata?.host || machine.id,
       subtitle: machine.id,
-      icon: <Ionicons name="laptop-outline" size={22} color={theme.colors.textSecondary} />,
+      icon: <Ionicons name="laptop-outline" size={22} color={theme.colors.text.secondary} />,
     }));
-  }, [machines, theme.colors.textSecondary]);
+  }, [machines, theme.colors.text.secondary]);
 
   const scopeItems = React.useMemo((): DropdownMenuItem[] => ([
     {
@@ -238,9 +238,9 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
         id: entry.id,
         title: entry.title,
         subtitle: entry.description,
-        icon: <Ionicons name="layers-outline" size={22} color={theme.colors.textSecondary} />,
+        icon: <Ionicons name="layers-outline" size={22} color={theme.colors.text.secondary} />,
       }));
-  }, [scopeCompatibleTypes, theme.colors.textSecondary]);
+  }, [scopeCompatibleTypes, theme.colors.text.secondary]);
 
   const installModeItems = React.useMemo((): DropdownMenuItem[] => {
     return availableInstallModes.map((entry) => ({
@@ -251,9 +251,9 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
       subtitle: entry === 'symlink'
         ? t('promptLibrary.externalAssetsInstallMethodSymlinkSubtitle')
         : t('promptLibrary.externalAssetsInstallMethodCopySubtitle'),
-      icon: <Ionicons name={entry === 'symlink' ? 'git-branch-outline' : 'copy-outline'} size={22} color={theme.colors.textSecondary} />,
+      icon: <Ionicons name={entry === 'symlink' ? 'git-branch-outline' : 'copy-outline'} size={22} color={theme.colors.text.secondary} />,
     }));
-  }, [availableInstallModes, theme.colors.textSecondary]);
+  }, [availableInstallModes, theme.colors.text.secondary]);
 
   const selectedInstallMode = React.useMemo(
     () => resolvePromptAssetInstallModeSelection({
@@ -405,7 +405,7 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
             itemTrigger={{
               title: t('promptLibrary.externalAssetsExportType'),
               subtitle: currentType?.title ?? t('promptLibrary.externalAssetsNoTypes'),
-              icon: <Ionicons name="layers-outline" size={29} color={theme.colors.textSecondary} />,
+              icon: <Ionicons name="layers-outline" size={29} color={theme.colors.text.secondary} />,
             }}
             rowKind="item"
             connectToTrigger
@@ -424,7 +424,7 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
                 subtitle: selectedInstallMode === 'symlink'
                   ? t('promptLibrary.externalAssetsInstallMethodSymlink')
                   : t('promptLibrary.externalAssetsInstallMethodCopy'),
-                icon: <Ionicons name={selectedInstallMode === 'symlink' ? 'git-branch-outline' : 'copy-outline'} size={29} color={theme.colors.textSecondary} />,
+                icon: <Ionicons name={selectedInstallMode === 'symlink' ? 'git-branch-outline' : 'copy-outline'} size={29} color={theme.colors.text.secondary} />,
               }}
               rowKind="item"
               connectToTrigger
@@ -447,7 +447,7 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
               />
             )}
             subtitleLines={0}
-            icon={<Ionicons name={artifactState?.libraryKind === 'bundle' ? 'sparkles-outline' : 'document-text-outline'} size={29} color={theme.colors.textSecondary} />}
+            icon={<Ionicons name={artifactState?.libraryKind === 'bundle' ? 'sparkles-outline' : 'document-text-outline'} size={29} color={theme.colors.text.secondary} />}
             mode="info"
             showChevron={false}
           />
@@ -463,7 +463,7 @@ export const PromptAssetExportScreen = React.memo((props: Readonly<{
                   ? t('promptLibrary.externalAssetsProjectScope')
                   : t('promptLibrary.externalAssetsUserScope'),
               })}
-              icon={<Ionicons name="link-outline" size={29} color={theme.colors.textSecondary} />}
+              icon={<Ionicons name="link-outline" size={29} color={theme.colors.text.secondary} />}
               detail={describePromptExternalLinkTitle(currentLink)}
               showChevron={false}
             />
