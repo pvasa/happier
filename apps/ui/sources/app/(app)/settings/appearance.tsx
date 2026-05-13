@@ -191,6 +191,7 @@ export default React.memo(function AppearanceSettingsScreen() {
             nextPreference: nextThemePreference,
             platform: Platform.OS,
             reduceMotion,
+            forceAnimate: true,
             systemTheme,
             mutation: () => {
                 setThemePreference(nextThemePreference);

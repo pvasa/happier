@@ -141,14 +141,14 @@ const ProviderSettingsNumberField = React.memo(function ProviderSettingsNumberFi
 	        <View style={[styles.inputContainer, { paddingTop: 0 }]}>
 	            <Text style={styles.fieldLabel}>{resolveProviderSettingsText(field.title) ?? ''}</Text>
 	            {field.subtitle && (
-	                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.textSecondary, marginBottom: 6 }}>
+	                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text.secondary, marginBottom: 6 }}>
 	                    {resolveProviderSettingsText(field.subtitle) ?? ''}
 	                </Text>
 	            )}
             <TextInput
                 style={[
                     styles.textInput,
-                    showError ? { borderWidth: 1, borderColor: theme.colors.textDestructive } : null,
+                    showError ? { borderWidth: 1, borderColor: theme.colors.state.danger.foreground } : null,
                 ]}
                 placeholder={resolveProviderSettingsText(field.numberSpec?.placeholder) ?? t('common.optional')}
                 placeholderTextColor={theme.colors.input.placeholder}
@@ -192,7 +192,7 @@ const ProviderSettingsNumberField = React.memo(function ProviderSettingsNumberFi
                 autoCorrect={false}
             />
             {showError && (
-                <Text style={{ ...Typography.default(), fontSize: 12, color: theme.colors.textDestructive, marginTop: 6 }}>
+                <Text style={{ ...Typography.default(), fontSize: 12, color: theme.colors.state.danger.foreground, marginTop: 6 }}>
                     {t('settingsProviders.invalidNumber')}
                 </Text>
             )}
@@ -207,11 +207,11 @@ const ProviderSettingsNotFound = React.memo(function ProviderSettingsNotFound(pr
         <ItemList style={{ paddingTop: 0 }}>
             <ItemGroup>
                 <View style={{ alignItems: 'center', paddingVertical: 32, paddingHorizontal: 16 }}>
-                    <Ionicons name="warning-outline" size={48} color={props.theme.colors.textDestructive} style={{ marginBottom: 16 }} />
-                    <Text style={{ ...Typography.default('semiBold'), fontSize: 16, color: props.theme.colors.textDestructive, textAlign: 'center', marginBottom: 8 }}>
+                    <Ionicons name="warning-outline" size={48} color={props.theme.colors.state.danger.foreground} style={{ marginBottom: 16 }} />
+                    <Text style={{ ...Typography.default('semiBold'), fontSize: 16, color: props.theme.colors.state.danger.foreground, textAlign: 'center', marginBottom: 8 }}>
                         {t('settingsProviders.notFoundTitle')}
                     </Text>
-                    <Text style={{ ...Typography.default(), fontSize: 14, color: props.theme.colors.textSecondary, textAlign: 'center', lineHeight: 20 }}>
+                    <Text style={{ ...Typography.default(), fontSize: 14, color: props.theme.colors.text.secondary, textAlign: 'center', lineHeight: 20 }}>
                         {t('settingsProviders.notFoundSubtitle')}
                     </Text>
                 </View>
@@ -389,9 +389,9 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
             id: machine.id,
             title: machine.metadata?.displayName ?? machine.metadata?.host ?? machine.id,
             subtitle: machine.id,
-            icon: <Ionicons name="laptop-outline" size={22} color={theme.colors.textSecondary} />,
+            icon: <Ionicons name="laptop-outline" size={22} color={theme.colors.text.secondary} />,
         }));
-    }, [activeServerMachines, theme.colors.textSecondary]);
+    }, [activeServerMachines, theme.colors.text.secondary]);
     const cliAvailability = useCLIDetection(primaryMachine?.id ?? null, {
         autoDetect: true,
         agentIds: [providerId],
@@ -438,10 +438,10 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                 ? 'time-outline'
                 : 'alert-circle';
     const statusIconColor = providerCliAvailable === true
-        ? theme.colors.success
+        ? theme.colors.state.success.foreground
         : providerCliAvailable === false
-            ? theme.colors.textDestructive
-            : theme.colors.textSecondary;
+            ? theme.colors.state.danger.foreground
+            : theme.colors.text.secondary;
 
     const capabilityBadges: BadgeGridItem[] = [
         {
@@ -543,7 +543,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                     <Item
                         title={t('settingsProviders.enabledTitle')}
                         subtitle={t('settingsProviders.enabledSubtitle')}
-                        icon={<Ionicons name="toggle-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="toggle-outline" size={29} color={theme.colors.text.secondary} />}
                         rightElement={<Switch value={backendEnabled} onValueChange={setBackendEnabled} />}
                         showChevron={false}
                         onPress={() => setBackendEnabled(!backendEnabled)}
@@ -568,7 +568,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                         itemTrigger={{
                             title: t('settingsSession.permissions.defaultPermissionModeTitle'),
                             subtitle: getPermissionModeLabelForAgentType(providerId, permissionMode),
-                            icon: <Ionicons name="shield-checkmark-outline" size={29} color={theme.colors.success} />,
+                            icon: <Ionicons name="shield-checkmark-outline" size={29} color={theme.colors.state.success.foreground} />,
                         }}
                         items={getPermissionModeOptionsForAgentType(providerId).map((opt) => ({
                             id: opt.value,
@@ -576,7 +576,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                             subtitle: opt.description,
                             icon: (
                                 <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                    <Ionicons name={opt.icon as any} size={22} color={theme.colors.textSecondary} />
+                                    <Ionicons name={opt.icon as any} size={22} color={theme.colors.text.secondary} />
                                 </View>
                             ),
                         }))}
@@ -615,7 +615,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
 	                                        key={field.key}
 	                                        title={resolveProviderSettingsText(field.title) ?? ''}
 	                                        subtitle={resolveProviderSettingsText(field.subtitle)}
-	                                        icon={<Ionicons name="options-outline" size={29} color={theme.colors.textSecondary} />}
+	                                        icon={<Ionicons name="options-outline" size={29} color={theme.colors.text.secondary} />}
 	                                        rightElement={<Switch value={boolValue} onValueChange={(v) => setFieldValue(field, v)} />}
 	                                        showChevron={false}
 	                                        onPress={() => setFieldValue(field, !boolValue)}
@@ -631,7 +631,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
 	                                            key={field.key}
 	                                            title={resolveProviderSettingsText(field.title) ?? ''}
 	                                            subtitle={resolveProviderSettingsText(field.subtitle) ?? t('settingsProviders.noOptionsAvailable')}
-	                                            icon={<Ionicons name="list-outline" size={29} color={theme.colors.textSecondary} />}
+	                                            icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
 	                                            showChevron={false}
 	                                            disabled={true}
 	                                        />
@@ -670,8 +670,8 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
 	                                                title={resolveProviderSettingsText(field.title) ?? ''}
 	                                                subtitle={resolveProviderSettingsText(field.subtitle)}
 	                                                detail={detail}
-	                                                icon={<Ionicons name="list-outline" size={29} color={theme.colors.textSecondary} />}
-                                                rightElement={<Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={theme.colors.textSecondary} />}
+	                                                icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
+                                                rightElement={<Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={theme.colors.text.secondary} />}
                                                 onPress={toggle}
                                                 showChevron={false}
                                                 selected={false}
@@ -688,7 +688,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
 	                                                        <Ionicons
 	                                                            name={checked ? 'checkbox-outline' : 'square-outline'}
                                                             size={22}
-                                                            color={theme.colors.textSecondary}
+                                                            color={theme.colors.text.secondary}
                                                         />
                                                     </View>
                                                 ),
@@ -713,7 +713,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
 	                                            key={field.key}
 	                                            title={resolveProviderSettingsText(field.title) ?? ''}
 	                                            subtitle={resolveProviderSettingsText(field.subtitle) ?? t('settingsProviders.noOptionsAvailable')}
-	                                            icon={<Ionicons name="list-outline" size={29} color={theme.colors.textSecondary} />}
+	                                            icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
 	                                            showChevron={false}
 	                                            disabled={true}
 	                                        />
@@ -738,7 +738,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                             title: resolveProviderSettingsText(field.title) ?? '',
                                             subtitle: resolveProviderSettingsText(field.subtitle) ?? undefined,
                                             showSelectedSubtitle: field.subtitle ? false : undefined,
-                                            icon: <Ionicons name="list-outline" size={29} color={theme.colors.textSecondary} />,
+                                            icon: <Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />,
                                             itemProps: {
                                                 testID: `settings-provider-field-${field.key}`,
                                             },
@@ -749,7 +749,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                             subtitle: resolveProviderSettingsText(opt.subtitle),
 	                                            icon: (
 	                                                <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-	                                                    <Ionicons name="radio-button-on-outline" size={22} color={theme.colors.textSecondary} />
+	                                                    <Ionicons name="radio-button-on-outline" size={22} color={theme.colors.text.secondary} />
 	                                                </View>
 	                                            ),
 	                                        }))}
@@ -809,7 +809,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
 	                                    <View key={field.key} style={[styles.inputContainer, { paddingTop: 0 }]}>
 	                                        <Text style={styles.fieldLabel}>{resolveProviderSettingsText(field.title) ?? ''}</Text>
 	                                        {field.subtitle && (
-	                                            <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.textSecondary, marginBottom: 6 }}>
+	                                            <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text.secondary, marginBottom: 6 }}>
 	                                                {resolveProviderSettingsText(field.subtitle) ?? ''}
 	                                            </Text>
 	                                        )}
@@ -820,7 +820,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                                     minHeight: field.kind === 'json' ? 110 : 44,
                                                     textAlignVertical: field.kind === 'json' ? 'top' : 'center',
                                                 } as any,
-                                                jsonError ? { borderWidth: 1, borderColor: theme.colors.textDestructive } : null,
+                                                jsonError ? { borderWidth: 1, borderColor: theme.colors.state.danger.foreground } : null,
                                             ]}
                                             multiline={field.kind === 'json'}
                                             placeholder={field.kind === 'json' ? '{ }' : ''}
@@ -839,7 +839,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                             autoCorrect={false}
                                         />
                                         {jsonError && (
-                                            <Text style={{ ...Typography.default(), fontSize: 12, color: theme.colors.textDestructive, marginTop: 6 }}>
+                                            <Text style={{ ...Typography.default(), fontSize: 12, color: theme.colors.state.danger.foreground, marginTop: 6 }}>
                                                 {jsonError}
                                             </Text>
                                         )}
@@ -859,20 +859,20 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                         testID="settings-provider-target-machine"
                         title={t('settingsProviders.targetMachineTitle')}
                         subtitle={primaryMachineLabel ?? t('machine.detectedCliUnknown')}
-                        icon={<Ionicons name="desktop-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="desktop-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         testID="settings-provider-detected-cli"
                         title={t('settingsProviders.detectedCliTitle')}
                         subtitle={`${core.cli.detectKey} • ${detectedCliStatus}`}
-                        icon={<Ionicons name="code-slash-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="code-slash-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.installSetupTitle')}
                         subtitle={installSetupSubtitle}
-                        icon={<Ionicons name="information-circle-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="information-circle-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     {supportsDesktopControls ? (
@@ -902,7 +902,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                 title: t('settingsProviders.cliSourcePreference.title'),
                                 subtitle: t('settingsProviders.cliSourcePreference.subtitle'),
                                 showSelectedSubtitle: false,
-                                icon: <Ionicons name="swap-horizontal-outline" size={29} color={theme.colors.textSecondary} />,
+                                icon: <Ionicons name="swap-horizontal-outline" size={29} color={theme.colors.text.secondary} />,
                                 itemProps: {
                                     testID: 'settings-provider-cli-source-preference',
                                 },
@@ -914,7 +914,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                     subtitle: t('settingsProviders.cliSourcePreference.options.systemFirst.subtitle'),
                                     icon: (
                                         <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="desktop-outline" size={22} color={theme.colors.textSecondary} />
+                                            <Ionicons name="desktop-outline" size={22} color={theme.colors.text.secondary} />
                                         </View>
                                     ),
                                 },
@@ -924,7 +924,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                                     subtitle: t('settingsProviders.cliSourcePreference.options.managedFirst.subtitle'),
                                     icon: (
                                         <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="download-outline" size={22} color={theme.colors.textSecondary} />
+                                            <Ionicons name="download-outline" size={22} color={theme.colors.text.secondary} />
                                         </View>
                                     ),
                                 },
@@ -939,7 +939,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                         <Item
                             title={t('settingsProviders.setupGuideUrlTitle')}
                             subtitle={core.cli.installBanner.guideUrl}
-                            icon={<Ionicons name="link-outline" size={29} color={theme.colors.textSecondary} />}
+                            icon={<Ionicons name="link-outline" size={29} color={theme.colors.text.secondary} />}
                             mode="info"
                             copy={core.cli.installBanner.guideUrl}
                         />
@@ -947,7 +947,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                     <Item
                         title={t('settingsProviders.connectedServiceTitle')}
                         subtitle={core.uiConnectedService.label}
-                        icon={<Ionicons name="cloud-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="cloud-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                 </ItemGroup>
@@ -960,49 +960,49 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                     <Item
                         title={t('settingsProviders.modelSelectionTitle')}
                         subtitle={core.model.supportsSelection ? t('settingsProviders.supported') : t('settingsProviders.notSupported')}
-                        icon={<Ionicons name="list-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.freeformModelIdsTitle')}
                         subtitle={core.model.supportsFreeform ? t('settingsProviders.allowed') : t('settingsProviders.notAllowed')}
-                        icon={<Ionicons name="create-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="create-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.defaultModelTitle')}
                         subtitle={defaultModelLabel}
-                        icon={<Ionicons name="star-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="star-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.catalogModelListTitle')}
                         subtitle={catalogModelListText}
-                        icon={<Ionicons name="albums-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="albums-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.dynamicModelProbeTitle')}
                         subtitle={dynamicProbe}
-                        icon={<Ionicons name="pulse-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="pulse-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.nonAcpApplyScopeTitle')}
                         subtitle={nonAcpApplyScope}
-                        icon={<Ionicons name="arrow-forward-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="arrow-forward-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.acpApplyBehaviorTitle')}
                         subtitle={acpApplyBehavior}
-                        icon={<Ionicons name="sync-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="sync-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                     <Item
                         title={t('settingsProviders.acpConfigOptionTitle')}
                         subtitle={core.model.acpModelConfigOptionId ?? t('settingsProviders.notAvailable')}
-                        icon={<Ionicons name="settings-outline" size={29} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="settings-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                 </ItemGroup>
@@ -1061,7 +1061,7 @@ const styles = StyleSheet.create((theme) => ({
     fieldLabel: {
         ...Typography.default('semiBold'),
         fontSize: 13,
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         marginBottom: 4,
     },
     textInput: {

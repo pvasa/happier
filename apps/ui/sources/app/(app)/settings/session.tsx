@@ -40,6 +40,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [busySteerSendPolicy, setBusySteerSendPolicy] = useSettingMutable('sessionBusySteerSendPolicy');
     const [codingPromptBehavior, setCodingPromptBehavior] = useSettingMutable('codingPromptBehaviorV1');
     const [rememberLastProjectSessionSelections, setRememberLastProjectSessionSelections] = useSettingMutable('rememberLastProjectSessionSelections');
+    const [rememberLastEngineSelections, setRememberLastEngineSelections] = useSettingMutable('rememberLastEngineSelectionsV1');
     const [useEnhancedSessionWizard, setUseEnhancedSessionWizard] = useSettingMutable('useEnhancedSessionWizard');
 
     const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
@@ -55,6 +56,8 @@ export default React.memo(function SessionSettingsScreen() {
     const [sessionReplaySummaryRunnerV1, setSessionReplaySummaryRunnerV1] = useSettingMutable('sessionReplaySummaryRunnerV1');
 
     const [sessionTagsEnabled, setSessionTagsEnabled] = useSettingMutable('sessionTagsEnabled');
+    const [sessionListWorkingStatusAnimatedTextEnabled, setSessionListWorkingStatusAnimatedTextEnabled] = useSettingMutable('sessionListWorkingStatusAnimatedTextEnabled');
+    const [sessionListNarrowWorkingIndicatorStyle, setSessionListNarrowWorkingIndicatorStyle] = useSettingMutable('sessionListNarrowWorkingIndicatorStyle');
 
     // Session list settings (moved from Appearance)
     const deviceType = useDeviceType();
@@ -76,6 +79,7 @@ export default React.memo(function SessionSettingsScreen() {
     const [openReplayMenu, setOpenReplayMenu] = React.useState<boolean>(false);
     const [openGroupingMenu, setOpenGroupingMenu] = React.useState<null | 'active' | 'inactive'>(null);
     const [openSessionListDensityMenu, setOpenSessionListDensityMenu] = React.useState(false);
+    const [openNarrowWorkingIndicatorMenu, setOpenNarrowWorkingIndicatorMenu] = React.useState(false);
     const [openWindowsRemoteSessionLaunchModeMenu, setOpenWindowsRemoteSessionLaunchModeMenu] = React.useState(false);
 
     const enterToSendEnabled = Platform.OS === 'web' ? agentInputEnterToSend : agentInputEnterToSendNative;
@@ -86,6 +90,7 @@ export default React.memo(function SessionSettingsScreen() {
             : t('settingsSession.inputBehavior.enterToSendEnabledNativeSubtitle')
         : t('settingsFeatures.enterToSendDisabled');
     const rememberProjectSelectionsEnabled = rememberLastProjectSessionSelections !== false;
+    const rememberEngineSelectionsEnabled = rememberLastEngineSelections !== false;
     const normalizedCodingPromptBehavior = React.useMemo<CodingPromptBehaviorV1>(() => {
         const raw = codingPromptBehavior && typeof codingPromptBehavior === 'object' && !Array.isArray(codingPromptBehavior)
             ? codingPromptBehavior as Partial<CodingPromptBehaviorV1>
@@ -150,6 +155,25 @@ export default React.memo(function SessionSettingsScreen() {
         if (itemId !== 'detailed' && itemId !== 'cozy' && itemId !== 'narrow') return;
         setSessionListDensity(itemId);
     }, [setSessionListDensity]);
+
+    const narrowWorkingIndicatorStyle = sessionListNarrowWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
+    const narrowWorkingIndicatorItems = React.useMemo(() => [
+        {
+            id: 'spinner',
+            title: t('settingsSession.sessionList.narrowWorkingIndicatorSpinnerTitle'),
+            subtitle: t('settingsSession.sessionList.narrowWorkingIndicatorSpinnerSubtitle'),
+        },
+        {
+            id: 'pulse',
+            title: t('settingsSession.sessionList.narrowWorkingIndicatorPulseTitle'),
+            subtitle: t('settingsSession.sessionList.narrowWorkingIndicatorPulseSubtitle'),
+        },
+    ], []);
+
+    const handleNarrowWorkingIndicatorSelect = React.useCallback((itemId: string) => {
+        if (itemId !== 'spinner' && itemId !== 'pulse') return;
+        setSessionListNarrowWorkingIndicatorStyle(itemId);
+    }, [setSessionListNarrowWorkingIndicatorStyle]);
 
     const options: Array<{ key: MessageSendMode; title: string; subtitle: string }> = [
         {
@@ -252,7 +276,7 @@ export default React.memo(function SessionSettingsScreen() {
                             ? 'settingsSession.sessionCreation.rememberLastProjectSelectionsEnabledSubtitle'
                             : 'settingsSession.sessionCreation.rememberLastProjectSelectionsDisabledSubtitle',
                     )}
-                    icon={<Ionicons name="copy-outline" size={29} color={theme.colors.textSecondary} />}
+                    icon={<Ionicons name="copy-outline" size={29} color={theme.colors.text.secondary} />}
                     rightElement={
                         <Switch
                             value={rememberProjectSelectionsEnabled}
@@ -261,6 +285,23 @@ export default React.memo(function SessionSettingsScreen() {
                     }
                     showChevron={false}
                     onPress={() => setRememberLastProjectSessionSelections((!rememberProjectSelectionsEnabled) as any)}
+                />
+                <Item
+                    title={t('settingsSession.sessionCreation.rememberLastEngineSelectionsTitle')}
+                    subtitle={t(
+                        rememberEngineSelectionsEnabled
+                            ? 'settingsSession.sessionCreation.rememberLastEngineSelectionsEnabledSubtitle'
+                            : 'settingsSession.sessionCreation.rememberLastEngineSelectionsDisabledSubtitle',
+                    )}
+                    icon={<Ionicons name="hardware-chip-outline" size={29} color={theme.colors.text.secondary} />}
+                    rightElement={
+                        <Switch
+                            value={rememberEngineSelectionsEnabled}
+                            onValueChange={(next) => setRememberLastEngineSelections(Boolean(next) as any)}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setRememberLastEngineSelections((!rememberEngineSelectionsEnabled) as any)}
                 />
             </ItemGroup>
 
@@ -341,6 +382,46 @@ export default React.memo(function SessionSettingsScreen() {
                     onSelect={handleSessionListDensitySelect}
                 />
                 <Item
+                    testID="settings-session-workingStatusAnimatedText-item"
+                    title={t('settingsSession.sessionList.workingStatusAnimatedTextTitle')}
+                    subtitle={sessionListWorkingStatusAnimatedTextEnabled !== false
+                        ? t('settingsSession.sessionList.workingStatusAnimatedTextEnabledSubtitle')
+                        : t('settingsSession.sessionList.workingStatusAnimatedTextDisabledSubtitle')}
+                    icon={<Ionicons name="pulse-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-session-workingStatusAnimatedText-toggle"
+                            value={sessionListWorkingStatusAnimatedTextEnabled !== false}
+                            onValueChange={(next) => setSessionListWorkingStatusAnimatedTextEnabled(Boolean(next))}
+                        />
+                    }
+                    showChevron={false}
+                    onPress={() => setSessionListWorkingStatusAnimatedTextEnabled(sessionListWorkingStatusAnimatedTextEnabled === false)}
+                />
+                <DropdownMenu
+                    open={openNarrowWorkingIndicatorMenu}
+                    onOpenChange={setOpenNarrowWorkingIndicatorMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={narrowWorkingIndicatorStyle}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    popoverBoundaryRef={popoverBoundaryRef}
+                    itemTrigger={{
+                        title: t('settingsSession.sessionList.narrowWorkingIndicatorTitle'),
+                        subtitle: narrowWorkingIndicatorStyle === 'pulse'
+                            ? t('settingsSession.sessionList.narrowWorkingIndicatorPulseSelectedSubtitle')
+                            : t('settingsSession.sessionList.narrowWorkingIndicatorSpinnerSelectedSubtitle'),
+                        icon: <Ionicons name={narrowWorkingIndicatorStyle === 'pulse' ? 'radio-button-on-outline' : 'sync-outline'} size={29} color={theme.colors.accent.blue} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-session-narrowWorkingIndicator-trigger' },
+                    }}
+                    items={narrowWorkingIndicatorItems}
+                    onSelect={handleNarrowWorkingIndicatorSelect}
+                />
+                <Item
                     title={t('settingsFeatures.hideInactiveSessions')}
                     subtitle={t('settingsFeatures.hideInactiveSessionsSubtitle')}
                     icon={<Ionicons name="eye-off-outline" size={29} color={theme.colors.accent.orange} />}
@@ -381,7 +462,7 @@ export default React.memo(function SessionSettingsScreen() {
                     itemTrigger={{
                         title: t('settingsFeatures.sessionListInactiveGrouping'),
                         subtitle: t('settingsFeatures.sessionListInactiveGroupingSubtitle'),
-                        icon: <Ionicons name="calendar-outline" size={29} color={theme.colors.success} />,
+                        icon: <Ionicons name="calendar-outline" size={29} color={theme.colors.state.success.foreground} />,
                         showSelectedSubtitle: false,
                     }}
                     items={groupingMenuItems}
@@ -490,7 +571,7 @@ export default React.memo(function SessionSettingsScreen() {
                             subtitle: opt.subtitle,
                             icon: (
                                 <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                    <Ionicons name={opt.iconName as any} size={22} color={theme.colors.textSecondary} />
+                                    <Ionicons name={opt.iconName as any} size={22} color={theme.colors.text.secondary} />
                                 </View>
                             ),
                         }))}
@@ -559,7 +640,7 @@ export default React.memo(function SessionSettingsScreen() {
                     testID="settings-session-replay-enabled-item"
                     title={t('settingsSession.replayResume.enabledTitle')}
                     subtitle={sessionReplayEnabled ? t('settingsSession.replayResume.enabledSubtitleOn') : t('settingsSession.replayResume.enabledSubtitleOff')}
-                    icon={<Ionicons name="refresh-outline" size={29} color={theme.colors.success} />}
+                    icon={<Ionicons name="refresh-outline" size={29} color={theme.colors.state.success.foreground} />}
                     rightElement={<Switch value={sessionReplayEnabled} onValueChange={setSessionReplayEnabled} />}
                     showChevron={false}
                     onPress={() => setSessionReplayEnabled(!sessionReplayEnabled)}
@@ -580,7 +661,7 @@ export default React.memo(function SessionSettingsScreen() {
                             popoverBoundaryRef={popoverBoundaryRef}
                             itemTrigger={{
                                 title: t('settingsSession.replayResume.strategyTitle'),
-                                icon: <Ionicons name="list-outline" size={29} color={theme.colors.success} />,
+                                icon: <Ionicons name="list-outline" size={29} color={theme.colors.state.success.foreground} />,
                             }}
                             items={replayStrategyOptions.map((opt) => ({
                                 id: opt.key,
@@ -588,7 +669,7 @@ export default React.memo(function SessionSettingsScreen() {
                                 subtitle: opt.subtitle,
                                 icon: (
                                     <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                        <Ionicons name="chatbox-ellipses-outline" size={22} color={theme.colors.textSecondary} />
+                                        <Ionicons name="chatbox-ellipses-outline" size={22} color={theme.colors.text.secondary} />
                                     </View>
                                 ),
                             }))}
@@ -804,13 +885,13 @@ const styles = StyleSheet.create((theme) => ({
     fieldLabel: {
         ...Typography.default('semiBold'),
         fontSize: 13,
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         marginBottom: 4,
     },
     fieldLabelMuted: {
         ...Typography.default('regular'),
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginBottom: 4,
     },
     textInput: {
