@@ -264,6 +264,7 @@ describe('MessageView (streaming smoothing)', () => {
         expect(captured.markdownProps).toHaveLength(1);
         expect(captured.markdownProps[0]?.markdown).toBe('Hello world!');
         expect(captured.markdownProps[0]?.streamingMode).toBeUndefined();
+        expect(captured.markdownProps[0]?.staticRenderPlaceholderEnabled).toBe(false);
         expect(captured.extractMentionsCalls).toBeGreaterThan(0);
     });
 

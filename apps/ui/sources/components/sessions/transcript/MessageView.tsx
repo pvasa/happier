@@ -20,7 +20,6 @@ import { shouldShowMessageCopyButton } from '@/components/sessions/transcript/me
 import { renderStructuredMessage, StructuredMessageBlock } from '@/components/sessions/transcript/structured/StructuredMessageBlock';
 import { usePathname, useRouter } from 'expo-router';
 import { buildSessionFileDeepLink } from '@/utils/url/sessionFileDeepLink';
-import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { storage, useProjectForSession, useSession, useSessionMessagesById, useSessionMessagesReducerState, useSetting } from '@/sync/domains/state/storage';
 import { Text } from '@/components/ui/text/Text';
@@ -50,7 +49,11 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useStreamingTextSmoothing } from '@/components/sessions/transcript/streaming/useStreamingTextSmoothing';
 import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMeta';
 import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
-import { resolveTranscriptMarkdownFileLink } from '@/components/sessions/transcript/resolveTranscriptMarkdownFileLink';
+import {
+  resolveTranscriptMarkdownFileLink,
+  type ResolvedTranscriptMarkdownFileLink,
+} from '@/components/sessions/transcript/resolveTranscriptMarkdownFileLink';
+import type { ReviewCommentAnchor } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 
 type StreamSegmentStateForRendering = 'streaming' | 'complete' | 'interrupted';
 type SessionFileDeepLinkParams = Parameters<typeof buildSessionFileDeepLink>[0];
@@ -58,16 +61,24 @@ type SessionFileDeepLinkRouter = Pick<ReturnType<typeof useRouter>, 'push'>;
 
 function pushSessionFileDeepLink(
   router: SessionFileDeepLinkRouter,
-  currentPathname: string | null | undefined,
+  _currentPathname: string | null | undefined,
   params: SessionFileDeepLinkParams,
 ): void {
   const href = buildSessionFileDeepLink(params);
-  prepareMobileSurfaceTransition({
-    currentPathname,
-    targetHref: href,
-    operation: 'push',
-  });
   router.push(href as never);
+}
+
+function buildTranscriptFileLinkAnchor(resolved: ResolvedTranscriptMarkdownFileLink): ReviewCommentAnchor | null {
+  if (typeof resolved.line !== 'number') return null;
+  if (typeof resolved.endLine === 'number' && resolved.endLine > resolved.line) {
+    return {
+      kind: 'range',
+      filePath: resolved.filePath,
+      startLine: resolved.line,
+      endLine: resolved.endLine,
+    };
+  }
+  return { kind: 'line', filePath: resolved.filePath, line: resolved.line };
 }
 
 function shouldEnableFallbackTextNativeSelection(platformOS: typeof Platform.OS): boolean {
@@ -338,12 +349,11 @@ function UserTextBlock(props: {
   const handleMarkdownLinkPress = React.useCallback((url: string) => {
     const resolved = resolveTranscriptMarkdownFileLink({ url, workspacePath });
     if (!resolved) return false;
+    const anchor = buildTranscriptFileLinkAnchor(resolved);
     pushSessionFileDeepLink(router, pathname, {
       sessionId: props.sessionId,
       filePath: resolved.filePath,
-      ...(typeof resolved.line === 'number'
-        ? { source: 'file' as const, anchor: { kind: 'fileLine' as const, startLine: resolved.line } }
-        : {}),
+      ...(anchor ? { source: 'file' as const, anchor } : {}),
     });
     return true;
   }, [pathname, props.sessionId, router, workspacePath]);
@@ -642,12 +652,11 @@ function AgentTextBlock(props: {
   const handleMarkdownLinkPress = React.useCallback((url: string) => {
     const resolved = resolveTranscriptMarkdownFileLink({ url, workspacePath });
     if (!resolved) return false;
+    const anchor = buildTranscriptFileLinkAnchor(resolved);
     pushSessionFileDeepLink(router, pathname, {
       sessionId: props.sessionId,
       filePath: resolved.filePath,
-      ...(typeof resolved.line === 'number'
-        ? { source: 'file' as const, anchor: { kind: 'fileLine' as const, startLine: resolved.line } }
-        : {}),
+      ...(anchor ? { source: 'file' as const, anchor } : {}),
     });
     return true;
   }, [pathname, props.sessionId, router, workspacePath]);
@@ -721,6 +730,12 @@ function AgentTextBlock(props: {
   const shouldRenderStreamingPlain = shouldRenderActiveStreamSegmentPlain || streaming.isStreaming;
   const shouldRenderStreamingMarkdown =
     shouldRenderStreamingPlain && transcriptStreamingMarkdownRenderingEnabled === true;
+  const streamingMarkdownMessageIdRef = React.useRef<string | null>(null);
+  if (shouldRenderStreamingMarkdown) {
+    streamingMarkdownMessageIdRef.current = props.message.id;
+  }
+  const staticRenderPlaceholderEnabled =
+    streamingMarkdownMessageIdRef.current === props.message.id ? false : undefined;
   const streamingRevealAnimationEnabled =
     motion?.config.preset !== 'off' &&
     motion?.config.animateNewItemsEnabled === true;
@@ -827,6 +842,7 @@ function AgentTextBlock(props: {
                   selectable={true}
                   profile={props.message.isThinking ? 'thinking' : 'transcript'}
                   textStyle={props.message.isThinking ? styles.thinkingMarkdownText : styles.transcriptMarkdownText}
+                  staticRenderPlaceholderEnabled={staticRenderPlaceholderEnabled}
                 />
               )
             )
@@ -979,12 +995,12 @@ function ForkMessageButton(props: {
       ]}
     >
       {isForking ? (
-        <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
       ) : (
         <Ionicons
           name="git-branch-outline"
           size={12}
-          color={theme.colors.textSecondary}
+          color={theme.colors.text.secondary}
         />
       )}
     </Pressable>
@@ -1052,7 +1068,7 @@ function CopyMessageButton(props: { markdown: string; testID?: string; onHoverIn
       <Ionicons
         name={copied ? "checkmark-outline" : "copy-outline"}
         size={12}
-        color={copied ? theme.colors.success : theme.colors.textSecondary}
+        color={copied ? theme.colors.state.success.foreground : theme.colors.text.secondary}
       />
     </Pressable>
   );
@@ -1190,7 +1206,7 @@ const styles = StyleSheet.create((theme) => ({
       paddingBottom: 22,
     },
     userMessageBubble: {
-      backgroundColor: theme.colors.userMessageBackground,
+      backgroundColor: theme.colors.message.user.background,
       paddingHorizontal: 14,
       paddingVertical: 8,
       borderRadius: 12,
@@ -1208,7 +1224,7 @@ const styles = StyleSheet.create((theme) => ({
   discardedCommittedMessageLabel: {
     marginTop: 6,
     fontSize: 12,
-    color: theme.colors.agentEventText,
+    color: theme.colors.message.event.foreground,
   },
   agentMessageContainer: {
     marginHorizontal: 16,
@@ -1277,25 +1293,25 @@ const styles = StyleSheet.create((theme) => ({
     opacity: 1,
   },
   debugText: {
-    color: theme.colors.agentEventText,
+    color: theme.colors.message.event.foreground,
     fontSize: 12,
   },
   transcriptMarkdownText: {
     ...transcriptMarkdownTextStyle,
   },
   streamingPlainText: {
-    color: theme.colors.text,
+    color: theme.colors.text.primary,
   },
     thinkingLabel: {
       marginBottom: 6,
       marginLeft: 2,
-      color: theme.colors.agentEventText,
+      color: theme.colors.message.event.foreground,
       fontSize: 12,
       fontStyle: 'italic',
       opacity: 0.78,
     },
       thinkingMarkdownText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontStyle: 'italic',
         opacity: 0.9,
             fontSize: 14,
@@ -1304,14 +1320,14 @@ const styles = StyleSheet.create((theme) => ({
             marginBottom: 0,
       },
       thinkingPlainText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontStyle: 'italic',
         opacity: 0.9,
         fontSize: 14,
         lineHeight: 20,
       },
       thinkingMarkdownTextCard: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontStyle: 'italic',
         opacity: 0.95,
             fontSize: 14,
@@ -1320,7 +1336,7 @@ const styles = StyleSheet.create((theme) => ({
             marginBottom: 0,
       },
       thinkingPlainTextCard: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontStyle: 'italic',
         opacity: 0.95,
         fontSize: 14,

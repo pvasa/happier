@@ -2,7 +2,6 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPartialStorageModuleMock, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReducer } from '@/sync/reducer/reducer';
-import { clearPendingMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
 
 const pathnameState = vi.hoisted(() => ({
@@ -170,7 +169,6 @@ let filesImagePreviewMaxBytes: number | null = null;
 let toolViewTimelineChromeMode: 'activity_feed' | 'cards' | null = null;
 
 afterEach(() => {
-    clearPendingMobileSurfaceTransition();
     pathnameState.pathname = '/session/s1';
     thinkingDisplayMode = 'inline';
     thinkingInlinePresentation = 'full';
@@ -713,14 +711,6 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         await screen.pressByTestIdAsync('review-comments-jump:c1');
 
         expect(routerPushSpy).toHaveBeenCalledWith('/session/s1/file?path=src%2Ffoo.ts&source=file&anchor=fileLine&startLine=12');
-        const {
-            resolvePendingMobileSurfaceTransitionStackOptions,
-        } = await import('@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent');
-        expect(resolvePendingMobileSurfaceTransitionStackOptions({
-            routeName: 'session/[id]/file',
-        })).toEqual({
-            animation: 'slide_from_right',
-        });
     });
 
     it('renders a structured review-findings card for tool-call messages when meta.happier.kind is review_findings.v1', async () => {

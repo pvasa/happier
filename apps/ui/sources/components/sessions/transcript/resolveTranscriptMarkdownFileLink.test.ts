@@ -31,6 +31,24 @@ describe('resolveTranscriptMarkdownFileLink', () => {
         })).toEqual({ filePath: 'src/index.ts', line: 5, column: 2 });
     });
 
+    it('maps terminal line ranges to workspace-relative paths', () => {
+        expect(resolveTranscriptMarkdownFileLink({
+            url: 'src/index.ts:5-8',
+            workspacePath: '/Users/leeroy/project',
+        })).toEqual({ filePath: 'src/index.ts', line: 5, endLine: 8 });
+    });
+
+    it('maps hash line anchors and ranges to workspace-relative paths', () => {
+        expect(resolveTranscriptMarkdownFileLink({
+            url: '/Users/leeroy/project/src/index.ts#L5',
+            workspacePath: '/Users/leeroy/project',
+        })).toEqual({ filePath: 'src/index.ts', line: 5 });
+        expect(resolveTranscriptMarkdownFileLink({
+            url: '/Users/leeroy/project/src/index.ts#L5-L8',
+            workspacePath: '/Users/leeroy/project',
+        })).toEqual({ filePath: 'src/index.ts', line: 5, endLine: 8 });
+    });
+
     it('maps Windows drive links to workspace-relative paths', () => {
         expect(resolveTranscriptMarkdownFileLink({
             url: 'C:\\Users\\Alice\\project\\src\\index.ts',

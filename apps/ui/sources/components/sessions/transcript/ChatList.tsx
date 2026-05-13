@@ -469,7 +469,7 @@ const ChatListInternal = React.memo((props: {
       const lastAutoRepinAtMsRef = React.useRef(0);
       const lastPinOffsetForIntentRef = React.useRef<number | null>(null);
       const lastScrollOffsetForIntentRef = React.useRef<number | null>(null);
-    const lastNativeInitialPinOffsetRef = React.useRef<number | null>(null);
+    const lastNativePinOffsetRef = React.useRef<number | null>(null);
     const initialWebPinStabilizingRef = React.useRef(false);
 
     const transcriptMotionPreset = useSetting('transcriptMotionPreset');
@@ -596,7 +596,7 @@ const ChatListInternal = React.memo((props: {
           lastAutoRepinAtMsRef.current = 0;
           lastPinOffsetForIntentRef.current = shouldFollowBottom ? 0 : (sessionViewport?.offsetY ?? null);
           lastScrollOffsetForIntentRef.current = null;
-          lastNativeInitialPinOffsetRef.current = null;
+          lastNativePinOffsetRef.current = null;
       }
       const [expandedToolCallsAnchorMessageIds, setExpandedToolCallsAnchorMessageIds] = React.useState<ReadonlySet<string>>(
           () => new Set<string>(),
@@ -687,7 +687,7 @@ const ChatListInternal = React.memo((props: {
         lastAutoRepinAtMsRef.current = 0;
         lastPinOffsetForIntentRef.current = shouldFollowBottom ? 0 : offsetY;
         lastScrollOffsetForIntentRef.current = null;
-        lastNativeInitialPinOffsetRef.current = null;
+        lastNativePinOffsetRef.current = null;
         setScrollPin({
             isPinned: shouldFollowBottom,
             newActivityCount: 0,
@@ -1313,13 +1313,13 @@ const ChatListInternal = React.memo((props: {
         if (!Number.isFinite(contentHeight) || contentHeight <= 0) return false;
 
         const offset = Math.max(0, Math.trunc(contentHeight - layoutHeight));
-        if (lastNativeInitialPinOffsetRef.current === offset) return true;
+        if (lastNativePinOffsetRef.current === offset) return true;
 
         const node: any = listRef.current as any;
         if (!node || typeof node.scrollToOffset !== 'function') return false;
 
         node.scrollToOffset({ offset, animated: false });
-        lastNativeInitialPinOffsetRef.current = offset;
+        lastNativePinOffsetRef.current = offset;
         return true;
     }, [props.jumpToSeq, usesNativeFlashListBottomMaintenance]);
 
@@ -1337,6 +1337,7 @@ const ChatListInternal = React.memo((props: {
             return;
         }
         if (usesNativeFlashListBottomMaintenance) {
+            pinNativeFlashListToBottomIfMeasured();
             return;
         }
         const node: any = listRef.current as any;
@@ -1347,7 +1348,7 @@ const ChatListInternal = React.memo((props: {
                     : Math.max(0, Math.trunc(listContentHeightRef.current - listLayoutHeightRef.current));
             node.scrollToOffset({ offset, animated: false });
         }
-    }, [listImplementation, tryPinToBottomDom, usesNativeFlashListBottomMaintenance]);
+    }, [listImplementation, pinNativeFlashListToBottomIfMeasured, tryPinToBottomDom, usesNativeFlashListBottomMaintenance]);
 
     const jumpToBottom = React.useCallback(() => {
         if (Platform.OS === 'web') {
@@ -1388,7 +1389,6 @@ const ChatListInternal = React.memo((props: {
     const scheduledPinRef = React.useRef<{ kind: 'raf' | 'timeout'; id: any; previousWebMetrics: WebTranscriptScrollMetrics | null } | null>(null);
     const schedulePinToBottom = React.useCallback((previousWebMetrics: WebTranscriptScrollMetrics | null = null) => {
         if (listImplementation !== 'flash_v2') return;
-        if (usesNativeFlashListBottomMaintenance) return;
         const waitMs = resolveAutoPinWaitMs();
         if (waitMs === null) return;
         if (scheduledPinRef.current) return;
@@ -1416,7 +1416,7 @@ const ChatListInternal = React.memo((props: {
             if (handle.previousWebMetrics && applyWebBottomFollowAdjustment(handle.previousWebMetrics)) return;
             pinToBottom();
         }, waitMs);
-    }, [applyWebBottomFollowAdjustment, listImplementation, pinToBottom, resolveAutoPinWaitMs, usesNativeFlashListBottomMaintenance]);
+    }, [applyWebBottomFollowAdjustment, listImplementation, pinToBottom, resolveAutoPinWaitMs]);
 
     React.useEffect(() => {
         return () => {
