@@ -43,13 +43,13 @@ export const SessionRightPanelGitHistoryTab = React.memo((props: SessionRightPan
                 />
             </ScrollView>
             <ScrollEdgeFades
-                color={props.theme.colors.surface}
+                color={props.theme.colors.surface.base}
                 size={18}
                 edges={scrollFades.visibility}
             />
             <ScrollEdgeIndicators
                 edges={scrollFades.visibility}
-                color={props.theme.colors.textSecondary}
+                color={props.theme.colors.text.secondary}
                 size={14}
                 opacity={0.35}
             />

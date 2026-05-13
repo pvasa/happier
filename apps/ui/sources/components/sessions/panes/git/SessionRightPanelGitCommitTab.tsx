@@ -89,14 +89,14 @@ export const SessionRightPanelGitCommitTab = React.memo((props: SessionRightPane
     const footerStyle = React.useMemo(() => {
         const baseStyle = {
             borderTopWidth: Platform.select({ ios: 0.33, default: 1 }),
-            borderTopColor: props.theme.colors.divider,
-            backgroundColor: props.theme.colors.surface,
+            borderTopColor: props.theme.colors.border.default,
+            backgroundColor: props.theme.colors.surface.base,
         };
 
         return keyboardBottomInset > 0
             ? [baseStyle, { marginBottom: keyboardBottomInset }]
             : baseStyle;
-    }, [keyboardBottomInset, props.theme.colors.divider, props.theme.colors.surface]);
+    }, [keyboardBottomInset, props.theme.colors.border.default, props.theme.colors.surface.base]);
 
     return (
         <View style={{ flex: 1, position: 'relative' }}>
@@ -459,25 +459,25 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                             paddingHorizontal: 12,
                             paddingVertical: 10,
                             borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                            borderBottomColor: props.theme.colors.divider,
-                            backgroundColor: props.theme.colors.surface,
+                            borderBottomColor: props.theme.colors.border.default,
+                            backgroundColor: props.theme.colors.surface.base,
                             opacity: pressed ? 0.85 : 1,
                         })}
                     >
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                            <Octicons name="archive" size={14} color={props.theme.colors.textSecondary} />
+                            <Octicons name="archive" size={14} color={props.theme.colors.text.secondary} />
                             <Text
                                 numberOfLines={1}
-                                style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}
+                                style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}
                             >
                                 {t('files.stash.summaryTitle')}
                             </Text>
                         </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                            <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.mono('semiBold') }}>
+                            <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.mono('semiBold') }}>
                                 {String(managedStashCount)}
                             </Text>
-                            <Octicons name="chevron-right" size={14} color={props.theme.colors.textSecondary} />
+                            <Octicons name="chevron-right" size={14} color={props.theme.colors.text.secondary} />
                         </View>
                     </Pressable>
                 ) : null}
@@ -498,8 +498,8 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                         paddingTop: 10,
                         paddingBottom: 8,
                         borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-                        borderBottomColor: props.theme.colors.divider,
-                        backgroundColor: props.theme.colors.surfaceHigh,
+                        borderBottomColor: props.theme.colors.border.default,
+                        backgroundColor: props.theme.colors.surface.inset,
                     }}
                 >
                     <View
@@ -522,16 +522,16 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                                     onChangedFilesViewMode={props.onChangedFilesViewMode}
                                     testID="session-rightpanel-git-view-mode-menu"
                                     triggerLabel={scopedChangedFilesTitle}
-                                    triggerLabelColor={props.theme.colors.text}
+                                    triggerLabelColor={props.theme.colors.text.primary}
                                     triggerStyle={{ alignSelf: 'flex-start', maxWidth: '100%' }}
                                     popoverAnchorAlign="start"
                                 />
                             ) : (
                                 <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-                                    <Text style={{ fontSize: 12, color: props.theme.colors.text, ...Typography.default('semiBold') }}>
+                                    <Text style={{ fontSize: 12, color: props.theme.colors.text.primary, ...Typography.default('semiBold') }}>
                                         {t('files.toolbar.changedFiles')}
                                     </Text>
-                                    <Text style={{ fontSize: 11, color: props.theme.colors.textSecondary, ...Typography.mono('semiBold') }}>
+                                    <Text style={{ fontSize: 11, color: props.theme.colors.text.secondary, ...Typography.mono('semiBold') }}>
                                         {String(repositoryChangedFiles.length)}
                                     </Text>
                                 </View>
@@ -563,14 +563,14 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                                         height: 30,
                                         borderRadius: 10,
                                         borderWidth: 1,
-                                        borderColor: props.theme.colors.divider,
-                                        backgroundColor: props.theme.colors.surface,
+                                        borderColor: props.theme.colors.border.default,
+                                        backgroundColor: props.theme.colors.surface.base,
                                         opacity: pressed ? 0.78 : 1,
                                         gap: 6,
                                     })}
                                 >
-                                    <Octicons name="diff" size={14} color={props.theme.colors.textSecondary} />
-                                    <Text style={{ fontSize: 12, color: props.theme.colors.textSecondary, ...Typography.default('semiBold') }}>
+                                    <Octicons name="diff" size={14} color={props.theme.colors.text.secondary} />
+                                    <Text style={{ fontSize: 12, color: props.theme.colors.text.secondary, ...Typography.default('semiBold') }}>
                                         {t('files.toolbar.review')}
                                     </Text>
                                 </Pressable>
@@ -586,7 +586,7 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
                                     style={{
                                         marginTop: index === 0 ? 0 : 2,
                                         fontSize: index === 0 ? 12 : 11,
-                                        color: props.theme.colors.textSecondary,
+                                        color: props.theme.colors.text.secondary,
                                         ...Typography.default(),
                                     }}
                                 >
@@ -707,13 +707,13 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
             )}
 
             <ScrollEdgeFades
-                color={props.theme.colors.surface}
+                color={props.theme.colors.surface.base}
                 size={18}
                 edges={scrollFades.visibility}
             />
             <ScrollEdgeIndicators
                 edges={scrollFades.visibility}
-                color={props.theme.colors.textSecondary}
+                color={props.theme.colors.text.secondary}
                 size={14}
                 opacity={0.35}
             />

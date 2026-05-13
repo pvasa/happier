@@ -476,8 +476,8 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     if (!effectiveScmSnapshot) {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 }}>
-                <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.textSecondary }}>
+                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary }}>
                     {t('common.loading')}
                 </Text>
             </View>

@@ -55,7 +55,7 @@ const DETAILS_TAB_MAX_WIDTH = 220;
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         minHeight: 0,
         minWidth: 0,
     },
@@ -64,8 +64,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: 10,
         paddingBottom: 8,
         borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-        borderBottomColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHigh,
+        borderBottomColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.inset,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -84,22 +84,22 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingRight: 52,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
         minWidth: DETAILS_TAB_MIN_WIDTH,
         maxWidth: DETAILS_TAB_MAX_WIDTH,
     },
     tabActive: {
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
     },
     tabLabel: {
         flexShrink: 1,
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
     },
     tabLabelActive: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     tabCopy: {
         flex: 1,
@@ -108,7 +108,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     tabSubtitle: {
         fontSize: 10,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     tabActions: {
@@ -123,8 +123,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
     },
     empty: {
         flex: 1,
@@ -135,7 +135,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     emptyText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 13,
         ...Typography.default(),
         textAlign: 'center',
@@ -148,7 +148,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 10,
     },
     loadingText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 12,
         ...Typography.default(),
         textAlign: 'center',
@@ -252,10 +252,10 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
 
     const renderLoadingFallback = React.useCallback(() => (
         <View style={styles.loading}>
-            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
             <Text style={styles.loadingText}>{t('common.loading')}</Text>
         </View>
-    ), [styles.loading, styles.loadingText, theme.colors.textSecondary]);
+    ), [styles.loading, styles.loadingText, theme.colors.text.secondary]);
 
     const renderTabContent = React.useCallback((tab: any) => {
         const resource = asResource(tab.resource);
@@ -382,7 +382,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             accessibilityRole="button"
             accessibilityLabel={closeButtonAtStart ? t('common.back') : t('session.detailsPanel.closeA11y')}
         >
-            <Octicons name={closeButtonAtStart ? 'chevron-left' : 'chevron-right'} size={18} color={theme.colors.textSecondary} />
+            <Octicons name={closeButtonAtStart ? 'chevron-left' : 'chevron-right'} size={18} color={theme.colors.text.secondary} />
         </Pressable>
     );
 
@@ -449,7 +449,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                         <Octicons
                                             name={iconName as any}
                                             size={14}
-                                            color={isActive ? theme.colors.textSecondary : theme.colors.textSecondary}
+                                            color={isActive ? theme.colors.text.secondary : theme.colors.text.secondary}
                                         />
                                     )}
                                     <View style={styles.tabCopy}>
@@ -483,7 +483,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                             accessibilityLabel={t('session.detailsPanel.pinTabA11y')}
                                             hitSlop={10}
                                         >
-                                            <PinIcon size={14} color={theme.colors.textSecondary} />
+                                            <PinIcon size={14} color={theme.colors.text.secondary} />
                                         </Pressable>
                                     ) : tab.isPinned ? (
                                         <Pressable
@@ -496,7 +496,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                             accessibilityLabel={t('session.detailsPanel.unpinTabA11y')}
                                             hitSlop={10}
                                         >
-                                            <PinSlashIcon size={14} color={theme.colors.textSecondary} />
+                                            <PinSlashIcon size={14} color={theme.colors.text.secondary} />
                                         </Pressable>
                                     ) : null}
                                     <Pressable
@@ -509,7 +509,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                                         accessibilityLabel={t('session.detailsPanel.closeTabA11y')}
                                         hitSlop={10}
                                     >
-                                        <Octicons name="x" size={13} color={theme.colors.textSecondary} />
+                                        <Octicons name="x" size={13} color={theme.colors.text.secondary} />
                                     </Pressable>
                                 </View>
                             </View>
@@ -531,7 +531,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                         <Ionicons
                             name={focusMode.active ? 'contract-outline' : 'expand-outline'}
                             size={18}
-                            color={theme.colors.textSecondary}
+                            color={theme.colors.text.secondary}
                         />
                     </Pressable>
                 ) : null}
@@ -547,7 +547,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                         const isActive = effectiveActiveKey ? tab.key === effectiveActiveKey : false;
                         return (
                             <DetailsTabSurface key={tab.key} isActive={isActive}>
-                                <React.Suspense fallback={<DetailsPaneLoadingFallback color={theme.colors.textSecondary} />}>
+                                <React.Suspense fallback={<DetailsPaneLoadingFallback color={theme.colors.text.secondary} />}>
                                     {renderTabContent(tab)}
                                 </React.Suspense>
                             </DetailsTabSurface>

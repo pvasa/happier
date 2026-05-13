@@ -33,19 +33,19 @@ type RightTabId = 'git' | 'files' | 'agents' | 'terminal';
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         minHeight: 0,
         minWidth: 0,
         borderTopWidth: Platform.select({ ios: 0.33, default: 1 }),
-        borderTopColor: theme.colors.divider,
+        borderTopColor: theme.colors.border.default,
     },
     header: {
         paddingHorizontal: 12,
         paddingTop: 10,
         paddingBottom: 8,
         borderBottomWidth: Platform.select({ ios: 0.33, default: 1 }),
-        borderBottomColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHigh,
+        borderBottomColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.inset,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -60,8 +60,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
     },
     body: {
         flex: 1,
@@ -125,7 +125,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
             accessibilityRole="button"
             accessibilityLabel={closeButtonAtStart ? t('common.back') : t('common.close')}
         >
-            <Octicons name={closeButtonAtStart ? 'chevron-left' : 'x'} size={18} color={theme.colors.textSecondary} />
+            <Octicons name={closeButtonAtStart ? 'chevron-left' : 'x'} size={18} color={theme.colors.text.secondary} />
         </Pressable>
     );
 
@@ -149,7 +149,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
                         isActive={activeTab === 'git'}
                         testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-git')}
                     >
-                        <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.textSecondary} />}>
+                        <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.text.secondary} />}>
                             <SessionGitSurface sessionId={props.sessionId} scopeId={props.scopeId} />
                         </React.Suspense>
                     </RightTabSurface>
@@ -157,7 +157,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
                         isActive={activeTab === 'files'}
                         testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-files')}
                     >
-                        <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.textSecondary} />}>
+                        <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.text.secondary} />}>
                             <SessionBrowseFilesSurface
                                 sessionId={props.sessionId}
                                 onOpenFile={openFileInDetails}
@@ -169,7 +169,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
                         isActive={activeTab === 'agents'}
                         testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-agents')}
                     >
-                        <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.textSecondary} />}>
+                        <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.text.secondary} />}>
                             <SessionRightPanelAgentsView sessionId={props.sessionId} scopeId={props.scopeId} />
                         </React.Suspense>
                     </RightTabSurface>
@@ -178,7 +178,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
                             isActive={activeTab === 'terminal'}
                             testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-terminal')}
                         >
-                            <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.textSecondary} />}>
+                            <React.Suspense fallback={<PaneLoadingFallback color={theme.colors.text.secondary} />}>
                                 <SessionTerminalSurface sessionId={props.sessionId} scopeId={props.scopeId} />
                             </React.Suspense>
                         </RightTabSurface>
