@@ -60,6 +60,34 @@ describe('settings', () => {
             expect((settings as any).compactSessionViewMinimal).toBe(false);
         });
 
+        it('defaults animated working status text in session rows to enabled', () => {
+            const settings = settingsParse({});
+
+            expect(settings.sessionListWorkingStatusAnimatedTextEnabled).toBe(true);
+        });
+
+        it('defaults narrow session list working indicators to a spinner', () => {
+            const settings = settingsParse({});
+
+            expect(settings.sessionListNarrowWorkingIndicatorStyle).toBe('spinner');
+        });
+
+        it('parses disabled animated working status text in session rows', () => {
+            const settings = settingsParse({
+                sessionListWorkingStatusAnimatedTextEnabled: false,
+            });
+
+            expect(settings.sessionListWorkingStatusAnimatedTextEnabled).toBe(false);
+        });
+
+        it('parses narrow session list working indicator style', () => {
+            const settings = settingsParse({
+                sessionListNarrowWorkingIndicatorStyle: 'pulse',
+            });
+
+            expect(settings.sessionListNarrowWorkingIndicatorStyle).toBe('pulse');
+        });
+
         it('includes installables policy map by default', () => {
             const settings = settingsParse({});
             expect((settings as any).installablesPolicyByMachineId).toEqual({});
@@ -118,6 +146,15 @@ describe('settings', () => {
                 v: 1,
                 folders: [],
             });
+        });
+
+        it('includes session folder settings by default', () => {
+            const settings = settingsParse({});
+            expect(settings.sessionFoldersV1).toEqual({
+                v: 1,
+                folders: [],
+            });
+            expect(settings.sessionFolderViewModeV1).toBe('off');
         });
 
         it('includes promptRegistrySourcesV1 by default', () => {
@@ -327,6 +364,25 @@ describe('settings', () => {
             expect(parsed.alwaysShowContextSize).toBe(true);
         });
 
+        it('parses account-synced keyboard shortcut settings without accepting malformed override entries', () => {
+            const parsed = settingsParse({
+                keyboardShortcutsV2Enabled: true,
+                keyboardSingleKeyShortcutsEnabled: true,
+                keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open', '', 123],
+                keyboardShortcutOverridesV1: {
+                    'commandPalette.open': [{ binding: 'Mod+K' }],
+                    'bad.command': [{ binding: '' }, { nope: true }],
+                },
+            });
+
+            expect(parsed.keyboardShortcutsV2Enabled).toBe(true);
+            expect(parsed.keyboardSingleKeyShortcutsEnabled).toBe(true);
+            expect(parsed.keyboardShortcutDisabledCommandIdsV1).toEqual(['commandPalette.open']);
+            expect(parsed.keyboardShortcutOverridesV1).toEqual({
+                'commandPalette.open': [{ binding: 'Mod+K' }],
+            });
+        });
+
         it('migrates alwaysShowContextSize=false to true for settings from older schema versions', () => {
             const parsed = settingsParse({
                 schemaVersion: 6,
@@ -411,6 +467,16 @@ describe('settings', () => {
 
             expect((parsed as any).experimentalFeatureToggles).toBeUndefined();
             expect((parsed as any).featureToggles).toEqual({});
+        });
+
+        it('drops accidentally account-scoped session MRU order while preserving other unknown account settings', () => {
+            const parsed = settingsParse({
+                sessionMruOrderV1: ['server-a:session-a'],
+                futureAccountSetting: 'kept',
+            } as any);
+
+            expect((parsed as any).sessionMruOrderV1).toBeUndefined();
+            expect((parsed as any).futureAccountSetting).toBe('kept');
         });
 
         it('defaults per-agent new-session permission modes', () => {
@@ -700,6 +766,52 @@ describe('settings', () => {
             expect((parsed as any).newSessionDefaultPersistenceModeByTargetKeyV1).toEqual({
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: 'direct',
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: 'persisted',
+            });
+        });
+
+        it('parses remembered new-session engine selections', () => {
+            const parsed = settingsParse({
+                rememberLastEngineSelectionsV1: true,
+                lastEngineSelectionsByScopeV1: {
+                    'server-1:agent:codex': {
+                        modelId: 'gpt-5.5',
+                        acpSessionModeId: 'plan',
+                        sessionConfigOptionOverrides: {
+                            v: 1,
+                            updatedAt: 123,
+                            overrides: {
+                                reasoning_effort: {
+                                    updatedAt: 123,
+                                    value: 'high',
+                                },
+                            },
+                        },
+                        updatedAt: 456,
+                    },
+                    'server-1:agent:bad': {
+                        modelId: 42,
+                        updatedAt: 'soon',
+                    },
+                },
+            } as any);
+
+            expect((parsed as any).rememberLastEngineSelectionsV1).toBe(true);
+            expect((parsed as any).lastEngineSelectionsByScopeV1).toEqual({
+                'server-1:agent:codex': {
+                    modelId: 'gpt-5.5',
+                    acpSessionModeId: 'plan',
+                    sessionConfigOptionOverrides: {
+                        v: 1,
+                        updatedAt: 123,
+                        overrides: {
+                            reasoning_effort: {
+                                updatedAt: 123,
+                                value: 'high',
+                            },
+                        },
+                    },
+                    updatedAt: 456,
+                },
             });
         });
 

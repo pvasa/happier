@@ -5,6 +5,7 @@ import {
 } from '@happier-dev/protocol';
 import { z } from 'zod';
 import { AvatarStyleIdSchema, DEFAULT_AVATAR_STYLE_ID } from './avatarStyleSetting';
+import { SessionFolderViewModeV1Schema } from '@/sync/domains/session/folders';
 
 export const SessionListDensitySchema = z.preprocess((raw) => {
     if (raw === 'compact') return 'cozy';
@@ -160,6 +161,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
                 compact_session_view_minimal: value === 'narrow',
             }),
         },
+    },
+    sessionFolderViewModeV1: {
+        schema: SessionFolderViewModeV1Schema,
+        default: 'off',
+        description: 'Session folder display mode for the session list',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
     showEnvironmentBadge: {
         schema: z.boolean(),

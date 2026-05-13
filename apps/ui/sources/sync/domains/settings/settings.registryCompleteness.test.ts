@@ -56,6 +56,36 @@ describe('settings registry completeness', () => {
         expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('rememberLastProjectSessionSelections', true);
     });
 
+    it('enables remembered engine selections as an account session-creation default', async () => {
+        const { ACCOUNT_SETTING_ARTIFACTS } = await import('./settings');
+
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.rememberLastEngineSelectionsV1.storageScope).toBe('account');
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.lastEngineSelectionsByScopeV1.storageScope).toBe('account');
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('rememberLastEngineSelectionsV1', true);
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('lastEngineSelectionsByScopeV1', {});
+    });
+
+    it('owns keyboard shortcut preferences as account-synced settings instead of local-only settings', async () => {
+        const { ACCOUNT_SETTING_ARTIFACTS } = await import('./settings');
+        const { LOCAL_SETTING_ARTIFACTS } = await import('./registry/local/localSettingDefinitions');
+        const syncedKeys = [
+            'commandPaletteEnabled',
+            'keyboardShortcutsV2Enabled',
+            'keyboardSingleKeyShortcutsEnabled',
+            'keyboardShortcutOverridesV1',
+            'keyboardShortcutDisabledCommandIdsV1',
+        ] as const;
+
+        for (const key of syncedKeys) {
+            expect(ACCOUNT_SETTING_ARTIFACTS.definitions[key].storageScope).toBe('account');
+            expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty(key);
+            expect(LOCAL_SETTING_ARTIFACTS.definitions).not.toHaveProperty(key);
+            expect(LOCAL_SETTING_ARTIFACTS.defaults).not.toHaveProperty(key);
+        }
+
+        expect(LOCAL_SETTING_ARTIFACTS.definitions.sessionMruOrderV1.storageScope).toBe('local');
+    });
+
     it('builds local settings schema and defaults entirely from canonical local setting artifacts', async () => {
         const { LOCAL_SETTING_ARTIFACTS } = await import('./registry/local/localSettingDefinitions');
         const { LocalSettingsSchema, localSettingsDefaults } = await import('./localSettings');

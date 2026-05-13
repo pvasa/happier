@@ -11,6 +11,7 @@ import {
     serializeTranscriptStorageModeByTargetKeyAnalytics,
     type SessionTranscriptStorageMode,
 } from '@/sync/domains/session/transcriptStorageDefaults';
+import { RememberedEngineSelectionsByScopeV1Schema } from '@/sync/domains/sessionAuthoring/rememberedEngineSelections';
 
 const SessionTranscriptStorageModeSchema = z.enum(SESSION_TRANSCRIPT_STORAGE_MODES);
 
@@ -97,6 +98,37 @@ export const ACCOUNT_SESSION_CREATION_SETTING_DEFINITIONS = defineSettingDefinit
             valueKind: 'boolean',
             privacy: 'safe',
             identityScope: 'person',
+        },
+    },
+    rememberLastEngineSelectionsV1: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Remember the last selected model, session mode, and config options for each new-session engine',
+        storageScope: 'account',
+        analytics: {
+            trackCurrentState: true,
+            trackChanges: true,
+            valueKind: 'boolean',
+            privacy: 'safe',
+            identityScope: 'person',
+        },
+    },
+    lastEngineSelectionsByScopeV1: {
+        schema: RememberedEngineSelectionsByScopeV1Schema,
+        default: {} as Record<string, never>,
+        description: 'Remembered new-session engine selections keyed by server and backend target',
+        storageScope: 'account',
+        analytics: {
+            trackCurrentState: true,
+            trackChanges: true,
+            valueKind: 'count',
+            privacy: 'count_only',
+            identityScope: 'person',
+            serializeCurrent: (value: unknown) => (
+                value && typeof value === 'object' && !Array.isArray(value)
+                    ? Object.keys(value as Record<string, unknown>).length
+                    : 0
+            ),
         },
     },
     newSessionDefaultPersistenceModeV1: {

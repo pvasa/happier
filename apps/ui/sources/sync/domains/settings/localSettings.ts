@@ -24,7 +24,14 @@ export type LocalSettings = z.infer<typeof LocalSettingsSchema>;
 export const localSettingsDefaults: LocalSettings = LOCAL_SETTING_ARTIFACTS.defaults;
 Object.freeze(localSettingsDefaults);
 
-const deprecatedLocalSettingKeys = ['editorFocusModeEnabled'] as const;
+const deprecatedLocalSettingKeys = [
+    'editorFocusModeEnabled',
+    'commandPaletteEnabled',
+    'keyboardShortcutsV2Enabled',
+    'keyboardSingleKeyShortcutsEnabled',
+    'keyboardShortcutDisabledCommandIdsV1',
+    'keyboardShortcutOverridesV1',
+] as const;
 
 function stripDeprecatedLocalSettingsKeys(settings: Readonly<Record<string, unknown>>): Record<string, unknown> {
     const next: Record<string, unknown> = { ...settings };
@@ -78,5 +85,5 @@ export function localSettingsParse(settings: unknown): LocalSettings {
 //
 
 export function applyLocalSettings(settings: LocalSettings, delta: Partial<LocalSettings> | Readonly<Record<string, unknown>>): LocalSettings {
-    return stripDeprecatedLocalSettingsKeys({ ...localSettingsDefaults, ...settings, ...delta }) as LocalSettings;
+    return localSettingsParse(stripDeprecatedLocalSettingsKeys({ ...localSettingsDefaults, ...settings, ...delta }));
 }

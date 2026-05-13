@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { THEME_PROFILE_MAX_OVERRIDES_PER_MODE } from '@/theme/profiles/themeProfileConstants';
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 
 describe('localSettingsParse', () => {
@@ -37,6 +38,153 @@ describe('localSettingsParse', () => {
         expect(localSettingsParse(null)).toEqual(localSettingsDefaults);
         expect(localSettingsParse(undefined)).toEqual(localSettingsDefaults);
         expect(localSettingsParse('nope')).toEqual(localSettingsDefaults);
+    });
+
+    it('defaults theme profiles to an empty local-only state', () => {
+        expect(localSettingsParse(null).themeProfiles).toEqual({
+            profiles: [],
+            activeProfileId: null,
+        });
+    });
+
+    it('drops malformed theme profile state while preserving other local settings', () => {
+        const parsed = localSettingsParse({
+            themePreference: 'dark',
+            themeProfiles: 'not a profile collection',
+        });
+
+        expect(parsed.themePreference).toBe('dark');
+        expect(parsed.themeProfiles).toEqual({
+            profiles: [],
+            activeProfileId: null,
+        });
+    });
+
+    it('drops malformed theme profiles from the local profile collection', () => {
+        const parsed = localSettingsParse({
+            themeProfiles: {
+                activeProfileId: 'valid-profile',
+                profiles: [
+                    { id: 'invalid-profile' },
+                    {
+                        schemaVersion: 1,
+                        id: 'valid-profile',
+                        name: 'Valid profile',
+                        createdAt: '2026-05-11T00:00:00.000Z',
+                        updatedAt: '2026-05-11T00:00:00.000Z',
+                        base: { light: 'light', dark: 'dark' },
+                        overrides: {
+                            light: { 'background.canvas': '#fafafa' },
+                            dark: {},
+                        },
+                    },
+                ],
+            },
+        });
+
+        expect(parsed.themeProfiles.profiles).toHaveLength(1);
+        expect(parsed.themeProfiles.profiles[0]?.id).toBe('valid-profile');
+        expect(parsed.themeProfiles.activeProfileId).toBe('valid-profile');
+    });
+
+    it('accepts built-in theme preset ids as active without storing them in custom profiles', () => {
+        const parsed = localSettingsParse({
+            themeProfiles: {
+                activeProfileId: 'premiumDark',
+                profiles: [],
+            },
+        });
+
+        expect(parsed.themeProfiles).toEqual({
+            activeProfileId: 'premiumDark',
+            profiles: [],
+        });
+    });
+
+    it('drops persisted theme profiles with control-character names', () => {
+        const parsed = localSettingsParse({
+            themeProfiles: {
+                activeProfileId: 'invalid-profile',
+                profiles: [
+                    {
+                        schemaVersion: 1,
+                        id: 'invalid-profile',
+                        name: 'Bad\u0000Profile',
+                        createdAt: '2026-05-11T00:00:00.000Z',
+                        updatedAt: '2026-05-11T00:00:00.000Z',
+                        base: { light: 'light', dark: 'dark' },
+                        overrides: {
+                            light: { 'background.canvas': '#fafafa' },
+                            dark: {},
+                        },
+                    },
+                ],
+            },
+        });
+
+        expect(parsed.themeProfiles).toEqual({
+            profiles: [],
+            activeProfileId: null,
+        });
+    });
+
+    it('drops persisted theme profiles with route-unsafe ids', () => {
+        const parsed = localSettingsParse({
+            themeProfiles: {
+                activeProfileId: '../bad/profile?x=1',
+                profiles: [
+                    {
+                        schemaVersion: 1,
+                        id: '../bad/profile?x=1',
+                        name: 'Bad profile',
+                        createdAt: '2026-05-11T00:00:00.000Z',
+                        updatedAt: '2026-05-11T00:00:00.000Z',
+                        base: { light: 'light', dark: 'dark' },
+                        overrides: {
+                            light: { 'background.canvas': '#fafafa' },
+                            dark: {},
+                        },
+                    },
+                ],
+            },
+        });
+
+        expect(parsed.themeProfiles).toEqual({
+            profiles: [],
+            activeProfileId: null,
+        });
+    });
+
+    it('drops persisted theme profiles with too many overrides in one mode', () => {
+        const parsed = localSettingsParse({
+            themeProfiles: {
+                activeProfileId: 'oversized-profile',
+                profiles: [
+                    {
+                        schemaVersion: 1,
+                        id: 'oversized-profile',
+                        name: 'Oversized profile',
+                        createdAt: '2026-05-11T00:00:00.000Z',
+                        updatedAt: '2026-05-11T00:00:00.000Z',
+                        base: { light: 'light', dark: 'dark' },
+                        overrides: {
+                            light: Object.fromEntries(
+                                Array.from(
+                                    { length: THEME_PROFILE_MAX_OVERRIDES_PER_MODE + 1 },
+                                    (_, index) => [`unknown.${index}`, '#ffffff'],
+                                ),
+                            ),
+                            dark: {},
+                        },
+                    },
+                ],
+            },
+        });
+
+        expect(parsed.themeProfiles).toEqual({
+            profiles: [],
+            activeProfileId: null,
+        });
     });
 
     it('migrates legacy uiFontSize to uiFontScale when uiFontScale is missing', () => {
@@ -96,12 +244,87 @@ describe('localSettingsParse', () => {
         expect(parsed.localNotificationsForegroundBehavior).toBe('silent');
     });
 
+    it('strips obsolete local keyboard shortcut settings instead of preserving pre-release compatibility state', () => {
+        const parsed = localSettingsParse({
+            commandPaletteEnabled: true,
+            keyboardShortcutsV2Enabled: true,
+            keyboardSingleKeyShortcutsEnabled: true,
+            keyboardShortcutDisabledCommandIdsV1: ['commandPalette.open', '', 123],
+            keyboardShortcutOverridesV1: {
+                'commandPalette.open': [{ binding: 'Mod+K' }],
+                'bad.command': [{ binding: '' }, { nope: true }],
+            },
+        });
+
+        expect(parsed).not.toHaveProperty('commandPaletteEnabled');
+        expect(parsed).not.toHaveProperty('keyboardShortcutsV2Enabled');
+        expect(parsed).not.toHaveProperty('keyboardSingleKeyShortcutsEnabled');
+        expect(parsed).not.toHaveProperty('keyboardShortcutDisabledCommandIdsV1');
+        expect(parsed).not.toHaveProperty('keyboardShortcutOverridesV1');
+        expect(localSettingsDefaults).not.toHaveProperty('commandPaletteEnabled');
+        expect(localSettingsDefaults).not.toHaveProperty('keyboardShortcutsV2Enabled');
+        expect(localSettingsDefaults).not.toHaveProperty('keyboardSingleKeyShortcutsEnabled');
+        expect(localSettingsDefaults).not.toHaveProperty('keyboardShortcutDisabledCommandIdsV1');
+        expect(localSettingsDefaults).not.toHaveProperty('keyboardShortcutOverridesV1');
+    });
+
+    it('parses session MRU order as a local string list without accepting malformed entries', () => {
+        const parsed = localSettingsParse({
+            sessionMruOrderV1: ['server-a:sess-2', '', 123, ' server-a:sess-1 '],
+        });
+
+        expect(parsed.sessionMruOrderV1).toEqual(['server-a:sess-2', 'server-a:sess-1']);
+    });
+
+    it('stores focused session folder state locally', () => {
+        const focusedFolder = {
+            serverId: 'server-a',
+            workspace: {
+                t: 'workspaceScope',
+                serverId: 'server-a',
+                machineId: 'machine-a',
+                rootPath: '/Users/lee/project',
+            },
+            renderWorkspaceKey: 'wl_old',
+            folderId: 'folder-a',
+        };
+
+        expect(localSettingsParse(null).sessionListFocusedFolderV1).toBeNull();
+        expect(localSettingsParse({ sessionListFocusedFolderV1: focusedFolder }).sessionListFocusedFolderV1).toEqual(focusedFolder);
+        expect(localSettingsParse({ sessionListFocusedFolderV1: { ...focusedFolder, folderId: '' } }).sessionListFocusedFolderV1).toBeNull();
+    });
+
     it('drops the deprecated persisted editor focus mode flag while parsing and applying settings', () => {
         const parsed = localSettingsParse({ editorFocusModeEnabled: true });
         expect(parsed).not.toHaveProperty('editorFocusModeEnabled');
 
         const staleDelta: Record<'editorFocusModeEnabled', boolean> = { editorFocusModeEnabled: true };
         const applied = applyLocalSettings(localSettingsDefaults, staleDelta);
+        expect(applied).not.toHaveProperty('editorFocusModeEnabled');
+    });
+
+    it('preserves unknown local settings while continuing to strip deprecated keys', () => {
+        const parsed = localSettingsParse({
+            themePreference: 'dark',
+            futureLocalSetting: 'kept',
+            editorFocusModeEnabled: true,
+        });
+
+        expect(parsed).toMatchObject({
+            themePreference: 'dark',
+            futureLocalSetting: 'kept',
+        });
+        expect(parsed).not.toHaveProperty('editorFocusModeEnabled');
+
+        const applied = applyLocalSettings(parsed, {
+            anotherFutureLocalSetting: 42,
+            editorFocusModeEnabled: true,
+        });
+
+        expect(applied).toMatchObject({
+            futureLocalSetting: 'kept',
+            anotherFutureLocalSetting: 42,
+        });
         expect(applied).not.toHaveProperty('editorFocusModeEnabled');
     });
 });

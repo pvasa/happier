@@ -8,6 +8,11 @@ import {
     PET_COMPANION_SIZE_SCALE_DEFAULT,
     normalizePetCompanionSizeScale,
 } from '@/sync/domains/pets/companionSizeScale';
+import {
+    DEFAULT_THEME_PROFILES_LOCAL_STATE,
+    ThemeProfilesLocalStateSchema,
+} from '@/theme/profiles/themeProfilePersistence';
+import { SessionListFocusedFolderV1Schema } from '@/sync/domains/session/folders';
 
 function bucketNormalizedPaneSize(
     value: number,
@@ -25,11 +30,6 @@ function bucketNormalizedPaneSize(
     return 'large';
 }
 
-function objectKeyCount(value: unknown): number {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
-    return Object.keys(value as Record<string, unknown>).length;
-}
-
 function serializeNormalizedPaneSizeWithBasisKey(
     basisKey: string,
     smallMaxFraction: number,
@@ -37,6 +37,11 @@ function serializeNormalizedPaneSizeWithBasisKey(
 ) {
     return (value: number, record: Readonly<Record<string, unknown>>) =>
         bucketNormalizedPaneSize(value, record[basisKey], smallMaxFraction, mediumMaxFraction);
+}
+
+function objectKeyCount(value: unknown): number {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
+    return Object.keys(value as Record<string, unknown>).length;
 }
 
 function serializePetCompanionSizeScaleBucket(value: number): 'small' | 'default' | 'large' | 'xlarge' {
@@ -71,6 +76,9 @@ const DesktopPetOverlayOffsetSchema = z.object({
     y: z.number(),
 });
 const PetCompanionSizeScaleSchema = z.number().catch(PET_COMPANION_SIZE_SCALE_DEFAULT);
+const SessionMruOrderSchema = z.array(z.unknown())
+    .transform((ids) => ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim()))
+    .catch([]);
 
 export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
     debugMode: {
@@ -85,12 +93,25 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         description: 'Enable developer menu in settings',
         storageScope: 'local',
     },
-    commandPaletteEnabled: {
-        schema: z.boolean(),
-        default: false,
-        description: 'Enable CMD+K command palette (web only)',
+    sessionMruOrderV1: {
+        schema: SessionMruOrderSchema,
+        default: [],
+        description: 'Most recently used session order, stored as server-scoped session keys',
         storageScope: 'local',
-        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'device_user' },
+        analytics: {
+            trackCurrentState: true,
+            trackChanges: true,
+            valueKind: 'count',
+            privacy: 'count_only',
+            identityScope: 'device_user',
+            serializeCurrent: (value: readonly unknown[]) => value.length,
+        },
+    },
+    sessionListFocusedFolderV1: {
+        schema: SessionListFocusedFolderV1Schema,
+        default: null,
+        description: 'Focused session folder navigation state for the local session list',
+        storageScope: 'local',
     },
     themePreference: {
         schema: z.enum(['light', 'dark', 'adaptive']),
@@ -98,6 +119,12 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         description: 'Theme preference: light, dark, or adaptive (follows system)',
         storageScope: 'local',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
+    },
+    themeProfiles: {
+        schema: ThemeProfilesLocalStateSchema,
+        default: DEFAULT_THEME_PROFILES_LOCAL_STATE,
+        description: 'Local custom theme profiles and active profile selection',
+        storageScope: 'local',
     },
     uiBackdropBlurEnabled: {
         schema: z.boolean(),
