@@ -47,9 +47,11 @@ const syncLoadOlderMessagesSpy = vi.fn(async (_sessionId: string) => {
 let ensureSessionVisibleDeferred: DeferredPromise<boolean> | null = null;
 const mockTheme = {
   colors: {
-    textSecondary: '#aaa',
     header: { background: '#000', tint: '#fff' },
-    text: '#fff',
+    text: {
+      primary: '#fff',
+      secondary: '#aaa',
+    },
   },
 } as const;
 

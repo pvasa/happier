@@ -21,6 +21,7 @@ const routerPushSpy = vi.fn();
 const routerBackSpy = vi.fn();
 const safeRouterBackSpy = vi.fn();
 const readMachineTargetForSessionSpy = vi.fn();
+const readDisplayMachineTargetForSessionSpy = vi.fn();
 const resolveServerIdForSessionIdFromLocalCacheSpy = vi.fn();
 const resolvePreferredServerIdForSessionIdSpy = vi.fn();
 const usePreferredServerIdForSessionSpy = vi.fn();
@@ -168,6 +169,7 @@ vi.mock('@expo/vector-icons', () => ({
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
+    readDisplayMachineTargetForSession: (params: any) => readDisplayMachineTargetForSessionSpy(params),
 }));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
@@ -321,6 +323,8 @@ describe('/session/[id]/info', () => {
         safeRouterBackSpy.mockReset();
         readMachineTargetForSessionSpy.mockReset();
         readMachineTargetForSessionSpy.mockReturnValue(null);
+        readDisplayMachineTargetForSessionSpy.mockReset();
+        readDisplayMachineTargetForSessionSpy.mockReturnValue(null);
         sessionStopSpy.mockClear();
         sessionReadStateSpy.mockClear();
         sessionArchiveSpy.mockClear();
@@ -764,9 +768,13 @@ describe('/session/[id]/info', () => {
         expect(avatar.props.flavor).toBe('opencode');
     });
 
-    it('routes View Machine to the reachable machine target when session metadata is stale after handoff', async () => {
+    it('routes View Machine to the stable display target when live reachability differs', async () => {
         readMachineTargetForSessionSpy.mockReturnValue({
-            machineId: 'machine-target',
+            machineId: 'machine-live-rpc',
+            basePath: '/workspace/repo',
+        });
+        readDisplayMachineTargetForSessionSpy.mockReturnValue({
+            machineId: 'machine-display',
             basePath: '/workspace/repo',
         });
         mockSession = {
@@ -788,12 +796,12 @@ describe('/session/[id]/info', () => {
         expect(viewMachineItem).toBeTruthy();
         expect(viewMachineItem?.props.subtitleAccessory).toBeTruthy();
         expect(viewMachineItem?.props.subtitleAccessory?.props.testID).toBe('sessionInfo.viewMachineTargetMachineId');
-        expect(viewMachineItem?.props.subtitleAccessory?.props.children).toBe('machine-target');
+        expect(viewMachineItem?.props.subtitleAccessory?.props.children).toBe('machine-display');
         expect(screen.findByTestId('sessionInfo.path')).toBeTruthy();
 
         screen.pressByTestId('sessionInfo.viewMachine');
 
-        expect(routerPushSpy).toHaveBeenCalledWith('/machine/machine-target');
+        expect(routerPushSpy).toHaveBeenCalledWith('/machine/machine-display');
     });
 
     it('opens a new session seeded from the current session configuration', async () => {
@@ -802,6 +810,10 @@ describe('/session/[id]/info', () => {
         readMachineTargetForSessionSpy.mockReturnValue({
             machineId: 'machine-target',
             basePath: '/workspace/repo',
+        });
+        readDisplayMachineTargetForSessionSpy.mockReturnValue({
+            machineId: 'machine-display',
+            basePath: '/workspace/display',
         });
         mockSession = {
             id: 'session-1',
@@ -840,8 +852,8 @@ describe('/session/[id]/info', () => {
             pathname: '/new',
             params: {
                 dataId: expect.any(String),
-                machineId: 'machine-target',
-                directory: '/workspace/repo',
+                machineId: 'machine-display',
+                directory: '/workspace/display',
                 spawnServerId: 'server-b',
             },
         });
@@ -849,8 +861,8 @@ describe('/session/[id]/info', () => {
         expect(tempData).toEqual(expect.objectContaining({
             prompt: '',
             replacePersistedDraftSelections: true,
-            machineId: 'machine-target',
-            directory: '/workspace/repo',
+            machineId: 'machine-display',
+            directory: '/workspace/display',
             agentType: 'codex',
             backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
             selectedProfileId: 'profile-1',

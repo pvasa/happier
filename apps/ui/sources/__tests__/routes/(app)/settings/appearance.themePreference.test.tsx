@@ -120,6 +120,7 @@ afterEach(() => {
     shared.setRootViewBackgroundColor.mockClear();
     shared.setStatusBarStyle.mockClear();
     shared.setSystemBackgroundColorAsync.mockClear();
+    shared.startViewTransition.mockClear();
     shared.startViewTransition.mockImplementation((update: () => void) => {
         update();
         return { ready: Promise.resolve() };
@@ -244,6 +245,40 @@ describe('Appearance settings theme preference', () => {
         expect(themeProfiles.activeProfileId).toBe('nightDark');
         expect(themeProfiles.profiles).toEqual([]);
         expect(shared.setTheme).toHaveBeenCalledWith('dark');
+    });
+
+    it('animates same-mode built-in theme switches from the theme dropdown', async () => {
+        shared.settingsState.themePreference = 'dark';
+        shared.settingsState.themeProfiles = { activeProfileId: 'premiumDark', profiles: [] };
+        shared.startViewTransition.mockImplementation((mutation: () => void) => {
+            mutation();
+            return { ready: Promise.resolve() };
+        });
+        Object.defineProperty(globalThis, 'document', {
+            configurable: true,
+            value: {
+                documentElement: {
+                    animate: shared.documentElementAnimate,
+                },
+                startViewTransition: shared.startViewTransition,
+            } as unknown as Document,
+        });
+
+        const mod = await import('@/app/(app)/settings/appearance');
+        const screen = await renderSettingsView(React.createElement(mod.default), {
+            flushOptions: { cycles: 0 },
+        });
+
+        const themeDropdown = screen.findAllByType('DropdownMenu' as any)
+            .find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.theme');
+
+        await act(async () => {
+            themeDropdown!.props.onSelect('nightDark');
+        });
+
+        expect(shared.startViewTransition).toHaveBeenCalledOnce();
+        expect(shared.documentElementAnimate).toHaveBeenCalled();
+        expect((shared.settingsState.themeProfiles as { activeProfileId: string | null }).activeProfileId).toBe('nightDark');
     });
 
     it('opens theme profile management from the theme group', async () => {

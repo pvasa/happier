@@ -78,4 +78,56 @@ describe('Session settings (Permissions entry)', () => {
         screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle');
         expect(sessionSettingsEntryState.settingsState.rememberLastProjectSessionSelections).toBe(false);
     });
+
+    it('renders remembered engine selections in the new-session modal group', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        const row = screen.findRowByTitle('settingsSession.sessionCreation.rememberLastEngineSelectionsTitle');
+        expect(row).toBeTruthy();
+
+        screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastEngineSelectionsTitle');
+        expect(sessionSettingsEntryState.settingsState.rememberLastEngineSelectionsV1).toBe(false);
+    });
+
+    it('renders animated working status text as a session list setting', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        const row = screen.findRowByTitle('settingsSession.sessionList.workingStatusAnimatedTextTitle');
+        expect(row).toBeTruthy();
+
+        let current = row?.parent;
+        let groupTitle: unknown;
+        while (current) {
+            if ((current.type as unknown) === 'ItemGroup') {
+                groupTitle = current.props?.title;
+                break;
+            }
+            current = current.parent;
+        }
+
+        expect(groupTitle).toBe('settingsSession.sessionList.title');
+
+        screen.pressRowByTitle('settingsSession.sessionList.workingStatusAnimatedTextTitle');
+        expect(sessionSettingsEntryState.settingsState.sessionListWorkingStatusAnimatedTextEnabled).toBe(false);
+    });
+
+    it('renders narrow working indicator style as a session list setting', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        const dropdown = screen.findAllByType('DropdownMenu' as any).find((node) =>
+            node.props.itemTrigger?.title === 'settingsSession.sessionList.narrowWorkingIndicatorTitle'
+        );
+        expect(dropdown).toBeTruthy();
+        expect(dropdown?.props.selectedId).toBe('spinner');
+
+        dropdown?.props.onSelect('pulse');
+
+        expect(sessionSettingsEntryState.settingsState.sessionListNarrowWorkingIndicatorStyle).toBe('pulse');
+    });
 });

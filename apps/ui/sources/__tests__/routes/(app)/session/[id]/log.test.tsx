@@ -27,6 +27,7 @@ const machineGetBugReportLogTailMock = vi.fn(async (_machineId?: string, _params
 
 let sessionLogPath: string | null = null;
 let sessionMachineId: string | null = null;
+let canonicalMachineTarget: { machineId: string; basePath: string | null } | null = null;
 let sessionHydrated = true;
 let mockServerId: string | undefined;
 const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
@@ -112,10 +113,15 @@ vi.mock('@/sync/ops', () => ({
         machineGetBugReportLogTailMock(machineId, params, options),
 }));
 
+vi.mock('@/sync/ops/sessionMachineTarget', () => ({
+    readMachineTargetForSession: () => canonicalMachineTarget,
+}));
+
 describe('Session log screen', () => {
     beforeEach(() => {
         sessionLogPath = null;
         sessionMachineId = null;
+        canonicalMachineTarget = null;
         sessionHydrated = true;
         mockServerId = undefined;
         hydrateSpy.mockClear();
@@ -147,7 +153,8 @@ describe('Session log screen', () => {
 
     it('fetches session log tail when log path exists', async () => {
         sessionLogPath = '/tmp/.happier/logs/session.log';
-        sessionMachineId = 'machine-1';
+        sessionMachineId = 'machine-stale';
+        canonicalMachineTarget = { machineId: 'machine-1', basePath: '/repo' };
         const { default: SessionLogScreen } = await import('@/app/(app)/session/[id]/log');
 
         await renderScreen(React.createElement(SessionLogScreen));
@@ -155,9 +162,21 @@ describe('Session log screen', () => {
         expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('machine-1', { path: sessionLogPath, maxBytes: 200000 }, undefined);
     });
 
+    it('does not target stale metadata when canonical reachability is unavailable', async () => {
+        sessionLogPath = '/tmp/.happier/logs/session.log';
+        sessionMachineId = 'machine-stale';
+        canonicalMachineTarget = null;
+        const { default: SessionLogScreen } = await import('@/app/(app)/session/[id]/log');
+
+        await renderScreen(React.createElement(SessionLogScreen));
+
+        expect(machineReadSessionLogTailMock).not.toHaveBeenCalled();
+    });
+
     it('does not call bug report log tail RPC for session logs', async () => {
         sessionLogPath = '/tmp/.happier/logs/session.log';
         sessionMachineId = 'machine-1';
+        canonicalMachineTarget = { machineId: 'machine-1', basePath: '/repo' };
         const { default: SessionLogScreen } = await import('@/app/(app)/session/[id]/log');
 
         await renderScreen(React.createElement(SessionLogScreen));
