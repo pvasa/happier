@@ -77,6 +77,16 @@ describe('uploadAttachmentDraftsToSession', () => {
                     mimeType: 'image/png',
                     sizeBytes: 5,
                     sha256: 'h1',
+                    structuredInput: {
+                        type: 'localImage',
+                        kind: 'image',
+                        localPath: '.happier/uploads/messages/m1/12345678-file.png',
+                        path: '.happier/uploads/messages/m1/12345678-file.png',
+                        mimeType: 'image/png',
+                        name: 'file.png',
+                        sizeBytes: 5,
+                        sha256: 'h1',
+                    },
                 },
             ],
         });
@@ -93,6 +103,53 @@ describe('uploadAttachmentDraftsToSession', () => {
             uploadedSizeBytes: 5,
             uploadedMimeType: 'image/png',
             sha256: 'h1',
+        });
+    });
+
+    it('does not add app-server image metadata for non-image attachments', async () => {
+        const { uploadAttachmentDraftsToSession } = await import('./uploadAttachmentDraftsToSession');
+
+        sessionAttachmentsUploadFileSpy.mockResolvedValue({
+            success: true,
+            path: '.happier/uploads/messages/m1/readme.md',
+            sizeBytes: 12,
+            sha256: 'h2',
+        });
+
+        const drafts: any[] = [
+            {
+                id: 'd1',
+                source: {
+                    kind: 'native',
+                    name: 'readme.md',
+                    mimeType: 'text/markdown',
+                    uri: 'file:///tmp/readme.md',
+                    sizeBytes: 12,
+                },
+                status: 'pending',
+            },
+        ];
+
+        const res = await uploadAttachmentDraftsToSession({
+            sessionId: 's1',
+            drafts,
+            messageLocalId: 'm1',
+            config: {
+                uploadLocation: 'workspace',
+                workspaceRelativeDir: '.happier/uploads',
+                vcsIgnoreStrategy: 'git_info_exclude',
+                vcsIgnoreWritesEnabled: true,
+                maxFileBytes: 25 * 1024 * 1024,
+            },
+            applyDraftPatch: () => {},
+        });
+
+        expect(res.uploaded[0]).toEqual({
+            name: 'readme.md',
+            path: '.happier/uploads/messages/m1/readme.md',
+            mimeType: 'text/markdown',
+            sizeBytes: 12,
+            sha256: 'h2',
         });
     });
 

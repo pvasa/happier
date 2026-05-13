@@ -36,13 +36,13 @@ type AttachmentImagePreviewModalProps = CustomModalInjectedProps & Readonly<{
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
         flex: 1,
-        backgroundColor: theme.colors.surfaceHigh,
+        backgroundColor: theme.colors.surface.inset,
     },
     imageSurface: {
         flex: 1,
         position: 'relative',
         overflow: 'hidden',
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.surface.elevated,
     },
     image: {
     },
@@ -54,7 +54,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 24,
     },
     centeredStateText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 13,
         textAlign: 'center',
         ...Typography.default('regular'),
@@ -124,7 +124,7 @@ function AttachmentImagePreviewCurrentImage(props: Readonly<{
     if (preview.status === 'error') {
         return (
             <View style={styles.centeredState}>
-                <Ionicons name="alert-circle-outline" size={28} color={theme.colors.textSecondary} />
+                <Ionicons name="alert-circle-outline" size={28} color={theme.colors.text.secondary} />
                 <Text style={styles.centeredStateText}>{t('common.error')}</Text>
             </View>
         );
@@ -132,7 +132,7 @@ function AttachmentImagePreviewCurrentImage(props: Readonly<{
 
     return (
         <View style={styles.centeredState}>
-            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
         </View>
     );
 }
@@ -210,7 +210,7 @@ export const AttachmentImagePreviewModal = React.memo(function AttachmentImagePr
                             ]}
                             testID="attachment-image-preview-previous"
                         >
-                            <Ionicons name="chevron-back" size={24} color={theme.colors.overlay.text} />
+                            <Ionicons name="chevron-back" size={24} color={theme.colors.overlay.foreground} />
                         </Pressable>
 
                         <Pressable
@@ -230,7 +230,7 @@ export const AttachmentImagePreviewModal = React.memo(function AttachmentImagePr
                             ]}
                             testID="attachment-image-preview-next"
                         >
-                            <Ionicons name="chevron-forward" size={24} color={theme.colors.overlay.text} />
+                            <Ionicons name="chevron-forward" size={24} color={theme.colors.overlay.foreground} />
                         </Pressable>
                     </>
                 ) : null}

@@ -4,6 +4,7 @@ import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/att
 import { randomUUID } from '@/platform/randomUUID';
 
 import type { AttachmentDraft } from './attachmentDraftModel';
+import type { StructuredInputImageInput } from '@/components/sessions/agentInput/structuredInputMentions';
 
 export type UploadedAttachment = Readonly<{
     name: string;
@@ -11,7 +12,33 @@ export type UploadedAttachment = Readonly<{
     mimeType?: string;
     sizeBytes: number;
     sha256?: string;
+    structuredInput?: StructuredInputImageInput;
 }>;
+type UploadedAttachmentBase = Omit<UploadedAttachment, 'structuredInput'>;
+
+function isImageMimeType(mimeType: string | undefined): boolean {
+    return typeof mimeType === 'string' && mimeType.toLowerCase().startsWith('image/');
+}
+
+function buildStructuredInputForUploadedAttachment(args: Readonly<{
+    name: string;
+    path: string;
+    mimeType?: string;
+    sizeBytes: number;
+    sha256?: string;
+}>): StructuredInputImageInput | undefined {
+    if (!isImageMimeType(args.mimeType)) return undefined;
+    return {
+        type: 'localImage',
+        kind: 'image',
+        localPath: args.path,
+        path: args.path,
+        name: args.name,
+        ...(args.mimeType ? { mimeType: args.mimeType } : {}),
+        sizeBytes: args.sizeBytes,
+        ...(args.sha256 ? { sha256: args.sha256 } : {}),
+    };
+}
 
 function describeSource(source: AttachmentsUploadFileSource): Readonly<{
     name: string;
@@ -58,12 +85,19 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
 
         const described = describeSource(stillPresent.source);
         if (stillPresent.uploadedPath) {
-            uploaded.push({
+            const uploadedAttachment: UploadedAttachmentBase = {
                 name: described.name,
                 path: stillPresent.uploadedPath,
-                mimeType: stillPresent.uploadedMimeType ?? described.mimeType,
                 sizeBytes: stillPresent.uploadedSizeBytes ?? described.sizeBytes ?? 0,
-                sha256: stillPresent.sha256,
+                ...((stillPresent.uploadedMimeType ?? described.mimeType)
+                    ? { mimeType: (stillPresent.uploadedMimeType ?? described.mimeType)! }
+                    : {}),
+                ...(stillPresent.sha256 ? { sha256: stillPresent.sha256 } : {}),
+            };
+            const structuredInput = buildStructuredInputForUploadedAttachment(uploadedAttachment);
+            uploaded.push({
+                ...uploadedAttachment,
+                ...(structuredInput ? { structuredInput } : {}),
             });
             continue;
         }
@@ -97,12 +131,17 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
             uploadProgress: { uploadedBytes: uploadRes.sizeBytes, totalBytes: uploadRes.sizeBytes },
         });
 
-        uploaded.push({
+        const uploadedAttachment: UploadedAttachmentBase = {
             name: described.name,
             path: uploadRes.path,
-            mimeType: described.mimeType,
             sizeBytes: uploadRes.sizeBytes,
-            sha256: uploadRes.sha256,
+            ...(described.mimeType ? { mimeType: described.mimeType } : {}),
+            ...(uploadRes.sha256 ? { sha256: uploadRes.sha256 } : {}),
+        };
+        const structuredInput = buildStructuredInputForUploadedAttachment(uploadedAttachment);
+        uploaded.push({
+            ...uploadedAttachment,
+            ...(structuredInput ? { structuredInput } : {}),
         });
     }
 
