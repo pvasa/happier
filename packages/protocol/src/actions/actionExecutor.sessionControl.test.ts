@@ -32,6 +32,12 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
     sessionList: async () => ({ sessions: [] }),
     sessionActivityGet: async () => ({}),
     sessionRecentMessagesGet: async () => ({}),
+    sessionWorkStateGet: async () => ({}),
+    sessionGoalGet: async () => ({}),
+    sessionGoalSet: async () => ({}),
+    sessionGoalClear: async () => ({}),
+    sessionVendorPluginCatalogList: async () => ({}),
+    sessionSkillCatalogList: async () => ({}),
     daemonMemorySearch: async () => ({ v: 1, ok: true as const, hits: [] }),
     daemonMemoryGetWindow: async () => ({ v: 1, snippets: [], citations: [] }),
     daemonMemoryEnsureUpToDate: async () => ({}),
@@ -228,6 +234,56 @@ describe('createActionExecutor (session control)', () => {
 
     expect(res).toEqual({ ok: true, result: { ok: true } });
     expect(sessionWaitIdle).toHaveBeenCalledWith({ sessionId: 's1', timeoutSeconds: 42, serverId: 'server-a' });
+  });
+
+  it('executes session work-state and goal actions through protocol deps', async () => {
+    const sessionWorkStateGet = vi.fn(async () => ({ workState: null }));
+    const sessionGoalGet = vi.fn(async () => ({ workState: null }));
+    const sessionGoalSet = vi.fn(async () => ({ ok: true }));
+    const sessionGoalClear = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionWorkStateGet,
+      sessionGoalGet,
+      sessionGoalSet,
+      sessionGoalClear,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    await executor.execute('session.work_state.get' as any, { sessionId: 's1' }, { surface: 'cli' });
+    await executor.execute('session.goal.get' as any, { sessionId: 's1' }, { surface: 'cli' });
+    await executor.execute(
+      'session.goal.set' as any,
+      { sessionId: 's1', objective: 'Ship goals', status: 'active', tokenBudget: null },
+      { surface: 'cli' },
+    );
+    await executor.execute('session.goal.clear' as any, { sessionId: 's1' }, { surface: 'cli' });
+
+    expect(sessionWorkStateGet).toHaveBeenCalledWith({ sessionId: 's1', serverId: 'server-a' });
+    expect(sessionGoalGet).toHaveBeenCalledWith({ sessionId: 's1', serverId: 'server-a' });
+    expect(sessionGoalSet).toHaveBeenCalledWith({
+      sessionId: 's1',
+      objective: 'Ship goals',
+      status: 'active',
+      tokenBudget: null,
+      serverId: 'server-a',
+    });
+    expect(sessionGoalClear).toHaveBeenCalledWith({ sessionId: 's1', serverId: 'server-a' });
+  });
+
+  it('executes vendor plugin and skill catalog list actions through protocol deps', async () => {
+    const sessionVendorPluginCatalogList = vi.fn(async () => ({ vendorPlugins: [] }));
+    const sessionSkillCatalogList = vi.fn(async () => ({ skills: [] }));
+    const executor = createExecutor({
+      sessionVendorPluginCatalogList,
+      sessionSkillCatalogList,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    await executor.execute('session.vendor_plugin_catalog.list' as any, { sessionId: 's1', cwd: '/repo' }, { surface: 'cli' });
+    await executor.execute('session.skill_catalog.list' as any, { sessionId: 's1', cwd: '/repo' }, { surface: 'cli' });
+
+    expect(sessionVendorPluginCatalogList).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/repo', serverId: 'server-a' });
+    expect(sessionSkillCatalogList).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/repo', serverId: 'server-a' });
   });
 
   it('executes session.spawn_new via deps.sessionSpawnNew (including backendTargetKey/title)', async () => {

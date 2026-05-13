@@ -19,6 +19,13 @@ describe('machine daemon ownership protocol', () => {
             startupSource: 'manual',
             serviceManaged: false,
             serviceLabel: 'com.happier.cli.daemon.default',
+            installationId: 'installation-1',
+            installationPublicKey: 'installation-public-key',
+            installationProof: {
+                version: 1,
+                algorithm: 'ed25519',
+                signature: 'installation-signature',
+            },
             takeover: true,
         })).toEqual({
             token: 'token',
@@ -30,6 +37,13 @@ describe('machine daemon ownership protocol', () => {
             startupSource: 'manual',
             serviceManaged: false,
             serviceLabel: 'com.happier.cli.daemon.default',
+            installationId: 'installation-1',
+            installationPublicKey: 'installation-public-key',
+            installationProof: {
+                version: 1,
+                algorithm: 'ed25519',
+                signature: 'installation-signature',
+            },
             takeover: true,
         });
     });

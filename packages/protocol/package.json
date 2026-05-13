@@ -57,6 +57,10 @@
     "./workspaces": {
       "types": "./dist/workspaces/index.d.ts",
       "default": "./dist/workspaces/index.js"
+    },
+    "./sessionFolders": {
+      "types": "./dist/sessionFolders/index.d.ts",
+      "default": "./dist/sessionFolders/index.js"
     }
   },
   "files": [

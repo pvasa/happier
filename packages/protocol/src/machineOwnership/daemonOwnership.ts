@@ -19,6 +19,13 @@ export const MachineDaemonOwnershipMetadataSchema = z.object({
     startupSource: MachineDaemonStartupSourceSchema.optional(),
     serviceManaged: z.boolean().optional(),
     serviceLabel: z.string().trim().min(1).optional(),
+    installationId: z.string().trim().min(1).optional(),
+    installationPublicKey: z.string().trim().min(1).optional(),
+    installationProof: z.object({
+        version: z.literal(1),
+        algorithm: z.literal('ed25519'),
+        signature: z.string().trim().min(1),
+    }).optional(),
 });
 
 export type MachineDaemonOwnershipMetadata = z.infer<typeof MachineDaemonOwnershipMetadataSchema>;
@@ -52,6 +59,13 @@ function normalizeOptionalStartupSource(value: unknown): MachineDaemonOwnershipM
     return parsed.success ? parsed.data : undefined;
 }
 
+function normalizeOptionalInstallationProof(
+    value: unknown,
+): MachineDaemonOwnershipMetadata['installationProof'] {
+    const parsed = MachineDaemonOwnershipMetadataSchema.shape.installationProof.safeParse(value);
+    return parsed.success ? parsed.data : undefined;
+}
+
 function normalizeMachineDaemonOwnershipMetadata(input: unknown): MachineDaemonOwnershipMetadata {
     const object = typeof input === 'object' && input !== null ? input as Record<string, unknown> : {};
     return {
@@ -65,6 +79,13 @@ function normalizeMachineDaemonOwnershipMetadata(input: unknown): MachineDaemonO
             ? { serviceManaged: normalizeOptionalBooleanField(object.serviceManaged) }
             : null),
         ...(normalizeOptionalStringField(object.serviceLabel) ? { serviceLabel: normalizeOptionalStringField(object.serviceLabel) } : null),
+        ...(normalizeOptionalStringField(object.installationId) ? { installationId: normalizeOptionalStringField(object.installationId) } : null),
+        ...(normalizeOptionalStringField(object.installationPublicKey)
+            ? { installationPublicKey: normalizeOptionalStringField(object.installationPublicKey) }
+            : null),
+        ...(normalizeOptionalInstallationProof(object.installationProof)
+            ? { installationProof: normalizeOptionalInstallationProof(object.installationProof) }
+            : null),
     };
 }
 
@@ -77,6 +98,9 @@ export function buildMachineScopedSocketAuth(params: Readonly<{
     startupSource?: string;
     serviceManaged?: boolean;
     serviceLabel?: string;
+    installationId?: string;
+    installationPublicKey?: string;
+    installationProof?: MachineDaemonOwnershipMetadata['installationProof'];
     takeover?: boolean;
 }>): Record<string, unknown> {
     const ownership = readMachineDaemonOwnershipMetadataFromSocketAuth(params);

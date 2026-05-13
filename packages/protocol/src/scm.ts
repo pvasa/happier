@@ -152,6 +152,16 @@ export const ScmWorktreeSchema = z.object({
   branch: z.string().nullable(),
   isCurrent: z.boolean(),
   isMain: z.boolean().optional(),
+  /**
+   * Total working-tree changes (modified + added + deleted + untracked).
+   * Optional for back-compat with older SCM backends.
+   */
+  changeCount: z.number().int().nonnegative().optional(),
+  /**
+   * Epoch ms of the most recent activity (max of HEAD commit time and worktree
+   * path mtime). Optional for back-compat with older SCM backends.
+   */
+  lastActivityAt: z.number().int().nonnegative().optional(),
 });
 export type ScmWorktree = z.infer<typeof ScmWorktreeSchema>;
 
@@ -222,8 +232,92 @@ export const ScmBackendDescribeResponseSchema = z.object({
 });
 export type ScmBackendDescribeResponse = z.infer<typeof ScmBackendDescribeResponseSchema>;
 
-export const ScmStatusSnapshotRequestSchema = ScmRequestBaseSchema;
+export const ScmStatusSnapshotRequestSchema = ScmRequestBaseSchema.extend({
+  /**
+   * Opt-in flag: when true, the cli git backend enriches each
+   * `ScmWorktreeSchema` entry with `changeCount` + `lastActivityAt` (per the
+   * `worktreeStatusEnricher` contract). When false/omitted, those fields are
+   * not computed (no per-worktree git overhead) and the response stays
+   * lightweight for callers that only need branch/path metadata.
+   *
+   * @deprecated Prefer the dedicated `ScmWorktreesEnrichmentRequestSchema`
+   * RPC for new callers: it lets the UI render the worktree list FAST from a
+   * lightweight snapshot and then progressively enrich per-worktree status in
+   * the background. Keeping this flag for back-compat with callers that
+   * intentionally want a single round-trip (and accept the latency).
+   */
+  includeWorktreeStatus: z.boolean().optional(),
+});
 export type ScmStatusSnapshotRequest = z.infer<typeof ScmStatusSnapshotRequestSchema>;
+
+/**
+ * Enrichment-only request: takes the already-known worktree paths from a
+ * prior light snapshot and returns just the per-worktree status fields.
+ *
+ * Splitting the snapshot fetch from the per-worktree enrichment lets the UI:
+ * 1. Display the worktree list immediately (light fetch ~sub-second).
+ * 2. Progressively augment each row with `changeCount` + `lastActivityAt`
+ *    once the heavier enrichment finishes (typically 1-2s for repos with
+ *    several active worktrees).
+ *
+ * Server-side path validation (security boundary):
+ *   The server intersects `worktreePaths` with the canonical output of
+ *   `git worktree list --porcelain` for the request's repo (resolved via
+ *   `cwd`). Paths that are NOT registered worktrees of that repo are
+ *   silently dropped from the response — they are NOT probed by the
+ *   per-worktree status reader. This prevents the RPC from being used to
+ *   inspect arbitrary filesystem paths the daemon user can read.
+ *
+ *   Symlinks are resolved (`fs.realpath`) before comparison so callers
+ *   may pass the symlink form (`/var/folders/...` on macOS) while git
+ *   reports the canonical form (`/private/var/folders/...`).
+ *
+ *   The server probes the CANONICAL worktree path corresponding to the
+ *   validated request (taken from `git worktree list --porcelain`), not
+ *   the caller-supplied path. This closes a TOCTOU race where a symlink
+ *   resolved to a registered worktree at validation time could be swapped
+ *   to point elsewhere before the per-worktree probe runs (FR3-5).
+ *   Each enrichment response entry's `path` is the canonical path that
+ *   was probed, so consumers receive a stable identifier matching what
+ *   `git worktree list` reports.
+ *
+ *   Request size: `worktreePaths` is capped at
+ *   {@link SCM_WORKTREES_ENRICHMENT_MAX_PATHS} entries to bound server-
+ *   side filesystem canonicalization work (FR3-12).
+ */
+/**
+ * Maximum number of worktree paths accepted per enrichment request.
+ *
+ * FR3-12 (audit 2026-05-12): the schema previously accepted an unbounded
+ * array, which let a malformed/abusive client trigger O(N) filesystem
+ * canonicalization on the daemon before the intersection drop. 64 is well
+ * above any realistic repo's worktree count (most repos have <20) while
+ * keeping the upper bound on per-request server work small.
+ */
+export const SCM_WORKTREES_ENRICHMENT_MAX_PATHS = 64;
+
+export const ScmWorktreesEnrichmentRequestSchema = ScmRequestBaseSchema.extend({
+  worktreePaths: z
+    .array(z.string().min(1))
+    .min(0)
+    .max(SCM_WORKTREES_ENRICHMENT_MAX_PATHS),
+});
+export type ScmWorktreesEnrichmentRequest = z.infer<typeof ScmWorktreesEnrichmentRequestSchema>;
+
+export const ScmWorktreeEnrichmentEntrySchema = z.object({
+  path: z.string(),
+  changeCount: z.number().int().nonnegative().optional(),
+  lastActivityAt: z.number().int().nonnegative().optional(),
+});
+export type ScmWorktreeEnrichmentEntry = z.infer<typeof ScmWorktreeEnrichmentEntrySchema>;
+
+export const ScmWorktreesEnrichmentResponseSchema = z.object({
+  success: z.boolean(),
+  worktrees: z.array(ScmWorktreeEnrichmentEntrySchema).optional(),
+  error: z.string().optional(),
+  errorCode: ScmOperationErrorCodeSchema.optional(),
+});
+export type ScmWorktreesEnrichmentResponse = z.infer<typeof ScmWorktreesEnrichmentResponseSchema>;
 
 export const ScmStatusSnapshotResponseSchema = z.object({
   success: z.boolean(),

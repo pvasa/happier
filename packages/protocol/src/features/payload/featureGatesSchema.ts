@@ -92,6 +92,7 @@ export const FeatureGatesSchema = z.object({
   sessions: z
     .object({
       enabled: z.boolean(),
+      folders: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
       handoff: z
         .object({
           enabled: z.boolean(),
@@ -100,7 +101,7 @@ export const FeatureGatesSchema = z.object({
         .default({ enabled: false }),
     })
     .optional()
-    .default({ enabled: false, handoff: { enabled: false } }),
+    .default({ enabled: false, folders: DEFAULT_GATE_DISABLED, handoff: { enabled: false } }),
   machines: z
     .object({
       enabled: z.boolean(),

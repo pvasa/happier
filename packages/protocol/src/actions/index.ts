@@ -7,7 +7,21 @@ export {
   isActionEnabledByActionsSettings,
   type ActionsSettingsV1,
 } from './actionSettings.js';
-export { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+export {
+  isApprovalRequiredByActionsSettings,
+  resolveActionApprovalRouting,
+  type ActionApprovalRoutingDecision,
+  type ResolveActionApprovalRoutingArgs,
+} from './actionApprovalPolicy.js';
+export {
+  ActionApprovalFlowSchema,
+  ActionApprovalResultSchema,
+  ActionApprovalSchema,
+  resolveActionApprovalFlow,
+  type ActionApproval,
+  type ActionApprovalFlow,
+  type ActionApprovalResult,
+} from './actionApprovalMetadata.js';
 export {
   ACTION_SPECS,
   ActionSafetySchema,

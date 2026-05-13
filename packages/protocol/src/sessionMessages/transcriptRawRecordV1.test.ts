@@ -84,6 +84,40 @@ describe('TranscriptRawRecordV1Schema', () => {
     expect(parsed.success).toBe(true);
   });
 
+  it('parses codex terminal primary turn lifecycle records', () => {
+    for (const type of ['turn_failed', 'turn_cancelled', 'turn_aborted'] as const) {
+      const parsed = TranscriptRawRecordV1Schema.safeParse({
+        role: 'agent',
+        content: {
+          type: 'codex',
+          data: {
+            type,
+          },
+        },
+      });
+
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  it('parses acp terminal primary turn lifecycle records', () => {
+    for (const type of ['turn_failed', 'turn_cancelled', 'turn_aborted'] as const) {
+      const parsed = TranscriptRawRecordV1Schema.safeParse({
+        role: 'agent',
+        content: {
+          type: 'acp',
+          provider: 'claude',
+          data: {
+            type,
+            id: 'turn_1',
+          },
+        },
+      });
+
+      expect(parsed.success).toBe(true);
+    }
+  });
+
   it('parses canonical context compaction records including cancellation and retry attempt metadata', () => {
     const parsed = TranscriptRawRecordV1Schema.safeParse({
       role: 'agent',

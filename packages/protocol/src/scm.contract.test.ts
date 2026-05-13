@@ -17,6 +17,8 @@ import {
     ScmRemoteRemoveRequestSchema,
     ScmRemoteSetUrlRequestSchema,
     ScmWorkingSnapshotSchema,
+    ScmWorktreesEnrichmentRequestSchema,
+    ScmWorktreesEnrichmentResponseSchema,
 } from './scm.js';
 
 describe('scm protocol contracts', () => {
@@ -193,6 +195,41 @@ describe('scm protocol contracts', () => {
         });
 
         expect(parsed.backendPreference?.backendId).toBe('sapling');
+    });
+
+    it('parses includeWorktreeStatus as true on status requests', () => {
+        const parsed = ScmStatusSnapshotRequestSchema.parse({
+            cwd: '.',
+            includeWorktreeStatus: true,
+        });
+
+        expect(parsed.includeWorktreeStatus).toBe(true);
+    });
+
+    it('parses includeWorktreeStatus as false on status requests', () => {
+        const parsed = ScmStatusSnapshotRequestSchema.parse({
+            cwd: '.',
+            includeWorktreeStatus: false,
+        });
+
+        expect(parsed.includeWorktreeStatus).toBe(false);
+    });
+
+    it('treats includeWorktreeStatus as undefined when omitted on status requests', () => {
+        const parsed = ScmStatusSnapshotRequestSchema.parse({
+            cwd: '.',
+        });
+
+        expect(parsed.includeWorktreeStatus).toBeUndefined();
+    });
+
+    it('rejects non-boolean includeWorktreeStatus on status requests', () => {
+        const result = ScmStatusSnapshotRequestSchema.safeParse({
+            cwd: '.',
+            includeWorktreeStatus: 'yes',
+        });
+
+        expect(result.success).toBe(false);
     });
 
     it('parses normalized working snapshots', () => {
@@ -489,6 +526,99 @@ describe('scm protocol contracts', () => {
             '',
         ].join('\n');
         expect(isScmPatchBoundToPath('src/a.ts', multiFilePatch)).toBe(false);
+    });
+
+    describe('ScmWorktreesEnrichmentRequestSchema', () => {
+        it('accepts an empty worktreePaths array (caller has zero worktrees to enrich)', () => {
+            const parsed = ScmWorktreesEnrichmentRequestSchema.parse({
+                cwd: '.',
+                worktreePaths: [],
+            });
+            expect(parsed.worktreePaths).toEqual([]);
+        });
+
+        it('accepts a list of worktree paths to enrich', () => {
+            const parsed = ScmWorktreesEnrichmentRequestSchema.parse({
+                cwd: '.',
+                worktreePaths: ['/repo', '/repo/.worktrees/feature-auth'],
+            });
+            expect(parsed.worktreePaths).toEqual(['/repo', '/repo/.worktrees/feature-auth']);
+        });
+
+        it('rejects a missing worktreePaths field', () => {
+            const result = ScmWorktreesEnrichmentRequestSchema.safeParse({ cwd: '.' });
+            expect(result.success).toBe(false);
+        });
+
+        it('rejects a non-string worktree path entry', () => {
+            const result = ScmWorktreesEnrichmentRequestSchema.safeParse({
+                cwd: '.',
+                worktreePaths: ['/repo', 42],
+            });
+            expect(result.success).toBe(false);
+        });
+
+        it('rejects an empty-string worktree path entry', () => {
+            const result = ScmWorktreesEnrichmentRequestSchema.safeParse({
+                cwd: '.',
+                worktreePaths: [''],
+            });
+            expect(result.success).toBe(false);
+        });
+
+        it('FR3-12: accepts up to 64 worktree paths', () => {
+            const sixtyFour = Array.from({ length: 64 }, (_, index) => `/repo/.worktrees/wt-${index}`);
+            const result = ScmWorktreesEnrichmentRequestSchema.safeParse({
+                cwd: '.',
+                worktreePaths: sixtyFour,
+            });
+            expect(result.success).toBe(true);
+        });
+
+        it('FR3-12: rejects more than 64 worktree paths to bound server-side work', () => {
+            const sixtyFive = Array.from({ length: 65 }, (_, index) => `/repo/.worktrees/wt-${index}`);
+            const result = ScmWorktreesEnrichmentRequestSchema.safeParse({
+                cwd: '.',
+                worktreePaths: sixtyFive,
+            });
+            expect(result.success).toBe(false);
+        });
+    });
+
+    describe('ScmWorktreesEnrichmentResponseSchema', () => {
+        it('parses a successful enrichment response with per-worktree status fields', () => {
+            const parsed = ScmWorktreesEnrichmentResponseSchema.parse({
+                success: true,
+                worktrees: [
+                    { path: '/repo', changeCount: 4, lastActivityAt: 1_700_000_000_000 },
+                    { path: '/repo/.worktrees/feature-auth', changeCount: 0 },
+                    { path: '/repo/.worktrees/orphan' },
+                ],
+            });
+            expect(parsed.success).toBe(true);
+            expect(parsed.worktrees).toHaveLength(3);
+            expect(parsed.worktrees?.[0]?.changeCount).toBe(4);
+            expect(parsed.worktrees?.[1]?.lastActivityAt).toBeUndefined();
+            expect(parsed.worktrees?.[2]?.changeCount).toBeUndefined();
+        });
+
+        it('parses a failure response with errorCode but no worktrees', () => {
+            const parsed = ScmWorktreesEnrichmentResponseSchema.parse({
+                success: false,
+                error: 'no repo',
+                errorCode: SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY,
+            });
+            expect(parsed.success).toBe(false);
+            expect(parsed.errorCode).toBe(SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY);
+        });
+
+        it('rejects a negative changeCount', () => {
+            const result = ScmWorktreesEnrichmentResponseSchema.safeParse({
+                success: true,
+                worktrees: [{ path: '/repo', changeCount: -1 }],
+            });
+            expect(result.success).toBe(false);
+        });
     });
 
     it('accepts deterministic unsupported feature errors', () => {

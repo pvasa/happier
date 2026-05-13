@@ -103,6 +103,12 @@ describe('protocol package root exports', () => {
         expect(typeof (protocol as any).TransferChunkEnvelopeSchema?.safeParse).toBe('function');
     });
 
+    it('exports session folder schemas', () => {
+        expect(typeof (protocol as any).SessionFoldersV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).SessionFolderWorkspaceRefV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).SetSessionFolderAssignmentRequestSchema?.safeParse).toBe('function');
+    });
+
     it('does not export the removed sync-only workspace replication RPC surface', () => {
         expect((protocol as any).WorkspaceReplicationEndpointSchema).toBeUndefined();
         expect((protocol as any).WorkspaceReplicationDiffSummarySchema).toBeUndefined();
@@ -160,5 +166,15 @@ describe('protocol package root exports', () => {
         expect(typeof (protocol as any).BackendTargetRefSchema?.safeParse).toBe('function');
         expect(typeof (protocol as any).buildBackendTargetKey).toBe('function');
         expect((protocol as any).buildBackendTargetKey({ kind: 'configuredAcpBackend', backendId: 'review' })).toBe('acpBackend:review');
+    });
+
+    it('exports session work-state and provider app-server schemas', () => {
+        expect(typeof (protocol as any).SessionWorkStateV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).mergeSessionWorkStateV1).toBe('function');
+        expect(typeof (protocol as any).mergeSessionWorkStateMetadataV1).toBe('function');
+        expect(typeof (protocol as any).normalizeCodexAppServerGoalToSessionWorkStateItem).toBe('function');
+        expect(typeof (protocol as any).normalizeOpenCodeSessionTodosToWorkStateItems).toBe('function');
+        expect(typeof (protocol as any).normalizeClaudeTaskEventToWorkStateItem).toBe('function');
+        expect(typeof (protocol as any).SessionWorkStateGetResponseV1Schema?.safeParse).toBe('function');
     });
 });

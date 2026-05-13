@@ -9,6 +9,12 @@ describe('ActionIdSchema', () => {
     expect(ActionIdSchema.parse('session.open')).toBe('session.open');
     expect(ActionIdSchema.parse('execution.run.start')).toBe('execution.run.start');
     expect(ActionIdSchema.parse('execution.run.wait')).toBe('execution.run.wait');
+    expect(ActionIdSchema.parse('session.work_state.get')).toBe('session.work_state.get');
+    expect(ActionIdSchema.parse('session.goal.get')).toBe('session.goal.get');
+    expect(ActionIdSchema.parse('session.goal.set')).toBe('session.goal.set');
+    expect(ActionIdSchema.parse('session.goal.clear')).toBe('session.goal.clear');
+    expect(ActionIdSchema.parse('session.vendor_plugin_catalog.list')).toBe('session.vendor_plugin_catalog.list');
+    expect(ActionIdSchema.parse('session.skill_catalog.list')).toBe('session.skill_catalog.list');
     expect(ActionIdSchema.parse('prompt_asset.export')).toBe('prompt_asset.export');
     expect(ActionIdSchema.parse('prompt_registry.install')).toBe('prompt_registry.install');
   });

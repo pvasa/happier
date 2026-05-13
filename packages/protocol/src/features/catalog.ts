@@ -129,6 +129,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['sessions'],
     representation: 'server',
   },
+  'sessions.folders': {
+    description: 'Per-account session folder organization and assignment APIs.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions'],
+    representation: 'server',
+  },
   machines: {
     description: 'Machine control-plane transport capabilities.',
     defaultFailMode: 'fail_closed',
@@ -337,6 +343,30 @@ const FEATURE_CATALOG_DEFINITION = {
     description: 'Direct sessions (provider-backed transcript).',
     defaultFailMode: 'fail_closed',
     dependencies: [],
+    representation: 'client',
+  },
+  'providers.codex.appServer.goals': {
+    description: 'Codex app-server native session goal controls and work-state projection.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions.direct'],
+    representation: 'client',
+  },
+  'providers.codex.appServer.plugins': {
+    description: 'Codex app-server readonly vendor plugin catalog and structured mentions.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions.direct', 'prompts.skills.registries'],
+    representation: 'client',
+  },
+  'providers.codex.appServer.structuredInput': {
+    description: 'Codex app-server structured turn inputs for text, images, skills, and vendor plugin mentions.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions.direct', 'attachments.uploads'],
+    representation: 'client',
+  },
+  'providers.codex.appServer.permissionProfiles': {
+    description: 'Codex app-server permission profile transport.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions.direct'],
     representation: 'client',
   },
   'zen.navigation': {

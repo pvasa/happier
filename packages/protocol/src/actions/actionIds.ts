@@ -29,6 +29,12 @@ export const ACTION_IDS = [
   'session.archive',
   'session.unarchive',
   'session.status.get',
+  'session.work_state.get',
+  'session.goal.get',
+  'session.goal.set',
+  'session.goal.clear',
+  'session.vendor_plugin_catalog.list',
+  'session.skill_catalog.list',
   'session.history.get',
   'session.wait.idle',
   // Intent start actions (first-class)

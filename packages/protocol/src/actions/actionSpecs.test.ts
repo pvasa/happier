@@ -2,7 +2,83 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { ExecutionRunIntentSchema } from '../executionRuns.js';
-import { ActionSpecSchema, ActionSurfaceSchema, getActionSpec, isActionSpecSurfacedOn, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs } from './actionSpecs.js';
+import { serializeActionSpec } from './actionCatalog.js';
+import { ActionApprovalSchema, ActionSpecSchema, ActionSurfaceSchema, getActionSpec, isActionSpecSurfacedOn, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, resolveActionApprovalFlow } from './actionSpecs.js';
+
+const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
+  'action.spec.search',
+  'action.spec.get',
+  'action.options.resolve',
+  'execution.run.list',
+  'execution.run.get',
+  'execution.run.wait',
+  'session.status.get',
+  'session.work_state.get',
+  'session.goal.get',
+  'session.vendor_plugin_catalog.list',
+  'session.skill_catalog.list',
+  'session.history.get',
+  'session.wait.idle',
+  'session.list',
+  'session.activity.get',
+  'session.messages.recent.get',
+  'agents.backends.list',
+  'agents.models.list',
+  'paths.list_recent',
+  'machines.list',
+  'servers.list',
+  'review.engines.list',
+  'memory.search',
+  'memory.get_window',
+  'memory.ensure_up_to_date',
+] as const;
+
+const RESULT_NONE_DEFERRED_ACTION_IDS = [
+  'prompt_doc.update',
+  'prompt_bundle.update',
+  'prompt_asset.export',
+  'prompt_registry.install',
+  'session.title.set',
+  'session.permission_mode.set',
+  'session.model.set',
+  'session.goal.set',
+  'session.goal.clear',
+  'session.archive',
+  'session.unarchive',
+  'session.stop',
+  'ui.voice_global.reset',
+  'ui.pet.choose',
+  'approval.request.create',
+  'approval.request.decide',
+] as const;
+
+const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
+  'review.start',
+  'subagents.plan.start',
+  'subagents.delegate.start',
+  'voice_agent.start',
+  'execution.run.start',
+  'execution.run.send',
+  'execution.run.stop',
+  'execution.run.action',
+  'session.open',
+  'session.fork',
+  'session.rollback',
+  'session.handoff',
+  'session.spawn_new',
+  'session.spawn_picker',
+  'session.message.send',
+  'session.permission.respond',
+  'session.user_action.answer',
+  'session.mode.set',
+  'session.target.primary.set',
+  'session.target.tracked.set',
+  'ui.voice_agent.teleport',
+] as const;
+
+function sorted(values: readonly string[]): string[] {
+  return [...values].sort();
+}
 
 describe('Action Spec Registry', () => {
   it('supports session_agent as an action surface', () => {
@@ -26,6 +102,64 @@ describe('Action Spec Registry', () => {
       // Runtime safety: registry objects must validate against the schema.
       ActionSpecSchema.parse(spec);
     }
+  });
+
+  it('declares approval result metadata for every action spec', () => {
+    for (const spec of listActionSpecs()) {
+      expect(spec.approval?.result).toEqual(expect.stringMatching(/^(required|optional|none)$/));
+    }
+  });
+
+  it('classifies action approval result and flow contracts', () => {
+    const groups = {
+      requiredBlocking: [] as string[],
+      noneDeferred: [] as string[],
+      optionalDeferred: [] as string[],
+    };
+
+    for (const spec of listActionSpecs()) {
+      const flow = resolveActionApprovalFlow(spec.approval);
+      if (spec.approval.result === 'required' && flow === 'blocking') groups.requiredBlocking.push(spec.id);
+      if (spec.approval.result === 'none' && flow === 'deferred') groups.noneDeferred.push(spec.id);
+      if (spec.approval.result === 'optional' && flow === 'deferred') groups.optionalDeferred.push(spec.id);
+    }
+
+    expect(sorted(groups.requiredBlocking)).toEqual(sorted(RESULT_REQUIRED_BLOCKING_ACTION_IDS));
+    expect(sorted(groups.noneDeferred)).toEqual(sorted(RESULT_NONE_DEFERRED_ACTION_IDS));
+    expect(sorted(groups.optionalDeferred)).toEqual(sorted(RESULT_OPTIONAL_DEFERRED_ACTION_IDS));
+    expect(new Set([
+      ...groups.requiredBlocking,
+      ...groups.noneDeferred,
+      ...groups.optionalDeferred,
+    ]).size).toBe(listActionSpecs().length);
+  });
+
+  it('uses default blocking flow for result-required approval metadata', () => {
+    const parsed = ActionApprovalSchema.parse({ result: 'required' });
+
+    expect(parsed.flow).toBeUndefined();
+    expect(getActionSpec('session.list').approval).toEqual({ result: 'required' });
+  });
+
+  it('uses default deferred flow for no-result approval metadata', () => {
+    const parsed = ActionApprovalSchema.parse({ result: 'none' });
+
+    expect(parsed.flow).toBeUndefined();
+    expect(getActionSpec('session.title.set').approval).toEqual({ result: 'none' });
+  });
+
+  it('requires optional-result approval metadata to declare an explicit flow', () => {
+    expect(() => ActionApprovalSchema.parse({ result: 'optional' })).toThrow();
+    expect(ActionApprovalSchema.parse({ result: 'optional', flow: 'deferred' })).toEqual({
+      result: 'optional',
+      flow: 'deferred',
+    });
+  });
+
+  it('serializes approval metadata in action catalog entries', () => {
+    const serialized = serializeActionSpec(getActionSpec('session.list'));
+
+    expect(serialized.approval).toEqual({ result: 'required' });
   });
 
   it('finds known action specs by id', () => {
@@ -70,6 +204,15 @@ describe('Action Spec Registry', () => {
       includeSystem: true,
       resumableOnly: true,
     });
+  });
+
+  it('registers work-state, goal, vendor plugin, and skill catalog actions', () => {
+    expect(getActionSpec('session.work_state.get' as any).bindings?.mcpToolName).toBe('session_work_state_get');
+    expect(getActionSpec('session.goal.get' as any).approval).toEqual({ result: 'required' });
+    expect(getActionSpec('session.goal.set' as any).approval).toEqual({ result: 'none' });
+    expect(getActionSpec('session.goal.clear' as any).approval).toEqual({ result: 'none' });
+    expect(getActionSpec('session.vendor_plugin_catalog.list' as any).bindings?.mcpToolName).toBe('session_vendor_plugin_catalog_list');
+    expect(getActionSpec('session.skill_catalog.list' as any).bindings?.mcpToolName).toBe('session_skill_catalog_list');
   });
 
   it('surfaces approval actions on external mcp and cli (power user/internal)', () => {
@@ -260,6 +403,7 @@ describe('Action Spec Registry', () => {
         id: 'review.start',
         title: 'Start review',
         safety: 'safe',
+        approval: { result: 'optional', flow: 'deferred' },
         placements: [],
         surfaces: {
           ui_button: true,
@@ -289,6 +433,7 @@ describe('Action Spec Registry', () => {
       id: 'review.start',
       title: 'Start review',
       safety: 'safe',
+      approval: { result: 'optional', flow: 'deferred' },
       placements: [],
       surfaces: {
         ui_button: true,

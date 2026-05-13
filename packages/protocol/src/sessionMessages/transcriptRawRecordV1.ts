@@ -270,7 +270,7 @@ const AgentEventSchema = z.discriminatedUnion('type', [
   withAgentEventLifecycle(
     z.object({
       type: z.literal('task-lifecycle'),
-      event: z.enum(['task_started', 'task_complete', 'turn_aborted']),
+      event: z.enum(['task_started', 'task_complete', 'turn_failed', 'turn_cancelled', 'turn_aborted']),
       id: z.string().nullable().optional(),
     })
   ),
@@ -294,6 +294,8 @@ const RawAgentRecordSchema = z
             z.object({ type: z.literal('token_count'), sidechainId: z.string().optional() }).passthrough(),
             z.object({ type: z.literal('task_started'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
             z.object({ type: z.literal('task_complete'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
+            z.object({ type: z.literal('turn_failed'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
+            z.object({ type: z.literal('turn_cancelled'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
             z.object({ type: z.literal('turn_aborted'), id: z.string().optional(), sidechainId: z.string().optional() }).passthrough(),
             z
               .object({
@@ -334,6 +336,8 @@ const RawAgentRecordSchema = z
             'terminal-output',
             'task_started',
             'task_complete',
+            'turn_failed',
+            'turn_cancelled',
             'turn_aborted',
             'permission-request',
             'token_count',
@@ -395,6 +399,8 @@ const RawAgentRecordSchema = z
               .passthrough(),
             z.object({ type: z.literal('task_started'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
             z.object({ type: z.literal('task_complete'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
+            z.object({ type: z.literal('turn_failed'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
+            z.object({ type: z.literal('turn_cancelled'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
             z.object({ type: z.literal('turn_aborted'), id: z.string(), sidechainId: z.string().optional() }).passthrough(),
             z
               .object({

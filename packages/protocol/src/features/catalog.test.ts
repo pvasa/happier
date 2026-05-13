@@ -59,12 +59,28 @@ describe('feature catalog', () => {
     expect(isFeatureId('sessions.direct')).toBe(true);
   });
 
+  it('includes Codex app-server feature ids as client-represented runtime capabilities', () => {
+    expect(isFeatureId('providers.codex.appServer.goals')).toBe(true);
+    expect(isFeatureId('providers.codex.appServer.plugins')).toBe(true);
+    expect(isFeatureId('providers.codex.appServer.structuredInput')).toBe(true);
+    expect(isFeatureId('providers.codex.appServer.permissionProfiles')).toBe(true);
+    expect(FEATURE_CATALOG['providers.codex.appServer.goals']?.representation).toBe('client');
+    expect(FEATURE_CATALOG['providers.codex.appServer.plugins']?.dependencies).toContain('prompts.skills.registries');
+    expect(FEATURE_CATALOG['providers.codex.appServer.structuredInput']?.dependencies).toContain('attachments.uploads');
+  });
+
   it('includes session handoff feature ids', () => {
     expect(isFeatureId('sessions.handoff')).toBe(true);
     expect(isFeatureId('sessions.handoff.serverRoutedTransfer')).toBe(false);
     expect(isFeatureId('machines.transfer.serverRouted')).toBe(true);
     expect(isFeatureId('machines.transfer.directPeer')).toBe(true);
     expect(isFeatureId('machines.transfer.directPeer.transportRns')).toBe(false);
+  });
+
+  it('includes session folders as a server-represented sessions feature', () => {
+    expect(isFeatureId('sessions.folders')).toBe(true);
+    expect(FEATURE_CATALOG['sessions.folders']?.representation).toBe('server');
+    expect(FEATURE_CATALOG['sessions.folders']?.dependencies).toEqual(['sessions']);
   });
 
   it('includes sharing feature ids', () => {

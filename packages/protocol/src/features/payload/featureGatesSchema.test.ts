@@ -15,8 +15,8 @@ describe('FeatureGatesSchema', () => {
       capabilities: {},
     });
 
-    expect(readServerEnabledBit(parsed, 'pets.companion' as never)).toBe(true);
-    expect(readServerEnabledBit(parsed, 'pets.sync' as never)).toBe(true);
+    expect(readServerEnabledBit(parsed, 'pets.companion')).toBe(true);
+    expect(readServerEnabledBit(parsed, 'pets.sync')).toBe(true);
   });
 
   it('preserves channel bridge gates', () => {
@@ -51,5 +51,19 @@ describe('FeatureGatesSchema', () => {
 
     expect(readServerEnabledBit(parsed, 'attachments.uploads')).toBe(true);
     expect(readServerEnabledBit(parsed, 'session.media.generated')).toBe(true);
+  });
+
+  it('preserves session folder gates under sessions', () => {
+    const parsed = FeaturesResponseSchema.parse({
+      features: {
+        sessions: {
+          enabled: true,
+          folders: { enabled: true },
+        },
+      },
+      capabilities: {},
+    });
+
+    expect(readServerEnabledBit(parsed, 'sessions.folders')).toBe(true);
   });
 });

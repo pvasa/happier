@@ -18,6 +18,7 @@ export type SerializedActionSpec = Readonly<{
   slash: ActionSpec['slash'] | null;
   bindings: ActionSpec['bindings'] | null;
   examples: ActionSpec['examples'] | null;
+  approval: ActionSpec['approval'];
   surfaces: ActionSpec['surfaces'];
   inputHints: ActionSpec['inputHints'] | null;
 }>;
@@ -100,6 +101,7 @@ export function serializeActionSpec(spec: ActionSpec): SerializedActionSpec {
     slash: spec.slash ?? null,
     bindings: spec.bindings ?? null,
     examples: spec.examples ?? null,
+    approval: spec.approval,
     surfaces: spec.surfaces,
     inputHints: spec.inputHints ?? null,
   };

@@ -51,6 +51,7 @@ describe('FeaturesResponseSchema', () => {
     expect(parsed.features.encryption.accountOptOut.enabled).toBe(false);
     expect((parsed as any).features.machines.transfer.directPeer.enabled).toBe(false);
     expect((parsed as any).features.machines.transfer.serverRouted.enabled).toBe(false);
+    expect((parsed as any).features.sessions.folders?.enabled).toBe(false);
     expect(parsed.features.auth.recovery.providerReset.enabled).toBe(false);
     expect((parsed as any).features.auth.mtls.enabled).toBe(false);
     // Backward compatibility: older servers predate this gate but still support `POST /v1/auth`.

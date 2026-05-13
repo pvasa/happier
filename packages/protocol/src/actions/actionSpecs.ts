@@ -13,6 +13,18 @@ import { ExecutionRunListRequestSchema } from '../executionRunListRequest.js';
 import { ExecutionRunStartRequestSchema } from '../executionRunStartRequest.js';
 import { SessionRollbackTargetSchema } from '../sessionRollback.js';
 import { SessionHandoffWorkspaceTransferSchema } from '../sessionControl/handoff/handoffSchemas.js';
+import { ActionApprovalSchema, type ActionApproval } from './actionApprovalMetadata.js';
+import { SessionWorkStateStatusV1Schema } from '../sessionWorkState/sessionWorkStateV1.js';
+
+export {
+  ActionApprovalFlowSchema,
+  ActionApprovalResultSchema,
+  ActionApprovalSchema,
+  resolveActionApprovalFlow,
+  type ActionApproval,
+  type ActionApprovalFlow,
+  type ActionApprovalResult,
+} from './actionApprovalMetadata.js';
 
 const ZodSchemaLike = z.custom<z.ZodTypeAny>((value) => {
   if (!value || typeof value !== 'object') return false;
@@ -158,6 +170,7 @@ export const ActionSpecSchema = z.object({
     .passthrough()
     .optional(),
   prompting: ActionPromptingSchema.optional(),
+  approval: ActionApprovalSchema,
   surfaces: ActionSurfaceSchema,
   inputSchema: ZodSchemaLike,
   inputHints: ActionInputHintsSchema.optional(),
@@ -207,6 +220,18 @@ const SessionHistoryGetInputSchema = z.object({
 const SessionWaitIdleInputSchema = z.object({
   sessionId: z.string().min(1),
   timeoutSeconds: z.number().int().min(1).max(3600).optional(),
+}).passthrough();
+
+const SessionGoalSetInputSchema = z.object({
+  sessionId: z.string().min(1),
+  objective: z.string().trim().min(1).max(4000),
+  status: SessionWorkStateStatusV1Schema.optional(),
+  tokenBudget: z.number().finite().positive().nullable().optional(),
+}).passthrough();
+
+const SessionCatalogListInputSchema = z.object({
+  sessionId: z.string().min(1),
+  cwd: z.string().min(1).optional(),
 }).passthrough();
 
 const IntentStartCommonSchema = z.object({
@@ -590,12 +615,17 @@ const PromptRegistryInstallInputSchema = z.object({
   }).optional(),
 }).passthrough();
 
+const APPROVAL_RESULT_REQUIRED: ActionApproval = Object.freeze({ result: 'required' });
+const APPROVAL_RESULT_NONE: ActionApproval = Object.freeze({ result: 'none' });
+const APPROVAL_RESULT_OPTIONAL_DEFERRED: ActionApproval = Object.freeze({ result: 'optional', flow: 'deferred' });
+
 export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
   {
     id: 'action.spec.search',
     title: 'Search action specs',
     description: 'Search available Happier action specs by name, description, bindings, and field hints.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'searchActionSpecs', mcpToolName: 'action_spec_search' },
@@ -626,6 +656,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Get action spec',
     description: 'Get one Happier action spec with input hints and examples.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'getActionSpec', mcpToolName: 'action_spec_get' },
@@ -654,6 +685,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Resolve action options',
     description: 'Resolve valid options for an action field, including dynamic options sources.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'resolveActionOptions', mcpToolName: 'action_options_resolve' },
@@ -687,6 +719,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'review.start',
     title: 'Start review',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['agent_input_chips', 'session_action_menu', 'command_palette', 'slash_command', 'voice_panel'],
     prompting: { voiceHotPath: true },
     slash: { tokens: ['/review', '/h.review'] },
@@ -779,6 +812,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'subagents.plan.start',
     title: 'Start plan run',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['agent_input_chips', 'session_action_menu', 'command_palette', 'slash_command', 'voice_panel'],
     prompting: { voiceHotPath: true },
     slash: { tokens: ['/h.plan'] },
@@ -822,6 +856,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'subagents.delegate.start',
     title: 'Start delegate run',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['agent_input_chips', 'session_action_menu', 'command_palette', 'slash_command', 'voice_panel'],
     prompting: { voiceHotPath: true },
     slash: { tokens: ['/h.delegate'] },
@@ -865,6 +900,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'voice_agent.start',
     title: 'Start voice agent run',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     slash: { tokens: ['/h.voice'] },
     bindings: { voiceClientToolName: 'startVoiceAgentRun', mcpToolName: 'voice_agent_start' },
@@ -908,6 +944,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Start execution run',
     description: 'Start a new execution run within a session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: [],
     bindings: { mcpToolName: 'execution_run_start' },
     examples: {
@@ -944,6 +981,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'execution.run.list',
     title: 'List execution runs',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['run_list', 'command_palette', 'slash_command', 'voice_panel'],
     prompting: { voiceHotPath: true },
     slash: { tokens: ['/h.runs'] },
@@ -988,6 +1026,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'execution.run.get',
     title: 'Get execution run',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['run_list', 'run_card', 'command_palette'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'getExecutionRun', mcpToolName: 'execution_run_get' },
@@ -1016,6 +1055,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'execution.run.send',
     title: 'Send to execution run',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['run_card'],
     bindings: { voiceClientToolName: 'sendExecutionRunMessage', mcpToolName: 'execution_run_send' },
     examples: {
@@ -1044,6 +1084,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'execution.run.stop',
     title: 'Stop execution run',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['run_card', 'run_list'],
     bindings: { voiceClientToolName: 'stopExecutionRun', mcpToolName: 'execution_run_stop' },
     examples: {
@@ -1068,6 +1109,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'execution.run.action',
     title: 'Apply execution run action',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['run_card'],
     bindings: { voiceClientToolName: 'actionExecutionRun', mcpToolName: 'execution_run_action' },
     examples: {
@@ -1097,6 +1139,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Wait for execution run',
     description: 'Wait until an execution run reaches a terminal status. Pass timeoutSeconds to bound the wait; omit it for no Happier-side deadline.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: [],
     bindings: { mcpToolName: 'execution_run_wait' },
     examples: {
@@ -1126,6 +1169,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'session.open',
     title: 'Open session',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['command_palette', 'session_info', 'voice_panel'],
     bindings: { voiceClientToolName: 'openSession' },
     examples: {
@@ -1154,6 +1198,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Fork session',
     description: 'Create a new session from the latest state of the selected session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['session_action_menu', 'session_info', 'command_palette', 'slash_command', 'voice_panel', 'agent_input_chips'],
     slash: { tokens: ['fork'] },
     bindings: { voiceClientToolName: 'forkSession' },
@@ -1181,6 +1226,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Rollback conversation',
     description: 'Roll back conversation state in the selected session.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['session_action_menu', 'session_info'],
     surfaces: {
       ui_button: true,
@@ -1203,6 +1249,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Hand off session',
     description: 'Move the current session to another machine while keeping the same session id.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['session_action_menu', 'session_info'],
     examples: {
       voice: { argsExample: '{"sessionId":"{{sessionId}}","targetMachineId":"{{machineId}}"}' },
@@ -1230,6 +1277,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'session.spawn_new',
     title: 'Create session',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['command_palette', 'session_info', 'voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'spawnSession', mcpToolName: 'session_spawn_new' },
@@ -1265,6 +1313,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Create session (picker)',
     description: 'Open the in-app machine + directory picker and create a new session from the user selection.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'spawnSessionPicker' },
@@ -1296,6 +1345,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List recent paths',
     description: 'List recent workspace directory handles (optionally filtered to a machine).',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listRecentPaths' },
     examples: {
@@ -1324,6 +1374,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List machines',
     description: 'List machines available on the active server scope.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listMachines' },
     examples: {
@@ -1349,6 +1400,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List servers',
     description: 'List servers configured in the client.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listServers' },
     examples: {
@@ -1374,6 +1426,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List review engines',
     description: 'List review engines currently available for the active session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'listReviewEngines' },
     examples: {
@@ -1402,6 +1455,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List agent backends',
     description: 'List available agent backends (providers) for spawning sessions.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'listAgentBackends', mcpToolName: 'agents_backends_list' },
@@ -1431,6 +1485,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List agent models',
     description: 'List available models for an agent backend.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'listAgentModels', mcpToolName: 'agents_models_list' },
@@ -1462,6 +1517,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Send a message to a session',
     description: 'Send a user message to the AI coding assistant inside the specified session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'sendSessionMessage', mcpToolName: 'session_message_send' },
@@ -1495,6 +1551,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Stop session',
     description: 'Request that the local daemon stops the specified session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     bindings: { mcpToolName: 'session_stop' },
     examples: {
@@ -1520,6 +1577,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Set session title',
     description: 'Set the title (summary text) shown for a session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     bindings: { mcpToolName: 'session_title_set' },
     examples: {
@@ -1548,6 +1606,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Set session permission mode',
     description: 'Update the permission intent (read_only/workspace_write/etc) for the specified session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     bindings: { mcpToolName: 'session_permission_mode_set' },
     examples: {
@@ -1576,6 +1635,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Set session model',
     description: 'Set the model override for the specified session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     bindings: { mcpToolName: 'session_model_set' },
     examples: {
@@ -1604,6 +1664,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Archive session',
     description: 'Archive the specified session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     bindings: { mcpToolName: 'session_archive' },
     examples: {
@@ -1629,6 +1690,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Unarchive session',
     description: 'Unarchive the specified session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     bindings: { mcpToolName: 'session_unarchive' },
     examples: {
@@ -1654,6 +1716,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Get session status',
     description: 'Get summary status for a session, optionally refreshing live agent state.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: [],
     bindings: { mcpToolName: 'session_status_get' },
     examples: {
@@ -1678,10 +1741,178 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     inputSchema: SessionStatusGetInputSchema,
   },
   {
+    id: 'session.work_state.get',
+    title: 'Get session work state',
+    description: 'Get the normalized current goal, task, and todo snapshot for a session.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_work_state_get' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Get session work state',
+      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+    },
+    inputSchema: SessionIdRequiredInputSchema,
+  },
+  {
+    id: 'session.goal.get',
+    title: 'Get session goal',
+    description: 'Get the editable session goal when the provider supports native goals.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_goal_get' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Get session goal',
+      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+    },
+    inputSchema: SessionIdRequiredInputSchema,
+  },
+  {
+    id: 'session.goal.set',
+    title: 'Set session goal',
+    description: 'Set or update the native session goal.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
+    placements: [],
+    bindings: { mcpToolName: 'session_goal_set' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}","objective":"Ship goal controls"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Set session goal',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'objective', title: 'Objective', widget: 'textarea', required: true },
+        { path: 'status', title: 'Status', widget: 'text' },
+        { path: 'tokenBudget', title: 'Token budget', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionGoalSetInputSchema,
+  },
+  {
+    id: 'session.goal.clear',
+    title: 'Clear session goal',
+    description: 'Clear the native session goal.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
+    placements: [],
+    bindings: { mcpToolName: 'session_goal_clear' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Clear session goal',
+      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+    },
+    inputSchema: SessionIdRequiredInputSchema,
+  },
+  {
+    id: 'session.vendor_plugin_catalog.list',
+    title: 'List session vendor plugins',
+    description: 'List provider-owned vendor plugins available to the session.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_vendor_plugin_catalog_list' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'List vendor plugins',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'cwd', title: 'Working directory', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionCatalogListInputSchema,
+  },
+  {
+    id: 'session.skill_catalog.list',
+    title: 'List session skills',
+    description: 'List provider-visible skills available to the session.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_skill_catalog_list' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'List skills',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'cwd', title: 'Working directory', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionCatalogListInputSchema,
+  },
+  {
     id: 'session.history.get',
     title: 'Get session history',
     description: 'Fetch a slice of session history/transcript records.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: [],
     bindings: { mcpToolName: 'session_history_get' },
     examples: {
@@ -1721,6 +1952,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Wait for session idle',
     description: 'Wait until the session becomes idle or the timeout elapses.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: [],
     bindings: { mcpToolName: 'session_wait_idle' },
     examples: {
@@ -1749,6 +1981,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Respond to permission request',
     description: 'Approve or deny an active permission request in a session.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'processPermissionRequest', mcpToolName: 'session_permission_respond' },
@@ -1788,6 +2021,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Respond to user-action request',
     description: 'Approve, reject, request changes, or provide structured answers for an active user-action request.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'answerUserActionRequest', mcpToolName: 'session_user_action_answer' },
@@ -1863,6 +2097,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Set session mode',
     description: 'Request a new ACP session mode for the current session when the active provider supports session modes.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'setSessionMode' },
@@ -1899,6 +2134,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Set primary action session',
     description: 'Set which session the voice assistant should target by default.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'setPrimaryActionSession', mcpToolName: 'session_target_primary_set' },
@@ -1928,6 +2164,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Set tracked sessions',
     description: 'Set which sessions should be treated as tracked for updates/snippets.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'setTrackedSessions', mcpToolName: 'session_target_tracked_set' },
     examples: {
@@ -1953,6 +2190,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'List sessions',
     description: 'List recent sessions the user can target.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'listSessions', mcpToolName: 'session_list' },
@@ -1983,6 +2221,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Get session activity',
     description: 'Get a short activity digest for a session without transcript content.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'getSessionActivity', mcpToolName: 'session_activity_get' },
     examples: {
@@ -2011,6 +2250,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Get recent messages',
     description: 'Get a small slice of recent messages for a session (privacy guarded).',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'getSessionRecentMessages', mcpToolName: 'session_messages_recent_get' },
     examples: {
@@ -2041,6 +2281,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     id: 'ui.voice_global.reset',
     title: 'Reset voice agent',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: ['voice_panel', 'command_palette', 'slash_command'],
     slash: { tokens: ['/h.voice.reset'] },
     bindings: { voiceClientToolName: 'resetGlobalVoiceAgent' },
@@ -2068,6 +2309,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Choose pet',
     description: 'Open pet settings so the user can choose or manage their companion.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
     placements: ['slash_command'],
     slash: { tokens: ['/pet', '/h.pet'] },
     inputHints: {
@@ -2091,6 +2333,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Teleport voice agent to session root',
     description: 'Move the daemon-backed voice agent into the current or specified session root.',
     safety: 'safe',
+    approval: APPROVAL_RESULT_OPTIONAL_DEFERRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'teleportVoiceAgentToSessionRoot' },
     inputHints: {
@@ -2117,6 +2360,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Search memory',
     description: 'Search the local daemon memory index (opt-in).',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel', 'command_palette'],
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'memorySearch', mcpToolName: 'memory_search' },
@@ -2172,6 +2416,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Get memory window',
     description: 'Fetch and decrypt a transcript window (used to verify/quote a memory hit).',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'memoryGetWindow', mcpToolName: 'memory_get_window' },
     inputHints: {
@@ -2204,6 +2449,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Ensure memory up to date',
     description: 'Trigger the daemon to sync memory hints for a session (or all active sessions).',
     safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'memoryEnsureUpToDate', mcpToolName: 'memory_ensure_up_to_date' },
     inputHints: {
@@ -2234,6 +2480,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Update prompt document',
     description: 'Update a prompt document stored in the Happier prompt library.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     surfaces: {
       ui_button: false,
@@ -2261,6 +2508,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Update prompt bundle',
     description: 'Update a skill bundle stored in the Happier prompt library.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     surfaces: {
       ui_button: false,
@@ -2288,6 +2536,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Export prompt asset',
     description: 'Export a prompt doc or skill bundle from the Happier library to a provider-native asset.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     surfaces: {
       ui_button: false,
@@ -2335,6 +2584,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Install prompt registry skill',
     description: 'Import a skill bundle from a registry and optionally export it to an external skills location.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     surfaces: {
       ui_button: false,
@@ -2382,6 +2632,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Create approval request',
     description: 'Create an approval request for another action to run.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     surfaces: {
       ui_button: false,
@@ -2408,6 +2659,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     title: 'Decide approval request',
     description: 'Approve or reject an approval request.',
     safety: 'danger',
+    approval: APPROVAL_RESULT_NONE,
     placements: [],
     surfaces: {
       ui_button: true,

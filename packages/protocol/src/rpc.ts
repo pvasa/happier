@@ -37,6 +37,7 @@ export const RPC_METHODS = {
   DAEMON_PROMPT_ASSETS_DOWNLOAD_FINALIZE: 'daemon.promptAssets.download.finalize',
   DAEMON_PROMPT_ASSETS_DOWNLOAD_ABORT: 'daemon.promptAssets.download.abort',
   DAEMON_PROMPT_ASSETS_DELETE: 'daemon.promptAssets.delete',
+  WORKSPACE_ANCHORS_RESOLVE: 'workspace.anchors.resolve',
   DAEMON_PROMPT_REGISTRY_LIST_ADAPTERS: 'daemon.promptRegistry.listAdapters',
   DAEMON_PROMPT_REGISTRY_LIST_SOURCES: 'daemon.promptRegistry.listSources',
   DAEMON_PROMPT_REGISTRY_SCAN_SOURCE: 'daemon.promptRegistry.scanSource',
@@ -98,6 +99,7 @@ export const RPC_METHODS = {
   SCM_WORKTREE_CREATE: 'scm.worktree.create',
   SCM_WORKTREE_REMOVE: 'scm.worktree.remove',
   SCM_WORKTREE_PRUNE: 'scm.worktree.prune',
+  SCM_WORKTREES_ENRICHMENT: 'scm.worktrees.enrichment',
   SCM_REMOTE_ADD: 'scm.remote.add',
   SCM_REMOTE_SET_URL: 'scm.remote.setUrl',
   SCM_REMOTE_REMOVE: 'scm.remote.remove',
@@ -147,6 +149,12 @@ export const RPC_ERROR_MESSAGES = {
 // Session-scoped RPC method names (used with `${sessionId}:${method}` over socket RPC).
 export const SESSION_RPC_METHODS = {
   SESSION_USER_MESSAGE_SEND: 'session.userMessage.send',
+  SESSION_WORK_STATE_GET: 'session.workState.get',
+  SESSION_GOAL_GET: 'session.goal.get',
+  SESSION_GOAL_SET: 'session.goal.set',
+  SESSION_GOAL_CLEAR: 'session.goal.clear',
+  SESSION_VENDOR_PLUGIN_CATALOG_LIST: 'session.vendorPluginCatalog.list',
+  SESSION_SKILL_CATALOG_LIST: 'session.skillCatalog.list',
   EXECUTION_RUN_START: 'execution.run.start',
   EXECUTION_RUN_ENSURE: 'execution.run.ensure',
   EXECUTION_RUN_ENSURE_OR_START: 'execution.run.ensureOrStart',
