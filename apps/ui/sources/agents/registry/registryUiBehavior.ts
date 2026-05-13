@@ -59,6 +59,12 @@ export type AgentUiBehavior = Readonly<{
     sessionUsage?: Readonly<{
         supportsExactContextUsageBadge?: boolean;
     }>;
+    workState?: Readonly<{
+        supportsEditableGoals?: (ctx: {
+            agentId: AgentId;
+            session: Session;
+        }) => boolean;
+    }>;
     mcpServers?: Readonly<{
         supportsDetectedConfigScan?: boolean;
     }>;
@@ -193,6 +199,7 @@ function mergeAgentUiBehavior(a: AgentUiBehavior, b: AgentUiBehavior): AgentUiBe
     return {
         ...(a.guidance || b.guidance ? { guidance: { ...(a.guidance ?? {}), ...(b.guidance ?? {}) } } : {}),
         ...(a.sessionUsage || b.sessionUsage ? { sessionUsage: { ...(a.sessionUsage ?? {}), ...(b.sessionUsage ?? {}) } } : {}),
+        ...(a.workState || b.workState ? { workState: { ...(a.workState ?? {}), ...(b.workState ?? {}) } } : {}),
         ...(a.mcpServers || b.mcpServers ? { mcpServers: { ...(a.mcpServers ?? {}), ...(b.mcpServers ?? {}) } } : {}),
         ...(a.permissions || b.permissions
             ? {
@@ -388,4 +395,12 @@ export function buildSessionComposerNextMessageMetaOverridesFromUiState(opts: {
 
 export function supportsDetectedMcpConfigScan(agentId: AgentId): boolean {
     return AGENTS_UI_BEHAVIOR[agentId]?.mcpServers?.supportsDetectedConfigScan === true;
+}
+
+export function supportsEditableSessionGoals(ctx: {
+    agentId: AgentId;
+    session: Session;
+}): boolean {
+    const fn = AGENTS_UI_BEHAVIOR[ctx.agentId]?.workState?.supportsEditableGoals;
+    return fn ? fn(ctx) : false;
 }

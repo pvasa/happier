@@ -88,6 +88,12 @@ export const CODEX_UI_BEHAVIOR_OVERRIDE: AgentUiBehavior = {
     sessionUsage: {
         supportsExactContextUsageBadge: false,
     },
+    workState: {
+        supportsEditableGoals: ({ agentId, session }) => {
+            if (agentId !== 'codex') return false;
+            return resolvePersistedCodexRuntimeIdentity(session.metadata ?? null)?.backendMode === 'appServer';
+        },
+    },
     mcpServers: {
         supportsDetectedConfigScan: true,
     },
