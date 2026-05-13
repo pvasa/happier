@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 
-import { gotoDomContentLoadedWithRetries } from './pageNavigation';
+import { gotoDomContentLoadedWithPathFallback } from './pageNavigation';
 
 export async function enableEnhancedSessionWizard(params: Readonly<{
   page: Page;
@@ -8,7 +8,12 @@ export async function enableEnhancedSessionWizard(params: Readonly<{
   timeoutMs?: number;
 }>): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 60_000;
-  await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/settings/session`, timeoutMs);
+  await gotoDomContentLoadedWithPathFallback(
+    params.page,
+    `${params.baseUrl}/settings/session`,
+    '/settings/session',
+    timeoutMs,
+  );
 
   const wizardModeItem = params.page.getByTestId('settings-new-session-wizard-mode');
   await expect(wizardModeItem).toHaveCount(1, { timeout: timeoutMs });

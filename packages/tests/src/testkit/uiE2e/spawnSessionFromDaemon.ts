@@ -1,5 +1,21 @@
 import type { StartedDaemon } from '../daemon/daemon';
 
+type SpawnSessionSuccessResponse = Readonly<{
+  success: true;
+  sessionId: string;
+}>;
+
+function isSpawnSessionSuccessResponse(value: unknown): value is SpawnSessionSuccessResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'success' in value &&
+    value.success === true &&
+    'sessionId' in value &&
+    typeof value.sessionId === 'string'
+  );
+}
+
 export async function spawnSessionFromDaemon(params: Readonly<{
   daemon: StartedDaemon;
   directory: string;
@@ -19,10 +35,9 @@ export async function spawnSessionFromDaemon(params: Readonly<{
       agent: params.agent ?? 'claude',
     }),
   });
-  const json = (await res.json().catch(() => null)) as any;
-  if (!res.ok || !json || json.success !== true || typeof json.sessionId !== 'string') {
+  const json: unknown = await res.json().catch(() => null);
+  if (!res.ok || !isSpawnSessionSuccessResponse(json)) {
     throw new Error(`Failed to spawn session (status=${res.status}): ${JSON.stringify(json)}`);
   }
-  return json.sessionId as string;
+  return json.sessionId;
 }
-

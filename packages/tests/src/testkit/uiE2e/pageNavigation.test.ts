@@ -136,6 +136,7 @@ describe('gotoCommittedWithRetries', () => {
 
 describe('normalizeLoopbackBaseUrl', () => {
   it('preserves routable IPv4 loopback hosts and rewrites non-routable loopback hosts to 127.0.0.1', () => {
+    expect(normalizeLoopbackBaseUrl('http://localhost:60674/')).toBe('http://127.0.0.1:60674');
     expect(normalizeLoopbackBaseUrl('http://127.0.0.1:60674/')).toBe('http://127.0.0.1:60674');
     expect(normalizeLoopbackBaseUrl('http://0.0.0.0:60674/')).toBe('http://127.0.0.1:60674');
     expect(normalizeLoopbackBaseUrl('http://[::1]:60674/')).toBe('http://127.0.0.1:60674');

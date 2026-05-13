@@ -179,7 +179,7 @@ describe('startCliAuthLoginForTerminalConnect', () => {
                 env: {},
             });
 
-            started.proc.child.exitCode = 0;
+            (started.proc.child as unknown as { exitCode: number | null }).exitCode = 0;
             started.proc.child.emit('exit', 0, null);
             await started.waitForSuccess();
 

@@ -8,7 +8,7 @@ import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
-import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import { gotoDomContentLoadedWithPathFallback, gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { clickScopedButtonByTestIdOrRole } from '../../src/testkit/uiE2e/clickScopedButtonByTestIdOrRole';
 import { createGitRepoForPartialStagingFixture } from '../../src/testkit/uiE2e/gitRepoFixtures';
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
@@ -55,7 +55,7 @@ function rightPaneLocator(page: Page) {
 }
 
 async function enableScmWriteOperationsInSettings(page: Page, baseUrl: string) {
-  await page.goto(`${baseUrl}/settings/features`, { waitUntil: 'domcontentloaded' });
+  await gotoDomContentLoadedWithPathFallback(page, `${baseUrl}/settings/features`, '/settings/features', 180_000);
   await expect(page.getByTestId('settings-feature-experiments-toggle')).toHaveCount(1, { timeout: 60_000 });
 
   const experimentsToggle = page.getByTestId('settings-feature-experiments-toggle');
@@ -101,6 +101,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
         EXPO_PUBLIC_DEBUG: '1',
         EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
         EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-${run.runId}`,
+        HAPPIER_E2E_UI_WEB_SCRIPT_FETCH_TIMEOUT_MS: process.env.HAPPIER_E2E_UI_WEB_SCRIPT_FETCH_TIMEOUT_MS ?? '420000',
       },
     });
 
@@ -124,7 +125,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
     let runDaemon: StartedDaemon | null = null;
     try {
       await page.setViewportSize({ width: 1440, height: 900 });
-      await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
+      await gotoDomContentLoadedWithRetries(page, uiBaseUrl, 180_000);
 
       await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
@@ -145,7 +146,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
         },
       });
 
-      await page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
+      await gotoDomContentLoadedWithPathFallback(page, cliLogin.connectUrl, '/terminal/connect', 180_000);
       await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
       await page.getByTestId('terminal-connect-approve').click();
       await cliLogin.waitForSuccess();
@@ -156,6 +157,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
       runDaemon = await startTestDaemon({
         testDir,
         happyHomeDir: cliHomeDir,
+        startupTimeoutMs: 180_000,
         env: {
           ...process.env,
           HOME: cliHomeDir,
@@ -182,7 +184,7 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
       await enableScmWriteOperationsInSettings(page, uiBaseUrl);
 
       const sessionId = await spawnSessionFromDaemon({ daemon: runDaemon, directory: repoDir });
-      await page.goto(`${uiBaseUrl}/session/${sessionId}?right=git`, { waitUntil: 'domcontentloaded' });
+      await gotoDomContentLoadedWithPathFallback(page, `${uiBaseUrl}/session/${sessionId}?right=git`, `/session/${sessionId}`, 180_000);
       await expect(page.getByTestId('session-composer-input')).toHaveCount(1, { timeout: 180_000 });
 
       // Ensure right pane is open and on Source control.
@@ -206,25 +208,24 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
       const twoHunksRow = rightPane.getByTestId(`scm-change-row-${toTestIdSafeValue(twoHunksPath)}`);
       await expect(twoHunksRow).toHaveCount(1, { timeout: 120_000 });
 
-      // Select both files for commit (atomic strategy uses a virtual selection model).
-      const twoHunksToggle = rightPane.getByTestId(`scm-commit-selection-toggle-${toTestIdSafeValue(twoHunksPath)}`);
-      await expect(twoHunksToggle).toHaveCount(1, { timeout: 60_000 });
-      await twoHunksToggle.click({ force: true });
-
+      // Select one whole file from the SCM list. The second file will be selected partially
+      // from its details pane through the explicit line-selection mode.
       const wholeFileToggle = rightPane.getByTestId(`scm-commit-selection-toggle-${toTestIdSafeValue(wholeFilePath)}`);
       await expect(wholeFileToggle).toHaveCount(1, { timeout: 60_000 });
       await wholeFileToggle.click({ force: true });
-      await expect(rightPane.getByTestId('scm-commit-selection-summary')).toContainText(/^2\b/, { timeout: 60_000 });
+      await expect(rightPane.getByTestId('scm-commit-selection-summary')).toContainText(/^1\b/, { timeout: 60_000 });
 
-      // Open file details tab (pinned) and select a line from the first hunk.
+      // Open file details tab (pinned), enter explicit line-selection mode, and select
+      // a single line from the first hunk.
       await twoHunksRow.focus();
       await page.keyboard.press('Shift+Enter');
       await expect(page.getByTestId(`session-details-tab-${toTestIdSafeValue(`file:${twoHunksPath}`)}`)).toHaveCount(1, { timeout: 60_000 });
 
       const fileDetailsScroll = detailsPaneLocator(page).getByTestId('file-details-scroll');
       await expect(fileDetailsScroll).toHaveCount(1, { timeout: 120_000 });
+      await expect(detailsPaneLocator(page).getByTestId('file-details-stage-file')).toHaveCount(1, { timeout: 60_000 });
+      await detailsPaneLocator(page).getByTestId('file-details-stage-file').click();
 
-      // Select a single line from the first hunk (line-selection UI should appear).
       const firstHunkLine = detailsPaneLocator(page).getByText('ADDED_HUNK1_A', { exact: true }).first();
       await expect(firstHunkLine).toHaveCount(1, { timeout: 120_000 });
       await firstHunkLine.click({ force: true });

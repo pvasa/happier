@@ -6,7 +6,8 @@ export function normalizeLoopbackBaseUrl(input: string): string {
     // Keep browser navigation on a routable IPv4 loopback. Some local environments resolve
     // `localhost` to IPv6 first, while these test servers only listen on 127.0.0.1.
     if (
-      parsed.hostname === '127.0.0.1'
+      parsed.hostname === 'localhost'
+      || parsed.hostname === '127.0.0.1'
       || parsed.hostname === '0.0.0.0'
       || parsed.hostname === '::1'
       || parsed.hostname === '[::1]'

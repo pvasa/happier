@@ -85,6 +85,9 @@ describe('openNewSessionMachineSelection', () => {
 
 describe('openNewSessionPathSelection', () => {
   it('prefers the in-place path popover and avoids route fallback when the input appears quickly', async () => {
+    // Phase 11 SelectionList migration: the helper queries the new
+    // `path-selection-list:header:input` testID via `page.locator(...)`. The
+    // legacy `path-selector-input` testID was deleted with `PathSelector.tsx`.
     let nowMs = 0;
     const pathChip = createCountableLocator({});
     const pathInput = createCountableLocator({ counts: [0, 1] });
@@ -97,11 +100,13 @@ describe('openNewSessionPathSelection', () => {
     const page = {
       getByTestId: vi.fn((testId: string) => {
         if (testId === 'agent-input-path-chip') return pathChip;
-        if (testId === 'path-selector-input') return pathInput;
         throw new Error(`unexpected test id: ${testId}`);
       }),
-      locator: vi.fn(() => {
-        throw new Error('unexpected locator lookup');
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="path-selection-list:header:input"]') {
+          return pathInput;
+        }
+        throw new Error(`unexpected selector: ${selector}`);
       }),
       goto: gotoSpy,
       waitForTimeout: waitForTimeoutSpy,
@@ -124,6 +129,112 @@ describe('openNewSessionPathSelection', () => {
 });
 
 describe('createSessionFromNewSessionComposer', () => {
+  it('selects the current-path checkout option before sending when the checkout chip is present', async () => {
+    let nowMs = 0;
+    let currentUrl = 'http://127.0.0.1:3000/new';
+    let sessionComposerVisible = false;
+
+    const exactMachineClickSpy = vi.fn(async () => {});
+    const checkoutChipClickSpy = vi.fn(async () => {});
+    const currentPathClickSpy = vi.fn(async () => {});
+    const sendClickSpy = vi.fn(async () => {
+      currentUrl = 'http://127.0.0.1:3000/session/session-checkout';
+      sessionComposerVisible = true;
+    });
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === 'new-session-composer-input') {
+          return {
+            count: async (): Promise<number> => 1,
+            fill: vi.fn(async () => {}),
+          };
+        }
+        if (testId === 'session-composer-input') {
+          return {
+            count: async (): Promise<number> => (sessionComposerVisible ? 1 : 0),
+          };
+        }
+        if (testId === 'agent-input-machine-chip') {
+          return {
+            count: async (): Promise<number> => 1,
+            click: vi.fn(async () => {}),
+          };
+        }
+        if (testId === 'new-session-machine:machine-1') {
+          return {
+            count: async (): Promise<number> => 1,
+            click: exactMachineClickSpy,
+            first: () => ({
+              click: exactMachineClickSpy,
+            }),
+          };
+        }
+        if (testId === 'new-session-checkout-chip') {
+          return {
+            count: async (): Promise<number> => 1,
+            click: checkoutChipClickSpy,
+          };
+        }
+        if (testId === 'selection-list:worktree-root:option:current_path') {
+          return {
+            count: async (): Promise<number> => 1,
+            click: currentPathClickSpy,
+          };
+        }
+        if (testId === 'new-session-composer-send') {
+          return {
+            count: async (): Promise<number> => 1,
+            click: sendClickSpy,
+          };
+        }
+        throw new Error(`unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid^="new-session-machine:"]') {
+          return {
+            first: () => ({
+              count: async (): Promise<number> => 1,
+            }),
+          };
+        }
+        if (selector === 'textarea[data-testid="session-composer-input"]:visible') {
+          return {
+            count: async (): Promise<number> => (sessionComposerVisible ? 1 : 0),
+          };
+        }
+        throw new Error(`unexpected selector: ${selector}`);
+      }),
+      goto: vi.fn(async (url: string) => {
+        currentUrl = url;
+      }),
+      waitForTimeout: vi.fn(async (delayMs: number) => {
+        nowMs += delayMs;
+      }),
+      waitForURL: vi.fn(async (matcher: (url: URL) => boolean) => {
+        const url = new URL(currentUrl);
+        if (!matcher(url)) {
+          throw new Error(`url predicate did not match: ${currentUrl}`);
+        }
+      }),
+      url: vi.fn(() => currentUrl),
+    };
+
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+
+    await expect(createSessionFromNewSessionComposer({
+      page: page as never,
+      uiBaseUrl: 'http://127.0.0.1:3000',
+      machineId: 'machine-1',
+      prompt: 'hello checkout',
+    })).resolves.toBe('session-checkout');
+
+    expect(exactMachineClickSpy).toHaveBeenCalledTimes(1);
+    expect(checkoutChipClickSpy).toHaveBeenCalledTimes(1);
+    expect(currentPathClickSpy).toHaveBeenCalledTimes(1);
+    expect(sendClickSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers when /new initially renders blocking guidance and only exposes the composer after the machine picker fallback returns', async () => {
     let nowMs = 0;
     let currentUrl = 'http://127.0.0.1:3000/new';

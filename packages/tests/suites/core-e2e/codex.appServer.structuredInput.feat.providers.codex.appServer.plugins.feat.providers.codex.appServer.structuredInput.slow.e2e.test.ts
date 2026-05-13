@@ -4,10 +4,6 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import {
-  SessionSkillCatalogListResponseV1Schema,
-  SessionVendorPluginCatalogListResponseV1Schema,
-} from '@happier-dev/protocol';
 
 import {
   readFakeCodexAppServerRequestLog,
@@ -25,6 +21,54 @@ import { waitFor } from '../../src/testkit/timing';
 
 const run = createRunDirs({ runLabel: 'core' });
 
+type CatalogParseResult<T> = { success: true; data: T } | { success: false };
+type RuntimeVendorPluginCatalog = Readonly<{
+  supported?: boolean;
+  unsupported?: boolean;
+  vendorPlugins: ReadonlyArray<Record<string, unknown>>;
+}>;
+type RuntimeSkillCatalog = Readonly<{
+  supported?: boolean;
+  unsupported?: boolean;
+  skills: ReadonlyArray<Record<string, unknown>>;
+}>;
+
+const RuntimeVendorPluginCatalogSchema = {
+  safeParse(input: unknown): CatalogParseResult<RuntimeVendorPluginCatalog> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return { success: false };
+    const record = input as Record<string, unknown>;
+    if (!Array.isArray(record.vendorPlugins)) return { success: false };
+    return {
+      success: true,
+      data: {
+        ...(typeof record.supported === 'boolean' ? { supported: record.supported } : {}),
+        ...(typeof record.unsupported === 'boolean' ? { unsupported: record.unsupported } : {}),
+        vendorPlugins: record.vendorPlugins.filter((entry): entry is Record<string, unknown> => {
+          return !!entry && typeof entry === 'object' && !Array.isArray(entry);
+        }),
+      },
+    };
+  },
+};
+
+const RuntimeSkillCatalogSchema = {
+  safeParse(input: unknown): CatalogParseResult<RuntimeSkillCatalog> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return { success: false };
+    const record = input as Record<string, unknown>;
+    if (!Array.isArray(record.skills)) return { success: false };
+    return {
+      success: true,
+      data: {
+        ...(typeof record.supported === 'boolean' ? { supported: record.supported } : {}),
+        ...(typeof record.unsupported === 'boolean' ? { unsupported: record.unsupported } : {}),
+        skills: record.skills.filter((entry): entry is Record<string, unknown> => {
+          return !!entry && typeof entry === 'object' && !Array.isArray(entry);
+        }),
+      },
+    };
+  },
+};
+
 async function connectUserSocket(params: Readonly<{
   baseUrl: string;
   token: string;
@@ -41,6 +85,56 @@ async function connectUserSocket(params: Readonly<{
     socket.close();
     throw error;
   }
+}
+
+async function enqueuePromptAndWaitForTranscript(params: Readonly<{
+  baseUrl: string;
+  token: string;
+  sessionId: string;
+  secret: Uint8Array;
+  afterSeq: number;
+  text: string;
+}>): Promise<void> {
+  const localId = `pending-${randomUUID()}`;
+  const enqueue = await enqueuePendingQueueV2({
+    baseUrl: params.baseUrl,
+    token: params.token,
+    sessionId: params.sessionId,
+    localId,
+    ciphertext: encryptLegacyBase64(
+      {
+        role: 'user',
+        content: { type: 'text', text: params.text },
+        localId,
+        meta: { source: 'ui', sentFrom: 'e2e' },
+      },
+      params.secret,
+    ),
+    timeoutMs: 20_000,
+  });
+  expect(enqueue.status).toBe(200);
+
+  await waitFor(async () => {
+    const pending = await listPendingQueueV2({
+      baseUrl: params.baseUrl,
+      token: params.token,
+      sessionId: params.sessionId,
+      timeoutMs: 20_000,
+    });
+    return pending.status === 200
+      && Array.isArray(pending.data?.pending)
+      && pending.data.pending.every((row) => row.localId !== localId);
+  }, { timeoutMs: 45_000, context: 'Codex app-server drains seed prompt before catalog RPC' });
+
+  await waitFor(async () => {
+    const transcriptRows = await fetchMessagesSince({
+      baseUrl: params.baseUrl,
+      token: params.token,
+      sessionId: params.sessionId,
+      afterSeq: params.afterSeq,
+    });
+    return transcriptRows.some((row) => row.localId === localId);
+  }, { timeoutMs: 45_000, context: 'Codex app-server materializes seed prompt before catalog RPC' });
 }
 
 describe('core e2e: Codex app-server vendor catalog and structured input', () => {
@@ -61,6 +155,15 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
     const { auth, requestLogPath, secret, serverBaseUrl, sessionId, workspaceDir } = harness;
     const baselineSeq = harness.readySession.seq ?? 0;
 
+    await enqueuePromptAndWaitForTranscript({
+      baseUrl: serverBaseUrl,
+      token: auth.token,
+      sessionId,
+      secret,
+      afterSeq: baselineSeq,
+      text: `start app-server thread before catalog RPC ${randomUUID()}`,
+    });
+
     const socket = await connectUserSocket({ baseUrl: serverBaseUrl, token: auth.token });
     try {
       const vendorCatalog = await callLegacyEncryptedSessionRpc({
@@ -69,10 +172,18 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
         method: SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST,
         req: {},
         secret,
-        schema: SessionVendorPluginCatalogListResponseV1Schema,
+        schema: RuntimeVendorPluginCatalogSchema,
         timeoutMs: 45_000,
       });
-      expect(vendorCatalog).toMatchObject({ vendorPlugins: [] });
+      expect(vendorCatalog.vendorPlugins).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          displayName: 'Reviewer',
+          mentionPath: 'plugin://reviewer@codex',
+          installed: true,
+          enabled: true,
+          mentionable: true,
+        }),
+      ]));
 
       const skillCatalog = await callLegacyEncryptedSessionRpc({
         ui: socket,
@@ -80,10 +191,17 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
         method: SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST,
         req: {},
         secret,
-        schema: SessionSkillCatalogListResponseV1Schema,
+        schema: RuntimeSkillCatalogSchema,
         timeoutMs: 45_000,
       });
-      expect(skillCatalog).toMatchObject({ skills: [] });
+      expect(skillCatalog.skills).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'code-review',
+          path: expect.stringContaining('/skills/code-review/SKILL.md'),
+          enabled: true,
+          projectionKind: 'codex_native',
+        }),
+      ]));
     } finally {
       socket.close();
     }
@@ -92,6 +210,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
     const userText = `structured input ${randomUUID()}`;
     const skillPath = resolve(testDir, 'skills', 'code-review', 'SKILL.md');
     const imagePath = resolve(testDir, 'uploads', 'screenshot.png');
+    const imageUrl = `https://images.example.test/${randomUUID()}.png`;
     const enqueue = await enqueuePendingQueueV2({
       baseUrl: serverBaseUrl,
       token: auth.token,
@@ -115,6 +234,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
               ],
               attachments: [
                 { kind: 'image', mimeType: 'image/png', localPath: imagePath },
+                { kind: 'image', mimeType: 'image/png', url: imageUrl },
               ],
             },
           },
@@ -171,6 +291,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
             expect.objectContaining({ type: 'mention', path: 'plugin://reviewer@codex' }),
             expect.objectContaining({ type: 'skill', name: 'code-review', path: skillPath }),
             expect.objectContaining({ type: 'localImage', path: imagePath }),
+            expect.objectContaining({ type: 'image', url: imageUrl }),
           ]),
         }),
       }),

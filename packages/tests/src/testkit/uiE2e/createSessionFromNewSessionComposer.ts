@@ -58,6 +58,27 @@ async function clickFirstMachineMatch(page: Page, machineId: string): Promise<Ma
   }
 }
 
+async function selectCurrentPathCheckoutIfPresent(page: Page): Promise<void> {
+  let checkoutChip: ReturnType<Page['getByTestId']>;
+  try {
+    checkoutChip = page.getByTestId('new-session-checkout-chip');
+  } catch {
+    return;
+  }
+
+  if ((await checkoutChip.count()) === 0) return;
+  try {
+    await checkoutChip.click({ timeout: 5_000 });
+  } catch {
+    return;
+  }
+
+  const currentPathOption = page.getByTestId('selection-list:worktree-root:option:current_path');
+  if (await waitForCount(page, currentPathOption, 1, 5_000)) {
+    await currentPathOption.click({ timeout: 5_000 });
+  }
+}
+
 export async function openNewSessionMachineSelection(
   params: Readonly<{
     page: Page;
@@ -113,7 +134,13 @@ export async function openNewSessionPathSelection(
 ): Promise<void> {
   const popoverWaitMs = params.popoverWaitMs ?? 3_000;
   const routeFallbackWaitMs = params.routeFallbackWaitMs ?? 60_000;
-  const pathInput = params.page.getByTestId('path-selector-input');
+  // Phase 11 SelectionList migration: the path picker is backed by the
+  // SelectionList primitive; the input mounts under
+  // `path-selection-list:header:input`. The legacy `path-selector-input`
+  // testID was deleted with `PathSelector.tsx` so we no longer accept it.
+  const pathInput = params.page.locator(
+      '[data-testid="path-selection-list:header:input"]',
+  );
 
   await params.page.getByTestId('agent-input-path-chip').click();
   if (await waitForCount(params.page, pathInput, 1, popoverWaitMs)) {
@@ -159,6 +186,7 @@ export async function createSessionFromNewSessionComposer(
 
   await page.waitForURL((url) => url.pathname.endsWith('/new'), { timeout: 60_000 });
   await expect(page.getByTestId('new-session-composer-input')).toHaveCount(1, { timeout: 60_000 });
+  await selectCurrentPathCheckoutIfPresent(page);
 
   await page.getByTestId('new-session-composer-input').fill(prompt);
   await expect(page.getByTestId('new-session-composer-send')).toHaveCount(1, { timeout: 60_000 });

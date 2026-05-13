@@ -20,16 +20,78 @@ export type FakeCodexAppServerRequest = Readonly<{
   params?: Record<string, unknown> | null;
 }>;
 
+export type FakeCodexAppServerGoal = Readonly<{
+  threadId: string;
+  objective: string;
+  status: 'active' | 'paused' | 'budgetLimited' | 'complete';
+  tokenBudget?: number | null;
+  tokensUsed?: number;
+  timeUsedSeconds?: number;
+}>;
+
+export type FakeCodexAppServerVendorPlugin = Readonly<{
+  id: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  mentionPath: string;
+  installed: boolean;
+  enabled: boolean;
+}>;
+
+export type FakeCodexAppServerSkill = Readonly<{
+  name: string;
+  displayName?: string;
+  description?: string;
+  path: string;
+  enabled: boolean;
+}>;
+
+function createDefaultFakeCodexVendorPlugins(): FakeCodexAppServerVendorPlugin[] {
+  return [
+    {
+      id: 'reviewer@codex',
+      name: 'reviewer',
+      displayName: 'Reviewer',
+      description: 'Review session context from the fake Codex app-server.',
+      mentionPath: 'plugin://reviewer@codex',
+      installed: true,
+      enabled: true,
+    },
+  ];
+}
+
+function createDefaultFakeCodexSkills(dir: string): FakeCodexAppServerSkill[] {
+  return [
+    {
+      name: 'code-review',
+      displayName: 'Code Review',
+      description: 'Review code with the fake Codex app-server.',
+      path: join(dir, 'skills', 'code-review', 'SKILL.md'),
+      enabled: true,
+    },
+  ];
+}
+
 export async function writeFakeCodexAppServerScript(params: Readonly<{
   dir: string;
   requestLogPath: string;
+  initialGoal?: FakeCodexAppServerGoal | null;
+  vendorPlugins?: readonly FakeCodexAppServerVendorPlugin[];
+  skills?: readonly FakeCodexAppServerSkill[];
 }>): Promise<string> {
   const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
+  const initialGoal = params.initialGoal ?? null;
+  const vendorPlugins = params.vendorPlugins ?? createDefaultFakeCodexVendorPlugins();
+  const skills = params.skills ?? createDefaultFakeCodexSkills(params.dir);
   const script = [
     '#!/usr/bin/env node',
     'import { appendFile } from "node:fs/promises";',
     'import readline from "node:readline";',
     `const requestLogPath = ${JSON.stringify(params.requestLogPath)};`,
+    `let currentGoal = ${JSON.stringify(initialGoal)};`,
+    `const vendorPlugins = ${JSON.stringify(vendorPlugins)};`,
+    `const skills = ${JSON.stringify(skills)};`,
     'const turnDelayMsRaw = process.env.HAPPIER_E2E_FAKE_CODEX_APP_SERVER_TURN_DELAY_MS;',
     'const turnDelayMs = (() => {',
     '  if (!turnDelayMsRaw) return 0;',
@@ -61,6 +123,57 @@ export async function writeFakeCodexAppServerScript(params: Readonly<{
     '  }',
     '  if (msg.method === "model/list") {',
     '    process.stdout.write(JSON.stringify({ id: msg.id, result: [{ id: "gpt-5.4", displayName: "GPT-5.4", isDefault: true }] }) + "\\n");',
+    '    continue;',
+    '  }',
+    '  if (msg.method === "thread/goal/get") {',
+    '    process.stdout.write(JSON.stringify({ id: msg.id, result: currentGoal }) + "\\n");',
+    '    continue;',
+    '  }',
+    '  if (msg.method === "thread/goal/set") {',
+    '    const nowIso = new Date().toISOString();',
+    '    const objective = typeof msg.params?.objective === "string" ? msg.params.objective.trim() : "";',
+    '    if (!objective) {',
+    '      process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "objective required" } }) + "\\n");',
+    '      continue;',
+    '    }',
+    '    currentGoal = {',
+    '      threadId: typeof msg.params?.threadId === "string" ? msg.params.threadId : "thread-started",',
+    '      objective,',
+    '      status: typeof msg.params?.status === "string" ? msg.params.status : "active",',
+    '      tokenBudget: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "tokenBudget") ? msg.params.tokenBudget : null,',
+    '      tokensUsed: 0,',
+    '      timeUsedSeconds: 0,',
+    '      createdAt: nowIso,',
+    '      updatedAt: nowIso',
+    '    };',
+    '    process.stdout.write(JSON.stringify({ id: msg.id, result: currentGoal }) + "\\n");',
+    '    process.stdout.write(JSON.stringify({ method: "thread/goal/updated", params: { threadId: currentGoal.threadId, goal: currentGoal } }) + "\\n");',
+    '    continue;',
+    '  }',
+    '  if (msg.method === "thread/goal/clear") {',
+    '    const threadId = typeof msg.params?.threadId === "string" ? msg.params.threadId : currentGoal?.threadId ?? "thread-started";',
+    '    currentGoal = null;',
+    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId } }) + "\\n");',
+    '    process.stdout.write(JSON.stringify({ method: "thread/goal/cleared", params: { threadId } }) + "\\n");',
+    '    continue;',
+    '  }',
+    '  if (msg.method === "plugin/list") {',
+    '    process.stdout.write(JSON.stringify({ id: msg.id, result: vendorPlugins }) + "\\n");',
+    '    continue;',
+    '  }',
+    '  if (msg.method === "plugin/read") {',
+    '    const pluginId = typeof msg.params?.id === "string" ? msg.params.id : null;',
+    '    const path = typeof msg.params?.path === "string" ? msg.params.path : null;',
+    '    const plugin = vendorPlugins.find((candidate) => candidate.id === pluginId || candidate.mentionPath === path) ?? null;',
+    '    if (!plugin) {',
+    '      process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "plugin not found" } }) + "\\n");',
+    '      continue;',
+    '    }',
+    '    process.stdout.write(JSON.stringify({ id: msg.id, result: plugin }) + "\\n");',
+    '    continue;',
+    '  }',
+    '  if (msg.method === "skills/list") {',
+    '    process.stdout.write(JSON.stringify({ id: msg.id, result: skills }) + "\\n");',
     '    continue;',
     '  }',
     '  if (msg.method === "turn/start") {',

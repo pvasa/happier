@@ -250,14 +250,15 @@ async function runRemoteToLocalMirroringScenario(): Promise<void> {
       stderrPath: resolve(join(testDir, 'cli.stderr.log')),
     });
 
-    ui = createUserScopedSocketCollector(server.baseUrl, auth.token);
+    const serverBaseUrl = server.baseUrl;
+    ui = createUserScopedSocketCollector(serverBaseUrl, auth.token);
     ui.connect();
 
     await waitFor(() => ui?.isConnected() === true, { timeoutMs: 20_000 });
-    const baseline = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+    const baseline = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
     const baselineAgentStateVersion = baseline.agentStateVersion;
     await waitFor(async () => {
-      const snap = await fetchSessionV2(server.baseUrl, auth.token, sessionId);
+      const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
       return snap.active === true || (typeof snap.agentStateVersion === 'number' && snap.agentStateVersion > baselineAgentStateVersion);
     }, { timeoutMs: 45_000 });
 
