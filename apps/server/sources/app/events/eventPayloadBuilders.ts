@@ -1,6 +1,7 @@
 import { AccountProfile } from "@/types";
 import { getPublicUrl } from "@/storage/blob/files";
 import { type UpdatePayload, type EphemeralPayload } from "./eventPayloadTypes";
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from "@happier-dev/protocol";
 
 type UpdateMessagePayloadInput = Readonly<{
     id: string;
@@ -100,6 +101,8 @@ export function buildUpdateSessionUpdate(
         lastViewedSessionSeq?: number;
         pendingPermissionRequestCount?: number;
         pendingUserActionRequestCount?: number;
+        latestTurnStatus?: PrimaryTurnStatusV1 | null;
+        lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
         archivedAt?: number | null;
     },
 ): UpdatePayload {
@@ -120,6 +123,8 @@ export function buildUpdateSessionUpdate(
             ...(typeof projection?.pendingUserActionRequestCount === 'number'
                 ? { pendingUserActionRequestCount: projection.pendingUserActionRequestCount }
                 : {}),
+            ...(projection && 'latestTurnStatus' in projection ? { latestTurnStatus: projection.latestTurnStatus ?? null } : {}),
+            ...(projection && 'lastRuntimeIssue' in projection ? { lastRuntimeIssue: projection.lastRuntimeIssue ?? null } : {}),
             ...(typeof projection?.archivedAt === 'number' || projection?.archivedAt === null
                 ? { archivedAt: projection.archivedAt }
                 : {}),
@@ -284,6 +289,14 @@ export function buildNewMachineUpdate(machine: {
     daemonState: string | null;
     daemonStateVersion: number;
     dataEncryptionKey: Uint8Array | null;
+    installationId?: string | null;
+    installationPublicKey?: Uint8Array | null;
+    contentPublicKeyFingerprint?: string | null;
+    replacedByMachineId?: string | null;
+    replacedAt?: Date | null;
+    replacementReason?: string | null;
+    replacementSource?: string | null;
+    replacementActorUserId?: string | null;
     active: boolean;
     lastActiveAt: Date;
     createdAt: Date;
@@ -301,6 +314,14 @@ export function buildNewMachineUpdate(machine: {
             daemonState: machine.daemonState,
             daemonStateVersion: machine.daemonStateVersion,
             dataEncryptionKey: machine.dataEncryptionKey ? Buffer.from(machine.dataEncryptionKey).toString('base64') : null,
+            installationId: machine.installationId ?? null,
+            installationPublicKey: machine.installationPublicKey ? Buffer.from(machine.installationPublicKey).toString('base64') : null,
+            contentPublicKeyFingerprint: machine.contentPublicKeyFingerprint ?? null,
+            replacedByMachineId: machine.replacedByMachineId ?? null,
+            replacedAt: machine.replacedAt ? machine.replacedAt.getTime() : null,
+            replacementReason: machine.replacementReason ?? null,
+            replacementSource: machine.replacementSource ?? null,
+            replacementActorUserId: machine.replacementActorUserId ?? null,
             active: machine.active,
             activeAt: machine.lastActiveAt.getTime(),
             createdAt: machine.createdAt.getTime(),
@@ -320,6 +341,11 @@ export function buildUpdateMachineUpdate(
         active?: boolean;
         activeAt?: number;
         revokedAt?: number | null;
+        replacedByMachineId?: string | null;
+        replacedAt?: number | null;
+        replacementReason?: string | null;
+        replacementSource?: string | null;
+        replacementActorUserId?: string | null;
     },
 ): UpdatePayload {
     return {

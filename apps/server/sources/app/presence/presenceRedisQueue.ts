@@ -110,8 +110,13 @@ async function flushBatch(batcher: PresenceBatcher): Promise<void> {
     if (machines.length > 0) {
         const results = await Promise.allSettled(
             machines.map((m) =>
-                db.machine.update({
-                    where: { accountId_id: { accountId: m.accountId, id: m.machineId } },
+                db.machine.updateMany({
+                    where: {
+                        accountId: m.accountId,
+                        id: m.machineId,
+                        revokedAt: null,
+                        replacedByMachineId: null,
+                    },
                     data: { lastActiveAt: new Date(m.timestamp), active: true },
                 }),
             ),

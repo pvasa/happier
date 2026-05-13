@@ -177,8 +177,8 @@ class ActivityCache {
             });
             
             if (machine) {
-                if (machine.revokedAt) {
-                    // Fail closed: a revoked/forgotten machine is treated as invalid for presence.
+                if (machine.revokedAt || machine.replacedByMachineId) {
+                    // Fail closed: revoked/forgotten/replaced machines are treated as invalid for presence.
                     this.machineCache.delete(machineId);
                     return false;
                 }
@@ -398,6 +398,7 @@ class ActivityCache {
                             accountId: update.entry.userId,
                             id: update.machineId,
                             revokedAt: null,
+                            replacedByMachineId: null,
                         },
                         data: { lastActiveAt: new Date(update.timestamp), active: true }
                     });

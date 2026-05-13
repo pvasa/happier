@@ -1,6 +1,12 @@
 import { Socket } from "socket.io";
 import type { LinkedProvider } from "@/app/auth/providers/linkedProviders";
-import type { DirectSessionTranscriptDeltaEphemeral, ExecutionRunPublicState, SessionStoredMessageContent } from "@happier-dev/protocol";
+import type {
+    DirectSessionTranscriptDeltaEphemeral,
+    ExecutionRunPublicState,
+    PrimaryTurnStatusV1,
+    SessionRuntimeIssueV1,
+    SessionStoredMessageContent,
+} from "@happier-dev/protocol";
 
 // === CONNECTION TYPES ===
 
@@ -94,6 +100,8 @@ export type UpdateEvent = {
     lastViewedSessionSeq?: number | undefined;
     pendingPermissionRequestCount?: number | undefined;
     pendingUserActionRequestCount?: number | undefined;
+    latestTurnStatus?: PrimaryTurnStatusV1 | null | undefined;
+    lastRuntimeIssue?: SessionRuntimeIssueV1 | null | undefined;
     archivedAt?: number | null | undefined;
 } | {
     type: 'pending-changed';
@@ -147,6 +155,14 @@ export type UpdateEvent = {
     daemonState: string | null;
     daemonStateVersion: number;
     dataEncryptionKey: string | null;
+    installationId?: string | null;
+    installationPublicKey?: string | null;
+    contentPublicKeyFingerprint?: string | null;
+    replacedByMachineId?: string | null;
+    replacedAt?: number | null;
+    replacementReason?: string | null;
+    replacementSource?: string | null;
+    replacementActorUserId?: string | null;
     active: boolean;
     activeAt: number;
     createdAt: number;
@@ -165,6 +181,11 @@ export type UpdateEvent = {
     activeAt?: number;
     active?: boolean;
     revokedAt?: number | null;
+    replacedByMachineId?: string | null;
+    replacedAt?: number | null;
+    replacementReason?: string | null;
+    replacementSource?: string | null;
+    replacementActorUserId?: string | null;
 } | {
     type: 'new-artifact';
     artifactId: string;

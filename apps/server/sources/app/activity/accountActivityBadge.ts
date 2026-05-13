@@ -1,4 +1,10 @@
 import { db } from "@/storage/db";
+import {
+    PrimaryTurnStatusV1Schema,
+    SessionRuntimeIssueV1Schema,
+    type PrimaryTurnStatusV1,
+    type SessionRuntimeIssueV1,
+} from "@happier-dev/protocol";
 
 export type SessionActivityBadgeInputs = Readonly<{
     seq?: number | null;
@@ -6,6 +12,8 @@ export type SessionActivityBadgeInputs = Readonly<{
     lastViewedSessionSeq?: number | null;
     pendingPermissionRequestCount?: number | null;
     pendingUserActionRequestCount?: number | null;
+    latestTurnStatus?: PrimaryTurnStatusV1 | string | null;
+    lastRuntimeIssue?: SessionRuntimeIssueV1 | string | null;
     active?: boolean | null;
     archivedAt?: Date | null;
 }>;
@@ -17,9 +25,31 @@ type SessionActivityBadgeRow = Readonly<{
     lastViewedSessionSeq: number | null;
     pendingPermissionRequestCount: number | null;
     pendingUserActionRequestCount: number | null;
+    latestTurnStatus: string | null;
+    lastRuntimeIssue: string | null;
     active: boolean;
     archivedAt: Date | null;
 }>;
+
+function parseStoredRuntimeIssue(value: SessionActivityBadgeInputs["lastRuntimeIssue"]): SessionRuntimeIssueV1 | null {
+    if (!value) return null;
+    if (typeof value === "string") {
+        try {
+            const parsed = JSON.parse(value);
+            const result = SessionRuntimeIssueV1Schema.safeParse(parsed);
+            return result.success ? result.data : null;
+        } catch {
+            return null;
+        }
+    }
+    const result = SessionRuntimeIssueV1Schema.safeParse(value);
+    return result.success ? result.data : null;
+}
+
+function parseStoredTurnStatus(value: SessionActivityBadgeInputs["latestTurnStatus"]): PrimaryTurnStatusV1 | null {
+    const result = PrimaryTurnStatusV1Schema.safeParse(value);
+    return result.success ? result.data : null;
+}
 
 export function computeSessionContributesToActivityBadge(session: SessionActivityBadgeInputs): boolean {
     if (session.active === false) return false;
@@ -31,12 +61,15 @@ export function computeSessionContributesToActivityBadge(session: SessionActivit
         typeof session.pendingPermissionRequestCount === "number" ? session.pendingPermissionRequestCount : 0;
     const pendingUserActionRequestCount =
         typeof session.pendingUserActionRequestCount === "number" ? session.pendingUserActionRequestCount : 0;
+    const latestTurnStatus = parseStoredTurnStatus(session.latestTurnStatus);
+    const lastRuntimeIssue = parseStoredRuntimeIssue(session.lastRuntimeIssue);
 
     const hasUnread =
         typeof lastViewedSessionSeq === "number"
             ? seq > lastViewedSessionSeq
             : seq > 0;
-    return hasUnread || pendingPermissionRequestCount > 0 || pendingUserActionRequestCount > 0;
+    const hasFailedRuntimeIssue = latestTurnStatus === "failed" && lastRuntimeIssue !== null;
+    return hasFailedRuntimeIssue || hasUnread || pendingPermissionRequestCount > 0 || pendingUserActionRequestCount > 0;
 }
 
 export function didSessionActivityBadgeContributionChange(
@@ -67,6 +100,8 @@ export async function computeAccountActivityBadgeCounts(accountIds: ReadonlyArra
             lastViewedSessionSeq: true,
             pendingPermissionRequestCount: true,
             pendingUserActionRequestCount: true,
+            latestTurnStatus: true,
+            lastRuntimeIssue: true,
             active: true,
             archivedAt: true,
         },
