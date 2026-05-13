@@ -172,6 +172,18 @@ function coerceLegacySessionRecord(raw: unknown): V2SessionRecord | null {
         lastViewedSessionSeq: readNullableNumber(raw.lastViewedSessionSeq),
         pendingPermissionRequestCount: readNumber(raw.pendingPermissionRequestCount) ?? undefined,
         pendingUserActionRequestCount: readNumber(raw.pendingUserActionRequestCount) ?? undefined,
+        latestTurnStatus: raw.latestTurnStatus === 'in_progress'
+            || raw.latestTurnStatus === 'completed'
+            || raw.latestTurnStatus === 'cancelled'
+            || raw.latestTurnStatus === 'failed'
+                ? raw.latestTurnStatus
+                : raw.latestTurnStatus === null
+                    ? null
+                    : undefined,
+        lastRuntimeIssue: raw.lastRuntimeIssue === null
+            || (raw.lastRuntimeIssue && typeof raw.lastRuntimeIssue === 'object')
+                ? raw.lastRuntimeIssue as V2SessionRecord['lastRuntimeIssue']
+                : undefined,
         pendingCount: readNumber(raw.pendingCount) ?? undefined,
         pendingVersion: readNumber(raw.pendingVersion) ?? undefined,
         dataEncryptionKey: readNullableString(raw.dataEncryptionKey) ?? null,
