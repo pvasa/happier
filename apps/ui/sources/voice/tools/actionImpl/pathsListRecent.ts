@@ -1,13 +1,15 @@
 import { storage } from '@/sync/domains/state/storage';
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readDisplayMachineIdForSession, readDisplayPathForSession } from '@/sync/ops/sessionMachineTarget';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { getRecentPathsForMachine } from '@/utils/sessions/recentPaths';
 import { buildSafeWorkspaceLabel, buildSafeWorkspaceLabels } from '@/utils/worktree/workspaceHandles';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { resolveCanonicalMachineId } from '@/sync/domains/machines/identity/resolveCanonicalMachineId';
 import { normalizeNonEmptyString, resolveVoiceMachineLabel } from './shared';
 
 function resolveDefaultMachineId(state: any): string | null {
+  const machines = Object.values(state?.machines ?? {}) as Array<{ id: string; replacedByMachineId?: string | null; replacedAt?: unknown }>;
   const sessionsObj = state?.sessions ?? {};
   const voiceTarget = useVoiceTargetStore.getState();
   const candidates = [voiceTarget.primaryActionSessionId, voiceTarget.lastFocusedSessionId]
@@ -16,13 +18,16 @@ function resolveDefaultMachineId(state: any): string | null {
 
   for (const sid of candidates) {
     const s = sessionsObj?.[sid] ?? null;
-    const machineId = readMachineTargetForSession(sid)?.machineId ?? normalizeNonEmptyString(s?.metadata?.machineId);
+    const machineId = readDisplayMachineIdForSession({
+      sessionId: sid,
+      metadata: s?.metadata ?? null,
+    }) || normalizeNonEmptyString(s?.metadata?.machineId);
     if (machineId) return machineId;
   }
 
   const recent = state?.settings?.recentMachinePaths?.[0] ?? null;
   const machineId = normalizeNonEmptyString(recent?.machineId);
-  if (machineId) return machineId;
+  if (machineId) return resolveCanonicalMachineId(machineId, machines)?.machineId ?? machineId;
   return null;
 }
 
@@ -63,12 +68,17 @@ export async function listRecentPathsForVoiceTool(params: Readonly<{ machineId?:
       let best = 0;
       for (const s of sessions as any[]) {
         if (!s || typeof s !== 'object') continue;
-        const sessionMachineId =
-          readMachineTargetForSession(typeof s.id === 'string' ? s.id : '')
-          ?.machineId
-          ?? normalizeNonEmptyString(s?.metadata?.machineId);
+        const sessionId = typeof s.id === 'string' ? s.id : '';
+        const sessionMachineId = readDisplayMachineIdForSession({
+          sessionId,
+          metadata: s?.metadata ?? null,
+        }) || normalizeNonEmptyString(s?.metadata?.machineId);
         if (sessionMachineId !== targetMachineId) continue;
-        if (String(s?.metadata?.path ?? '') !== path) continue;
+        const sessionPath = readDisplayPathForSession({
+          sessionId,
+          metadata: s?.metadata ?? null,
+        }) || normalizeNonEmptyString(s?.metadata?.path);
+        if (sessionPath !== path) continue;
         const updatedAtRaw = Number(s?.updatedAt ?? 0);
         const updatedAt = Number.isFinite(updatedAtRaw) ? Math.floor(updatedAtRaw) : 0;
         if (updatedAt > best) best = updatedAt;

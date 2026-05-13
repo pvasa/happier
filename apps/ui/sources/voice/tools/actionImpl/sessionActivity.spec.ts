@@ -43,6 +43,8 @@ function createTestSessionMessages(messages: ReadonlyArray<Message>): SessionMes
         reducerState: createReducer(),
         latestThinkingMessageId: null,
         latestThinkingMessageActivityAtMs: null,
+        latestReadyEventSeq: null,
+        latestReadyEventAt: null,
         messagesVersion: 0,
         lastAppliedAgentStateVersion: null,
         isLoaded: true,

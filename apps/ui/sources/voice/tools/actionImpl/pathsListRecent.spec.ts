@@ -120,7 +120,7 @@ describe('listRecentPathsForVoiceTool', () => {
         expect(result.items[0]).not.toHaveProperty('path');
     });
 
-    it('resolves the default machine and lastUsedAt from the reachable target even when raw path sharing is force-enabled', async () => {
+    it('keeps the default machine on stable display attribution without explicit replacement', async () => {
         voiceTargetState.primaryActionSessionId = 's1';
         state.sessions = {
             s1: {
@@ -163,12 +163,100 @@ describe('listRecentPathsForVoiceTool', () => {
         expect(result).toMatchObject({
             items: [
                 {
-                    label: 'happier — Leeroy MacBook Pro',
+                    label: 'happier — m-stale',
                     lastUsedAt: 1000,
                 },
             ],
         });
         expect(result.items[0]).not.toHaveProperty('machineId');
         expect(result.items[0]).not.toHaveProperty('path');
+    });
+
+    it('uses stable display attribution for project paths when computing voice recent timestamps', async () => {
+        state.sessions = {
+            s1: {
+                id: 's1',
+                active: false,
+                presence: 900,
+                updatedAt: 1000,
+                metadata: {
+                    machineId: 'm1',
+                    path: '/Users/leeroy/projects/stale',
+                    homeDir: '/Users/leeroy',
+                },
+            },
+        };
+        state.machines = {
+            m1: {
+                id: 'm1',
+                active: false,
+                activeAt: 100,
+                metadata: { displayName: 'Leeroy MacBook Pro', host: 'leeroy-mbp' },
+            },
+        };
+        state.settings.recentMachinePaths = [];
+        state.getProjectForSession = (sessionId: string) =>
+            sessionId === 's1'
+                ? {
+                    key: {
+                        machineId: 'm1',
+                        path: '/Users/leeroy/projects/current',
+                    },
+                }
+                : null;
+
+        const { listRecentPathsForVoiceTool } = await import('./pathsListRecent');
+
+        const result: any = await listRecentPathsForVoiceTool({ machineId: 'm1', limit: 10 });
+
+        expect(result.items).toEqual([
+            {
+                label: 'current — Leeroy MacBook Pro',
+                lastUsedAt: 1000,
+            },
+        ]);
+    });
+
+    it('canonicalizes the default recent-path machine through explicit replacement', async () => {
+        state.sessions = {
+            s1: {
+                id: 's1',
+                active: false,
+                presence: 900,
+                updatedAt: 1000,
+                metadata: {
+                    machineId: 'm-old',
+                    path: '/Users/leeroy/projects/happier',
+                    homeDir: '/Users/leeroy',
+                },
+            },
+        };
+        state.machines = {
+            'm-old': {
+                id: 'm-old',
+                active: false,
+                replacedByMachineId: 'm-new',
+                metadata: { displayName: 'Old Machine', host: 'old-host' },
+            },
+            'm-new': {
+                id: 'm-new',
+                active: true,
+                metadata: { displayName: 'Replacement Machine', host: 'new-host' },
+            },
+        };
+        state.settings.recentMachinePaths = [
+            { machineId: 'm-old', path: '/Users/leeroy/projects/happier' },
+        ];
+
+        const { listRecentPathsForVoiceTool } = await import('./pathsListRecent');
+
+        const result: any = await listRecentPathsForVoiceTool({ limit: 10 });
+
+        expect(result.items).toEqual([
+            {
+                label: 'happier — Replacement Machine',
+                lastUsedAt: 1000,
+            },
+        ]);
     });
 });
