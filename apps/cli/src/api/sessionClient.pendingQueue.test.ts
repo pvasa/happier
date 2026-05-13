@@ -156,6 +156,35 @@ describe('ApiSessionClient pending queue materialization', () => {
         });
     });
 
+    it('popPendingMessage falls back to HTTP materialize when the socket ACK never settles', async () => {
+        vi.useFakeTimers();
+        vi.stubEnv('HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS', '5');
+        const sessionSocket = createApiSessionSocketStub({
+            connected: true,
+            emitWithAck: async () => new Promise<never>(() => {}),
+        });
+        const userSocket = createApiSessionSocketStub();
+
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+
+        const axiosMod = await import('axios');
+        const axios = axiosMod.default as any;
+        const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { ok: true, didMaterialize: false } });
+
+        const client = new ApiSessionClient('fake-token', { ...mockSession, metadata: {} });
+        const poppedPromise = client.popPendingMessage();
+
+        try {
+            await vi.advanceTimersByTimeAsync(60_000);
+
+            await expect(poppedPromise).resolves.toBe(false);
+            expect(postSpy).toHaveBeenCalled();
+        } finally {
+            vi.unstubAllEnvs();
+            vi.useRealTimers();
+        }
+    });
+
     it('popPendingMessage falls back to HTTP materialize when the session socket is disconnected', async () => {
         const sessionSocket = createApiSessionSocketStub({ connected: false });
         const userSocket = createApiSessionSocketStub();
