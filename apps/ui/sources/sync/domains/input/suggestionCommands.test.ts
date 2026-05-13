@@ -20,6 +20,7 @@ describe('suggestionCommands', () => {
         expect(commands.some((c) => c.command === 'h.review')).toBe(true);
         expect(commands.find((c) => c.command === 'pet')?.description).toBe(t('commandPalette.pets.chooseSubtitle'));
         expect(commands.find((c) => c.command === 'h.pet')?.description).toBe(t('commandPalette.pets.chooseSubtitle'));
+        expect(commands.find((c) => c.command === 'goal')?.description).toBe('Set or inspect the session goal');
         expect(commands.some((c) => c.command === 'clear')).toBe(true);
     });
 

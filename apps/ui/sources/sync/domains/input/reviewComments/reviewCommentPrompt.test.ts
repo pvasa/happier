@@ -87,4 +87,93 @@ describe('reviewCommentPrompt', () => {
 
         expect(filterReviewCommentDraftsIncludedInPrompt(drafts).map((draft) => draft.id)).toEqual(['c1']);
     });
+
+    it('formats normalized range anchors with their side and line range', () => {
+        const drafts: ReviewCommentDraft[] = [
+            {
+                id: 'c1',
+                filePath: 'src/a.ts',
+                source: 'diff',
+                anchor: {
+                    kind: 'range',
+                    filePath: 'src/a.ts',
+                    startLine: 10,
+                    endLine: 12,
+                    side: 'after',
+                    startLineHash: 'lh1:1234567890abcdef',
+                    endLineHash: 'lh1:fedcba0987654321',
+                },
+                snapshot: { selectedLines: ['+a', '+b', '+c'], beforeContext: [], afterContext: [] },
+                body: 'Review this range',
+                createdAt: 1,
+            },
+        ];
+
+        const prompt = buildReviewCommentsPromptText({
+            sessionId: 's1',
+            drafts,
+            additionalMessage: '',
+        });
+
+        expect(prompt).toContain('after L10-L12');
+        expect(prompt).toContain('lh1:1234567890abcdef');
+        expect(prompt).toContain('lh1:fedcba0987654321');
+    });
+
+    it('includes daemon-resolved anchor details without replacing the original anchor', () => {
+        const drafts: ReviewCommentDraft[] = [
+            {
+                id: 'c1',
+                filePath: 'src/a.ts',
+                source: 'file',
+                anchor: {
+                    kind: 'line',
+                    filePath: 'src/a.ts',
+                    line: 5,
+                    lineHash: 'lh1:1234567890abcdef',
+                },
+                anchorResolution: {
+                    id: 'c1',
+                    filePath: 'src/a.ts',
+                    originalAnchor: {
+                        kind: 'line',
+                        filePath: 'src/a.ts',
+                        line: 5,
+                        lineHash: 'lh1:1234567890abcdef',
+                    },
+                    resolvedAnchor: {
+                        kind: 'line',
+                        filePath: 'src/a.ts',
+                        line: 12,
+                        lineHash: 'lh1:fedcba0987654321',
+                    },
+                    status: 'hash',
+                    confidence: 0.85,
+                    preview: {
+                        beforeContext: ['const before = true;'],
+                        selectedLines: ['const moved = true;'],
+                        afterContext: ['const after = true;'],
+                    },
+                },
+                snapshot: {
+                    selectedLines: ['const original = true;'],
+                    beforeContext: [],
+                    afterContext: [],
+                },
+                body: 'Review the moved line',
+                createdAt: 1,
+            },
+        ];
+
+        const prompt = buildReviewCommentsPromptText({
+            sessionId: 's1',
+            drafts,
+            additionalMessage: '',
+        });
+
+        expect(prompt).toContain('src/a.ts (L5');
+        expect(prompt).toContain('resolved: hash L12');
+        expect(prompt).toContain('confidence: 0.85');
+        expect(prompt).toContain('const moved = true;');
+    });
 });

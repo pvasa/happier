@@ -85,4 +85,40 @@ describe('reviewCommentMeta', () => {
             }],
         })).toBeNull();
     });
+
+    it('parses normalized line and range anchors for forward-compatible draft metadata', () => {
+        expect(parseReviewCommentsV1({
+            sessionId: 's1',
+            comments: [{
+                id: 'c1',
+                filePath: 'src/a.ts',
+                source: 'file',
+                anchor: { kind: 'line', filePath: 'src/a.ts', line: 3, lineHash: 'lh1:1234567890abcdef' },
+                snapshot: { selectedLines: ['x'], beforeContext: [], afterContext: [] },
+                body: 'nit',
+                createdAt: 1,
+            }],
+        })).not.toBeNull();
+
+        expect(parseReviewCommentsV1({
+            sessionId: 's1',
+            comments: [{
+                id: 'c2',
+                filePath: 'src/a.ts',
+                source: 'diff',
+                anchor: {
+                    kind: 'range',
+                    filePath: 'src/a.ts',
+                    startLine: 3,
+                    endLine: 6,
+                    side: 'after',
+                    startLineHash: 'lh1:1234567890abcdef',
+                    endLineHash: 'lh1:fedcba0987654321',
+                },
+                snapshot: { selectedLines: ['x', 'y'], beforeContext: [], afterContext: [] },
+                body: 'nit',
+                createdAt: 1,
+            }],
+        })).not.toBeNull();
+    });
 });

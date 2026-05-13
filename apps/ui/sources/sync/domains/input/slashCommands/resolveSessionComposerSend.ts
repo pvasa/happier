@@ -8,6 +8,8 @@ export type SessionComposerSendResolution =
     | { kind: 'noop' }
     | { kind: 'send'; text: string }
     | { kind: 'action'; actionId: ActionId; rest: string }
+    | { kind: 'goal'; command: 'open' | 'status' | 'pause' | 'resume' | 'clear' }
+    | { kind: 'goal'; command: 'set'; objective: string }
     | {
         kind: 'template';
         invocationId: string;
@@ -20,6 +22,25 @@ export type SessionComposerSendResolution =
     };
 
 const RESERVED_TOKENS: ReadonlySet<string> = new Set(['/clear', '/compact']);
+
+function resolveGoalCommand(input: string): SessionComposerSendResolution | null {
+    const trimmed = input.trim();
+    if (!trimmed.startsWith('/')) return null;
+    const firstSpace = trimmed.search(/\s/);
+    const token = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+    if (token.toLowerCase() !== '/goal') return null;
+
+    const rest = firstSpace === -1 ? '' : trimmed.slice(firstSpace).trim();
+    if (!rest) return { kind: 'goal', command: 'open' };
+
+    const normalizedRest = rest.toLowerCase();
+    if (normalizedRest === 'pause') return { kind: 'goal', command: 'pause' };
+    if (normalizedRest === 'resume') return { kind: 'goal', command: 'resume' };
+    if (normalizedRest === 'clear') return { kind: 'goal', command: 'clear' };
+    if (normalizedRest === 'status') return { kind: 'goal', command: 'status' };
+
+    return { kind: 'goal', command: 'set', objective: rest };
+}
 
 export function resolveSessionComposerSend(args: {
     input: string;
@@ -47,6 +68,9 @@ export function resolveSessionComposerSend(args: {
         }
         return parsedSlash;
     }
+
+    const goalCommand = resolveGoalCommand(args.input);
+    if (goalCommand) return goalCommand;
 
     // Built-in core slash commands (e.g. /happier-diagnose). Resolved before
     // user-defined template invocations so they cannot be shadowed by an entry

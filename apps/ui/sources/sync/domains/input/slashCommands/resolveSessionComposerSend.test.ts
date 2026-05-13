@@ -127,6 +127,40 @@ describe('resolveSessionComposerSend', () => {
         });
     });
 
+    it('intercepts /goal with no objective as a goal UI command', () => {
+        expect(resolveSessionComposerSend({ input: '/goal', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'open',
+        });
+    });
+
+    it('intercepts /goal objective text as a native set-goal command', () => {
+        expect(resolveSessionComposerSend({ input: '/goal migrate plugin support', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'set',
+            objective: 'migrate plugin support',
+        });
+    });
+
+    it('intercepts /goal control verbs as native goal commands', () => {
+        expect(resolveSessionComposerSend({ input: '/goal pause', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'pause',
+        });
+        expect(resolveSessionComposerSend({ input: '/goal resume', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'resume',
+        });
+        expect(resolveSessionComposerSend({ input: '/goal clear', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'clear',
+        });
+        expect(resolveSessionComposerSend({ input: '/goal status', executionRunsEnabled: true })).toEqual({
+            kind: 'goal',
+            command: 'status',
+        });
+    });
+
     it('does not intercept /h.review when disabled (passes through as a normal message)', () => {
         expect(resolveSessionComposerSend({ input: '/h.review review this', executionRunsEnabled: false })).toEqual({
             kind: 'send',

@@ -5,10 +5,22 @@ import { storage } from '@/sync/domains/state/storage';
 import { buildExecutionRunActionDraftInputForUi } from '@/sync/domains/actions/buildExecutionRunActionDraftInputForUi';
 import { resolveExecutionRunActionDefaultPermissionMode } from '@/sync/domains/actions/resolveExecutionRunActionDefaultPermissionMode';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { t } from '@/text';
 
 export type SessionComposerActionExecutor = Readonly<{
   execute: (actionId: ActionId, input: unknown, ctx?: ActionExecutorContext) => Promise<ActionExecuteResult>;
 }>;
+
+export type SessionGoalOperationResult =
+  | { ok: true }
+  | { ok: false; error: string; errorCode?: string };
+
+type SetSessionGoal = (
+  sessionId: string,
+  request: Readonly<{ objective?: string; status?: 'active' | 'paused' | 'complete' }>,
+) => Promise<SessionGoalOperationResult>;
+
+type ClearSessionGoal = (sessionId: string) => Promise<SessionGoalOperationResult>;
 
 export async function executeSessionComposerResolution(args: Readonly<{
   resolved: SessionComposerSendResolution;
@@ -24,6 +36,9 @@ export async function executeSessionComposerResolution(args: Readonly<{
   trackMessageSent: () => void;
   navigateToRuns: () => void;
   navigateToPetSettings?: () => void;
+  openGoalControls?: () => void;
+  setSessionGoal?: SetSessionGoal;
+  clearSessionGoal?: ClearSessionGoal;
   modalAlert: (title: string, message: string) => void;
 }>): Promise<boolean> {
   const ctx: ActionExecutorContext = {
@@ -31,6 +46,60 @@ export async function executeSessionComposerResolution(args: Readonly<{
     surface: 'ui_slash_command',
     placement: 'slash_command',
   };
+
+  if (args.resolved.kind === 'goal') {
+    if (args.resolved.command === 'open' || args.resolved.command === 'status') {
+      args.setMessage('');
+      args.clearDraft();
+      if (args.openGoalControls) {
+        args.openGoalControls();
+      } else {
+        args.modalAlert(t('session.workState.unsupportedTitle'), t('session.workState.unsupportedMessage'));
+      }
+      return true;
+    }
+
+    if (args.resolved.command === 'set') {
+      if (!args.setSessionGoal) {
+        args.modalAlert(t('session.workState.unsupportedTitle'), t('session.workState.unsupportedMessage'));
+        return true;
+      }
+      args.setMessage('');
+      args.clearDraft();
+      const result = await args.setSessionGoal(args.sessionId, { objective: args.resolved.objective });
+      if (!result.ok) {
+        if (args.previousMessage) args.setMessage(args.previousMessage);
+        args.modalAlert(t('common.error'), result.error);
+      }
+      return true;
+    }
+
+    if (args.resolved.command === 'pause' || args.resolved.command === 'resume') {
+      if (!args.setSessionGoal) {
+        args.modalAlert(t('session.workState.unsupportedTitle'), t('session.workState.unsupportedMessage'));
+        return true;
+      }
+      args.setMessage('');
+      args.clearDraft();
+      const result = await args.setSessionGoal(args.sessionId, {
+        status: args.resolved.command === 'pause' ? 'paused' : 'active',
+      });
+      if (!result.ok) args.modalAlert(t('common.error'), result.error);
+      return true;
+    }
+
+    if (args.resolved.command === 'clear') {
+      if (!args.clearSessionGoal) {
+        args.modalAlert(t('session.workState.unsupportedTitle'), t('session.workState.unsupportedMessage'));
+        return true;
+      }
+      args.setMessage('');
+      args.clearDraft();
+      const result = await args.clearSessionGoal(args.sessionId);
+      if (!result.ok) args.modalAlert(t('common.error'), result.error);
+      return true;
+    }
+  }
 
   if (args.resolved.kind !== 'action') return false;
 
