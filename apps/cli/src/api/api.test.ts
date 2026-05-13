@@ -5,15 +5,19 @@ import { connectionState } from '@/api/offline/serverConnectionErrors';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { captureConsoleText } from '@/testkit/logger/captureOutput';
 import { logger } from '@/ui/logger';
+import tweetnacl from 'tweetnacl';
 
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
-const { mockPost, mockIsAxiosError } = vi.hoisted(() => ({
+const { mockGet, mockPost, mockIsAxiosError, consumeMachineReplacementCandidateAfterRegistrationMock } = vi.hoisted(() => ({
+    mockGet: vi.fn(),
     mockPost: vi.fn(),
-    mockIsAxiosError: vi.fn(() => true)
+    mockIsAxiosError: vi.fn(() => true),
+    consumeMachineReplacementCandidateAfterRegistrationMock: vi.fn(async () => undefined),
 }));
 
 vi.mock('axios', () => ({
     default: {
+        get: mockGet,
         post: mockPost,
         isAxiosError: mockIsAxiosError
     },
@@ -28,6 +32,10 @@ vi.mock('@/ui/logger', () => ({
 
 vi.mock('@/features/serverFeaturesClient', () => ({
     fetchServerFeaturesSnapshot: async () => ({ status: 'unsupported', reason: 'endpoint_missing' }),
+}));
+
+vi.mock('@/daemon/machineIdentity/machineReplacementCandidates', () => ({
+    consumeMachineReplacementCandidateAfterRegistration: consumeMachineReplacementCandidateAfterRegistrationMock,
 }));
 
 // Mock encryption utilities
@@ -70,6 +78,9 @@ const testMachineMetadata = {
     happyLibDir: '/home/user/.happy/lib'
 };
 
+const testInstallationPublicKey = Buffer.from(new Uint8Array(tweetnacl.sign.publicKeyLength)).toString('base64url');
+const testInstallationProofSignature = Buffer.from(new Uint8Array(tweetnacl.sign.signatureLength)).toString('base64url');
+
 describe('Api server error handling', () => {
     let api: ApiClient;
     const envKeys = [
@@ -83,6 +94,7 @@ describe('Api server error handling', () => {
     beforeEach(async () => {
         vi.clearAllMocks();
         connectionState.reset(); // Reset offline state between tests
+        mockGet.mockRejectedValue({ response: { status: 404 } });
 
         // Keep retry loops fast and deterministic in unit tests.
         envScope.patch(Object.fromEntries([
@@ -431,6 +443,178 @@ describe('Api server error handling', () => {
 
             const body = mockPost.mock.calls[0]?.[1];
             expect(body?.contentPublicKey).toEqual(dataKeyCredential.encryption.publicKey);
+        });
+
+        it('includes installation proof and explicit replacement intent when registering a machine', async () => {
+            mockPost.mockResolvedValue({
+                data: {
+                    machine: {
+                        id: 'test-machine',
+                        metadata: testMachineMetadata,
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                    },
+                },
+            });
+
+            await api.getOrCreateMachine({
+                machineId: 'test-machine',
+                metadata: testMachineMetadata,
+                registrationIdentity: {
+                    installationId: 'installation-1',
+                    installationPublicKey: testInstallationPublicKey,
+                    installationProof: {
+                        version: 1,
+                        algorithm: 'ed25519',
+                        signature: testInstallationProofSignature,
+                    },
+                    replacesMachineId: 'machine-old',
+                    replacementReason: 'rotation',
+                    contentPublicKeyFingerprint: 'content-public-key-sha256:' + 'a'.repeat(64),
+                },
+            });
+
+            const body = mockPost.mock.calls[0]?.[1];
+            expect(body).toEqual(expect.objectContaining({
+                installationId: 'installation-1',
+                installationPublicKey: testInstallationPublicKey,
+                installationProof: {
+                    version: 1,
+                    algorithm: 'ed25519',
+                    signature: testInstallationProofSignature,
+                },
+                replacesMachineId: 'machine-old',
+                replacementReason: 'rotation',
+                contentPublicKeyFingerprint: 'content-public-key-sha256:' + 'a'.repeat(64),
+            }));
+        });
+
+        it('keeps the local replacement candidate until the server acknowledges replacement', async () => {
+            mockPost.mockResolvedValue({
+                data: {
+                    machine: {
+                        id: 'test-machine',
+                        metadata: testMachineMetadata,
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                    },
+                },
+            });
+
+            await api.getOrCreateMachine({
+                machineId: 'test-machine',
+                metadata: testMachineMetadata,
+                registrationIdentity: {
+                    installationId: 'installation-1',
+                    installationPublicKey: testInstallationPublicKey,
+                    installationProof: {
+                        version: 1,
+                        algorithm: 'ed25519',
+                        signature: testInstallationProofSignature,
+                    },
+                    replacesMachineId: 'machine-old',
+                    replacementReason: 'rotation',
+                    replacementCandidateAccountId: 'account-1',
+                },
+            });
+
+            expect(consumeMachineReplacementCandidateAfterRegistrationMock).not.toHaveBeenCalled();
+        });
+
+        it('consumes the local replacement candidate after the server acknowledges replacement', async () => {
+            mockPost.mockResolvedValue({
+                data: {
+                    machine: {
+                        id: 'test-machine',
+                        metadata: testMachineMetadata,
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                    },
+                    machineReplacement: {
+                        status: 'applied',
+                        replacesMachineId: 'machine-old',
+                    },
+                },
+            });
+
+            await api.getOrCreateMachine({
+                machineId: 'test-machine',
+                metadata: testMachineMetadata,
+                registrationIdentity: {
+                    installationId: 'installation-1',
+                    installationPublicKey: testInstallationPublicKey,
+                    installationProof: {
+                        version: 1,
+                        algorithm: 'ed25519',
+                        signature: testInstallationProofSignature,
+                    },
+                    replacesMachineId: 'machine-old',
+                    replacementReason: 'rotation',
+                    replacementCandidateAccountId: 'account-1',
+                },
+            });
+
+            expect(consumeMachineReplacementCandidateAfterRegistrationMock).toHaveBeenCalledWith({
+                accountId: 'account-1',
+                didRegister: true,
+                replacesMachineId: 'machine-old',
+            });
+        });
+
+        it('consumes the local replacement candidate when the old machine already points at the new machine', async () => {
+            mockPost.mockResolvedValue({
+                data: {
+                    machine: {
+                        id: 'test-machine',
+                        metadata: testMachineMetadata,
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                    },
+                },
+            });
+            mockGet.mockResolvedValue({
+                data: {
+                    machine: {
+                        id: 'machine-old',
+                        replacedByMachineId: 'test-machine',
+                    },
+                },
+            });
+
+            await api.getOrCreateMachine({
+                machineId: 'test-machine',
+                metadata: testMachineMetadata,
+                registrationIdentity: {
+                    installationId: 'installation-1',
+                    installationPublicKey: testInstallationPublicKey,
+                    installationProof: {
+                        version: 1,
+                        algorithm: 'ed25519',
+                        signature: testInstallationProofSignature,
+                    },
+                    replacesMachineId: 'machine-old',
+                    replacementReason: 'rotation',
+                    replacementCandidateAccountId: 'account-1',
+                },
+            });
+
+            expect(mockGet).toHaveBeenCalledWith(
+                'https://api.example.com/v1/machines/machine-old',
+                expect.objectContaining({
+                    headers: expect.objectContaining({
+                        Authorization: 'Bearer fake-token',
+                    }),
+                }),
+            );
+            expect(consumeMachineReplacementCandidateAfterRegistrationMock).toHaveBeenCalledWith({
+                accountId: 'account-1',
+                didRegister: true,
+                replacesMachineId: 'machine-old',
+            });
         });
 
         it('throws (instead of returning a synthetic machine) when server is unreachable (ECONNREFUSED)', async () => {

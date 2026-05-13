@@ -26,6 +26,7 @@ import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createT
 import { registerRipgrepHandler } from './ripgrep';
 import { registerDifftasticHandler } from './difftastic';
 import { registerSessionUserMessageSendHandler } from './sessionUserMessageSend';
+import { registerSessionControlHandlers, type SessionRuntimeControls } from './sessionControls';
 import {
     type FilesystemAccessPolicy,
     resolveFilesystemPolicyDefaultDirectory,
@@ -83,6 +84,14 @@ export interface SpawnSessionOptions {
      * the old runner has already been stopped.
      */
     existingSessionAttachPayload?: SessionAttachFilePayload;
+    /**
+     * Existing-session attach cursor for wake-after-send resume.
+     *
+     * When a UI first commits a wake prompt to the Happier transcript and then asks the daemon
+     * to resume the stopped runner, the child must catch up after this seq so the new prompt is
+     * delivered once without replaying older turns.
+     */
+    initialTranscriptAfterSeq?: number;
     /**
      * Optional attach-only metadata identity policy.
      * Preserve current persisted machine identity for normal attaches, but allow runtime replacement
@@ -197,6 +206,7 @@ export function registerSessionHandlers(
         setAdditionalAllowedReadDirs?: (dirs: string[]) => void;
         setAdditionalAllowedWriteDirs?: (dirs: string[]) => void;
         accessPolicy?: FilesystemAccessPolicy;
+        sessionRuntimeControls?: SessionRuntimeControls | null;
     }>,
 ) {
     const pathAllowanceRegistry = createTransferPathAllowanceRegistry({
@@ -235,5 +245,9 @@ export function registerSessionHandlers(
     registerDifftasticHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
     registerSessionUserMessageSendHandler(rpcHandlerManager, {
         enqueueSessionUserMessage: opts?.enqueueSessionUserMessage ?? null,
+    });
+    registerSessionControlHandlers(rpcHandlerManager, {
+        getSessionMetadata: opts?.getSessionMetadata ?? null,
+        sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
     });
 }

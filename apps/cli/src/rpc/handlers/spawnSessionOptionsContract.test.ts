@@ -69,6 +69,15 @@ describe('SpawnDaemonSessionRequestSchema', () => {
     expect(parsed.accountSettingsVersionHint).toBe(42);
   });
 
+  it('accepts initial transcript catch-up cursors from resume requests', () => {
+    const parsed = SpawnDaemonSessionRequestSchema.parse({
+      directory: '/tmp',
+      initialTranscriptAfterSeq: 36,
+    });
+
+    expect(parsed.initialTranscriptAfterSeq).toBe(36);
+  });
+
   it('rejects malformed account settings version hints', () => {
     expect(() => SpawnDaemonSessionRequestSchema.parse({
       directory: '/tmp',

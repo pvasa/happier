@@ -43,6 +43,16 @@ describe('resolveMcpToolCallRequestOptions', () => {
     })).toBe(240_000);
   });
 
+  it('keeps action-approval-capable MCP tools on the configurable general timeout', async () => {
+    process.env.HAPPIER_MCP_TOOL_CALL_TIMEOUT_MS = '360000';
+    reloadConfiguration();
+
+    expect(resolveMcpToolCallRequestTimeoutMs({
+      toolName: 'mcp__happier__session_list',
+      args: {},
+    })).toBe(360_000);
+  });
+
   it('aligns execution_run_wait timeout with timeoutSeconds plus configured grace', async () => {
     process.env.HAPPIER_MCP_EXECUTION_RUN_WAIT_TIMEOUT_GRACE_MS = '45000';
     reloadConfiguration();

@@ -50,6 +50,8 @@ import type {
     ScmWorktreePruneResponse,
     ScmWorktreeRemoveRequest,
     ScmWorktreeRemoveResponse,
+    ScmWorktreesEnrichmentRequest,
+    ScmWorktreesEnrichmentResponse,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -309,6 +311,18 @@ export function registerScmHandlers(
                 onNonRepository: async () => notRepositoryResponse<ScmWorktreePruneResponse>(),
                 runWithBackend: ({ context, selection }) =>
                     selection.backend.worktreePrune({ context, request }),
+            })
+    );
+
+    rpcHandlerManager.registerHandler<ScmWorktreesEnrichmentRequest, ScmWorktreesEnrichmentResponse>(
+        RPC_METHODS.SCM_WORKTREES_ENRICHMENT,
+        async (request) =>
+            runScmRoute<ScmWorktreesEnrichmentRequest, ScmWorktreesEnrichmentResponse>({
+                request,
+                ...routeBase,
+                onNonRepository: async () => ({ success: true, worktrees: [] }),
+                runWithBackend: ({ context, selection }) =>
+                    selection.backend.worktreesEnrichment({ context, request }),
             })
     );
 

@@ -162,6 +162,54 @@ describe('stateUpdates (plaintext sessions)', () => {
     expect(version).toBe(2);
   });
 
+  it('sends runtime issue summaries with update-state payloads', async () => {
+    const runtimeIssueSummaryV1 = {
+      latestTurnStatus: 'failed',
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1_778_089_800_000,
+        provider: 'codex',
+        sanitizedPreview: 'Usage limit reached',
+      },
+    } as const;
+    const emitWithAck = vi.fn(async (_event: string, payload: any) => {
+      expect(payload.runtimeIssueSummaryV1).toEqual(runtimeIssueSummaryV1);
+      return {
+        result: 'success',
+        agentState: payload.agentState,
+        version: payload.expectedVersion + 1,
+      };
+    });
+
+    let agentState: any = { requests: {}, completedRequests: {} };
+    let version = 1;
+
+    await updateSessionAgentStateWithAck({
+      socket: { emitWithAck },
+      sessionId: 's1',
+      sessionEncryptionMode: 'plain',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      getAgentState: () => agentState,
+      setAgentState: (next) => {
+        agentState = next;
+      },
+      getAgentStateVersion: () => version,
+      setAgentStateVersion: (next) => {
+        version = next;
+      },
+      syncSessionSnapshotFromServer: async () => {},
+      handler: (current) => current,
+      runtimeIssueSummaryV1,
+    });
+
+    expect(version).toBe(2);
+  });
+
   it('rejects metadata updates when snapshot sync cannot establish a metadata version', async () => {
     const emitWithAck = vi.fn();
     const syncSessionSnapshotFromServer = vi.fn(async () => undefined);
@@ -293,5 +341,48 @@ describe('stateUpdates (plaintext sessions)', () => {
     expect(seenPaths).toEqual(['/tmp', '/server']);
     expect(metadata).toMatchObject({ path: '/server', serverOnly: true, clientOnly: true });
     expect(version).toBe(3);
+  });
+
+  it('does not leave metadata updates pending forever when the socket ack never settles', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS', '5');
+
+    const emitWithAck = vi.fn(() => new Promise<never>(() => {}));
+    const timeout = vi.fn(() => ({ emitWithAck }));
+    let metadata: any = { path: '/tmp', host: 'localhost' };
+    let version = 1;
+    let observedError: unknown = null;
+
+    const updatePromise = updateSessionMetadataWithAck({
+      socket: { timeout, emitWithAck },
+      sessionId: 's1',
+      sessionEncryptionMode: 'plain',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      getMetadata: () => metadata,
+      setMetadata: (next) => {
+        metadata = next;
+      },
+      getMetadataVersion: () => version,
+      setMetadataVersion: (next) => {
+        version = next;
+      },
+      syncSessionSnapshotFromServer: async () => {},
+      handler: (current) => ({ ...current, path: '/tmp2' }),
+    }).catch((error) => {
+      observedError = error;
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(observedError).toBeInstanceOf(Error);
+      expect((observedError as Error).message).toMatch(/ack timed out/i);
+      expect(metadata.path).toBe('/tmp');
+      await updatePromise;
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
   });
 });

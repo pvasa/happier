@@ -10,6 +10,7 @@ import { MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import { registerFileSystemHandlers } from '@/rpc/handlers/fileSystem';
+import { registerWorkspaceAnchorHandlers } from '@/rpc/handlers/workspaceAnchors/registerWorkspaceAnchorHandlers';
 import { registerMachineFileBrowserHandlers } from '@/rpc/handlers/machineFileBrowser/registerMachineFileBrowserHandlers';
 import {
     resolveFilesystemAccessPolicy,
@@ -44,6 +45,8 @@ import {
 } from '@happier-dev/connection-supervisor';
 import { createLoopbackReadinessProbe } from '@/api/connection/createLoopbackReadinessProbe';
 import { createMachineSocketTransport } from '@/api/machine/connection/createMachineSocketTransport';
+import { buildInstallationProofForMachine } from '@/daemon/identity/proof';
+import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { readMachineOwnerConflictFromSocketError, type MachineOwnerConflictDetails } from '@/api/machine/machineOwnerConflict';
 import { readAccountSettingsVersionFromHint } from '@/settings/accountSettings/accountSettingsVersion';
 
@@ -163,6 +166,10 @@ export class ApiMachineClient {
             accessPolicy: filesystemAccessPolicy,
             getAdditionalAllowedReadDirs: () => additionalAllowedReadDirs,
             getAdditionalAllowedWriteDirs: () => additionalAllowedWriteDirs,
+        });
+        registerWorkspaceAnchorHandlers(this.rpcHandlerManager, {
+            defaultDirectory: machineRpcWorkingDirectory,
+            accessPolicy: filesystemAccessPolicy,
         });
         registerMachineFileBrowserHandlers({
             rpcHandlerManager: this.rpcHandlerManager,
@@ -369,10 +376,25 @@ export class ApiMachineClient {
                 createTransport: () => {
                     const transportGeneration = this.activeTransportGeneration + 1;
                     this.activeTransportGeneration = transportGeneration;
+                    const installationIdentity = readInstallationIdentityIfExistsSync();
+                    const installationProof = installationIdentity
+                        ? buildInstallationProofForMachine({
+                            identity: installationIdentity,
+                            machineId: this.machine.id,
+                            token: this.token,
+                        })
+                        : null;
                     const { socket, transport } = createMachineSocketTransport({
                         serverUrl,
                         token: this.token,
                         machineId: this.machine.id,
+                        ...(installationProof
+                            ? {
+                                installationId: installationProof.installationId,
+                                installationPublicKey: installationProof.installationPublicKey,
+                                installationProof: installationProof.installationProof,
+                            }
+                            : null),
                         ...this.ownershipMetadata,
                         takeover: takeoverOnNextConnect,
                         transports: configuration.socketIoTransports,

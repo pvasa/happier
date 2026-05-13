@@ -10,6 +10,7 @@ import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLo
 import { materializeNextPendingQueueV2MessageViaHttp } from '@/api/session/pendingQueueV2Transport';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import type { ApiMachineClient } from '@/api/apiMachine';
+import { applyInitialTranscriptAfterSeqToAttachPayload } from '@/daemon/sessionEncryption/applyInitialTranscriptAfterSeqToAttachPayload';
 import { TrackedSession } from './types';
 import { MachineMetadata, DaemonState, type Metadata } from '@/api/types';
 import {
@@ -662,6 +663,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 backendTarget: normalizedOptions.backendTarget,
                 profileId: normalizedOptions.profileId,
                 hasInitialPrompt: typeof normalizedOptions.initialPrompt === 'string' && normalizedOptions.initialPrompt.trim().length > 0,
+                hasInitialTranscriptAfterSeq: typeof normalizedOptions.initialTranscriptAfterSeq === 'number',
                 hasResume: typeof normalizedOptions.resume === 'string' && normalizedOptions.resume.trim().length > 0,
                 windowsRemoteSessionLaunchMode: normalizedOptions.windowsRemoteSessionLaunchMode,
                 windowsRemoteSessionConsole: normalizedOptions.windowsRemoteSessionConsole,
@@ -694,6 +696,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     agentModeUpdatedAt,
                     modelId,
                     modelUpdatedAt,
+                    initialTranscriptAfterSeq,
                     initialPrompt,
                     experimentalCodexAcp,
                     codexBackendMode,
@@ -742,6 +745,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     }
                   }
                 }
+
+                sessionAttachPayload = applyInitialTranscriptAfterSeqToAttachPayload(sessionAttachPayload, initialTranscriptAfterSeq);
               }
 
               // Only gate vendor resume. Happy-session reconnect (existingSessionId) is supported for all agents.
@@ -865,6 +870,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 });
                 const {
                   existingSessionAttachPayload: _existingSessionAttachPayload,
+                  initialTranscriptAfterSeq: _initialTranscriptAfterSeq,
                   ...trackedSpawnOptionsBase
                 } = normalizedOptions;
                 const trackedSpawnOptions: SpawnSessionOptions = {

@@ -48,6 +48,7 @@ const SpawnDaemonSessionRequestCompatSchema = z.object({
   initialPrompt: z.string().optional(),
   sessionId: z.string().trim().min(1).optional(),
   existingSessionId: z.string().trim().min(1).optional(),
+  initialTranscriptAfterSeq: z.number().int().min(0).optional(),
   attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
   resume: z.string().trim().min(1).optional(),
   experimentalCodexAcp: z.boolean().optional(),
@@ -72,7 +73,12 @@ const SpawnDaemonSessionRequestCompatSchema = z.object({
   transcriptStorage: z.enum(['persisted', 'direct']).optional(),
 });
 
-export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSchema.transform((request) => {
+type SpawnDaemonSessionRequestCompat = z.output<typeof SpawnDaemonSessionRequestCompatSchema>;
+type SpawnDaemonSessionRequestOutput = Omit<SpawnDaemonSessionRequestCompat, 'experimentalCodexAcp' | 'codexBackendMode'> & {
+  codexBackendMode?: SpawnSessionOptions['codexBackendMode'];
+};
+
+export const SpawnDaemonSessionRequestSchema = SpawnDaemonSessionRequestCompatSchema.transform((request): SpawnDaemonSessionRequestOutput => {
   const { experimentalCodexAcp: _experimentalCodexAcp, codexBackendMode, ...rest } = request;
   const canonicalCodexBackendMode = resolveCanonicalCodexBackendMode({
     codexBackendMode,
@@ -110,6 +116,7 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'codexBackendMode',
   'agentRuntimeDescriptorV1',
   'existingSessionId',
+  'initialTranscriptAfterSeq',
   'attachMetadataIdentityPolicy',
   'permissionMode',
   'permissionModeUpdatedAt',

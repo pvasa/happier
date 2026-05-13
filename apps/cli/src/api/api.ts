@@ -1,7 +1,17 @@
 import axios from 'axios'
 import { z } from 'zod';
 import { logger } from '@/ui/logger'
-import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
+import type {
+  AgentState,
+  CreateSessionResponse,
+  DaemonState,
+  Machine,
+  MachineMetadata,
+  MachineRegistrationIdentity,
+  Metadata,
+  Session,
+} from '@/api/types'
+import { MachineRegistrationIdentitySchema } from '@/api/types'
 import { ApiSessionClient } from './session/sessionClient';
 import { ApiMachineClient } from './apiMachine';
 import { decodeBase64, encodeBase64, encrypt, decrypt } from './encryption';
@@ -36,6 +46,8 @@ import type {
 } from '@happier-dev/protocol';
 import { resolveSessionCreateEncryptionMode } from '@/api/session/resolveSessionCreateEncryptionMode';
 import { createScmConnectedAccountCredentialResolver } from './connectedServices/scmConnectedAccountCredentialResolver';
+import { resolveMachineRegistrationIdentity } from '@/daemon/machineIdentity/resolveMachineRegistrationIdentity';
+import { consumeMachineReplacementCandidateAfterRegistration } from '@/daemon/machineIdentity/machineReplacementCandidates';
 
 export class MachineIdConflictError extends Error {
   readonly machineId: string;
@@ -108,6 +120,32 @@ export function isMachineContentPublicKeyMismatchError(error: unknown): error is
 
 function resolveServerHttpBaseUrl(): string {
   return resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
+}
+
+function didServerAcknowledgeMachineReplacement(
+  data: unknown,
+  expectedReplacesMachineId: string,
+): boolean {
+  const object = typeof data === 'object' && data !== null ? data as Record<string, unknown> : null;
+  const replacement = object && typeof object.machineReplacement === 'object' && object.machineReplacement !== null
+    ? object.machineReplacement as Record<string, unknown>
+    : null;
+  if (!replacement) return false;
+
+  const status = replacement.status;
+  if (status !== 'applied' && status !== 'alreadyApplied') return false;
+
+  const acknowledgedMachineId = replacement.replacesMachineId ?? replacement.replacedMachineId;
+  if (acknowledgedMachineId === undefined || acknowledgedMachineId === null) return true;
+  return typeof acknowledgedMachineId === 'string' && acknowledgedMachineId.trim() === expectedReplacesMachineId;
+}
+
+function doesMachineRowPointAtReplacement(data: unknown, expectedReplacementMachineId: string): boolean {
+  const object = typeof data === 'object' && data !== null ? data as Record<string, unknown> : null;
+  const machine = object && typeof object.machine === 'object' && object.machine !== null
+    ? object.machine as Record<string, unknown>
+    : null;
+  return machine?.replacedByMachineId === expectedReplacementMachineId;
 }
 
 export class ApiClient {
@@ -303,8 +341,12 @@ export class ApiClient {
     metadata: MachineMetadata,
     daemonState?: DaemonState,
     timeoutMs?: number,
+    registrationIdentity?: MachineRegistrationIdentity,
   }): Promise<Machine> {
     const { encryptionKey, encryptionVariant, dataEncryptionKey } = resolveMachineEncryptionContext(this.credential);
+    const registrationIdentity = opts.registrationIdentity
+      ? MachineRegistrationIdentitySchema.parse(opts.registrationIdentity)
+      : await this.resolveMachineRegistrationIdentity(opts.machineId);
     const machinesUrl = `${resolveServerHttpBaseUrl()}/v1/machines`;
 
     // Create machine
@@ -324,6 +366,16 @@ export class ApiClient {
             this.credential.encryption.type === 'dataKey'
               ? encodeBase64(this.credential.encryption.publicKey)
               : undefined,
+          ...(registrationIdentity
+            ? {
+                installationId: registrationIdentity.installationId,
+                installationPublicKey: registrationIdentity.installationPublicKey,
+                installationProof: registrationIdentity.installationProof,
+                replacesMachineId: registrationIdentity.replacesMachineId,
+                replacementReason: registrationIdentity.replacementReason,
+                contentPublicKeyFingerprint: registrationIdentity.contentPublicKeyFingerprint,
+              }
+            : null),
         },
         {
           headers: {
@@ -337,6 +389,25 @@ export class ApiClient {
 
       const raw = response.data.machine;
       logger.debug(`[API] Machine ${opts.machineId} registered/updated with server`);
+      const didAcknowledgeReplacement = registrationIdentity?.replacesMachineId
+        ? didServerAcknowledgeMachineReplacement(response.data, registrationIdentity.replacesMachineId)
+          || await this.didServerAlreadyApplyMachineReplacement({
+            replacesMachineId: registrationIdentity.replacesMachineId,
+            replacementMachineId: opts.machineId,
+            timeoutMs,
+          })
+        : false;
+      if (
+        registrationIdentity?.replacementCandidateAccountId
+        && registrationIdentity.replacesMachineId
+        && didAcknowledgeReplacement
+      ) {
+        await consumeMachineReplacementCandidateAfterRegistration({
+          accountId: registrationIdentity.replacementCandidateAccountId,
+          didRegister: true,
+          replacesMachineId: registrationIdentity.replacesMachineId,
+        });
+      }
 
       // Return decrypted machine like we do for sessions
       const machine: Machine = {
@@ -382,6 +453,48 @@ export class ApiClient {
 
       // For other errors, rethrow
       throw error;
+    }
+  }
+
+  private async resolveMachineRegistrationIdentity(machineId: string): Promise<MachineRegistrationIdentity | undefined> {
+    if (!configuration.installationIdentityFile) return undefined;
+    const identity = await resolveMachineRegistrationIdentity({
+      machineId,
+      token: this.credential.token,
+      contentPublicKey: this.credential.encryption.type === 'dataKey'
+        ? this.credential.encryption.publicKey
+        : undefined,
+    });
+    return {
+      installationId: identity.installationId,
+      installationPublicKey: identity.installationPublicKey,
+      installationProof: identity.installationProof,
+      ...(identity.replacesMachineId ? { replacesMachineId: identity.replacesMachineId } : null),
+      ...(identity.replacementReason ? { replacementReason: identity.replacementReason } : null),
+      ...(identity.contentPublicKeyFingerprint ? { contentPublicKeyFingerprint: identity.contentPublicKeyFingerprint } : null),
+      ...(identity.replacementCandidateAccountId ? { replacementCandidateAccountId: identity.replacementCandidateAccountId } : null),
+    };
+  }
+
+  private async didServerAlreadyApplyMachineReplacement(opts: Readonly<{
+    replacesMachineId: string;
+    replacementMachineId: string;
+    timeoutMs: number;
+  }>): Promise<boolean> {
+    try {
+      const response = await axios.get(
+        `${resolveServerHttpBaseUrl()}/v1/machines/${encodeURIComponent(opts.replacesMachineId)}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: opts.timeoutMs,
+        },
+      );
+      return doesMachineRowPointAtReplacement(response.data, opts.replacementMachineId);
+    } catch {
+      return false;
     }
   }
 

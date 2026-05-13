@@ -40,6 +40,7 @@ type BulkTransferUploadInitRequest =
       fileName: string;
       sizeBytes: number;
       uploadLocation?: AttachmentUploadLocation;
+      workspaceRootPath?: string;
       workspaceRelativeDir?: string;
       vcsIgnoreStrategy?: AttachmentVcsIgnoreStrategy;
       vcsIgnoreWritesEnabled?: boolean;
@@ -73,6 +74,14 @@ function resolveAttachmentTransferConfig(request: Extract<BulkTransferUploadInit
     vcsIgnoreStrategy,
     vcsIgnoreWritesEnabled,
   };
+}
+
+function resolveAttachmentWorkingDirectory(
+  request: Extract<BulkTransferUploadInitRequest, { t: 'session_attachment_upload_v1' }>,
+  fallbackWorkingDirectory: string,
+): string {
+  const workspaceRootPath = typeof request.workspaceRootPath === 'string' ? request.workspaceRootPath.trim() : '';
+  return workspaceRootPath.length > 0 ? workspaceRootPath : fallbackWorkingDirectory;
 }
 
 function sanitizeAttachmentFileName(value: string): string {
@@ -173,10 +182,11 @@ export function registerBulkTransferUploadRpcHandlers(
         };
       }
 
+      const attachmentWorkingDirectory = resolveAttachmentWorkingDirectory(request, deps.workingDirectory);
       const resolvedTarget = resolveConfiguredAttachmentTransferTarget({
         config,
         tempUploadRoot,
-        workingDirectory: deps.workingDirectory,
+        workingDirectory: attachmentWorkingDirectory,
         accessPolicy: deps.accessPolicy,
       });
 
@@ -214,7 +224,7 @@ export function registerBulkTransferUploadRpcHandlers(
       });
 
       const target = resolveWorkspaceFileUploadTarget({
-        workingDirectory: deps.workingDirectory,
+        workingDirectory: attachmentWorkingDirectory,
         accessPolicy: deps.accessPolicy,
         path,
         sizeBytes: request.sizeBytes,
@@ -234,7 +244,7 @@ export function registerBulkTransferUploadRpcHandlers(
 
       try {
         await ensureAttachmentIgnoreRule({
-          workingDirectory: deps.workingDirectory,
+          workingDirectory: attachmentWorkingDirectory,
           config,
         });
       } catch {

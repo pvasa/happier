@@ -52,7 +52,7 @@ export async function handleAuthLogin(args: string[]): Promise<void> {
     await clearCredentials();
     console.log(chalk.gray('✓ Cleared credentials'));
 
-    await clearMachineId();
+    await clearMachineId({ preserveReplacementCandidate: true, replacementReason: 'reauth' });
     console.log(chalk.gray('✓ Cleared machine ID'));
 
     console.log('');
@@ -75,7 +75,7 @@ export async function handleAuthLogin(args: string[]): Promise<void> {
           logger.debug('Daemon was not running or failed to stop during auth repair:', error);
         }
         await clearCredentials();
-        await clearMachineId();
+        await clearMachineId({ preserveReplacementCandidate: true, replacementReason: 'reauth' });
         existingCreds = null;
       }
     }

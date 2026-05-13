@@ -56,7 +56,7 @@ function createDelayedSocketStub(): DelayedSocketStub {
   );
 }
 
-let sessionSocketStub: DelayedSocketStub | null = null;
+let sessionSocketStub: ApiSessionSocketStub | null = null;
 let userSocketStub: ApiSessionSocketStub | null = null;
 
 vi.mock('./sockets', () => ({
@@ -96,9 +96,40 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
 }));
 
 describe('ApiSessionClient message commit queue', () => {
+  it('persists turn_failed as failed primary turn runtime state', async () => {
+    vi.resetModules();
+    const runtimeStateUpdates: unknown[] = [];
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAck: async (event: string, payload: any) => {
+        if (event === 'update-state') {
+          runtimeStateUpdates.push(payload.runtimeIssueSummaryV1);
+          return {
+            result: 'success',
+            agentState: payload.agentState,
+            version: payload.expectedVersion + 1,
+          };
+        }
+        return { ok: true, id: 'm1', seq: 1, localId: payload?.localId ?? 'l1' };
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    client.sendAgentMessage('opencode' as any, { type: 'turn_failed', id: 'turn-1' } as any);
+
+    await expect.poll(() => runtimeStateUpdates).toEqual([
+      { latestTurnStatus: 'failed' },
+    ]);
+  });
+
   it('serializes best-effort message commits to avoid concurrent socket acks', async () => {
     vi.resetModules();
-    sessionSocketStub = createDelayedSocketStub();
+    const delayedSessionSocket = createDelayedSocketStub();
+    sessionSocketStub = delayedSessionSocket;
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
 
     const { ApiSessionClient } = await import('./sessionClient');
@@ -111,7 +142,7 @@ describe('ApiSessionClient message commit queue', () => {
 
     const waitForPending = async (count: number) => {
       const start = Date.now();
-      while (sessionSocketStub && sessionSocketStub.state.pendingResolvers.length < count) {
+    while (delayedSessionSocket.state.pendingResolvers.length < count) {
         if (Date.now() - start > 1_000) {
           throw new Error('Timed out waiting for socket ack resolvers');
         }
@@ -121,14 +152,14 @@ describe('ApiSessionClient message commit queue', () => {
 
     await waitForPending(1);
 
-    expect(sessionSocketStub.state.maxInFlight).toBe(1);
+    expect(delayedSessionSocket.state.maxInFlight).toBe(1);
 
-    sessionSocketStub.resolveNext({ ok: true, id: 'm1', seq: 1, localId: 'l1' });
+    delayedSessionSocket.resolveNext({ ok: true, id: 'm1', seq: 1, localId: 'l1' });
     await waitForPending(1);
 
-    sessionSocketStub.resolveNext({ ok: true, id: 'm2', seq: 2, localId: 'l2' });
+    delayedSessionSocket.resolveNext({ ok: true, id: 'm2', seq: 2, localId: 'l2' });
     await waitForPending(1);
 
-    sessionSocketStub.resolveNext({ ok: true, id: 'm3', seq: 3, localId: 'l3' });
+    delayedSessionSocket.resolveNext({ ok: true, id: 'm3', seq: 3, localId: 'l3' });
   });
 });

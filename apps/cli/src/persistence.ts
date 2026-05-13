@@ -25,6 +25,7 @@ import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineId
 import { cleanupAtomicWriteTempFiles, cleanupAtomicWriteTempFilesSync, writeJsonAtomicSync } from '@/utils/fs/writeJsonAtomicSync';
 import type { PublicReleaseRingLabel } from '@happier-dev/release-runtime/releaseRings';
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
+import type { MachineReplacementReason } from '@happier-dev/protocol';
 
 async function bestEffortChmod(path: string, mode: number): Promise<void> {
   if (process.platform === 'win32') return;
@@ -88,6 +89,12 @@ async function cleanupLegacyDaemonStateFilesBestEffort(): Promise<void> {
 // Incremented when Settings structure changes.
 export const SUPPORTED_SCHEMA_VERSION = 6;
 
+export type MachineReplacementCandidate = Readonly<{
+  machineId: string;
+  replacementReason: MachineReplacementReason;
+  createdAt: number;
+}>;
+
 export interface Settings {
   // Schema version for backwards compatibility
   schemaVersion: number
@@ -125,6 +132,14 @@ export interface Settings {
    * when credentials are swapped (e.g. due to credential repair/migration or manual re-auth).
    */
   machineIdByServerIdByAccountId?: Record<string, Record<string, string | undefined> | undefined>
+  /**
+   * Old exact machine ids that the current local installation may explicitly replace on its next
+   * successful registration. These are scoped by server and account and are never live RPC targets.
+   */
+  machineReplacementCandidatesByServerIdByAccountId?: Record<
+    string,
+    Record<string, MachineReplacementCandidate | undefined> | undefined
+  >
   /**
    * Last observed JWT `sub` (account id) per server id (schema v6+; best-effort).
    *
@@ -177,6 +192,7 @@ const defaultSettings: Settings = {
   },
   machineIdByServerId: {},
   machineIdByServerIdByAccountId: {},
+  machineReplacementCandidatesByServerIdByAccountId: {},
   lastTokenSubByServerId: {},
   machineIdConfirmedByServerByServerId: {},
   lastChangesCursorByServerIdByAccountId: {},
@@ -666,16 +682,36 @@ export async function clearCredentials(): Promise<void> {
   }
 }
 
-export async function clearMachineId(): Promise<void> {
+export async function clearMachineId(opts?: Readonly<{
+  preserveReplacementCandidate?: boolean;
+  replacementReason?: MachineReplacementReason;
+  now?: number;
+}>): Promise<void> {
   await updateSettings((settings) => {
     const activeServerId = sanitizeServerIdForFilesystem(
       configuration.activeServerId ?? settings.activeServerId ?? 'cloud',
       'cloud',
     );
     const nextMap = { ...(settings.machineIdByServerId ?? {}) };
+    const currentMachineId = typeof nextMap[activeServerId] === 'string'
+      ? String(nextMap[activeServerId]).trim()
+      : '';
     const nextPerAccount = { ...(settings.machineIdByServerIdByAccountId ?? {}) };
     if (activeServerId in nextPerAccount) delete nextPerAccount[activeServerId];
     const nextLastSub = { ...(settings.lastTokenSubByServerId ?? {}) };
+    const currentAccountId = typeof nextLastSub[activeServerId] === 'string'
+      ? String(nextLastSub[activeServerId]).trim()
+      : '';
+    const nextReplacementCandidates = { ...(settings.machineReplacementCandidatesByServerIdByAccountId ?? {}) };
+    if (opts?.preserveReplacementCandidate === true && currentMachineId && currentAccountId) {
+      const byAccount = { ...(nextReplacementCandidates[activeServerId] ?? {}) };
+      byAccount[currentAccountId] = {
+        machineId: currentMachineId,
+        replacementReason: opts.replacementReason ?? 'reauth',
+        createdAt: opts.now ?? Date.now(),
+      };
+      nextReplacementCandidates[activeServerId] = byAccount;
+    }
     if (activeServerId in nextLastSub) delete nextLastSub[activeServerId];
     if (activeServerId in nextMap) delete nextMap[activeServerId];
     const nextConfirmed = { ...(settings.machineIdConfirmedByServerByServerId ?? {}) };
@@ -684,6 +720,7 @@ export async function clearMachineId(): Promise<void> {
       ...settings,
       machineIdByServerId: Object.keys(nextMap).length ? nextMap : {},
       machineIdByServerIdByAccountId: Object.keys(nextPerAccount).length ? nextPerAccount : {},
+      machineReplacementCandidatesByServerIdByAccountId: Object.keys(nextReplacementCandidates).length ? nextReplacementCandidates : {},
       lastTokenSubByServerId: Object.keys(nextLastSub).length ? nextLastSub : {},
       machineIdConfirmedByServerByServerId: Object.keys(nextConfirmed).length ? nextConfirmed : {},
     };

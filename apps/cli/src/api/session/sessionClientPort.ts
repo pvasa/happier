@@ -3,6 +3,7 @@ import type { RawJSONLines } from '@/backends/claude/types';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
 import type { AgentState, Metadata } from '../types';
 import type { TurnAssistantTextSnapshot } from './turnAssistantTextSnapshot';
+import type { PrimaryTurnRuntimeStateUpdate } from './stateUpdates';
 
 export interface SessionClientPort {
   sessionId: string;
@@ -20,6 +21,7 @@ export interface SessionClientPort {
 
   updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
   updateAgentState(updater: (state: AgentState) => AgentState): void | Promise<void>;
+  updatePrimaryTurnRuntimeState?(record: PrimaryTurnRuntimeStateUpdate): void | Promise<void>;
 
   keepAlive(thinking: boolean, mode: 'local' | 'remote'): void;
 

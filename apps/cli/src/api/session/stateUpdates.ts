@@ -2,12 +2,19 @@ import { logger } from '@/ui/logger'
 import { backoff } from '@/utils/time';
 import { resolveSessionControlSocketAckTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import type { AgentState, Metadata } from '../types';
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '../encryption';
 import { deriveActivitySummaryFromAgentState } from './deriveActivitySummaryFromAgentState';
+
+export type PrimaryTurnRuntimeStateUpdate = Readonly<{
+    latestTurnStatus: PrimaryTurnStatusV1;
+    lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
+}>;
 
 type AckableSocket = {
     emitWithAck: (event: string, ...args: any[]) => Promise<any>;
     timeout?: (ms: number) => AckableSocket;
+    connected?: boolean;
 };
 
 type SessionStateUpdateError = Error & {
@@ -38,8 +45,36 @@ async function emitWithAck(opts: {
     event: string;
     payload: unknown;
 }): Promise<any> {
-    const socketWithTimeout = opts.socket.timeout?.(resolveSessionControlSocketAckTimeoutMs()) ?? opts.socket;
-    return await socketWithTimeout.emitWithAck(opts.event, opts.payload);
+    if (opts.socket.connected === false) {
+        throw createSessionStateUpdateError(
+            `${opts.event} socket is not connected`,
+            'socket_not_connected',
+            true,
+        );
+    }
+
+    const timeoutMs = resolveSessionControlSocketAckTimeoutMs();
+    const socketWithTimeout = opts.socket.timeout?.(timeoutMs) ?? opts.socket;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+        return await Promise.race([
+            socketWithTimeout.emitWithAck(opts.event, opts.payload),
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                    reject(createSessionStateUpdateError(
+                        `${opts.event} ack timed out after ${timeoutMs}ms`,
+                        'socket_ack_timeout',
+                        true,
+                    ));
+                }, timeoutMs);
+                timer.unref?.();
+            }),
+        ]);
+    } finally {
+        if (timer) {
+            clearTimeout(timer);
+        }
+    }
 }
 
 function readLoggedCurrentModeId(metadata: Record<string, unknown> | null | undefined): string | null {
@@ -161,6 +196,7 @@ export async function updateSessionAgentStateWithAck(opts: {
     setAgentStateVersion: (version: number) => void;
     syncSessionSnapshotFromServer: () => Promise<void>;
     handler: (agentState: AgentState) => AgentState;
+    runtimeIssueSummaryV1?: PrimaryTurnRuntimeStateUpdate;
 }): Promise<void> {
     await backoff(async () => {
         if (opts.getAgentStateVersion() < 0) {
@@ -188,6 +224,7 @@ export async function updateSessionAgentStateWithAck(opts: {
                 expectedVersion: opts.getAgentStateVersion(),
                 agentState: agentStatePayload,
                 activitySummaryV1,
+                ...(opts.runtimeIssueSummaryV1 ? { runtimeIssueSummaryV1: opts.runtimeIssueSummaryV1 } : {}),
             },
         });
 

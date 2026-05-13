@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLock } from '@/utils/lock';
 import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
+import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 import { registerEphemeralTaskHandlers } from '@/rpc/handlers/ephemeralTasks';
 import { createExecutionRunBackend } from '@/agent/executionRuns/runtime/createExecutionRunBackend';
@@ -24,7 +25,7 @@ import { addDiscardedCommittedMessageLocalIds } from '../queue/discardedCommitte
 import { fetchSessionSnapshotUpdateFromServer, shouldSyncSessionSnapshotOnConnect } from './snapshotSync';
 import { createUserScopedSocket } from './sockets';
 import { isToolTraceEnabled, recordAcpToolTraceEventIfNeeded, recordClaudeToolTraceEvents, recordCodexToolTraceEventIfNeeded } from './toolTrace';
-import { updateSessionAgentStateWithAck, updateSessionMetadataWithAck } from './stateUpdates';
+import { updateSessionAgentStateWithAck, updateSessionMetadataWithAck, type PrimaryTurnRuntimeStateUpdate } from './stateUpdates';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { calculateCost } from '@/utils/pricing';
 import { buildAcpAgentMessageEnvelope, shouldTraceAcpMessageType } from './acpMessageEnvelope';
@@ -79,6 +80,7 @@ import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/execution
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
 import { updateMetadataBestEffort } from './sessionWritesBestEffort';
+import { normalizeAgentPromptPayload } from '@/agent/core/AgentPromptPayload';
 
 function serializeUnknownErrorForLog(error: unknown): Record<string, unknown> {
     if (error instanceof Error) {
@@ -191,6 +193,7 @@ export class ApiSessionClient extends EventEmitter {
     private readonly materializationRecoveryScheduler: KeyedSingleFlightScheduler;
     private readonly transcriptRecoveryErrorStateByLocalId = new Map<string, { lastLoggedAt: number; suppressed: number }>();
     private messageCommitQueueTail: Promise<unknown> = Promise.resolve();
+    private readonly sessionRuntimeControls: Partial<SessionRuntimeControls> = {};
     readonly executionRuns = {
         start: async (request: unknown) =>
             await startExecutionRun({
@@ -361,6 +364,7 @@ export class ApiSessionClient extends EventEmitter {
         registerSessionHandlers(this.rpcHandlerManager, this.metadata.path, {
             getSessionMetadata: () => this.getMetadataSnapshot(),
             enqueueSessionUserMessage: (request) => this.enqueueSessionUserMessage(request),
+            sessionRuntimeControls: this.sessionRuntimeControls,
         });
 
         const transcriptWriter = {
@@ -556,6 +560,20 @@ export class ApiSessionClient extends EventEmitter {
         });
 
         void this.sessionConnectionSupervisor.start();
+    }
+
+    setSessionRuntimeControls(controls: SessionRuntimeControls | null): void {
+        delete this.sessionRuntimeControls.refreshGoal;
+        delete this.sessionRuntimeControls.setGoal;
+        delete this.sessionRuntimeControls.clearGoal;
+        delete this.sessionRuntimeControls.listVendorPlugins;
+        delete this.sessionRuntimeControls.listSkills;
+        if (!controls) return;
+        if (typeof controls.refreshGoal === 'function') this.sessionRuntimeControls.refreshGoal = controls.refreshGoal;
+        if (typeof controls.setGoal === 'function') this.sessionRuntimeControls.setGoal = controls.setGoal;
+        if (typeof controls.clearGoal === 'function') this.sessionRuntimeControls.clearGoal = controls.clearGoal;
+        if (typeof controls.listVendorPlugins === 'function') this.sessionRuntimeControls.listVendorPlugins = controls.listVendorPlugins;
+        if (typeof controls.listSkills === 'function') this.sessionRuntimeControls.listSkills = controls.listSkills;
     }
 
     private debugTranscriptRecoveryFetchError(localId: string, error: unknown): void {
@@ -1763,6 +1781,16 @@ export class ApiSessionClient extends EventEmitter {
             logErrorMessage: '[SOCKET] Failed to commit agent message (non-fatal)',
         });
 
+        if (normalizedBody.type === 'task_started') {
+            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'in_progress' });
+        } else if (normalizedBody.type === 'task_complete') {
+            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'completed' });
+        } else if (normalizedBody.type === 'turn_failed') {
+            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'failed' });
+        } else if (normalizedBody.type === 'turn_cancelled' || normalizedBody.type === 'turn_aborted') {
+            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'cancelled', lastRuntimeIssue: null });
+        }
+
         // Best-effort: allow ACP providers to report token usage via a token_count message.
         if (normalizedBody.type === 'token_count') {
             try {
@@ -1890,7 +1918,11 @@ export class ApiSessionClient extends EventEmitter {
         if (text.length === 0) return;
         const localId = typeof params.localId === 'string' && params.localId.length > 0 ? params.localId : randomUUID();
 
-        const meta: Record<string, unknown> = params.meta && typeof params.meta === 'object' ? { ...params.meta } : {};
+        const rawMeta: Record<string, unknown> = params.meta && typeof params.meta === 'object' ? { ...params.meta } : {};
+        const normalizedPayload = normalizeAgentPromptPayload({ text, meta: rawMeta });
+        const meta: Record<string, unknown> = normalizedPayload.meta && typeof normalizedPayload.meta === 'object'
+            ? { ...normalizedPayload.meta }
+            : {};
         if (typeof meta.source !== 'string' || meta.source.trim().length === 0) {
             meta.source = 'ui';
         }
@@ -2143,6 +2175,29 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
+    updatePrimaryTurnRuntimeState(record: PrimaryTurnRuntimeStateUpdate): Promise<void> {
+        return this.agentStateLock.inLock(async () => {
+            await updateSessionAgentStateWithAck({
+                socket: this.socket as any,
+                sessionId: this.sessionId,
+                sessionEncryptionMode: this.sessionEncryptionMode,
+                encryptionKey: this.encryptionKey,
+                encryptionVariant: this.encryptionVariant,
+                getAgentState: () => this.agentState,
+                setAgentState: (agentState) => {
+                    this.agentState = agentState;
+                },
+                getAgentStateVersion: () => this.agentStateVersion,
+                setAgentStateVersion: (version) => {
+                    this.agentStateVersion = version;
+                },
+                syncSessionSnapshotFromServer: () => this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' }),
+                handler: (agentState) => agentState,
+                runtimeIssueSummaryV1: record,
+            });
+        });
+    }
+
     /**
      * Wait for socket buffer to flush
      */
@@ -2383,7 +2438,7 @@ export class ApiSessionClient extends EventEmitter {
             return false;
         }
 
-        if (materializeResult.didWrite && materializeResult.localId) {
+        if (materializeResult.localId) {
             // Best-effort: recover if we miss socket broadcasts for the committed transcript row.
             this.pendingQueueMaterializedLocalIds.add(materializeResult.localId);
             this.scheduleMaterializationRecovery(materializeResult.localId);

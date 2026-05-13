@@ -423,6 +423,75 @@ describe('attachments upload (chunked)', () => {
     }
   });
 
+  it('resolves workspace attachment uploads against an explicit workspace root', async () => {
+    const machineWorkingDirectory = await mkdtemp(join(tmpdir(), 'happier-attach-machine-root-'));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'happier-attach-workspace-root-'));
+    const readAllowedDirs: { current: string[] } = { current: [] };
+    const writeAllowedDirs: { current: string[] } = { current: [] };
+
+    try {
+      await writeFile(join(workspaceRoot, '.gitignore'), '# workspace\n', 'utf8');
+      const mgr = createRpcHandlerManager();
+      const pathAllowanceRegistry = createTransferPathAllowanceRegistry({
+        onReadDirsChange: (dirs) => {
+          readAllowedDirs.current = [...dirs];
+        },
+        onWriteDirsChange: (dirs) => {
+          writeAllowedDirs.current = [...dirs];
+        },
+      });
+      registerSessionTransferRpcHandlers(mgr as unknown as RpcHandlerManager, {
+        workingDirectory: machineWorkingDirectory,
+        getAdditionalAllowedReadDirs: () => readAllowedDirs.current,
+        getAdditionalAllowedWriteDirs: () => writeAllowedDirs.current,
+        attachmentUpload: {
+          pathAllowanceRegistry,
+        },
+      });
+
+      const init = mgr.handlers.get(RPC_METHODS.DAEMON_BULK_TRANSFER_UPLOAD_INIT);
+      const chunk = mgr.handlers.get(RPC_METHODS.DAEMON_BULK_TRANSFER_UPLOAD_CHUNK);
+      const finalize = mgr.handlers.get(RPC_METHODS.DAEMON_BULK_TRANSFER_UPLOAD_FINALIZE);
+      if (!init || !chunk || !finalize) {
+        throw new Error('expected attachment upload handlers to be registered');
+      }
+
+      const initResult: any = await init({
+        t: 'session_attachment_upload_v1',
+        messageLocalId: 'message-absolute-root',
+        fileName: 'hello.txt',
+        sizeBytes: 11,
+        uploadLocation: 'workspace',
+        workspaceRootPath: workspaceRoot,
+        workspaceRelativeDir: '.happier/uploads',
+        vcsIgnoreStrategy: 'gitignore',
+        vcsIgnoreWritesEnabled: true,
+      });
+      expect(initResult).toMatchObject({ success: true, recipientPublicKeyBase64: expect.any(String) });
+
+      expect(await chunk(createEncryptedUploadChunkRequest({
+        uploadId: initResult.uploadId,
+        index: 0,
+        payload: Buffer.from('hello world', 'utf8'),
+        recipientPublicKeyBase64: initResult.recipientPublicKeyBase64,
+      }))).toEqual({ success: true });
+
+      const finalizeResult: any = await finalize({ uploadId: initResult.uploadId });
+      expect(finalizeResult).toMatchObject({
+        success: true,
+        path: expect.stringMatching(/^\.happier\/uploads\/messages\/message-absolute-root\/[0-9a-f]{8}-hello\.txt$/),
+        sizeBytes: 11,
+      });
+      await expect(readFile(resolve(workspaceRoot, finalizeResult.path), 'utf8')).resolves.toBe('hello world');
+      await expect(readFile(resolve(machineWorkingDirectory, finalizeResult.path), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(workspaceRoot, '.gitignore'), 'utf8')).resolves.toContain('/.happier/uploads/');
+      await expect(readFile(join(machineWorkingDirectory, '.gitignore'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(machineWorkingDirectory, { recursive: true, force: true }).catch(() => {});
+      await rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it('supports os_temp attachment uploads and subsequent file download through the dedicated transfer handlers', async () => {
     const workingDirectory = await mkdtemp(join(tmpdir(), 'happier-attach-os-temp-'));
     const readAllowedDirs: { current: string[] } = { current: [] };
