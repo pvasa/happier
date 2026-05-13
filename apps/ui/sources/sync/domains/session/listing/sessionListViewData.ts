@@ -8,14 +8,28 @@ import {
 } from '@/sync/ops/sessionMachineTarget';
 import { isUserFacingSession } from './isUserFacingSession';
 import { resolveSessionWorkspacePresentation } from './sessionWorkspacePresentation';
+import {
+    buildSessionFolderAssignmentKey,
+    buildSessionFolderTree,
+    resolveDurableWorkspaceRefForSessionListHeader,
+    type SessionFoldersV1,
+    type SessionFolderTreeNode,
+    type SessionFolderWorkspaceRefV1,
+} from '../folders';
 
 export type SessionListViewItem =
     | {
         type: 'header';
         title: string;
-        headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'project' | 'pinned' | 'shared';
+        headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'project' | 'pinned' | 'shared' | 'folder';
         groupKey?: string;
         workspaceKey?: string;
+        workspace?: SessionFolderWorkspaceRefV1;
+        renderWorkspaceKey?: string;
+        folderId?: string;
+        parentFolderId?: string | null;
+        depth?: number;
+        sessionCount?: number;
         workspaceScopeHint?: Readonly<{ serverId: string; machineId: string; rootPath: string }> | null;
         seedSessionId?: string | null;
         serverId?: string;
@@ -28,7 +42,9 @@ export type SessionListViewItem =
         session: SessionListRenderableSession;
         section?: 'active' | 'inactive';
         groupKey?: string;
-        groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'shared';
+        groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'shared' | 'folder';
+        folderId?: string | null;
+        folderDepth?: number;
         pinned?: boolean;
         variant?: 'default' | 'no-path';
         serverId?: string;
@@ -47,6 +63,11 @@ export interface BuildSessionListViewDataOptions {
     serverScope?: {
         serverId: string;
         serverName?: string;
+    };
+    sessionFolders?: {
+        enabled: boolean;
+        folders: SessionFoldersV1;
+        assignmentsBySessionKey: Readonly<Record<string, string | null | undefined>>;
     };
 }
 
@@ -93,6 +114,36 @@ type ProjectGroup = {
     latestCreatedAt: number;
     sessions: SessionListRenderableSession[];
 };
+
+function hasKnownWorkspaceMachine(
+    group: ProjectGroup,
+    machines: Record<string, MachineDisplayRenderable>,
+): boolean {
+    return Boolean(group.workspaceMachineId && machines[group.workspaceMachineId]);
+}
+
+function mergeMissingMachineProjectGroups(
+    groups: Map<string, ProjectGroup>,
+    machines: Record<string, MachineDisplayRenderable>,
+): void {
+    const groupsByPath = new Map<string, ProjectGroup[]>();
+    for (const group of groups.values()) {
+        if (!hasKnownWorkspaceMachine(group, machines)) continue;
+        const bucket = groupsByPath.get(group.workspaceRootPath) ?? [];
+        bucket.push(group);
+        groupsByPath.set(group.workspaceRootPath, bucket);
+    }
+
+    for (const [key, group] of Array.from(groups.entries())) {
+        if (hasKnownWorkspaceMachine(group, machines)) continue;
+        const candidates = groupsByPath.get(group.workspaceRootPath) ?? [];
+        if (candidates.length !== 1) continue;
+        const target = candidates[0];
+        target.sessions.push(...group.sessions);
+        target.latestCreatedAt = Math.max(target.latestCreatedAt, group.latestCreatedAt);
+        groups.delete(key);
+    }
+}
 
 function compareSessionsStableNewestFirst(a: SessionListRenderableSession, b: SessionListRenderableSession): number {
     if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
@@ -151,6 +202,8 @@ function groupSessionsByProject(params: Readonly<{
         }
     }
 
+    mergeMissingMachineProjectGroups(groups, params.machines);
+
     const sortedGroups = Array.from(groups.values()).sort((a, b) => {
         if (b.latestCreatedAt !== a.latestCreatedAt) return b.latestCreatedAt - a.latestCreatedAt;
         if (a.displayPath !== b.displayPath) return a.displayPath.localeCompare(b.displayPath);
@@ -170,33 +223,54 @@ function pushProjectGroupsToList(params: Readonly<{
     section: 'active' | 'inactive';
     serverKey: string;
     serverScopeMeta: ServerScopeMeta;
+    sessionFolders?: BuildSessionListViewDataOptions['sessionFolders'];
 }>): void {
     for (const group of params.groups) {
         const hasGroupHeader = Boolean(group.displayPath);
         const groupKey = `server:${params.serverKey}:${params.section}:project:${group.workspaceHash}`;
+        const projectHeader: Extract<SessionListViewItem, { type: 'header' }> = {
+            type: 'header',
+            title: group.displayPath,
+            headerKind: 'project',
+            groupKey,
+            workspaceKey: group.workspaceKey,
+            workspaceScopeHint: params.serverScopeMeta.serverId && group.workspaceMachineId && group.workspaceRootPath
+                ? {
+                    serverId: params.serverScopeMeta.serverId,
+                    machineId: group.workspaceMachineId,
+                    rootPath: group.workspaceRootPath,
+                }
+                : null,
+            seedSessionId: group.sessions[0]?.id ?? null,
+            machine: group.machine,
+            subtitle: group.machine.metadata?.displayName || group.machine.metadata?.host || group.machine.id,
+            ...params.serverScopeMeta,
+        };
 
         if (hasGroupHeader) {
-            params.listData.push({
-                type: 'header',
-                title: group.displayPath,
-                headerKind: 'project',
-                groupKey,
-                workspaceKey: group.workspaceKey,
-                workspaceScopeHint: params.serverScopeMeta.serverId && group.workspaceMachineId && group.workspaceRootPath
-                    ? {
-                        serverId: params.serverScopeMeta.serverId,
-                        machineId: group.workspaceMachineId,
-                        rootPath: group.workspaceRootPath,
-                    }
-                    : null,
-                seedSessionId: group.sessions[0]?.id ?? null,
-                machine: group.machine,
-                subtitle: group.machine.metadata?.displayName || group.machine.metadata?.host || group.machine.id,
-                ...params.serverScopeMeta,
-            });
+            params.listData.push(projectHeader);
         }
 
         const variant: 'default' | 'no-path' = hasGroupHeader ? 'no-path' : 'default';
+        const folderOptions = params.sessionFolders?.enabled === true && hasGroupHeader ? params.sessionFolders : null;
+        if (folderOptions) {
+            const workspace = resolveDurableWorkspaceRefForSessionListHeader(projectHeader);
+            if (workspace) {
+                pushFolderAwareProjectSessionsToList({
+                    listData: params.listData,
+                    sessions: group.sessions,
+                    section: params.section,
+                    projectGroupKey: groupKey,
+                    variant,
+                    serverScopeMeta: params.serverScopeMeta,
+                    renderWorkspaceKey: group.workspaceKey,
+                    workspace,
+                    sessionFolders: folderOptions,
+                });
+                continue;
+            }
+        }
+
         group.sessions.forEach((session) => {
             params.listData.push({
                 type: 'session',
@@ -209,6 +283,169 @@ function pushProjectGroupsToList(params: Readonly<{
             });
         });
     }
+}
+
+function buildFolderGroupKey(params: Readonly<{
+    projectGroupKey: string;
+    folderId: string;
+}>): string {
+    return `${params.projectGroupKey}:folder:${params.folderId}`;
+}
+
+function pushFolderAwareProjectSessionsToList(params: Readonly<{
+    listData: SessionListViewItem[];
+    sessions: ReadonlyArray<SessionListRenderableSession>;
+    section: 'active' | 'inactive';
+    projectGroupKey: string;
+    variant: 'default' | 'no-path';
+    serverScopeMeta: ServerScopeMeta;
+    renderWorkspaceKey: string;
+    workspace: SessionFolderWorkspaceRefV1;
+    sessionFolders: NonNullable<BuildSessionListViewDataOptions['sessionFolders']>;
+}>): void {
+    const tree = buildSessionFolderTree(params.sessionFolders.folders, params.workspace);
+    if (tree.rootNodes.length === 0) {
+        params.sessions.forEach((session) => {
+            params.listData.push({
+                type: 'session',
+                session,
+                section: params.section,
+                groupKey: params.projectGroupKey,
+                groupKind: 'project',
+                variant: params.variant,
+                folderId: null,
+                folderDepth: 0,
+                ...params.serverScopeMeta,
+            });
+        });
+        return;
+    }
+
+    const sessionsByFolderId = new Map<string, SessionListRenderableSession[]>();
+    const rootSessions: SessionListRenderableSession[] = [];
+    for (const session of params.sessions) {
+        const assignmentKey = buildSessionFolderAssignmentKey(params.serverScopeMeta.serverId, session.id);
+        const folderId = params.sessionFolders.assignmentsBySessionKey[assignmentKey] ?? null;
+        if (folderId && tree.nodesById.has(folderId)) {
+            const bucket = sessionsByFolderId.get(folderId) ?? [];
+            bucket.push(session);
+            sessionsByFolderId.set(folderId, bucket);
+        } else {
+            rootSessions.push(session);
+        }
+    }
+
+    const pushNode = (node: SessionFolderTreeNode): void => {
+        const depth = node.depth + 1;
+        const folderGroupKey = buildFolderGroupKey({
+            projectGroupKey: params.projectGroupKey,
+            folderId: node.id,
+        });
+        const folderSessions = sessionsByFolderId.get(node.id) ?? [];
+        params.listData.push({
+            type: 'header',
+            title: node.name,
+            headerKind: 'folder',
+            groupKey: folderGroupKey,
+            workspace: node.workspace,
+            renderWorkspaceKey: params.renderWorkspaceKey,
+            folderId: node.id,
+            parentFolderId: node.parentId,
+            depth,
+            sessionCount: folderSessions.length,
+            ...params.serverScopeMeta,
+        });
+        folderSessions.forEach((session) => {
+            params.listData.push({
+                type: 'session',
+                session,
+                section: params.section,
+                groupKey: folderGroupKey,
+                groupKind: 'folder',
+                variant: params.variant,
+                folderId: node.id,
+                folderDepth: depth,
+                ...params.serverScopeMeta,
+            });
+        });
+        node.children.forEach(pushNode);
+    };
+
+    tree.rootNodes.forEach(pushNode);
+    rootSessions.forEach((session) => {
+        params.listData.push({
+            type: 'session',
+            session,
+            section: params.section,
+            groupKey: params.projectGroupKey,
+            groupKind: 'project',
+            variant: params.variant,
+            folderId: null,
+            folderDepth: 0,
+            ...params.serverScopeMeta,
+        });
+    });
+}
+
+export function applySessionFoldersToSessionListViewData(
+    source: ReadonlyArray<SessionListViewItem>,
+    options: NonNullable<BuildSessionListViewDataOptions['sessionFolders']>,
+): SessionListViewItem[] {
+    if (options.enabled !== true || source.length === 0) return source as SessionListViewItem[];
+    if (source.some((item) => item.type === 'header' && item.headerKind === 'folder')) {
+        return source as SessionListViewItem[];
+    }
+
+    let changed = false;
+    const out: SessionListViewItem[] = [];
+    for (let index = 0; index < source.length; index += 1) {
+        const item = source[index];
+        if (item.type !== 'header' || item.headerKind !== 'project') {
+            out.push(item);
+            continue;
+        }
+
+        const workspace = resolveDurableWorkspaceRefForSessionListHeader(item);
+        if (!workspace || !item.groupKey) {
+            out.push(item);
+            continue;
+        }
+
+        const sessions: Array<Extract<SessionListViewItem, { type: 'session' }>> = [];
+        let cursor = index + 1;
+        while (cursor < source.length) {
+            const next = source[cursor];
+            if (next.type !== 'session' || next.groupKey !== item.groupKey) break;
+            sessions.push(next);
+            cursor += 1;
+        }
+
+        if (sessions.length === 0) {
+            out.push(item);
+            continue;
+        }
+
+        out.push(item);
+        const beforeLength = out.length;
+        pushFolderAwareProjectSessionsToList({
+            listData: out,
+            sessions: sessions.map((session) => session.session),
+            section: sessions[0]?.section ?? 'inactive',
+            projectGroupKey: item.groupKey,
+            variant: sessions[0]?.variant ?? 'default',
+            serverScopeMeta: {
+                serverId: item.serverId,
+                serverName: item.serverName,
+            },
+            renderWorkspaceKey: item.workspaceKey ?? item.renderWorkspaceKey ?? '',
+            workspace,
+            sessionFolders: options,
+        });
+        changed = changed || out.length !== beforeLength + sessions.length;
+        index = cursor - 1;
+    }
+
+    return changed ? out : source as SessionListViewItem[];
 }
 
 function pushDateGroupsToList(params: Readonly<{
@@ -313,6 +550,7 @@ function pushOwnedSessionsToList(params: Readonly<{
     serverKey: string;
     serverScopeMeta: ServerScopeMeta;
     sessionTargetState?: SessionMachineTargetState;
+    sessionFolders?: BuildSessionListViewDataOptions['sessionFolders'];
 }>): void {
     if (params.sessions.length === 0) return;
 
@@ -327,6 +565,7 @@ function pushOwnedSessionsToList(params: Readonly<{
             section: params.section,
             serverKey: params.serverKey,
             serverScopeMeta: params.serverScopeMeta,
+            sessionFolders: params.sessionFolders,
         });
         return;
     }
@@ -400,6 +639,7 @@ export function buildSessionListViewData(
             serverKey,
             serverScopeMeta,
             sessionTargetState: options.sessionTargetState,
+            sessionFolders: options.sessionFolders,
         });
     }
 
@@ -422,6 +662,7 @@ export function buildSessionListViewData(
             serverKey,
             serverScopeMeta,
             sessionTargetState: options.sessionTargetState,
+            sessionFolders: options.sessionFolders,
         });
     }
 

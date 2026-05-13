@@ -1,7 +1,5 @@
-import {
-    resolveBestMachineDisplayRenderableForHost,
-    type MachineDisplayRenderable,
-} from '@/sync/domains/machines/machineDisplayRenderable';
+import { type MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
+import { resolveCanonicalMachineId } from '@/sync/domains/machines/identity/resolveCanonicalMachineId';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { normalizeNonEmptyString } from '@/utils/strings/normalizeNonEmptyString';
 
@@ -78,22 +76,24 @@ export function resolveSessionWorkspacePresentation(params: Readonly<{
     const parts = resolveSessionProjectGroupingKeyParts(params.metadata);
     const targetMachineId = normalizeNonEmptyString(params.target?.machineId);
     const targetPath = normalizeNonEmptyString(params.target?.basePath);
-    const displayMachineId = targetMachineId ?? parts.machineId;
+    const rawDisplayMachineId = targetMachineId ?? parts.machineId;
+    const canonical = rawDisplayMachineId
+        ? resolveCanonicalMachineId(rawDisplayMachineId, Object.values(params.machines))
+        : null;
+    const displayMachineId = canonical?.reason === 'missingReplacementTarget'
+        ? rawDisplayMachineId
+        : canonical?.machineId ?? rawDisplayMachineId;
     const displayPathInput = targetPath ?? normalizeNonEmptyString(params.metadata?.path);
     const directMachine = displayMachineId ? params.machines[displayMachineId] : undefined;
-    const host = normalizeNonEmptyString(directMachine?.metadata?.host) ?? parts.host;
     const homeDir = normalizeNonEmptyString(directMachine?.metadata?.homeDir) ?? parts.homeDir;
     const pathKey = normalizeSessionPathForProjectGrouping(displayPathInput, homeDir);
-    const machineGroupId = host ? `host:${host}` : displayMachineId ? `id:${displayMachineId}` : 'unknown';
+    const machineGroupId = displayMachineId ? `id:${displayMachineId}` : parts.machineGroupId;
     const groupKey = `${machineGroupId}:${pathKey}`;
     const workspaceHash = hashFNV1a32Hex(groupKey);
     const workspaceKey = `wl_${workspaceHash}`;
     const displayPath = pathKey ? formatPathRelativeToHome(pathKey, homeDir ?? undefined) : '';
     const customLabel = readWorkspaceLabel(params.workspaceLabelsV1, workspaceKey);
     const displayMachine = (() => {
-        if (host) {
-            return resolveBestMachineDisplayRenderableForHost(params.machines, host) ?? makeUnknownMachine(host);
-        }
         if (displayMachineId) {
             return params.machines[displayMachineId] ?? makeUnknownMachine(displayMachineId);
         }

@@ -51,7 +51,7 @@ function makeRenderableSession(
 }
 
 describe('buildSessionListViewData (project grouping)', () => {
-    it('groups sessions by host when machine ids differ', () => {
+    it('does not group sessions by host when machine ids differ without explicit replacement', () => {
         const host = 'lima-happier-wsrepl-qa-0324';
 
         const sessions: Record<string, SessionListRenderableSession> = {
@@ -101,13 +101,13 @@ describe('buildSessionListViewData (project grouping)', () => {
         });
 
         const projectHeaders = list.filter((item) => item.type === 'header' && item.headerKind === 'project');
-        expect(projectHeaders).toHaveLength(1);
+        expect(projectHeaders).toHaveLength(2);
 
         const sessionRows = list.filter((item) => item.type === 'session');
         expect(sessionRows).toHaveLength(2);
     });
 
-    it('groups sessions by machine host when session metadata host is missing', () => {
+    it('groups explicitly replaced machine ids under the current replacement machine', () => {
         const host = 'lima-happier-wsrepl-qa-0324';
 
         const sessions: Record<string, SessionListRenderableSession> = {
@@ -138,12 +138,18 @@ describe('buildSessionListViewData (project grouping)', () => {
                 activeAt: 200,
                 metadata: { host, homeDir: '/Users/leeroy', displayName: null },
             }),
-            m_old: makeMachineDisplay({
+            m_old: {
+                ...makeMachineDisplay({
                 id: 'm_old',
                 active: false,
                 activeAt: 100,
                 metadata: { host, homeDir: '/Users/leeroy', displayName: null },
-            }),
+                }),
+                replacedByMachineId: 'm_new',
+                replacedAt: 100,
+                replacementReason: 'manual_repair',
+                replacementSource: 'manual',
+            } as MachineDisplayRenderable,
         };
 
         const list = buildSessionListViewData(sessions, machines, {
@@ -157,6 +163,7 @@ describe('buildSessionListViewData (project grouping)', () => {
         );
         expect(projectHeaders).toHaveLength(1);
         expect(projectHeaders[0]?.subtitle).toBe(host);
+        expect(projectHeaders[0]?.machine?.id).toBe('m_new');
 
         const sessionRows = list.filter((item) => item.type === 'session');
         expect(sessionRows).toHaveLength(2);

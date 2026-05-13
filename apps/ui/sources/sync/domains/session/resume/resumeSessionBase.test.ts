@@ -27,6 +27,35 @@ afterEach(() => {
     };
 });
 
+function setCanonicalSessionTarget(machineId: string, path: string): void {
+    storageState = {
+        sessions: {
+            s1: {
+                active: false,
+                updatedAt: 10,
+                metadata: { machineId, path, homeDir: '/Users/test', host: 'host.local' },
+            },
+        },
+        machines: {
+            [machineId]: {
+                id: machineId,
+                active: true,
+                activeAt: 20,
+                metadata: { host: 'host.local' },
+            },
+        },
+        getProjectForSession: (sessionId: string) =>
+            sessionId === 's1'
+                ? {
+                    key: {
+                        machineId,
+                        path,
+                    },
+                }
+                : null,
+    };
+}
+
 describe('buildResumeSessionBaseOptionsFromSession', () => {
     it('returns null when session metadata is missing', () => {
         expect(buildResumeSessionBaseOptionsFromSession({
@@ -45,6 +74,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('returns base options when vendor resume is allowed and present', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: { metadata: { machineId: 'm1', path: '/tmp', flavor: 'openai', codexSessionId: 'x1' } } as any,
@@ -56,6 +86,14 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
             backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
             resume: 'x1',
         });
+    });
+
+    it('does not use raw metadata as a live resume target when canonical reachability is unavailable', () => {
+        expect(buildResumeSessionBaseOptionsFromSession({
+            sessionId: 's1',
+            session: { metadata: { machineId: 'm-stale', path: '/tmp/stale', flavor: 'openai', codexSessionId: 'x1' } } as any,
+            resumeCapabilityOptions: { accountSettings: { codexBackendMode: 'acp' } },
+        })).toBeNull();
     });
 
     it('prefers a resolved resume target override over stale session metadata', () => {
@@ -91,6 +129,14 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
                 },
             },
             machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 5,
+                    metadata: { host: 'stale.local' },
+                    replacedByMachineId: 'm-target',
+                    replacedAt: 15,
+                },
                 'm-target': {
                     id: 'm-target',
                     active: true,
@@ -123,6 +169,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('prefers persisted codex backend mode over account settings when resuming codex sessions', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: {
@@ -145,6 +192,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('carries agentRuntimeDescriptorV1 through resume base options when present', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: {
@@ -182,6 +230,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('passes through permission mode overrides', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: { metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude', claudeSessionId: 'c1' } } as any,
@@ -199,6 +248,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('resolves configured ACP sessions to configured backend targets', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: {
@@ -224,6 +274,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('infers configured ACP backend id from the flavor when metadata backend id is missing', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: {
@@ -243,6 +294,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('infers configured ACP backend id from the flavor when metadata backend id is blank', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',
             session: {
@@ -268,6 +320,7 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
     });
 
     it('resumes configured ACP sessions even when built-in agent resolution is unavailable', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
         const actualResolveAgentIdFromFlavor = catalog.resolveAgentIdFromFlavor;
         vi.spyOn(catalog, 'resolveAgentIdFromFlavor').mockImplementation(flavor =>
             flavor === 'acp:custom-kiro' ? null : actualResolveAgentIdFromFlavor(flavor),

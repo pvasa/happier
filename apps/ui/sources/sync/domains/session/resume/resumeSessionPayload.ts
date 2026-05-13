@@ -30,6 +30,7 @@ export type ResumeHappySessionRpcParams = CodexBackendTransportFields & {
     modelId?: string;
     modelUpdatedAt?: number;
     accountSettingsVersionHint?: number;
+    initialTranscriptAfterSeq?: number;
 };
 
 type BuildResumeHappySessionRpcInput = Omit<ResumeHappySessionRpcParams, 'type' | keyof CodexBackendTransportFields> & {
@@ -53,6 +54,7 @@ const ResumeHappySessionRpcParamsSchema = z.object({
     modelId: z.string().min(1).optional(),
     modelUpdatedAt: z.number().optional(),
     accountSettingsVersionHint: z.number().int().min(0).optional(),
+    initialTranscriptAfterSeq: z.number().int().min(0).optional(),
     experimentalCodexAcp: z.literal(true).optional(),
     codexBackendMode: z.enum(['mcp', 'acp', 'appServer']).optional(),
 });

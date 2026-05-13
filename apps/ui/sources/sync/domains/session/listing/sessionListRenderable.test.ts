@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+    areSessionListRenderablesEqual,
     buildSessionListRenderableFromSession,
     derivePendingRequestFlagsFromAgentState,
     preserveSessionListRenderableStaleFields,
@@ -149,6 +150,102 @@ describe('buildSessionListRenderableFromSession', () => {
         } satisfies Session);
 
         expect(renderable.hasUnreadMessages).toBe(true);
+    });
+
+    it('projects runtime attention fields onto renderable session rows', () => {
+        const lastRuntimeIssue = {
+            v: 1,
+            scope: 'primary_session',
+            status: 'failed',
+            code: 'auth_error',
+            source: 'auth_error',
+            occurredAt: 123,
+            sanitizedPreview: 'Authentication failed',
+        };
+
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_failed',
+            seq: 4,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } as any);
+
+        expect(renderable.latestTurnStatus).toBe('failed');
+        expect(renderable.lastRuntimeIssue).toBe(lastRuntimeIssue);
+    });
+
+    it('projects ready event fields onto renderable session rows', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_ready',
+            seq: 4,
+            lastViewedSessionSeq: 3,
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestReadyEventSeq: 4,
+            latestReadyEventAt: 1_234,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } as any);
+
+        expect(renderable.latestReadyEventSeq).toBe(4);
+        expect(renderable.latestReadyEventAt).toBe(1_234);
+    });
+
+    it('treats runtime attention fields as renderable equality inputs', () => {
+        const previous = buildRenderable({
+            id: 's_runtime',
+            latestTurnStatus: 'in_progress',
+            lastRuntimeIssue: null,
+        } as any);
+        const next = buildRenderable({
+            id: 's_runtime',
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: {
+                v: 1,
+                scope: 'primary_session',
+                status: 'failed',
+                code: 'auth_error',
+                source: 'auth_error',
+                occurredAt: 123,
+            },
+        } as any);
+
+        expect(areSessionListRenderablesEqual(previous, next)).toBe(false);
+    });
+
+    it('treats ready event fields as renderable equality inputs', () => {
+        const previous = buildRenderable({
+            id: 's_ready_equality',
+            latestReadyEventSeq: null,
+            latestReadyEventAt: null,
+        });
+        const next = buildRenderable({
+            id: 's_ready_equality',
+            latestReadyEventSeq: 5,
+            latestReadyEventAt: 2_000,
+        });
+
+        expect(areSessionListRenderablesEqual(previous, next)).toBe(false);
     });
 
     it('keeps read-state actions derived from the projected session cursor', () => {

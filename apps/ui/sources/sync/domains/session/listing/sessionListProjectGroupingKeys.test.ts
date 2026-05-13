@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
 
 describe('resolveSessionProjectGroupingKeyParts', () => {
-    it('normalizes windows separators and expands ~ using homeDir', () => {
+    it('normalizes windows separators and expands ~ using homeDir without grouping by host', () => {
         const parts = resolveSessionProjectGroupingKeyParts({
             host: 'example',
             machineId: 'm1',
@@ -13,7 +13,7 @@ describe('resolveSessionProjectGroupingKeyParts', () => {
 
         expect(parts.homeDir).toBe('C:/Users/Bob');
         expect(parts.pathKey).toBe('C:/Users/Bob/repo');
-        expect(parts.machineGroupId).toBe('host:example');
+        expect(parts.machineGroupId).toBe('id:m1');
     });
 
     it('preserves UNC/network share prefixes when normalizing slashes', () => {
@@ -24,6 +24,15 @@ describe('resolveSessionProjectGroupingKeyParts', () => {
         });
 
         expect(parts.pathKey).toBe('//server/share/repo');
-        expect(parts.machineGroupId).toBe('host:example');
+        expect(parts.machineGroupId).toBe('id:m1');
+    });
+
+    it('does not use host as a legacy grouping identity when machine id is missing', () => {
+        const parts = resolveSessionProjectGroupingKeyParts({
+            host: 'example',
+            path: '/repo',
+        });
+
+        expect(parts.machineGroupId).toBe('unknown');
     });
 });

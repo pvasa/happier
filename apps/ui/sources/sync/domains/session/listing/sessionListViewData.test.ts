@@ -146,6 +146,83 @@ describe('buildSessionListViewData', () => {
         ]);
     });
 
+    it('builds folder headers and assigned session rows from durable workspace refs', () => {
+        const machine = makeMachine({
+            id: 'm1',
+            metadata: { host: 'm1', platform: 'darwin', happyCliVersion: '0.0.0', happyHomeDir: '/h', homeDir: '/home/u' },
+        });
+
+        const sessions: Record<string, Session> = {
+            assigned: makeSession({
+                id: 'assigned',
+                active: true,
+                createdAt: 2,
+                updatedAt: 100,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+            unassigned: makeSession({
+                id: 'unassigned',
+                active: true,
+                createdAt: 1,
+                updatedAt: 50,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+        };
+
+        const options = {
+            groupInactiveSessionsByProject: true,
+            serverScope: { serverId: 'server-a', serverName: 'Server A' },
+            sessionFolders: {
+                enabled: true,
+                folders: {
+                    v: 1 as const,
+                    folders: [{
+                        id: 'folder-a',
+                        workspace: {
+                            t: 'workspaceScope' as const,
+                            serverId: 'server-a',
+                            machineId: 'm1',
+                            rootPath: '/home/u/repoA',
+                        },
+                        renderWorkspaceKey: 'old-render-key',
+                        parentId: null,
+                        name: 'Planning',
+                        createdAt: 1,
+                        updatedAt: 1,
+                    }],
+                },
+                assignmentsBySessionKey: {
+                    'server-a:assigned': 'folder-a',
+                },
+            },
+        };
+
+        const data = buildSessionListViewData(sessions, { [machine.id]: machine }, options);
+        const summary = data.map((item) => {
+            if (item.type === 'header') {
+                return `header:${item.headerKind ?? 'unknown'}:${item.title}:${item.folderId ?? 'root'}:${item.depth ?? 0}`;
+            }
+            return `session:${item.session.id}:${item.groupKind ?? 'unknown'}:${item.folderId ?? 'root'}:${item.folderDepth ?? 0}`;
+        });
+
+        expect(summary).toEqual([
+            'header:active:Active:root:0',
+            'header:project:~/repoA:root:0',
+            'header:folder:Planning:folder-a:1',
+            'session:assigned:folder:folder-a:1',
+            'session:unassigned:project:root:0',
+        ]);
+        expect(data.find((item) => item.type === 'header' && item.headerKind === 'folder')).toMatchObject({
+            workspace: {
+                t: 'workspaceScope',
+                serverId: 'server-a',
+                machineId: 'm1',
+                rootPath: '/home/u/repoA',
+            },
+            renderWorkspaceKey: expect.any(String),
+        });
+    });
+
     it('stores the newest session id on project headers for contextual new-session seeding', () => {
         const machine = makeMachine({
             id: 'm1',

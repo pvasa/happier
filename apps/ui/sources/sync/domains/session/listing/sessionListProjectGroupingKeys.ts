@@ -1,3 +1,4 @@
+import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 import { normalizeNonEmptyString } from '@/utils/strings/normalizeNonEmptyString';
 
 function normalizePathForProjectGrouping(path: string): string {
@@ -17,14 +18,7 @@ export function normalizeSessionPathForProjectGrouping(pathInput: unknown, homeD
 
     const homeDirRaw = normalizeNonEmptyString(homeDirInput);
     const homeDir = homeDirRaw ? normalizePathForProjectGrouping(homeDirRaw) : null;
-    let expanded = path;
-    if (homeDir && path.startsWith('~')) {
-        if (path === '~') {
-            expanded = homeDir;
-        } else if (path.startsWith('~/') || path.startsWith('~\\')) {
-            expanded = `${homeDir}/${path.slice(2)}`;
-        }
-    }
+    const expanded = resolveAbsolutePath(path, homeDirRaw ?? undefined);
 
     return normalizePathForProjectGrouping(expanded);
 }
@@ -48,7 +42,7 @@ export function resolveSessionProjectGroupingKeyParts(metadata: Readonly<{
     const homeDirRaw = normalizeNonEmptyString(metadata?.homeDir);
     const homeDir = homeDirRaw ? normalizePathForProjectGrouping(homeDirRaw) : null;
     const pathKey = normalizeSessionPathForProjectGrouping(metadata?.path, homeDir);
-    const machineGroupId = host ? `host:${host}` : machineId ? `id:${machineId}` : 'unknown';
+    const machineGroupId = machineId ? `id:${machineId}` : 'unknown';
 
     return {
         machineGroupId,

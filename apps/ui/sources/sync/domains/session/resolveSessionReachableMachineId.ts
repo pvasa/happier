@@ -1,4 +1,6 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { resolveCanonicalMachineId } from '@/sync/domains/machines/identity/resolveCanonicalMachineId';
+import { resolveSessionRpcTarget } from '@/sync/domains/machines/identity/resolveSessionMachineTargets';
 
 function normalizeNonEmptyString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -6,152 +8,24 @@ function normalizeNonEmptyString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
-function resolveMachineIdByHost(hostInput: unknown, machines: ReadonlyArray<Machine>): string | null {
-    const host = normalizeNonEmptyString(hostInput);
-    if (!host) return null;
-
-    let bestMachineId: string | null = null;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    for (const machine of machines) {
-        const machineHost = normalizeNonEmptyString(machine.metadata?.host);
-        if (!machineHost || machineHost !== host) continue;
-        const score = (machine.active ? 1_000_000_000_000 : 0) + machine.activeAt;
-        if (score <= bestScore) continue;
-        bestScore = score;
-        bestMachineId = machine.id;
-    }
-    return bestMachineId;
-}
-
-function normalizePathForComparison(pathInput: unknown, homeDirInput: unknown): string | null {
-    const path = normalizeNonEmptyString(pathInput);
-    if (!path) return null;
-
-    const homeDir = normalizeNonEmptyString(homeDirInput);
-    let expanded = path;
-    if (homeDir && path.startsWith('~')) {
-        if (path === '~') {
-            expanded = homeDir;
-        } else if (path.startsWith('~/') || path.startsWith('~\\')) {
-            expanded = `${homeDir}/${path.slice(2)}`;
-        }
-    }
-
-    const normalized = expanded.replace(/\\/g, '/').replace(/\/+/g, '/');
-    if (/^[a-zA-Z]:\/$/.test(normalized)) return normalized;
-    if (normalized.length > 1 && normalized.endsWith('/')) return normalized.slice(0, -1);
-    return normalized;
-}
-
-function resolveSingleMachineFallback(machines: ReadonlyArray<Machine>): string | null {
-    const activeMachines = machines.filter((machine) => machine.active);
-    if (activeMachines.length === 1) return activeMachines[0]?.id ?? null;
-    if (activeMachines.length === 0 && machines.length === 1) return machines[0]?.id ?? null;
-    return null;
-}
-
-export type SessionMachineTargetPeer = Readonly<{
-    id: string;
-    active?: boolean;
-    updatedAt?: number;
-    machineId?: string | null;
-    hostHint?: string | null;
-    path?: string | null;
-    homeDir?: string | null;
-    projectMachineId?: string | null;
-    projectPath?: string | null;
-}>;
-
 export function resolveSessionMachineRpcTarget(input: Readonly<{
     sessionId: string;
     sessionActive?: boolean | null;
     sessionMachineId?: string | null;
-    sessionHostHint?: string | null;
     sessionPath?: string | null;
-    sessionHomeDir?: string | null;
     projectMachineId?: string | null;
     projectPath?: string | null;
     machines: ReadonlyArray<Machine>;
-    peerSessions?: ReadonlyArray<SessionMachineTargetPeer>;
 }>): { machineId: string; basePath: string } | null {
-    const sessionPath = normalizeNonEmptyString(input.sessionPath);
-    const projectPath = normalizeNonEmptyString(input.projectPath);
-
-    const machineById = new Set(input.machines.map((machine) => machine.id));
-    const knownMachineCandidate = (candidateMachineId: string | null): string | null => {
-        if (!candidateMachineId) return null;
-        return machineById.has(candidateMachineId) ? candidateMachineId : null;
-    };
-
-    const sessionMachineId = normalizeNonEmptyString(input.sessionMachineId);
-    const projectMachineId = normalizeNonEmptyString(input.projectMachineId);
-    const primaryResolved = resolveSessionReachableMachineId({
-        machineId: sessionMachineId,
-        fallbackMachineId: projectMachineId,
-        hostHint: input.sessionHostHint ?? null,
+    const target = resolveSessionRpcTarget({
+        sessionActive: input.sessionActive,
+        sessionMachineId: input.sessionMachineId,
+        sessionPath: input.sessionPath,
+        projectMachineId: input.projectMachineId,
+        projectPath: input.projectPath,
         machines: input.machines,
     });
-    const shouldUseActiveSessionPath =
-        input.sessionActive === true
-        && Boolean(sessionPath)
-        && (
-            !projectPath
-            || !projectMachineId
-            || !sessionMachineId
-            || projectMachineId === sessionMachineId
-            || primaryResolved === sessionMachineId
-        );
-    const basePath = shouldUseActiveSessionPath
-        ? sessionPath
-        : projectPath ?? sessionPath;
-    if (!basePath) return null;
-
-    const knownPrimary = knownMachineCandidate(primaryResolved);
-    if (knownPrimary) {
-        return { machineId: knownPrimary, basePath };
-    }
-
-    const comparableBasePath = normalizePathForComparison(basePath, input.sessionHomeDir);
-    if (comparableBasePath && Array.isArray(input.peerSessions) && input.peerSessions.length > 0) {
-        const peers = input.peerSessions
-            .filter((peer) => peer.id !== input.sessionId)
-            .map((peer) => ({
-                ...peer,
-                comparablePath:
-                    normalizePathForComparison(peer.path ?? null, peer.homeDir ?? null)
-                    ?? normalizePathForComparison(peer.projectPath ?? null, peer.homeDir ?? null),
-            }))
-            .filter((peer) => peer.comparablePath === comparableBasePath)
-            .sort((a, b) => {
-                const activeDelta = Number(Boolean(b.active)) - Number(Boolean(a.active));
-                if (activeDelta !== 0) return activeDelta;
-                return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-            });
-
-        for (const peer of peers) {
-            const resolved = resolveSessionReachableMachineId({
-                machineId: peer.machineId ?? null,
-                fallbackMachineId: peer.projectMachineId ?? null,
-                hostHint: peer.hostHint ?? null,
-                machines: input.machines,
-            });
-            const knownPeer = knownMachineCandidate(resolved);
-            if (knownPeer) {
-                return { machineId: knownPeer, basePath };
-            }
-        }
-    }
-
-    const fallbackMachineId = resolveSingleMachineFallback(input.machines);
-    if (fallbackMachineId) {
-        return { machineId: fallbackMachineId, basePath };
-    }
-
-    if (primaryResolved) {
-        return { machineId: primaryResolved, basePath };
-    }
-
-    return null;
+    return target ? { machineId: target.machineId, basePath: target.basePath } : null;
 }
 
 export function resolveSessionReachableMachineId(input: Readonly<{
@@ -162,22 +36,15 @@ export function resolveSessionReachableMachineId(input: Readonly<{
 }>): string | null {
     const machineId = normalizeNonEmptyString(input.machineId);
     const fallbackMachineId = normalizeNonEmptyString(input.fallbackMachineId);
-    const hostHint = normalizeNonEmptyString(input.hostHint);
-    const machineById = new Map(input.machines.map((machine) => [machine.id, machine] as const));
 
-    if (machineId && !machineId.startsWith('host:')) {
-        const directMachine = machineById.get(machineId);
-        if (directMachine?.active) return machineId;
+    if (machineId?.startsWith('host:')) return null;
+    if (fallbackMachineId?.startsWith('host:')) return null;
 
-        const hostCandidate = resolveMachineIdByHost(
-            normalizeNonEmptyString(directMachine?.metadata?.host) ?? hostHint,
-            input.machines,
-        );
-        if (hostCandidate) return hostCandidate;
-        if (fallbackMachineId && fallbackMachineId !== machineId) return fallbackMachineId;
-        return machineId;
-    }
+    const requestedMachineId = machineId ?? fallbackMachineId;
+    if (!requestedMachineId) return null;
 
-    const hostFromMachineId = machineId?.startsWith('host:') ? machineId.slice('host:'.length) : null;
-    return resolveMachineIdByHost(hostFromMachineId ?? hostHint, input.machines) ?? fallbackMachineId;
+    const canonical = resolveCanonicalMachineId(requestedMachineId, input.machines);
+    if (canonical?.reason === 'replacement') return canonical.machineId;
+    if (canonical === null && input.machines.some((machine) => machine.id === requestedMachineId)) return null;
+    return requestedMachineId;
 }

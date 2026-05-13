@@ -1,5 +1,6 @@
 import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import {
     derivePendingRequestFlagsFromAgentState,
     derivePendingRequestFlagsFromSession,
@@ -48,6 +49,10 @@ export interface SessionListRenderableSession {
     thinking: boolean;
     thinkingAt: number;
     presence: 'online' | number;
+    latestTurnStatus?: PrimaryTurnStatusV1 | null;
+    lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
+    latestReadyEventSeq?: number | null;
+    latestReadyEventAt?: number | null;
     optimisticThinkingAt?: number | null;
     thinkingGraceUntil?: number | null;
     owner?: string;
@@ -151,6 +156,10 @@ export function buildSessionListRenderableFromSession(
         thinking: session.thinking,
         thinkingAt: session.thinkingAt,
         presence: session.presence,
+        latestTurnStatus: readSessionLatestTurnStatus(session),
+        lastRuntimeIssue: readSessionLastRuntimeIssue(session),
+        latestReadyEventSeq: readSessionReadyEventNumber(session, 'latestReadyEventSeq'),
+        latestReadyEventAt: readSessionReadyEventNumber(session, 'latestReadyEventAt'),
         optimisticThinkingAt: session.optimisticThinkingAt ?? null,
         thinkingGraceUntil: session.thinkingGraceUntil ?? null,
         owner: session.owner,
@@ -284,6 +293,10 @@ export function areSessionListRenderablesEqual(
         && previous.thinking === next.thinking
         && previous.thinkingAt === next.thinkingAt
         && previous.presence === next.presence
+        && (previous.latestTurnStatus ?? null) === (next.latestTurnStatus ?? null)
+        && areSessionRuntimeIssuesEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)
+        && (previous.latestReadyEventSeq ?? null) === (next.latestReadyEventSeq ?? null)
+        && (previous.latestReadyEventAt ?? null) === (next.latestReadyEventAt ?? null)
         && (previous.optimisticThinkingAt ?? null) === (next.optimisticThinkingAt ?? null)
         && (previous.thinkingGraceUntil ?? null) === (next.thinkingGraceUntil ?? null)
         && (previous.owner ?? null) === (next.owner ?? null)
@@ -295,6 +308,57 @@ export function areSessionListRenderablesEqual(
         && (previous.keepVisibleWhenInactive === true) === (next.keepVisibleWhenInactive === true)
         && (previous.metadataUnavailable === true) === (next.metadataUnavailable === true)
         && areSessionListRenderableMetadataEqual(previous.metadata, next.metadata);
+}
+
+function readSessionLatestTurnStatus(session: Session): PrimaryTurnStatusV1 | null {
+    const value = (session as { latestTurnStatus?: unknown }).latestTurnStatus;
+    return value === 'in_progress' || value === 'completed' || value === 'cancelled' || value === 'failed'
+        ? value
+        : null;
+}
+
+function readSessionLastRuntimeIssue(session: Session): SessionRuntimeIssueV1 | null {
+    const value = (session as { lastRuntimeIssue?: unknown }).lastRuntimeIssue;
+    return isSessionRuntimeIssueV1(value) ? value : null;
+}
+
+function readSessionReadyEventNumber(
+    session: Session,
+    key: 'latestReadyEventSeq' | 'latestReadyEventAt',
+): number | null {
+    const value = (session as unknown as Record<string, unknown>)[key];
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.trunc(value)
+        : null;
+}
+
+function isSessionRuntimeIssueV1(value: unknown): value is SessionRuntimeIssueV1 {
+    if (value == null || typeof value !== 'object') return false;
+    const issue = value as Partial<SessionRuntimeIssueV1>;
+    return issue.v === 1
+        && issue.scope === 'primary_session'
+        && issue.status === 'failed'
+        && typeof issue.code === 'string'
+        && typeof issue.source === 'string'
+        && typeof issue.occurredAt === 'number';
+}
+
+function areSessionRuntimeIssuesEqual(
+    previous: SessionRuntimeIssueV1 | null,
+    next: SessionRuntimeIssueV1 | null,
+): boolean {
+    if (previous === next) return true;
+    if (!previous || !next) return previous === next;
+    return previous.v === next.v
+        && previous.scope === next.scope
+        && previous.status === next.status
+        && previous.code === next.code
+        && previous.source === next.source
+        && previous.occurredAt === next.occurredAt
+        && (previous.sessionSeq ?? null) === (next.sessionSeq ?? null)
+        && (previous.provider ?? null) === (next.provider ?? null)
+        && (previous.providerTurnId ?? null) === (next.providerTurnId ?? null)
+        && (previous.sanitizedPreview ?? null) === (next.sanitizedPreview ?? null);
 }
 
 export function didSessionListRenderableStructuralFieldsChange(
