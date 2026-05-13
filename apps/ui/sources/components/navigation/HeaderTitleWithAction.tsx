@@ -20,7 +20,7 @@ export type HeaderTitleWithActionProps = {
 export const HeaderTitleWithAction = React.memo((props: HeaderTitleWithActionProps) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const tintColor = props.tintColor ?? theme.colors.header.tint;
+    const tintColor = props.tintColor ?? theme.colors.chrome.header.foreground;
     const actionColor = props.actionColor ?? tintColor;
 
     return (

@@ -129,7 +129,7 @@ const NavigationHeaderComponent: React.FC<NativeStackHeaderProps> = React.memo((
     const { options, route, back, navigation } = props;
     const extendedOptions = options as ExtendedNavigationOptions;
     const { theme } = useUnistyles();
-    const headerTintColor = options.headerTintColor ?? theme.colors.header.tint;
+    const headerTintColor = options.headerTintColor ?? theme.colors.chrome.header.foreground;
 
     // Extract title - handle both string and function types
     let title: React.ReactNode | null = null;
@@ -210,7 +210,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         backgroundColor: 'transparent',
     },
     containerNormal: {
-        backgroundColor: theme.colors.header.background,
+        backgroundColor: theme.colors.chrome.header.background,
     },
     contentWrapper: {
         width: '100%',
@@ -244,7 +244,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     title: {
         fontSize: 16,
         textAlign: 'center',
-        color: theme.colors.header.tint,
+        color: theme.colors.chrome.header.foreground,
         ...Typography.default('semiBold'),
     },
     subtitle: {
@@ -252,13 +252,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         fontWeight: '400',
         textAlign: Platform.OS === 'ios' ? 'center' : 'left',
         marginTop: 2,
-        color: theme.colors.header.tint,
+        color: theme.colors.chrome.header.foreground,
         ...Typography.default('regular'),
     },
     shadow: {
         ...shadowLevelStyle(theme.colors.shadowLevels[3]),
     },
     backButton: {
-        color: theme.colors.header.tint,
+        color: theme.colors.chrome.header.foreground,
     },
 }));

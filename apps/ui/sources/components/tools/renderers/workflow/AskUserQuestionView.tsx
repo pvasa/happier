@@ -431,7 +431,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId,
                                                 }
                                             }}
                                             placeholder={question.freeform?.placeholder ?? t('tools.askUserQuestion.otherPlaceholder')}
-                                            placeholderTextColor={theme.colors.text.secondary}
+                                            placeholderTextColor={theme.colors.input.placeholder}
                                             editable={canInteract}
                                             autoCapitalize="none"
                                             autoCorrect={false}

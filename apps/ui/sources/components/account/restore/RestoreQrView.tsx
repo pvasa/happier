@@ -21,7 +21,7 @@ import { Text } from '@/components/ui/text/Text';
 const stylesheet = StyleSheet.create((theme) => ({
     scrollView: {
         flex: 1,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
     },
     container: {
         flex: 1,
@@ -35,27 +35,27 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     noticeCard: {
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         borderRadius: 14,
         paddingHorizontal: 16,
         paddingVertical: 14,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
     },
     noticeTitle: {
         fontSize: 16,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         marginBottom: 6,
         ...Typography.default('semiBold'),
     },
     noticeBody: {
         fontSize: 14,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         lineHeight: 20,
         ...Typography.default(),
     },
     sectionLead: {
         fontSize: 15,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginTop: 18,
         marginBottom: 14,
         textAlign: 'center',
@@ -199,14 +199,14 @@ export const RestoreQrView = React.memo(function RestoreQrView() {
                     <View style={styles.qrBlock}>
                         {!authReady ? (
                             <View style={{ width: 220, height: 220, alignItems: 'center', justifyContent: 'center' }}>
-                                <ActivityIndicator size="small" color={theme.colors.text} />
+                                <ActivityIndicator size="small" color={theme.colors.text.primary} />
                             </View>
                         ) : (
                             <QRCode
                                 data={buildAccountConnectDeepLink({ publicKeyB64Url: encodeBase64(keypair.publicKey, 'base64url') })}
                                 size={260}
-                                foregroundColor={theme.colors.text}
-                                backgroundColor={theme.colors.surface}
+                                foregroundColor={theme.colors.text.primary}
+                                backgroundColor={theme.colors.surface.base}
                             />
                         )}
                     </View>

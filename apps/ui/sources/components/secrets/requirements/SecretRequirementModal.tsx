@@ -187,10 +187,10 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
     }, [machine, props.machineId]);
 
     const machineNameColor = React.useMemo(() => {
-        if (!props.machineId) return theme.colors.textSecondary;
-        if (!machine) return theme.colors.textSecondary;
+        if (!props.machineId) return theme.colors.text.secondary;
+        if (!machine) return theme.colors.text.secondary;
         return isMachineOnline(machine) ? theme.colors.status.connected : theme.colors.status.disconnected;
-    }, [machine, props.machineId, theme.colors.status.connected, theme.colors.status.disconnected, theme.colors.textSecondary]);
+    }, [machine, props.machineId, theme.colors.status.connected, theme.colors.status.disconnected, theme.colors.text.secondary]);
 
     const allowedSources = React.useMemo(() => {
         const sources: Array<'machine' | 'saved' | 'once'> = [];
@@ -349,7 +349,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
                     >
-                        <Ionicons name="close" size={20} color={theme.colors.textSecondary} />
+                        <Ionicons name="close" size={20} color={theme.colors.text.secondary} />
                     </Pressable>
                 </View>
             ) : null}
@@ -404,8 +404,8 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                                 borderBottomLeftRadius: open ? 0 : 12,
                                                 borderBottomRightRadius: open ? 0 : 12,
                                                 backgroundColor: open
-                                                    ? (theme.dark ? theme.colors.surfaceHighest : theme.colors.surfaceHigh)
-                                                    : theme.colors.surface,
+                                                    ? (theme.dark ? theme.colors.surface.elevated : theme.colors.surface.inset)
+                                                    : theme.colors.surface.base,
                                             },
                                         ]}
                                     >
@@ -413,12 +413,12 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                             selected={false}
                                             title={activeEnvVarName}
                                             subtitle={t('profiles.requirements.modalHelpWithEnv', { env: activeEnvVarName })}
-                                            icon={<Ionicons name="key-outline" size={24} color={theme.colors.textSecondary} />}
+                                            icon={<Ionicons name="key-outline" size={24} color={theme.colors.text.secondary} />}
                                             rightElement={(
                                                 <Ionicons
                                                     name={open ? 'chevron-up' : 'chevron-down'}
                                                     size={20}
-                                                    color={theme.colors.textSecondary}
+                                                    color={theme.colors.text.secondary}
                                                 />
                                             )}
                                             showChevron={false}
@@ -439,7 +439,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                     subtitle: undefined,
                                     icon: (
                                         <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="key-outline" size={24} color={theme.colors.textSecondary} />
+                                            <Ionicons name="key-outline" size={24} color={theme.colors.text.secondary} />
                                         </View>
                                     ),
                                 }))}
@@ -474,8 +474,8 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                                 borderBottomLeftRadius: open ? 0 : 12,
                                                 borderBottomRightRadius: open ? 0 : 12,
                                                 backgroundColor: open
-                                                    ? (theme.dark ? theme.colors.surfaceHighest : theme.colors.surfaceHigh)
-                                                    : theme.colors.surface,
+                                                    ? (theme.dark ? theme.colors.surface.elevated : theme.colors.surface.inset)
+                                                    : theme.colors.surface.base,
                                             },
                                         ]}
                                     >
@@ -512,14 +512,14 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                                                 : 'options-outline'
                                                     }
                                                     size={24}
-                                                    color={theme.colors.textSecondary}
+                                                    color={theme.colors.text.secondary}
                                                 />
                                             )}
                                             rightElement={(
                                                 <Ionicons
                                                     name={open ? 'chevron-up' : 'chevron-down'}
                                                     size={20}
-                                                    color={theme.colors.textSecondary}
+                                                    color={theme.colors.text.secondary}
                                                 />
                                             )}
                                             showChevron={false}
@@ -542,7 +542,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                         subtitle: machineEnvSubtitle,
                                         icon: (
                                             <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                                <Ionicons name="desktop-outline" size={24} color={theme.colors.textSecondary} />
+                                                <Ionicons name="desktop-outline" size={24} color={theme.colors.text.secondary} />
                                             </View>
                                         ),
                                         disabled: machineHasRequiredSecret !== true,
@@ -553,7 +553,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                         subtitle: t('profiles.requirements.options.useSavedSecret.subtitle'),
                                         icon: (
                                             <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                                <Ionicons name="key-outline" size={24} color={theme.colors.textSecondary} />
+                                                <Ionicons name="key-outline" size={24} color={theme.colors.text.secondary} />
                                             </View>
                                         ),
                                     },
@@ -563,7 +563,7 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                                         subtitle: t('profiles.requirements.options.enterOnce.subtitle'),
                                         icon: (
                                             <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                                                <Ionicons name="flash-outline" size={24} color={theme.colors.textSecondary} />
+                                                <Ionicons name="flash-outline" size={24} color={theme.colors.text.secondary} />
                                             </View>
                                         ),
                                     }] : []),
@@ -687,13 +687,13 @@ export function SecretRequirementModal(props: SecretRequirementModalProps) {
                 </ScrollView>
 
                 <ScrollEdgeFades
-                    color={theme.colors.groupped.background}
+                    color={theme.colors.background.canvas}
                     size={18}
                     edges={fades.visibility}
                 />
                 <ScrollEdgeIndicators
                     edges={fades.visibility}
-                    color={theme.colors.textSecondary}
+                    color={theme.colors.text.secondary}
                     size={14}
                     opacity={0.35}
                 />
@@ -707,13 +707,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         minHeight: 0,
         width: '100%',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
         alignSelf: 'stretch',
     },
     containerScreen: {
         flex: 1,
         width: '100%',
-        backgroundColor: theme.colors.groupped.background,
+        backgroundColor: theme.colors.background.canvas,
         borderRadius: 0,
         overflow: 'hidden',
         borderWidth: 0,
@@ -727,17 +727,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: 12,
         borderBottomWidth: 1,
-        borderBottomColor: theme.colors.divider,
+        borderBottomColor: theme.colors.border.default,
     },
     headerTitle: {
         fontSize: 16,
         fontWeight: '700',
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
     },
     headerSubtitle: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         marginTop: 2,
         ...Typography.default(),
     },
@@ -765,7 +765,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     helpText: {
         ...Typography.default(),
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 15, default: 14 }),
         lineHeight: 20,
         letterSpacing: Platform.select({ ios: -0.24, default: 0.1 }),
@@ -784,17 +784,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     fieldLabel: {
         ...Typography.default('semiBold'),
         fontSize: 13,
-        color: theme.colors.groupped.sectionTitle,
+        color: theme.colors.text.secondary,
         marginBottom: 4,
     },
     textInput: {
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
+        borderColor: theme.colors.border.default,
         paddingHorizontal: 12,
         paddingVertical: 10,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default(),
     },
 }));

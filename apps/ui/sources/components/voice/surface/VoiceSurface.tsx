@@ -12,7 +12,7 @@ import { VoiceBars } from '@/components/ui/status/VoiceBars';
 import { PrimaryCircleIconButton } from '@/components/ui/buttons/PrimaryCircleIconButton';
 import { useSetting } from '@/sync/domains/state/storage';
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
-import { useAllSessions } from '@/sync/store/hooks';
+import { useAllSessions, useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { useVoiceActivityStore } from '@/voice/activity/voiceActivityStore';
 import { voiceActivityController } from '@/voice/activity/voiceActivityController';
@@ -62,24 +62,15 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
   const activityFeedEnabled = voice?.ui?.activityFeedEnabled === true;
   const activityFeedAutoExpandOnStart = voice?.ui?.activityFeedAutoExpandOnStart === true;
 
-  const allSessions = useAllSessions();
-  const currentSession = React.useMemo(() => {
-    const sessionId = typeof props.sessionId === 'string' ? props.sessionId.trim() : '';
-    if (!sessionId) return null;
-    return (allSessions as any[]).find((session) => session?.id === sessionId) ?? null;
-  }, [allSessions, props.sessionId]);
-  const sessionLabelById = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const s of allSessions as any[]) {
-      if (!s || typeof s.id !== 'string') continue;
-      map.set(s.id, getSessionName(s));
-    }
-    return map;
-  }, [allSessions]);
+  const sessionSurfaceSessionId = typeof props.sessionId === 'string' ? props.sessionId.trim() : '';
+  const currentSession = useSession(sessionSurfaceSessionId);
 
   const feedSessionId = props.variant === 'session' && typeof props.sessionId === 'string' ? props.sessionId : null;
   const lastFocusedSessionId = useVoiceTargetStore((s) => s.lastFocusedSessionId);
   const primaryActionSessionId = useVoiceTargetStore((s) => s.primaryActionSessionId);
+  const primaryActionSession = useSession(
+    typeof primaryActionSessionId === 'string' ? primaryActionSessionId.trim() : '',
+  );
   const voiceScope = useVoiceTargetStore((s) => s.scope);
   const routeSessionId = props.variant === 'sidebar' ? resolveSessionIdFromPathname(pathname) : null;
   const startSessionId =
@@ -196,7 +187,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
       adapterId: providerId,
       controlSessionIds: controlSessionCandidates,
     })?.conversationSessionId ?? null;
-  }, [allSessions, bindingsByConversationSessionId, controlSessionCandidates, providerId]);
+  }, [bindingsByConversationSessionId, controlSessionCandidates, providerId]);
   const fallbackOpenConversationControlSessionId = React.useMemo(() => {
     return controlSessionCandidates[0] ?? null;
   }, [controlSessionCandidates]);
@@ -253,7 +244,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
   const targetLabel =
     props.variant === 'sidebar' && voiceScope === 'global' && primaryActionSessionId
       ? (
-        sessionLabelById.get(primaryActionSessionId)
+        (primaryActionSession ? getSessionName(primaryActionSession) : null)
         ?? resolveVoiceSessionLabel(primaryActionSessionId, {
           voiceShareSessionSummary: voicePrivacy.shareSessionSummary,
           voiceShareFilePaths: voicePrivacy.shareFilePaths,
@@ -286,7 +277,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
     styles.container,
     {
       // Match other sidebar items: white surface without an outer border.
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.colors.surface.base,
     },
     props.style,
   ];
@@ -307,28 +298,28 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
               }}
               style={({ pressed }) => [
                 styles.micBadge,
-                { backgroundColor: theme.colors.surfaceHigh, borderColor: theme.colors.divider, opacity: pressed ? 0.72 : 1 },
+                { backgroundColor: theme.colors.surface.inset, borderColor: theme.colors.border.default, opacity: pressed ? 0.72 : 1 },
               ]}
             >
               <StatusDot color={statusInfo.dot} isPulsing={snap.status === 'connecting'} size={7} style={styles.dot as any} />
-              <Ionicons name="mic-off-outline" size={13} color={theme.colors.text} style={styles.micIcon as any} />
+              <Ionicons name="mic-off-outline" size={13} color={theme.colors.text.primary} style={styles.micIcon as any} />
             </Pressable>
           ) : (
-            <View style={[styles.micBadge, { backgroundColor: theme.colors.surfaceHigh, borderColor: theme.colors.divider }]}>
+            <View style={[styles.micBadge, { backgroundColor: theme.colors.surface.inset, borderColor: theme.colors.border.default }]}>
               <StatusDot color={statusInfo.dot} isPulsing={snap.status === 'connecting'} size={7} style={styles.dot as any} />
-              <Ionicons name={snap.mode === 'listening' ? 'mic' : 'mic-off-outline'} size={13} color={theme.colors.text} style={styles.micIcon as any} />
+              <Ionicons name={snap.mode === 'listening' ? 'mic' : 'mic-off-outline'} size={13} color={theme.colors.text.primary} style={styles.micIcon as any} />
             </View>
           )}
           <View style={styles.statusTextCol}>
-            <Text style={[styles.statusText, { color: theme.colors.text }]} numberOfLines={1}>
+            <Text style={[styles.statusText, { color: theme.colors.text.primary }]} numberOfLines={1}>
               {statusInfo.label}
             </Text>
             {targetLabel ? (
-              <Text style={[styles.targetText, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+              <Text style={[styles.targetText, { color: theme.colors.text.secondary }]} numberOfLines={1}>
                 {t('voiceSurface.targetSession')}: {targetLabel}
               </Text>
             ) : toggleDisabledReason ? (
-              <Text style={[styles.targetText, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+              <Text style={[styles.targetText, { color: theme.colors.text.secondary }]} numberOfLines={1}>
                 {toggleDisabledReason}
               </Text>
             ) : null}
@@ -336,7 +327,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
         </View>
 
         <View style={styles.statusRight}>
-          {isSpeaking ? <VoiceBars isActive color={theme.colors.textSecondary} size="small" /> : null}
+          {isSpeaking ? <VoiceBars isActive color={theme.colors.text.secondary} size="small" /> : null}
 
           {canCancelTurn ? (
             <Pressable
@@ -350,7 +341,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
               }}
               style={({ pressed }) => [{ opacity: pressed ? 0.72 : 1 }, styles.iconAction as any]}
             >
-              <Ionicons name="close-circle-outline" size={18} color={theme.colors.textSecondary} />
+              <Ionicons name="close-circle-outline" size={18} color={theme.colors.text.secondary} />
             </Pressable>
           ) : null}
 
@@ -386,7 +377,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
               }}
               style={({ pressed }) => [{ opacity: pressed ? 0.72 : 1 }, styles.iconAction as any]}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.colors.textSecondary} />
+              <Ionicons name="chatbubble-ellipses-outline" size={18} color={theme.colors.text.secondary} />
             </Pressable>
           ) : null}
 
@@ -401,7 +392,7 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
               }}
               style={({ pressed }) => [{ opacity: pressed ? 0.72 : 1 }, styles.iconAction as any]}
             >
-              <Ionicons name="navigate-outline" size={18} color={theme.colors.textSecondary} />
+              <Ionicons name="navigate-outline" size={18} color={theme.colors.text.secondary} />
             </Pressable>
           ) : null}
 
@@ -413,12 +404,12 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
             accessibilityLabel={canStop ? t('voiceAssistant.tapToEnd') : t('voiceAssistant.label')}
           >
             {canStop ? (
-              <Ionicons name="stop-circle" size={22} color={theme.colors.button?.primary?.tint ?? theme.colors.text} />
+              <Ionicons name="stop-circle" size={22} color={theme.colors.button?.primary?.tint ?? theme.colors.text.primary} />
             ) : (
               <Image
                 source={require('@/assets/images/icon-voice-white.png')}
                 style={{ width: 22, height: 22 }}
-                tintColor={theme.colors.button?.primary?.tint ?? theme.colors.text}
+                tintColor={theme.colors.button?.primary?.tint ?? theme.colors.text.primary}
               />
             )}
           </PrimaryCircleIconButton>
@@ -434,11 +425,11 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
                 accessibilityLabel={t('voiceSurface.a11y.toggleActivity')}
                 style={({ pressed }) => [{ opacity: pressed ? 0.72 : 1 }, styles.feedHeaderLeft as any]}
               >
-              <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={14} color={theme.colors.textSecondary} />
-              <Text style={[styles.feedTitle, { color: theme.colors.textSecondary }]}>
+              <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={14} color={theme.colors.text.secondary} />
+              <Text style={[styles.feedTitle, { color: theme.colors.text.secondary }]}>
                 {t('voiceActivity.title')}
               </Text>
-              <Text style={[styles.feedCount, { color: theme.colors.textSecondary }]}>
+              <Text style={[styles.feedCount, { color: theme.colors.text.secondary }]}>
                 {`${events.length}`}
               </Text>
             </Pressable>
@@ -452,31 +443,52 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
                   styles.clearButton,
                 {
                   opacity: pressed ? 0.72 : 1,
-                  backgroundColor: events.length === 0 ? 'transparent' : theme.colors.surfaceHigh,
-                  borderColor: theme.colors.divider,
+                  backgroundColor: events.length === 0 ? 'transparent' : theme.colors.surface.inset,
+                  borderColor: theme.colors.border.default,
                 },
               ]}
             >
-              <Text style={[styles.clearText, { color: theme.colors.textSecondary }]}>{t('voiceActivity.clear')}</Text>
+              <Text style={[styles.clearText, { color: theme.colors.text.secondary }]}>{t('voiceActivity.clear')}</Text>
             </Pressable>
           </View>
 
           {expanded ? (
-            <ScrollView style={styles.feedScroll} contentContainerStyle={styles.feedScrollContent as any}>
-              {events.length === 0 ? (
-                <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{t('voiceActivity.empty')}</Text>
-              ) : (
-                visibleEvents.map((e) => (
-                  <Text key={e.id} style={[styles.eventText, { color: theme.colors.text }]} numberOfLines={3}>
-                    {formatVoiceActivityEvent(e, sessionLabelById)}
-                  </Text>
-                ))
-              )}
-            </ScrollView>
+            <VoiceSurfaceActivityEventsList events={events} visibleEvents={visibleEvents} />
           ) : null}
         </View>
       ) : null}
     </View>
+  );
+}
+
+function VoiceSurfaceActivityEventsList(props: Readonly<{
+  events: ReadonlyArray<any>;
+  visibleEvents: ReadonlyArray<any>;
+}>): React.ReactElement {
+  const { theme } = useUnistyles();
+  const styles = stylesheet;
+  const allSessions = useAllSessions();
+  const sessionLabelById = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const session of allSessions as any[]) {
+      if (!session || typeof session.id !== 'string') continue;
+      map.set(session.id, getSessionName(session));
+    }
+    return map;
+  }, [allSessions]);
+
+  return (
+    <ScrollView style={styles.feedScroll} contentContainerStyle={styles.feedScrollContent as any}>
+      {props.events.length === 0 ? (
+        <Text style={[styles.emptyText, { color: theme.colors.text.secondary }]}>{t('voiceActivity.empty')}</Text>
+      ) : (
+        props.visibleEvents.map((event) => (
+          <Text key={event.id} style={[styles.eventText, { color: theme.colors.text.primary }]} numberOfLines={3}>
+            {formatVoiceActivityEvent(event, sessionLabelById)}
+          </Text>
+        ))
+      )}
+    </ScrollView>
   );
 }
 
@@ -547,7 +559,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
   },
   feedContainer: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.divider,
+    borderTopColor: theme.colors.border.default,
   },
   feedHeader: {
     paddingHorizontal: 12,

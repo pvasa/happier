@@ -159,6 +159,8 @@ vi.mock('@expo/vector-icons', () => ({
 vi.mock('@/constants/Typography', () => ({
     Typography: {
         default: () => ({}),
+        pillLabel: () => ({}),
+        tabular: () => ({}),
     },
 }));
 
@@ -225,6 +227,7 @@ vi.mock('@/utils/platform/tauri', () => ({
 vi.mock('@/components/navigation/connectionStatus/useConnectionHealth', () => ({
     useConnectionHealth: () => ({
         kind: 'no_machine',
+        tone: 'attention',
         color: '#ff9900',
         isPulsing: false,
         statusLabelKey: 'status.actionRequired',
@@ -338,6 +341,25 @@ describe('ConnectionStatusControl (native popover config)', () => {
         expect(allText).toContain('status.actionRequired');
         expect(allText).toContain('settings.machines');
         expect(allText).toContain('newSession.noMachinesFound');
+    });
+
+    it('renders the popover readiness state through the shared status pill', async () => {
+        const ConnectionStatusControl = await importConnectionStatusControl();
+        let tree: renderer.ReactTestRenderer | undefined;
+        const screen = await renderScreen(React.createElement(ConnectionStatusControl, { variant: 'sidebar' }));
+        tree = screen.tree;
+
+        const trigger = screen.findByProps({ accessibilityRole: 'button' });
+        await act(async () => {
+            await pressTestInstanceAsync(trigger);
+        });
+
+        expect(screen.findByTestId('connection-popover-health-status')).toBeTruthy();
+        expect(screen.findByTestId('connection-popover-health-status:variant:warning')).toBeTruthy();
+
+        await act(async () => {
+            tree?.unmount();
+        });
     });
 
     it('renders relay switching with a dropdown only when there are more than two targets', async () => {

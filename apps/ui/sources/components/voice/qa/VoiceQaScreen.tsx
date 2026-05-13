@@ -39,15 +39,15 @@ function VoiceQaField(props: Readonly<{ label: string; value: string; onChangeTe
 
   return (
     <View style={styles.fieldBlock}>
-      <Text style={[styles.fieldLabel, { color: theme.colors.textSecondary }]}>{props.label}</Text>
+      <Text style={[styles.fieldLabel, { color: theme.colors.text.secondary }]}>{props.label}</Text>
       <TextInput
         testID={props.testID}
         style={[
           styles.input,
           {
-            color: theme.colors.text,
-            backgroundColor: theme.colors.surfaceHigh,
-            borderColor: theme.colors.divider,
+            color: theme.colors.text.primary,
+            backgroundColor: theme.colors.surface.inset,
+            borderColor: theme.colors.border.default,
             minHeight: props.multiline ? 88 : 44,
           },
         ]}
@@ -201,11 +201,11 @@ export function VoiceQaScreen() {
   );
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: theme.colors.groupped.background }]} contentContainerStyle={styles.content}>
+    <ScrollView style={[styles.container, { backgroundColor: theme.colors.background.canvas }]} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: theme.colors.text }]}>{t('devVoiceQa.title')}</Text>
-        <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.subtitle')}</Text>
-        <Text style={[styles.instructions, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.instructions')}</Text>
+        <Text style={[styles.title, { color: theme.colors.text.primary }]}>{t('devVoiceQa.title')}</Text>
+        <Text style={[styles.subtitle, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.subtitle')}</Text>
+        <Text style={[styles.instructions, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.instructions')}</Text>
       </View>
 
       <ItemList>
@@ -330,16 +330,16 @@ export function VoiceQaScreen() {
                 }
               />
             </View>
-            <Text style={[styles.noteText, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.usesCurrentProvider')}</Text>
-            <Text style={[styles.noteText, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.localModeHint')}</Text>
-            <Text style={[styles.noteText, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.elevenLabsHint')}</Text>
+            <Text style={[styles.noteText, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.usesCurrentProvider')}</Text>
+            <Text style={[styles.noteText, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.localModeHint')}</Text>
+            <Text style={[styles.noteText, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.elevenLabsHint')}</Text>
           </View>
         </ItemGroup>
 
         <ItemGroup title={t('devVoiceQa.transcriptTitle')}>
           <View style={styles.groupContent}>
             {qaState.entries.length === 0 ? (
-              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.transcriptEmpty')}</Text>
+              <Text style={[styles.emptyText, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.transcriptEmpty')}</Text>
             ) : (
               qaState.entries.map((entry) => (
                 <View
@@ -347,17 +347,17 @@ export function VoiceQaScreen() {
                   style={[
                     styles.logEntry,
                     {
-                      backgroundColor: theme.colors.surfaceHigh,
-                      borderColor: theme.colors.divider,
+                      backgroundColor: theme.colors.surface.inset,
+                      borderColor: theme.colors.border.default,
                     },
                   ]}
                 >
-                  <Text style={[styles.entryKind, { color: theme.colors.textSecondary }]}>{entry.kind}</Text>
-                  <Text style={[styles.entryText, { color: theme.colors.text }]} selectable>
+                  <Text style={[styles.entryKind, { color: theme.colors.text.secondary }]}>{entry.kind}</Text>
+                  <Text style={[styles.entryText, { color: theme.colors.text.primary }]} selectable>
                     {entry.text}
                   </Text>
                   {entry.raw ? (
-                    <Text style={[styles.entryRaw, { color: theme.colors.textSecondary }]} selectable>
+                    <Text style={[styles.entryRaw, { color: theme.colors.text.secondary }]} selectable>
                       {entry.raw}
                     </Text>
                   ) : null}
@@ -370,10 +370,10 @@ export function VoiceQaScreen() {
         <ItemGroup title={t('devVoiceQa.activityTitle')}>
           <View style={styles.groupContent}>
             {activityEvents.length === 0 ? (
-              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{t('devVoiceQa.activityEmpty')}</Text>
+              <Text style={[styles.emptyText, { color: theme.colors.text.secondary }]}>{t('devVoiceQa.activityEmpty')}</Text>
             ) : (
               activityEvents.map((event) => (
-                <Text key={event.id} style={[styles.activityText, { color: theme.colors.text }]} selectable>
+                <Text key={event.id} style={[styles.activityText, { color: theme.colors.text.primary }]} selectable>
                   {formatVoiceActivityEvent(event)}
                 </Text>
               ))

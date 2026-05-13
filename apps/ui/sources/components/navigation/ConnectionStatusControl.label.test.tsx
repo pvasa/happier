@@ -68,7 +68,16 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
+    Typography: {
+        default: () => ({}),
+        eyebrow: () => ({}),
+        keyHint: () => ({}),
+        pillLabel: () => ({}),
+        rowMeta: () => ({}),
+        rowTitle: () => ({}),
+        tabular: () => ({}),
+        timestamp: () => ({}),
+    },
 }));
 
 vi.mock('@/components/ui/text/Text', () => ({
@@ -137,6 +146,7 @@ vi.mock('@/components/settings/server/modals/ServerSwitchAuthPrompt', () => ({
 vi.mock('@/components/navigation/connectionStatus/useConnectionHealth', () => ({
     useConnectionHealth: () => ({
         kind: 'no_machine',
+        tone: 'attention',
         color: '#ff9900',
         isPulsing: false,
         statusLabelKey: 'status.actionRequired',

@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { t } from '@/text';
 import { StatusDot } from '@/components/ui/status/StatusDot';
+import { StatusPill, type StatusPillVariant } from '@/components/ui/status/StatusPill';
 import { Popover } from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { useSocketStatus, useSyncError, useLastSyncAt, useSettingMutable } from '@/sync/domains/state/storage';
@@ -30,12 +31,26 @@ import { isTauriDesktop } from '@/utils/platform/tauri';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { ActionListSection } from '@/components/ui/lists/ActionListSection';
+import type { ConnectionHealthPresentation } from './connectionStatus/connectionHealthTypes';
 
 type Variant = 'sidebar' | 'header';
 const RELAY_SETTINGS_ROUTE = '/settings/server';
 const RELAY_DROPDOWN_TARGET_THRESHOLD = 2;
 const POPOVER_MAX_WIDTH = 420;
 const POPOVER_MIN_WIDTH = 220;
+
+function resolveConnectionHealthStatusPillVariant(tone: ConnectionHealthPresentation['tone']): StatusPillVariant {
+    switch (tone) {
+        case 'positive':
+            return 'success';
+        case 'attention':
+            return 'warning';
+        case 'danger':
+            return 'danger';
+        case 'neutral':
+            return 'info';
+    }
+}
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -70,7 +85,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     popoverTitle: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
         marginBottom: 8,
         paddingHorizontal: 16,
@@ -86,15 +101,18 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     popoverLabel: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     popoverValue: {
         fontSize: 12,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default(),
         flexShrink: 1,
         textAlign: 'right',
+    },
+    popoverStatusPill: {
+        flexShrink: 0,
     },
     popoverSection: {
         paddingHorizontal: 16,
@@ -109,7 +127,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     popoverSectionTitle: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default('semiBold'),
         textTransform: 'uppercase',
     },
@@ -340,7 +358,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
             void switchTarget(target);
         },
         selectedColor: theme.colors.status.connected,
-        iconColor: theme.colors.text,
+        iconColor: theme.colors.text.primary,
     });
 
     const relayDropdownItems = React.useMemo<ReadonlyArray<DropdownMenuItem>>(() => {
@@ -438,7 +456,12 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
 
                                 <View style={styles.popoverRow}>
                                     <Text style={styles.popoverLabel}>{t('profile.status')}</Text>
-                                    <Text style={styles.popoverValue}>{t(connectionHealth.statusLabelKey)}</Text>
+                                    <StatusPill
+                                        testID="connection-popover-health-status"
+                                        variant={resolveConnectionHealthStatusPillVariant(connectionHealth.tone)}
+                                        label={t(connectionHealth.statusLabelKey)}
+                                        style={styles.popoverStatusPill}
+                                    />
                                 </View>
 
                                 <View style={styles.popoverRow}>
@@ -492,7 +515,7 @@ export const ConnectionStatusControl = React.memo(function ConnectionStatusContr
                                                     onPress={handleManageRelay}
                                                     style={styles.popoverSectionIconButton}
                                                 >
-                                                    <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
+                                                    <Ionicons name="settings-outline" size={18} color={theme.colors.text.secondary} />
                                                 </Pressable>
                                             </View>
                                         </View>

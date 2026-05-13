@@ -1,10 +1,15 @@
 import * as React from 'react';
-import { Image, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Appearance, Image, Platform, Pressable, ScrollView, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { t } from '@/text';
 import { darkTheme, lightTheme } from '@/theme';
+import { loadThemeRuntimeLocalState } from '@/sync/domains/state/persistence';
+import {
+  resolveThemeRuntimeThemes,
+  resolveThemeRuntimeVisualTheme,
+} from '@/theme/profiles/themeProfileRuntime';
 import { Typography } from '@/constants/Typography';
 import { getBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
 import { getBugReportLogText } from '@/utils/system/bugReportLogBuffer';
@@ -29,13 +34,23 @@ export type AppBlockingScreenAction = Readonly<{
   variant: 'primary' | 'secondary';
 }>;
 
-function resolveFallbackTheme() {
+function readSystemThemeForCrashRecovery(): 'light' | 'dark' | null {
   try {
-    const Appearance = (require('react-native') as any).Appearance;
-    const scheme: unknown = Appearance?.getColorScheme?.();
-    return scheme === 'dark' ? darkTheme : lightTheme;
+    return Appearance.getColorScheme() === 'dark' ? 'dark' : 'light';
   } catch {
-    return lightTheme;
+    return null;
+  }
+}
+
+export function resolveCrashRecoveryFallbackTheme() {
+  try {
+    const { themePreference, themeProfiles } = loadThemeRuntimeLocalState();
+    const themes = resolveThemeRuntimeThemes(themeProfiles);
+    const visualTheme = resolveThemeRuntimeVisualTheme(themePreference, readSystemThemeForCrashRecovery());
+    return themes[visualTheme];
+  } catch {
+    const visualTheme = resolveThemeRuntimeVisualTheme('adaptive', readSystemThemeForCrashRecovery());
+    return visualTheme === 'dark' ? darkTheme : lightTheme;
   }
 }
 
@@ -71,14 +86,14 @@ export function AppBlockingScreen(props: Readonly<{
   details: string;
   actions: ReadonlyArray<AppBlockingScreenAction>;
 }>): React.ReactElement {
-  const theme = resolveFallbackTheme();
+  const theme = resolveCrashRecoveryFallbackTheme();
 
   const primary = props.actions.filter((a) => a.variant === 'primary');
   const secondary = props.actions.filter((a) => a.variant === 'secondary');
   const ordered = [...primary, ...secondary];
 
   return (
-    <View testID={props.testID} style={[styles.container, { backgroundColor: theme.colors.surface }]}>
+    <View testID={props.testID} style={[styles.container, { backgroundColor: theme.colors.surface.base }]}>
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
@@ -94,30 +109,30 @@ export function AppBlockingScreen(props: Readonly<{
         </View>
         <View style={styles.header}>
           <View style={styles.titleRow}>
-            <View style={[styles.dot, { backgroundColor: theme.colors.warningCritical }]} />
+            <View style={[styles.dot, { backgroundColor: theme.colors.state.danger.foreground }]} />
             <View style={styles.titleColumn}>
               <View>
                 <TextBlock
                   text={props.title}
-                  style={[styles.title, { color: theme.colors.text }]}
+                  style={[styles.title, { color: theme.colors.text.primary }]}
                 />
                 <TextBlock
                   text={props.subtitle}
-                  style={[styles.subtitle, { color: theme.colors.textSecondary }]}
+                  style={[styles.subtitle, { color: theme.colors.text.secondary }]}
                 />
               </View>
             </View>
           </View>
         </View>
 
-        <View style={[styles.card, { backgroundColor: theme.colors.surfaceHigh, borderColor: theme.colors.divider }]}>
+        <View style={[styles.card, { backgroundColor: theme.colors.surface.inset, borderColor: theme.colors.border.default }]}>
           <TextBlock
             text={props.detailsTitle}
-            style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}
+            style={[styles.sectionTitle, { color: theme.colors.text.secondary }]}
           />
           <TextBlock
             text={props.details}
-            style={[styles.details, { color: theme.colors.text }]}
+            style={[styles.details, { color: theme.colors.text.primary }]}
             selectable
           />
         </View>
@@ -134,14 +149,14 @@ export function AppBlockingScreen(props: Readonly<{
                   style={({ pressed }) => [
                     styles.primaryButton,
                     {
-                      backgroundColor: pressed ? theme.colors.surfacePressed : theme.colors.accent.blue,
-                      borderColor: theme.colors.divider,
+                      backgroundColor: pressed ? theme.colors.surface.pressed : theme.colors.accent.blue,
+                      borderColor: theme.colors.border.default,
                     },
                   ]}
                 >
                   <TextBlock
                     text={action.label}
-                    style={[styles.primaryButtonText, { color: theme.colors.overlay.text }]}
+                    style={[styles.primaryButtonText, { color: theme.colors.overlay.foreground }]}
                   />
                 </Pressable>
               );
@@ -156,14 +171,14 @@ export function AppBlockingScreen(props: Readonly<{
                 style={({ pressed }) => [
                   styles.secondaryButton,
                   {
-                    backgroundColor: pressed ? theme.colors.surfacePressed : theme.colors.surfaceHighest,
-                    borderColor: theme.colors.divider,
+                    backgroundColor: pressed ? theme.colors.surface.pressed : theme.colors.surface.elevated,
+                    borderColor: theme.colors.border.default,
                   },
                 ]}
               >
                 <TextBlock
                   text={action.label}
-                  style={[styles.secondaryButtonText, { color: theme.colors.text }]}
+                  style={[styles.secondaryButtonText, { color: theme.colors.text.primary }]}
                 />
               </Pressable>
             );

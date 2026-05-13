@@ -109,8 +109,17 @@ const voiceSettingState: { current: any } = {
 const storageState: { current: any } = { current: { sessions: {}, sessionListViewDataByServerId: {} } };
 
 const allSessionsState: { current: any[] } = { current: [] };
+const useAllSessionsSpy = vi.fn(() => allSessionsState.current);
+const useSessionSpy = vi.fn((sessionId: string) => {
+    const normalized = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!normalized) return null;
+    return storageState.current?.sessions?.[normalized]
+        ?? allSessionsState.current.find((session) => session?.id === normalized)
+        ?? null;
+});
 vi.mock('@/sync/store/hooks', () => ({
-    useAllSessions: () => allSessionsState.current,
+    useAllSessions: () => useAllSessionsSpy(),
+    useSession: (sessionId: string) => useSessionSpy(sessionId),
     useLocalSetting: () => 1,
 }));
 
@@ -130,6 +139,9 @@ describe('VoiceSurface', () => {
   beforeEach(() => {
     pathnameState.current = '/';
     storageState.current = { sessions: {}, sessionListViewDataByServerId: {} };
+    allSessionsState.current = [];
+    useAllSessionsSpy.mockClear();
+    useSessionSpy.mockClear();
   });
 
   it('disables daemon local voice start when voice.agent is unavailable on the active server', async () => {
@@ -354,6 +366,58 @@ describe('VoiceSurface', () => {
 
     expect(screen.getTextContent()).toContain('Ready and waiting');
     expect(screen.getTextContent()).not.toContain('s_target');
+  });
+
+  it('reads the sidebar target label from the focused session instead of a stale full session list', async () => {
+    vi.resetModules();
+    featureEnabledState['voice.agent'] = true;
+    voiceSettingState.current = {
+      providerId: 'local_conversation',
+      ui: { activityFeedEnabled: false, scopeDefault: 'global', surfaceLocation: 'auto' },
+      privacy: { shareSessionSummary: true, shareFilePaths: true },
+    };
+    storageState.current = {
+      sessions: {
+        s_target: {
+          id: 's_target',
+          metadata: {
+            summaryText: 'Focused target',
+          },
+        },
+        s_background: {
+          id: 's_background',
+          metadata: {
+            summaryText: 'Background churn',
+          },
+        },
+      },
+      sessionListViewDataByServerId: {},
+    };
+    allSessionsState.current = [{
+      id: 's_target',
+      metadata: {
+        summaryText: 'Stale broad list label',
+      },
+    }];
+    const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
+    useVoiceTargetStore.getState().setScope('global');
+    useVoiceTargetStore.getState().setPrimaryActionSessionId('s_target');
+
+    const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+    setVoiceSessionSnapshot({
+      adapterId: 'local_conversation',
+      sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+      status: 'connected',
+      mode: 'idle',
+      canStop: true,
+    });
+
+    const { VoiceSurface } = await import('./VoiceSurface');
+
+    const screen = await renderScreen(React.createElement(VoiceSurface, { variant: 'sidebar' }));
+
+    expect(screen.getTextContent()).toContain('Focused target');
+    expect(screen.getTextContent()).not.toContain('Stale broad list label');
   });
 
   it('shows the voice conversation icon from a persisted hidden voice session even without an active binding', async () => {

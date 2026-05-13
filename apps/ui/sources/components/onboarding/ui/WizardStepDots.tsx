@@ -24,13 +24,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 7,
         height: 7,
         borderRadius: 999,
-        backgroundColor: theme.colors.textSecondary,
+        backgroundColor: theme.colors.text.secondary,
         opacity: 0.35,
     },
     activeDot: {
         width: 14,
         height: 7,
-        backgroundColor: theme.colors.text,
+        backgroundColor: theme.colors.text.primary,
         opacity: 0.35,
     },
 }));

@@ -333,7 +333,7 @@ export const ExitPlanToolView = React.memo<ToolViewProps>(({ tool, sessionId, in
                                     value={changeRequestText}
                                     onChangeText={setChangeRequestText}
                                     placeholder={t('tools.exitPlanMode.requestChangesPlaceholder')}
-                                    placeholderTextColor={theme.colors.text.secondary}
+                                    placeholderTextColor={theme.colors.input.placeholder}
                                     multiline
                                     editable={!isApproving && !isRejecting}
                                 />
