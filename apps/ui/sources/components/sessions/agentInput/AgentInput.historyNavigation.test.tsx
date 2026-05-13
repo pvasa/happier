@@ -19,6 +19,16 @@ const mocks = vi.hoisted(() => ({
   onSend: vi.fn(),
 }));
 
+const localSettingState = vi.hoisted(() => ({
+  values: {
+    uiBackdropBlurEnabled: 1,
+    keyboardShortcutsV2Enabled: true,
+    keyboardSingleKeyShortcutsEnabled: true,
+    keyboardShortcutOverridesV1: {},
+    keyboardShortcutDisabledCommandIdsV1: [] as readonly string[],
+  },
+}));
+
 installAgentInputCommonModuleMocks({
   reactNative: async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -54,6 +64,7 @@ installAgentInputCommonModuleMocks({
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
       useSetting: (key: string) => {
+        if (key in localSettingState.values) return localSettingState.values[key as keyof typeof localSettingState.values];
         if (key === 'profiles') return [];
         if (key === 'agentInputEnterToSend') return true;
         if (key === 'agentInputActionBarLayout') return 'wrap';
@@ -64,6 +75,10 @@ installAgentInputCommonModuleMocks({
       },
       useSettings: () => ({
         profiles: [],
+        keyboardShortcutsV2Enabled: localSettingState.values.keyboardShortcutsV2Enabled,
+        keyboardSingleKeyShortcutsEnabled: localSettingState.values.keyboardSingleKeyShortcutsEnabled,
+        keyboardShortcutOverridesV1: localSettingState.values.keyboardShortcutOverridesV1,
+        keyboardShortcutDisabledCommandIdsV1: localSettingState.values.keyboardShortcutDisabledCommandIdsV1,
         agentInputEnterToSend: true,
         agentInputActionBarLayout: 'wrap',
         agentInputChipDensity: 'labels',
@@ -80,7 +95,7 @@ installAgentInputCommonModuleMocks({
 });
 
 vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
+    useLocalSetting: (key: keyof typeof localSettingState.values) => localSettingState.values[key] ?? 1,
 }));
 
 vi.mock('expo-image', () => ({
@@ -207,6 +222,13 @@ function findMultiTextInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
 describe('AgentInput (history navigation)', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    localSettingState.values = {
+      uiBackdropBlurEnabled: 1,
+      keyboardShortcutsV2Enabled: true,
+      keyboardSingleKeyShortcutsEnabled: true,
+      keyboardShortcutOverridesV1: {},
+      keyboardShortcutDisabledCommandIdsV1: [],
+    };
   });
 
   it('sends on Enter when there are sendable attachments (web enter-to-send)', async () => {
@@ -284,7 +306,13 @@ describe('AgentInput (history navigation)', () => {
 
     let handled: any = null;
     await act(async () => {
-      handled = input.props.onKeyPress?.({ key: 'Enter', shiftKey: false, metaKey: true });
+      handled = input.props.onKeyPress?.({
+        key: 'Enter',
+        shiftKey: false,
+        metaKey: true,
+        platformOS: 'web',
+        webPlatform: 'MacIntel',
+      });
     });
 
     expect(handled).toBe(true);
@@ -292,7 +320,7 @@ describe('AgentInput (history navigation)', () => {
     expect(mocks.onSend).toHaveBeenCalledWith({ forceImmediate: true });
   });
 
-  it('uses immediate-send bypass on Ctrl+Enter (web)', async () => {
+  it('uses immediate-send bypass on Ctrl+Enter for non-Apple web platforms', async () => {
     const { AgentInput } = await import('./AgentInput');
     const screen = await renderScreen(
       <AgentInput
@@ -313,12 +341,114 @@ describe('AgentInput (history navigation)', () => {
 
     let handled: any = null;
     await act(async () => {
-      handled = input.props.onKeyPress?.({ key: 'Enter', shiftKey: false, ctrlKey: true });
+      handled = input.props.onKeyPress?.({
+        key: 'Enter',
+        shiftKey: false,
+        ctrlKey: true,
+        platformOS: 'web',
+        webPlatform: 'Win32',
+      });
     });
 
     expect(handled).toBe(true);
     expect(mocks.onSend).toHaveBeenCalledTimes(1);
     expect(mocks.onSend).toHaveBeenCalledWith({ forceImmediate: true });
+  });
+
+  it('does not treat Ctrl+Enter as immediate-send on Apple web platforms', async () => {
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(
+      <AgentInput
+        sessionId="s1"
+        value="draft"
+        onChangeText={mocks.onChangeText}
+        placeholder="p"
+        onSend={mocks.onSend}
+        autocompletePrefixes={[]}
+        autocompleteSuggestions={async () => []}
+        isSendDisabled={false}
+        disabled={false}
+        showAbortButton={false}
+      />
+    );
+
+    const input = findMultiTextInput(screen);
+
+    let handled: any = null;
+    await act(async () => {
+      handled = input.props.onKeyPress?.({
+        key: 'Enter',
+        shiftKey: false,
+        ctrlKey: true,
+        platformOS: 'web',
+        webPlatform: 'MacIntel',
+      });
+    });
+
+    expect(handled).toBe(false);
+    expect(mocks.onSend).not.toHaveBeenCalled();
+  });
+
+  it('does not cycle permission mode when the mode cycle shortcut is disabled', async () => {
+    localSettingState.values.keyboardShortcutDisabledCommandIdsV1 = ['mode.cycle'];
+    const onPermissionModeChange = vi.fn();
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(
+      <AgentInput
+        sessionId="s1"
+        value="draft"
+        onChangeText={mocks.onChangeText}
+        placeholder="p"
+        onSend={mocks.onSend}
+        autocompletePrefixes={[]}
+        autocompleteSuggestions={async () => []}
+        isSendDisabled={false}
+        disabled={false}
+        showAbortButton={false}
+        onPermissionModeChange={onPermissionModeChange}
+      />
+    );
+
+    const input = findMultiTextInput(screen);
+
+    let handled: any = null;
+    await act(async () => {
+      handled = input.props.onKeyPress?.({ key: 'Tab', code: 'Tab', shiftKey: true });
+    });
+
+    expect(handled).toBe(false);
+    expect(onPermissionModeChange).not.toHaveBeenCalled();
+  });
+
+  it('does not cycle permission mode when keyboard shortcuts V2 is disabled', async () => {
+    localSettingState.values.keyboardShortcutsV2Enabled = false;
+    const onPermissionModeChange = vi.fn();
+    const { AgentInput } = await import('./AgentInput');
+    const screen = await renderScreen(
+      <AgentInput
+        sessionId="s1"
+        value="draft"
+        onChangeText={mocks.onChangeText}
+        placeholder="p"
+        onSend={mocks.onSend}
+        autocompletePrefixes={[]}
+        autocompleteSuggestions={async () => []}
+        isSendDisabled={false}
+        disabled={false}
+        showAbortButton={false}
+        onPermissionModeChange={onPermissionModeChange}
+      />
+    );
+
+    const input = findMultiTextInput(screen);
+
+    let handled: any = null;
+    await act(async () => {
+      handled = input.props.onKeyPress?.({ key: 'Tab', code: 'Tab', shiftKey: true });
+    });
+
+    expect(handled).toBe(false);
+    expect(onPermissionModeChange).not.toHaveBeenCalled();
   });
 
   it('intercepts ArrowUp at start-of-input on web and applies history text', async () => {

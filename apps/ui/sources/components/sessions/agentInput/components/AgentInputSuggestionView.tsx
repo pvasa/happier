@@ -65,6 +65,56 @@ export const FileMentionSuggestion = React.memo(({ fileName, filePath, fileType 
     );
 });
 
+interface VendorPluginMentionSuggestionProps {
+    name: string;
+    displayName: string;
+    description?: string;
+    source?: string;
+}
+
+export const VendorPluginMentionSuggestion = React.memo((props: VendorPluginMentionSuggestionProps) => {
+    return (
+        <View style={styles.suggestionContainer}>
+            <View style={styles.leadingIcon}>
+                <Ionicons name="extension-puzzle-outline" size={16} color={styles.iconColor.color} />
+            </View>
+            <View style={styles.labelColumn}>
+                <Text style={styles.fileTitleText} numberOfLines={1}>
+                    {props.displayName}
+                </Text>
+                <Text style={styles.filePathText} numberOfLines={1}>
+                    {props.source ?? props.name}
+                </Text>
+            </View>
+        </View>
+    );
+});
+
+interface SkillMentionSuggestionProps {
+    name: string;
+    displayName: string;
+    description?: string;
+    source?: string;
+}
+
+export const SkillMentionSuggestion = React.memo((props: SkillMentionSuggestionProps) => {
+    return (
+        <View style={styles.suggestionContainer}>
+            <View style={styles.leadingIcon}>
+                <Ionicons name="sparkles-outline" size={16} color={styles.iconColor.color} />
+            </View>
+            <View style={styles.labelColumn}>
+                <Text style={styles.fileTitleText} numberOfLines={1}>
+                    {props.displayName}
+                </Text>
+                <Text style={styles.filePathText} numberOfLines={1}>
+                    {props.description ?? props.source ?? props.name}
+                </Text>
+            </View>
+        </View>
+    );
+});
+
 const styles = StyleSheet.create((theme) => ({
     suggestionContainer: {
         flexDirection: 'row',
@@ -74,14 +124,14 @@ const styles = StyleSheet.create((theme) => ({
     },
     commandText: {
         fontSize: 14,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontWeight: '600',
         ...Typography.default('semiBold'),
     },
     descriptionText: {
         flex: 1,
         fontSize: 13,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
     leadingIcon: {
@@ -91,19 +141,23 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         marginRight: 8,
     },
+    labelColumn: {
+        flex: 1,
+        minWidth: 0,
+    },
     iconColor: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
     },
     fileTitleText: {
         fontSize: 13,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
     },
     filePathText: {
         flex: 1,
         minWidth: 0,
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
 }));

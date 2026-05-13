@@ -149,7 +149,7 @@ describe('getContextWarning', () => {
         expect(formatContextTokenCount(usageState?.usedTokens ?? 0)).toBe('200k');
 
         const warning = getContextWarning(200_000, true, lightTheme, 1_000_000);
-        expect(warning?.color).toBe(lightTheme.colors.textSecondary);
+        expect(warning?.color).toBe(lightTheme.colors.text.secondary);
         expect(warning?.text).toContain('79');
     });
 });

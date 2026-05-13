@@ -6,6 +6,8 @@ import type { EffectivePermissionModeDescription } from '@/sync/domains/permissi
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
+import type { PermissionModePickerStyles } from './permissionModePickerStyles';
+
 
 export type PermissionModePickerOption = Readonly<{
     value: PermissionMode;
@@ -18,20 +20,9 @@ export function PermissionModePicker(props: {
     options: readonly PermissionModePickerOption[];
     selected: PermissionMode;
     onSelect: (mode: PermissionMode) => void;
-    styles: Readonly<{
-        overlaySection: any;
-        overlaySectionTitle: any;
-        overlayOptionRow: any;
-        overlayOptionRowPressed: any;
-        overlayRadioOuter: any;
-        overlayRadioOuterSelected: any;
-        overlayRadioOuterUnselected: any;
-        overlayRadioInner: any;
-        overlayOptionLabel: any;
-        overlayOptionLabelSelected: any;
-        overlayOptionLabelUnselected: any;
-        overlayOptionDescription: any;
-    }>;
+    // FR4-16: explicit typed style contract (was `Readonly<{ ... any }>`).
+    // See `permissionModePickerStyles.ts` for field definitions.
+    styles: PermissionModePickerStyles;
     effectivePermissionLabel: string;
     effectivePermissionPolicy: EffectivePermissionModeDescription;
 }): React.ReactNode {

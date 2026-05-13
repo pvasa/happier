@@ -154,6 +154,11 @@ describe('AgentInput review comment composer badge', () => {
         } satisfies ReviewCommentDraft;
         const reviewCommentsChip = createReviewCommentsActionChip({
             sessionId: 's1',
+            reviewScope: {
+                serverId: 'server-1',
+                machineId: 'machine-1',
+                rootPath: '/repo',
+            },
             reviewCommentDrafts: [draft],
             onSetDraftIncluded: (draftId, included) => setDraftIncludedSpy('s1', draftId, included),
             onUpdateDraft: (nextDraft) => updateDraftSpy('s1', nextDraft),
@@ -189,6 +194,11 @@ describe('AgentInput review comment composer badge', () => {
         const modalConfig = modalShowSpy.mock.calls[0]?.[0] as any;
         expect(modalConfig?.component?.name).toBe('ReviewCommentsDraftsModal');
         expect(modalConfig?.chrome?.kind).toBe('card');
+        expect(modalConfig?.props?.reviewScope).toEqual({
+            serverId: 'server-1',
+            machineId: 'machine-1',
+            rootPath: '/repo',
+        });
     });
 
     it('lets the user detach or discard review comments from the composer badge remove button', async () => {

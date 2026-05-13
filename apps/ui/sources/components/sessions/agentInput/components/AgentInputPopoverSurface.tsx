@@ -50,6 +50,7 @@ export const AgentInputPopoverSurface = React.memo(
           edgeFades={edgeFades}
           edgeIndicators={edgeIndicators}
           arrow={arrow}
+          surfaceChrome="theme"
           initialVisibility={initialVisibility}
         >
           {children}

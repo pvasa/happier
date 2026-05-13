@@ -61,17 +61,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingVertical: 6,
         borderRadius: 999,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
     },
     attachmentChipText: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 12,
         maxWidth: 180,
         ...Typography.default(),
     },
     attachmentChipMeta: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 11,
         ...Typography.default('semiBold'),
     },
@@ -87,8 +87,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginRight: 6,
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.base,
         overflow: 'hidden',
     },
     attachmentImage: {},
@@ -103,12 +103,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.overlay.scrim,
     },
     attachmentImageOverlayText: {
-        color: theme.colors.overlay.text,
+        color: theme.colors.overlay.foreground,
         fontSize: 11,
         ...Typography.default('semiBold'),
     },
     attachmentImageErrorOverlay: {
-        backgroundColor: theme.colors.box.error.background,
+        backgroundColor: theme.colors.state.danger.background,
     },
     attachmentImageRemoveButton: {
         position: 'absolute',
@@ -145,8 +145,8 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                 contentContainerStyle={styles.rowContent}
             >
                 {composerBadges.map((badge) => {
-                    const icon = badge.icon?.(theme.colors.textSecondary) ?? (
-                        <Ionicons name="document-outline" size={14} color={theme.colors.textSecondary} />
+                    const icon = badge.icon?.(theme.colors.text.secondary) ?? (
+                        <Ionicons name="document-outline" size={14} color={theme.colors.text.secondary} />
                     );
                     const content = (
                         <>
@@ -171,7 +171,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                             }}
                             testID={badge.testID ? `${badge.testID}-remove` : undefined}
                         >
-                            <Ionicons name="close-circle" size={16} color={theme.colors.textSecondary} />
+                            <Ionicons name="close-circle" size={16} color={theme.colors.text.secondary} />
                         </Pressable>
                     ) : null;
 
@@ -240,7 +240,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     ) : null}
                                     {att.status === 'error' ? (
                                         <View style={[styles.attachmentImageOverlay, styles.attachmentImageErrorOverlay]}>
-                                            <Ionicons name="alert-circle" size={20} color={theme.colors.overlay.text} />
+                                            <Ionicons name="alert-circle" size={20} color={theme.colors.overlay.foreground} />
                                         </View>
                                     ) : null}
                                 </Pressable>
@@ -256,7 +256,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                         hitSlop={8}
                                         style={styles.attachmentImageRemoveButton}
                                     >
-                                        <Ionicons name="close-circle" size={18} color={theme.colors.textSecondary} />
+                                        <Ionicons name="close-circle" size={18} color={theme.colors.text.secondary} />
                                     </Pressable>
                                 ) : null}
                             </View>
@@ -265,7 +265,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
 
                     return (
                         <View key={att.key} style={styles.attachmentChip}>
-                            <Ionicons name="document-outline" size={14} color={theme.colors.textSecondary} />
+                            <Ionicons name="document-outline" size={14} color={theme.colors.text.secondary} />
                             <Text
                                 numberOfLines={1}
                                 style={styles.attachmentChipText}
@@ -276,7 +276,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                 percent != null ? (
                                     <Text style={styles.attachmentChipMeta}>{percent}%</Text>
                                 ) : (
-                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                                 )
                             ) : null}
                             {att.onRemove ? (
@@ -290,7 +290,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     disabled={removingDisabled}
                                     hitSlop={8}
                                 >
-                                    <Ionicons name="close-circle" size={16} color={theme.colors.textSecondary} />
+                                    <Ionicons name="close-circle" size={16} color={theme.colors.text.secondary} />
                                 </Pressable>
                             ) : null}
                         </View>

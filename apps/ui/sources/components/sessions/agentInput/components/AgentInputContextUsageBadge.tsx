@@ -49,13 +49,13 @@ export function AgentInputContextUsageBadge(props: AgentInputContextUsageBadgePr
     const toneColor = React.useMemo(
         () => resolveToneColor({
             severity: props.state.severity,
-            neutralColor: theme.colors.textSecondary,
-            warningColor: theme.colors.warning,
-            criticalColor: theme.colors.warningCritical,
+            neutralColor: theme.colors.text.secondary,
+            warningColor: theme.colors.state.neutral.foreground,
+            criticalColor: theme.colors.state.danger.foreground,
         }),
-        [props.state.severity, theme.colors.textSecondary, theme.colors.warning, theme.colors.warningCritical],
+        [props.state.severity, theme.colors.text.secondary, theme.colors.state.neutral.foreground, theme.colors.state.danger.foreground],
     );
-    const ringTrackColor = theme.colors.divider;
+    const ringTrackColor = theme.colors.border.default;
     const progressRatio = React.useMemo(
         () => Math.max(0, Math.min(props.state.usedRatio, 1)),
         [props.state.usedRatio],
@@ -224,17 +224,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 11,
         letterSpacing: 1,
         textTransform: 'uppercase',
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.header(),
     },
     popoverDetail: {
         fontSize: 13,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         ...Typography.default(),
     },
     popoverDescription: {
         fontSize: 12,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         ...Typography.default(),
     },
 }));

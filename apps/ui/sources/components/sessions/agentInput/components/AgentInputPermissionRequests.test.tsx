@@ -2,12 +2,14 @@ import * as React from 'react';
 
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
-import type { AgentInputPermissionRequests as AgentInputPermissionRequestsComponent } from './AgentInputPermissionRequests';
+import type { AgentInputAttentionRequests as AgentInputAttentionRequestsComponent } from './AgentInputPermissionRequests';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const capturedPermissionPromptCardProps: Array<Record<string, unknown>> = [];
 const capturedUserActionPromptCardProps: Array<Record<string, unknown>> = [];
+const capturedApprovalPromptCardProps: Array<Record<string, unknown>> = [];
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -57,13 +59,36 @@ vi.mock('@/components/tools/shell/userActions/UserActionPromptCard', () => ({
     },
 }));
 
-describe('AgentInputPermissionRequests', () => {
+vi.mock('@/components/tools/shell/approvals/ApprovalPromptCard', () => ({
+    ApprovalPromptCard: (props: any) => {
+        capturedApprovalPromptCardProps.push(props);
+        return React.createElement('ApprovalPromptCard', props);
+    },
+}));
+
+function approvalArtifact(id = 'a1'): DecryptedArtifact {
+    return {
+        id,
+        header: { kind: 'approval_request.v1', title: 'Approval', approvalStatus: 'open', sessionId: 's1' },
+        title: 'Approval',
+        body: null,
+        headerVersion: 1,
+        bodyVersion: 1,
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        isDecrypted: true,
+    };
+}
+
+describe('AgentInputAttentionRequests', () => {
     it('renders a single outer chrome wrapper and uses inline cards with dividers', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
+        const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
+        capturedApprovalPromptCardProps.length = 0;
 
-        const screen = await renderScreen(React.createElement(AgentInputPermissionRequests, {
+        const screen = await renderScreen(React.createElement(AgentInputAttentionRequests, {
             sessionId: 's1',
             permissionRequests: [
                 { id: 'p1', kind: 'permission', tool: 'execute', arguments: { command: 'pwd' }, createdAt: null },
@@ -71,6 +96,21 @@ describe('AgentInputPermissionRequests', () => {
             ],
             userActionRequests: [
                 { id: 'u1', kind: 'user_action', tool: 'execute', arguments: { command: 'whoami' }, createdAt: null },
+            ],
+            approvalRequests: [
+                {
+                    artifact: approvalArtifact('a1'),
+                    approval: {
+                        v: 1,
+                        status: 'open',
+                        createdAtMs: 1,
+                        updatedAtMs: 1,
+                        createdBy: { surface: 'session_agent', sessionId: 's1' },
+                        actionId: 'session.list',
+                        actionArgs: {},
+                        summary: 'List sessions',
+                    },
+                },
             ],
             permissionLocationsById: new Map(),
             metadata: null,
@@ -80,30 +120,51 @@ describe('AgentInputPermissionRequests', () => {
             onLayout: () => {},
             onScroll: () => {},
             fadeVisibility: { top: false, bottom: false },
-        } satisfies React.ComponentProps<typeof AgentInputPermissionRequestsComponent>));
+        } satisfies React.ComponentProps<typeof AgentInputAttentionRequestsComponent>));
 
         expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeTruthy();
 
         expect(capturedPermissionPromptCardProps).toHaveLength(2);
-        expect(capturedUserActionPromptCardProps).toHaveLength(0);
+        expect(capturedUserActionPromptCardProps).toHaveLength(1);
+        expect(capturedApprovalPromptCardProps).toHaveLength(1);
         expect(capturedPermissionPromptCardProps[0].chrome).toBe('inline');
+        expect(capturedUserActionPromptCardProps[0].chrome).toBe('inline');
+        expect(capturedApprovalPromptCardProps[0].chrome).toBe('inline');
 
-        // Only permission rows belong in the composer request chrome.
-        expect(screen.findByTestId('agentInput.permissionRequests.divider:p2')).toBeTruthy();
-        expect(screen.findByTestId('agentInput.permissionRequests.divider:u1')).toBeNull();
+        expect(screen.findByTestId('agentInput.permissionRequests.divider:permission:p2')).toBeTruthy();
+        expect(screen.findByTestId('agentInput.permissionRequests.divider:userAction:u1')).toBeTruthy();
+        expect(screen.findByTestId('agentInput.permissionRequests.divider:approval:a1')).toBeTruthy();
     });
 
     it('does not render when approvals are disabled due to inactive session', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
+        const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
+        capturedApprovalPromptCardProps.length = 0;
 
-        const screen = await renderScreen(React.createElement(AgentInputPermissionRequests, {
+        const screen = await renderScreen(React.createElement(AgentInputAttentionRequests, {
             sessionId: 's1',
             permissionRequests: [
                 { id: 'p1', kind: 'permission', tool: 'execute', arguments: { command: 'pwd' }, createdAt: null },
             ],
-            userActionRequests: [],
+            userActionRequests: [
+                { id: 'u1', kind: 'user_action', tool: 'execute', arguments: { command: 'whoami' }, createdAt: null },
+            ],
+            approvalRequests: [
+                {
+                    artifact: approvalArtifact('a1'),
+                    approval: {
+                        v: 1,
+                        status: 'open',
+                        createdAtMs: 1,
+                        updatedAtMs: 1,
+                        createdBy: { surface: 'session_agent', sessionId: 's1' },
+                        actionId: 'session.list',
+                        actionArgs: {},
+                        summary: 'List sessions',
+                    },
+                },
+            ],
             permissionLocationsById: new Map(),
             metadata: null,
             canApprovePermissions: false,
@@ -113,23 +174,27 @@ describe('AgentInputPermissionRequests', () => {
             onLayout: () => {},
             onScroll: () => {},
             fadeVisibility: { top: false, bottom: false },
-        } satisfies React.ComponentProps<typeof AgentInputPermissionRequestsComponent>));
+        } satisfies React.ComponentProps<typeof AgentInputAttentionRequestsComponent>));
 
         expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeNull();
         expect(capturedPermissionPromptCardProps).toHaveLength(0);
+        expect(capturedUserActionPromptCardProps).toHaveLength(0);
+        expect(capturedApprovalPromptCardProps).toHaveLength(0);
     });
 
     it('does not render permission requests when the session is inactive even if canApprovePermissions is incorrectly true', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
+        const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
+        capturedApprovalPromptCardProps.length = 0;
 
-        const screen = await renderScreen(React.createElement(AgentInputPermissionRequests, {
+        const screen = await renderScreen(React.createElement(AgentInputAttentionRequests, {
             sessionId: 's1',
             permissionRequests: [
                 { id: 'p1', kind: 'permission', tool: 'mcp__playwright__browser_close', arguments: {}, createdAt: null },
             ],
             userActionRequests: [],
+            approvalRequests: [],
             permissionLocationsById: new Map(),
             metadata: null,
             canApprovePermissions: true,
@@ -139,9 +204,38 @@ describe('AgentInputPermissionRequests', () => {
             onLayout: () => {},
             onScroll: () => {},
             fadeVisibility: { top: false, bottom: false },
-        } satisfies React.ComponentProps<typeof AgentInputPermissionRequestsComponent>));
+        } satisfies React.ComponentProps<typeof AgentInputAttentionRequestsComponent>));
 
         expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeNull();
         expect(capturedPermissionPromptCardProps).toHaveLength(0);
+    });
+
+    it('ignores legacy user action requests without an explicit user action kind', async () => {
+        const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
+        capturedPermissionPromptCardProps.length = 0;
+        capturedUserActionPromptCardProps.length = 0;
+        capturedApprovalPromptCardProps.length = 0;
+        const legacyUserActionRequests = [
+            { id: 'u1', tool: 'AskUserQuestion', arguments: { question: 'Continue?' }, createdAt: null },
+        ] as unknown as React.ComponentProps<typeof AgentInputAttentionRequestsComponent>['userActionRequests'];
+
+        const screen = await renderScreen(React.createElement(AgentInputAttentionRequests, {
+            sessionId: 's1',
+            permissionRequests: [],
+            // Malformed persisted legacy fixture intentionally violates the current request type.
+            userActionRequests: legacyUserActionRequests,
+            approvalRequests: [],
+            permissionLocationsById: new Map(),
+            metadata: null,
+            canApprovePermissions: true,
+            maxHeightPx: 200,
+            onContentSizeChange: () => {},
+            onLayout: () => {},
+            onScroll: () => {},
+            fadeVisibility: { top: false, bottom: false },
+        } satisfies React.ComponentProps<typeof AgentInputAttentionRequestsComponent>));
+
+        expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeNull();
+        expect(capturedUserActionPromptCardProps).toHaveLength(0);
     });
 });

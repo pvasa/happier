@@ -8,8 +8,12 @@ import { Item } from "@/components/ui/lists/Item";
 import { ItemGroup } from "@/components/ui/lists/ItemGroup";
 import { ItemListStatic } from "@/components/ui/lists/ItemList";
 
-import type { AgentInputChipPickerOption } from "./AgentInputChipPickerTypes";
+import {
+  AGENT_INPUT_CHIP_PICKER_DETAIL_MIN_HEIGHT,
+  type AgentInputChipPickerOption,
+} from "./AgentInputChipPickerTypes";
 import { deferAgentInputPopoverClose } from "@/components/sessions/agentInput/selection/deferAgentInputPopoverClose";
+import { runAfterInteractionsWithFallback } from "@/utils/timing/runAfterInteractionsWithFallback";
 
 export type AgentInputChipPickerDetailPaneProps = Readonly<{
   option: AgentInputChipPickerOption;
@@ -20,11 +24,61 @@ export type AgentInputChipPickerDetailPaneProps = Readonly<{
   style?: any;
 }>;
 
+const renderedDeferredDetailContentKeys = new Set<string>();
+
+const DETAIL_BUTTON_TRANSIENT_STYLES = {
+  pressed: {
+    opacity: 0.82,
+  },
+  disabled: {
+    opacity: 0.5,
+  },
+} as const;
+
 export function AgentInputChipPickerDetailPane(
   props: AgentInputChipPickerDetailPaneProps,
 ) {
   const styles = stylesheet;
-  const detailContent = props.option.renderDetailContent
+  const shouldDeferDetailContent =
+    props.option.deferRenderDetailContent === true &&
+    typeof props.option.renderDetailContent === "function";
+  const deferredDetailContentCacheKey = shouldDeferDetailContent
+    ? props.option.deferredDetailContentCacheKey ?? props.option.id
+    : null;
+  const [deferredDetailContentOptionId, setDeferredDetailContentOptionId] =
+    React.useState<string | null>(() =>
+      shouldDeferDetailContent && deferredDetailContentCacheKey &&
+        !renderedDeferredDetailContentKeys.has(deferredDetailContentCacheKey)
+        ? null
+        : props.option.id,
+    );
+
+  React.useEffect(() => {
+    if (!shouldDeferDetailContent) {
+      setDeferredDetailContentOptionId(props.option.id);
+      return;
+    }
+    if (
+      deferredDetailContentCacheKey &&
+      renderedDeferredDetailContentKeys.has(deferredDetailContentCacheKey)
+    ) {
+      setDeferredDetailContentOptionId(props.option.id);
+      return;
+    }
+
+    setDeferredDetailContentOptionId(null);
+    return runAfterInteractionsWithFallback(() => {
+      if (deferredDetailContentCacheKey) {
+        renderedDeferredDetailContentKeys.add(deferredDetailContentCacheKey);
+      }
+      setDeferredDetailContentOptionId(props.option.id);
+    });
+  }, [deferredDetailContentCacheKey, props.option.id, shouldDeferDetailContent]);
+
+  const canRenderDetailContent =
+    !shouldDeferDetailContent ||
+    deferredDetailContentOptionId === props.option.id;
+  const detailContent = canRenderDetailContent && props.option.renderDetailContent
     ? props.option.renderDetailContent()
     : props.option.detailContent;
   const detailSelectOptions = props.option.detailSelectOptions ?? [];
@@ -35,6 +89,13 @@ export function AgentInputChipPickerDetailPane(
         <Text style={styles.detailDescription}>
           {props.option.detailDescription}
         </Text>
+      ) : null}
+
+      {shouldDeferDetailContent && !canRenderDetailContent ? (
+        <View
+          testID="agent-input-chip-picker.detail-deferred-placeholder"
+          style={styles.detailDeferredPlaceholder}
+        />
       ) : null}
 
       {detailContent ? (
@@ -85,8 +146,8 @@ export function AgentInputChipPickerDetailPane(
           disabled={props.option.disabled}
           style={({ pressed }) => [
             styles.detailActionButton,
-            pressed ? styles.detailActionButtonPressed : null,
-            props.option.disabled ? styles.applyButtonDisabled : null,
+            pressed ? DETAIL_BUTTON_TRANSIENT_STYLES.pressed : null,
+            props.option.disabled ? DETAIL_BUTTON_TRANSIENT_STYLES.disabled : null,
           ]}
         >
           <Text style={styles.detailActionButtonText}>
@@ -103,8 +164,8 @@ export function AgentInputChipPickerDetailPane(
           disabled={props.option.disabled}
           style={({ pressed }) => [
             styles.applyButton,
-            pressed ? styles.applyButtonPressed : null,
-            props.option.disabled ? styles.applyButtonDisabled : null,
+            pressed ? DETAIL_BUTTON_TRANSIENT_STYLES.pressed : null,
+            props.option.disabled ? DETAIL_BUTTON_TRANSIENT_STYLES.disabled : null,
           ]}
         >
           <Text style={styles.applyButtonText}>{props.applyLabel}</Text>
@@ -118,7 +179,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailPane: {
     flex: 1,
     gap: 10,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.surface.base,
   },
   detailHeader: {
     gap: 3,
@@ -126,19 +187,22 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailTitle: {
     fontSize: 15,
     ...Typography.header(),
-    color: theme.colors.text,
+    color: theme.colors.text.primary,
   },
   detailSubtitle: {
     fontSize: 12,
-    color: theme.colors.textSecondary,
+    color: theme.colors.text.secondary,
   },
   detailDescription: {
     fontSize: 12,
     lineHeight: 16,
-    color: theme.colors.text,
+    color: theme.colors.text.primary,
   },
   detailCustomContent: {
     gap: 10,
+  },
+  detailDeferredPlaceholder: {
+    minHeight: AGENT_INPUT_CHIP_PICKER_DETAIL_MIN_HEIGHT,
   },
   detailSelectList: {
     backgroundColor: "transparent",
@@ -156,13 +220,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     height: 6,
     marginTop: 7,
     borderRadius: 999,
-    backgroundColor: theme.colors.textSecondary,
+    backgroundColor: theme.colors.text.secondary,
   },
   detailBulletText: {
     flex: 1,
     fontSize: 12,
     lineHeight: 18,
-    color: theme.colors.textSecondary,
+    color: theme.colors.text.secondary,
   },
   detailActionButton: {
     minHeight: 38,
@@ -170,15 +234,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: theme.colors.divider,
-    backgroundColor: theme.colors.surfaceHigh,
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.inset,
     paddingHorizontal: 12,
   },
-  detailActionButtonPressed: {
-    opacity: 0.82,
-  },
   detailActionButtonText: {
-    color: theme.colors.text,
+    color: theme.colors.text.primary,
     ...Typography.header(),
     fontSize: 13,
   },
@@ -190,12 +251,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     justifyContent: "center",
     backgroundColor: theme.colors.button.primary.background,
     paddingHorizontal: 12,
-  },
-  applyButtonPressed: {
-    opacity: 0.82,
-  },
-  applyButtonDisabled: {
-    opacity: 0.5,
   },
   applyButtonText: {
     color: theme.colors.button.primary.tint,

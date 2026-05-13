@@ -30,7 +30,7 @@ export function AgentInputSelectionPopover(props: AgentInputSelectionPopoverProp
         Platform.OS === 'web'
             ? 'top'
             : keyboardHeight > 0
-                ? 'auto'
+                ? 'auto-vertical'
                 : 'top';
 
     return (
@@ -43,6 +43,7 @@ export function AgentInputSelectionPopover(props: AgentInputSelectionPopoverProp
             // new-session popover anchoring on native where we rely on a scroll boundary.
             boundaryRef={boundaryRef}
             placement={placement}
+            keyboardBottomInset={Platform.OS === 'web' ? 0 : keyboardHeight}
             gap={8}
             maxHeightCap={props.maxHeightCap}
             maxWidthCap={props.maxWidthCap}

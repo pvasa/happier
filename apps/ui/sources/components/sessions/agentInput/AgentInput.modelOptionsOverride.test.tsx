@@ -692,7 +692,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
         await screen.pressByTestIdAsync('agent-input-session-mode-chip');
 
         expect(onAcpSessionModeChange).toHaveBeenCalledWith('plan');
-        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeNull();
+        expect(screen.findByTestId('agent-input-selection-list-popover')).toBeNull();
     });
 
     it('calls onAcpSessionModeChange when selecting a preflight ACP mode', async () => {
@@ -722,8 +722,8 @@ describe('AgentInput (modelOptionsOverride)', () => {
         } as any));
 
         await screen.pressByTestIdAsync('agent-input-session-mode-chip');
-        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeTruthy();
-        await screen.pressByTestIdAsync('agent-input-simple-option:plan');
+        expect(screen.findByTestId('agent-input-selection-list-popover')).toBeTruthy();
+        await screen.pressByTestIdAsync('selection-list:session-mode-root:option:plan');
 
         expect(onAcpSessionModeChange).toHaveBeenCalledWith('plan');
     });
@@ -763,7 +763,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
 
         expect(onAcpSessionModeChange).toHaveBeenCalledWith('plan');
         expect(modalShowMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeNull();
+        expect(screen.findByTestId('agent-input-selection-list-popover')).toBeNull();
     });
 
     it('keeps the existing list icon and bare mode label when the selected ACP mode is Plan', async () => {
@@ -829,9 +829,9 @@ describe('AgentInput (modelOptionsOverride)', () => {
 
         expect(onAcpSessionModeChange).not.toHaveBeenCalled();
         expect(modalShowMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('agent-input-simple-options-popover')).toBeTruthy();
-        expect(screen.findByTestId('agent-input-simple-option:review')).toBeTruthy();
-        await screen.pressByTestIdAsync('agent-input-simple-option:build');
+        expect(screen.findByTestId('agent-input-selection-list-popover')).toBeTruthy();
+        expect(screen.findByTestId('selection-list:session-mode-root:option:review')).toBeTruthy();
+        await screen.pressByTestIdAsync('selection-list:session-mode-root:option:build');
         expect(onAcpSessionModeChange).toHaveBeenCalledWith('build');
     });
 
@@ -1383,7 +1383,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
             await pressTestInstanceAsync(modeAction, 'Build pressable');
 
             expect(screen.findByTestId('agent-input-action-menu-overlay')).toBeNull();
-            expect(screen.findByTestId('agent-input-simple-options-popover')).toBeNull();
+            expect(screen.findByTestId('agent-input-selection-list-popover')).toBeNull();
             expect(onAcpSessionModeChange).toHaveBeenCalledWith('plan');
         } finally {
             mockSessionModePickerControl = null;

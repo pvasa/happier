@@ -1,0 +1,129 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+    buildStructuredInputMetaOverrides,
+    reconcileStructuredInputMentionsWithText,
+    type ComposerStructuredInputMention,
+} from './structuredInputMentions';
+
+const vendorPluginMention = {
+    kind: 'vendorPlugin',
+    tokenText: '@gmail',
+    start: 5,
+    end: 11,
+    vendorPluginRef: 'plugin://gmail@openai-curated',
+    label: 'Gmail',
+} satisfies ComposerStructuredInputMention;
+
+const skillMention = {
+    kind: 'skill',
+    tokenText: '$review',
+    start: 12,
+    end: 19,
+    name: 'review',
+    path: '/skills/review/SKILL.md',
+    displayName: 'Review',
+    projectionKind: 'codex_native',
+} satisfies ComposerStructuredInputMention;
+
+describe('structured input mentions', () => {
+    it('keeps a selected mention when text changes before the token', () => {
+        const mentions = reconcileStructuredInputMentionsWithText({
+            previousText: 'Call @gmail',
+            nextText: 'Please Call @gmail',
+            mentions: [vendorPluginMention],
+        });
+
+        expect(mentions).toEqual([
+            expect.objectContaining({
+                kind: 'vendorPlugin',
+                start: 12,
+                end: 18,
+                vendorPluginRef: 'plugin://gmail@openai-curated',
+            }),
+        ]);
+    });
+
+    it('drops a selected mention when the token text is edited', () => {
+        const mentions = reconcileStructuredInputMentionsWithText({
+            previousText: 'Call @gmail',
+            nextText: 'Call @gmai',
+            mentions: [vendorPluginMention],
+        });
+
+        expect(mentions).toEqual([]);
+    });
+
+    it('does not infer a manually typed vendor plugin token', () => {
+        const meta = buildStructuredInputMetaOverrides({
+            mentions: [],
+            text: 'Call @gmail',
+        });
+
+        expect(meta).toEqual({});
+    });
+
+    it('builds one structured input envelope for selected vendor plugins and skills', () => {
+        const meta = buildStructuredInputMetaOverrides({
+            mentions: [vendorPluginMention, skillMention],
+            text: 'Call @gmail $review',
+        });
+
+        expect(meta).toMatchObject({
+            happierStructuredInputV1: {
+                v: 1,
+                vendorPluginMentions: [
+                    {
+                        vendorPluginRef: 'plugin://gmail@openai-curated',
+                        label: 'Gmail',
+                    },
+                ],
+                skillMentions: [
+                    {
+                        name: 'review',
+                        path: '/skills/review/SKILL.md',
+                        displayName: 'Review',
+                        projectionKind: 'codex_native',
+                    },
+                ],
+            },
+        });
+        expect(JSON.stringify(meta)).not.toContain('skill_content');
+    });
+
+    it('uses attachments as the structured image field', () => {
+        const meta = buildStructuredInputMetaOverrides({
+            attachments: [
+                {
+                    type: 'localImage',
+                    kind: 'image',
+                    localPath: '/tmp/happier/image.png',
+                    path: '/tmp/happier/image.png',
+                    mimeType: 'image/png',
+                    name: 'image.png',
+                    sizeBytes: 12,
+                    sha256: 'hash',
+                },
+            ],
+        });
+
+        expect(meta).toMatchObject({
+            happierStructuredInputV1: {
+                v: 1,
+                attachments: [
+                    {
+                        type: 'localImage',
+                        kind: 'image',
+                        localPath: '/tmp/happier/image.png',
+                        path: '/tmp/happier/image.png',
+                        mimeType: 'image/png',
+                        name: 'image.png',
+                        sizeBytes: 12,
+                        sha256: 'hash',
+                    },
+                ],
+            },
+        });
+        expect(JSON.stringify(meta)).not.toContain('imageInputs');
+    });
+});

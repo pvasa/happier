@@ -87,7 +87,8 @@ vi.mock('@/components/ui/layout/layout', () => ({
 
 vi.mock('@/sync/domains/state/storageStore', async () => {
     const { createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const store = createStorageStoreMock({ sessionMessages: {} } as any);
+    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    const store = createStorageStoreMock({ sessionMessages: {}, localSettings: localSettingsDefaults } as any);
     return {
         getStorage: () => store,
     };

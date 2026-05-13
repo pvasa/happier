@@ -88,9 +88,9 @@ export function getContextWarning(
         text: t('agentInput.context.remaining', { percent: Math.round(usageState.remainingWarningPercentage) }),
         color:
             usageState.severity === 'critical'
-                ? theme.colors.warningCritical
+                ? theme.colors.state.danger.foreground
                 : usageState.severity === 'warning'
-                    ? theme.colors.warning
-                    : theme.colors.textSecondary,
+                    ? theme.colors.state.neutral.foreground
+                    : theme.colors.text.secondary,
     };
 }

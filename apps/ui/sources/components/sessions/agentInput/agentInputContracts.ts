@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
+import type { SelectionListStep } from '@/components/ui/selectionList';
 
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import type { AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
@@ -42,6 +43,78 @@ export type AgentInputComposerAttachmentBadge = Readonly<{
     removeAccessibilityLabel?: string;
 }>;
 
+export type AgentInputStatusBadgeTone = 'neutral' | 'active' | 'paused' | 'warning' | 'complete';
+
+export type AgentInputStatusBadge = Readonly<{
+    key: string;
+    label: string;
+    testID?: string;
+    accessibilityLabel?: string;
+    tone?: AgentInputStatusBadgeTone;
+    icon?: (tint: string) => React.ReactNode;
+    onPress?: () => void;
+    renderPopover?: (ctx: Readonly<{
+        open: boolean;
+        anchorRef: React.RefObject<any>;
+        onRequestClose: () => void;
+    }>) => React.ReactNode;
+}>;
+
+/**
+ * Shared fields for every `collapsedOptionsPopover` descriptor. The branch-specific
+ * fields (`presentation`, `options`, `rootStep`) live on the discriminated union
+ * `AgentInputCollapsedOptionsPopover` below so that mixed `{ options, rootStep }`
+ * shapes are rejected at compile time.
+ */
+type AgentInputCollapsedOptionsPopoverBase = Readonly<{
+    title: string;
+    label?: string | null;
+    icon?: (tint: string) => React.ReactNode;
+    selectedOptionId?: string | null;
+    onSelect: (id: string) => void;
+    applyLabel?: string;
+    railWidth?: number;
+    railMaxWidth?: number | `${number}%`;
+    maxHeightCap?: number;
+    maxWidthCap?: number;
+}>;
+
+/**
+ * Discriminated union describing the popover that opens when an extra action
+ * chip is invoked from the collapsed action menu.
+ *
+ * - `'picker'` (default when `presentation` is omitted) — renders the chip-picker
+ *   rail+detail panel (`AgentInputChipPickerPopover`). Requires `options` and
+ *   forbids `rootStep`.
+ * - `'list'` — renders the SelectionList-driven popover
+ *   (`AgentInputSelectionListPopover`). Requires `rootStep` and forbids
+ *   `options`.
+ *
+ * Encoding this invariant in the type system guarantees that the routing site
+ * never observes a mixed `{ options, rootStep }` descriptor at runtime.
+ */
+export type AgentInputCollapsedOptionsPopover =
+    | (AgentInputCollapsedOptionsPopoverBase & Readonly<{
+        presentation?: 'picker';
+        options: ReadonlyArray<AgentInputChipPickerOption>;
+        rootStep?: undefined;
+    }>)
+    | (AgentInputCollapsedOptionsPopoverBase & Readonly<{
+        presentation: 'list';
+        rootStep: SelectionListStep;
+        options?: undefined;
+    }>);
+
+export function hasAgentInputCollapsedOptionsPopoverContent(
+    popover: AgentInputCollapsedOptionsPopover,
+): boolean {
+    if (popover.presentation === 'list') {
+        return popover.rootStep !== undefined;
+    }
+
+    return Array.isArray(popover.options) && popover.options.length > 0;
+}
+
 export type AgentInputExtraActionChip = Readonly<{
     key: string;
     controlId?: AgentInputControlId;
@@ -55,24 +128,7 @@ export type AgentInputExtraActionChip = Readonly<{
         dismiss: () => void;
         blurInput: () => void;
     }>) => ActionListItem | ReadonlyArray<ActionListItem>;
-    collapsedOptionsPopover?: Readonly<{
-        /**
-         * Controls which popover presentation is used when this chip is opened from the collapsed
-         * action menu. Defaults to the richer chip-picker panel.
-         */
-        presentation?: 'picker' | 'simple';
-        title: string;
-        label?: string | null;
-        icon?: (tint: string) => React.ReactNode;
-        options: ReadonlyArray<AgentInputChipPickerOption>;
-        selectedOptionId?: string | null;
-        onSelect: (id: string) => void;
-        applyLabel?: string;
-        railWidth?: number;
-        railMaxWidth?: number | `${number}%`;
-        maxHeightCap?: number;
-        maxWidthCap?: number;
-    }>;
+    collapsedOptionsPopover?: AgentInputCollapsedOptionsPopover;
     collapsedContentPopover?: Readonly<{
         title: string;
         label?: string | null;

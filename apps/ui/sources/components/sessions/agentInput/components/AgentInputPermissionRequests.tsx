@@ -5,10 +5,13 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 import { PermissionPromptCard } from '@/components/tools/shell/permissions/PermissionPromptCard';
+import { UserActionPromptCard } from '@/components/tools/shell/userActions/UserActionPromptCard';
+import { ApprovalPromptCard } from '@/components/tools/shell/approvals/ApprovalPromptCard';
 import { Typography } from '@/constants/Typography';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
+import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 
 const stylesheet = StyleSheet.create((theme) => ({
     permissionRequestsContainer: {
@@ -18,7 +21,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginTop: -2,
     },
     permissionRequestTitle: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 12,
         ...Typography.default('semiBold'),
     },
@@ -28,21 +31,38 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderBottomLeftRadius: 0,
         borderBottomRightRadius: 0,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHighest,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.elevated,
         overflow: 'hidden',
     },
     divider: {
         height: 1,
-        backgroundColor: theme.colors.divider,
+        backgroundColor: theme.colors.border.default,
         opacity: 1,
     },
 }));
 
-export const AgentInputPermissionRequests = React.memo(function AgentInputPermissionRequests(props: Readonly<{
+type AttentionRequest =
+    | Readonly<{ kind: 'provider_permission'; id: string; request: PendingPermissionRequest }>
+    | Readonly<{ kind: 'user_action'; id: string; request: PendingPermissionRequest }>
+    | Readonly<{ kind: 'action_approval'; id: string; request: OpenApprovalArtifactForSession }>;
+
+function getAttentionRequestKey(request: AttentionRequest): string {
+    switch (request.kind) {
+        case 'provider_permission':
+            return `permission:${request.id}`;
+        case 'user_action':
+            return `userAction:${request.id}`;
+        case 'action_approval':
+            return `approval:${request.id}`;
+    }
+}
+
+export const AgentInputAttentionRequests = React.memo(function AgentInputAttentionRequests(props: Readonly<{
     sessionId: string;
     permissionRequests: readonly PendingPermissionRequest[];
     userActionRequests?: readonly PendingPermissionRequest[];
+    approvalRequests?: readonly OpenApprovalArtifactForSession[];
     permissionLocationsById: ReadonlyMap<string, PermissionToolCallMessageLocation | null>;
     metadata: Metadata | null;
     canApprovePermissions: boolean;
@@ -56,10 +76,32 @@ export const AgentInputPermissionRequests = React.memo(function AgentInputPermis
     const styles = stylesheet;
     const { theme } = useUnistyles();
 
-    const permissionRequests = props.disabledReason === 'inactive' ? [] : props.permissionRequests;
+    const attentionRequests = React.useMemo(() => {
+        if (props.disabledReason === 'inactive') return [];
+
+        const userActionRequests = (props.userActionRequests ?? []).filter((request) => request.kind === 'user_action');
+
+        return [
+            ...props.permissionRequests.map((request): AttentionRequest => ({
+                kind: 'provider_permission',
+                id: request.id,
+                request,
+            })),
+            ...userActionRequests.map((request): AttentionRequest => ({
+                kind: 'user_action',
+                id: request.id,
+                request,
+            })),
+            ...(props.approvalRequests ?? []).map((request): AttentionRequest => ({
+                kind: 'action_approval',
+                id: request.artifact.id,
+                request,
+            })),
+        ];
+    }, [props.approvalRequests, props.disabledReason, props.permissionRequests, props.userActionRequests]);
     const scrollStyle = React.useMemo(() => ({ maxHeight: props.maxHeightPx }), [props.maxHeightPx]);
 
-    if (permissionRequests.length === 0) {
+    if (attentionRequests.length === 0) {
         return null;
     }
 
@@ -79,37 +121,58 @@ export const AgentInputPermissionRequests = React.memo(function AgentInputPermis
                         onScroll={props.onScroll}
                     >
                         <View style={{ paddingTop: 0 }}>
-                            {permissionRequests.map((req, index) => (
-                                <React.Fragment key={req.id}>
+                            {attentionRequests.map((entry, index) => (
+                                <React.Fragment key={getAttentionRequestKey(entry)}>
                                     {index > 0 ? (
                                         <View
-                                            testID={`agentInput.permissionRequests.divider:${req.id}`}
+                                            testID={`agentInput.permissionRequests.divider:${getAttentionRequestKey(entry)}`}
                                             style={styles.divider}
                                         />
                                     ) : null}
-                                    <PermissionPromptCard
-                                        chrome="inline"
-                                        request={req}
-                                        location={props.permissionLocationsById.get(req.id) ?? null}
-                                        sessionId={props.sessionId}
-                                        metadata={props.metadata}
-                                        canApprovePermissions={props.canApprovePermissions}
-                                        disabledReason={props.disabledReason}
-                                    />
+                                    {entry.kind === 'provider_permission' ? (
+                                        <PermissionPromptCard
+                                            chrome="inline"
+                                            request={entry.request}
+                                            location={props.permissionLocationsById.get(entry.request.id) ?? null}
+                                            sessionId={props.sessionId}
+                                            metadata={props.metadata}
+                                            canApprovePermissions={props.canApprovePermissions}
+                                            disabledReason={props.disabledReason}
+                                        />
+                                    ) : entry.kind === 'user_action' ? (
+                                        <UserActionPromptCard
+                                            chrome="inline"
+                                            request={entry.request}
+                                            location={props.permissionLocationsById.get(entry.request.id) ?? null}
+                                            sessionId={props.sessionId}
+                                            metadata={props.metadata}
+                                            canApprovePermissions={props.canApprovePermissions}
+                                            disabledReason={props.disabledReason}
+                                        />
+                                    ) : (
+                                        <ApprovalPromptCard
+                                            chrome="inline"
+                                            artifact={entry.request.artifact}
+                                            approval={entry.request.approval}
+                                            sessionId={props.sessionId}
+                                            canApprove={props.canApprovePermissions}
+                                            disabledReason={props.disabledReason}
+                                        />
+                                    )}
                                 </React.Fragment>
                             ))}
                         </View>
                     </ScrollView>
 
                     <ScrollEdgeFades
-                        color={theme.colors.surfaceHighest}
+                        color={theme.colors.surface.elevated}
                         edges={{
                             top: props.fadeVisibility?.top === true,
                             bottom: props.fadeVisibility?.bottom === true,
                         }}
                     />
                     <ScrollEdgeIndicators
-                        color={theme.colors.textSecondary}
+                        color={theme.colors.text.secondary}
                         edges={{
                             top: props.fadeVisibility?.top === true,
                             bottom: props.fadeVisibility?.bottom === true,
@@ -120,3 +183,5 @@ export const AgentInputPermissionRequests = React.memo(function AgentInputPermis
         </View>
     );
 });
+
+export const AgentInputPermissionRequests = AgentInputAttentionRequests;

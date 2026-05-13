@@ -1,18 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as React from 'react';
 import { Platform, Pressable, ScrollView, View } from 'react-native';
-import { usePathname, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { prepareMobileSurfaceTransition } from '@/components/navigation/mobile/transition/mobileSurfaceTransitionIntent';
 import type { CustomModalInjectedProps } from '@/modal';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import {
     hasReviewCommentDraftBody,
     normalizeReviewCommentDraftBody,
 } from '@/sync/domains/input/reviewComments/reviewCommentDraftBody';
+import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { isReviewCommentDraftIncludedInPrompt } from '@/sync/domains/input/reviewComments/reviewCommentPrompt';
 import { formatReviewCommentAnchorLabel } from '@/sync/domains/input/reviewComments/reviewCommentPresentation';
 import { t } from '@/text';
@@ -38,6 +39,7 @@ function renderSnippetLines(params: {
 
 export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Readonly<{
     sessionId?: string;
+    reviewScope?: WorkspaceScopeBase | null;
     reviewCommentDrafts: readonly ReviewCommentDraft[];
     onUpdateDraft: (draft: ReviewCommentDraft) => void;
     onDeleteDraft: (draftId: string) => void;
@@ -45,7 +47,6 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
-    const pathname = usePathname();
     const {
         onClose,
         onDeleteDraft,
@@ -56,6 +57,24 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
         ? props.sessionId
         : null;
     const [drafts, setDrafts] = React.useState(() => [...reviewCommentDrafts]);
+
+    React.useEffect(() => {
+        if (!props.reviewScope) return undefined;
+
+        let cancelled = false;
+        void resolveReviewCommentDraftAnchorsForPrompt({
+            drafts: reviewCommentDrafts,
+            reviewScope: props.reviewScope,
+        }).then((resolvedDrafts) => {
+            if (!cancelled) {
+                setDrafts(resolvedDrafts);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [props.reviewScope, reviewCommentDrafts]);
 
     const updateDraft = React.useCallback((draftId: string, updater: (draft: ReviewCommentDraft) => ReviewCommentDraft) => {
         setDrafts((current) => current.map((draft) => {
@@ -85,13 +104,8 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
             source: draft.source,
             anchor: draft.anchor,
         });
-        prepareMobileSurfaceTransition({
-            currentPathname: pathname,
-            targetHref: href,
-            operation: 'push',
-        });
         router.push(href as never);
-    }, [onClose, pathname, router, sessionId]);
+    }, [onClose, router, sessionId]);
 
     const closeModal = React.useCallback(() => {
         for (const draft of drafts) {
@@ -158,20 +172,20 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
                                     onPress={() => deleteDraft(draft.id)}
                                     testID={`review-comment-draft-delete:${draft.id}`}
                                 >
-                                    <Ionicons name="trash-outline" size={16} color={theme.colors.textDestructive ?? theme.colors.textSecondary} />
+                                    <Ionicons name="trash-outline" size={16} color={theme.colors.state.danger.foreground ?? theme.colors.text.secondary} />
                                 </Pressable>
                             </View>
 
                             <View style={styles.snippet} testID={`review-comment-draft-context-preview:${draft.id}`}>
                                 {renderSnippetLines({
                                     draftId: draft.id,
-                                    lines: draft.snapshot.beforeContext,
+                                    lines: (draft.anchorResolution?.preview ?? draft.snapshot).beforeContext,
                                     style: styles.snippetText,
                                     testIDPrefix: 'before-line',
                                 })}
                                 {renderSnippetLines({
                                     draftId: draft.id,
-                                    lines: draft.snapshot.selectedLines,
+                                    lines: (draft.anchorResolution?.preview ?? draft.snapshot).selectedLines,
                                     style: styles.snippetSelectedText,
                                     testIDPrefix: 'selected-line',
                                 })}
@@ -180,13 +194,13 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
                                     value={draft.body}
                                     onChangeText={(body) => updateDraft(draft.id, (current) => ({ ...current, body }))}
                                     placeholder={t('files.reviewComments.placeholder')}
-                                    placeholderTextColor={theme.colors.textSecondary}
+                                    placeholderTextColor={theme.colors.text.secondary}
                                     style={styles.commentInput}
                                     testID={`review-comment-draft-body:${draft.id}`}
                                 />
                                 {renderSnippetLines({
                                     draftId: draft.id,
-                                    lines: draft.snapshot.afterContext,
+                                    lines: (draft.anchorResolution?.preview ?? draft.snapshot).afterContext,
                                     style: styles.snippetText,
                                     testIDPrefix: 'after-line',
                                 })}
@@ -215,7 +229,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingBottom: 10,
     },
     summaryText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 13,
         ...Typography.default(),
     },
@@ -232,8 +246,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         padding: 12,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        backgroundColor: theme.colors.surfaceHigh,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.surface.inset,
     },
     cardHeader: {
         flexDirection: 'row',
@@ -253,20 +267,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.button.primary.background,
     },
     includeToggleOff: {
-        backgroundColor: theme.colors.surface,
-        borderColor: theme.colors.divider,
+        backgroundColor: theme.colors.surface.base,
+        borderColor: theme.colors.border.default,
     },
     titleColumn: {
         flex: 1,
         minWidth: 0,
     },
     filePathText: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 13,
         ...Typography.default('semiBold'),
     },
     anchorText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 11,
         ...Typography.default(),
     },
@@ -274,15 +288,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 3,
         padding: 10,
         borderRadius: 8,
-        backgroundColor: theme.colors.surfaceHighest ?? theme.colors.surface,
+        backgroundColor: theme.colors.surface.elevated ?? theme.colors.surface.base,
     },
     snippetText: {
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontSize: 12,
         ...Typography.mono(),
     },
     snippetSelectedText: {
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontSize: 12,
         ...Typography.mono(),
     },
@@ -292,9 +306,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         padding: 10,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: theme.colors.divider,
-        color: theme.colors.text,
-        backgroundColor: theme.colors.surfaceHighest ?? theme.colors.surface,
+        borderColor: theme.colors.border.default,
+        color: theme.colors.text.primary,
+        backgroundColor: theme.colors.surface.elevated ?? theme.colors.surface.base,
         fontSize: 13,
         ...Typography.default(),
         ...(Platform.select({
@@ -316,7 +330,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 8,
     },
     jumpButtonText: {
-        color: theme.colors.textLink ?? theme.colors.text,
+        color: theme.colors.text.link ?? theme.colors.text.primary,
         fontSize: 12,
         ...Typography.default('semiBold'),
     },
@@ -324,7 +338,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         padding: 12,
         alignItems: 'flex-end',
         borderTopWidth: 1,
-        borderTopColor: theme.colors.divider,
+        borderTopColor: theme.colors.border.default,
     },
     doneButton: {
         paddingHorizontal: 14,

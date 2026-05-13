@@ -84,9 +84,16 @@ vi.mock('@/components/tools/shell/permissions/PermissionPromptCard', () => ({
 vi.mock('@/components/tools/shell/userActions/UserActionPromptCard', () => ({
     UserActionPromptCard: (props: any) => React.createElement('UserActionPromptCard', props),
 }));
+vi.mock('@/components/tools/shell/approvals/ApprovalPromptCard', () => ({
+    ApprovalPromptCard: (props: any) => React.createElement('ApprovalPromptCard', props),
+}));
 
 vi.mock('@/sync/domains/state/storageStore', () => ({
     getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
+}));
+
+vi.mock('@/sync/store/hooks', () => ({
+    useLocalSetting: () => true,
 }));
 
 vi.mock('@/hooks/session/useUserMessageHistory', () => ({
@@ -333,7 +340,7 @@ describe('AgentInput (permission prompt surface)', () => {
         act(() => tree.unmount());
     });
 
-    it('does not show user action cards when surface is composer', async () => {
+    it('shows user action cards when surface is composer', async () => {
         permissionPromptSurfaceSetting.value = 'composer';
         const { AgentInput } = await import('./AgentInput');
         let tree!: renderer.ReactTestRenderer;
@@ -349,11 +356,11 @@ describe('AgentInput (permission prompt surface)', () => {
                     connectionStatus={null as any}
                 />)).tree;
 
-        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(0);
+        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(1);
         act(() => tree.unmount());
     });
 
-    it('does not show user action cards for legacy requests without an explicit kind', async () => {
+    it('shows approval cards when surface is composer', async () => {
         permissionPromptSurfaceSetting.value = 'composer';
         const { AgentInput } = await import('./AgentInput');
         let tree!: renderer.ReactTestRenderer;
@@ -365,11 +372,23 @@ describe('AgentInput (permission prompt surface)', () => {
                     autocompletePrefixes={[]}
                     autocompleteSuggestions={async () => []}
                     sessionId="s1"
-                    userActionRequests={[{ id: 'q1', tool: 'AskUserQuestion', arguments: { questions: [{ header: 'Mode', question: 'Create?', options: [{ label: 'Yes', description: 'Create it' }], multiSelect: false }] }, createdAt: 1 } as any]}
+                    approvalRequests={[{
+                        artifact: { id: 'a1' },
+                        approval: {
+                            v: 1,
+                            status: 'open',
+                            createdAtMs: 1,
+                            updatedAtMs: 1,
+                            createdBy: { surface: 'session_agent', sessionId: 's1' },
+                            actionId: 'session.list',
+                            actionArgs: {},
+                            summary: 'List sessions',
+                        },
+                    } as any]}
                     connectionStatus={null as any}
                 />)).tree;
 
-        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(0);
+        expect(tree.findAllByType('ApprovalPromptCard' as any)).toHaveLength(1);
         act(() => tree.unmount());
     });
 });

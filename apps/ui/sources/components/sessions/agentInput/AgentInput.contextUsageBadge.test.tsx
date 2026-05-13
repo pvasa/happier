@@ -102,7 +102,8 @@ vi.mock('@/components/ui/layout/layout', () => ({
 
 vi.mock('@/sync/domains/state/storageStore', async () => {
     const { createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const store = createStorageStoreMock({ sessionMessages: {} } as any);
+    const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    const store = createStorageStoreMock({ sessionMessages: {}, localSettings: localSettingsDefaults } as any);
     return {
         getStorage: () => store,
     };
@@ -405,6 +406,114 @@ describe('AgentInput (context usage badge)', () => {
 
         expect(screen.findByTestId('agent-input-context-usage-badge')).toBeTruthy();
         expect(screen.findByTestId('agent-input-context-usage-value')?.props.children).toBe('19');
+
+        act(() => screen.tree.unmount());
+    });
+
+    it('renders status badges next to the connection status without moving trailing usage', async () => {
+        captured.last = null;
+        const { AgentInput } = await import('./AgentInput');
+        const onPress = vi.fn();
+
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                connectionStatus={{
+                    text: 'online',
+                    color: 'green',
+                    dotColor: 'green',
+                }}
+                agentType={"claude" as any}
+                statusBadges={[
+                    {
+                        key: 'work-state',
+                        label: 'Goal: migrate plugin support',
+                        testID: 'session-work-state-status-badge',
+                        accessibilityLabel: 'Session work state',
+                        onPress,
+                    },
+                ] as any}
+                usageData={{
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheCreation: 0,
+                    cacheRead: 0,
+                    contextSize: 38_691,
+                }}
+                alwaysShowContextSize={true}
+            />,
+        );
+
+        const badge = screen.findByTestId('session-work-state-status-badge');
+        expect(badge).toBeTruthy();
+        expect(screen.findByTestId('agent-input-status-trailing')).toBeTruthy();
+        expect(screen.findByTestId('agent-input-context-usage-badge')).toBeTruthy();
+
+        act(() => {
+            badge?.props.onPress?.({} as never);
+        });
+        expect(onPress).toHaveBeenCalledTimes(1);
+
+        act(() => screen.tree.unmount());
+    });
+
+    it('opens a click-persistent status badge popover from the badge press', async () => {
+        captured.last = null;
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                connectionStatus={{
+                    text: 'online',
+                    color: 'green',
+                    dotColor: 'green',
+                }}
+                agentType={"claude" as any}
+                statusBadges={[
+                    {
+                        key: 'work-state',
+                        label: 'Goal: migrate plugin support',
+                        testID: 'session-work-state-status-badge',
+                        accessibilityLabel: 'Session work state',
+                        renderPopover: (ctx: Readonly<{
+                            open: boolean;
+                            onRequestClose: () => void;
+                        }>) => ctx.open
+                            ? React.createElement('WorkStatePopover', {
+                                testID: 'session-work-state-popover',
+                                onRequestClose: ctx.onRequestClose,
+                            })
+                            : null,
+                    },
+                ] as any}
+            />,
+        );
+
+        expect(screen.findByTestId('session-work-state-popover')).toBeNull();
+
+        const badge = screen.findByTestId('session-work-state-status-badge');
+        act(() => {
+            badge?.props.onPress?.({} as never);
+        });
+
+        const popover = screen.findByTestId('session-work-state-popover');
+        expect(popover).toBeTruthy();
+
+        act(() => {
+            popover?.props.onRequestClose();
+        });
+        expect(screen.findByTestId('session-work-state-popover')).toBeNull();
 
         act(() => screen.tree.unmount());
     });

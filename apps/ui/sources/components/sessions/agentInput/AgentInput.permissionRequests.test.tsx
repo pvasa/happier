@@ -92,6 +92,10 @@ vi.mock('@/sync/domains/state/storageStore', () => ({
     getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
 }));
 
+vi.mock('@/sync/store/hooks', () => ({
+    useLocalSetting: () => true,
+}));
+
 vi.mock('@/agents/catalog/catalog', () => ({
     AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
     DEFAULT_AGENT_ID: 'codex',
@@ -258,7 +262,7 @@ vi.mock('@/components/ui/layout/layout', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}), mono: () => ({}), header: () => ({}) },
+    Typography: { default: () => ({}), mono: () => ({}), header: () => ({}), eyebrow: () => ({}), keyHint: () => ({}) },
 }));
 
 vi.mock('./ResumeChip', () => ({

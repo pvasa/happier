@@ -10,6 +10,7 @@ import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 const mocks = vi.hoisted(() => ({
     onChangeText: vi.fn(),
     onSend: vi.fn(),
+    inputFocus: vi.fn(),
     inputBlur: vi.fn(),
     suggestionMoveUp: vi.fn(),
     suggestionMoveDown: vi.fn(),
@@ -23,6 +24,10 @@ const settingState = vi.hoisted(() => ({
 const hardwareShiftEnterState = vi.hoisted(() => ({
     listener: null as null | (() => void),
     remove: vi.fn(),
+}));
+
+const keyboardShortcutState = vi.hoisted(() => ({
+    useHandlers: vi.fn(),
 }));
 
 installAgentInputCommonModuleMocks({
@@ -89,6 +94,10 @@ vi.mock('@/sync/store/hooks', () => ({
     useLocalSetting: () => 1,
 }));
 
+vi.mock('@/keyboard/KeyboardShortcutProvider', () => ({
+    useKeyboardShortcutHandlers: (handlers: unknown) => keyboardShortcutState.useHandlers(handlers),
+}));
+
 vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
 }));
@@ -136,7 +145,7 @@ vi.mock('@/components/ui/forms/MultiTextInput', () => ({
                 props.onChangeText?.(text);
                 props.onStateChange?.({ text, selection });
             },
-            focus: () => {},
+            focus: mocks.inputFocus,
             blur: mocks.inputBlur,
         }));
         return React.createElement('MultiTextInput', props, null);
@@ -227,6 +236,37 @@ describe('AgentInput (enter to send on native)', () => {
         settingState.nativeEnterToSend = true;
         hardwareShiftEnterState.listener = null;
         vi.clearAllMocks();
+    });
+
+    it('registers composer focus shortcuts through the central keyboard provider', async () => {
+        const onAbort = vi.fn();
+        const { AgentInput } = await import('./AgentInput');
+        await renderScreen(
+            <AgentInput
+                sessionId="session-1"
+                value="hello"
+                onChangeText={mocks.onChangeText}
+                placeholder="p"
+                onSend={mocks.onSend}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                isSendDisabled={false}
+                disabled={false}
+                showAbortButton={true}
+                onAbort={onAbort}
+            />,
+        );
+
+        const registeredHandlers = keyboardShortcutState.useHandlers.mock.calls.at(-1)?.[0] as Record<string, () => void>;
+
+        expect(registeredHandlers['composer.focus']).toEqual(expect.any(Function));
+        expect(registeredHandlers['composer.abortConfirm']).toEqual(expect.any(Function));
+
+        await act(async () => {
+            registeredHandlers['composer.focus']();
+        });
+
+        expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
     });
 
     it('uses a 16 point input text base for existing sessions and new sessions', async () => {
@@ -331,7 +371,7 @@ describe('AgentInput (enter to send on native)', () => {
         expect(mocks.onSend).not.toHaveBeenCalled();
     });
 
-    it('uses immediate-send bypass on hardware Cmd+Enter and Ctrl+Enter', async () => {
+    it('uses platform-correct immediate-send bypass for native hardware Mod+Enter', async () => {
         settingState.webEnterToSend = false;
         settingState.nativeEnterToSend = false;
 
@@ -358,6 +398,9 @@ describe('AgentInput (enter to send on native)', () => {
         });
         await act(async () => {
             input.props.onKeyPress?.({ key: 'Enter', shiftKey: false, ctrlKey: true });
+        });
+        await act(async () => {
+            input.props.onKeyPress?.({ key: 'Enter', shiftKey: false, ctrlKey: true, platformOS: 'android' });
         });
 
         expect(mocks.onSend).toHaveBeenCalledTimes(2);

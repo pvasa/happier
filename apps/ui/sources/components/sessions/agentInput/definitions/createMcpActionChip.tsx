@@ -25,6 +25,7 @@ export function createMcpActionChip(params: Readonly<{
             renderContent: params.popoverContent,
             maxHeightCap: params.maxHeightCap,
             maxWidthCap: params.maxWidthCap,
+            scrollEnabled: false,
         },
         render: ({ chipStyle, iconColor, showLabel, textStyle, countTextStyle, chipAnchorRef, toggleCollapsedPopover }) => (
             <Pressable
