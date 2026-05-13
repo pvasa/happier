@@ -290,7 +290,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       <ItemList>
         <ItemGroup title={t('settings.connectedAccounts')}>
           <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-            <Text style={{ color: theme.colors.textSecondary }}>{t('settings.connectedAccountsDisabled')}</Text>
+            <Text style={{ color: theme.colors.text.secondary }}>{t('settings.connectedAccountsDisabled')}</Text>
           </View>
         </ItemGroup>
       </ItemList>
@@ -302,7 +302,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       <ItemList>
         <ItemGroup title={t('connectedServices.title')}>
           <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-            <Text style={{ color: theme.colors.textSecondary }}>{t('connectedServices.detail.unknownService')}</Text>
+            <Text style={{ color: theme.colors.text.secondary }}>{t('connectedServices.detail.unknownService')}</Text>
           </View>
         </ItemGroup>
       </ItemList>
