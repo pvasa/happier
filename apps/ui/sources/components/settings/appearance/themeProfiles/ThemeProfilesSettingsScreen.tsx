@@ -10,6 +10,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { resolveStatusBarStyleForThemePreference, type ThemePreference } from '@/components/ui/layout/statusBarStyle';
 import { runThemePreferenceChange } from '@/components/settings/appearance/themePreferenceTransition';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -42,6 +43,7 @@ export const ThemeProfilesSettingsScreen = React.memo(function ThemeProfilesSett
     const reduceMotion = useReducedMotionPreference();
     const [themePreference, setThemePreference] = useLocalSettingMutable('themePreference');
     const [themeProfiles, setThemeProfiles] = useLocalSettingMutable('themeProfiles');
+    const [builtInDropdownOpen, setBuiltInDropdownOpen] = React.useState(false);
     const presetOptions = React.useMemo(() => buildThemePresetSourceOptions(themeProfiles), [themeProfiles]);
     const customPresetOptions = React.useMemo(() => presetOptions.filter((option) => option.kind === 'custom'), [presetOptions]);
     const builtInPresetOptions = React.useMemo(() => presetOptions.filter((option) => option.kind !== 'custom'), [presetOptions]);
@@ -63,6 +65,7 @@ export const ThemeProfilesSettingsScreen = React.memo(function ThemeProfilesSett
             nextPreference: nextThemePreference,
             platform: Platform.OS,
             reduceMotion,
+            forceAnimate: true,
             systemTheme,
             mutation: () => {
                 setThemePreference(nextThemePreference);
@@ -198,10 +201,46 @@ export const ThemeProfilesSettingsScreen = React.memo(function ThemeProfilesSett
         );
     }, [activatePresetOption, activeThemeId, renderPresetActions, theme.colors.accent.indigo, theme.colors.status.connecting]);
 
+    const builtInDropdownItems = React.useMemo((): readonly DropdownMenuItem[] => (
+        builtInPresetOptions.map((option) => {
+            const iconName = option.kind === 'builtIn' ? 'sparkles-outline' : option.id === 'dark' ? 'moon-outline' : 'sunny-outline';
+            return {
+                id: option.id,
+                testID: `settings-theme-profile-built-in-option-${option.id}`,
+                title: option.title,
+                subtitle: option.subtitle,
+                icon: <Ionicons name={iconName} size={22} color={option.kind === 'builtIn' ? theme.colors.accent.indigo : theme.colors.status.connecting} />,
+                rightElement: renderPresetActions(option),
+            };
+        })
+    ), [builtInPresetOptions, renderPresetActions, theme.colors.accent.indigo, theme.colors.status.connecting]);
+
     return (
         <ItemList testID="settings-theme-profiles-screen" style={{ paddingTop: 0 }}>
             <ItemGroup title={t('settingsAppearance.themeProfiles.builtInGroup')} footer={t('settingsAppearance.themeProfiles.builtInFooter')}>
-                {builtInPresetOptions.map(renderPresetRow)}
+                <DropdownMenu
+                    open={builtInDropdownOpen}
+                    onOpenChange={setBuiltInDropdownOpen}
+                    variant="selectable"
+                    search
+                    selectedId={activeThemeId}
+                    showCategoryTitles={false}
+                    matchTriggerWidth
+                    connectToTrigger
+                    rowKind="item"
+                    itemTrigger={{
+                        title: t('settingsAppearance.themeProfiles.builtInGroup'),
+                        subtitle: t('settingsAppearance.themeProfiles.builtInFooter'),
+                        icon: <Ionicons name="sparkles-outline" size={28} color={theme.colors.accent.indigo} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-theme-profile-built-in-dropdown-trigger' },
+                    }}
+                    items={builtInDropdownItems}
+                    onSelect={(itemId) => {
+                        const option = builtInPresetOptions.find((entry) => entry.id === itemId);
+                        if (option) activatePresetOption(option);
+                    }}
+                />
             </ItemGroup>
 
             {customPresetOptions.length > 0 ? (

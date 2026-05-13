@@ -233,8 +233,8 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const effectiveIncludeCoAuthoredBy = scmIncludeCoAuthoredBy === true;
 
     const renderIcon = React.useCallback((iconName: IoniconName) => (
-        <Ionicons name={iconName} size={29} color={theme.colors.textSecondary} />
-    ), [theme.colors.textSecondary]);
+        <Ionicons name={iconName} size={29} color={theme.colors.text.secondary} />
+    ), [theme.colors.text.secondary]);
 
     return (
         <ItemList style={{ paddingTop: 0 }}>
@@ -371,16 +371,16 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                       <TextInput
                         style={{
                             borderWidth: 1,
-                            borderColor: theme.colors.divider,
+                            borderColor: theme.colors.border.default,
                             borderRadius: 10,
                             paddingHorizontal: 12,
                             paddingVertical: 10,
                             height: 110,
                             textAlignVertical: 'top' as any,
-                            color: theme.colors.text,
+                            color: theme.colors.text.primary,
                         }}
                         placeholder={t('settingsSourceControl.commitMessageGenerator.instructionsPlaceholder')}
-                        placeholderTextColor={theme.colors.textSecondary}
+                        placeholderTextColor={theme.colors.input.placeholder}
                         value={effectiveCommitMessageGeneratorInstructions}
                         multiline={true}
                         onChangeText={(value) => setScmCommitMessageGeneratorInstructions(String(value))}

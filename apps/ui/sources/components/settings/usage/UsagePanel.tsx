@@ -30,7 +30,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: 8,
         paddingHorizontal: 12,
         borderRadius: 8,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         alignItems: 'center',
     },
     periodButtonActive: {
@@ -38,7 +38,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     periodText: {
         fontSize: 14,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         fontWeight: '500',
     },
     periodTextActive: {
@@ -46,7 +46,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     statsContainer: {
         padding: 16,
-        backgroundColor: theme.colors.surface,
+        backgroundColor: theme.colors.surface.base,
         margin: 16,
         borderRadius: 12,
         gap: 12,
@@ -58,12 +58,12 @@ const styles = StyleSheet.create((theme) => ({
     },
     statLabel: {
         fontSize: 16,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     statValue: {
         fontSize: 20,
         fontWeight: '700',
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     chartSection: {
         marginTop: 16,
@@ -71,7 +71,7 @@ const styles = StyleSheet.create((theme) => ({
     sectionTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
         marginHorizontal: 16,
         marginBottom: 8,
     },
@@ -100,14 +100,14 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: 6,
         paddingHorizontal: 16,
         borderRadius: 16,
-        backgroundColor: theme.colors.divider,
+        backgroundColor: theme.colors.border.default,
     },
     metricButtonActive: {
         backgroundColor: theme.colors.accent.blue,
     },
     metricText: {
         fontSize: 14,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontWeight: '500',
     },
     metricTextActive: {

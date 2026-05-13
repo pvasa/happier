@@ -52,7 +52,7 @@ export function PetsLocalLibrarySection(props: PetsLocalLibrarySectionProps): Re
                                 subtitle={t('settingsPets.removeFromDeviceDaemonErrorSubtitle', {
                                     code: props.removalDiagnostic.code,
                                 })}
-                                icon={<Ionicons name="warning-outline" size={25} color={theme.colors.warningCritical} />}
+                                icon={<Ionicons name="warning-outline" size={25} color={theme.colors.state.danger.foreground} />}
                                 detail={props.removalDiagnostic.code}
                                 mode="info"
                             />
@@ -64,7 +64,7 @@ export function PetsLocalLibrarySection(props: PetsLocalLibrarySectionProps): Re
                         testID="settings-pets-help-docs"
                         title={t('settingsPets.helpDocsTitle')}
                         subtitle={t('settingsPets.helpDocsSubtitle')}
-                        icon={<Ionicons name="help-circle-outline" size={25} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="help-circle-outline" size={25} color={theme.colors.text.secondary} />}
                         onPress={() => void openExternalUrl(PETS_HELP_URL)}
                     />
                 </ItemGroup>
@@ -128,7 +128,7 @@ function PetsDetectedCodexState(props: Readonly<{
                             subtitle={t('settingsPets.importToDeviceDaemonErrorSubtitle', {
                                 code: props.importDiagnostic.code,
                             })}
-                            icon={<Ionicons name="warning-outline" size={25} color={theme.colors.warningCritical} />}
+                            icon={<Ionicons name="warning-outline" size={25} color={theme.colors.state.danger.foreground} />}
                             detail={props.importDiagnostic.code}
                             mode="info"
                         />
@@ -145,7 +145,7 @@ function PetsDetectedCodexState(props: Readonly<{
                     <Item
                         title={t('settingsPets.detectedCodexPetsEmptyTitle')}
                         subtitle={t('settingsPets.detectedCodexPetsEmptySubtitle')}
-                        icon={<Ionicons name="file-tray-outline" size={25} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="file-tray-outline" size={25} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                 </ItemGroup>
@@ -160,7 +160,7 @@ function PetsDetectedCodexState(props: Readonly<{
                     <Item
                         title={t('settingsPets.detectedCodexPetsNoTargetTitle')}
                         subtitle={t('settingsPets.detectedCodexPetsNoTargetSubtitle')}
-                        icon={<Ionicons name="cloud-offline-outline" size={25} color={theme.colors.warningCritical} />}
+                        icon={<Ionicons name="cloud-offline-outline" size={25} color={theme.colors.state.danger.foreground} />}
                         mode="info"
                     />
                 </ItemGroup>
@@ -175,7 +175,7 @@ function PetsDetectedCodexState(props: Readonly<{
                     <Item
                         title={t('settingsPets.detectedCodexPetsErrorTitle')}
                         subtitle={t('settingsPets.detectedCodexPetsErrorSubtitle')}
-                        icon={<Ionicons name="warning-outline" size={25} color={theme.colors.warningCritical} />}
+                        icon={<Ionicons name="warning-outline" size={25} color={theme.colors.state.danger.foreground} />}
                         mode="info"
                     />
                 </ItemGroup>
@@ -190,7 +190,7 @@ function PetsDetectedCodexState(props: Readonly<{
                     <Item
                         title={t('settingsPets.detectedCodexPetsDaemonMismatchTitle')}
                         subtitle={t('settingsPets.detectedCodexPetsDaemonMismatchSubtitle')}
-                        icon={<Ionicons name="refresh-outline" size={25} color={theme.colors.warningCritical} />}
+                        icon={<Ionicons name="refresh-outline" size={25} color={theme.colors.state.danger.foreground} />}
                         mode="info"
                     />
                 </ItemGroup>

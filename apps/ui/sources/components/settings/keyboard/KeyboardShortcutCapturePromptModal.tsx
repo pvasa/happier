@@ -113,7 +113,7 @@ export function KeyboardShortcutCapturePromptModal(props: KeyboardShortcutCaptur
                     autoFocus={true}
                     value={value}
                     placeholder={props.placeholder}
-                    placeholderTextColor={theme.colors.text.tertiary}
+                    placeholderTextColor={theme.colors.input.placeholder}
                     onChangeText={setValue}
                     onKeyPress={captureShortcut}
                     selectTextOnFocus={true}

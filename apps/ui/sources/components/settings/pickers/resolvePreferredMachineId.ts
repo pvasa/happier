@@ -1,4 +1,5 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 type RecentMachinePathEntry = Readonly<{ machineId?: string | null }> | null | undefined;
@@ -28,14 +29,15 @@ export function listPreferredMachineIds(params: Readonly<{
   const ordered: string[] = [];
   const seen = new Set<string>();
 
-  const pushIfEligible = (machineId: unknown) => {
-    const normalizedMachineId = normalizeId(machineId);
-    if (!normalizedMachineId) return;
-    const machine = machineById.get(normalizedMachineId);
-    if (!machine) return;
-    if (onlineOnly && !isMachineOnline(machine)) return;
-    pushUniqueMachineId(ordered, seen, normalizedMachineId);
-  };
+    const pushIfEligible = (machineId: unknown) => {
+        const normalizedMachineId = normalizeId(machineId);
+        if (!normalizedMachineId) return;
+        const machine = machineById.get(normalizedMachineId);
+        if (!machine) return;
+        if (!isMachineVisibleForLaunchSelection(machine)) return;
+        if (onlineOnly && !isMachineOnline(machine)) return;
+        pushUniqueMachineId(ordered, seen, normalizedMachineId);
+    };
 
   if (preferredMachineId) {
     pushIfEligible(preferredMachineId);
@@ -46,6 +48,7 @@ export function listPreferredMachineIds(params: Readonly<{
   }
 
   for (const machine of machines) {
+    if (!isMachineVisibleForLaunchSelection(machine)) continue;
     if (isMachineOnline(machine)) {
       pushUniqueMachineId(ordered, seen, machine.id);
     }
@@ -64,6 +67,7 @@ export function listPreferredMachineIds(params: Readonly<{
   }
 
   for (const machine of machines) {
+    if (!isMachineVisibleForLaunchSelection(machine)) continue;
     pushUniqueMachineId(ordered, seen, machine.id);
   }
 

@@ -392,7 +392,7 @@ export function PetsSettingsScreen() {
                         subtitle={t(companionDisabledByServer
                             ? 'settingsPets.disabledByServerSubtitle'
                             : 'settingsPets.disabledSubtitle')}
-                        icon={<Ionicons name="paw-outline" size={25} color={theme.colors.textSecondary} />}
+                        icon={<Ionicons name="paw-outline" size={25} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
                 </ItemGroup>

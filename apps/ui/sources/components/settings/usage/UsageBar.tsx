@@ -23,16 +23,16 @@ const styles = StyleSheet.create((theme) => ({
     },
     label: {
         fontSize: 14,
-        color: theme.colors.text,
+        color: theme.colors.text.primary,
     },
     value: {
         fontSize: 14,
-        color: theme.colors.textSecondary,
+        color: theme.colors.text.secondary,
         fontWeight: '600',
     },
     barContainer: {
         height: 8,
-        backgroundColor: theme.colors.divider,
+        backgroundColor: theme.colors.border.default,
         borderRadius: 4,
         overflow: 'hidden',
     },

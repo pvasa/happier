@@ -81,7 +81,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
     const builtInItems = new Map(
       getAgentDropdownMenuItems({
         agentIds: enabledAgentIds as any,
-        iconColor: theme.colors.textSecondary,
+        iconColor: theme.colors.text.secondary,
       }).map((item) => [item.id, item]),
     );
 
@@ -100,21 +100,21 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
         id: entry.targetKey,
         title: entry.title,
         subtitle: entry.subtitle ?? undefined,
-        icon: <Ionicons name="sparkles-outline" size={22} color={theme.colors.textSecondary} />,
+        icon: <Ionicons name="sparkles-outline" size={22} color={theme.colors.text.secondary} />,
       };
     });
-  }, [backendEntries, enabledAgentIds, theme.colors.textSecondary]);
+  }, [backendEntries, enabledAgentIds, theme.colors.text.secondary]);
 
   const selectableModelMenuItems = React.useMemo(() => {
     return getModelDropdownMenuItems({
       modelOptions: preflightModels.modelOptions,
-      iconColor: theme.colors.textSecondary,
+      iconColor: theme.colors.text.secondary,
       probe: {
         phase: preflightModels.probe.phase,
         onRefresh: preflightModels.probe.onRefresh,
       },
     });
-  }, [preflightModels.modelOptions, preflightModels.probe.onRefresh, preflightModels.probe.phase, theme.colors.textSecondary]);
+  }, [preflightModels.modelOptions, preflightModels.probe.onRefresh, preflightModels.probe.phase, theme.colors.text.secondary]);
 
   const modelMenuItems = React.useMemo(() => {
     return [
@@ -123,10 +123,10 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
         id: '__custom__',
         title: t('settingsSession.replayResume.summaryRunner.customTitle'),
         subtitle: t('settingsSession.replayResume.summaryRunner.customModelIdSubtitle'),
-        icon: <Ionicons name="create-outline" size={22} color={theme.colors.textSecondary} />,
+        icon: <Ionicons name="create-outline" size={22} color={theme.colors.text.secondary} />,
       },
     ];
-  }, [selectableModelMenuItems, theme.colors.textSecondary]);
+  }, [selectableModelMenuItems, theme.colors.text.secondary]);
 
   const selectedBackendLabel = React.useMemo(() => {
     return selectedBackendEntry?.title ?? t('settingsSession.replayResume.summaryRunner.notSet');
@@ -143,7 +143,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
     <>
       <View style={{ gap: 8 }}>
         {showLabels ? (
-          <Text style={{ fontSize: 12, fontWeight: '500', color: theme.colors.textSecondary }}>
+          <Text style={{ fontSize: 12, fontWeight: '500', color: theme.colors.text.secondary }}>
             {t('settingsSession.replayResume.summaryRunner.backendTitle')}
           </Text>
         ) : null}
@@ -190,7 +190,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
       />
 
       {showLabels ? (
-        <Text style={{ fontSize: 12, fontWeight: '500', color: theme.colors.textSecondary }}>
+        <Text style={{ fontSize: 12, fontWeight: '500', color: theme.colors.text.secondary }}>
           {t('settingsSession.replayResume.summaryRunner.modelTitle')}
         </Text>
       ) : null}

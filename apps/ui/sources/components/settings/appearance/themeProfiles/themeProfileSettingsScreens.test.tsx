@@ -8,6 +8,7 @@ import { THEME_PROFILE_MAX_PROFILES } from '@/theme/profiles/themeProfileConstan
 import type { ThemeProfilesLocalStateV1, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
 import { exportThemeProfileToJson } from '@/theme/profiles/themeProfileImportExport';
 import { getBuiltInThemeProfileDefinition } from '@/theme/profiles/builtInThemeProfiles';
+import type { ItemAction } from '@/components/ui/lists/itemActions';
 
 const testGlobal = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean };
 testGlobal.IS_REACT_ACT_ENVIRONMENT = true;
@@ -149,6 +150,19 @@ const findPresetDropdown = async (screen: Awaited<ReturnType<typeof renderSettin
         .find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.themeProfiles.presetSource');
 };
 
+const findBuiltInThemesDropdown = async (screen: Awaited<ReturnType<typeof renderSettingsView>>) => {
+    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+    return screen.findAllByType(DropdownMenu as any)
+        .find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.themeProfiles.builtInGroup');
+};
+
+const findRowActionsInNode = (node: React.ReactNode): ItemAction[] => {
+    if (!React.isValidElement(node)) return [];
+    const props = node.props as { actions?: ItemAction[]; children?: React.ReactNode };
+    if (Array.isArray(props.actions)) return props.actions;
+    return React.Children.toArray(props.children).flatMap(findRowActionsInNode);
+};
+
 async function renderProfilesScreen() {
     const mod = await import('./ThemeProfilesSettingsScreen');
     return renderSettingsView(React.createElement(mod.ThemeProfilesSettingsScreen), { flushOptions: { cycles: 0 } });
@@ -201,27 +215,33 @@ afterEach(() => {
 });
 
 describe('Theme profile settings screen', () => {
-    it('renders built-in themes as management rows and shows custom themes only when they exist', async () => {
+    it('renders built-in themes in a management dropdown and shows custom themes only when they exist', async () => {
         setThemeProfiles({ activeProfileId: null, profiles: [baseProfile('theme_ocean')] });
         const screen = await renderProfilesScreen();
 
         expect(screen.findByTestId('settings-theme-profiles-screen')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-light')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-dark')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-premiumDark')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-nightDark')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-catppuccinMocha')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-catppuccinMacchiato')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-catppuccinFrappe')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-oneDarkPro')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-monokaiPro')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-githubDark')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-darkModern')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-premiumLight')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-catppuccinLatte')).not.toBeNull();
-        expect(screen.findByTestId('settings-theme-profile-built-in-githubLight')).not.toBeNull();
+        expect(screen.findByTestId('settings-theme-profile-built-in-dropdown-trigger')).not.toBeNull();
+        expect(screen.findByTestId('settings-theme-profile-built-in-premiumDark')).toBeNull();
         expect(screen.findByTestId('settings-theme-profile-custom-theme_ocean')).not.toBeNull();
         expect(screen.findByTestId('settings-theme-selector-trigger')).toBeNull();
+
+        const builtInDropdown = await findBuiltInThemesDropdown(screen);
+        expect(builtInDropdown?.props.items.map((item: { id: string }) => item.id)).toEqual([
+            'light',
+            'dark',
+            'premiumDark',
+            'nightDark',
+            'catppuccinMocha',
+            'catppuccinMacchiato',
+            'catppuccinFrappe',
+            'oneDarkPro',
+            'monokaiPro',
+            'githubDark',
+            'darkModern',
+            'premiumLight',
+            'catppuccinLatte',
+            'githubLight',
+        ]);
     });
 
     it('does not render a custom themes section when there are no custom profiles', async () => {
@@ -231,10 +251,14 @@ describe('Theme profile settings screen', () => {
         expect(screen.findByTestId('settings-theme-profile-create')).not.toBeNull();
     });
 
-    it('activates a built-in theme from its row without storing it as a custom profile', async () => {
+    it('activates a built-in theme from the built-in dropdown without storing it as a custom profile', async () => {
         const screen = await renderProfilesScreen();
 
-        await screen.pressByTestIdAsync('settings-theme-profile-built-in-premiumDark');
+        const builtInDropdown = await findBuiltInThemesDropdown(screen);
+
+        await act(async () => {
+            builtInDropdown!.props.onSelect('premiumDark');
+        });
 
         expect(getThemeProfiles().profiles).toEqual([]);
         expect(getThemeProfiles().activeProfileId).toBe('premiumDark');
@@ -243,7 +267,13 @@ describe('Theme profile settings screen', () => {
 
     it('duplicates a built-in theme from row actions and opens its editor', async () => {
         const screen = await renderProfilesScreen();
-        await screen.pressByTestIdAsync('settings-theme-duplicate-premiumDark');
+        const builtInDropdown = await findBuiltInThemesDropdown(screen);
+        const premiumDarkItem = builtInDropdown!.props.items.find((item: { id: string }) => item.id === 'premiumDark');
+        const duplicateAction = findRowActionsInNode(premiumDarkItem.rightElement).find((action) => action.id === 'duplicate-premiumDark');
+
+        await act(async () => {
+            duplicateAction!.onPress();
+        });
 
         const [clone] = getThemeProfiles().profiles;
         expect(clone?.id).not.toBe('premiumDark');
@@ -257,9 +287,12 @@ describe('Theme profile settings screen', () => {
     it('disables profile creation and duplicate actions after the profile limit is reached', async () => {
         setThemeProfiles({ activeProfileId: null, profiles: maxProfiles() });
         const screen = await renderProfilesScreen();
+        const builtInDropdown = await findBuiltInThemesDropdown(screen);
+        const premiumDarkItem = builtInDropdown!.props.items.find((item: { id: string }) => item.id === 'premiumDark');
 
         expect(screen.findByTestId('settings-theme-profile-create')?.props.disabled).toBe(true);
         expect(screen.findByTestId('settings-theme-duplicate-premiumDark')).toBeNull();
+        expect(findRowActionsInNode(premiumDarkItem.rightElement)).toEqual([]);
     });
 
     it('opens a new unsaved theme editor from the actions group', async () => {

@@ -164,17 +164,17 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
                             selected={selected}
                             showChevron={false}
                             disabled={installQueue.state.hasStarted ? (installQueue.state.isRunning || !canRetryInstall) : Boolean(queueState)}
-                            icon={<Ionicons name={core.ui.agentPickerIconName as any} size={24} color={theme.colors.textSecondary} />}
+                            icon={<Ionicons name={core.ui.agentPickerIconName as any} size={24} color={theme.colors.text.secondary} />}
                             rightElement={
                                 installQueue.state.hasStarted
                                     ? installStatus === 'installing'
-                                        ? <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                        ? <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                                         : installStatus === 'installed'
                                             ? <Ionicons name="checkmark-circle" size={20} color={theme.colors.accent.blue} />
                                             : installStatus === 'failed'
-                                                ? <Ionicons name="alert-circle" size={20} color={theme.colors.textSecondary} />
+                                                ? <Ionicons name="alert-circle" size={20} color={theme.colors.text.secondary} />
                                                 : installStatus === 'queued'
-                                                    ? <Ionicons name="time-outline" size={20} color={theme.colors.textSecondary} />
+                                                    ? <Ionicons name="time-outline" size={20} color={theme.colors.text.secondary} />
                                                     : undefined
                                     : selected
                                         ? <Ionicons name="checkmark-circle" size={20} color={theme.colors.accent.blue} />
