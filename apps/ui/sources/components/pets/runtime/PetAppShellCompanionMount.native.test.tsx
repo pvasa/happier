@@ -113,10 +113,28 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
 }));
 
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+    const { createStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
     const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+    const baseStorage = createStorageStoreMock({});
+    const readStorageState = () => ({
+        ...baseStorage.getState(),
+        isDataReady: true,
+        sessions: Object.fromEntries(sessionsState.current.map((session) => [session.id, session])),
+        sessionListRenderables: {},
+        sessionMessages: {},
+        sessionPending: {},
+    });
+    const storage = Object.assign(
+        ((selector?: Parameters<typeof baseStorage>[0]) =>
+            typeof selector === 'function' ? selector(readStorageState()) : readStorageState()) as typeof baseStorage,
+        {
+            ...baseStorage,
+            getState: readStorageState,
+            getInitialState: readStorageState,
+        },
+    );
     const readAccountSettings = (): typeof settingsDefaults => ({
         ...settingsDefaults,
         ...settingsState.account,
@@ -134,6 +152,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             useLocalSettings: readLocalSettings,
             useLocalSetting: ((name) => readLocalSettings()[name]) as typeof actual.useLocalSetting,
             useAllSessions: () => sessionsState.current,
+            storage,
         },
     });
 });
