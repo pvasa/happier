@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, FlatList, Platform, View, type ScrollViewProps } from 'react-native';
+import { FlatList, Platform, View, type ScrollViewProps } from 'react-native';
 import { Ionicons, Octicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { Item } from '@/components/ui/lists/Item';
@@ -55,7 +56,7 @@ export const SearchResultsList = React.memo(({
                     paddingTop: 40,
                 }}
             >
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 <Text
                     style={{
                         fontSize: 16,

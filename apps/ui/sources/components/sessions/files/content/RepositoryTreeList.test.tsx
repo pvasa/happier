@@ -58,12 +58,17 @@ const theme = vi.hoisted(() => ({
     dark: false,
 } as const));
 
+const flatListRenderPropsLog = vi.hoisted(() => ({
+    current: [] as any[],
+}));
+
 installFilesContentCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             TurboModuleRegistry: { get: () => ({}) },
             FlatList: ({ data, renderItem, keyExtractor, ListHeaderComponent }: any) => {
+                flatListRenderPropsLog.current.push({ data, renderItem, keyExtractor, ListHeaderComponent });
                 const header = ListHeaderComponent
                     ? (React.isValidElement(ListHeaderComponent) ? ListHeaderComponent : React.createElement(ListHeaderComponent))
                     : null;
@@ -159,6 +164,13 @@ function findDropTargetForTitle(screen: Awaited<ReturnType<typeof renderReposito
     )) ?? null;
 }
 
+function findLoadingIndicators(screen: Awaited<ReturnType<typeof renderRepositoryTreeList>>['screen']) {
+    return screen.findAll((node) =>
+        (node.type as any) === 'ActivityIndicator'
+        || node.props?.accessibilityRole === 'progressbar',
+    );
+}
+
 async function settleRepositoryTree() {
     await flushHookEffects({ cycles: 3 });
 }
@@ -215,6 +227,7 @@ async function renderRepositoryTreeList(overrides: Partial<Readonly<{
 describe('RepositoryTreeList', () => {
     beforeEach(() => {
         sessionListDirectorySpy.mockReset();
+        flatListRenderPropsLog.current = [];
         sessionListDirectorySpy.mockResolvedValue({
             success: true,
             entries: [],
@@ -453,7 +466,7 @@ describe('RepositoryTreeList', () => {
         await settleRepositoryTree();
 
         expect(findRepositoryRows(screen).map((row) => row.props.title)).toEqual(['src/', 'README.md']);
-        expect(screen.findAll((node) => (node.type as any) === 'ActivityIndicator').length).toBeGreaterThanOrEqual(1);
+        expect(findLoadingIndicators(screen).length).toBeGreaterThanOrEqual(1);
 
         await act(async () => {
             pending.resolve({
@@ -526,7 +539,7 @@ describe('RepositoryTreeList', () => {
         await settleRepositoryTree();
 
         expect(findRepositoryRows(screen).map((row) => row.props.title)).toEqual(['src/', 'README.md']);
-        expect(screen.findAll((node) => (node.type as any) === 'ActivityIndicator')).toHaveLength(0);
+        expect(findLoadingIndicators(screen)).toHaveLength(0);
         expect(onRootLoadingChange).toHaveBeenCalledWith(true);
 
         await act(async () => {
@@ -538,5 +551,95 @@ describe('RepositoryTreeList', () => {
         await settleRepositoryTree();
 
         expect(onRootLoadingChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('keeps the rendered tree stable when an unrelated parent callback changes', async () => {
+        sessionListDirectorySpy.mockResolvedValue({
+            success: true,
+            entries: [{ name: 'README.md', type: 'file' }],
+        });
+
+        const { RepositoryTreeList } = await import('./RepositoryTreeList');
+        const onOpenFile = vi.fn();
+
+        function Wrapper() {
+            const [expandedPaths, setExpandedPaths] = React.useState<string[]>([]);
+            const [tick, setTick] = React.useState(0);
+            return (
+                <>
+                    <RepositoryTreeList
+                        theme={theme}
+                        sessionId="session-1"
+                        expandedPaths={expandedPaths}
+                        onExpandedPathsChange={setExpandedPaths}
+                        onOpenFile={onOpenFile}
+                        onRootLoadingChange={() => {
+                            void tick;
+                        }}
+                    />
+                    {React.createElement('Pressable' as any, {
+                        testID: 'parent-rerender',
+                        onPress: () => setTick((value) => value + 1),
+                    })}
+                </>
+            );
+        }
+
+        const screen = await renderScreen(<Wrapper />);
+        await settleRepositoryTree();
+        const initialRenderCount = flatListRenderPropsLog.current.length;
+
+        await act(async () => {
+            screen.pressByTestId('parent-rerender');
+        });
+        await settleRepositoryTree();
+
+        expect(flatListRenderPropsLog.current).toHaveLength(initialRenderCount);
+    });
+
+    it('keeps the rendered tree stable when equivalent theme objects change', async () => {
+        sessionListDirectorySpy.mockResolvedValue({
+            success: true,
+            entries: [{ name: 'README.md', type: 'file' }],
+        });
+
+        const { RepositoryTreeList } = await import('./RepositoryTreeList');
+        const onOpenFile = vi.fn();
+
+        function Wrapper() {
+            const [expandedPaths, setExpandedPaths] = React.useState<string[]>([]);
+            const [tick, setTick] = React.useState(0);
+            const equivalentTheme = {
+                ...theme,
+                colors: { ...theme.colors },
+                tick,
+            };
+            return (
+                <>
+                    <RepositoryTreeList
+                        theme={equivalentTheme}
+                        sessionId="session-1"
+                        expandedPaths={expandedPaths}
+                        onExpandedPathsChange={setExpandedPaths}
+                        onOpenFile={onOpenFile}
+                    />
+                    {React.createElement('Pressable' as any, {
+                        testID: 'theme-rerender',
+                        onPress: () => setTick((value) => value + 1),
+                    })}
+                </>
+            );
+        }
+
+        const screen = await renderScreen(<Wrapper />);
+        await settleRepositoryTree();
+        const initialRenderCount = flatListRenderPropsLog.current.length;
+
+        await act(async () => {
+            screen.pressByTestId('theme-rerender');
+        });
+        await settleRepositoryTree();
+
+        expect(flatListRenderPropsLog.current).toHaveLength(initialRenderCount);
     });
 });

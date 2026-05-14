@@ -66,6 +66,14 @@ export function useRepositoryTreeRowActions(params: Readonly<{
 }>): Readonly<{
     onSelectRowMenuItem: (node: RepositoryTreeNodeLike, itemId: RepositoryTreeRowActionMenuItemId) => Promise<void>;
 }> {
+    const {
+        sessionId,
+        writeActionsEnabled,
+        expandedPaths,
+        onExpandedPathsChange,
+        onRequestRefresh,
+        onRequestDownload,
+    } = params;
     const isDestinationAlreadyExistsError = React.useCallback((error: string | undefined): boolean => {
         return typeof error === 'string' && /destination already exists/i.test(error);
     }, []);
@@ -83,27 +91,27 @@ export function useRepositoryTreeRowActions(params: Readonly<{
         }
 
         if (itemId === 'repository-tree-menuitem-rename') {
-            if (!params.writeActionsEnabled) return;
+            if (!writeActionsEnabled) return;
             let nextPath = await renamePathPrompt({ currentPath: node.path });
             if (!nextPath) return;
 
-            let result = await sessionRenamePath(params.sessionId, { from: node.path, to: nextPath, overwrite: undefined });
+            let result = await sessionRenamePath(sessionId, { from: node.path, to: nextPath, overwrite: undefined });
             if (!result.success && isDestinationAlreadyExistsError(result.error)) {
                 const strategy = await showRenameConflictResolutionDialog({ path: nextPath });
                 if (strategy === 'cancel') return;
 
                 if (strategy === 'replace') {
-                    result = await sessionRenamePath(params.sessionId, { from: node.path, to: nextPath, overwrite: true });
+                    result = await sessionRenamePath(sessionId, { from: node.path, to: nextPath, overwrite: true });
                 } else {
                     nextPath = await resolveKeepBothTargetPath({
                         desiredPath: nextPath,
                         maxAttempts: 50,
                         pathExists: async (candidatePath) => {
-                            const stat = await sessionStatFile(params.sessionId, candidatePath);
+                            const stat = await sessionStatFile(sessionId, candidatePath);
                             return !stat.success || stat.exists === true;
                         },
                     });
-                    result = await sessionRenamePath(params.sessionId, { from: node.path, to: nextPath, overwrite: undefined });
+                    result = await sessionRenamePath(sessionId, { from: node.path, to: nextPath, overwrite: undefined });
                 }
             }
 
@@ -114,43 +122,51 @@ export function useRepositoryTreeRowActions(params: Readonly<{
 
             if (node.type === 'directory') {
                 const nextExpanded = remapExpandedPathsAfterRename({
-                    expandedPaths: params.expandedPaths,
+                    expandedPaths,
                     from: node.path,
                     to: nextPath,
                 });
-                params.onExpandedPathsChange(nextExpanded);
+                onExpandedPathsChange(nextExpanded);
             }
-            params.onRequestRefresh?.();
+            onRequestRefresh?.();
             return;
         }
 
         if (itemId === 'repository-tree-menuitem-delete') {
-            if (!params.writeActionsEnabled) return;
+            if (!writeActionsEnabled) return;
 
             const confirm = await deletePathConfirm({ path: node.path, kind: node.type });
             if (!confirm.confirmed) return;
 
-            const result = await sessionDeletePath(params.sessionId, { path: node.path, recursive: confirm.recursive });
+            const result = await sessionDeletePath(sessionId, { path: node.path, recursive: confirm.recursive });
             if (!result.success) {
                 Modal.alert(t('common.error'), result.error || t('files.repositoryTree.delete.failed'));
                 return;
             }
 
             if (node.type === 'directory') {
-                params.onExpandedPathsChange(removeExpandedPathsUnderDirectory(params.expandedPaths, node.path));
+                onExpandedPathsChange(removeExpandedPathsUnderDirectory(expandedPaths, node.path));
             }
-            params.onRequestRefresh?.();
+            onRequestRefresh?.();
             return;
         }
 
         if (itemId === 'repository-tree-menuitem-download' || itemId === 'repository-tree-menuitem-zip') {
-            if (!params.onRequestDownload) return;
-            const res = await params.onRequestDownload({ path: node.path, asZip: itemId === 'repository-tree-menuitem-zip' });
+            if (!onRequestDownload) return;
+            const res = await onRequestDownload({ path: node.path, asZip: itemId === 'repository-tree-menuitem-zip' });
             if (!res.ok) {
                 Modal.alert(t('common.error'), res.error);
             }
         }
-    }, [isDestinationAlreadyExistsError, params]);
+    }, [
+        expandedPaths,
+        isDestinationAlreadyExistsError,
+        onExpandedPathsChange,
+        onRequestDownload,
+        onRequestRefresh,
+        sessionId,
+        writeActionsEnabled,
+    ]);
 
-    return { onSelectRowMenuItem };
+    return React.useMemo(() => ({ onSelectRowMenuItem }), [onSelectRowMenuItem]);
 }

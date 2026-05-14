@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Ionicons, Octicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { RepositoryTreeList } from '@/components/sessions/files/content/RepositoryTreeList';
 import { SearchResultsList } from '@/components/sessions/files/content/SearchResultsList';
@@ -434,7 +435,7 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 priority: 10,
                 order: 6,
                 icon: treeRootLoading
-                    ? <ActivityIndicator testID="repository-tree-refresh-loading" size="small" color={theme.colors.text.secondary} />
+                    ? <ActivitySpinner testID="repository-tree-refresh-loading" size="small" color={theme.colors.text.secondary} />
                     : <Octicons name="sync" size={16} color={theme.colors.text.secondary} />,
                 menuIcon: 'refresh-outline',
                 accessibilityLabel: t('common.refresh'),

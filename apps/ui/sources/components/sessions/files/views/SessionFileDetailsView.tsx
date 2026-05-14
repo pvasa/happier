@@ -8,7 +8,7 @@ import { FileEditorPanel } from '@/components/sessions/files/file/editor/FileEdi
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
 import {
     useSession,
-    useSessions,
+    useSessionsReady,
     useProjectForSession,
     useWorkspaceReviewCommentsDrafts,
     useSessionProjectScmCommitSelectionPaths,
@@ -22,7 +22,7 @@ import { layout } from '@/components/ui/layout/layout';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { buildFileLineSelectionFingerprint, canUseLineSelection } from '@/scm/scmLineSelection';
+import { buildFileLineSelectionFingerprint, canStartLineSelection, canUseLineSelection } from '@/scm/scmLineSelection';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
 import { allowsLiveStaging, isAtomicCommitStrategy } from '@/scm/settings/commitStrategy';
 import { resolveDefaultDiffModeForFile } from '@/scm/diff/defaultMode';
@@ -114,7 +114,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const filesEditorNativeCodeMirrorEnabled = useSetting('filesEditorNativeCodeMirrorEnabled');
     const session = useSession(sessionId);
     const project = useProjectForSession(sessionId);
-    const sessionsReady = useSessions() !== null;
+    const sessionsReady = useSessionsReady();
     const sessionPath = resolveSessionWorkspacePath({
         sessionPath: session?.metadata?.path ?? null,
         projectPath: project?.key?.path ?? null,
@@ -174,6 +174,16 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         diffMode,
         diffContent,
     });
+    const lineSelectionCanStart = canStartLineSelection({
+        scmWriteEnabled,
+        includeExcludeEnabled,
+        virtualLineSelectionEnabled,
+        hasConflicts,
+        isBinary: fileEntry?.stats.isBinary === true,
+        hasPendingDelta,
+        hasIncludedDelta,
+        diffContent,
+    });
     const effectiveLineSelectionEnabled = lineSelectionEnabled && commitSelectionModeActive;
 
     React.useEffect(() => {
@@ -192,11 +202,11 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }, [diffMode, diffContent, lineSelectionFingerprint]);
 
     React.useEffect(() => {
-        if (!lineSelectionEnabled) {
+        if (!lineSelectionCanStart) {
             setSelectedLineKeys(new Set());
             setCommitSelectionModeActive(false);
         }
-    }, [lineSelectionEnabled]);
+    }, [lineSelectionCanStart]);
 
     const hasLoadedOnceRef = React.useRef(false);
     const refreshAll = React.useCallback(async (options?: Readonly<{ background?: boolean }>) => {
@@ -391,6 +401,11 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         persistDraft,
     });
 
+    const handleStartEditingFile = React.useCallback(() => {
+        props.onStartEditingFile?.();
+        startEditingFile();
+    }, [props.onStartEditingFile, startEditingFile]);
+
     const onStageFile = React.useCallback(() => {
         void handleStage(true);
     }, [handleStage]);
@@ -410,12 +425,16 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }, []);
 
     const onStartLineSelection = React.useCallback(() => {
-        if (!lineSelectionEnabled) return;
+        if (!lineSelectionCanStart) return;
         setReviewCommentModeActive(false);
         setDisplayMode('diff');
+        if (!lineSelectionEnabled) {
+            setDiffContent(null);
+            setDiffMode(hasPendingDelta ? 'pending' : 'included');
+        }
         setSelectedLineKeys(new Set(appliedLineSelectionKeys));
         setCommitSelectionModeActive(true);
-    }, [appliedLineSelectionKeys, lineSelectionEnabled]);
+    }, [appliedLineSelectionKeys, hasPendingDelta, lineSelectionCanStart, lineSelectionEnabled]);
 
     const onToggleReviewCommentMode = React.useCallback((active: boolean) => {
         setReviewCommentModeActive(active);
@@ -529,6 +548,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     virtualSelectionEnabled={virtualSelectionEnabled}
                     isSelectedForCommit={isSelectedForCommit}
                     lineSelectionEnabled={lineSelectionEnabled}
+                    lineSelectionCanStart={lineSelectionCanStart}
                     lineSelectionActive={commitSelectionModeActive}
                     reviewCommentsEnabled={reviewCommentsEnabled}
                     commentModeActive={reviewCommentModeActive}
@@ -545,10 +565,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     isEditingFile={isEditingFile}
                     fileEditorDirty={editorDirty}
                     fileEditorBusy={isSavingEdits}
-                    onStartEditingFile={() => {
-                        props.onStartEditingFile?.();
-                        startEditingFile();
-                    }}
+                    onStartEditingFile={handleStartEditingFile}
                     onCancelEditingFile={cancelEditingFile}
                     onSaveEditingFile={saveFileEdits}
                 />

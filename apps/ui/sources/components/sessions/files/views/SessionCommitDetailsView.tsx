@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { View, ActivityIndicator, Platform, Pressable } from 'react-native';
+import { View, Platform, Pressable } from 'react-native';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { sessionScmCommitBackout, sessionScmDiffCommit } from '@/sync/ops';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     storage,
     useSession,
@@ -304,7 +305,7 @@ export function SessionCommitDetailsView(props: SessionCommitDetailsViewProps) {
                     constrainWidth ? { maxWidth: layout.maxWidth, alignSelf: 'center', width: '100%' } : null,
                 ]}
             >
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             </View>
         );
     }

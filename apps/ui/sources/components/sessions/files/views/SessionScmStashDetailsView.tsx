@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Octicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { DiffFilesListView } from '@/components/ui/code/diff/DiffFilesListView';
@@ -400,7 +401,7 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
     if (isLoadingStashes && managedStashes.length === 0) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 24 }}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                     {t('common.loading')}
                 </Text>
@@ -567,7 +568,7 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
 
             {diffState.loading ? (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 24 }}>
-                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                    <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                     <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
                         {t('common.loading')}
                     </Text>

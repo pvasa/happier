@@ -38,6 +38,7 @@ type FileActionToolbarProps = {
     virtualSelectionEnabled: boolean;
     isSelectedForCommit: boolean;
     lineSelectionEnabled: boolean;
+    lineSelectionCanStart?: boolean;
     lineSelectionActive?: boolean;
     reviewCommentsEnabled?: boolean;
     commentModeActive?: boolean;
@@ -80,6 +81,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         virtualSelectionEnabled,
         isSelectedForCommit,
         lineSelectionEnabled,
+        lineSelectionCanStart,
         lineSelectionActive,
         reviewCommentsEnabled,
         commentModeActive,
@@ -121,7 +123,16 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     const unstageLabel = virtualSelectionEnabled ? t('files.fileActions.removeFromCommitSelection') : t('files.fileActions.unstageFile');
     const commandIconSize = 14;
     const isLineSelectionActive = lineSelectionActive === true || selectedLineCount > 0;
+    const canStartLineSelection = lineSelectionCanStart === true || lineSelectionEnabled;
     const isCommentModeActive = commentModeActive === true;
+    const showCompactCommitSelectionEntry = virtualSelectionEnabled && !isLineSelectionActive;
+    const handleStageFilePress = React.useCallback(() => {
+        if (canStartLineSelection && !isLineSelectionActive) {
+            onStartLineSelection?.();
+            return;
+        }
+        onStageFile();
+    }, [canStartLineSelection, isLineSelectionActive, onStageFile, onStartLineSelection]);
     const hasSelectedLines = isLineSelectionActive && lineSelectionEnabled && selectedLineCount > 0;
     const selectedLineActionIsRemoval = !virtualSelectionEnabled && diffMode === 'included';
     const selectedLineActionColor = selectedLineActionIsRemoval ? theme.colors.state.neutral.foreground : theme.colors.state.success.foreground;
@@ -420,22 +431,30 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
             {scmWriteEnabled && canUseSelectionActions && canIncludeFileInSelection && !hasSelectedLines && (
                 <Pressable
                     disabled={actionBusy}
-                    onPress={lineSelectionEnabled && !isLineSelectionActive ? (onStartLineSelection ?? onStageFile) : onStageFile}
+                    onPress={handleStageFilePress}
                     testID="file-details-stage-file"
-                    style={{
-                        paddingHorizontal: 12,
-                        paddingVertical: 6,
-                        minHeight: 32,
-                        borderRadius: 10,
-                        backgroundColor: theme.colors.surface.base,
-                        borderWidth: 1,
-                        borderColor: theme.colors.state.success.foreground,
-                        opacity: actionBusy ? 0.6 : 1,
-                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={stageLabel}
+                    style={showCompactCommitSelectionEntry
+                        ? [chipStyle(false), { width: 32, height: 32, paddingHorizontal: 0, paddingVertical: 0, opacity: actionBusy ? 0.6 : 1 }]
+                        : {
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                            minHeight: 32,
+                            borderRadius: 10,
+                            backgroundColor: theme.colors.surface.base,
+                            borderWidth: 1,
+                            borderColor: theme.colors.state.success.foreground,
+                            opacity: actionBusy ? 0.6 : 1,
+                        }}
                 >
-                    <Text style={{ color: theme.colors.state.success.foreground, fontSize: 13, ...Typography.default('semiBold') }}>
-                        {stageLabel}
-                    </Text>
+                    {showCompactCommitSelectionEntry ? (
+                        <Octicons name="plus" size={commandIconSize} color={theme.colors.text.secondary} />
+                    ) : (
+                        <Text style={{ color: theme.colors.state.success.foreground, fontSize: 13, ...Typography.default('semiBold') }}>
+                            {stageLabel}
+                        </Text>
+                    )}
                 </Pressable>
             )}
 

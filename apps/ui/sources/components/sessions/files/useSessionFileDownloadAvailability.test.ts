@@ -54,6 +54,38 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
 }));
 
 describe('useSessionFileDownloadAvailability', () => {
+    it('keeps the transfer resolver stable when unrelated session fields change', async () => {
+        state.session = { active: true, latestUsage: { totalTokens: 1 } } as any;
+        state.machineReachability = { machineRpcTargetAvailable: true } as any;
+        state.cachedMachineRpcDirectRoute = { status: 'unknown' as const };
+        state.serverSnapshot = {
+            status: 'ready' as const,
+            features: {
+                features: {
+                    machines: {
+                        enabled: true,
+                        transfer: {
+                            enabled: true,
+                            serverRouted: { enabled: true },
+                        },
+                    },
+                },
+                capabilities: {},
+            },
+        } as any;
+
+        const { useSessionFileTransferAvailabilityResolver } = await import('./useSessionFileTransferAvailability');
+        const hook = await renderHook(() => useSessionFileTransferAvailabilityResolver('s1'));
+        const firstResolver = hook.getCurrent();
+        expect(firstResolver(null)).toBe(true);
+
+        state.session = { active: true, latestUsage: { totalTokens: 2 } } as any;
+        await hook.rerender();
+
+        expect(hook.getCurrent()).toBe(firstResolver);
+        expect(hook.getCurrent()(null)).toBe(true);
+    });
+
     it('reflects cached direct-route failures after rerender (no stale memoization)', async () => {
         state.session = { active: false } as any;
         state.machineReachability = { machineRpcTargetAvailable: true } as any;

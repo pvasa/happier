@@ -11,14 +11,15 @@ import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestrati
 export function useSessionFileTransferAvailabilityResolver(sessionId: string): (transferSizeBytes?: number | null) => boolean {
     const session = useSession(sessionId);
     const { machineRpcTargetAvailable } = useSessionMachineReachability(sessionId);
-    const sessionRpcAvailable = Boolean(session) && session?.active !== false;
+    const sessionExists = Boolean(session);
+    const sessionRpcAvailable = sessionExists && session?.active !== false;
     const serverId = resolvePreferredServerIdForSessionId(sessionId) ?? null;
     const serverSnapshot = useServerFeaturesSnapshotForServerId(serverId, {
         enabled: Boolean(serverId) && (sessionRpcAvailable || machineRpcTargetAvailable),
     });
 
     return React.useCallback((transferSizeBytes?: number | null) => {
-        if (!session) {
+        if (!sessionExists) {
             return false;
         }
         if (!serverId) {
@@ -55,7 +56,14 @@ export function useSessionFileTransferAvailabilityResolver(sessionId: string): (
             serverFeatures: serverSnapshot.features,
             sessionRpcTransferSizeBytes: sizedBytes,
         }).kind === 'selected';
-    }, [machineRpcTargetAvailable, serverId, serverSnapshot, session, sessionId, sessionRpcAvailable]);
+    }, [
+        machineRpcTargetAvailable,
+        serverId,
+        serverSnapshot,
+        sessionExists,
+        sessionId,
+        sessionRpcAvailable,
+    ]);
 }
 
 export function useSessionFileTransferAvailability(sessionId: string): boolean {
