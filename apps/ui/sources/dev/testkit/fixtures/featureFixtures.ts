@@ -1,5 +1,6 @@
 import {
     DEFAULT_PETS_CAPABILITIES,
+    DEFAULT_SESSION_CAPABILITIES,
     type FeaturesResponse as RootLayoutFeatures,
 } from '@happier-dev/protocol';
 
@@ -172,6 +173,7 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
             },
         },
         oauth: { providers: { github: { enabled: true, configured: true } } },
+        session: DEFAULT_SESSION_CAPABILITIES,
         auth: {
             methods: [],
             signup: { methods: [{ id: 'anonymous', enabled: true }] },

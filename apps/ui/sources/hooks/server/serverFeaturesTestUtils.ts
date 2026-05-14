@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import { DEFAULT_PETS_CAPABILITIES, type FeaturesResponse } from '@happier-dev/protocol';
+import { DEFAULT_PETS_CAPABILITIES, DEFAULT_SESSION_CAPABILITIES, type FeaturesResponse } from '@happier-dev/protocol';
 
 type FixtureOverrides = {
     friendsEnabled?: boolean;
@@ -188,6 +188,7 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
             oauth: {
                 providers: oauthProviders,
             },
+            session: DEFAULT_SESSION_CAPABILITIES,
             auth: {
                 methods: [],
                 signup: { methods: [{ id: 'anonymous', enabled: true }] },

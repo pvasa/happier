@@ -11,6 +11,8 @@ export const SessionMessagesCapabilitiesSchema = z
   .optional()
   .default(DEFAULT_SESSION_MESSAGES_CAPABILITIES);
 
+export type SessionMessagesCapabilities = z.infer<typeof SessionMessagesCapabilitiesSchema>;
+
 export const DEFAULT_SESSION_CAPABILITIES = Object.freeze({
   messages: DEFAULT_SESSION_MESSAGES_CAPABILITIES,
 });
@@ -21,3 +23,5 @@ export const SessionCapabilitiesSchema = z
   })
   .optional()
   .default(DEFAULT_SESSION_CAPABILITIES);
+
+export type SessionCapabilities = z.infer<typeof SessionCapabilitiesSchema>;

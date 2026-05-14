@@ -2014,6 +2014,8 @@ export {
   DEFAULT_PETS_CAPABILITIES,
   DEFAULT_PETS_PACKAGE_LIMITS_CAPABILITIES,
   DEFAULT_PETS_SYNC_CAPABILITIES,
+  DEFAULT_SESSION_CAPABILITIES,
+  DEFAULT_SESSION_MESSAGES_CAPABILITIES,
   FeatureGateSchema,
   FeatureGatesSchema,
   FeaturesResponseSchema,
@@ -2027,6 +2029,8 @@ export {
   PetsPackageLimitsCapabilitiesSchema,
   PetsSyncCapabilitiesSchema,
   PetsSyncSupportedMediaTypeSchema,
+  SessionCapabilitiesSchema,
+  SessionMessagesCapabilitiesSchema,
   coerceBugReportsCapabilitiesFromFeaturesPayload,
   normalizeMachineTransferServerRoutedMaxBytes,
   readMachineTransferServerRoutedMaxBytes,
@@ -2044,6 +2048,8 @@ export {
   type PetsPackageLimitsCapabilities,
   type PetsSyncCapabilities,
   type PetsSyncSupportedMediaType,
+  type SessionCapabilities,
+  type SessionMessagesCapabilities,
 } from './features.js';
 export * from './pets/index.js';
 export {
