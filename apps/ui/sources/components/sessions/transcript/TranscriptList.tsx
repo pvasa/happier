@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, FlatList, Platform, View } from 'react-native';
+import { FlatList, Platform, View } from 'react-native';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useHeaderHeight } from '@/utils/platform/responsive';
@@ -9,6 +9,7 @@ import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
 import { useSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 type TranscriptInteraction = {
     canSendMessages: boolean;
@@ -29,7 +30,7 @@ const ListHeader = React.memo((props: { isLoading?: boolean }) => {
         <View>
             {props.isLoading ? (
                 <View style={{ paddingVertical: 12 }}>
-                    <ActivityIndicator size="small" />
+                    <ActivitySpinner size="small" />
                 </View>
             ) : null}
             <View style={{ flexDirection: 'row', alignItems: 'center', height: headerHeight + safeArea.top + 32 }} />

@@ -13,7 +13,8 @@ import {
     useSessionTranscriptIds,
     useSetting,
 } from '@/sync/domains/state/storage';
-import { ActivityIndicator, FlatList, Platform, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { FlatList, Platform, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { useCallback } from 'react';
 import { useHeaderHeight } from '@/utils/platform/responsive';
@@ -393,7 +394,7 @@ const ListHeader = React.memo((props: { isLoadingOlder: boolean }) => {
         <View>
             {props.isLoadingOlder && (
                 <View style={{ paddingVertical: 12 }}>
-                    <ActivityIndicator size="small" />
+                    <ActivitySpinner size="small" />
                 </View>
             )}
             <View style={{ flexDirection: 'row', alignItems: 'center', height: headerHeight + safeArea.top + 32 }} />

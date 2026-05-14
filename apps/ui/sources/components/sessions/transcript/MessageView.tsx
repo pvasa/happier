@@ -1,5 +1,5 @@
 import * as React from "react";
-import { View, Pressable, Platform, ActivityIndicator } from 'react-native';
+import { View, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Modal } from '@/modal';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -50,6 +50,7 @@ import { useStreamingTextSmoothing } from '@/components/sessions/transcript/stre
 import { useThrottledStreamingMarkdownText } from '@/components/sessions/transcript/streaming/useThrottledStreamingMarkdownText';
 import { readStreamSegmentMetaV1 } from '@/sync/reducer/helpers/streamSegmentMeta';
 import { resolveSessionWorkspacePath } from '@/sync/domains/session/resolveSessionWorkspacePath';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
   resolveTranscriptMarkdownFileLink,
 } from '@/components/sessions/transcript/resolveTranscriptMarkdownFileLink';
@@ -986,7 +987,7 @@ function ForkMessageButton(props: {
       ]}
     >
       {isForking ? (
-        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
       ) : (
         <Ionicons
           name="git-branch-outline"

@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable } from 'react-native';
+import { Platform, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Modal } from '@/modal';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
@@ -94,7 +95,7 @@ export const TranscriptRollbackActionButton = React.memo((props: {
             ]}
         >
             {isRollingBack ? (
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             ) : (
                 <Ionicons name="arrow-undo-outline" size={12} color={theme.colors.text.secondary} />
             )}

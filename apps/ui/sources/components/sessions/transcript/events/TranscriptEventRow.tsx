@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import type { AgentEvent } from '@/sync/typesRaw';
@@ -60,7 +61,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
             <View style={styles.row}>
                 <View style={styles.iconContainer}>
                     {isLoading ? (
-                        <ActivityIndicator size={EVENT_SPINNER_SIZE} color={theme.colors.text.secondary} />
+                        <ActivitySpinner size={EVENT_SPINNER_SIZE} color={theme.colors.text.secondary} />
                     ) : (
                         <Ionicons name={iconName} size={EVENT_ICON_SIZE} color={theme.colors.text.secondary} />
                     )}

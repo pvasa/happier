@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { ToolCallMessage } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
@@ -212,7 +213,7 @@ export const ToolCallsGroupView = React.memo((props: {
                 <View style={styles.headerRight}>
                     <View style={styles.statusIconRight}>
                         {props.status === 'running' ? (
-                            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                            <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                         ) : props.status === 'error' ? (
                             <Ionicons name="alert-circle" size={16} color={theme.colors.state.danger.foreground} />
                         ) : (
