@@ -8,6 +8,7 @@ import {
     compareSessionFolderWorkspaceRefs,
     createSessionFolder,
     deleteSessionFolder,
+    moveSessionFolder,
     normalizeSessionFolderName,
     normalizeSessionFolders,
     resolveDurableWorkspaceRefForSessionListHeader,
@@ -160,6 +161,42 @@ describe('session folder domain helpers', () => {
         expect(deleted.deletedFolderIds).toEqual(['child']);
         expect(deleted.replacementFolderId).toBe('parent');
         expect(deleted.next.folders.map((item) => item.id)).toEqual(['parent']);
+    });
+
+    it('moves folders between workspace root and subfolders without cycles', () => {
+        const current: SessionFoldersV1 = {
+            v: 1,
+            folders: [
+                folder({ id: 'parent', name: 'Parent' }),
+                folder({ id: 'child', name: 'Child', parentId: 'parent' }),
+                folder({ id: 'sibling', name: 'Sibling' }),
+            ],
+        };
+
+        const movedToSibling = moveSessionFolder({
+            current,
+            folderId: 'child',
+            parentId: 'sibling',
+            now: 20,
+        });
+        expect(movedToSibling.folder).toMatchObject({ id: 'child', parentId: 'sibling', updatedAt: 20 });
+
+        const movedToRoot = moveSessionFolder({
+            current: movedToSibling.next,
+            folderId: 'child',
+            parentId: null,
+            now: 30,
+        });
+        expect(movedToRoot.folder).toMatchObject({ id: 'child', parentId: null, updatedAt: 30 });
+
+        const rejectedCycle = moveSessionFolder({
+            current,
+            folderId: 'parent',
+            parentId: 'child',
+            now: 40,
+        });
+        expect(rejectedCycle.folder).toBeNull();
+        expect(rejectedCycle.next).toBe(current);
     });
 
     it('builds durable collapse and assignment keys', () => {

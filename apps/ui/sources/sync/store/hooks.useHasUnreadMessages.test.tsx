@@ -162,6 +162,9 @@ describe('useHasUnreadMessages', () => {
         s1: makeRenderableSession('s1', {
           seq: 10,
           updatedAt: 1_000,
+          pendingVersion: 1,
+          metadataVersion: 1,
+          agentStateVersion: 1,
           thinking: true,
           thinkingAt: 1_000,
           metadata: {
@@ -184,9 +187,12 @@ describe('useHasUnreadMessages', () => {
     await act(async () => {
       storage.setState({
         sessionListRenderables: {
-          s1: makeRenderableSession('s1', {
+        s1: makeRenderableSession('s1', {
             seq: 11,
             updatedAt: 1_500,
+            pendingVersion: 2,
+            metadataVersion: 2,
+            agentStateVersion: 2,
             thinking: true,
             thinkingAt: 1_500,
             metadata: {
@@ -194,6 +200,47 @@ describe('useHasUnreadMessages', () => {
               summaryText: 'Working session',
             },
           }),
+        },
+      } as never);
+    });
+
+    expect(hook.getCurrent()).toBe(initial);
+    expect(renderCount).toBe(1);
+    await hook.unmount();
+  });
+
+  it('keeps the session-list activity label stable while streaming timestamps stay in the same display bucket', async () => {
+    storage.setState({
+      sessions: {
+        s1: {
+          id: 's1',
+          createdAt: 1,
+        },
+      },
+      sessionMessages: {
+        s1: {
+          latestThinkingMessageActivityAtMs: 60_000,
+        },
+      },
+      sessionPending: {},
+      sessionListRenderables: {},
+      isDataReady: true,
+    } as never);
+
+    const { useSessionListActivityTimeLabel } = await import('./hooks');
+    let renderCount = 0;
+    const hook = await renderHook(() => {
+      renderCount += 1;
+      return useSessionListActivityTimeLabel('s1');
+    });
+    const initial = hook.getCurrent();
+
+    await act(async () => {
+      storage.setState({
+        sessionMessages: {
+          s1: {
+            latestThinkingMessageActivityAtMs: 60_500,
+          },
         },
       } as never);
     });

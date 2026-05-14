@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 
-import { useSessionRecentPathEntries, useSessions } from '@/sync/domains/state/storage';
+import { useSessionRecentPathEntries, useSessions, useSessionsReady } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
@@ -102,6 +102,65 @@ describe('useSessions', () => {
             await hook.rerender();
 
             expect(hook.getCurrent()).toBe(first);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('keeps sessions readiness stable when unrelated session records change', async () => {
+        const previousState = storage.getState();
+        try {
+            const session: Session = {
+                id: 's-1',
+                seq: 1,
+                createdAt: 10,
+                updatedAt: 20,
+                active: true,
+                activeAt: 20,
+                archivedAt: null,
+                metadata: { path: '/repo', host: 'localhost', machineId: 'm-1' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: true,
+                thinkingAt: 20,
+                presence: 'online',
+            };
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: { 's-1': session },
+                sessionsData: null,
+            }));
+
+            const seen: boolean[] = [];
+            const hook = await renderHook(() => {
+                const ready = useSessionsReady();
+                seen.push(ready);
+                return ready;
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent()).toBe(true);
+
+            storage.setState((state) => ({
+                ...state,
+                sessions: {
+                    's-1': {
+                        ...session,
+                        seq: 2,
+                        updatedAt: 30,
+                    },
+                },
+            }));
+            await hook.rerender();
+
+            expect(hook.getCurrent()).toBe(true);
+            expect(seen).toEqual([true, true]);
 
             await hook.unmount();
         } finally {

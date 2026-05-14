@@ -34,6 +34,7 @@ import type { SessionActionDraft } from '../domains/sessionActions/sessionAction
 import { buildSessionMessageRouteId, resolveSessionMessageRouteId } from '../domains/messages/messageRouteIds';
 import { useApplyLocalSettings, useApplySettings } from './settingsWriters';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
+import type { StorageState } from './types';
 
 import { getStorage } from '../domains/state/storageStore';
 import type { KnownEntitlements } from '../domains/state/storageStore';
@@ -46,6 +47,7 @@ import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '../domains/work
 import { buildSessionFolderAssignmentKey } from '../domains/session/folders';
 import { readDisplayMachineIdForSession, readDisplayPathForSession } from '../ops/sessionMachineTarget';
 import { encodeSessionRecentPathEntry, type SessionRecentPathEntry } from '@/utils/sessions/recentPathEntries';
+import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
 export function useSessions() {
   const snapshot = getStorage()(
@@ -59,6 +61,10 @@ export function useSessions() {
     if (!snapshot.isDataReady) return null;
     return Object.values(snapshot.sessions);
   }, [snapshot.isDataReady, snapshot.sessions]);
+}
+
+export function useSessionsReady(): boolean {
+  return getStorage()((state) => state.isDataReady);
 }
 
 export function useSessionRecentPathEntries(): SessionRecentPathEntry[] | null {
@@ -111,10 +117,7 @@ type SessionListRowRenderableSnapshot = Readonly<{
   active: boolean;
   activeAt: number;
   archivedAt: number | null;
-  pendingVersion: number | null;
   pendingCount: number | null;
-  metadataVersion: number;
-  agentStateVersion: number;
   metadataPresent: boolean;
   metadataName: string | null;
   metadataSummaryText: string | null;
@@ -155,10 +158,7 @@ export function useSessionListRowRenderable(id: string): SessionListRenderableSe
         active: renderable.active,
         activeAt: renderable.activeAt,
         archivedAt: renderable.archivedAt ?? null,
-        pendingVersion: renderable.pendingVersion ?? null,
         pendingCount: renderable.pendingCount ?? null,
-        metadataVersion: renderable.metadataVersion,
-        agentStateVersion: renderable.agentStateVersion,
         metadataPresent: metadata != null,
         metadataName: metadata?.name ?? null,
         metadataSummaryText: metadata?.summaryText ?? null,
@@ -199,10 +199,10 @@ export function useSessionListRowRenderable(id: string): SessionListRenderableSe
       active: snapshot.active,
       activeAt: snapshot.activeAt,
       archivedAt: snapshot.archivedAt,
-      pendingVersion: snapshot.pendingVersion ?? undefined,
+      pendingVersion: undefined,
       pendingCount: snapshot.pendingCount ?? undefined,
-      metadataVersion: snapshot.metadataVersion,
-      agentStateVersion: snapshot.agentStateVersion,
+      metadataVersion: 0,
+      agentStateVersion: 0,
       metadata: snapshot.metadataPresent
         ? {
             name: snapshot.metadataName ?? undefined,
@@ -737,39 +737,50 @@ export function useSessionPendingMessages(
   );
 }
 
+function selectSessionListMeaningfulActivityAt(state: StorageState, sessionId: string): number | null {
+  const session = state.sessions[sessionId];
+  const transcript = state.sessionMessages[sessionId];
+  const pending = state.sessionPending[sessionId];
+
+  const latestCommittedMessageId =
+    transcript?.messageIdsOldestFirst?.length
+      ? transcript.messageIdsOldestFirst[transcript.messageIdsOldestFirst.length - 1] ?? null
+      : null;
+  const latestCommittedMessageCreatedAt =
+    latestCommittedMessageId != null
+      ? transcript?.messagesById?.[latestCommittedMessageId]?.createdAt ?? null
+      : null;
+
+  let latestPendingMessageCreatedAt: number | null = null;
+  const pendingMessages = pending?.messages ?? emptyArray;
+  for (const pendingMessage of pendingMessages as PendingMessage[]) {
+    const createdAt = pendingMessage?.createdAt;
+    if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || createdAt <= 0) continue;
+    latestPendingMessageCreatedAt =
+      latestPendingMessageCreatedAt == null ? createdAt : Math.max(latestPendingMessageCreatedAt, createdAt);
+  }
+
+  return deriveSessionListMeaningfulActivityAt({
+    sessionCreatedAt: session?.createdAt ?? null,
+    latestCommittedMessageCreatedAt,
+    latestThinkingActivityAt: transcript?.latestThinkingMessageActivityAtMs ?? null,
+    latestPendingMessageCreatedAt,
+  });
+}
+
 export function useSessionListMeaningfulActivityAt(sessionId: string): number | null {
   return getStorage()(
-    useShallow((state) => {
-      const session = state.sessions[sessionId];
-      const transcript = state.sessionMessages[sessionId];
-      const pending = state.sessionPending[sessionId];
-
-      const latestCommittedMessageId =
-        transcript?.messageIdsOldestFirst?.length
-          ? transcript.messageIdsOldestFirst[transcript.messageIdsOldestFirst.length - 1] ?? null
-          : null;
-      const latestCommittedMessageCreatedAt =
-        latestCommittedMessageId != null
-          ? transcript?.messagesById?.[latestCommittedMessageId]?.createdAt ?? null
-          : null;
-
-      let latestPendingMessageCreatedAt: number | null = null;
-      const pendingMessages = pending?.messages ?? emptyArray;
-      for (const pendingMessage of pendingMessages as PendingMessage[]) {
-        const createdAt = pendingMessage?.createdAt;
-        if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || createdAt <= 0) continue;
-        latestPendingMessageCreatedAt =
-          latestPendingMessageCreatedAt == null ? createdAt : Math.max(latestPendingMessageCreatedAt, createdAt);
-      }
-
-      return deriveSessionListMeaningfulActivityAt({
-        sessionCreatedAt: session?.createdAt ?? null,
-        latestCommittedMessageCreatedAt,
-        latestThinkingActivityAt: transcript?.latestThinkingMessageActivityAtMs ?? null,
-        latestPendingMessageCreatedAt,
-      });
-    })
+    useShallow((state) => selectSessionListMeaningfulActivityAt(state, sessionId))
   );
+}
+
+export function useSessionListActivityTimeLabel(sessionId: string): string {
+  return getStorage()((state) => {
+    const meaningfulActivityAt = selectSessionListMeaningfulActivityAt(state, sessionId);
+    return typeof meaningfulActivityAt === 'number' && meaningfulActivityAt > 0
+      ? formatShortRelativeTime(meaningfulActivityAt)
+      : '';
+  });
 }
 
 function buildMessageLegacySignature(message: Message | null): string {

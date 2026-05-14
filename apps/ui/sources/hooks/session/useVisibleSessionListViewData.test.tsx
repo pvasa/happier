@@ -49,6 +49,7 @@ const sourceData = vi.hoisted(() => ({
     sessionFoldersEnabled: false,
     sessionFolderViewModeV1: 'off' as 'off' | 'tree',
     sessionFoldersV1: { v: 1, folders: [] } as SessionFoldersV1,
+    sessionFolderAssignmentsBySessionKey: {} as Record<string, string | null>,
     fetchAndApplySessionFolderAssignments: vi.fn(async () => undefined),
     getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 'secret-a' })),
 }));
@@ -60,6 +61,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         overrides: {
             useSessionListViewData: () => sourceData.activeData,
             useSessionListViewDataByServerId: () => ({}),
+            useSessionFolderAssignmentsBySessionKey: () => sourceData.sessionFolderAssignmentsBySessionKey,
             useSetting: (key: string) => {
                 if (key === 'hideInactiveSessions') return sourceData.hideInactiveSessions;
                 if (key === 'pinnedSessionKeysV1') return sourceData.pinnedKeys;
@@ -129,6 +131,7 @@ describe('useVisibleSessionListViewData', () => {
         sourceData.sessionFoldersEnabled = false;
         sourceData.sessionFolderViewModeV1 = 'off';
         sourceData.sessionFoldersV1 = { v: 1, folders: [] };
+        sourceData.sessionFolderAssignmentsBySessionKey = {};
         sourceData.fetchAndApplySessionFolderAssignments.mockClear();
         sourceData.getCredentialsForServerUrl.mockClear();
         syncPerformanceTelemetry.configure({ enabled: false });
@@ -304,6 +307,80 @@ describe('useVisibleSessionListViewData', () => {
         expect(hook.getCurrent()?.some((item) => item.type === 'header' && item.headerKind === 'folder'))
             .toBe(false);
         expect(sourceData.fetchAndApplySessionFolderAssignments).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
+
+    it('keeps the workspace header when every visible workspace session is assigned to a folder', async () => {
+        sourceData.sessionFoldersEnabled = true;
+        sourceData.sessionFolderViewModeV1 = 'tree';
+        sourceData.sessionFoldersV1 = {
+            v: 1,
+            folders: [{
+                id: 'folder-a',
+                workspace: {
+                    t: 'workspaceScope',
+                    serverId: 'server-a',
+                    machineId: 'machine-a',
+                    rootPath: '/repo',
+                },
+                parentId: null,
+                name: 'Planning',
+                createdAt: 1,
+                updatedAt: 1,
+            }],
+        };
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'server:server-a:active',
+                serverId: 'server-a',
+            },
+            {
+                type: 'header',
+                title: 'Project',
+                headerKind: 'project',
+                groupKey: 'server:server-a:active:project:repo',
+                serverId: 'server-a',
+                workspaceKey: 'wl_repo',
+                workspaceScopeHint: {
+                    serverId: 'server-a',
+                    machineId: 'machine-a',
+                    rootPath: '/repo',
+                },
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('assigned-session', {
+                    active: true,
+                    metadata: { path: '/repo', host: 'machine-a' },
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:active:project:repo',
+                groupKind: 'project',
+                serverId: 'server-a',
+            },
+        ];
+        sourceData.groupOrder = {
+            'server:server-a:active:project:repo': ['server-a:assigned-session'],
+        };
+        sourceData.sessionFolderAssignmentsBySessionKey = {
+            'server-a:assigned-session': 'folder-a',
+        };
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData('persisted'));
+
+        expect(hook.getCurrent()?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}:${item.title}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}:${item.folderId ?? 'root'}`
+        )).toEqual([
+            'header:active:Active',
+            'header:project:Project',
+            'header:folder:Planning',
+            'session:assigned-session:folder:folder-a',
+        ]);
         await hook.unmount();
     });
 });

@@ -118,3 +118,62 @@ export function renameSessionFolder(params: Readonly<{
         folder: next.folders.find((folder) => folder.id === target.id) ?? null,
     };
 }
+
+function isDescendantFolder(
+    candidateId: string,
+    ancestorId: string,
+    byId: ReadonlyMap<string, SessionFolderV1>,
+): boolean {
+    let current = byId.get(candidateId);
+    const seen = new Set<string>();
+    while (current?.parentId) {
+        if (current.parentId === ancestorId) return true;
+        if (seen.has(current.parentId)) return false;
+        seen.add(current.parentId);
+        current = byId.get(current.parentId);
+    }
+    return false;
+}
+
+export function moveSessionFolder(params: Readonly<{
+    current: SessionFoldersV1;
+    folderId: string;
+    parentId: string | null;
+    now: number;
+}>): Readonly<{
+    next: SessionFoldersV1;
+    folder: SessionFolderV1 | null;
+}> {
+    const byId = new Map(params.current.folders.map((folder) => [folder.id, folder] as const));
+    const target = byId.get(params.folderId);
+    if (!target) {
+        return { next: params.current, folder: null };
+    }
+    if (params.parentId === target.id) {
+        return { next: params.current, folder: null };
+    }
+    const parent = params.parentId ? byId.get(params.parentId) ?? null : null;
+    if (params.parentId && !parent) {
+        return { next: params.current, folder: null };
+    }
+    if (parent && buildSessionFolderWorkspaceRefKey(parent.workspace) !== buildSessionFolderWorkspaceRefKey(target.workspace)) {
+        return { next: params.current, folder: null };
+    }
+    if (parent && isDescendantFolder(parent.id, target.id, byId)) {
+        return { next: params.current, folder: null };
+    }
+    if ((target.parentId ?? null) === (params.parentId ?? null)) {
+        return { next: params.current, folder: target };
+    }
+
+    const next = normalizeSessionFolders({
+        v: 1,
+        folders: params.current.folders.map((folder) => folder.id === target.id
+            ? { ...folder, parentId: params.parentId, updatedAt: params.now }
+            : folder),
+    });
+    return {
+        next,
+        folder: next.folders.find((folder) => folder.id === target.id) ?? null,
+    };
+}

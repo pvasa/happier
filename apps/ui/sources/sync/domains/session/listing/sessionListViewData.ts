@@ -341,7 +341,8 @@ function pushFolderAwareProjectSessionsToList(params: Readonly<{
     }
 
     const pushNode = (node: SessionFolderTreeNode): void => {
-        const depth = node.depth + 1;
+        const headerDepth = node.depth;
+        const sessionDepth = node.depth + 1;
         const folderGroupKey = buildFolderGroupKey({
             projectGroupKey: params.projectGroupKey,
             folderId: node.id,
@@ -356,7 +357,7 @@ function pushFolderAwareProjectSessionsToList(params: Readonly<{
             renderWorkspaceKey: params.renderWorkspaceKey,
             folderId: node.id,
             parentFolderId: node.parentId,
-            depth,
+            depth: headerDepth,
             sessionCount: folderSessions.length,
             ...params.serverScopeMeta,
         });
@@ -369,13 +370,14 @@ function pushFolderAwareProjectSessionsToList(params: Readonly<{
                 groupKind: 'folder',
                 variant: params.variant,
                 folderId: node.id,
-                folderDepth: depth,
+                folderDepth: sessionDepth,
                 ...params.serverScopeMeta,
             });
         });
         node.children.forEach(pushNode);
     };
 
+    tree.rootNodes.forEach(pushNode);
     rootSessions.forEach((session) => {
         params.listData.push({
             type: 'session',
@@ -389,7 +391,6 @@ function pushFolderAwareProjectSessionsToList(params: Readonly<{
             ...params.serverScopeMeta,
         });
     });
-    tree.rootNodes.forEach(pushNode);
 }
 
 export function applySessionFoldersToSessionListViewData(
@@ -425,17 +426,15 @@ export function applySessionFoldersToSessionListViewData(
             cursor += 1;
         }
 
-        if (sessions.length === 0) {
-            out.push(item);
-            continue;
-        }
-
         out.push(item);
         const beforeLength = out.length;
+        const fallbackSection = typeof item.groupKey === 'string' && item.groupKey.includes(':active:')
+            ? 'active'
+            : 'inactive';
         pushFolderAwareProjectSessionsToList({
             listData: out,
             sessions: sessions.map((session) => session.session),
-            section: sessions[0]?.section ?? 'inactive',
+            section: sessions[0]?.section ?? fallbackSection,
             projectGroupKey: item.groupKey,
             variant: sessions[0]?.variant ?? 'default',
             serverScopeMeta: {

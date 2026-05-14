@@ -74,7 +74,7 @@ function buildVisibleSessionListViewData(
         storageFilterApplied: storageFilter !== 'all',
     });
 
-    return applySessionListStorageFilter(visible, storageFilter);
+    return visible;
 }
 
 function countRenderedSessions(data: SessionListViewItem[] | null): number {

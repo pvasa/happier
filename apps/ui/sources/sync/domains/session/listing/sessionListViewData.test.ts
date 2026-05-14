@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
-import { buildSessionListViewData } from './sessionListViewData';
+import { applySessionFoldersToSessionListViewData, buildSessionListViewData } from './sessionListViewData';
 
 function makeSession(partial: Partial<Session> & Pick<Session, 'id'>): Session {
     const active = partial.active ?? false;
@@ -135,12 +135,12 @@ describe('buildSessionListViewData', () => {
 
         expect(summary).toEqual([
             'header:active:Active',
-            'header:project:~/repoA',
+            'header:project:repoA',
             'session:active:active:no-path',
             'header:inactive:Inactive',
-            'header:project:~/repoB',
+            'header:project:repoB',
             'session:b1:inactive:no-path',
-            'header:project:~/repoA',
+            'header:project:repoA',
             'session:a2:inactive:no-path',
             'session:a1:inactive:no-path',
         ]);
@@ -207,10 +207,10 @@ describe('buildSessionListViewData', () => {
 
         expect(summary).toEqual([
             'header:active:Active:root:0',
-            'header:project:~/repoA:root:0',
-            'session:unassigned:project:root:0',
-            'header:folder:Planning:folder-a:1',
+            'header:project:repoA:root:0',
+            'header:folder:Planning:folder-a:0',
             'session:assigned:folder:folder-a:1',
+            'session:unassigned:project:root:0',
         ]);
         expect(data.find((item) => item.type === 'header' && item.headerKind === 'folder')).toMatchObject({
             workspace: {
@@ -221,6 +221,54 @@ describe('buildSessionListViewData', () => {
             },
             renderWorkspaceKey: expect.any(String),
         });
+    });
+
+    it('keeps workspace folder headers visible when the workspace has no visible sessions', () => {
+        const workspace = {
+            t: 'workspaceScope' as const,
+            serverId: 'server-a',
+            machineId: 'm1',
+            rootPath: '/home/u/repoA',
+        };
+
+        const data = applySessionFoldersToSessionListViewData([
+            { type: 'header', title: 'Active', headerKind: 'active', groupKey: 'active' },
+            {
+                type: 'header',
+                title: 'repoA',
+                headerKind: 'project',
+                groupKey: 'server:server-a:active:project:repoA',
+                workspaceKey: 'repoA',
+                workspaceScopeHint: workspace,
+                serverId: 'server-a',
+            },
+            { type: 'header', title: 'Inactive', headerKind: 'inactive', groupKey: 'inactive' },
+        ] as any, {
+            enabled: true,
+            folders: {
+                v: 1,
+                folders: [{
+                    id: 'folder-a',
+                    workspace,
+                    renderWorkspaceKey: 'repoA',
+                    parentId: null,
+                    name: 'Planning',
+                    createdAt: 1,
+                    updatedAt: 1,
+                }],
+            },
+            assignmentsBySessionKey: {},
+        });
+
+        expect(data.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}:${item.title}:${item.folderId ?? 'root'}:${item.depth ?? 0}`
+            : `session:${item.session.id}`
+        )).toEqual([
+            'header:active:Active:root:0',
+            'header:project:repoA:root:0',
+            'header:folder:Planning:folder-a:0',
+            'header:inactive:Inactive:root:0',
+        ]);
     });
 
     it('stores the newest session id on project headers for contextual new-session seeding', () => {
@@ -328,7 +376,7 @@ describe('buildSessionListViewData', () => {
 
         const data = buildSessionListViewData(sessions, { [machine.id]: machine }, { groupInactiveSessionsByProject: true });
         const header = data.find((i) => i.type === 'header' && i.headerKind === 'project') as any;
-        expect(header?.title).toBe('/home/userfoo/repo');
+        expect(header?.title).toBe('repo');
     });
 
     it('propagates server scope metadata to all list rows when provided', () => {
@@ -418,9 +466,9 @@ describe('buildSessionListViewData', () => {
 
             expect(summary).toEqual([
                 'header:active:Active',
-                'header:project:~/repoB',
+                'header:project:repoB',
                 'session:act2:active:no-path',
-                'header:project:~/repoA',
+                'header:project:repoA',
                 'session:act1:active:no-path',
                 'header:inactive:Inactive',
                 'header:date:Yesterday',
@@ -487,7 +535,7 @@ describe('buildSessionListViewData', () => {
                 'header:active:Active',
                 'header:shared:Shared sessions',
                 'session:sharedActive:active:shared',
-                'header:project:~/own-active',
+                'header:project:own-active',
                 'session:ownActive:active:project',
                 'header:inactive:Inactive',
                 'header:shared:Shared sessions',
