@@ -22,7 +22,7 @@ function readGoalOperationResult(response: unknown): SessionGoalOperationResult 
     }
     const raw = response as Record<string, unknown>;
     if (raw.ok === true) return { ok: true };
-    if (raw.ok === false && typeof raw.error === 'string') {
+    if (raw.ok !== true && typeof raw.error === 'string') {
         return {
             ok: false,
             error: raw.error,

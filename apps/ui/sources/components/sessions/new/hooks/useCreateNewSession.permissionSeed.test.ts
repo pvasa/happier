@@ -108,6 +108,9 @@ async function setupUseCreateNewSessionHarness() {
     const prefetchMachineCapabilitiesSpy = vi.fn(async () => {});
     const captureExceptionIfEnabledSpy = vi.fn();
     const syncSendMessageSpy = vi.fn<(...args: unknown[]) => Promise<void>>(async (..._args: unknown[]) => {});
+    const sessionGoalSetSpy = vi.fn(async (_sessionId: string, _request: unknown, _opts?: unknown) => ({ ok: true as const }));
+    const sessionGoalClearSpy = vi.fn(async (_sessionId: string, _opts?: unknown) => ({ ok: true as const }));
+    const actionExecuteSpy = vi.fn(async (_actionId: unknown, _input: unknown, _ctx?: unknown) => ({ ok: true as const }));
     const followUpSpawnedSessionWithServerScopeSpy = vi.fn(async (params: {
         sessionId: string;
         targetServerId?: string | null;
@@ -329,6 +332,18 @@ async function setupUseCreateNewSessionHarness() {
     vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession', () => ({
         followUpSpawnedSessionWithServerScope: followUpSpawnedSessionWithServerScopeSpy,
     }));
+    vi.doMock('@/sync/ops/sessionGoals', () => ({
+        sessionGoalSet: (sessionId: string, request: unknown, opts?: unknown) => sessionGoalSetSpy(sessionId, request, opts),
+        sessionGoalClear: (sessionId: string, opts?: unknown) => sessionGoalClearSpy(sessionId, opts),
+    }));
+    vi.doMock('@/sync/ops/actions/defaultActionExecutor', () => ({
+        createDefaultActionExecutor: vi.fn(() => ({
+            execute: (actionId: unknown, input: unknown, ctx?: unknown) => actionExecuteSpy(actionId, input, ctx),
+        })),
+    }));
+    vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', () => ({
+        resolveServerIdForSessionIdFromLocalCache: vi.fn(() => 'server-a'),
+    }));
 
     const { useCreateNewSession } = await import('./useCreateNewSession');
     return {
@@ -355,6 +370,9 @@ async function setupUseCreateNewSessionHarness() {
         prefetchMachineCapabilitiesSpy,
         captureExceptionIfEnabledSpy,
         syncSendMessageSpy,
+        sessionGoalSetSpy,
+        sessionGoalClearSpy,
+        actionExecuteSpy,
         followUpSpawnedSessionWithServerScopeSpy,
         machineSpawnNewSessionSpy,
     };
@@ -547,6 +565,88 @@ describe('useCreateNewSession permission seeding', () => {
             initialMessageText: 'hello',
             metaOverrides: { model: 'gpt' },
         }));
+    });
+
+    it('sets a created session goal from a /goal initial prompt and sends the objective text', async () => {
+        const {
+            useCreateNewSession,
+            followUpSpawnedSessionWithServerScopeSpy,
+            machineSpawnNewSessionSpy,
+            sessionGoalSetSpy,
+            syncSendMessageSpy,
+        } = await setupUseCreateNewSessionHarness();
+
+        machineSpawnNewSessionSpy.mockResolvedValueOnce({ type: 'success', sessionId: 'sess_goal' });
+
+        let handleCreateSession: null | (() => Promise<void>) = null;
+        const settings = { experiments: false } as unknown as Settings;
+        const machineEnvPresence: UseMachineEnvPresenceResult = {
+            isPreviewEnvSupported: false,
+            isLoading: false,
+            meta: {},
+            refreshedAt: null,
+            refresh: () => {},
+        };
+
+        function Test() {
+            const hook = useCreateNewSession({
+                router: { push: vi.fn(), replace: vi.fn() },
+                selectedMachineId: 'm1',
+                selectedPath: '/tmp',
+                selectedMachine: { metadata: {} },
+                setIsCreating: vi.fn(),
+                setIsResumeSupportChecking: vi.fn(),
+                settings,
+                useProfiles: false,
+                selectedProfileId: null,
+                profileMap: new Map(),
+                recentMachinePaths: [],
+                agentType: 'codex' as any,
+                permissionMode: 'default' as PermissionMode,
+                modelMode: 'default' as any,
+                sessionPrompt: '/goal Ship slash support',
+                resumeSessionId: '',
+                agentNewSessionOptions: null,
+                machineEnvPresence,
+                secrets: [],
+                secretBindingsByProfileId: {},
+                selectedSecretIdByProfileIdByEnvVarName: {},
+                sessionOnlySecretValueByProfileIdByEnvVarName: {},
+                selectedMachineCapabilities: null,
+                targetServerId: 'server-a',
+                allowedTargetServerIds: ['server-a'],
+            });
+
+            handleCreateSession = hook.handleCreateSession as () => Promise<void>;
+            return React.createElement('View');
+        }
+
+        await renderScreen(React.createElement(Test));
+
+        await act(async () => {
+            await handleCreateSession?.();
+        });
+
+        expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({
+            sessionId: 'sess_goal',
+            initialMessageText: '',
+        }));
+        expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({
+            sessionId: 'sess_goal',
+            initialMessageText: 'Ship slash support',
+        }));
+        expect(syncSendMessageSpy).toHaveBeenCalledWith(
+            'sess_goal',
+            'Ship slash support',
+            undefined,
+            undefined,
+            undefined,
+        );
+        expect(sessionGoalSetSpy).toHaveBeenCalledWith(
+            'sess_goal',
+            { objective: 'Ship slash support' },
+            { serverId: 'server-a' },
+        );
     });
 
     it('passes connectedServices bindings into machineSpawnNewSession when provided', async () => {

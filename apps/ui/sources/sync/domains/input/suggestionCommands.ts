@@ -154,7 +154,7 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
 // Get commands from session metadata
 function getCommandsFromSession(sessionId: string): CommandItem[] {
     const state = storage.getState();
-    const session = state.sessions[sessionId];
+    const session = state.sessions?.[sessionId];
     // Built-in core slash commands (e.g. /happier-diagnose) are always available
     // and cannot be shadowed by user templates or session-provided commands.
     const commands: CommandItem[] = [

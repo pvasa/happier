@@ -95,6 +95,23 @@ describe('sessionWorkStatePresentation', () => {
         expect(resolvePrimarySessionWorkStateItem(snapshot)?.id).toBe('goal:thread-1');
     });
 
+    it('keeps displayable canonical items when future items use a different item shape', () => {
+        const snapshot = readSessionWorkStateFromMetadata({
+            sessionWorkStateV1: {
+                v: 1,
+                backendId: 'codex',
+                updatedAt: 10,
+                primaryItemId: 'goal:thread-1',
+                items: [
+                    { id: 'future:1', label: 'Future item', state: 'waiting' },
+                    { id: 'goal:thread-1', kind: 'goal', origin: 'vendor', status: 'active', title: 'Known goal', updatedAt: 10 },
+                ],
+            },
+        });
+
+        expect(resolvePrimarySessionWorkStateItem(snapshot)?.id).toBe('goal:thread-1');
+    });
+
     it('ignores canonical metadata with invalid root timestamps', () => {
         expect(readSessionWorkStateFromMetadata({
             sessionWorkStateV1: {

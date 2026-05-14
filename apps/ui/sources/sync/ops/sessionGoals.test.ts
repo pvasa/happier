@@ -70,4 +70,19 @@ describe('session goal operations', () => {
             error: 'Unsupported response from session RPC',
         });
     });
+
+    it('passes through bare runtime error responses from older session runners', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        sessionRpcWithServerScopeMock.mockResolvedValue({
+            error: 'unsupported_session_runtime_method:session.goal.set',
+            errorCode: 'unsupported_session_runtime_method',
+        });
+        const { sessionGoalSet } = await import('./sessionGoals');
+
+        await expect(sessionGoalSet('session-1', { objective: 'ship work-state' })).resolves.toEqual({
+            ok: false,
+            error: 'unsupported_session_runtime_method:session.goal.set',
+            errorCode: 'unsupported_session_runtime_method',
+        });
+    });
 });

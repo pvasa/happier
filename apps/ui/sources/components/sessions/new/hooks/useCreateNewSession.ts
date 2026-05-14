@@ -33,6 +33,10 @@ import { nowServerMs } from '@/sync/runtime/time';
 import { encodeAutomationTemplateCiphertextForAccount } from '@/sync/domains/automations/encodeAutomationTemplateCiphertextForAccount';
 import { resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/resolveSessionComposerSend';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
+import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
 
 function getActiveNewSessionDraftScope() {
     return storage.getState().profileScope ?? null;
@@ -155,6 +159,7 @@ export function useCreateNewSession(params: Readonly<{
     sessionPrompt: string;
     resumeSessionId: string;
     agentNewSessionOptions?: Record<string, unknown> | null;
+    executionRunsEnabled?: boolean;
     authoringDraft?: SessionAuthoringDraft | null;
     automationEditId?: string | null;
     mcpSelection?: SessionMcpSelectionV1 | null;
@@ -509,19 +514,21 @@ export function useCreateNewSession(params: Readonly<{
                 let postSpawnFollowUpError: unknown = null;
                 let initialMessageText = '';
                 let recoverableCreatedSessionDraft = '';
+                let postSpawnSessionRouteSuffix = '';
+                let postSpawnReplacementHref: string | null = null;
 
                 try {
                     const shouldSendInitialMessage = (opts?.initialMessage ?? 'send') !== 'skip';
                     const shouldPrepareInitialMessage = shouldSendInitialMessage && current.sessionPrompt.trim();
-                    if (shouldPrepareInitialMessage) {
-                        const promptInvocationsV1 = storage.getState().settings.promptInvocationsV1;
-                        const resolvedInitialMessage = resolveSessionComposerSend({
+                    const resolvedInitialMessage = shouldPrepareInitialMessage
+                        ? resolveSessionComposerSend({
                             input: current.sessionPrompt,
-                            executionRunsEnabled: false,
-                            promptInvocationsV1,
-                        });
+                            executionRunsEnabled: current.executionRunsEnabled === true,
+                            promptInvocationsV1: storage.getState().settings.promptInvocationsV1,
+                        })
+                        : null;
 
-                        initialMessageText = current.sessionPrompt;
+                    if (resolvedInitialMessage) {
                         if (resolvedInitialMessage.kind === 'template') {
                             initialMessageText = await expandPromptTemplateInvocation({
                                 targetArtifactId: resolvedInitialMessage.targetArtifactId,
@@ -530,6 +537,8 @@ export function useCreateNewSession(params: Readonly<{
                         } else if (resolvedInitialMessage.kind === 'send') {
                             initialMessageText = resolvedInitialMessage.text;
                         } else if (resolvedInitialMessage.kind === 'noop') {
+                            initialMessageText = '';
+                        } else {
                             initialMessageText = '';
                         }
                     }
@@ -555,9 +564,60 @@ export function useCreateNewSession(params: Readonly<{
                         })(),
                         profileId: profilesActive ? (current.selectedProfileId ?? '') : null,
                     });
+
+                    if (
+                        resolvedInitialMessage
+                        && (resolvedInitialMessage.kind === 'action' || resolvedInitialMessage.kind === 'goal')
+                    ) {
+                        const actionExecutor = createDefaultActionExecutor({
+                            resolveServerIdForSessionId: (sessionId) => {
+                                if (sessionId === result.sessionId && resolvedTargetServerId) {
+                                    return resolvedTargetServerId;
+                                }
+                                return resolveServerIdForSessionIdFromLocalCache(sessionId);
+                            },
+                            openSession: (sessionId) => {
+                                if (sessionId === result.sessionId) {
+                                    postSpawnReplacementHref = buildScopedSessionRouteHref({
+                                        sessionId,
+                                        serverId: resolvedTargetServerId,
+                                    });
+                                }
+                            },
+                        });
+
+                        await executeSessionComposerResolution({
+                            resolved: resolvedInitialMessage,
+                            sessionId: result.sessionId,
+                            agentId: current.agentType,
+                            backendTarget: current.backendTarget ?? null,
+                            permissionMode: current.permissionMode,
+                            actionExecutor,
+                            previousMessage: current.sessionPrompt,
+                            setMessage: () => {},
+                            clearDraft: () => {},
+                            trackMessageSent: () => {},
+                            navigateToRuns: () => {
+                                postSpawnSessionRouteSuffix = '/runs';
+                            },
+                            navigateToPetSettings: () => {
+                                postSpawnReplacementHref = '/settings/pets';
+                            },
+                            openGoalControls: () => {},
+                            setSessionGoal: (sessionId, request) => sessionGoalSet(sessionId, request, { serverId: resolvedTargetServerId }),
+                            clearSessionGoal: (sessionId) => sessionGoalClear(sessionId, { serverId: resolvedTargetServerId }),
+                            sendGoalObjectiveMessage: (objective) => followUpSpawnedSessionWithServerScope({
+                                sessionId: result.sessionId!,
+                                targetServerId: resolvedTargetServerId,
+                                initialMessageText: objective,
+                                profileId: profilesActive ? (current.selectedProfileId ?? '') : null,
+                            }),
+                            modalAlert: (title, message) => Modal.alert(title, message),
+                        });
+                    }
                 } catch (error) {
                     postSpawnFollowUpError = error;
-                    recoverableCreatedSessionDraft = initialMessageText;
+                    recoverableCreatedSessionDraft = initialMessageText || current.sessionPrompt;
                 }
 
                 storage.getState().updateSessionPermissionMode(result.sessionId, current.permissionMode);
@@ -666,10 +726,11 @@ export function useCreateNewSession(params: Readonly<{
                 const sessionRoute = buildScopedSessionRouteHref({
                     sessionId: result.sessionId,
                     serverId: resolvedTargetServerId,
+                    suffix: postSpawnSessionRouteSuffix,
                     query: recoveryDataId ? { recoveryDataId } : undefined,
                 });
 
-                current.router.replace(sessionRoute, {
+                current.router.replace(postSpawnReplacementHref ?? sessionRoute, {
                     dangerouslySingular() {
                         return 'session';
                     },

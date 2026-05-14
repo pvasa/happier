@@ -22,6 +22,38 @@ type SetSessionGoal = (
 
 type ClearSessionGoal = (sessionId: string) => Promise<SessionGoalOperationResult>;
 
+function isUnsupportedGoalOperationResult(result: SessionGoalOperationResult): boolean {
+  if (result.ok) return false;
+  if (result.errorCode === 'unsupported_session_runtime_method') return true;
+  return /goals?\s+feature\s+is\s+disabled/i.test(result.error);
+}
+
+function isMissingCurrentGoalOperationResult(result: SessionGoalOperationResult): boolean {
+  if (result.ok) return false;
+  return result.errorCode === 'goal_objective_required'
+    || result.error === 'goal_objective_required'
+    || result.errorCode === 'invalid_parameters'
+    || result.error === 'invalid_parameters';
+}
+
+function showGoalOperationFailure(
+  result: SessionGoalOperationResult,
+  modalAlert: (title: string, message: string) => void,
+  options?: Readonly<{ statusOnly?: boolean }>,
+): void {
+  if (options?.statusOnly === true && isMissingCurrentGoalOperationResult(result)) {
+    modalAlert(t('session.workState.noCurrentGoalTitle'), t('session.workState.noCurrentGoalMessage'));
+    return;
+  }
+  if (isUnsupportedGoalOperationResult(result)) {
+    modalAlert(t('session.workState.unsupportedTitle'), t('session.workState.unsupportedMessage'));
+    return;
+  }
+  if (!result.ok) {
+    modalAlert(t('common.error'), result.error);
+  }
+}
+
 export async function executeSessionComposerResolution(args: Readonly<{
   resolved: SessionComposerSendResolution;
   sessionId: string;
@@ -39,6 +71,7 @@ export async function executeSessionComposerResolution(args: Readonly<{
   openGoalControls?: () => void;
   setSessionGoal?: SetSessionGoal;
   clearSessionGoal?: ClearSessionGoal;
+  sendGoalObjectiveMessage?: (objective: string) => Promise<void>;
   modalAlert: (title: string, message: string) => void;
 }>): Promise<boolean> {
   const ctx: ActionExecutorContext = {
@@ -69,7 +102,16 @@ export async function executeSessionComposerResolution(args: Readonly<{
       const result = await args.setSessionGoal(args.sessionId, { objective: args.resolved.objective });
       if (!result.ok) {
         if (args.previousMessage) args.setMessage(args.previousMessage);
-        args.modalAlert(t('common.error'), result.error);
+        showGoalOperationFailure(result, args.modalAlert);
+        return true;
+      }
+      if (args.sendGoalObjectiveMessage) {
+        try {
+          await args.sendGoalObjectiveMessage(args.resolved.objective);
+        } catch (error) {
+          if (args.previousMessage) args.setMessage(args.previousMessage);
+          args.modalAlert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));
+        }
       }
       return true;
     }
@@ -84,7 +126,7 @@ export async function executeSessionComposerResolution(args: Readonly<{
       const result = await args.setSessionGoal(args.sessionId, {
         status: args.resolved.command === 'pause' ? 'paused' : 'active',
       });
-      if (!result.ok) args.modalAlert(t('common.error'), result.error);
+      if (!result.ok) showGoalOperationFailure(result, args.modalAlert, { statusOnly: true });
       return true;
     }
 
@@ -96,7 +138,7 @@ export async function executeSessionComposerResolution(args: Readonly<{
       args.setMessage('');
       args.clearDraft();
       const result = await args.clearSessionGoal(args.sessionId);
-      if (!result.ok) args.modalAlert(t('common.error'), result.error);
+      if (!result.ok) showGoalOperationFailure(result, args.modalAlert);
       return true;
     }
   }

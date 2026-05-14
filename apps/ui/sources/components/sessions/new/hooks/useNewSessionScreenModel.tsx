@@ -64,6 +64,7 @@ import {
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { resolveLocalFeaturePolicyEnabled } from '@/sync/domains/features/featureLocalPolicy';
 import { useNewSessionConnectedServices } from '@/components/sessions/new/modules/useNewSessionConnectedServices';
 import {
     buildNewSessionAuthoringDraftFromPersistedDraft,
@@ -119,6 +120,7 @@ import {
 // Configuration constants
 const RECENT_PATHS_DEFAULT_VISIBLE = 5;
 const SIMPLE_NEW_SESSION_COMPOSER_CHROME_HEIGHT = 96;
+const NEW_SESSION_COMMAND_SUGGESTION_SESSION_ID = '__new_session__';
 const styles = newSessionScreenStyles;
 
 function buildNewSessionPopoverSignature(value: unknown): string {
@@ -293,6 +295,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         });
     }, [activeServerSnapshot.serverId, targetServerId]);
     const directSessionsFeatureEnabled = useFeatureEnabled('sessions.direct', { scopeKind: 'spawn', serverId: targetServerId });
+    const executionRunsEnabled = resolveLocalFeaturePolicyEnabled('execution.runs', settings);
     const useMachinePickerSearch = useSetting('useMachinePickerSearch');
     const usePathPickerSearch = useSetting('usePathPickerSearch');
     const newSessionWizardSectionPresentation = useSetting('newSessionWizardSectionPresentationV1');
@@ -462,11 +465,14 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         }
         setSelectedProfileId(null);
     }, [profileMap, resolvedBackendEntries, selectedProfileId, useProfiles]);
-    // AgentInput autocomplete is unused on this screen today, but passing a new
-    // function/array each render forces autocomplete hooks to re-sync.
-    // Keep these stable to avoid unnecessary work during taps/selection changes.
-    const emptyAutocompletePrefixes = React.useMemo(() => [], []);
-    const emptyAutocompleteSuggestions = React.useCallback(async () => [], []);
+    // New-session autocomplete is limited to provider-independent slash commands.
+    // Provider-discovered commands are session metadata published after spawn.
+    const emptyAutocompletePrefixes = React.useMemo(() => ['/'], []);
+    const emptyAutocompleteSuggestions = React.useCallback(async (query: string) => {
+        if (!query.startsWith('/')) return [];
+        const { getCommandSuggestions } = await import('@/components/autocomplete/suggestions');
+        return getCommandSuggestions(NEW_SESSION_COMMAND_SUGGESTION_SESSION_ID, query);
+    }, []);
 
     const effectiveMachineIdParam = React.useMemo(() => {
         const normalizedMachineIdParam = normalizeOptionalParam(machineIdParam);
@@ -1518,6 +1524,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         automationEditId,
         resumeSessionId,
         agentNewSessionOptions,
+        executionRunsEnabled,
         authoringDraft: currentAuthoringDraft,
         mcpSelection,
         windowsRemoteSessionLaunchModeOverride,

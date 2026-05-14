@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { TodoChecklist } from '@/components/todos/TodoChecklist';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
@@ -19,27 +20,15 @@ function WorkStateGroup(props: Readonly<{
     return (
         <View testID={props.testID} style={styles.group}>
             <Text style={[styles.groupTitle, { color: theme.colors.text.secondary }]}>{props.title}</Text>
-            {props.items.map((item) => {
-                const selected = item.id === props.primaryItemId;
-                return (
-                    <View
-                        key={item.id}
-                        testID={`session-work-state-item-${item.id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`}
-                        accessibilityState={{ selected }}
-                        style={[
-                            styles.row,
-                            {
-                                borderColor: selected ? theme.colors.accent.blue : theme.colors.border.default,
-                                backgroundColor: selected ? theme.colors.surface.selected : undefined,
-                            },
-                        ]}
-                    >
-                        <Text numberOfLines={2} style={[styles.itemTitle, { color: theme.colors.text.primary }]}>
-                            {item.title}
-                        </Text>
-                    </View>
-                );
-            })}
+            <TodoChecklist
+                items={props.items.map((item) => ({
+                    id: item.id,
+                    title: item.title,
+                    status: item.status,
+                    testID: `session-work-state-item-${item.id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`,
+                }))}
+                surface="plain"
+            />
         </View>
     );
 }
@@ -69,16 +58,5 @@ const styles = StyleSheet.create(() => ({
     groupTitle: {
         fontSize: 11,
         fontWeight: '700',
-    },
-    row: {
-        borderWidth: StyleSheet.hairlineWidth,
-        borderRadius: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        gap: 3,
-    },
-    itemTitle: {
-        fontSize: 13,
-        fontWeight: '600',
     },
 }));

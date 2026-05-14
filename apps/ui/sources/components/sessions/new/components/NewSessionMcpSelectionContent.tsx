@@ -1,7 +1,8 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type {
     DaemonMcpServersPreviewResponse,
@@ -63,7 +64,7 @@ function GroupActionButton(props: GroupActionButtonProps) {
             ]}
         >
             {isLoading ? (
-                <ActivityIndicator size="small" color={theme.colors.text.tertiary} />
+                <ActivitySpinner size="small" color={theme.colors.text.tertiary} />
             ) : (
                 normalizeNodeForView(
                     <Ionicons name={props.icon} size={18} color={theme.colors.text.tertiary} />,

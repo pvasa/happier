@@ -99,7 +99,6 @@ function readCanonicalSnapshot(value: unknown): SessionWorkStateSnapshot | null 
     const updatedAt = readNonNegativeNumber(raw.updatedAt);
     if (!backendId || updatedAt === null || !Array.isArray(raw.items)) return null;
     const parsedItems = raw.items.map(readItem);
-    if (parsedItems.some((item) => item.type === 'invalid')) return null;
     const items = parsedItems
         .filter((item): item is Readonly<{ type: 'item'; item: SessionWorkStateItem }> => item.type === 'item')
         .map((item) => item.item);

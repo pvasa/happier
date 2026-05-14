@@ -107,9 +107,10 @@ describe('executeSessionComposerResolution', () => {
     expect(openGoalControls).toHaveBeenCalledTimes(1);
   });
 
-  it('runs a native goal set operation for /goal objective text', async () => {
+  it('sets the native goal and sends the objective as the next user message for /goal objective text', async () => {
     const executeSessionComposerResolution = await loadSubject();
     const setSessionGoal = vi.fn(async () => ({ ok: true as const }));
+    const sendGoalObjectiveMessage = vi.fn(async () => undefined);
     const setMessage = vi.fn();
     const clearDraft = vi.fn();
     const trackMessageSent = vi.fn();
@@ -128,13 +129,46 @@ describe('executeSessionComposerResolution', () => {
       navigateToRuns: vi.fn(),
       modalAlert: vi.fn(),
       setSessionGoal,
+      sendGoalObjectiveMessage,
     } as any);
 
     expect(handled).toBe(true);
     expect(setSessionGoal).toHaveBeenCalledWith('s1', { objective: 'migrate plugin support' });
+    expect(sendGoalObjectiveMessage).toHaveBeenCalledWith('migrate plugin support');
     expect(setMessage).toHaveBeenCalledWith('');
     expect(clearDraft).toHaveBeenCalled();
     expect(trackMessageSent).not.toHaveBeenCalled();
+  });
+
+  it('does not send the objective message when the native goal set fails', async () => {
+    const executeSessionComposerResolution = await loadSubject();
+    const setSessionGoal = vi.fn(async () => ({
+      ok: false as const,
+      error: 'goals feature is disabled',
+    }));
+    const sendGoalObjectiveMessage = vi.fn(async () => undefined);
+    const setMessage = vi.fn();
+
+    const handled = await executeSessionComposerResolution({
+      resolved: { kind: 'goal', command: 'set', objective: 'migrate plugin support' } as any,
+      sessionId: 's1',
+      agentId: 'codex',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      permissionMode: 'default',
+      actionExecutor: { execute: vi.fn() },
+      previousMessage: '/goal migrate plugin support',
+      setMessage,
+      clearDraft: vi.fn(),
+      trackMessageSent: vi.fn(),
+      navigateToRuns: vi.fn(),
+      modalAlert: vi.fn(),
+      setSessionGoal,
+      sendGoalObjectiveMessage,
+    } as any);
+
+    expect(handled).toBe(true);
+    expect(sendGoalObjectiveMessage).not.toHaveBeenCalled();
+    expect(setMessage).toHaveBeenCalledWith('/goal migrate plugin support');
   });
 
   it('shows unsupported goal feedback without sending text', async () => {
@@ -157,6 +191,92 @@ describe('executeSessionComposerResolution', () => {
 
     expect(handled).toBe(true);
     expect(modalAlert).toHaveBeenCalledWith('Goal unavailable', 'This backend does not support editable session goals yet.');
+  });
+
+  it('normalizes unsupported goal operation failures to goal unavailable feedback', async () => {
+    const executeSessionComposerResolution = await loadSubject();
+    const modalAlert = vi.fn();
+    const setSessionGoal = vi.fn(async () => ({
+      ok: false as const,
+      error: 'unsupported_session_runtime_method:session.goal.set',
+      errorCode: 'unsupported_session_runtime_method',
+    }));
+
+    const handled = await executeSessionComposerResolution({
+      resolved: { kind: 'goal', command: 'set', objective: 'migrate plugin support' } as any,
+      sessionId: 's1',
+      agentId: 'codex',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      permissionMode: 'default',
+      actionExecutor: { execute: vi.fn() },
+      previousMessage: '/goal migrate plugin support',
+      setMessage: vi.fn(),
+      clearDraft: vi.fn(),
+      trackMessageSent: vi.fn(),
+      navigateToRuns: vi.fn(),
+      modalAlert,
+      setSessionGoal,
+    } as any);
+
+    expect(handled).toBe(true);
+    expect(modalAlert).toHaveBeenCalledWith('Goal unavailable', 'This backend does not support editable session goals yet.');
+  });
+
+  it('normalizes disabled goal feature failures to goal unavailable feedback', async () => {
+    const executeSessionComposerResolution = await loadSubject();
+    const modalAlert = vi.fn();
+    const setSessionGoal = vi.fn(async () => ({
+      ok: false as const,
+      error: 'goals feature is disabled',
+    }));
+
+    const handled = await executeSessionComposerResolution({
+      resolved: { kind: 'goal', command: 'set', objective: 'migrate plugin support' } as any,
+      sessionId: 's1',
+      agentId: 'codex',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      permissionMode: 'default',
+      actionExecutor: { execute: vi.fn() },
+      previousMessage: '/goal migrate plugin support',
+      setMessage: vi.fn(),
+      clearDraft: vi.fn(),
+      trackMessageSent: vi.fn(),
+      navigateToRuns: vi.fn(),
+      modalAlert,
+      setSessionGoal,
+    } as any);
+
+    expect(handled).toBe(true);
+    expect(modalAlert).toHaveBeenCalledWith('Goal unavailable', 'This backend does not support editable session goals yet.');
+  });
+
+  it('normalizes status-only goal failures without a current goal', async () => {
+    const executeSessionComposerResolution = await loadSubject();
+    const modalAlert = vi.fn();
+    const setSessionGoal = vi.fn(async () => ({
+      ok: false as const,
+      error: 'invalid_parameters',
+      errorCode: 'invalid_parameters',
+    }));
+
+    const handled = await executeSessionComposerResolution({
+      resolved: { kind: 'goal', command: 'pause' } as any,
+      sessionId: 's1',
+      agentId: 'codex',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      permissionMode: 'default',
+      actionExecutor: { execute: vi.fn() },
+      previousMessage: '/goal pause',
+      setMessage: vi.fn(),
+      clearDraft: vi.fn(),
+      trackMessageSent: vi.fn(),
+      navigateToRuns: vi.fn(),
+      modalAlert,
+      setSessionGoal,
+    } as any);
+
+    expect(handled).toBe(true);
+    expect(modalAlert).toHaveBeenCalledWith('No goal to update', 'Set a goal before pausing or resuming it.');
   });
 
   it('inserts a review.start action draft when /h.review has no instructions', async () => {
