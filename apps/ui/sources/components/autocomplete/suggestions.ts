@@ -1,5 +1,5 @@
 import {
-    CommandSuggestion,
+    COMMAND_SUGGESTION_ROW_HEIGHT,
     FileMentionSuggestion,
     SkillMentionSuggestion,
     VendorPluginMentionSuggestion,
@@ -167,7 +167,9 @@ function buildFileSuggestion(file: FileItem): AutocompleteSuggestion {
 export async function getCommandSuggestions(sessionId: string, query: string): Promise<{
     key: string;
     text: string;
-    component: React.ComponentType;
+    label: string;
+    description?: string;
+    rowHeight?: number;
 }[]> {
     // Remove the "/" prefix for searching
     const searchTerm = query.slice(1);
@@ -180,10 +182,9 @@ export async function getCommandSuggestions(sessionId: string, query: string): P
         return commands.map((cmd: CommandItem) => ({
             key: `cmd-${cmd.command}`,
             text: `/${cmd.command}`,
-            component: () => React.createElement(CommandSuggestion, {
-                command: cmd.command,
-                description: cmd.description,
-            }),
+            label: `/${cmd.command}`,
+            description: cmd.description,
+            rowHeight: COMMAND_SUGGESTION_ROW_HEIGHT,
         }));
     } catch {
         return [];

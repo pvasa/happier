@@ -21,6 +21,9 @@ export type AutocompleteStructuredInput =
 export type AutocompleteSuggestion = Readonly<{
     key: string;
     text: string;
-    component: React.ElementType;
+    label?: string;
+    description?: string;
+    component?: React.ElementType;
+    rowHeight?: number;
     structuredInput?: AutocompleteStructuredInput;
 }>;
