@@ -291,6 +291,45 @@ describe('SessionCockpitSurfaceScreen', () => {
         expect(screen.tree.findByType(expectedType as never)).toBeTruthy();
     });
 
+    it('keeps git surface detail-opening callbacks stable across cockpit rerenders', async () => {
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <CockpitSurfaceHarness
+                    sessionId="s_1"
+                    scopeId="session:s_1"
+                    surface="git"
+                    routeServerId="server-b"
+                    terminalTabAvailable
+                />
+            </AppPaneProvider>,
+        );
+
+        const firstGitSurface = screen.tree.findByType('SessionGitSurface' as never);
+        const firstProps = { ...firstGitSurface.props };
+
+        await act(async () => {
+            await screen.update(
+                <AppPaneProvider>
+                    <CockpitSurfaceHarness
+                        sessionId="s_1"
+                        scopeId="session:s_1"
+                        surface="git"
+                        routeServerId="server-b"
+                        jumpToSeq={42}
+                        terminalTabAvailable
+                    />
+                </AppPaneProvider>,
+            );
+        });
+
+        const nextGitSurface = screen.tree.findByType('SessionGitSurface' as never);
+        expect(nextGitSurface.props.onOpenFile).toBe(firstProps.onOpenFile);
+        expect(nextGitSurface.props.onOpenFilePinned).toBe(firstProps.onOpenFilePinned);
+        expect(nextGitSurface.props.onOpenCommit).toBe(firstProps.onOpenCommit);
+        expect(nextGitSurface.props.onOpenReviewAllChanges).toBe(firstProps.onOpenReviewAllChanges);
+        expect(nextGitSurface.props.onOpenStashDetails).toBe(firstProps.onOpenStashDetails);
+    });
+
     it('uses screen presentation for details when the route owns safe-area padding', async () => {
         const screen = await renderScreen(
             <AppPaneProvider>

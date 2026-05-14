@@ -256,4 +256,24 @@ describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
         expect(nextProps.onOpenReviewAllChanges).toBe(firstProps.onOpenReviewAllChanges);
         expect(nextProps.onOpenStashDetails).toBe(firstProps.onOpenStashDetails);
     }, SLOW_TEST_TIMEOUT_MS);
+
+    it('does not update inactive keep-mounted commit content on unrelated parent rerenders', async () => {
+        const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
+
+        activeGitSubTab = 'commit';
+        const { tree } = await renderScreen(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1" />);
+
+        activeGitSubTab = 'history';
+        await act(async () => {
+            tree.update(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1:history" />);
+        });
+
+        const callsAfterSwitch = gitCommitTabContentSpy.mock.calls.length;
+
+        await act(async () => {
+            tree.update(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1:history-rerender" />);
+        });
+
+        expect(gitCommitTabContentSpy.mock.calls).toHaveLength(callsAfterSwitch);
+    }, SLOW_TEST_TIMEOUT_MS);
 });

@@ -73,6 +73,8 @@ export function useSessionFileEditorState(input: Readonly<{
     const editorOriginalTextRef = React.useRef('');
     const isEditingFileRef = React.useRef(false);
     const persistDraftRef = React.useRef(input.persistDraft);
+    const latestInputRef = React.useRef(input);
+    latestInputRef.current = input;
 
     React.useEffect(() => {
         hydratedFromPersistedRef.current = false;
@@ -231,8 +233,8 @@ export function useSessionFileEditorState(input: Readonly<{
         setEditorByteSize(() => new Blob([editorOriginalText]).size);
         setEditorDirty(false);
         setEditorResetKey((key) => key + 1);
-        input.persistDraft?.(null);
-    }, [editorOriginalText, input.filePath, input.persistDraft, input.sessionId]);
+        persistDraftRef.current?.(null);
+    }, [editorOriginalText, input.filePath, input.sessionId]);
 
     const onEditorChange = React.useCallback((value: string) => {
         editorTextRef.current = value;
@@ -256,10 +258,11 @@ export function useSessionFileEditorState(input: Readonly<{
 
     const saveFileEdits = React.useCallback(() => {
         void (async () => {
+            const latestInput = latestInputRef.current;
             if (!editorSurfaceEnabled) return;
-            if (!input.sessionPath) return;
-            if (!input.sessionId) return;
-            if (!input.filePath) return;
+            if (!latestInput.sessionPath) return;
+            if (!latestInput.sessionId) return;
+            if (!latestInput.filePath) return;
             if (editorTextRef.current === editorOriginalTextRef.current) return;
 
             setIsSavingEdits(true);
@@ -270,7 +273,7 @@ export function useSessionFileEditorState(input: Readonly<{
                 sizeAndPersistDebounce.flush();
                 if (latestText === editorOriginalTextRef.current) return;
 
-                const response = await sessionWriteFile(input.sessionId, input.filePath, latestText);
+                const response = await sessionWriteFile(latestInput.sessionId, latestInput.filePath, latestText);
 
                 if (!response.success) {
                     const code = response.errorCode;
@@ -282,12 +285,12 @@ export function useSessionFileEditorState(input: Readonly<{
                             onRetry: () => {
                                 saveFileEdits();
                             },
-                            shouldContinue: () => input.mountedRef.current,
+                            shouldContinue: () => latestInputRef.current.mountedRef.current,
                         });
                         return;
                     }
                     if (code === RPC_ERROR_CODES.METHOD_NOT_FOUND) {
-                        input.setFileWriteSupported(false);
+                        latestInput.setFileWriteSupported(false);
                         setIsEditingFile(false);
                         Modal.alert(t('common.error'), t('files.fileEditingUnsupported'));
                         return;
@@ -302,12 +305,12 @@ export function useSessionFileEditorState(input: Readonly<{
                 setIsEditingFile(false);
                 setEditorDirty(false);
                 sessionFileEditorDraftCache.setDraft({
-                    sessionId: input.sessionId,
-                    filePath: input.filePath,
+                    sessionId: latestInput.sessionId,
+                    filePath: latestInput.filePath,
                     draft: null,
                 });
-                input.persistDraft?.(null);
-                await input.refreshAll();
+                latestInput.persistDraft?.(null);
+                await latestInput.refreshAll();
             } catch (err) {
                 const shown = tryShowDaemonUnavailableAlertForRpcError({
                     error: err,
@@ -315,7 +318,7 @@ export function useSessionFileEditorState(input: Readonly<{
                     onRetry: () => {
                         saveFileEdits();
                     },
-                    shouldContinue: () => input.mountedRef.current,
+                    shouldContinue: () => latestInputRef.current.mountedRef.current,
                 });
                 if (!shown) {
                     const message = err instanceof Error ? err.message : t('files.fileWriteFailed');
@@ -325,7 +328,7 @@ export function useSessionFileEditorState(input: Readonly<{
                 setIsSavingEdits(false);
             }
         })();
-    }, [editorDirty, editorSurfaceEnabled, input, input.filePath, input.refreshAll, input.sessionId, input.sessionPath, sizeAndPersistDebounce]);
+    }, [editorSurfaceEnabled, sizeAndPersistDebounce]);
 
     React.useEffect(() => {
         if (!input.filesEditorAutoSave) return;

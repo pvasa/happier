@@ -68,6 +68,11 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     const pane = useAppPaneScope(props.scopeId);
     const resumeSession = useSessionResumeAction();
     const { activeGitSubTab, commitDraftMessage, setCommitDraftMessage, setActiveGitSubTab } = useSessionRightPanelGitTabState(pane);
+    const setActiveGitSubTabRef = React.useRef(setActiveGitSubTab);
+    setActiveGitSubTabRef.current = setActiveGitSubTab;
+    const selectGitSubTab = React.useCallback((subTabId: 'commit' | 'update' | 'history') => {
+        setActiveGitSubTabRef.current(subTabId);
+    }, []);
     const defaultOpenDetails = useSessionRightPanelGitOpenDetails(pane);
     const openFileInDetailsSource = props.onOpenFile ?? defaultOpenDetails.openFileInDetails;
     const openFileInDetailsPinnedSource = props.onOpenFilePinned ?? defaultOpenDetails.openFileInDetailsPinned;
@@ -608,7 +613,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
             <SessionRightPanelGitSubTabsBar
                 tabs={availableTabs}
                 activeSubTabId={displayActiveGitSubTab}
-                onSelectSubTab={setActiveGitSubTab}
+                onSelectSubTab={selectGitSubTab}
             />
             <View style={{ flex: 1, position: 'relative' }}>
                 <GitSubTabSurface testID="session-rightpanel-git-surface:commit" isActive={displayActiveGitSubTab === 'commit'}>
@@ -659,4 +664,8 @@ const GitSubTabSurface = React.memo((props: Readonly<{ testID?: string; isActive
             {props.children}
         </View>
     );
+}, (previous, next) => {
+    if (previous.testID !== next.testID || previous.isActive !== next.isActive) return false;
+    if (!next.isActive) return true;
+    return previous.children === next.children;
 });

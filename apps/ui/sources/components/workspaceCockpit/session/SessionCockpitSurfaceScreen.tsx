@@ -57,6 +57,10 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
     const setRightTab = pane.setRightTab;
     const terminalTabAvailable = props.terminalTabAvailable !== false;
     const hasDeepLinkedDetailsTarget = props.paneUrlState?.details != null;
+    const paneRef = React.useRef(pane);
+    const surfaceNavigationRef = React.useRef(surfaceNavigation);
+    paneRef.current = pane;
+    surfaceNavigationRef.current = surfaceNavigation;
 
     const targetRightTabId = resolveSessionRightTabIdForSurface(props.surface, terminalTabAvailable);
     React.useEffect(() => {
@@ -88,16 +92,17 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
     }, [closeDetails, detailsIsOpen, hasDeepLinkedDetailsTarget, isFocused, props.surface]);
 
     const openDetailsSurface = React.useCallback(() => {
-        surfaceNavigation?.switchSurface('tabs');
-    }, [surfaceNavigation]);
+        surfaceNavigationRef.current?.switchSurface('tabs');
+    }, []);
 
     const openDetailsRoute = React.useCallback((
         target: SessionPaneUrlDetailsTarget,
         intent?: { intent: 'pinned' },
     ) => {
         deferOnWeb(() => {
+            const currentPane = paneRef.current;
             if (target.kind === 'file') {
-                pane.openDetailsTab(createSessionFileDetailsTab(target.path), intent);
+                currentPane.openDetailsTab(createSessionFileDetailsTab(target.path), intent);
                 openDetailsSurface();
                 return;
             }
@@ -106,21 +111,21 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
                 const tab = createSessionCommitDetailsTab(target.sha);
                 if (!tab) return;
 
-                pane.openDetailsTab(tab, intent);
+                currentPane.openDetailsTab(tab, intent);
                 openDetailsSurface();
                 return;
             }
 
             if (target.kind === 'terminal') {
-                pane.openDetailsTab(createSessionDetailsTerminalTab(), intent);
+                currentPane.openDetailsTab(createSessionDetailsTerminalTab(), intent);
                 openDetailsSurface();
                 return;
             }
 
-            pane.openDetailsTab(createSessionScmReviewDetailsTab(), intent);
+            currentPane.openDetailsTab(createSessionScmReviewDetailsTab(), intent);
             openDetailsSurface();
         });
-    }, [openDetailsSurface, pane]);
+    }, [openDetailsSurface]);
 
     const openFileInDetails = React.useCallback((fullPath: string) => {
         openDetailsRoute({ kind: 'file', path: fullPath });
@@ -144,10 +149,10 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
     const openStashDetails = React.useCallback(() => {
         deferOnWeb(() => {
             const tab = createSessionScmStashDetailsTab();
-            pane.openDetailsTab(tab, { intent: 'pinned' });
+            paneRef.current.openDetailsTab(tab, { intent: 'pinned' });
             openDetailsSurface();
         });
-    }, [openDetailsSurface, pane]);
+    }, [openDetailsSurface]);
 
     const safeAreaTopMode = 'internal';
     const headerSafeAreaTopMode = 'internal';

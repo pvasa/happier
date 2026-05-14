@@ -211,14 +211,22 @@ function isExecutionRunLauncherResource(value: unknown): value is Readonly<{
     return maybe.intent == null || maybe.intent === 'review' || maybe.intent === 'plan' || maybe.intent === 'delegate';
 }
 
+type FileEditStartCallbackEntry = Readonly<{
+    isPreview: boolean;
+    callback: () => void;
+}>;
+
 export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const pane = useAppPaneScope(props.scopeId);
+    const paneRef = React.useRef(pane);
+    paneRef.current = pane;
     const requestClose = props.onRequestClose ?? pane.closeDetails;
     const focusMode = usePaneFocusMode(props.scopeId);
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
     const rootRef = React.useRef<any>(null);
+    const fileEditStartCallbacksRef = React.useRef(new Map<string, FileEditStartCallbackEntry>());
     useWebScrollLockBypass({ rootRef, enabled: true });
     const stopScrollEventPropagationOnWeb = React.useCallback((event: any) => {
         // Expo Router (Vaul/Radix) overlays on web can install document-level wheel/touchmove listeners
@@ -235,6 +243,29 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
 
     const activeTab = React.useMemo(() => tabs.find((t) => t.key === activeKey) ?? tabs.at(-1) ?? null, [activeKey, tabs]);
     const effectiveActiveKey = activeKey ?? activeTab?.key ?? null;
+
+    React.useEffect(() => {
+        const currentTabKeys = new Set(tabs.map((tab) => tab.key));
+        for (const tabKey of fileEditStartCallbacksRef.current.keys()) {
+            if (!currentTabKeys.has(tabKey)) {
+                fileEditStartCallbacksRef.current.delete(tabKey);
+            }
+        }
+    }, [tabs]);
+
+    const resolveFileEditStartCallback = React.useCallback((tabKey: string, isPreview: boolean) => {
+        const existing = fileEditStartCallbacksRef.current.get(tabKey);
+        if (existing?.isPreview === isPreview) {
+            return existing.callback;
+        }
+        const callback = () => {
+            if (isPreview) {
+                paneRef.current.pinDetailsTab(tabKey);
+            }
+        };
+        fileEditStartCallbacksRef.current.set(tabKey, { isPreview, callback });
+        return callback;
+    }, []);
 
     const openFileTab = React.useCallback((path: string, intent: 'default' | 'pinned' = 'default') => {
         const fileName = path.split('/').pop() ?? path;
@@ -271,11 +302,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                             deepLinkAnchor={anchor}
                             presentation="panel"
                             scopeId={props.scopeId}
-                            onStartEditingFile={() => {
-                                if (tab.isPreview) {
-                                    pane.pinDetailsTab(tab.key);
-                                }
-                            }}
+                            onStartEditingFile={resolveFileEditStartCallback(tab.key, Boolean(tab.isPreview))}
                         />
                     </React.Suspense>
                 );
@@ -373,7 +400,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                 <Text style={styles.emptyText}>{t('session.detailsPanel.unsupportedTab')}</Text>
             </View>
         );
-    }, [openFileTab, pane, props.scopeId, props.sessionId, renderLoadingFallback, requestClose, styles.empty, styles.emptyText]);
+    }, [openFileTab, pane, props.scopeId, props.sessionId, renderLoadingFallback, requestClose, resolveFileEditStartCallback, styles.empty, styles.emptyText]);
 
     const closeButton = (
         <Pressable

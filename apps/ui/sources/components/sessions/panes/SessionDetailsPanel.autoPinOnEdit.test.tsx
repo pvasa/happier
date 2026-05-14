@@ -123,4 +123,20 @@ describe('SessionDetailsPanel (auto pin on edit)', () => {
         const latestProps = SessionFileDetailsViewMock.mock.calls.at(-1)?.[0];
         expect(latestProps?.onStartEditingFile).toBe(firstProps.onStartEditingFile);
     });
+
+    it('keeps the file edit callback stable across parent chrome rerenders', async () => {
+        const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
+
+        const screen = await renderScreen(<SessionDetailsPanel sessionId="s1" scopeId="session:s1" showHeaderActions />);
+
+        const firstProps = { ...SessionFileDetailsViewMock.mock.calls[0]?.[0] };
+        expect(typeof firstProps.onStartEditingFile).toBe('function');
+
+        await act(async () => {
+            screen.tree.update(<SessionDetailsPanel sessionId="s1" scopeId="session:s1" showHeaderActions={false} />);
+        });
+
+        const latestProps = SessionFileDetailsViewMock.mock.calls.at(-1)?.[0];
+        expect(latestProps?.onStartEditingFile).toBe(firstProps.onStartEditingFile);
+    });
 });

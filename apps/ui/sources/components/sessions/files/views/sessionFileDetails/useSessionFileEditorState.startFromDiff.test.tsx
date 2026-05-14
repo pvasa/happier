@@ -117,4 +117,46 @@ describe('useSessionFileEditorState (start from diff)', () => {
         expect(latest.getEditorText()).toBe('console.log(2);');
     });
 
+    it('keeps save callback stable across equivalent input rerenders', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+
+        let latest: any = null;
+        const mountedRef = { current: true };
+        const setFileWriteSupported = vi.fn();
+        const refreshAll = vi.fn(async () => undefined);
+
+        function Harness(props: HarnessProps) {
+            latest = useSessionFileEditorState({
+                sessionId: 's1',
+                sessionPath: '/repo',
+                filePath: 'src/a.ts',
+                displayMode: props.displayMode,
+                fileText: props.fileText,
+                fileWriteSupported: true,
+                setFileWriteSupported,
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 10,
+                filesEditorMaxFileBytes: 10_000,
+                filesEditorBridgeMaxChunkBytes: 10_000,
+                mountedRef,
+                refreshAll,
+            });
+            return null;
+        }
+
+        const tree = (await renderScreen(<Harness displayMode="file" fileText={'console.log(1);'} />)).tree;
+        await act(async () => {});
+
+        const firstSaveFileEdits = latest.saveFileEdits;
+
+        await act(async () => {
+            tree.update(<Harness displayMode="file" fileText={'console.log(1);'} />);
+        });
+
+        expect(latest.saveFileEdits).toBe(firstSaveFileEdits);
+    });
+
 });
