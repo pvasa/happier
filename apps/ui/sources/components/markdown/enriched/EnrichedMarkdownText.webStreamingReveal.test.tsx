@@ -424,6 +424,8 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
 
     it('preserves paragraph block boundaries inside loose ordered list items', async () => {
         const { RenderNode } = await loadPatchedWebRenderers();
+        const globalWithReact = globalThis as typeof globalThis & { React?: typeof React };
+        globalWithReact.React = React;
         const ast: MarkdownAstNode = {
             type: 'OrderedList',
             children: [
@@ -451,22 +453,29 @@ describe('EnrichedMarkdownText web streaming reveal', () => {
                 },
             ],
         };
-        const renderer = TestRenderer.create(
-            <RenderNode
-                node={ast}
-                style={{}}
-                styles={{
-                    list: {},
-                    listNested: {},
-                    listTask: {},
-                    paragraph: {},
-                    paragraphInListItem: {},
-                    paragraphInListItemLast: {},
-                }}
-                callbacks={{}}
-                capabilities={{ katex: null }}
-            />,
-        );
+        const rendererHolder: { current: TestRenderer.ReactTestRenderer | null } = { current: null };
+        TestRenderer.act(() => {
+            rendererHolder.current = TestRenderer.create(
+                <RenderNode
+                    node={ast}
+                    style={{}}
+                    styles={{
+                        list: {},
+                        listNested: {},
+                        listTask: {},
+                        paragraph: {},
+                        paragraphInListItem: {},
+                        paragraphInListItemLast: {},
+                    }}
+                    callbacks={{}}
+                    capabilities={{ katex: null }}
+                />,
+            );
+        });
+        const renderer = rendererHolder.current;
+        if (renderer === null) {
+            throw new Error('Expected RenderNode test renderer to be created');
+        }
 
         expect(countJsonNodesByType(renderer.toJSON(), 'ol')).toBe(1);
         expect(countJsonNodesByType(renderer.toJSON(), 'li')).toBe(2);
