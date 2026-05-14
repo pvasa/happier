@@ -31,6 +31,11 @@ test('install.ps1 makes the managed home bin directory the canonical PATH target
     /Remove-Item\s+-Path\s+\(Join-Path\s+\$LegacyBinDir\s+"happier\.exe"\)/i,
     'expected install.ps1 to remove the old drifting global shim copy during migration',
   );
+  assert.doesNotMatch(
+    raw,
+    /Where-Object\s*\{\s*\$_\s+-and\s+\$_\s+-ne\s+\$LegacyBinDir\s+-and\s+\$_\s+-ne\s+\$BinDir\s*\}/i,
+    'expected install.ps1 to preserve the shared legacy bin directory on PATH because tools like uv install there',
+  );
 });
 
 test('install.ps1 accepts an exact CLI version request through parameter or environment', async () => {

@@ -26,3 +26,19 @@ test('install.ps1 refreshes the current session PATH and prints Windows PATH rel
   );
   assert.match(raw, /Show-PathReloadGuidance\s+-ShimName\s+\(Resolve-CliShimName\)\s+-BinDir\s+\$BinDir/i);
 });
+
+test('install.ps1 allows Windows installs without persistent PATH mutation', async () => {
+  const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1');
+  const raw = await readFile(path, 'utf8');
+
+  assert.match(
+    raw,
+    /\$NoPathUpdate\s*=\s*if\s*\(\$env:HAPPIER_NO_PATH_UPDATE\)/i,
+    'expected install.ps1 to read the cross-platform HAPPIER_NO_PATH_UPDATE opt-out',
+  );
+  assert.match(
+    raw,
+    /if\s*\(\$NoPathUpdate\s+-ne\s+"1"\)\s*\{[\s\S]*\[Environment\]::SetEnvironmentVariable\("Path"/i,
+    'expected install.ps1 to guard persistent PATH writes behind HAPPIER_NO_PATH_UPDATE',
+  );
+});

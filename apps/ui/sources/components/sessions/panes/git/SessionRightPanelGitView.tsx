@@ -201,12 +201,12 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         && pullPreflightReason !== 'write_disabled'
         && pushPreflightReason !== 'write_disabled';
 
-    const availableTabs: Array<{ id: 'commit' | 'update' | 'history'; label: string }> = [
+    const availableTabs = React.useMemo<Array<{ id: 'commit' | 'update' | 'history'; label: string }>>(() => [
         { id: 'commit', label: t('files.toolbar.changedFiles') },
         ...(remoteWriteEnabled ? [{ id: 'update', label: t('common.update') } as const] : []),
         { id: 'history', label: t('common.history') },
-    ];
-    const availableTabIdSet = new Set(availableTabs.map((tab) => tab.id));
+    ], [remoteWriteEnabled]);
+    const availableTabIdSet = React.useMemo(() => new Set(availableTabs.map((tab) => tab.id)), [availableTabs]);
     const displayActiveGitSubTab: 'commit' | 'update' | 'history' =
         availableTabIdSet.has(activeGitSubTab)
             ? activeGitSubTab

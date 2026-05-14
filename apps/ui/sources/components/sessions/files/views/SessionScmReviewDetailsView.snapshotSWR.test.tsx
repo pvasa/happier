@@ -9,6 +9,7 @@ import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTes
 
 let mockSnapshot: any = null;
 let reviewCommentsFeatureEnabled = false;
+let scmWriteOperationsFeatureEnabled = false;
 const changedFilesReviewSpy = vi.fn();
 
 const mockSession = {
@@ -53,14 +54,22 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: any) => React.createElement('Text', props, props.children),
 }));
 
+const mockPaneScope = {
+    openDetailsTab: vi.fn(),
+    setDetailsTabState: vi.fn(),
+    scopeState: null,
+};
+
 vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => ({
-        openDetailsTab: vi.fn(),
-    }),
+    useAppPaneScope: () => mockPaneScope,
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => featureId === 'files.reviewComments' && reviewCommentsFeatureEnabled,
+    useFeatureEnabled: (featureId: string) => {
+        if (featureId === 'files.reviewComments') return reviewCommentsFeatureEnabled;
+        if (featureId === 'scm.writeOperations') return scmWriteOperationsFeatureEnabled;
+        return false;
+    },
 }));
 
 vi.mock('@/sync/domains/session/resolveWorkspaceScopeForSession', () => ({
@@ -138,7 +147,10 @@ vi.mock('@/components/sessions/files/content/ChangedFilesReview', () => ({
 describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
     beforeEach(() => {
         reviewCommentsFeatureEnabled = false;
+        scmWriteOperationsFeatureEnabled = false;
         changedFilesReviewSpy.mockClear();
+        mockPaneScope.openDetailsTab.mockClear();
+        mockPaneScope.setDetailsTabState.mockClear();
         mockSnapshot = null;
     });
 
@@ -216,5 +228,53 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
             onDeleteReviewCommentDraft: expect.any(Function),
             onReviewCommentError: expect.any(Function),
         }));
+    });
+
+    it('keeps review callbacks stable across unrelated parent rerenders', async () => {
+        scmWriteOperationsFeatureEnabled = true;
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        mockSnapshot = {
+            fetchedAt: 1,
+            projectKey: 'm1:/repo',
+            repo: { isRepo: true, rootPath: '/tmp/repo', backendId: 'git', mode: '.git' },
+            capabilities: { readLog: true },
+            branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+            stashCount: 0,
+            hasConflicts: false,
+            entries: [],
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 0,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 0,
+                pendingRemoved: 0,
+            },
+        };
+
+        function Wrapper(props: Readonly<{ tick: number }>) {
+            return React.createElement(
+                React.Fragment,
+                null,
+                React.createElement('TickMarker', { value: props.tick }),
+                React.createElement(SessionScmReviewDetailsView, { sessionId: 's1', scopeId: `session:s1:${props.tick}` }),
+            );
+        }
+
+        const { tree } = await renderScreen(React.createElement(Wrapper, { tick: 0 }));
+        const firstProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        const firstCallCount = changedFilesReviewSpy.mock.calls.length;
+
+        await act(async () => {
+            tree.update(React.createElement(Wrapper, { tick: 1 }));
+        });
+
+        const nextProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        expect(changedFilesReviewSpy.mock.calls.length).toBeGreaterThan(firstCallCount);
+        expect(nextProps.onFilePress).toBe(firstProps.onFilePress);
+        expect(nextProps.onFilePressPinned).toBe(firstProps.onFilePressPinned);
+        expect(nextProps.renderFileTrailingActions).toBe(firstProps.renderFileTrailingActions);
     });
 });

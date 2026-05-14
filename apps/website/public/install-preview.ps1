@@ -71,6 +71,7 @@ if ($env:HAPPIER_BIN_DIR) {
   }
 }
 $Noninteractive = if ($env:HAPPIER_NONINTERACTIVE) { $env:HAPPIER_NONINTERACTIVE } else { "0" }
+$NoPathUpdate = if ($env:HAPPIER_NO_PATH_UPDATE) { $env:HAPPIER_NO_PATH_UPDATE } else { "0" }
 $WithDaemonExplicit = $false
 if ($WithDaemon.IsPresent) {
   $WithDaemonPreference = "1"
@@ -1316,24 +1317,8 @@ function Ensure-Minisign {
     & $exe.FullName --version *> $null
   }
   catch {
-    Write-Warning "Downloaded minisign binary is not compatible with this system. Attempting install via winget..."
-    try {
-      $wingetInstallResult = Invoke-NativeCommandCapturingOutput {
-        winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements
-      }
-      if ($wingetInstallResult.ExitCode -ne 0 -and $wingetInstallResult.Output) {
-        Write-Warning $wingetInstallResult.Output.Trim()
-      }
-      $wingetMinisign = Resolve-MinisignExecutablePath
-      if ($wingetMinisign) {
-        return $wingetMinisign
-      }
-      if ($wingetInstallResult.ExitCode -ne 0) {
-        throw "winget install failed."
-      }
-    }
-    catch {}
-    throw "minisign is not available and could not be installed automatically. Please install minisign manually (for example, 'winget install jedisct1.minisign') and retry."
+    Write-Warning "Downloaded minisign binary is not compatible with this system."
+    throw "minisign is not available. Please install minisign manually (for example, 'winget install jedisct1.minisign') and retry."
   }
 
   return $exe.FullName
@@ -1479,31 +1464,36 @@ try {
     Remove-Item -Path (Join-Path $LegacyBinDir "happier.exe") -Force -ErrorAction SilentlyContinue
   }
 
-  $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
-  $pathEntries = @()
-  if ($userPath) {
-    $pathEntries = @(
-      $userPath -split ';' |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -and $_ -ne $LegacyBinDir -and $_ -ne $BinDir }
-    )
+  if ($NoPathUpdate -ne "1") {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+    $pathEntries = @()
+    if ($userPath) {
+      $pathEntries = @(
+        $userPath -split ';' |
+          ForEach-Object { $_.Trim() } |
+          Where-Object { $_ -and $_ -ne $BinDir }
+      )
+    }
+    $updatedPathEntries = @($BinDir) + $pathEntries
+    [Environment]::SetEnvironmentVariable("Path", ($updatedPathEntries -join ';'), [EnvironmentVariableTarget]::User)
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
+    $machinePathEntries = @()
+    if ($machinePath) {
+      $machinePathEntries = @(
+        $machinePath -split ';' |
+          ForEach-Object { $_.Trim() } |
+          Where-Object { $_ -and $updatedPathEntries -notcontains $_ }
+      )
+    }
+    $processPathEntries = @($updatedPathEntries) + @($machinePathEntries)
+    $env:Path = ($processPathEntries -join ';')
+    if ($pathEntries.Length -eq 0 -or $userPath -notmatch [Regex]::Escape($BinDir)) {
+      Write-Host "Added $BinDir to user PATH."
+      Show-PathReloadGuidance -ShimName (Resolve-CliShimName) -BinDir $BinDir
+    }
   }
-  $updatedPathEntries = @($BinDir) + $pathEntries
-  [Environment]::SetEnvironmentVariable("Path", ($updatedPathEntries -join ';'), [EnvironmentVariableTarget]::User)
-  $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
-  $machinePathEntries = @()
-  if ($machinePath) {
-    $machinePathEntries = @(
-      $machinePath -split ';' |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -and $updatedPathEntries -notcontains $_ }
-    )
-  }
-  $processPathEntries = @($updatedPathEntries) + @($machinePathEntries)
-  $env:Path = ($processPathEntries -join ';')
-  if ($pathEntries.Length -eq 0 -or $userPath -notmatch [Regex]::Escape($BinDir)) {
-    Write-Host "Added $BinDir to user PATH."
-    Show-PathReloadGuidance -ShimName (Resolve-CliShimName) -BinDir $BinDir
+  else {
+    Write-Host "Skipped PATH update because HAPPIER_NO_PATH_UPDATE=1."
   }
 
   $invoker = Resolve-InstalledCliInvoker
@@ -1537,6 +1527,10 @@ try {
   }
   if ($shimDirOnCurrentPath) {
     Write-Host "You can run ``$displayShimBasename`` right away."
+  }
+  elseif ($NoPathUpdate -eq "1") {
+    Write-Host "PATH update was skipped. Run directly using the absolute path:"
+    Write-Host "  $displayShimPath"
   }
   else {
     Write-Host "To use ``$displayShimBasename`` from any new shell, $displayShimDir has been added to your PATH."

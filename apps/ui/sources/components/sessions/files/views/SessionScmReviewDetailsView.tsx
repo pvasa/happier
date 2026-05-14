@@ -33,6 +33,7 @@ import {
     resolveChangedFilesViewMode,
     type ChangedFilesViewMode,
 } from '@/scm/scmAttribution';
+import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 
 export type SessionScmReviewDetailsViewProps = Readonly<{
     sessionId: string;
@@ -42,6 +43,7 @@ export type SessionScmReviewDetailsViewProps = Readonly<{
 export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDetailsViewProps) => {
     const { theme } = useUnistyles();
     const pane = useAppPaneScope(props.scopeId);
+    const openDetailsTab = pane.openDetailsTab;
     const setDetailsTabState = pane.setDetailsTabState;
     const reviewTabKey = 'scmReview:working';
     const persistedReviewTabState = pane.scopeState?.details?.tabState?.[reviewTabKey] as any as
@@ -191,7 +193,15 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
                 { intent },
             );
         });
-    }, [pane]);
+    }, [openDetailsTab]);
+
+    const openFileDefault = React.useCallback((file: { fullPath: string }) => {
+        openFile(file.fullPath, 'default');
+    }, [openFile]);
+
+    const openFilePinned = React.useCallback((file: { fullPath: string }) => {
+        openFile(file.fullPath, 'pinned');
+    }, [openFile]);
 
     // Ensure the SCM snapshot is warm so large reviews can load diffs even if the user
     // opened the review tab before visiting Source control.
@@ -203,6 +213,29 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
         await scmStatusSync.invalidateFromMutationAndAwait(props.sessionId);
         setDiffRefreshToken((t) => t + 1);
     }, [props.sessionId]);
+
+    const renderReviewFileTrailingActions = React.useMemo(() => {
+        if (!scmWriteEnabled) return undefined;
+        return (file: ScmFileStatus) => (
+            <ScmChangeDiscardButton
+                sessionId={props.sessionId}
+                sessionPath={sessionPath}
+                snapshot={effectiveSnapshot ?? null}
+                scmWriteEnabled={scmWriteEnabled}
+                commitStrategy={scmCommitStrategy}
+                file={file}
+                surface="files"
+                onAfterDiscard={refreshAfterMutation}
+            />
+        );
+    }, [
+        effectiveSnapshot,
+        props.sessionId,
+        refreshAfterMutation,
+        scmCommitStrategy,
+        scmWriteEnabled,
+        sessionPath,
+    ]);
 
     if (!effectiveSnapshot && !snapshotError) {
         return (
@@ -274,28 +307,13 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
                 suppressedInferredCount={changed.suppressedInferredCount}
                 maxFiles={maxFiles}
                 maxChangedLines={maxChangedLines}
-                onFilePress={(file) => openFile(file.fullPath, 'default')}
-                onFilePressPinned={(file) => openFile(file.fullPath, 'pinned')}
+                onFilePress={openFileDefault}
+                onFilePressPinned={openFilePinned}
                 initialCollapsedPaths={persistedCollapsedPaths}
                 onCollapsedPathsChange={onCollapsedPathsChange}
                 initialScrollTop={persistedScrollTop}
                 onScrollTopChange={onScrollTopChange}
-                renderFileTrailingActions={
-                    scmWriteEnabled
-                        ? (file) => (
-                            <ScmChangeDiscardButton
-                                sessionId={props.sessionId}
-                                sessionPath={sessionPath}
-                                snapshot={effectiveSnapshot ?? null}
-                                scmWriteEnabled={scmWriteEnabled}
-                                commitStrategy={scmCommitStrategy}
-                                file={file}
-                                surface="files"
-                                onAfterDiscard={refreshAfterMutation}
-                            />
-                        )
-                        : undefined
-                }
+                renderFileTrailingActions={renderReviewFileTrailingActions}
                 rowDensity="compact"
                 diffRefreshToken={diffRefreshToken}
                 providerDiffByPath={reviewProviderDiffByPath}

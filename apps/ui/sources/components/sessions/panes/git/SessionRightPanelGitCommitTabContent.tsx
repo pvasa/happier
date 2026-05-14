@@ -197,6 +197,14 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
         );
     }, [props.scmCommitStrategy, props.scmSnapshot, props.scmWriteEnabled, props.sessionId, props.sessionPath, revealInTree]);
 
+    const onFilePress = React.useCallback((file: ScmFileStatus) => {
+        props.openFileInDetails(file.fullPath);
+    }, [props.openFileInDetails]);
+
+    const onFilePressPinned = React.useCallback((file: ScmFileStatus) => {
+        props.openFileInDetailsPinned(file.fullPath);
+    }, [props.openFileInDetailsPinned]);
+
     return (
         <SessionRightPanelGitCommitTab
             theme={props.theme}
@@ -231,8 +239,8 @@ export const SessionRightPanelGitCommitTabContent = React.memo((props: SessionRi
             onSelectNone={commitSelectionUiEnabled ? bulkSelectNone : noop}
             disableSelectAll={commitSelectionUiEnabled ? disableSelectAll || currentScopeChangedFiles.length === 0 : true}
             disableSelectNone={commitSelectionUiEnabled ? disableSelectNone : true}
-            onFilePress={(file) => props.openFileInDetails(file.fullPath)}
-            onFilePressPinned={(file) => props.openFileInDetailsPinned(file.fullPath)}
+            onFilePress={onFilePress}
+            onFilePressPinned={onFilePressPinned}
             onToggleSelectionForFile={commitSelectionUiEnabled ? toggleCommitSelectionForFile : noopFile}
             renderFileActions={commitSelectionUiEnabled ? renderCommitSelectionAction : renderNull}
             renderFileTrailingActions={renderTrailingActions}

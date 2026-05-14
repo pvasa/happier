@@ -1,6 +1,6 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionDetailsPanelCommonModuleMocks } from '../sessionDetailsPanelTestHelpers';
 
@@ -9,6 +9,8 @@ import { installSessionDetailsPanelCommonModuleMocks } from '../sessionDetailsPa
 
 const SLOW_TEST_TIMEOUT_MS = 60_000;
 let activeGitSubTab: 'commit' | 'update' | 'history' = 'commit';
+const setActiveGitSubTabSpy = vi.hoisted(() => vi.fn());
+const gitSubTabsBarSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -95,10 +97,17 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
 vi.mock('./useSessionRightPanelGitTabState', () => ({
     useSessionRightPanelGitTabState: () => ({
         activeGitSubTab,
-        setActiveGitSubTab: vi.fn(),
+        setActiveGitSubTab: setActiveGitSubTabSpy,
         commitDraftMessage: '',
         setCommitDraftMessage: vi.fn(),
     }),
+}));
+
+vi.mock('./SessionRightPanelGitSubTabsBar', () => ({
+    SessionRightPanelGitSubTabsBar: (props: any) => {
+        gitSubTabsBarSpy(props);
+        return React.createElement('SessionRightPanelGitSubTabsBar', props);
+    },
 }));
 
 vi.mock('./useSessionRightPanelGitOpenDetails', () => ({
@@ -181,6 +190,11 @@ vi.mock('./SessionRightPanelGitHistoryTab', () => ({
 }));
 
 describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
+    beforeEach(() => {
+        setActiveGitSubTabSpy.mockClear();
+        gitSubTabsBarSpy.mockClear();
+    });
+
     it('mounts inactive sub-tabs only after first activation', async () => {
         const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
 
@@ -200,5 +214,21 @@ describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
         expect(tree.findAllByTestId('session-right-panel-git-commit-tab')).toHaveLength(1);
         expect(tree.findAllByTestId('session-right-panel-git-update-tab')).toHaveLength(0);
         expect(tree.findAllByTestId('session-right-panel-git-history-tab')).toHaveLength(1);
+    }, SLOW_TEST_TIMEOUT_MS);
+
+    it('keeps the sub-tab definitions stable when the active sub-tab changes', async () => {
+        const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
+
+        activeGitSubTab = 'commit';
+        const { tree } = await renderScreen(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1" />);
+        const firstProps = gitSubTabsBarSpy.mock.calls.at(-1)?.[0];
+
+        activeGitSubTab = 'history';
+        await act(async () => {
+            tree.update(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1:history" />);
+        });
+
+        const nextProps = gitSubTabsBarSpy.mock.calls.at(-1)?.[0];
+        expect(nextProps.tabs).toBe(firstProps.tabs);
     }, SLOW_TEST_TIMEOUT_MS);
 });
