@@ -1,5 +1,14 @@
 import * as React from 'react';
-import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+    Platform,
+    View,
+    type LayoutChangeEvent,
+    type NativeScrollEvent,
+    type NativeSyntheticEvent,
+    type ScrollView,
+    type StyleProp,
+    type ViewStyle,
+} from 'react-native';
 import Animated from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
@@ -76,6 +85,10 @@ interface FloatingOverlayProps {
      * that typically have more content below).
      */
     initialVisibility?: Partial<ScrollEdgeVisibility>;
+    scrollViewRef?: React.Ref<ScrollView>;
+    onScrollViewLayout?: (event: LayoutChangeEvent) => void;
+    onScrollViewContentSizeChange?: (width: number, height: number) => void;
+    onScrollViewScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
 }
 
 export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
@@ -93,6 +106,10 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         surfaceChrome = 'modal',
         containerStyle,
         scrollViewStyle,
+        scrollViewRef,
+        onScrollViewLayout,
+        onScrollViewContentSizeChange,
+        onScrollViewScroll,
     } = props;
 
     const fadeCfg = React.useMemo(() => {
@@ -154,14 +171,27 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
 
     const content = scrollEnabled ? (
         <Animated.ScrollView
+            ref={scrollViewRef}
             style={[{ maxHeight }, scrollViewStyle]}
             keyboardShouldPersistTaps={keyboardShouldPersistTaps}
             showsVerticalScrollIndicator={showScrollIndicator}
             scrollEventThrottle={32}
-            onLayout={fadeCfg || indicatorCfg ? fades.onViewportLayout : undefined}
-            onContentSizeChange={fadeCfg || indicatorCfg ? fades.onContentSizeChange : undefined}
-            onScroll={fadeCfg || indicatorCfg ? fades.onScroll : undefined}
-            onMomentumScrollEnd={fadeCfg || indicatorCfg ? fades.onMomentumScrollEnd : undefined}
+            onLayout={(event) => {
+                if (fadeCfg || indicatorCfg) fades.onViewportLayout(event);
+                onScrollViewLayout?.(event);
+            }}
+            onContentSizeChange={(width, height) => {
+                if (fadeCfg || indicatorCfg) fades.onContentSizeChange(width, height);
+                onScrollViewContentSizeChange?.(width, height);
+            }}
+            onScroll={(event) => {
+                if (fadeCfg || indicatorCfg) fades.onScroll(event);
+                onScrollViewScroll?.(event);
+            }}
+            onMomentumScrollEnd={(event) => {
+                if (fadeCfg || indicatorCfg) fades.onMomentumScrollEnd(event);
+                onScrollViewScroll?.(event);
+            }}
         >
             {children}
         </Animated.ScrollView>

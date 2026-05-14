@@ -403,6 +403,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             selectedOptionId={props.selectedOptionId ?? null}
             plan={renderPlan}
             focusedOptionId={focusedOptionId}
+            scrollTargetOptionId={props.activeScrollOptionId ?? focusedOptionId ?? props.selectedOptionId ?? null}
             listboxId={listboxId}
             onSelect={props.onSelect}
             onPushStep={handlePushStep}

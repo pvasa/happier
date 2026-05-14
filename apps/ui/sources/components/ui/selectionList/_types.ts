@@ -60,6 +60,12 @@ type SelectionListOptionBase = Readonly<{
      */
     testID?: string;
     label: string;
+    /**
+     * Optional full-row body. When present, SelectionList still owns row
+     * activation, selected/focused styling, a11y ids, and scroll-into-view,
+     * while the consumer owns the inner visual content.
+     */
+    content?: React.ReactNode;
     subtitle?: string;
     icon?: React.ReactNode;
     /** Right-side accessory (status pill, relative time, key chip, etc.) */
@@ -328,6 +334,12 @@ export type SelectionListProps = Readonly<{
     rootStep: SelectionListStep;
     /** Currently-selected option id (rendered with selected style). Optional. */
     selectedOptionId?: string | null;
+    /**
+     * Optional externally-owned active row for scroll-into-view. Most
+     * SelectionList surfaces use internal keyboard focus; externally-keyed
+     * popovers such as slash autocomplete can pass their own highlighted row.
+     */
+    activeScrollOptionId?: string | null;
     /**
      * `'search'` (default): input filters the list; Enter on the input commits
      * the focused row.

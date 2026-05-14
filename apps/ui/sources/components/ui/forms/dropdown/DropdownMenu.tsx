@@ -16,6 +16,7 @@ import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeFor
 import { TextInput } from '@/components/ui/text/Text';
 import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
+import { useScrollRectIntoViewRegistry } from '@/components/ui/scroll/useScrollRectIntoView';
 
 
 export type DropdownMenuItem = Readonly<{
@@ -348,6 +349,12 @@ export function DropdownMenu(props: DropdownMenuProps) {
             : null,
     });
 
+    const resultScroll = useScrollRectIntoViewRegistry({
+        activeKey: selectedIndex >= 0 ? String(selectedIndex) : null,
+        padding: 8,
+        animated: true,
+    });
+
     const handleCreate = React.useCallback(() => {
         const query = searchQuery.trim();
         if (!query || !props.onCreateItem) return;
@@ -416,6 +423,10 @@ export function DropdownMenu(props: DropdownMenuProps) {
                             edgeIndicators={{ size: 14, opacity: 0.35 }}
                             arrow={overlayArrowCfg ? { placement, size: overlayArrowCfg.size } : false}
                             surfaceChrome="theme"
+                            scrollViewRef={resultScroll.scrollRef}
+                            onScrollViewLayout={resultScroll.onViewportLayout}
+                            onScrollViewContentSizeChange={resultScroll.onContentSizeChange}
+                            onScrollViewScroll={resultScroll.onScroll}
                             containerStyle={[
                                 props.connectToTrigger
                                     ? (
@@ -484,6 +495,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                     showCategoryTitles={props.showCategoryTitles ?? false}
                                     rowKind={props.rowKind}
                                     itemProps={props.itemRowProps}
+                                    registerItemLayout={resultScroll.registerItemLayout}
                                 />
                             </View>
                         </FloatingOverlay>

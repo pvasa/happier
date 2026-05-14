@@ -13,13 +13,15 @@
  */
 
 import * as React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
 import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwitch';
 
 import { activateSelectionListRow } from './SelectionListRowActivation';
 import { renderSelectionListAccessory } from './renderSelectionListAccessory';
+import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
 import { selectionListTestId } from './_shared';
 import type { SectionRenderPlan } from './SelectionListRenderPlan';
 import type { SelectionListOption, SelectionListStep } from './_types';
@@ -69,6 +71,8 @@ export function PlanOptionRow(props: Readonly<{
      */
     measureMode?: boolean;
 }>): React.ReactElement {
+    const { theme } = useUnistyles();
+    const registerScrollItemLayout = React.useContext(SelectionListScrollIntoViewContext);
     const optionTestId = selectionListTestId(
         props.rootTestID,
         props.stepId,
@@ -108,7 +112,24 @@ export function PlanOptionRow(props: Readonly<{
             </View>
         );
     }
-    const row = (
+    const selectedOrFocused = props.isSelected || props.isFocused;
+    const row = props.option.content !== undefined ? (
+        <Pressable
+            testID={optionTestId}
+            onPress={handlePress}
+            disabled={props.option.disabled === true}
+            style={({ pressed }) => ({
+                backgroundColor: pressed
+                    ? theme.colors.surface.pressed
+                    : selectedOrFocused
+                        ? theme.colors.surface.selected
+                        : undefined,
+                opacity: props.option.disabled === true ? 0.5 : 1,
+            })}
+        >
+            {props.option.content}
+        </Pressable>
+    ) : (
         <Item
             testID={optionTestId}
             title={props.option.label}
@@ -116,7 +137,7 @@ export function PlanOptionRow(props: Readonly<{
             icon={props.option.icon}
             rightElement={renderSelectionListAccessory(props.option.rightAccessory)}
             onPress={handlePress}
-            selected={props.isSelected || props.isFocused}
+            selected={selectedOrFocused}
             disabled={props.option.disabled === true}
             showChevron={Boolean(props.option.openStep)}
             // On web the wrapper claims `role="option"`. The inner Item's
@@ -129,6 +150,7 @@ export function PlanOptionRow(props: Readonly<{
     return (
         <View
             testID={optionWrapperTestId}
+            onLayout={registerScrollItemLayout?.(props.option.id)}
             {...(optionAria as unknown as Record<string, never>)}
         >
             {typeof props.option.testID === 'string' && props.option.testID.length > 0 ? (

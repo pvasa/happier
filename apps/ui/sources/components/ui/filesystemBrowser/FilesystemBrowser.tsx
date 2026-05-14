@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Text } from '@/components/ui/text/Text';
@@ -36,7 +37,7 @@ export function FilesystemBrowser(props: FilesystemBrowserProps): React.ReactEle
                     paddingTop: 40,
                 }}
             >
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 <Text
                     style={{
                         fontSize: 16,

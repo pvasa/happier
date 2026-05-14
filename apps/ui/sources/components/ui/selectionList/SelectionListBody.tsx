@@ -83,6 +83,7 @@ export type SelectionListBodyProps = Readonly<{
     selectedOptionId: string | null | undefined;
     plan: ReadonlyArray<SectionRenderPlan>;
     focusedOptionId: string | null;
+    scrollTargetOptionId?: string | null;
     listboxId: string;
     onSelect: (id: string, option: SelectionListOption) => void;
     onPushStep: (step: SelectionListStep) => void;
@@ -206,6 +207,7 @@ export function SelectionListBody(props: SelectionListBodyProps): React.ReactEle
                 fadeTopTestId={selectionListTestId(props.rootTestID, 'bodyScroll', 'fadeTop')}
                 fadeBottomTestId={selectionListTestId(props.rootTestID, 'bodyScroll', 'fadeBottom')}
                 listboxAria={listboxAria as ListboxAriaProps}
+                scrollTargetOptionId={props.scrollTargetOptionId ?? null}
             >
                 {sectionNodes}
             </SelectionListBodyScrollFrame>

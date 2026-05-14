@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -9,9 +10,17 @@ import type {
     SelectionListStep,
 } from '../_types';
 
+const scrollToSpy = vi.fn<(args: { y: number; animated?: boolean }) => void>();
+
 vi.mock('react-native', async () => {
+    const React = await import('react');
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    return createReactNativeWebMock({
+        ScrollView: React.forwardRef((props: Record<string, unknown> & { children?: React.ReactNode }, ref) => {
+            React.useImperativeHandle(ref, () => ({ scrollTo: scrollToSpy }));
+            return React.createElement('ScrollView', { ...props, ref }, props.children);
+        }),
+    });
 });
 
 function makeOptions(count: number, prefix = 'opt'): ReadonlyArray<SelectionListOption> {
@@ -45,6 +54,10 @@ function defaultProps(rootStep: SelectionListStep, overrides: Partial<SelectionL
  * the ownership boundary.
  */
 describe('SelectionList non-virtualized body scroll wrapper (R9 blocker 1)', () => {
+    beforeEach(() => {
+        scrollToSpy.mockClear();
+    });
+
     it('wraps non-virtualized rows in a ScrollView so all rows remain reachable', async () => {
         const root: SelectionListStep = {
             id: 'root',
@@ -179,5 +192,44 @@ describe('SelectionList non-virtualized body scroll wrapper (R9 blocker 1)', () 
         const { SelectionList } = await import('../SelectionList');
         const screen = await renderScreen(<SelectionList {...defaultProps(root)} />);
         expect(screen.findByTestId('sl:bodyScroll')).toBeNull();
+    });
+
+    it('scrolls the selected non-virtualized row into the body viewport', async () => {
+        const root: SelectionListStep = {
+            id: 'root',
+            inputPlaceholder: 'Search',
+            sections: [
+                {
+                    kind: 'static',
+                    id: 'shorty',
+                    title: 'SHORTY',
+                    options: makeOptions(30, 'short'),
+                },
+            ],
+        };
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(
+            <SelectionList {...defaultProps(root, {
+                maxHeight: 200,
+                selectedOptionId: 'short-20',
+                activeScrollOptionId: 'short-20',
+            })} />,
+        );
+        const bodyScroll = screen.findByTestId('sl:bodyScroll');
+        const selectedRow = screen.findByTestId('sl:root:option-wrapper:short-20');
+
+        expect(bodyScroll).not.toBeNull();
+        expect(typeof bodyScroll?.props?.onLayout).toBe('function');
+        expect(selectedRow).not.toBeNull();
+        expect(typeof selectedRow?.props?.onLayout).toBe('function');
+
+        await act(async () => {
+            bodyScroll?.props?.onLayout?.({ nativeEvent: { layout: { height: 120 } } });
+            bodyScroll?.props?.onContentSizeChange?.(320, 1200);
+            selectedRow?.props?.onLayout?.({ nativeEvent: { layout: { y: 480, height: 40 } } });
+        });
+        await act(async () => {});
+
+        expect(scrollToSpy).toHaveBeenCalledWith({ y: 408, animated: true });
     });
 });

@@ -22,6 +22,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
+import { useScrollRectIntoViewRegistry } from '@/components/ui/scroll/useScrollRectIntoView';
+import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
 
 type ListboxAriaProps = Readonly<{ id: string; role: 'listbox' }>;
 
@@ -68,6 +70,7 @@ export function SelectionListBodyScrollFrame(props: Readonly<{
     fadeTopTestId: string;
     fadeBottomTestId: string;
     listboxAria: ListboxAriaProps;
+    scrollTargetOptionId: string | null;
     children: React.ReactNode;
 }>): React.ReactElement {
     const fades = useScrollEdgeFades({
@@ -77,6 +80,11 @@ export function SelectionListBodyScrollFrame(props: Readonly<{
         // Optimistically render the trailing fade so users see "more content
         // below" before the first layout/scroll measurement.
         initialVisibility: { bottom: true },
+    });
+    const scrollIntoView = useScrollRectIntoViewRegistry({
+        activeKey: props.scrollTargetOptionId,
+        padding: 8,
+        animated: true,
     });
     const { theme } = useUnistyles();
     const fadeColor = theme.colors.surface.base;
@@ -88,18 +96,33 @@ export function SelectionListBodyScrollFrame(props: Readonly<{
         >
             <View testID={props.fadeHostTestId} style={styles.bodyScrollHost}>
                 <ScrollView
+                    ref={scrollIntoView.scrollRef}
                     testID={props.scrollTestId}
                     style={styles.bodyScroll}
                     contentContainerStyle={styles.bodyScrollContent}
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator={false}
-                    onLayout={fades.onViewportLayout}
-                    onContentSizeChange={fades.onContentSizeChange}
-                    onScroll={fades.onScroll}
-                    onMomentumScrollEnd={fades.onMomentumScrollEnd}
+                    onLayout={(event) => {
+                        fades.onViewportLayout(event);
+                        scrollIntoView.onViewportLayout(event);
+                    }}
+                    onContentSizeChange={(width, height) => {
+                        fades.onContentSizeChange(width, height);
+                        scrollIntoView.onContentSizeChange(width, height);
+                    }}
+                    onScroll={(event) => {
+                        fades.onScroll(event);
+                        scrollIntoView.onScroll(event);
+                    }}
+                    onMomentumScrollEnd={(event) => {
+                        fades.onMomentumScrollEnd(event);
+                        scrollIntoView.onScroll(event);
+                    }}
                     scrollEventThrottle={16}
                 >
-                    {props.children}
+                    <SelectionListScrollIntoViewContext.Provider value={scrollIntoView.registerItemLayout}>
+                        {props.children}
+                    </SelectionListScrollIntoViewContext.Provider>
                 </ScrollView>
                 <View
                     testID={props.fadeTopTestId}

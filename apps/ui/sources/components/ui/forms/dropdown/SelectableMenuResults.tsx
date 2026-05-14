@@ -9,6 +9,7 @@ import { ItemGroupRowPositionBoundary } from '@/components/ui/lists/ItemGroupRow
 import type { SelectableMenuCategory, SelectableMenuItem } from './selectableMenuTypes';
 import { Text } from '@/components/ui/text/Text';
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
+import type { ScrollItemLayoutHandler } from '@/components/ui/scroll/useScrollRectIntoView';
 
 type WebMouseDownActivationEvent = Readonly<{
     button?: number;
@@ -96,6 +97,7 @@ export function SelectableMenuResults(props: {
     itemProps?: Partial<
         Omit<ItemProps, 'title' | 'subtitle' | 'icon' | 'rightElement' | 'selected' | 'disabled' | 'showChevron' | 'showDivider' | 'onPress'>
     >;
+    registerItemLayout?: (key: string) => ScrollItemLayoutHandler;
 }) {
     const styles = stylesheet;
     const mouseDownActivatedItemIdRef = React.useRef<string | null>(null);
@@ -201,9 +203,16 @@ export function SelectableMenuResults(props: {
                         />
                     );
 
-                    return React.cloneElement(itemNode, {
-                        key: item.id,
-                    });
+                    const scrollFrameLayout = props.registerItemLayout?.(String(itemIndex));
+                    return (
+                        <View
+                            key={item.id}
+                            testID={`${optionTestID}:scroll-frame`}
+                            {...(scrollFrameLayout ? { onLayout: scrollFrameLayout } : {})}
+                        >
+                            {itemNode}
+                        </View>
+                    );
                 });
 
                 return (

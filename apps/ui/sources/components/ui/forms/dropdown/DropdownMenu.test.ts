@@ -345,6 +345,27 @@ describe('DropdownMenu', () => {
         expect(overlay?.props?.surfaceChrome).toBe('theme');
     });
 
+    it('wires menu result rows to the overlay scroll container for keyboard auto-scroll', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange: vi.fn(),
+            items: [{ id: 'a', title: 'A' }, { id: 'b', title: 'B' }],
+            onSelect: () => {},
+            trigger: React.createElement('View'),
+        }));
+
+        const overlay = screen.findByType('FloatingOverlay' as any);
+        expect(overlay?.props?.scrollViewRef).toBeTruthy();
+        expect(typeof overlay?.props?.onScrollViewLayout).toBe('function');
+        expect(typeof overlay?.props?.onScrollViewContentSizeChange).toBe('function');
+        expect(typeof overlay?.props?.onScrollViewScroll).toBe('function');
+
+        const selectableResults = screen.findByType('SelectableMenuResults' as any);
+        expect(typeof selectableResults?.props?.registerItemLayout).toBe('function');
+    });
+
     it('defaults showCategoryTitles to false', async () => {
         const { DropdownMenu } = await import('./DropdownMenu');
 
