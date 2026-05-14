@@ -1,11 +1,7 @@
 import type { Theme } from '@/theme';
+import { createVerticalGradient } from '../verticalGradient';
 
 type ThemeControlGradient = Theme['colors']['button']['primary']['gradient'];
-
-const withGradientStops = (gradient: ThemeControlGradient, firstColor: string, secondColor: string): ThemeControlGradient => ({
-    ...gradient,
-    colors: [firstColor, secondColor],
-});
 
 const derivePrimaryButtonGradient = (theme: Theme, baseTheme: Theme): ThemeControlGradient => {
     const primary = theme.colors.button.primary;
@@ -14,7 +10,7 @@ const derivePrimaryButtonGradient = (theme: Theme, baseTheme: Theme): ThemeContr
         return primary.gradient;
     }
 
-    return withGradientStops(primary.gradient, primary.background, primary.background);
+    return createVerticalGradient([primary.background, primary.background]);
 };
 
 const deriveFabGradient = (theme: Theme, baseTheme: Theme): ThemeControlGradient => {
@@ -24,7 +20,7 @@ const deriveFabGradient = (theme: Theme, baseTheme: Theme): ThemeControlGradient
         return fab.gradient;
     }
 
-    return withGradientStops(fab.gradient, fab.background, fab.backgroundPressed);
+    return createVerticalGradient([fab.background, fab.backgroundPressed]);
 };
 
 const deriveSegmentedControlActiveGradient = (theme: Theme, baseTheme: Theme): ThemeControlGradient => {
@@ -33,11 +29,7 @@ const deriveSegmentedControlActiveGradient = (theme: Theme, baseTheme: Theme): T
         return segmentedControl.activeGradient;
     }
 
-    return withGradientStops(
-        segmentedControl.activeGradient,
-        segmentedControl.activeBackground,
-        segmentedControl.activeBackground,
-    );
+    return createVerticalGradient([segmentedControl.activeBackground, segmentedControl.activeBackground]);
 };
 
 const deriveStatusColor = (sourceColor: string, baseSourceColor: string, currentStatusColor: string): string => {

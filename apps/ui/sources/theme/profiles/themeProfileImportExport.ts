@@ -269,6 +269,71 @@ const parseProfile = (value: unknown): ThemeProfileV1 | undefined => {
     return value as ThemeProfileV1;
 };
 
+const stripJsonComments = (text: string): string => {
+    let output = '';
+    let inString = false;
+    let stringQuote: '"' | '\'' | null = null;
+    let isEscaped = false;
+
+    for (let index = 0; index < text.length; index += 1) {
+        const character = text[index];
+        const nextCharacter = text[index + 1];
+
+        if (inString) {
+            output += character;
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
+            }
+            if (character === '\\') {
+                isEscaped = true;
+                continue;
+            }
+            if (character === stringQuote) {
+                inString = false;
+                stringQuote = null;
+            }
+            continue;
+        }
+
+        if (character === '"' || character === '\'') {
+            inString = true;
+            stringQuote = character;
+            output += character;
+            continue;
+        }
+
+        if (character === '/' && nextCharacter === '/') {
+            while (index < text.length && text[index] !== '\n') index += 1;
+            output += '\n';
+            continue;
+        }
+
+        if (character === '/' && nextCharacter === '*') {
+            index += 2;
+            while (index < text.length - 1 && !(text[index] === '*' && text[index + 1] === '/')) index += 1;
+            index += 1;
+            continue;
+        }
+
+        output += character;
+    }
+
+    return output;
+};
+
+const parseJsonLikeText = (json: string): unknown | null => {
+    try {
+        return JSON.parse(json);
+    } catch {
+        try {
+            return JSON.parse(stripJsonComments(json).replace(/,\s*([}\]])/g, '$1'));
+        } catch {
+            return null;
+        }
+    }
+};
+
 const resolveCompleteModeOverrides = (profile: ThemeProfileV1, mode: ThemeProfileMode): ThemeProfileColorOverrides => {
     const theme = resolveThemeProfile({ mode, profile });
     return Object.fromEntries(
@@ -311,10 +376,8 @@ export const importThemeProfileFromJson = (json: string, options: ImportOptions)
         return { ok: false, error: 'tooLarge' };
     }
 
-    let parsed: unknown;
-    try {
-        parsed = JSON.parse(json);
-    } catch {
+    const parsed = parseJsonLikeText(json);
+    if (parsed === null) {
         return { ok: false, error: 'invalidJson' };
     }
 

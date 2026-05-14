@@ -1,6 +1,6 @@
 import { COMMUNITY_BUILT_IN_THEME_PROFILES } from './communityBuiltInThemeProfiles';
 import { createBuiltInProfile } from './builtInThemeProfileFactory';
-import { pitchDarkProfile, premiumDarkProfile, sunsetDarkProfile } from './builtInDarkThemeProfiles';
+import { pitchDarkProfile, premiumDarkProfile, sunsetDarkProfile, tokyoNightProfile } from './builtInDarkThemeProfiles';
 import type { BuiltInThemeProfileDefinition, BuiltInThemeProfilePresetId } from './themeProfileTypes';
 
 export const BUILT_IN_THEME_PROFILES: readonly BuiltInThemeProfileDefinition[] = [
@@ -30,6 +30,15 @@ export const BUILT_IN_THEME_PROFILES: readonly BuiltInThemeProfileDefinition[] =
         editable: false,
         deletable: false,
         profile: sunsetDarkProfile,
+    },
+    {
+        presetId: 'tokyoNight',
+        translationKey: 'settingsAppearance.themeProfiles.presets.tokyoNight',
+        preferredMode: 'dark',
+        cloneable: true,
+        editable: false,
+        deletable: false,
+        profile: tokyoNightProfile,
     },
     {
         presetId: 'nightDark',
@@ -154,7 +163,7 @@ export const BUILT_IN_THEME_PROFILES: readonly BuiltInThemeProfileDefinition[] =
             },
         }),
     },
-    ...COMMUNITY_BUILT_IN_THEME_PROFILES.slice(0, 7),
+    ...COMMUNITY_BUILT_IN_THEME_PROFILES.slice(0, 8),
     {
         presetId: 'premiumLight',
         translationKey: 'settingsAppearance.themeProfiles.presets.premiumLight',
@@ -185,7 +194,7 @@ export const BUILT_IN_THEME_PROFILES: readonly BuiltInThemeProfileDefinition[] =
             dark: {},
         }),
     },
-    ...COMMUNITY_BUILT_IN_THEME_PROFILES.slice(7),
+    ...COMMUNITY_BUILT_IN_THEME_PROFILES.slice(8),
 ] as const;
 
 export const getBuiltInThemeProfileDefinition = (presetId: BuiltInThemeProfilePresetId): BuiltInThemeProfileDefinition | undefined => (

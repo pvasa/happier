@@ -78,6 +78,32 @@ describe('theme profile import/export', () => {
         expect(importThemeProfileFromJson('{"name":"Not a theme","type":"dark"}', { now: '2026-05-12T00:00:00.000Z' }).ok).toBe(false);
     });
 
+    it('imports supported VS Code theme JSONC payloads with comments and trailing commas', () => {
+        const result = importThemeProfileFromJson(`{
+            "name": "Tokyo Night",
+            "type": "dark",
+            "colors": {
+                "editor.background": "#1a1b26",
+                "editor.foreground": "#a9b1d6",
+                // VS Code theme files commonly include comments
+                "input.background": "#14141b",
+            },
+            "tokenColors": [
+                { "scope": "comment", "settings": { "foreground": "#515670" } },
+            ],
+        }`, { now: '2026-05-12T00:00:00.000Z' });
+
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+            expect(result.profile.name).toBe('Tokyo Night');
+            expect(result.profile.assetAppearance).toBe('dark');
+            expect(result.profile.overrides.dark['background.canvas']).toBe('#1a1b26');
+            expect(result.profile.overrides.dark['text.primary']).toBe('#a9b1d6');
+            expect(result.profile.overrides.dark['control.input.background']).toBe('#14141b');
+            expect(result.profile.overrides.dark['syntax.comment']).toBe('#515670');
+        }
+    });
+
     it('auto-detects and imports a supported VS Code theme JSON payload', () => {
         const json = JSON.stringify({
             name: 'Pitch Dark',

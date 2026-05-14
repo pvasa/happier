@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { darkTheme, lightTheme } from './theme';
+import { BUILT_IN_THEME_PROFILES } from './theme/profiles/builtInThemeProfiles';
+import { resolveThemeProfile } from './theme/profiles/resolveThemeProfile';
 
 describe('control gradient theme tokens', () => {
     function hexLuminance(hex: string): number {
@@ -12,10 +14,13 @@ describe('control gradient theme tokens', () => {
         return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
     }
 
-    function expectVerticalGradientToBeLighterAtTop(colors: readonly [string, string, ...string[]]) {
+    function expectVerticalGradientToBeLighterAtTop(colors: readonly [string, string, ...string[]], label?: string) {
         const bottomColor = colors[0];
         const topColor = colors[colors.length - 1];
-        expect(hexLuminance(topColor)).toBeGreaterThanOrEqual(hexLuminance(bottomColor));
+        expect(
+            hexLuminance(topColor) >= hexLuminance(bottomColor),
+            label ? `${label}: expected top stop to be lighter than bottom stop` : undefined,
+        ).toBe(true);
     }
 
     it('defines subtle fallback-compatible gradients for FAB controls', () => {
@@ -49,6 +54,16 @@ describe('control gradient theme tokens', () => {
             expectVerticalGradientToBeLighterAtTop(theme.colors.fab.gradient.colors);
             expectVerticalGradientToBeLighterAtTop(theme.colors.button.primary.gradient.colors);
             expectVerticalGradientToBeLighterAtTop(theme.colors.segmentedControl.activeGradient.colors);
+        }
+    });
+
+    it('keeps all built-in theme control gradients lighter at the top than the bottom', () => {
+        for (const definition of BUILT_IN_THEME_PROFILES) {
+            const theme = resolveThemeProfile({ mode: definition.preferredMode, profile: definition.profile });
+
+            expectVerticalGradientToBeLighterAtTop(theme.colors.fab.gradient.colors, `${definition.presetId} fab`);
+            expectVerticalGradientToBeLighterAtTop(theme.colors.button.primary.gradient.colors, `${definition.presetId} button.primary`);
+            expectVerticalGradientToBeLighterAtTop(theme.colors.segmentedControl.activeGradient.colors, `${definition.presetId} segmentedControl.active`);
         }
     });
 

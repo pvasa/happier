@@ -34,7 +34,9 @@ export type BuiltInThemeProfilePresetId =
     | 'premiumDark'
     | 'pitchDark'
     | 'sunsetDark'
+    | 'tokyoNight'
     | 'nightDark'
+    | 'graphiteDark'
     | 'catppuccinMocha'
     | 'catppuccinMacchiato'
     | 'catppuccinFrappe'
@@ -43,6 +45,7 @@ export type BuiltInThemeProfilePresetId =
     | 'githubDark'
     | 'darkModern'
     | 'premiumLight'
+    | 'paperLight'
     | 'catppuccinLatte'
     | 'githubLight';
 
