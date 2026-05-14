@@ -23,6 +23,14 @@ vi.mock('./MermaidRenderer', () => ({
         React.createElement('MermaidRenderer', props),
 }));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
+    }
+    if (style && typeof style === 'object') return style as Record<string, unknown>;
+    return {};
+}
+
 describe('MarkdownView (enriched renderer)', () => {
     it('renders package-safe prose as one selectable enriched markdown run', async () => {
         const { MarkdownView } = await import('./MarkdownView');
@@ -153,6 +161,11 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+        });
+        expect(flattenStyle(trigger.props.style)).toMatchObject({
+            width: '100%',
+            alignSelf: 'stretch',
+            alignItems: 'stretch',
         });
         expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(1);
     });

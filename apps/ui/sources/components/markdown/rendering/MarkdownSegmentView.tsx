@@ -68,12 +68,12 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     const testID = `markdown-source-range-trigger:${props.segment.sourceRange.startLine}-${props.segment.sourceRange.endLine}`;
     const Wrapper = props.onPressSourceRange ? Pressable : View;
     return (
-        <View>
+        <View style={styles.sourceRangeContainer}>
             <Wrapper
                 testID={testID}
                 accessibilityRole={props.onPressSourceRange ? 'button' : undefined}
                 onPress={props.onPressSourceRange ? () => props.onPressSourceRange?.(sourceAction) : undefined}
-                style={highlighted ? styles.highlight : undefined}
+                style={[styles.sourceRangeTrigger, highlighted ? styles.highlight : null]}
             >
                 {content}
             </Wrapper>
@@ -88,6 +88,16 @@ function rangesOverlap(a: MarkdownSourceRange, b: MarkdownSourceRange | null): b
 }
 
 const styles = StyleSheet.create((theme) => ({
+    sourceRangeContainer: {
+        width: '100%',
+        alignSelf: 'stretch',
+        alignItems: 'stretch',
+    },
+    sourceRangeTrigger: {
+        width: '100%',
+        alignSelf: 'stretch',
+        alignItems: 'stretch',
+    },
     highlight: {
         borderRadius: 8,
         backgroundColor: theme.colors.surface.selected,
