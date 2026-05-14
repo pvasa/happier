@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { SvgXml } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { useSessionImagePreview } from '@/components/sessions/files/content/imagePreview/useSessionImagePreview';
 import { Text } from '@/components/ui/text/Text';
@@ -132,7 +133,7 @@ function AttachmentImagePreviewCurrentImage(props: Readonly<{
 
     return (
         <View style={styles.centeredState}>
-            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+            <ActivitySpinner size="small" color={theme.colors.text.secondary} />
         </View>
     );
 }

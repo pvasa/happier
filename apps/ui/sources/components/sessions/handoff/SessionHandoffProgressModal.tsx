@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { Octicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     SessionHandoffProgressCheckpointSchema,
     SESSION_HANDOFF_PROGRESS_FULL_TIMELINE,
@@ -444,7 +445,7 @@ export function SessionHandoffProgressModal({ setChrome, title, message, status 
         <View style={styles.body}>
             <View style={styles.messageRow}>
                 {showSpinner ? (
-                    <ActivityIndicator size="small" color={theme.colors.accent.blue} />
+                    <ActivitySpinner size="small" color={theme.colors.accent.blue} />
                 ) : (
                     <Octicons
                         name={isFailureState ? 'alert' : 'check'}

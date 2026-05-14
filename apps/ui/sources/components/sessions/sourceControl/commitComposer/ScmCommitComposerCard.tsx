@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -238,7 +239,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                         })}
                     >
                         {generating ? (
-                            <ActivityIndicator color={props.theme.colors.text.secondary} />
+                            <ActivitySpinner color={props.theme.colors.text.secondary} />
                         ) : (
                             <Ionicons
                                 name="sparkles-outline"
@@ -268,7 +269,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                     })}
                 >
                     {props.busy ? (
-                        <ActivityIndicator color={commitButtonContentColor} />
+                        <ActivitySpinner color={commitButtonContentColor} />
                     ) : (
                         <Text style={{ fontSize: 12, color: commitButtonContentColor, ...Typography.default('semiBold') }}>
                             {props.commitActionLabel}
@@ -296,7 +297,7 @@ export const ScmCommitComposerCard = React.memo((props: ScmCommitComposerCardPro
                         })}
                     >
                         {pushAction.busy ? (
-                            <ActivityIndicator color={props.theme.colors.text.secondary} />
+                            <ActivitySpinner color={props.theme.colors.text.secondary} />
                         ) : (
                             <Ionicons
                                 name="arrow-up-circle-outline"

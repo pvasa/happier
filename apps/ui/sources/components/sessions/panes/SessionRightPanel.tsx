@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Octicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -192,7 +193,7 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => {
 const PaneLoadingFallback = React.memo((props: Readonly<{ color: string }>) => {
     return (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 24, paddingHorizontal: 16 }}>
-            <ActivityIndicator size="small" color={props.color} />
+            <ActivitySpinner size="small" color={props.color} />
             <Text style={{ marginTop: 10, fontSize: 12, color: props.color, ...Typography.default() }}>
                 {t('common.loading')}
             </Text>

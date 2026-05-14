@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 import { Octicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
@@ -70,7 +71,7 @@ export const ScmChangeDiscardButton = React.memo((props: ScmChangeDiscardButtonP
             }}
         >
             {busy ? (
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             ) : (
                 <Octicons name="history" size={14} color={theme.colors.text.secondary} />
             )}

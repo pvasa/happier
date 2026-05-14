@@ -100,12 +100,101 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return {};
 }
 
+function makeGitTheme() {
+    return {
+        colors: {
+            border: { default: '#ddd' },
+            divider: '#ddd',
+            surface: { base: '#fff', inset: '#fafafa' },
+            surfaceHigh: '#f6f6f6',
+            text: { primary: '#000', secondary: '#666' },
+            textSecondary: '#666',
+            success: '#0a0',
+            warning: '#f90',
+            textLink: '#09f',
+        },
+    };
+}
+
 describe('SessionRightPanelGitCommitTab (virtualization)', () => {
+    it('keeps virtualized changed-file props stable when equivalent theme objects change', async () => {
+        const { SessionRightPanelGitCommitTab } = await import('./SessionRightPanelGitCommitTab');
+        const files = [makeScmFile('src/file-0.ts')];
+
+        function Wrapper() {
+            const [tick, setTick] = React.useState(0);
+            const theme = {
+                ...makeGitTheme(),
+                tick,
+            };
+            return (
+                <>
+                    <SessionRightPanelGitCommitTab
+                        theme={theme}
+                        sessionId="s1"
+                        sessionPath="/workspace"
+                        backendLabel="Git"
+                        commitActionLabel="Commit"
+                        scmSnapshot={null}
+                        hasConflicts={false}
+                        scmOperationBusy={false}
+                        scmOperationStatus={null}
+                        hasGlobalOperationInFlight={false}
+                        inFlightScmOperation={null}
+                        commitAllowed={false}
+                        commitBlockedMessage={null}
+                        changedFilesViewMode="repository"
+                        attributionReliability="high"
+                        allRepositoryChangedFiles={files as any}
+                        sessionAttributedFiles={[] as any}
+                        repositoryOnlyFiles={[] as any}
+                        suppressedInferredCount={0}
+                        repositorySelectedCount={0}
+                        onSelectAll={() => {}}
+                        onSelectNone={() => {}}
+                        disableSelectAll={true}
+                        disableSelectNone={true}
+                        onFilePress={() => {}}
+                        onFilePressPinned={() => {}}
+                        onToggleSelectionForFile={() => {}}
+                        renderFileActions={() => null}
+                        renderFileTrailingActions={() => null}
+                        commitDraftMessage=""
+                        onCommitDraftMessageChange={() => {}}
+                        onCommitFromMessage={() => {}}
+                        commitMessageGeneratorEnabled={false}
+                        onGenerateCommitMessageSuggestion={async () => ({ ok: true, message: '' })}
+                        scmStatusFiles={null}
+                        showCommitComposer={false}
+                    />
+                    {React.createElement('Pressable' as any, {
+                        testID: 'theme-rerender',
+                        onPress: () => setTick((value) => value + 1),
+                    })}
+                </>
+            );
+        }
+
+        const screen = await renderScreen(<Wrapper />);
+        const firstFlatListProps = screen.tree.findByType('FlatList' as any).props;
+
+        await renderer.act(async () => {
+            screen.pressByTestId('theme-rerender');
+        });
+
+        const nextFlatListProps = screen.tree.findByType('FlatList' as any).props;
+        expect(nextFlatListProps.keyExtractor).toBe(firstFlatListProps.keyExtractor);
+        expect(nextFlatListProps.ListHeaderComponent).toBe(firstFlatListProps.ListHeaderComponent);
+        expect(nextFlatListProps.contentContainerStyle).toBe(firstFlatListProps.contentContainerStyle);
+        expect(nextFlatListProps.renderItem).toBe(firstFlatListProps.renderItem);
+        expect(nextFlatListProps.getItemLayout).toBe(firstFlatListProps.getItemLayout);
+    });
+
     it('hides changed-file view mode chips when only repository view is available', async () => {
         const { SessionRightPanelGitCommitTab } = await import('./SessionRightPanelGitCommitTab');
 
         const screen = await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"
@@ -168,7 +257,7 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         const onChangedFilesViewMode = vi.fn();
 
         const screen = await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"
@@ -258,7 +347,7 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         ];
 
         const screen = await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"
@@ -329,7 +418,7 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         ];
 
         const screen = await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"
@@ -403,7 +492,7 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
 
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"
@@ -456,7 +545,7 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
 
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"
@@ -517,7 +606,7 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
 
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(<SessionRightPanelGitCommitTab
-                    theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f' } }}
+                    theme={makeGitTheme()}
                     sessionId="s1"
                     sessionPath="/workspace"
                     backendLabel="Git"

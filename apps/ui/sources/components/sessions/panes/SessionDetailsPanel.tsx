@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons, Octicons } from '@expo/vector-icons';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { FileIcon } from '@/components/ui/media/FileIcon';
@@ -252,7 +253,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
 
     const renderLoadingFallback = React.useCallback(() => (
         <View style={styles.loading}>
-            <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+            <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             <Text style={styles.loadingText}>{t('common.loading')}</Text>
         </View>
     ), [styles.loading, styles.loadingText, theme.colors.text.secondary]);

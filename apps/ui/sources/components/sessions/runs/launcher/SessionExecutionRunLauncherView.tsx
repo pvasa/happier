@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { getActionSpec, resolveEffectiveActionInputFields } from '@happier-dev/protocol';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { buildResumeSessionExtrasFromUiState, DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
@@ -437,11 +438,11 @@ export const SessionExecutionRunLauncherView = React.memo((props: Readonly<{
     ]);
 
     if (!hydrateReady) {
-        return <ActivityIndicator size="small" color={theme.colors.text.secondary} />;
+        return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
     }
 
     if (waitingForExecutionRunCapabilities) {
-        return <ActivityIndicator size="small" color={theme.colors.text.secondary} />;
+        return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
     }
 
     if (!canLaunchExecutionRuns) {

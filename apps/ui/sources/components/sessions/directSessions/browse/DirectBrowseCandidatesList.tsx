@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -83,7 +84,7 @@ export const DirectBrowseCandidatesList = React.memo(function DirectBrowseCandid
 
             {props.loading ? (
                 <View style={styles.loadingRow}>
-                    <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                    <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 </View>
             ) : props.error ? (
                 <View>

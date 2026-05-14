@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { Text } from '@/components/ui/text/Text';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
@@ -476,7 +477,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     if (!effectiveScmSnapshot) {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 40 }}>
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 <Text style={{ marginTop: 12, fontSize: 12, color: theme.colors.text.secondary }}>
                     {t('common.loading')}
                 </Text>

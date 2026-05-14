@@ -1,7 +1,8 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 import { Octicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
@@ -72,7 +73,7 @@ export const ScmCommitSelectionToggleButton = React.memo((props: ScmCommitSelect
             }}
         >
             {busy ? (
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             ) : (
                 <Octicons name={iconName as any} size={14} color={iconColor} />
             )}

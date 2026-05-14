@@ -47,7 +47,7 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
+    Typography: { default: () => ({}), eyebrow: () => ({}), keyHint: () => ({}) },
 }));
 
 const SessionFileDetailsViewMock = vi.fn((props: any) => React.createElement('SessionFileDetailsView', props));
@@ -106,5 +106,21 @@ describe('SessionDetailsPanel (auto pin on edit)', () => {
         });
 
         expect(pinDetailsTab).toHaveBeenCalledWith('file:a');
+    });
+
+    it('keeps the file edit callback stable across unchanged panel rerenders', async () => {
+        const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
+
+        const screen = await renderScreen(<SessionDetailsPanel sessionId="s1" scopeId="session:s1" />);
+
+        const firstProps = SessionFileDetailsViewMock.mock.calls[0]?.[0];
+        expect(typeof firstProps?.onStartEditingFile).toBe('function');
+
+        await act(async () => {
+            screen.tree.update(<SessionDetailsPanel sessionId="s1" scopeId="session:s1" />);
+        });
+
+        const latestProps = SessionFileDetailsViewMock.mock.calls.at(-1)?.[0];
+        expect(latestProps?.onStartEditingFile).toBe(firstProps.onStartEditingFile);
     });
 });
