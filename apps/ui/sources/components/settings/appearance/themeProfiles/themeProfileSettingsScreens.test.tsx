@@ -127,6 +127,7 @@ vi.mock('@/text', async () => {
             translate: (key: string, params?: Record<string, unknown>) => {
                 if (typeof params?.name === 'string') return `${params.name} copy`;
                 if (typeof params?.count === 'number') return `Custom theme ${params.count}`;
+                if (typeof params?.formats === 'string') return `Supported formats: ${params.formats}`;
                 return key;
             },
         }),
@@ -154,6 +155,12 @@ const findBuiltInThemesDropdown = async (screen: Awaited<ReturnType<typeof rende
     const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
     return screen.findAllByType(DropdownMenu as any)
         .find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.themeProfiles.builtInGroup');
+};
+
+const findAssetAppearanceDropdown = async (screen: Awaited<ReturnType<typeof renderSettingsView>>) => {
+    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+    return screen.findAllByType(DropdownMenu as any)
+        .find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.themeProfiles.assetAppearance');
 };
 
 const findRowActionsInNode = (node: React.ReactNode): ItemAction[] => {
@@ -230,6 +237,8 @@ describe('Theme profile settings screen', () => {
             'light',
             'dark',
             'premiumDark',
+            'pitchDark',
+            'sunsetDark',
             'nightDark',
             'catppuccinMocha',
             'catppuccinMacchiato',
@@ -379,6 +388,20 @@ describe('Theme profile editor', () => {
         expect(saved.profiles).toHaveLength(1);
         expect(saved.activeProfileId).toBe(saved.profiles[0]?.id);
         expect(saved.profiles[0]?.id).toMatch(/^theme_/);
+    });
+
+    it('saves the selected asset appearance and uses it as the activation mode', async () => {
+        const screen = await renderEditorScreen('new');
+        const assetAppearanceDropdown = await findAssetAppearanceDropdown(screen);
+
+        await act(async () => {
+            assetAppearanceDropdown?.props.onSelect('dark');
+        });
+        await screen.pressByTestIdAsync('settings-theme-profile-save');
+
+        const saved = getThemeProfiles().profiles[0] as (ThemeProfileV1 & { assetAppearance?: string }) | undefined;
+        expect(saved?.assetAppearance).toBe('dark');
+        expect(shared.settingsState.themePreference).toBe('dark');
     });
 
     it('blocks saving when the profile name is invalid', async () => {
@@ -582,6 +605,12 @@ describe('Theme profile import and export screens', () => {
         await screen.pressByTestIdAsync('settings-theme-profile-import-submit');
 
         expect(getThemeProfiles().profiles[0]?.overrides.light['background.canvas']).toBe('#123456');
+    });
+
+    it('shows the supported import formats hint on the import screen', async () => {
+        const screen = await renderImportScreen();
+
+        expect(screen.getTextContent()).toContain('Supported formats: Happier theme profile JSON, VS Code theme JSON');
     });
 
     it('keeps import warnings visible before leaving the import screen', async () => {

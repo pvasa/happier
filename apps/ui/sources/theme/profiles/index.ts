@@ -4,6 +4,7 @@ export * from './createThemeProfileDraft';
 export * from './deriveThemeColors';
 export * from './resolveThemeProfile';
 export * from './themeProfileColorValidation';
+export * from './themeProfileAssetAppearance';
 export * from './themeProfileConstants';
 export * from './themeProfileImportExport';
 export * from './themeProfilePathAccess';

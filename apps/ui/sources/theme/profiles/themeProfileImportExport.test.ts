@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { THEME_PROFILE_MAX_JSON_BYTES, THEME_PROFILE_MAX_OVERRIDES_PER_MODE, THEME_PROFILE_MAX_PROFILES } from './themeProfileConstants';
-import { exportThemeProfileToJson, importThemeProfileFromJson, migrateThemeProfileOverrideTokenIds } from './themeProfileImportExport';
+import { exportThemeProfileToJson, getSupportedThemeProfileImportFormats, importThemeProfileFromJson, migrateThemeProfileOverrideTokenIds } from './themeProfileImportExport';
 import { THEME_PROFILE_PUBLIC_TOKEN_IDS } from './themeProfileTokenRegistry';
 import type { ThemeProfileV1 } from './themeProfileTypes';
 
@@ -22,6 +22,10 @@ const profile: ThemeProfileV1 = {
             'background.canvas': '#0A0A0B',
         },
     },
+};
+const profileWithDarkAssets: ThemeProfileV1 & { assetAppearance: 'dark' } = {
+    ...profile,
+    assetAppearance: 'dark',
 };
 
 describe('theme profile import/export', () => {
@@ -52,7 +56,7 @@ describe('theme profile import/export', () => {
 
     it('imports valid exported JSON', () => {
         const exported = exportThemeProfileToJson({
-            ...profile,
+            ...profileWithDarkAssets,
             overrides: { light: { 'background.canvas': '#fafafa' }, dark: {} },
         });
 
@@ -62,6 +66,7 @@ describe('theme profile import/export', () => {
         if (result.ok) {
             expect(result.profile.name).toBe('Ocean Terminal');
             expect(result.profile.overrides.light).toEqual({ 'background.canvas': '#fafafa' });
+            expect((result.profile as ThemeProfileV1 & { assetAppearance?: string }).assetAppearance).toBe('dark');
             expect(result.warnings).toEqual([]);
         }
     });
@@ -70,6 +75,53 @@ describe('theme profile import/export', () => {
         expect(importThemeProfileFromJson('{not json}', { now: '2026-05-12T00:00:00.000Z' }).ok).toBe(false);
         expect(importThemeProfileFromJson('{"kind":"other","schemaVersion":1}', { now: '2026-05-12T00:00:00.000Z' }).ok).toBe(false);
         expect(importThemeProfileFromJson('{"kind":"happier.themeProfile","schemaVersion":2}', { now: '2026-05-12T00:00:00.000Z' }).ok).toBe(false);
+        expect(importThemeProfileFromJson('{"name":"Not a theme","type":"dark"}', { now: '2026-05-12T00:00:00.000Z' }).ok).toBe(false);
+    });
+
+    it('auto-detects and imports a supported VS Code theme JSON payload', () => {
+        const json = JSON.stringify({
+            name: 'Pitch Dark',
+            type: 'dark',
+            colors: {
+                'editor.background': '#191724',
+                'editor.foreground': '#E0DEF4',
+                'activityBar.background': '#191724',
+                'titleBar.activeBackground': '#191724',
+                'panel.background': '#1F1D2E',
+                'input.background': '#393552',
+                'input.foreground': '#E0DEF4',
+                'button.background': '#403D52',
+                'button.foreground': '#E0DEF4',
+            },
+            tokenColors: [
+                { scope: 'comment', settings: { foreground: '#6E6A86' } },
+                { scope: 'string', settings: { foreground: '#9CCFD8' } },
+                { scope: 'keyword', settings: { foreground: '#C4A7E7' } },
+                { scope: 'constant.numeric', settings: { foreground: '#F6C177' } },
+                { scope: 'entity.name.function', settings: { foreground: '#EBBCBA' } },
+            ],
+        });
+
+        const result = importThemeProfileFromJson(json, { now: '2026-05-12T00:00:00.000Z' });
+
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+            expect(result.profile.name).toBe('Pitch Dark');
+            expect(result.profile.assetAppearance).toBe('dark');
+            expect(result.profile.overrides.dark['background.canvas']).toBe('#191724');
+            expect(result.profile.overrides.dark['surface.base']).toBe('#1F1D2E');
+            expect(result.profile.overrides.dark['control.input.background']).toBe('#393552');
+            expect(result.profile.overrides.dark['effect.surfaceHighlight']).toBe('transparent');
+            expect(result.profile.overrides.dark['syntax.keyword']).toBe('#C4A7E7');
+            expect(result.profile.overrides.dark['syntax.comment']).toBe('#6E6A86');
+        }
+    });
+
+    it('exposes the supported import formats used by the import screen', () => {
+        expect(getSupportedThemeProfileImportFormats().map((format) => format.id)).toEqual([
+            'happier-theme-profile-json',
+            'vscode-theme-json',
+        ]);
     });
 
     it('rejects JSON payloads over the profile import size limit', () => {

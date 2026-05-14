@@ -7,6 +7,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { SettingsActionFooter } from '@/components/ui/settingsSurface/SettingsActionFooter';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -17,6 +18,7 @@ import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
 import { createThemeProfileDraft, resetThemeProfileDraftMode, resetThemeProfileDraftToken, updateThemeProfileDraftColor } from '@/theme/profiles/createThemeProfileDraft';
 import { THEME_PROFILE_MAX_PROFILES } from '@/theme/profiles/themeProfileConstants';
 import { sanitizeThemeProfileName } from '@/theme/profiles/themeProfileImportExport';
+import { isThemeProfileAssetAppearance, resolveThemeProfileAssetAppearance } from '@/theme/profiles/themeProfileAssetAppearance';
 import { applyThemeRuntimeSelection } from '@/theme/profiles/themeProfileRuntime';
 import { findThemeProfileById } from '@/theme/profiles/themeProfilePersistence';
 import type { ThemeProfileMode, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
@@ -139,6 +141,7 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         });
     });
     const [presetMenuOpen, setPresetMenuOpen] = React.useState(false);
+    const [assetAppearanceMenuOpen, setAssetAppearanceMenuOpen] = React.useState(false);
     const [invalidByToken, setInvalidByToken] = React.useState<Readonly<Record<string, boolean>>>({});
     const previewAppliedRef = React.useRef(false);
     const committedRef = React.useRef(false);
@@ -154,6 +157,23 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
     }, [themePreference, themeProfiles]);
 
     const profileDisplayName = builtInDefinition ? t(builtInDefinition.translationKey) : draft?.name;
+    const assetAppearance = React.useMemo(() => (
+        draft ? resolveThemeProfileAssetAppearance(draft) : mode
+    ), [draft, mode]);
+    const assetAppearanceItems = React.useMemo((): readonly DropdownMenuItem[] => ([
+        {
+            id: 'light',
+            title: t('settingsAppearance.themeOptions.light'),
+            subtitle: t('settingsAppearance.themeDescriptions.light'),
+            icon: <Ionicons name="sunny-outline" size={22} color={theme.colors.accent.blue} />,
+        },
+        {
+            id: 'dark',
+            title: t('settingsAppearance.themeOptions.dark'),
+            subtitle: t('settingsAppearance.themeDescriptions.dark'),
+            icon: <Ionicons name="moon-outline" size={22} color={theme.colors.accent.blue} />,
+        },
+    ]), [theme.colors.accent.blue]);
     const groups = React.useMemo(() => buildThemeProfileTokenGroups(), []);
     const recentColors = React.useMemo(() => (draft ? getThemeProfileRecentColors(draft) : []), [draft]);
     const hasInvalidColor = Object.values(invalidByToken).some(Boolean);
@@ -222,6 +242,16 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         setDraft((current) => current ? resetThemeProfileDraftMode(current, mode, nowThemeProfileTimestamp()) : current);
     }, [mode, readonly]);
 
+    const updateAssetAppearance = React.useCallback((nextAssetAppearance: string) => {
+        if (readonly || !isThemeProfileAssetAppearance(nextAssetAppearance)) return;
+        setMode(nextAssetAppearance);
+        setDraft((current) => current ? {
+            ...current,
+            assetAppearance: nextAssetAppearance,
+            updatedAt: nowThemeProfileTimestamp(),
+        } : current);
+    }, [readonly]);
+
     const saveAndActivate = React.useCallback(async () => {
         if (!draft || readonly || saveDisabled) return;
         committedRef.current = true;
@@ -232,14 +262,14 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         await activateThemeProfileFromSettingsScreen({
             profileId: draft.id,
             themePreference,
-            nextThemePreference: mode,
+            nextThemePreference: assetAppearance,
             themeProfiles: nextThemeProfiles,
             setThemePreference,
             setThemeProfiles,
             forceAnimate: true,
             reduceMotion,
         });
-    }, [draft, mode, readonly, reduceMotion, saveDisabled, setThemePreference, setThemeProfiles, themePreference, themeProfiles]);
+    }, [assetAppearance, draft, readonly, reduceMotion, saveDisabled, setThemePreference, setThemeProfiles, themePreference, themeProfiles]);
 
     const deactivate = React.useCallback(async () => {
         committedRef.current = true;
@@ -278,7 +308,7 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         const timeout = setTimeout(() => {
             previewAppliedRef.current = true;
             applyThemeRuntimeSelection({
-                themePreference: mode,
+                themePreference: assetAppearance,
                 themeProfiles: {
                     ...upsertThemeProfile(themeProfiles, draft),
                     activeProfileId: draft.id,
@@ -288,7 +318,7 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         }, 150);
 
         return () => clearTimeout(timeout);
-    }, [draft, hasInvalidColor, hasInvalidProfileName, hasProfileLimitReached, mode, readonly, themeProfiles]);
+    }, [assetAppearance, draft, hasInvalidColor, hasInvalidProfileName, hasProfileLimitReached, readonly, themeProfiles]);
 
     React.useEffect(() => () => {
         if (!previewAppliedRef.current || committedRef.current) return;
@@ -360,6 +390,28 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
                         options={presetOptions}
                         selectedOption={selectedPreset}
                         onSelect={(presetId) => { void selectPreset(presetId); }}
+                    />
+                ) : null}
+                {!readonly ? (
+                    <DropdownMenu
+                        open={assetAppearanceMenuOpen}
+                        onOpenChange={setAssetAppearanceMenuOpen}
+                        variant="selectable"
+                        search={false}
+                        selectedId={assetAppearance}
+                        showCategoryTitles={false}
+                        matchTriggerWidth={true}
+                        connectToTrigger={true}
+                        rowKind="item"
+                        itemTrigger={{
+                            title: t('settingsAppearance.themeProfiles.assetAppearance'),
+                            subtitle: t('settingsAppearance.themeProfiles.assetAppearanceSubtitle'),
+                            icon: <Ionicons name="image-outline" size={28} color={theme.colors.accent.indigo} />,
+                            showSelectedSubtitle: false,
+                            itemProps: { testID: 'settings-theme-profile-asset-appearance' },
+                        }}
+                        items={assetAppearanceItems}
+                        onSelect={updateAssetAppearance}
                     />
                 ) : null}
                 <Item

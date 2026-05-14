@@ -2,6 +2,7 @@ import type { ThemePreference } from '@/components/ui/layout/statusBarStyle';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { THEME_PROFILE_ID_PREFIX, THEME_PROFILE_MAX_PROFILES } from '@/theme/profiles/themeProfileConstants';
 import { isReservedThemeProfileId, isRouteSafeThemeProfileId, sanitizeThemeProfileName, sanitizeThemeProfileOverridesForV1TrustBoundary } from '@/theme/profiles/themeProfileImportExport';
+import { inferThemeProfileAssetAppearance, isThemeProfileAssetAppearance } from '@/theme/profiles/themeProfileAssetAppearance';
 import type { ThemeProfilesLocalStateV1, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
 import { activateThemeProfile } from '@/theme/profiles/themeProfileRuntime';
 
@@ -25,6 +26,9 @@ const sanitizeEditableThemeProfile = (profile: ThemeProfileV1): ThemeProfileV1 |
         id,
         name,
         base: { light: 'light', dark: 'dark' },
+        assetAppearance: isThemeProfileAssetAppearance(profile.assetAppearance)
+            ? profile.assetAppearance
+            : inferThemeProfileAssetAppearance({ overrides }),
         overrides,
     };
 };

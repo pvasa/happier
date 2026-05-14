@@ -468,14 +468,14 @@ export const darkTheme = {
         fab: {
             background: '#303030',
             backgroundPressed: '#1b1b1b',
-            gradient: verticalControlGradient(['#303030', '#343434']),
+            gradient: verticalControlGradient(['#303030', '#323232']),
             icon: '#ffffff',
         },
         segmentedControl: {
             trackBackground: '#292929',
             trackGradient: undefined,
             activeBackground: '#202020',
-            activeGradient: verticalControlGradient(['#202020', '#232323']),
+            activeGradient: verticalControlGradient(['#202020', '#212121']),
         },
         radio: {
             active: '#0A84FF',
@@ -485,7 +485,7 @@ export const darkTheme = {
         button: {
             primary: {
                 background: '#1b1b1b',
-                gradient: verticalControlGradient(['#1b1b1b', '#1d1d1d']),
+                gradient: verticalControlGradient(['#1b1b1b', '#1c1c1c']),
                 tint: '#FFFFFF',
                 disabled: '#C0C0C0',
             },

@@ -4,6 +4,79 @@ import { resolveThemeProfile } from './resolveThemeProfile';
 import { createThemeProfileDraft, resetThemeProfileDraftToken } from './createThemeProfileDraft';
 import { BUILT_IN_THEME_PROFILES, getBuiltInThemeProfileDefinition } from './builtInThemeProfiles';
 
+const importedDarkThemePresetIds = [
+    'catppuccinMocha',
+    'catppuccinMacchiato',
+    'catppuccinFrappe',
+    'oneDarkPro',
+    'monokaiPro',
+    'githubDark',
+    'darkModern',
+] as const;
+
+const sunsetDarkSeed = {
+    'background.canvas': '#131111',
+    'surface.base': '#191717',
+    'surface.inset': '#171515',
+    'surface.elevated': '#221C1C',
+    'surface.selected': '#292121',
+    'surface.pressed': '#302727',
+    'border.surface': 'rgba(255,255,255,0.056)',
+    'border.strong': 'rgba(255,255,255,0.090)',
+    'effect.surfaceHighlight': 'transparent',
+    'text.primary': '#EFEFEF',
+    'text.secondary': '#8A817C',
+    'text.tertiary': '#6C625D',
+    'text.link': '#D8B45A',
+    'text.destructive': '#D06A49',
+    'text.placeholder': '#766C67',
+    'text.disabled': '#635955',
+    'state.active.background': 'rgba(208,106,73,0.11)',
+    'state.active.border': 'rgba(208,106,73,0.26)',
+    'state.active.foreground': '#D06A49',
+    'state.success.foreground': '#7FA98D',
+    'state.success.background': 'rgba(127,169,141,0.10)',
+    'state.success.border': 'rgba(127,169,141,0.22)',
+    'state.warning.foreground': '#E0B65A',
+    'state.warning.background': 'rgba(224,182,90,0.10)',
+    'state.warning.border': 'rgba(224,182,90,0.22)',
+    'state.danger.foreground': '#D06A49',
+    'state.danger.background': 'rgba(208,106,73,0.10)',
+    'state.danger.border': 'rgba(208,106,73,0.22)',
+    'state.info.foreground': '#D8B45A',
+    'state.info.background': 'rgba(216,180,90,0.08)',
+    'state.info.border': 'rgba(216,180,90,0.20)',
+    'control.input.background': '#171515',
+    'control.button.primary.background': '#221C1C',
+    'control.button.primary.foreground': '#EFEFEF',
+    'control.button.primary.disabled': '#2A2323',
+    'control.fab.background': '#221C1C',
+    'control.fab.backgroundPressed': '#2A2323',
+    'control.fab.foreground': '#EFEFEF',
+    'control.segmentedControl.trackBackground': '#201A1A',
+    'control.segmentedControl.activeBackground': '#2A2222',
+    'control.switch.track.active': '#D06A49',
+    'control.switch.track.inactive': '#252121',
+    'control.switch.thumb.inactive': '#766C67',
+    'control.radio.active': '#E0B65A',
+    'control.radio.inactive': '#766C67',
+    'control.permissionButton.allowAll.background': 'rgba(216,180,90,0.14)',
+    'control.permissionButton.allowAll.foreground': '#D8B45A',
+    'control.permissionButton.inactive.background': '#131111',
+    'control.permissionButton.inactive.border': 'rgba(255,255,255,0.050)',
+    'control.permissionButton.inactive.foreground': '#8A817C',
+    'control.permissionButton.selected.background': '#2A2222',
+    'control.permissionButton.selected.border': 'rgba(255,255,255,0.090)',
+    'message.user.background': '#221C1C',
+    'message.event.foreground': '#8A817C',
+    'syntax.keyword': '#D06A49',
+    'syntax.string': '#7FA98D',
+    'syntax.comment': '#6C625D',
+    'syntax.number': '#E0B65A',
+    'syntax.function': '#E9A06C',
+    'overlay.scrim': 'rgba(19,17,17,0.72)',
+};
+
 const premiumDarkSeed = {
     'background.canvas': '#050506',
     'surface.base': '#141417',
@@ -13,7 +86,7 @@ const premiumDarkSeed = {
     'surface.pressed': '#2D2D35',
     'border.surface': 'rgba(255,255,255,0.075)',
     'border.strong': 'rgba(255,255,255,0.13)',
-    'effect.surfaceHighlight': 'rgba(255,255,255,0.055)',
+    'effect.surfaceHighlight': 'transparent',
     'text.primary': '#ECECEF',
     'text.secondary': '#9A9AA3',
     'text.tertiary': '#6F6F78',
@@ -74,10 +147,79 @@ const nightDarkSeed = {
     'overlay.scrim': 'rgba(0,0,0,0.72)',
 };
 
+const pitchDarkSeed = {
+    'background.canvas': '#090909',
+    'surface.base': '#131313',
+    'surface.inset': '#1B1B1B',
+    'surface.elevated': '#202020',
+    'surface.selected': '#1A1A1A',
+    'surface.pressed': '#202020',
+    'surface.pressedOverlay': 'rgba(255,255,255,0.035)',
+    'surface.ripple': 'rgba(255,255,255,0.055)',
+    'border.surface': 'rgba(255,255,255,0.05)',
+    'border.strong': 'rgba(255,255,255,0.075)',
+    'effect.surfaceHighlight': 'transparent',
+    'chrome.header.background': '#131313',
+    'chrome.header.foreground': '#E8E8E8',
+    'text.primary': '#E8E8E8',
+    'text.secondary': '#939393',
+    'text.tertiary': '#6E6E6E',
+    'text.link': '#70CFF8',
+    'text.destructive': '#F98181',
+    'text.placeholder': '#6A6A6A',
+    'text.disabled': '#575757',
+    'state.active.background': 'rgba(112,207,248,0.10)',
+    'state.active.border': 'rgba(112,207,248,0.24)',
+    'state.active.foreground': '#70CFF8',
+    'state.success.foreground': '#B9F18D',
+    'state.success.background': 'rgba(185,241,141,0.10)',
+    'state.success.border': 'rgba(185,241,141,0.22)',
+    'state.warning.foreground': '#FBBE88',
+    'state.warning.background': 'rgba(251,190,136,0.10)',
+    'state.warning.border': 'rgba(251,190,136,0.22)',
+    'state.danger.foreground': '#F98181',
+    'state.danger.background': 'rgba(249,129,129,0.10)',
+    'state.danger.border': 'rgba(249,129,129,0.22)',
+    'state.info.foreground': '#70CFF8',
+    'state.info.background': 'rgba(112,207,248,0.08)',
+    'state.info.border': 'rgba(112,207,248,0.20)',
+    'control.input.background': '#131313',
+    'control.button.primary.background': '#1B1B1B',
+    'control.button.primary.foreground': '#E8E8E8',
+    'control.button.primary.disabled': '#232323',
+    'control.fab.background': '#1B1B1B',
+    'control.fab.backgroundPressed': '#202020',
+    'control.fab.foreground': '#E8E8E8',
+    'control.segmentedControl.trackBackground': '#131313',
+    'control.segmentedControl.activeBackground': '#1A1A1A',
+    'control.switch.track.active': '#70CFF8',
+    'control.switch.track.inactive': '#202020',
+    'control.switch.thumb.inactive': '#939393',
+    'control.radio.active': '#70CFF8',
+    'control.radio.inactive': '#6E6E6E',
+    'control.permissionButton.allowAll.background': 'rgba(112,207,248,0.14)',
+    'control.permissionButton.allowAll.foreground': '#70CFF8',
+    'control.permissionButton.inactive.background': '#131313',
+    'control.permissionButton.inactive.border': 'rgba(255,255,255,0.05)',
+    'control.permissionButton.inactive.foreground': '#939393',
+    'control.permissionButton.selected.background': '#1A1A1A',
+    'control.permissionButton.selected.border': 'rgba(255,255,255,0.075)',
+    'message.user.background': '#1A1A1A',
+    'message.event.foreground': '#939393',
+    'syntax.keyword': '#70CFF8',
+    'syntax.string': '#B9F18D',
+    'syntax.comment': '#6E6E6E',
+    'syntax.number': '#FBBE88',
+    'syntax.function': '#C0A7FF',
+    'overlay.scrim': 'rgba(9,9,9,0.74)',
+};
+
 describe('built-in theme profiles', () => {
     it('exposes curated themes as read-only cloneable presets with locked seed palettes', () => {
         expect(BUILT_IN_THEME_PROFILES.map((definition) => definition.presetId)).toEqual([
             'premiumDark',
+            'pitchDark',
+            'sunsetDark',
             'nightDark',
             'catppuccinMocha',
             'catppuccinMacchiato',
@@ -93,6 +235,7 @@ describe('built-in theme profiles', () => {
         expect(getBuiltInThemeProfileDefinition('premiumDark')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'dark' });
         expect(getBuiltInThemeProfileDefinition('premiumLight')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'light' });
         expect(getBuiltInThemeProfileDefinition('nightDark')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'dark' });
+        expect(getBuiltInThemeProfileDefinition('sunsetDark')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'dark' });
         expect(getBuiltInThemeProfileDefinition('catppuccinLatte')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'light' });
         expect(getBuiltInThemeProfileDefinition('catppuccinFrappe')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'dark' });
         expect(getBuiltInThemeProfileDefinition('catppuccinMacchiato')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'dark' });
@@ -104,9 +247,17 @@ describe('built-in theme profiles', () => {
         expect(getBuiltInThemeProfileDefinition('darkModern')).toMatchObject({ cloneable: true, editable: false, deletable: false, preferredMode: 'dark' });
         expect(getBuiltInThemeProfileDefinition('premiumDark')?.profile.overrides.dark).toMatchObject(premiumDarkSeed);
         expect(Object.keys(getBuiltInThemeProfileDefinition('premiumDark')?.profile.overrides.dark ?? {}).length).toBeGreaterThan(80);
+        expect(BUILT_IN_THEME_PROFILES.find((definition) => definition.presetId === 'pitchDark')?.profile.overrides.dark).toMatchObject(pitchDarkSeed);
+        expect(Object.keys(BUILT_IN_THEME_PROFILES.find((definition) => definition.presetId === 'pitchDark')?.profile.overrides.dark ?? {}).length).toBeGreaterThan(20);
+        expect(BUILT_IN_THEME_PROFILES.find((definition) => definition.presetId === 'sunsetDark')?.profile.overrides.dark).toMatchObject(sunsetDarkSeed);
+        expect(Object.keys(BUILT_IN_THEME_PROFILES.find((definition) => definition.presetId === 'sunsetDark')?.profile.overrides.dark ?? {}).length).toBeGreaterThan(20);
         expect(getBuiltInThemeProfileDefinition('premiumLight')?.profile.overrides.light).toEqual(premiumLightSeed);
         expect(getBuiltInThemeProfileDefinition('nightDark')?.profile.overrides.dark).toMatchObject(nightDarkSeed);
         expect(Object.keys(getBuiltInThemeProfileDefinition('nightDark')?.profile.overrides.dark ?? {}).length).toBeGreaterThan(80);
+        expect(getBuiltInThemeProfileDefinition('nightDark')?.profile.overrides.dark['effect.surfaceHighlight']).toBe('rgba(255,255,255,0.028)');
+        for (const presetId of importedDarkThemePresetIds) {
+            expect(getBuiltInThemeProfileDefinition(presetId)?.profile.overrides.dark['effect.surfaceHighlight']).toBe('transparent');
+        }
         expect(getBuiltInThemeProfileDefinition('catppuccinMocha')?.profile.overrides.dark).toMatchObject({
             'background.canvas': '#11111B',
             'surface.base': '#1E1E2E',

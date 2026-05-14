@@ -80,7 +80,7 @@ describe('ThemeProfilePreviewPane surface chrome', () => {
         const style = flattenTestStyle(findPreviewCard(screen).props.style);
         expect(style.borderColor).toBe('rgba(0,0,0,0.08)');
         expect(Number(style.borderWidth)).toBeGreaterThan(0);
-        expect(style.borderTopColor).toBe('rgba(255,255,255,0.04)');
+        expect(style.borderTopColor).toBe('rgba(0,0,0,0.08)');
         expect(Number(style.borderTopWidth)).toBeGreaterThan(0);
         expect(hasShadow(style)).toBe(true);
     });

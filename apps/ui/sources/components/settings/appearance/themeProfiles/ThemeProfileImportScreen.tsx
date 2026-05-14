@@ -12,7 +12,7 @@ import { SettingsActionFooter } from '@/components/ui/settingsSurface/SettingsAc
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { importThemeProfileFromJson } from '@/theme/profiles/themeProfileImportExport';
+import { getSupportedThemeProfileImportFormats, importThemeProfileFromJson } from '@/theme/profiles/themeProfileImportExport';
 import { nativePickFiles, type NativePickedFile } from '@/utils/files/nativePickFiles';
 import { nowThemeProfileTimestamp, upsertThemeProfile } from './themeProfileScreenUtils';
 
@@ -32,6 +32,10 @@ export const ThemeProfileImportScreen = React.memo(function ThemeProfileImportSc
     const [json, setJson] = React.useState('');
     const [error, setError] = React.useState<string | null>(null);
     const [warnings, setWarnings] = React.useState(0);
+    const supportedImportFormats = React.useMemo(
+        () => getSupportedThemeProfileImportFormats().map((format) => format.label).join(', '),
+        [],
+    );
 
     const submit = React.useCallback(() => {
         const result = importThemeProfileFromJson(json, {
@@ -66,7 +70,10 @@ export const ThemeProfileImportScreen = React.memo(function ThemeProfileImportSc
 
     return (
         <ItemList testID="settings-theme-profile-import-screen" style={{ paddingTop: 0 }}>
-            <ItemGroup title={t('settingsAppearance.themeProfiles.importProfile')} footer={t('settingsAppearance.themeProfiles.importFooter')}>
+            <ItemGroup
+                title={t('settingsAppearance.themeProfiles.importProfile')}
+                footer={t('settingsAppearance.themeProfiles.importFooter', { formats: supportedImportFormats })}
+            >
                 <View style={styles.jsonEditorRow}>
                     <View style={styles.jsonEditorHeader}>
                         <View style={styles.jsonEditorTitle}>

@@ -14,6 +14,14 @@ const profile = (overrides: ThemeProfileV1['overrides']): ThemeProfileV1 => ({
     overrides,
 });
 
+const withAssetAppearance = (
+    sourceProfile: ThemeProfileV1,
+    assetAppearance: 'light' | 'dark',
+): ThemeProfileV1 & { assetAppearance: 'light' | 'dark' } => ({
+    ...sourceProfile,
+    assetAppearance,
+});
+
 const source = (sourceProfile: ThemeProfileV1): ThemePresetSourceOption => ({
     id: sourceProfile.id,
     kind: 'custom',
@@ -58,10 +66,25 @@ describe('themeProfilePresetOptions', () => {
         expect(custom?.preferredMode).toBe('dark');
     });
 
+    it('uses explicit custom asset appearance instead of inferring from color override counts', () => {
+        const options = buildThemePresetSourceOptions({
+            activeProfileId: null,
+            profiles: [withAssetAppearance(profile({
+                light: { 'background.canvas': '#FFFFFF' },
+                dark: {},
+            }), 'dark')],
+        });
+        const custom = options.find((option) => option.id === 'theme_order');
+
+        expect(custom?.preferredMode).toBe('dark');
+    });
+
     it('uses built-in preset metadata for curated theme modes', () => {
         const options = buildThemePresetSourceOptions({ activeProfileId: null, profiles: [] });
 
         expect(options.find((option) => option.id === 'premiumDark')?.preferredMode).toBe('dark');
+        expect(options.find((option) => option.id === 'pitchDark')?.preferredMode).toBe('dark');
+        expect(options.find((option) => option.id === 'sunsetDark')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'nightDark')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'catppuccinMocha')?.preferredMode).toBe('dark');
         expect(options.find((option) => option.id === 'catppuccinMacchiato')?.preferredMode).toBe('dark');

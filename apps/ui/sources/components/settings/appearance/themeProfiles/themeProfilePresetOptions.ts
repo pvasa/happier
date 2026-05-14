@@ -1,5 +1,6 @@
 import { t } from '@/text';
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
+import { resolveThemeProfileAssetAppearance } from '@/theme/profiles/themeProfileAssetAppearance';
 import type { BuiltInThemeProfileDefinition, ThemeProfileMode, ThemeProfilesLocalStateV1, ThemeProfileV1 } from '@/theme/profiles/themeProfileTypes';
 
 export type ThemePresetSourceKind = 'base' | 'builtIn' | 'custom';
@@ -15,9 +16,7 @@ export type ThemePresetSourceOption = Readonly<{
 }>;
 
 export const resolveThemePresetSourcePreferredMode = (profile: ThemeProfileV1): ThemeProfileMode => {
-    const lightCount = Object.keys(profile.overrides.light).length;
-    const darkCount = Object.keys(profile.overrides.dark).length;
-    return darkCount > lightCount ? 'dark' : 'light';
+    return resolveThemeProfileAssetAppearance(profile);
 };
 
 const cloneOverrides = (overrides: ThemeProfileV1['overrides']): ThemeProfileV1['overrides'] => ({
@@ -70,8 +69,9 @@ export const buildThemePresetSourceOptions = (
     })),
 ];
 
-const valuesSignature = (profile: Pick<ThemeProfileV1, 'base' | 'overrides'> | null): string => JSON.stringify({
+const valuesSignature = (profile: Pick<ThemeProfileV1, 'base' | 'assetAppearance' | 'overrides'> | null): string => JSON.stringify({
     base: profile?.base ?? { light: 'light', dark: 'dark' },
+    assetAppearance: profile ? resolveThemeProfileAssetAppearance(profile) : 'light',
     overrides: sortOverrides(profile ? profile.overrides : emptyOverrides()),
 });
 
@@ -88,5 +88,6 @@ export const replaceThemeProfileDraftFromPresetSource = (
     ...draft,
     updatedAt,
     base: source.profile?.base ?? { light: 'light', dark: 'dark' },
+    assetAppearance: source.profile ? resolveThemeProfileAssetAppearance(source.profile) : source.preferredMode,
     overrides: source.profile ? cloneOverrides(source.profile.overrides) : emptyOverrides(),
 });

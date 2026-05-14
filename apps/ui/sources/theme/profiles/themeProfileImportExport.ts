@@ -14,7 +14,11 @@ import { isValidThemeProfileColorValue } from './themeProfileColorValidation';
 import { getThemeProfileTokenDefinition, THEME_PROFILE_TOKEN_DEFINITIONS } from './themeProfileTokenRegistry';
 import { resolveThemeProfile } from './resolveThemeProfile';
 import { readThemeProfilePathValue } from './themeProfilePathAccess';
+import { inferThemeProfileAssetAppearance, isThemeProfileAssetAppearance } from './themeProfileAssetAppearance';
+import { resolveExternalThemeProfileImportProfile } from './themeProfileExternalThemeImport';
 import type { ThemeProfileColorOverrides, ThemeProfileMode, ThemeProfileV1 } from './themeProfileTypes';
+
+export { getSupportedThemeProfileImportFormats } from './themeProfileExternalThemeImport';
 
 export type ThemeProfileImportWarning =
     | Readonly<{ code: 'unknownToken'; tokenId: string; mode: ThemeProfileMode }>
@@ -235,7 +239,7 @@ const sanitizeProfile = (
     const dark = sanitizeOverrides(profile.overrides?.dark, 'dark', warnings, sanitizeOptions);
     if (light.invalid || dark.invalid) return null;
 
-    return {
+    const sanitizedProfileWithoutAssetAppearance = {
         schemaVersion: THEME_PROFILE_SCHEMA_VERSION,
         id: sanitizeId(profile.id, options),
         name,
@@ -246,6 +250,13 @@ const sanitizeProfile = (
             light: light.overrides,
             dark: dark.overrides,
         },
+    } satisfies Omit<ThemeProfileV1, 'assetAppearance'>;
+
+    return {
+        ...sanitizedProfileWithoutAssetAppearance,
+        assetAppearance: isThemeProfileAssetAppearance(profile.assetAppearance)
+            ? profile.assetAppearance
+            : inferThemeProfileAssetAppearance(sanitizedProfileWithoutAssetAppearance),
     };
 };
 
@@ -307,13 +318,17 @@ export const importThemeProfileFromJson = (json: string, options: ImportOptions)
         return { ok: false, error: 'invalidJson' };
     }
 
-    if (!isRecord(parsed) || parsed.kind !== THEME_PROFILE_EXPORT_KIND || parsed.schemaVersion !== THEME_PROFILE_SCHEMA_VERSION) {
-        return { ok: false, error: 'unsupportedSchema' };
-    }
-
-    const parsedProfile = parseProfile(parsed.profile);
-    if (!parsedProfile) {
-        return { ok: false, error: 'invalidProfile' };
+    let parsedProfile: ThemeProfileV1 | null = null;
+    if (isRecord(parsed) && parsed.kind === THEME_PROFILE_EXPORT_KIND && parsed.schemaVersion === THEME_PROFILE_SCHEMA_VERSION) {
+        parsedProfile = parseProfile(parsed.profile) ?? null;
+        if (!parsedProfile) {
+            return { ok: false, error: 'invalidProfile' };
+        }
+    } else {
+        parsedProfile = resolveExternalThemeProfileImportProfile(parsed, options);
+        if (!parsedProfile) {
+            return { ok: false, error: 'unsupportedSchema' };
+        }
     }
 
     if ((options.existingProfileIds?.size ?? 0) >= THEME_PROFILE_MAX_PROFILES) {

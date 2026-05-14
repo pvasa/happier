@@ -18,6 +18,7 @@ export type ThemeProfileV1 = Readonly<{
         light: 'light';
         dark: 'dark';
     }>;
+    assetAppearance?: ThemeProfileMode;
     overrides: Readonly<{
         light: ThemeProfileColorOverrides;
         dark: ThemeProfileColorOverrides;
@@ -31,6 +32,8 @@ export type ThemeProfilesLocalStateV1 = Readonly<{
 
 export type BuiltInThemeProfilePresetId =
     | 'premiumDark'
+    | 'pitchDark'
+    | 'sunsetDark'
     | 'nightDark'
     | 'catppuccinMocha'
     | 'catppuccinMacchiato'

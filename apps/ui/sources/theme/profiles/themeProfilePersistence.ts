@@ -11,6 +11,7 @@ import {
 } from './themeProfileImportExport';
 import type { ThemeProfileV1, ThemeProfilesLocalStateV1 } from './themeProfileTypes';
 import { getBuiltInThemeProfileDefinition, isBuiltInThemeProfilePresetId } from './builtInThemeProfiles';
+import { inferThemeProfileAssetAppearance, isThemeProfileAssetAppearance } from './themeProfileAssetAppearance';
 
 export const DEFAULT_THEME_PROFILES_LOCAL_STATE: ThemeProfilesLocalStateV1 = Object.freeze({
     profiles: [],
@@ -46,7 +47,7 @@ const parseThemeProfile = (value: unknown): Readonly<{ profile: ThemeProfileV1; 
     });
     if (!sanitizedOverrides) return null;
 
-    const profile: ThemeProfileV1 = {
+    const profileWithoutAssetAppearance = {
         schemaVersion: THEME_PROFILE_SCHEMA_VERSION,
         id: value.id.trim(),
         name,
@@ -54,6 +55,13 @@ const parseThemeProfile = (value: unknown): Readonly<{ profile: ThemeProfileV1; 
         updatedAt: value.updatedAt,
         base: { light: 'light', dark: 'dark' },
         overrides: sanitizedOverrides,
+    } satisfies Omit<ThemeProfileV1, 'assetAppearance'>;
+
+    const profile: ThemeProfileV1 = {
+        ...profileWithoutAssetAppearance,
+        assetAppearance: isThemeProfileAssetAppearance(value.assetAppearance)
+            ? value.assetAppearance
+            : inferThemeProfileAssetAppearance(profileWithoutAssetAppearance),
     };
 
     return {

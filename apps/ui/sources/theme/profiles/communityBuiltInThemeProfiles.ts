@@ -73,7 +73,7 @@ const createCuratedThemeOverrides = (palette: CuratedThemePalette): ThemeProfile
     'border.surface': palette.borderSurface,
     'border.strong': palette.borderStrong,
     'border.modal': palette.borderModal,
-    'effect.surfaceHighlight': palette.highlight,
+    'effect.surfaceHighlight': 'transparent',
     'chrome.header.background': palette.base,
     'chrome.header.foreground': palette.textPrimary,
     'text.primary': palette.textPrimary,
@@ -185,7 +185,7 @@ const createCuratedBuiltInProfile = (
     cloneable: true,
     editable: false,
     deletable: false,
-    profile: createBuiltInProfile(presetId, name, overrides),
+    profile: createBuiltInProfile(presetId, name, preferredMode, overrides),
 });
 
 const createDarkProfile = (presetId: BuiltInThemeProfilePresetId, name: string, palette: CuratedThemePalette): BuiltInThemeProfileDefinition => (

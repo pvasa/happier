@@ -17,6 +17,10 @@ const sourceProfile: ThemeProfileV1 = {
         dark: { 'background.canvas': '#0A0A0B' },
     },
 };
+const sourceProfileWithDarkAssets: ThemeProfileV1 & { assetAppearance: 'dark' } = {
+    ...sourceProfile,
+    assetAppearance: 'dark',
+};
 
 describe('createThemeProfileDraft', () => {
     it('creates a draft profile from base canonical themes', () => {
@@ -34,7 +38,7 @@ describe('createThemeProfileDraft', () => {
     });
 
     it('clones an existing profile without retaining identity or timestamps', () => {
-        const draft = createThemeProfileDraft({ id: 'clone', name: 'Clone', now, sourceProfile });
+        const draft = createThemeProfileDraft({ id: 'clone', name: 'Clone', now, sourceProfile: sourceProfileWithDarkAssets });
 
         expect(draft.id).toBe('clone');
         expect(draft.name).toBe('Clone');
@@ -42,6 +46,7 @@ describe('createThemeProfileDraft', () => {
         expect(draft.updatedAt).toBe(now);
         expect(draft.overrides).toEqual(sourceProfile.overrides);
         expect(draft.overrides).not.toBe(sourceProfile.overrides);
+        expect((draft as ThemeProfileV1 & { assetAppearance?: string }).assetAppearance).toBe('dark');
     });
 
     it('updates, resets one token, and resets one mode immutably', () => {

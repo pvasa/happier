@@ -1,4 +1,5 @@
 import { THEME_PROFILE_MAX_OVERRIDES_PER_MODE, THEME_PROFILE_SCHEMA_VERSION } from './themeProfileConstants';
+import { resolveThemeProfileAssetAppearance } from './themeProfileAssetAppearance';
 import type { ThemeProfileColorOverrides, ThemeProfileMode, ThemeProfileV1 } from './themeProfileTypes';
 
 type CreateThemeProfileDraftInput = Readonly<{
@@ -36,6 +37,7 @@ export const createThemeProfileDraft = ({ id, name, now, sourceProfile }: Create
     createdAt: now,
     updatedAt: now,
     base: { light: 'light', dark: 'dark' },
+    ...(sourceProfile ? { assetAppearance: resolveThemeProfileAssetAppearance(sourceProfile) } : {}),
     overrides: sourceProfile ? cloneOverrides(sourceProfile.overrides) : emptyOverrides(),
 });
 
