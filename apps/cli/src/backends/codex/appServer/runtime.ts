@@ -54,6 +54,7 @@ import {
     type CompletedTurnSeqRange,
 } from './rollbackMetadata';
 import {
+    isCodexAppServerInvalidRequestForMethodError,
     isCodexAppServerInvalidParamsError,
     isCodexAppServerMethodNotFoundError,
 } from './appServerCompatibility';
@@ -102,6 +103,12 @@ function unsupportedSessionRuntimeMethod(method: string): UnsupportedSessionRunt
         errorCode: 'unsupported_session_runtime_method',
         error: `unsupported_session_runtime_method:${method}`,
     };
+}
+
+function isCodexAppServerGoalMethodUnavailableError(error: unknown, appServerMethod: string): boolean {
+    return isCodexAppServerMethodNotFoundError(error)
+        || isCodexAppServerInvalidParamsError(error)
+        || isCodexAppServerInvalidRequestForMethodError(error, appServerMethod);
 }
 
 type PendingTurn = Readonly<{
@@ -682,7 +689,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             await publishGoalWorkState(response);
             return true;
         } catch (error) {
-            if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
+            if (isCodexAppServerGoalMethodUnavailableError(error, 'thread/goal/get')) {
                 return false;
             }
             throw error;
@@ -2091,7 +2098,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 await publishGoalWorkState(response);
                 return undefined;
             } catch (error) {
-                if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
+                if (isCodexAppServerGoalMethodUnavailableError(error, 'thread/goal/set')) {
                     logger.debug('[codex-app-server] Native goal set unsupported by app-server', {
                         threadId: activeThreadId,
                         error,
@@ -2112,7 +2119,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 await clearGoalWorkState();
                 return undefined;
             } catch (error) {
-                if (isCodexAppServerMethodNotFoundError(error) || isCodexAppServerInvalidParamsError(error)) {
+                if (isCodexAppServerGoalMethodUnavailableError(error, 'thread/goal/clear')) {
                     logger.debug('[codex-app-server] Native goal clear unsupported by app-server', {
                         threadId: activeThreadId,
                         error,

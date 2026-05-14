@@ -13,19 +13,16 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { Metadata } from '@/api/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 
-type SessionRuntimeControlErrorResult = Readonly<{ ok: false; errorCode?: string; error: string }>;
-type SessionRuntimeControlResult = void | SessionRuntimeControlErrorResult;
-
 export type SessionRuntimeControls = {
-  refreshGoal?: () => Promise<SessionRuntimeControlResult>;
+  refreshGoal?: () => unknown;
   setGoal?: (
     objective: string,
     options?: Readonly<{
       status?: string;
       tokenBudget?: number | null;
     }>,
-  ) => Promise<SessionRuntimeControlResult>;
-  clearGoal?: () => Promise<SessionRuntimeControlResult>;
+  ) => unknown;
+  clearGoal?: () => unknown;
   listVendorPlugins?: () => Promise<unknown>;
   listSkills?: () => Promise<unknown>;
 };
@@ -52,7 +49,7 @@ function readWorkState(getSessionMetadata?: (() => Metadata | null) | null): unk
   return readDisplayableSessionWorkStateV1((metadata as Record<string, unknown>).sessionWorkStateV1);
 }
 
-function readRuntimeControlErrorResult(value: SessionRuntimeControlResult): Readonly<{ ok: false; errorCode: string; error: string }> | null {
+function readRuntimeControlErrorResult(value: unknown): Readonly<{ ok: false; errorCode: string; error: string }> | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   if (record.ok !== false || typeof record.error !== 'string') return null;

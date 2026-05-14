@@ -35,6 +35,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rejectInterruptAsNoActiveTurn?: boolean;
     rejectPermissionsProfile?: boolean;
     rejectGoalMethods?: boolean;
+    rejectGoalMethodsAsInvalidRequest?: boolean;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -78,6 +79,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/get") {',
+        `        if (${JSON.stringify(params.rejectGoalMethodsAsInvalidRequest === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32600, message: "Invalid request" } }) + "\\n");',
+        '            continue;',
+        '        }',
         `        if (${JSON.stringify(params.rejectGoalMethods === true)}) {`,
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/get" } }) + "\\n");',
         '            continue;',
@@ -86,6 +91,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/set") {',
+        `        if (${JSON.stringify(params.rejectGoalMethodsAsInvalidRequest === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32600, message: "Invalid request" } }) + "\\n");',
+        '            continue;',
+        '        }',
         `        if (${JSON.stringify(params.rejectGoalMethods === true)}) {`,
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/set" } }) + "\\n");',
         '            continue;',
@@ -95,6 +104,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/clear") {',
+        `        if (${JSON.stringify(params.rejectGoalMethodsAsInvalidRequest === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32600, message: "Invalid request" } }) + "\\n");',
+        '            continue;',
+        '        }',
         `        if (${JSON.stringify(params.rejectGoalMethods === true)}) {`,
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/clear" } }) + "\\n");',
         '            continue;',
@@ -636,6 +649,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectInterruptAsNoActiveTurn?: boolean;
             rejectPermissionsProfile?: boolean;
             rejectGoalMethods?: boolean;
+            rejectGoalMethodsAsInvalidRequest?: boolean;
         }> = {},
     ): Promise<{
         root: string;
@@ -652,6 +666,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectInterruptAsNoActiveTurn: options.rejectInterruptAsNoActiveTurn,
             rejectPermissionsProfile: options.rejectPermissionsProfile,
             rejectGoalMethods: options.rejectGoalMethods,
+            rejectGoalMethodsAsInvalidRequest: options.rejectGoalMethodsAsInvalidRequest,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -1110,6 +1125,36 @@ describe('createCodexAppServerRuntime', () => {
             refreshGoal: () => Promise<unknown>;
         }).refreshGoal()).resolves.toEqual({
             ...expected,
+            error: 'unsupported_session_runtime_method:session.goal.get',
+        });
+    });
+
+    it('returns stable unsupported results when app-server goal methods return invalid-request errors', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-goal-invalid-request-', {
+            rejectGoalMethodsAsInvalidRequest: true,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+
+        await expect((runtime as unknown as {
+            setGoal: (objective: string) => Promise<unknown>;
+        }).setGoal('Unsupported native goal')).resolves.toEqual({
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
+            error: 'unsupported_session_runtime_method:session.goal.set',
+        });
+        await expect((runtime as unknown as {
+            refreshGoal: () => Promise<unknown>;
+        }).refreshGoal()).resolves.toEqual({
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
             error: 'unsupported_session_runtime_method:session.goal.get',
         });
     });

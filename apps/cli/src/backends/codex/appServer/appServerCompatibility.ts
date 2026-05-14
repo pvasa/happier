@@ -41,6 +41,14 @@ export function isCodexAppServerInvalidParamsError(error: unknown): boolean {
     return /invalid\s+params/i.test(readMessage(error));
 }
 
+export function isCodexAppServerInvalidRequestForMethodError(error: unknown, method: string): boolean {
+    if (readCode(error) !== -32600) return false;
+    if (!error || typeof error !== 'object') return false;
+    const errorMethod = (error as { method?: unknown }).method;
+    if (errorMethod === method) return true;
+    return readMessage(error).includes(method);
+}
+
 export function isCodexAppServerExperimentalApiUnavailableError(error: unknown): boolean {
     const message = readMessage(error);
     if (!/experimental/i.test(message)) return false;

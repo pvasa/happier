@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     isCodexAppServerExperimentalApiUnavailableError,
+    isCodexAppServerInvalidRequestForMethodError,
     isCodexAppServerInvalidParamsError,
     isCodexAppServerMethodNotFoundError,
 } from './appServerCompatibility';
@@ -31,5 +32,12 @@ describe('appServerCompatibility', () => {
         expect(isCodexAppServerExperimentalApiUnavailableError(makeError('experimental API is not enabled', -32602))).toBe(true);
         expect(isCodexAppServerExperimentalApiUnavailableError(makeError('unknown experimental method', -32601))).toBe(true);
         expect(isCodexAppServerExperimentalApiUnavailableError(makeError('Invalid params: missing field'))).toBe(false);
+    });
+
+    it('detects invalid-request errors for a specific app-server method only', () => {
+        expect(isCodexAppServerInvalidRequestForMethodError(makeError('request failed', -32600), 'thread/goal/set')).toBe(false);
+        expect(isCodexAppServerInvalidRequestForMethodError({ code: -32600, method: 'thread/goal/set' }, 'thread/goal/set')).toBe(true);
+        expect(isCodexAppServerInvalidRequestForMethodError(makeError('Invalid request: thread/goal/set', -32600), 'thread/goal/set')).toBe(true);
+        expect(isCodexAppServerInvalidRequestForMethodError({ code: -32600, method: 'thread/goal/get' }, 'thread/goal/set')).toBe(false);
     });
 });
