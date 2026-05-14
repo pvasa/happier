@@ -164,7 +164,7 @@ function countJsonNodesByType(node: TestRenderer.ReactTestRendererJSON | TestRen
     }
 
     return (node.type === type ? 1 : 0)
-        + node.children.reduce((count, child) => {
+        + (node.children ?? []).reduce((count, child) => {
             if (typeof child === 'string') return count;
             return count + countJsonNodesByType(child, type);
         }, 0);
