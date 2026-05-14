@@ -19,6 +19,15 @@ function mergeTauriConfig(baseValue, overlayValue) {
   return out;
 }
 
+function applyHtml5FileDragDropWindowPolicy(config) {
+  if (!Array.isArray(config?.app?.windows)) return config;
+  config.app.windows = config.app.windows.map((windowConfig) => ({
+    ...windowConfig,
+    dragDropEnabled: false,
+  }));
+  return config;
+}
+
 export function resolveStackTauriDevUrl({ runtimeState, defaultPort = 8081 } = {}) {
   const expo = runtimeState && typeof runtimeState === 'object' ? runtimeState.expo : null;
   const port = Number(expo?.webPort ?? expo?.port ?? defaultPort);
@@ -41,5 +50,5 @@ export function buildStackTauriDevConfig({ baseConfig, overlayConfig, devUrl, en
   if (hasExplicitStackOverride) {
     applyStackTauriOverrides({ tauriConfig: merged, env });
   }
-  return merged;
+  return applyHtml5FileDragDropWindowPolicy(merged);
 }
