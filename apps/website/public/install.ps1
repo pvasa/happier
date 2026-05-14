@@ -1322,7 +1322,7 @@ function Ensure-Minisign {
     $wingetInstallResult = Invoke-NativeCommandCapturingOutput {
       winget install --id jedisct1.minisign --accept-source-agreements --accept-package-agreements
     }
-    if (-not $wingetInstallResult.Ok) {
+    if ($wingetInstallResult.ExitCode -ne 0) {
       throw "Unable to install minisign via winget. $($wingetInstallResult.Output)"
     }
     $installedMinisign = Resolve-MinisignExecutablePath

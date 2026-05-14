@@ -54,6 +54,8 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /\$ErrorActionPreference = \$previousErrorActionPreference/);
   assert.match(installPs1, /Invoke-NativeCommandCapturingOutput\s+\{/);
   assert.match(installPs1, /\$wingetInstallResult/i);
+  assert.match(installPs1, /\$wingetInstallResult\.ExitCode\s+-ne\s+0/i);
+  assert.doesNotMatch(installPs1, /\$wingetInstallResult\.Ok/i);
   assert.match(installPs1, /Unable to install minisign via winget/i);
   assert.match(installPs1, /Payload promotion is unsupported by this CLI build, falling back to legacy direct binary copy\./);
   assert.match(installPs1, /Payload promotion failed without a safe fallback\./);

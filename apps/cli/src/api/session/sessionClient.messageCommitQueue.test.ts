@@ -58,6 +58,7 @@ function createDelayedSocketStub(): DelayedSocketStub {
 
 let sessionSocketStub: ApiSessionSocketStub | null = null;
 let userSocketStub: ApiSessionSocketStub | null = null;
+let supervisorStartCount = 0;
 
 vi.mock('./sockets', () => ({
   createUserScopedSocket: () => {
@@ -88,6 +89,7 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
   DEFAULT_MANAGED_CONNECTION_POLICY: {},
   createManagedConnectionSupervisor: (params: { createTransport: () => unknown; onConnected?: () => Promise<void> | void }) => ({
     start: async () => {
+      supervisorStartCount += 1;
       params.createTransport();
       await params.onConnected?.();
     },
@@ -126,8 +128,64 @@ describe('ApiSessionClient message commit queue', () => {
     ]);
   });
 
+  it('treats disconnected primary turn state updates as non-fatal', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: false,
+      emitWithAck: async () => {
+        throw new Error('socket emit should not be reached while disconnected');
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const [{ ApiSessionClient }, { logger }] = await Promise.all([
+      import('./sessionClient'),
+      import('@/ui/logger'),
+    ]);
+    const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    client.sendAgentMessage('claude' as any, { type: 'task_complete', id: 'turn-1' } as any);
+
+    await expect.poll(() => debugSpy.mock.calls).toContainEqual([
+      '[API] Failed to update primary turn runtime state (non-fatal)',
+      expect.objectContaining({
+        latestTurnStatus: 'completed',
+        error: expect.objectContaining({
+          message: 'update-state socket is not connected',
+        }),
+      }),
+    ]);
+
+    debugSpy.mockRestore();
+  });
+
+  it('requests reconnect when message commits queue while disconnected', async () => {
+    vi.resetModules();
+    supervisorStartCount = 0;
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: false,
+      emitWithAck: async () => {
+        throw new Error('socket emit should not be reached while disconnected');
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+
+    await expect.poll(() => supervisorStartCount).toBe(1);
+
+    client.sendAgentMessage('claude' as any, { type: 'message', message: 'FAKE_CLAUDE_OK_2' } as any);
+
+    await expect.poll(() => supervisorStartCount).toBeGreaterThan(1);
+  });
+
   it('serializes best-effort message commits to avoid concurrent socket acks', async () => {
     vi.resetModules();
+    supervisorStartCount = 0;
     const delayedSessionSocket = createDelayedSocketStub();
     sessionSocketStub = delayedSessionSocket;
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });

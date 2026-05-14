@@ -710,6 +710,18 @@ export class ApiSessionClient extends EventEmitter {
     private queueSessionMessageUntilReconnect(params: { message: string | { t: 'plain'; v: unknown }; localId: string; sidechainId: string | null }): void {
         if (this.closed) return;
         this.queuedDisconnectedSessionMessages.set(params.localId, params);
+        this.kickSessionSocketReconnectForQueuedMessage(params.localId);
+    }
+
+    private kickSessionSocketReconnectForQueuedMessage(localId: string): void {
+        const supervisor = this.sessionConnectionSupervisor;
+        if (!supervisor) return;
+        void supervisor.start().catch((error) => {
+            logger.debug('[API] Failed to restart session socket for queued message', {
+                localId,
+                error: serializeUnknownErrorForLog(error),
+            });
+        });
     }
 
     private async flushQueuedSessionMessagesOnReconnect(): Promise<void> {
@@ -1787,13 +1799,13 @@ export class ApiSessionClient extends EventEmitter {
         });
 
         if (normalizedBody.type === 'task_started') {
-            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'in_progress' });
+            this.updatePrimaryTurnRuntimeStateBestEffort({ latestTurnStatus: 'in_progress' });
         } else if (normalizedBody.type === 'task_complete') {
-            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'completed' });
+            this.updatePrimaryTurnRuntimeStateBestEffort({ latestTurnStatus: 'completed' });
         } else if (normalizedBody.type === 'turn_failed') {
-            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'failed' });
+            this.updatePrimaryTurnRuntimeStateBestEffort({ latestTurnStatus: 'failed' });
         } else if (normalizedBody.type === 'turn_cancelled' || normalizedBody.type === 'turn_aborted') {
-            void this.updatePrimaryTurnRuntimeState({ latestTurnStatus: 'cancelled', lastRuntimeIssue: null });
+            this.updatePrimaryTurnRuntimeStateBestEffort({ latestTurnStatus: 'cancelled', lastRuntimeIssue: null });
         }
 
         // Best-effort: allow ACP providers to report token usage via a token_count message.
@@ -2199,6 +2211,22 @@ export class ApiSessionClient extends EventEmitter {
                 syncSessionSnapshotFromServer: () => this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' }),
                 handler: (agentState) => agentState,
                 runtimeIssueSummaryV1: record,
+            });
+        });
+    }
+
+    private updatePrimaryTurnRuntimeStateBestEffort(record: PrimaryTurnRuntimeStateUpdate): void {
+        if (!this.socket.connected) {
+            logger.debug('[API] Failed to update primary turn runtime state (non-fatal)', {
+                latestTurnStatus: record.latestTurnStatus,
+                error: serializeUnknownErrorForLog(new Error('update-state socket is not connected')),
+            });
+            return;
+        }
+        void this.updatePrimaryTurnRuntimeState(record).catch((error) => {
+            logger.debug('[API] Failed to update primary turn runtime state (non-fatal)', {
+                latestTurnStatus: record.latestTurnStatus,
+                error: serializeUnknownErrorForLog(error),
             });
         });
     }
