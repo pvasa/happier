@@ -1,6 +1,5 @@
 import React from 'react';
-import { View, FlatList, Pressable, Platform } from 'react-native';
-import { Image } from 'expo-image';
+import { View, FlatList, Pressable, Platform, Image as ReactNativeImage } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
@@ -27,6 +26,7 @@ import {
     DEFAULT_SESSION_FOLDERS_V1,
     createSessionFolder,
     deleteSessionFolder,
+    moveSessionFolder,
     renameSessionFolder,
     resolveDurableWorkspaceRefForSessionListHeader,
     type SessionFoldersV1,
@@ -44,11 +44,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
-import {
-    SESSION_LIST_ROW_HEIGHT_COMPACT,
-    SESSION_LIST_ROW_HEIGHT_DEFAULT,
-    SESSION_LIST_ROW_HEIGHT_MINIMAL,
-} from './sessionListRowHeights';
+import { resolveSessionListRowHeight } from './sessionListRowDensity';
 import { countCollapsedSessionListGroups, filterCollapsedSessionListItems } from './sessionListCollapsedItems';
 import { buildSessionListReachabilityModels } from './sessionListReachabilityModels';
 import { buildSessionListSelectedItems, type SessionListSelectedItem } from './sessionListSelectedItems';
@@ -60,6 +56,7 @@ import {
     asSessionFolderHeaderItem,
     readSessionFolderDepth,
     readSessionFolderId,
+    type SessionFolderHeaderItem,
     type SessionFolderViewModeV1,
 } from './sessionFolderShellTypes';
 import {
@@ -138,6 +135,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row' as const,
         alignItems: 'center' as const,
         justifyContent: 'space-between' as const,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    groupHeaderRowDropTargetActive: {
+        borderColor: theme.colors.accent.blue,
+        backgroundColor: theme.colors.state.active.background,
     },
     groupHeaderTitleRow: {
         flexDirection: 'row' as const,
@@ -150,7 +154,18 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 16,
         height: 16,
         borderRadius: 4,
-        backgroundColor: theme.colors.background.surface,
+    },
+    groupHeaderFaviconFrame: {
+        width: 16,
+        minWidth: 16,
+        maxWidth: 16,
+        height: 16,
+        minHeight: 16,
+        maxHeight: 16,
+        flexShrink: 0,
+        borderRadius: 4,
+        backgroundColor: theme.colors.surface.base,
+        overflow: 'hidden' as const,
     },
     groupHeaderContent: {
         flex: 1,
@@ -229,10 +244,9 @@ type SessionFolderAssignableSessionItem = Readonly<{
     serverId?: string;
 }>;
 
-const ROW_HEIGHT_DEFAULT = SESSION_LIST_ROW_HEIGHT_DEFAULT;
-const ROW_HEIGHT_COMPACT = SESSION_LIST_ROW_HEIGHT_COMPACT;
-const ROW_HEIGHT_MINIMAL = SESSION_LIST_ROW_HEIGHT_MINIMAL;
+const SESSION_LIST_HEADER_ROW_HEIGHT = 28;
 const EMPTY_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
+const EMPTY_SESSION_FOLDER_BREADCRUMBS: ReadonlyArray<SessionFolderHeaderItem> = Object.freeze([]);
 const EMPTY_COLLAPSED_GROUP_KEYS: Readonly<Record<string, boolean>> = Object.freeze({});
 const EMPTY_SESSION_LIST_GROUP_ORDER: Readonly<Record<string, ReadonlyArray<string> | undefined>> = Object.freeze({});
 
@@ -400,6 +414,35 @@ type SessionListRowProps = Readonly<
     }
 >;
 
+const SessionListDropIndicator = React.memo(function SessionListDropIndicator(props: Readonly<{
+    dataIndex: number;
+    dropIndicatorIdx: SharedValue<number>;
+    dropIndicatorEdge: SharedValue<number>;
+    indent?: number;
+}>) {
+    const styles = stylesheet;
+    const indicatorAnimatedStyle = useAnimatedStyle(() => {
+        const isTarget = props.dropIndicatorIdx.value === props.dataIndex;
+        const atBottom = props.dropIndicatorEdge.value === 1;
+        return {
+            opacity: isTarget ? 1 : 0,
+            top: atBottom ? undefined : 0,
+            bottom: atBottom ? 0 : undefined,
+        };
+    });
+
+    return (
+        <Animated.View
+            style={[
+                styles.dropIndicator,
+                typeof props.indent === 'number' && props.indent > 0 ? { left: 16 + props.indent } : null,
+                indicatorAnimatedStyle,
+            ]}
+            pointerEvents="none"
+        />
+    );
+});
+
 const SessionListRow = React.memo(function SessionListRow(props: SessionListRowProps) {
     const { sessionKey, groupKey, rowHeight, onDragStart, onDragEnd, onDragUpdate, resolveDropIntent, onDropIntent, isDragActive, isBeingDragged, dataIndex, totalItemCount, dropIndicatorIdx, dropIndicatorEdge, ...itemProps } = props;
 
@@ -501,19 +544,6 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
         ? 'none' as const
         : 'auto' as const;
 
-    // Drop indicator: a 2px accent-blue line at the top or bottom edge of this
-    // row when it's the current drop target. Always mounted (no layout change);
-    // invisible when inactive.
-    const indicatorAnimatedStyle = useAnimatedStyle(() => {
-        const isTarget = dropIndicatorIdx.value === dataIndex;
-        const atBottom = dropIndicatorEdge.value === 1;
-        return {
-            opacity: isTarget ? 1 : 0,
-            top: atBottom ? undefined : 0,
-            bottom: atBottom ? 0 : undefined,
-        };
-    });
-
     const sessionItem = (
         <SessionItem
             {...itemProps}
@@ -524,7 +554,12 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
 
     return (
         <Animated.View ref={wrapperRef} style={animatedStyle} pointerEvents={rowPointerEvents}>
-            <Animated.View style={[styles.dropIndicator, indicatorAnimatedStyle]} pointerEvents="none" />
+            <SessionListDropIndicator
+                dataIndex={dataIndex}
+                dropIndicatorIdx={dropIndicatorIdx}
+                dropIndicatorEdge={dropIndicatorEdge}
+                indent={itemProps.folderDepth ? Math.max(0, Math.min(3, itemProps.folderDepth)) * 6 : 0}
+            />
             {Platform.OS === 'ios' && gesture ? (
                 <GestureDetector gesture={gesture}>
                     {sessionItem}
@@ -532,6 +567,87 @@ const SessionListRow = React.memo(function SessionListRow(props: SessionListRowP
             ) : sessionItem}
         </Animated.View>
     );
+});
+
+const SessionListHeaderFrame = React.memo(function SessionListHeaderFrame(props: Readonly<{
+    children: React.ReactNode;
+    dataIndex: number;
+    dropIndicatorIdx: SharedValue<number>;
+    dropIndicatorEdge: SharedValue<number>;
+    indent?: number;
+}>) {
+    return (
+        <View style={{ position: 'relative' }}>
+            <SessionListDropIndicator
+                dataIndex={props.dataIndex}
+                dropIndicatorIdx={props.dropIndicatorIdx}
+                dropIndicatorEdge={props.dropIndicatorEdge}
+                indent={props.indent}
+            />
+            {props.children}
+        </View>
+    );
+});
+
+const DraggableSessionFolderHeaderFrame = React.memo(function DraggableSessionFolderHeaderFrame(props: Readonly<{
+    children: React.ReactNode;
+    folderId: string;
+    groupKey: string;
+    dataIndex: number;
+    totalItemCount: number;
+    dropIndicatorIdx: SharedValue<number>;
+    dropIndicatorEdge: SharedValue<number>;
+    indent?: number;
+    onDragStart: (sessionKey: string) => void;
+    onDragEnd: (sessionKey: string, groupKey: string, positionDelta: number) => void;
+    onDragUpdate?: (event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => void;
+    resolveDropIntent?: (event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number | null;
+        absoluteY: number | null;
+    }>) => SessionFolderDragDropIntent | null;
+    onDropIntent?: (event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        intent: SessionFolderDragDropIntent;
+    }>) => void;
+}>) {
+    const dragKey = `folder:${props.folderId}`;
+    const { gesture, animatedStyle } = useSessionInlineDrag({
+        sessionKey: dragKey,
+        groupKey: props.groupKey,
+        rowHeight: SESSION_LIST_HEADER_ROW_HEIGHT,
+        onDragStart: props.onDragStart,
+        onDragEnd: props.onDragEnd,
+        onDragUpdate: props.onDragUpdate,
+        resolveDropIntent: props.resolveDropIntent,
+        onDropIntent: props.onDropIntent,
+        dataIndex: props.dataIndex,
+        totalItemCount: props.totalItemCount,
+        dropIndicatorIdx: props.dropIndicatorIdx,
+        dropIndicatorEdge: props.dropIndicatorEdge,
+        activateAfterLongPressMs: Platform.OS === 'web' ? undefined : 350,
+    });
+
+    const content = (
+        <Animated.View style={animatedStyle}>
+            <SessionListDropIndicator
+                dataIndex={props.dataIndex}
+                dropIndicatorIdx={props.dropIndicatorIdx}
+                dropIndicatorEdge={props.dropIndicatorEdge}
+                indent={props.indent}
+            />
+            {props.children}
+        </Animated.View>
+    );
+
+    return gesture ? (
+        <GestureDetector gesture={gesture}>{content}</GestureDetector>
+    ) : content;
 });
 
 export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: Readonly<{
@@ -549,6 +665,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     headerTestId: string;
     onRegisterWorkspaceRootDropTarget?: (target: SessionFolderDropTarget) => void;
     onUnregisterWorkspaceRootDropTarget?: (id: string) => void;
+    activeDropTargetId?: string | null;
 }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -567,6 +684,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
         headerTestId,
         onRegisterWorkspaceRootDropTarget,
         onUnregisterWorkspaceRootDropTarget,
+        activeDropTargetId,
     } = props;
     const [isRowHovered, setIsRowHovered] = React.useState(false);
     const [isActionsHovered, setIsActionsHovered] = React.useState(false);
@@ -590,6 +708,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     });
     const rowRef = React.useRef<View | null>(null);
     const dropTargetId = `workspace-root:${item.groupKey ?? item.workspaceKey ?? item.title}`;
+    const isActiveDropTarget = activeDropTargetId === dropTargetId;
 
     React.useEffect(() => {
         return () => {
@@ -634,11 +753,9 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const chevronColor = theme.colors.text.secondary;
     return (
         <View style={styles.groupHeaderSection}>
-            <Pressable
+            <View
                 ref={rowRef as React.Ref<View>}
-                style={styles.groupHeaderRow}
-                onPress={onToggleCollapse}
-                testID={headerTestId}
+                style={[styles.groupHeaderRow, isActiveDropTarget ? styles.groupHeaderRowDropTargetActive : null]}
                 onLayout={(event) => {
                     const workspace = resolveDurableWorkspaceRefForSessionListHeader(item);
                     if (!workspace) return;
@@ -659,18 +776,28 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                         bounds,
                     }));
                 }}
-                onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
-                onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
+                onPointerEnter={isWeb ? () => setIsRowHovered(true) : undefined}
+                onPointerLeave={isWeb ? () => setIsRowHovered(false) : undefined}
             >
-                <View style={styles.groupHeaderContent}>
+                <Pressable
+                    style={styles.groupHeaderContent}
+                    onPress={onToggleCollapse}
+                    testID={headerTestId}
+                    accessibilityRole="button"
+                    accessibilityLabel={displayTitle}
+                    onHoverIn={isWeb ? () => setIsRowHovered(true) : undefined}
+                    onHoverOut={isWeb ? () => setIsRowHovered(false) : undefined}
+                >
                     <View style={styles.groupHeaderTitleRow}>
                         {favicon ? (
-                            <Image
-                                source={{ uri: favicon.uri }}
-                                style={styles.groupHeaderFavicon}
-                                contentFit="cover"
-                                accessibilityIgnoresInvertColors
-                            />
+                            <View testID="session-list-workspace-favicon" style={styles.groupHeaderFaviconFrame}>
+                                <ReactNativeImage
+                                    source={{ uri: favicon.uri }}
+                                    style={styles.groupHeaderFavicon}
+                                    resizeMode="cover"
+                                    accessibilityIgnoresInvertColors
+                                />
+                            </View>
                         ) : null}
                         <Text
                             style={shouldUseStartEllipsis
@@ -702,43 +829,43 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                                     color={chevronColor}
                                 />
                             </View>
-                            {showHoverActions && workspaceKey ? (
-                                <DropdownMenu
-                                    open={menuOpen}
-                                    onOpenChange={setMenuOpen}
-                                    items={menuItems}
-                                    onSelect={handleMenuSelect}
-                                    placement="left"
-                                    variant="slim"
-                                    matchTriggerWidth={false}
-                                    maxWidthCap={220}
-                                    showCategoryTitles={false}
-                                    popoverPortalWebTarget="body"
-                                    trigger={({ toggle }) => (
-                                        <Pressable
-                                            style={styles.groupHeaderActionButton}
-                                            onPress={(event) => {
-                                                (event as any)?.stopPropagation?.();
-                                                toggle();
-                                            }}
-                                            onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
-                                            onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={t('common.moreActions')}
-                                            hitSlop={8}
-                                        >
-                                            <Octicons name="kebab-horizontal" size={12} color={actionIconColor} />
-                                        </Pressable>
-                                    )}
-                                />
-                            ) : null}
                         </View>
                     </View>
                     {workspaceMachineSubtitlesEnabled && hasMultipleMachines && item.subtitle ? (
                         <Text style={styles.groupHeaderSubtitle}>{item.subtitle}</Text>
                     ) : null}
-                </View>
+                </Pressable>
                 <View style={styles.groupHeaderTrailingActions}>
+                    {showHoverActions && workspaceKey ? (
+                        <DropdownMenu
+                            open={menuOpen}
+                            onOpenChange={setMenuOpen}
+                            items={menuItems}
+                            onSelect={handleMenuSelect}
+                            placement="left"
+                            variant="slim"
+                            matchTriggerWidth={false}
+                            maxWidthCap={220}
+                            showCategoryTitles={false}
+                            popoverPortalWebTarget="body"
+                            trigger={({ toggle }) => (
+                                <Pressable
+                                    style={styles.groupHeaderActionButton}
+                                    onPress={(event) => {
+                                        (event as any)?.stopPropagation?.();
+                                        toggle();
+                                    }}
+                                    onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
+                                    onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={t('common.moreActions')}
+                                    hitSlop={8}
+                                >
+                                    <Octicons name="kebab-horizontal" size={12} color={actionIconColor} />
+                                </Pressable>
+                            )}
+                        />
+                    ) : null}
                     {canCreateSession ? (
                         <Pressable
                             style={styles.groupHeaderActionButton}
@@ -754,7 +881,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                         </Pressable>
                     ) : null}
                 </View>
-            </Pressable>
+            </View>
         </View>
     );
 });
@@ -908,7 +1035,7 @@ export function SessionsListContent(props: Readonly<{
     }, [collapsedListItems, focusedFolderId, folderViewEnabled]);
 
     const folderBreadcrumbs = React.useMemo(() => {
-        if (!folderViewEnabled || !focusedFolderId || !folderPresentedData) return [];
+        if (!folderViewEnabled || !focusedFolderId || !folderPresentedData) return EMPTY_SESSION_FOLDER_BREADCRUMBS;
         return buildSessionFolderBreadcrumbs(folderPresentedData, focusedFolderId);
     }, [folderPresentedData, focusedFolderId, folderViewEnabled]);
 
@@ -954,11 +1081,12 @@ export function SessionsListContent(props: Readonly<{
     const reachableSessionDisplayById = reachabilityModels.reachableSessionDisplayById;
     const hasMultipleMachines = reachabilityModels.hasMultipleMachines;
 
-    const rowHeight = compactSessionViewMinimal
-        ? ROW_HEIGHT_MINIMAL
-        : compactSessionView
-            ? ROW_HEIGHT_COMPACT
-            : ROW_HEIGHT_DEFAULT;
+    const rowHeight = resolveSessionListRowHeight({
+        compact: compactSessionView,
+        compactMinimal: compactSessionViewMinimal,
+        isTablet,
+        platform: Platform.OS,
+    });
 
     // Use refs so handleDragEnd is stable and never causes gesture recreation
     // when the store updates during a drag.
@@ -968,6 +1096,8 @@ export function SessionsListContent(props: Readonly<{
     groupOrderRef.current = currentGroupOrderMap;
 
     const [draggingSessionKey, setDraggingSessionKey] = React.useState<string | null>(null);
+    const [activeDropTargetId, setActiveDropTargetId] = React.useState<string | null>(null);
+    const activeDropTargetIdRef = React.useRef<string | null>(null);
     const [nativeContextMenuSessionKey, setNativeContextMenuSessionKey] = React.useState<string | null>(null);
 
     // Drop indicator shared values — written by the dragging row's onUpdate
@@ -1011,6 +1141,8 @@ export function SessionsListContent(props: Readonly<{
                 }
             }
         }
+        activeDropTargetIdRef.current = null;
+        setActiveDropTargetId(null);
         setDraggingSessionKey(null);
     }, []);
 
@@ -1088,12 +1220,79 @@ export function SessionsListContent(props: Readonly<{
             persistSessionFolderAssignmentFromKey(event.sessionKey, null);
         }
         setDraggingSessionKey(null);
+        activeDropTargetIdRef.current = null;
+        setActiveDropTargetId(null);
     }, [handleDragEnd, persistSessionFolderAssignmentFromKey]);
 
     const handleDragStart = React.useCallback((sessionKey: string) => {
         setNativeContextMenuSessionKey(null);
         setDraggingSessionKey(sessionKey);
+        activeDropTargetIdRef.current = null;
+        setActiveDropTargetId(null);
     }, []);
+    const handleDragUpdate = React.useCallback((event: Readonly<{ sessionKey: string; absoluteX: number; absoluteY: number }>) => {
+        const target = typeof dropTargetRegistry.resolveTarget === 'function'
+            ? dropTargetRegistry.resolveTarget({ x: event.absoluteX, y: event.absoluteY })
+            : null;
+        const nextId = target?.id ?? null;
+        if (activeDropTargetIdRef.current === nextId) return;
+        activeDropTargetIdRef.current = nextId;
+        setActiveDropTargetId(nextId);
+    }, [dropTargetRegistry]);
+
+    const resolveFolderHeaderDropIntent = React.useCallback((event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        dataIndex: number;
+        absoluteX: number | null;
+        absoluteY: number | null;
+    }>): SessionFolderDragDropIntent | null => {
+        const intent = dropTargetRegistry.resolveIntent({
+            groupKey: event.groupKey,
+            positionDelta: event.positionDelta,
+            pointer: event.absoluteX == null || event.absoluteY == null
+                ? null
+                : { x: event.absoluteX, y: event.absoluteY },
+        });
+        return intent.kind === 'moveToFolder' || intent.kind === 'moveToWorkspaceRoot' ? intent : null;
+    }, [dropTargetRegistry]);
+
+    const handleFolderHeaderDragEnd = React.useCallback(() => {
+        activeDropTargetIdRef.current = null;
+        setActiveDropTargetId(null);
+        setDraggingSessionKey(null);
+    }, []);
+
+    const handleFolderHeaderDropIntent = React.useCallback((event: Readonly<{
+        sessionKey: string;
+        groupKey: string;
+        positionDelta: number;
+        intent: SessionFolderDragDropIntent;
+    }>) => {
+        const folderId = event.sessionKey.startsWith('folder:') ? event.sessionKey.slice('folder:'.length) : '';
+        if (!folderId) {
+            handleFolderHeaderDragEnd();
+            return;
+        }
+        const parentId = event.intent.kind === 'moveToFolder'
+            ? event.intent.folderId
+            : event.intent.kind === 'moveToWorkspaceRoot'
+                ? null
+                : undefined;
+        if (parentId !== undefined) {
+            const moved = moveSessionFolder({
+                current: sessionFoldersV1,
+                folderId,
+                parentId,
+                now: Date.now(),
+            });
+            if (moved.folder) {
+                setSessionFoldersV1(moved.next);
+            }
+        }
+        handleFolderHeaderDragEnd();
+    }, [handleFolderHeaderDragEnd, sessionFoldersV1, setSessionFoldersV1]);
 
     const handleRenameWorkspace = React.useCallback(async (workspaceKey: string, currentLabel: string) => {
         const newName = await Modal.prompt(
@@ -1464,7 +1663,7 @@ export function SessionsListContent(props: Readonly<{
         setHideInactiveSessions,
         setSessionFolderViewModeV1,
     ]);
-    const renderHeaderItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'header' }>) => {
+    const renderHeaderItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'header' }>, index: number) => {
         const headerTestId = item.headerKind === 'project'
             ? `session-list-project-header:${item.groupKey ?? item.title}`
             : `session-list-header:${item.groupKey ?? item.title}`;
@@ -1472,40 +1671,63 @@ export function SessionsListContent(props: Readonly<{
         if (folderHeader) {
             const collapseKey = folderHeader.groupKey ?? `folder:${folderHeader.folderId}`;
             return (
-                <FolderGroupHeader
-                    item={folderHeader}
-                    collapsed={Boolean(collapsedKeys[collapseKey])}
-                    onToggleCollapse={() => handleToggleCollapse(collapseKey)}
-                    onFocus={() => setFocusedFolderId(folderHeader.folderId)}
-                    onNewSession={() => handleCreateSessionFromFolder(folderHeader)}
-                    onAddSubfolder={() => handleAddSessionSubfolder(folderHeader)}
-                    onRename={() => handleRenameSessionFolder(folderHeader)}
-                    onDelete={() => handleDeleteSessionFolder(folderHeader)}
-                    onRegisterDropTarget={dropTargetRegistry.registerTarget}
-                    onUnregisterDropTarget={dropTargetRegistry.unregisterTarget}
-                    disabled={!folderActionsEnabled}
-                />
+                <DraggableSessionFolderHeaderFrame
+                    folderId={folderHeader.folderId}
+                    groupKey={folderHeader.groupKey ?? collapseKey}
+                    dataIndex={index}
+                    totalItemCount={listItems.length}
+                    dropIndicatorIdx={dropIndicatorIdx}
+                    dropIndicatorEdge={dropIndicatorEdge}
+                    indent={Math.max(0, Math.min(3, folderHeader.depth)) * 6}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleFolderHeaderDragEnd}
+                    onDragUpdate={handleDragUpdate}
+                    resolveDropIntent={resolveFolderHeaderDropIntent}
+                    onDropIntent={handleFolderHeaderDropIntent}
+                >
+                    <FolderGroupHeader
+                        item={folderHeader}
+                        collapsed={Boolean(collapsedKeys[collapseKey])}
+                        onToggleCollapse={() => handleToggleCollapse(collapseKey)}
+                        onFocus={() => setFocusedFolderId(folderHeader.folderId)}
+                        onNewSession={() => handleCreateSessionFromFolder(folderHeader)}
+                        onAddSubfolder={() => handleAddSessionSubfolder(folderHeader)}
+                        onRename={() => handleRenameSessionFolder(folderHeader)}
+                        onDelete={() => handleDeleteSessionFolder(folderHeader)}
+                        onRegisterDropTarget={dropTargetRegistry.registerTarget}
+                        onUnregisterDropTarget={dropTargetRegistry.unregisterTarget}
+                        activeDropTargetId={activeDropTargetId}
+                        disabled={!folderActionsEnabled}
+                    />
+                </DraggableSessionFolderHeaderFrame>
             );
         }
         if (item.title && item.headerKind === 'project') {
             const collapseKey = item.groupKey ?? '';
             return (
-                <ProjectGroupHeader
-                    item={item}
-                    hasMultipleMachines={hasMultipleMachines}
-                    workspaceLabelsV1={workspaceLabelsV1}
-                    workspaceFaviconsEnabled={workspaceFaviconsEnabled}
-                    workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
-                    onRenameWorkspace={handleRenameWorkspace}
-                    onResetWorkspaceName={handleResetWorkspaceName}
-                    onCreateSession={() => handleCreateSessionFromProject(item)}
-                    onAddFolder={() => handleAddFolderToProject(item)}
-                    collapsed={Boolean(collapsedKeys[collapseKey])}
-                    onToggleCollapse={() => handleToggleCollapse(collapseKey)}
-                    headerTestId={headerTestId}
-                    onRegisterWorkspaceRootDropTarget={dropTargetRegistry.registerTarget}
-                    onUnregisterWorkspaceRootDropTarget={dropTargetRegistry.unregisterTarget}
-                />
+                <SessionListHeaderFrame
+                    dataIndex={index}
+                    dropIndicatorIdx={dropIndicatorIdx}
+                    dropIndicatorEdge={dropIndicatorEdge}
+                >
+                    <ProjectGroupHeader
+                        item={item}
+                        hasMultipleMachines={hasMultipleMachines}
+                        workspaceLabelsV1={workspaceLabelsV1}
+                        workspaceFaviconsEnabled={workspaceFaviconsEnabled}
+                        workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
+                        onRenameWorkspace={handleRenameWorkspace}
+                        onResetWorkspaceName={handleResetWorkspaceName}
+                        onCreateSession={() => handleCreateSessionFromProject(item)}
+                        onAddFolder={() => handleAddFolderToProject(item)}
+                        collapsed={Boolean(collapsedKeys[collapseKey])}
+                        onToggleCollapse={() => handleToggleCollapse(collapseKey)}
+                        headerTestId={headerTestId}
+                        onRegisterWorkspaceRootDropTarget={dropTargetRegistry.registerTarget}
+                        onUnregisterWorkspaceRootDropTarget={dropTargetRegistry.unregisterTarget}
+                        activeDropTargetId={activeDropTargetId}
+                    />
+                </SessionListHeaderFrame>
             );
         }
 
@@ -1519,31 +1741,46 @@ export function SessionsListContent(props: Readonly<{
                 : item.title;
 
         return (
-            <CollapsibleSectionHeader
-                title={title}
-                headerKind={item.headerKind}
-                collapsed={isCollapsed}
-                onPress={() => handleToggleCollapse(collapseKey)}
-                headerTestId={headerTestId}
-                rightElement={item.headerKind === 'active' || item.headerKind === 'inactive' ? viewMenu : null}
-            />
+            <SessionListHeaderFrame
+                dataIndex={index}
+                dropIndicatorIdx={dropIndicatorIdx}
+                dropIndicatorEdge={dropIndicatorEdge}
+            >
+                <CollapsibleSectionHeader
+                    title={title}
+                    headerKind={item.headerKind}
+                    collapsed={isCollapsed}
+                    onPress={() => handleToggleCollapse(collapseKey)}
+                    headerTestId={headerTestId}
+                    rightElement={item.headerKind === 'active' || item.headerKind === 'inactive' ? viewMenu : null}
+                />
+            </SessionListHeaderFrame>
         );
     }, [
         collapsedKeys,
         folderActionsEnabled,
         folderViewEnabled,
+        listItems.length,
+        dropIndicatorIdx,
+        dropIndicatorEdge,
         dropTargetRegistry.registerTarget,
         dropTargetRegistry.unregisterTarget,
+        activeDropTargetId,
         handleAddFolderToProject,
         handleAddSessionSubfolder,
         handleCreateSessionFromProject,
         handleCreateSessionFromFolder,
         handleDeleteSessionFolder,
+        handleDragStart,
+        handleDragUpdate,
+        handleFolderHeaderDragEnd,
+        handleFolderHeaderDropIntent,
         handleRenameWorkspace,
         handleRenameSessionFolder,
         handleResetWorkspaceName,
         handleToggleCollapse,
         hasMultipleMachines,
+        resolveFolderHeaderDropIntent,
         viewMenu,
         workspaceLabelsV1,
         workspaceFaviconsEnabled,
@@ -1615,6 +1852,7 @@ export function SessionsListContent(props: Readonly<{
                 rowHeight={rowHeight}
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
+                onDragUpdate={handleDragUpdate}
                 resolveDropIntent={resolveDropIntent}
                 onDropIntent={(event) => handleDropIntent({
                     ...event,
@@ -1671,6 +1909,7 @@ export function SessionsListContent(props: Readonly<{
         folderMoveMenuItems,
         folderViewEnabled,
         handleDragEnd,
+        handleDragUpdate,
         handleDragStart,
         handleDropIntent,
         handleSessionFolderMoveMenuItem,
@@ -1696,7 +1935,7 @@ export function SessionsListContent(props: Readonly<{
     renderSessionItemRef.current = renderSessionItem;
 
     const renderVirtualizedItem = React.useCallback(({ item, index }: { item: SessionListViewItem; index: number }) => {
-        if (item.type === 'header') return renderHeaderItemRef.current(item);
+        if (item.type === 'header') return renderHeaderItemRef.current(item, index);
         return renderSessionItemRef.current(item, index);
     }, []);
 

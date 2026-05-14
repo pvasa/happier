@@ -17,6 +17,7 @@ const AvatarMock = 'Avatar' as unknown as React.ComponentType<{
     hasUnreadMessages?: boolean;
 }>;
 let platformOs: 'ios' | 'android' | 'web' = 'web';
+let isTabletDevice = false;
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -72,7 +73,7 @@ installSessionShellCommonModuleMocks({
             useProfile: useProfileSpy,
             useSession: useSessionSpy,
             useSessionListRowRenderable: useSessionListRowRenderableSpy,
-            useSessionListMeaningfulActivityAt: () => 60_000,
+            useSessionListActivityTimeLabel: () => '1m',
             useSessionListAttentionState: () => mockListAttentionState ?? (
                 mockSessionStatus.state === 'waiting' ? 'quiet' : mockSessionStatus.state
             ),
@@ -107,7 +108,7 @@ vi.mock('@/hooks/session/useNavigateToSession', () => ({
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({
-    useIsTablet: () => false,
+    useIsTablet: () => isTabletDevice,
 }));
 
 vi.mock('@/hooks/ui/useHappyAction', () => ({
@@ -116,10 +117,6 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 
 vi.mock('@/utils/errors/errors', () => ({
     HappyError: class HappyError extends Error {},
-}));
-
-vi.mock('@/utils/time/formatShortRelativeTime', () => ({
-    formatShortRelativeTime: () => '1m',
 }));
 
 vi.mock('@/sync/ops', () => ({
@@ -196,6 +193,14 @@ function createSession(id: string) {
     });
 }
 
+function findSessionTitleText(screen: Awaited<ReturnType<typeof renderScreen>>, title: string) {
+    return screen.findAllByType('Text').find((node) => node.props.children === title);
+}
+
+function findWorkingSpinner(screen: Awaited<ReturnType<typeof renderScreen>>, sessionId: string) {
+    return screen.findByTestId(`session-row-attention-indicator-spinner-${sessionId}`);
+}
+
 describe('SessionItem activity time', () => {
     beforeEach(() => {
         mockSessionStatus = {
@@ -205,6 +210,7 @@ describe('SessionItem activity time', () => {
         mockHasUnreadMessages = false;
         mockNarrowWorkingIndicatorStyle = 'spinner';
         platformOs = 'web';
+        isTabletDevice = false;
         useProfileSpy.mockClear();
         useSessionSpy.mockClear();
         useSessionListRowRenderableSpy.mockClear();
@@ -267,10 +273,13 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-row-attention-indicator-sess_compact_active')).toBeNull();
         expect(screen.findByTestId('session-row-attention-indicator-sess_compact_active-trailing')).toBeTruthy();
         expect(screen.findByTestId('session-list-attention-indicator-sess_compact_active-trailing-working')).toBeTruthy();
-        const spinners = screen.findAllByType('ActivityIndicator');
-        expect(spinners).toHaveLength(1);
-        expect(spinners[0]?.props.size).toBe(12);
-        expect(spinners[0]?.props.color).toBe(lightTheme.colors.text.tertiary);
+        const spinner = findWorkingSpinner(screen, 'sess_compact_active-trailing');
+        expect(spinner).toBeTruthy();
+        expect(flattenStyle(spinner?.props.style)).toMatchObject({
+            width: 12,
+            height: 12,
+            borderColor: lightTheme.colors.text.tertiary,
+        });
         expect(screen.findAllByType('StatusDot')).toHaveLength(0);
         expect(screen.getTextContent()).not.toContain('working on it');
         expect(screen.getTextContent()).not.toContain('1m');
@@ -339,6 +348,61 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-row-attention-indicator-sess_compact_height')).toBeNull();
     });
 
+    it('keeps very compact web rows dense for the sidebar surface', async () => {
+        platformOs = 'web';
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_web')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_web')?.props.style);
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+
+        expect(rowStyle.height).toBe(34);
+        expect(titleStyle.fontSize).toBe(12);
+        expect(titleStyle.lineHeight).toBe(16);
+    });
+
+    it('uses readable title metrics for very compact native phone rows', async () => {
+        platformOs = 'ios';
+        isTabletDevice = false;
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_phone')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_phone')?.props.style);
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+
+        expect(rowStyle.height).toBe(42);
+        expect(titleStyle.fontSize).toBe(14);
+        expect(titleStyle.lineHeight).toBe(18);
+    });
+
     it('renders meaningful working status with canonical row indicator and themed text', async () => {
         mockSessionStatus = {
             state: 'thinking',
@@ -371,9 +435,12 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-list-status-subtitle-sess_status_pill-working')).toBeTruthy();
         expect(screen.findByTestId('session-list-attention-indicator-sess_status_pill-secondary-working')).toBeTruthy();
         expect(screen.findByTestId('session-list-status-subtitle-text-sess_status_pill-working')?.props.children).toBe('working on it');
-        const spinners = screen.findAllByType('ActivityIndicator');
-        expect(spinners).toHaveLength(1);
-        expect(spinners[0]?.props.size).toBe(12);
+        const spinner = findWorkingSpinner(screen, 'sess_status_pill-secondary');
+        expect(spinner).toBeTruthy();
+        expect(flattenStyle(spinner?.props.style)).toMatchObject({
+            width: 12,
+            height: 12,
+        });
         expect(screen.findAllByType('StatusDot')).toHaveLength(0);
         const statusText = screen.findAllByType('Text').find((node) => node.props.children === 'working on it');
         const flat = flattenStyle(statusText?.props.style);

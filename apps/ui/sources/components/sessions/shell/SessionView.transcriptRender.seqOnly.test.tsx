@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
@@ -12,6 +13,7 @@ const previousDev = (globalThis as { __DEV__?: boolean }).__DEV__;
 const shouldRenderChatTimelineForSessionMock = vi.fn((_args: any) => true);
 const realtimeStatusValue = vi.hoisted(() => ({ current: { status: 'connected' } as any }));
 const onSessionVisibleSpy = vi.hoisted(() => vi.fn());
+const chatHeaderRenderSpy = vi.hoisted(() => vi.fn());
 const chatListRenderSpy = vi.hoisted(() => vi.fn());
 const themeColors = vi.hoisted(() => ({
     text: '#000',
@@ -43,6 +45,15 @@ const themeColors = vi.hoisted(() => ({
 
 let authCredentials: any = { token: 't', secret: 's' };
 let sessionState: any = null;
+let sessionUsageState: any = null;
+const sessionUsageListeners = new Set<() => void>();
+
+function setSessionUsageState(next: any) {
+    sessionUsageState = next;
+    for (const listener of sessionUsageListeners) {
+        listener();
+    }
+}
 
 vi.mock('react-native-reanimated', () => ({}));
 vi.mock('expo-linear-gradient', () => ({
@@ -126,7 +137,14 @@ installSessionShellCommonModuleMocks({
                 useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
                 useSessionPendingMessages: () => ({ messages: [] }),
                 useSessionReviewCommentsDrafts: () => [],
-                useSessionUsage: () => null,
+                useSessionUsage: () => React.useSyncExternalStore(
+                    (listener) => {
+                        sessionUsageListeners.add(listener);
+                        return () => sessionUsageListeners.delete(listener);
+                    },
+                    () => sessionUsageState,
+                    () => sessionUsageState,
+                ),
                 useLocalSetting: (key: string) => {
                     if (key === 'acknowledgedCliVersions') return {};
                     if (key === 'uiMultiPanePanelsEnabled') return false;
@@ -178,7 +196,10 @@ vi.mock('@/components/sessions/panes/url/useSessionPaneUrlSync', () => ({
     useSessionPaneUrlSync: () => {},
 }));
 vi.mock('@/components/sessions/transcript/ChatHeaderView', () => ({
-    ChatHeaderView: () => null,
+    ChatHeaderView: React.memo((props: any) => {
+        chatHeaderRenderSpy(props);
+        return null;
+    }),
 }));
 vi.mock('@/components/sessions/transcript/ChatList', () => ({
     ChatList: (props: any) => {
@@ -368,8 +389,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
             metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
             agentState: {},
         };
+        setSessionUsageState(null);
         shouldRenderChatTimelineForSessionMock.mockClear();
         onSessionVisibleSpy.mockClear();
+        chatHeaderRenderSpy.mockClear();
         chatListRenderSpy.mockClear();
     });
 
@@ -511,6 +534,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         const { SessionView } = await import('./SessionView');
 
         await flushHookEffects({ cycles: 2, turns: 1 });
+        chatHeaderRenderSpy.mockClear();
         chatListRenderSpy.mockClear();
 
         sessionState = {
@@ -521,6 +545,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         };
         await screen.update(<SessionView id="s1" />);
 
+        expect(chatHeaderRenderSpy).not.toHaveBeenCalled();
         expect(chatListRenderSpy).not.toHaveBeenCalled();
 
         await screen.unmount();
@@ -573,12 +598,43 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
 
         const initialViewportChange = chatListRenderSpy.mock.calls.at(-1)?.[0]?.onViewportChange;
         expect(typeof initialViewportChange).toBe('function');
+        chatHeaderRenderSpy.mockClear();
         chatListRenderSpy.mockClear();
 
         await screen.update(<SessionView id="s1" jumpToSeq={99} />);
 
         const nextViewportChange = chatListRenderSpy.mock.calls.at(-1)?.[0]?.onViewportChange;
+        expect(chatHeaderRenderSpy).not.toHaveBeenCalled();
         expect(nextViewportChange).toBe(initialViewportChange);
+
+        await screen.unmount();
+    });
+
+    it('keeps the transcript host stable when token usage updates during streaming', async () => {
+        setSessionUsageState({
+            inputTokens: 100,
+            outputTokens: 10,
+            cacheCreation: 0,
+            cacheRead: 0,
+            contextSize: 200,
+        });
+        const screen = await renderSessionView();
+
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        chatListRenderSpy.mockClear();
+        shouldRenderChatTimelineForSessionMock.mockClear();
+
+        await act(async () => {
+            setSessionUsageState({
+                ...sessionUsageState,
+                outputTokens: 11,
+                contextSize: 201,
+            });
+            await Promise.resolve();
+        });
+
+        expect(chatListRenderSpy).not.toHaveBeenCalled();
+        expect(shouldRenderChatTimelineForSessionMock).not.toHaveBeenCalled();
 
         await screen.unmount();
     });

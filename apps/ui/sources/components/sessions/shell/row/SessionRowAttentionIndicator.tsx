@@ -1,6 +1,7 @@
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import type {
@@ -25,7 +26,7 @@ const stylesheet = StyleSheet.create(() => ({
     },
 }));
 
-export function SessionRowAttentionIndicator(props: Readonly<{
+export const SessionRowAttentionIndicator = React.memo(function SessionRowAttentionIndicator(props: Readonly<{
     indicator: SessionRowAttentionIndicatorKind;
     sessionId: string;
     attentionState: SessionRowAttentionState;
@@ -79,7 +80,11 @@ export function SessionRowAttentionIndicator(props: Readonly<{
                 style={stylesheet.stateContainer}
             >
                 {shouldRenderWorkingSpinner ? (
-                    <ActivityIndicator size={DEFAULT_WORKING_SPINNER_SIZE} color={color} />
+                    <ActivitySpinner
+                        testID={`session-row-attention-indicator-spinner-${props.sessionId}`}
+                        size={DEFAULT_WORKING_SPINNER_SIZE}
+                        color={color}
+                    />
                 ) : (
                     <StatusDot
                         testID={`session-row-attention-indicator-dot-${props.sessionId}`}
@@ -91,4 +96,4 @@ export function SessionRowAttentionIndicator(props: Readonly<{
             </View>
         </View>
     );
-}
+});

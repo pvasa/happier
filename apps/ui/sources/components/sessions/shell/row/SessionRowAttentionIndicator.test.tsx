@@ -27,8 +27,17 @@ vi.mock('react-native-reanimated', () => ({
     withTiming: (value: unknown) => value,
 }));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (!style) return {};
+    if (Array.isArray(style)) {
+        return style.reduce((acc, item) => Object.assign(acc, flattenStyle(item)), {} as Record<string, unknown>);
+    }
+    if (typeof style === 'object') return style as Record<string, unknown>;
+    return {};
+}
+
 describe('SessionRowAttentionIndicator', () => {
-    it('uses a static dot for compact working indicators on web instead of an animated ActivityIndicator', async () => {
+    it('uses a CSS transform spinner for compact working indicators on web instead of React Native Web ActivityIndicator', async () => {
         const { SessionRowAttentionIndicator } = await import('./SessionRowAttentionIndicator');
 
         const screen = await renderScreen(
@@ -41,6 +50,10 @@ describe('SessionRowAttentionIndicator', () => {
         );
 
         expect(screen.findAllByType('ActivityIndicator' as never)).toHaveLength(0);
-        expect(screen.findByTestId('session-row-attention-indicator-dot-session-a')).toBeTruthy();
+        const spinner = screen.findByTestId('session-row-attention-indicator-spinner-session-a');
+        if (!spinner) {
+            throw new Error('Expected CSS working spinner to render');
+        }
+        expect(flattenStyle(spinner.props.style).animationName).toBe('happierActivitySpinnerSpin');
     });
 });

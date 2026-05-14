@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
@@ -7,6 +7,7 @@ import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsL
 import { useVisibleSessionListPaneState } from '@/hooks/session/useVisibleSessionListViewData';
 import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
 import { SessionsListContent } from '@/components/sessions/shell/SessionsList';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -57,7 +58,7 @@ export const SessionsListWrapper = React.memo(() => {
                 {storageChrome}
                 <View style={styles.loadingContainerWrapper}>
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                     </View>
                 </View>
             </View>

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { renderScreen } from '@/dev/testkit';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
@@ -27,6 +27,9 @@ const sessionState = vi.hoisted(() => ({
 
 const attachmentsTransferAvailableState = vi.hoisted(() => ({ value: true }));
 const attachmentsFeatureScopeState = vi.hoisted(() => ({ enabledForServerId: null as string | null }));
+const executeSessionComposerResolutionMock = vi.hoisted(() => vi.fn());
+const modalAlertSpy = vi.hoisted(() => vi.fn());
+const resolveSessionComposerSendMock = vi.hoisted(() => vi.fn(() => ({ kind: 'noop' })));
 
 installSessionShellCommonModuleMocks({
   reactNative: async () =>
@@ -82,7 +85,8 @@ installSessionShellCommonModuleMocks({
           surfaceHigh: '#f5f5f5',
           surfaceSelected: '#eef4ff',
           divider: '#ddd',
-          border: '#ddd',
+          border: { default: '#ddd', surface: '#ddd', modal: '#ddd', strong: '#aaa' },
+          effect: { surfaceHighlight: 'transparent' },
           indigo: '#5856D6',
           radio: { active: '#007AFF' },
           accent: {
@@ -99,6 +103,11 @@ installSessionShellCommonModuleMocks({
           header: { tint: '#000' },
           status: { error: '#f00' },
           shadow: { color: '#000', opacity: 0.2 },
+          shadowLevels: {
+            0: { boxShadow: 'none', shadowColor: '#000', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0, elevation: 0 },
+            1: { boxShadow: '0 1px 2px rgba(0,0,0,0.1)', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
+            2: { boxShadow: '0 2px 6px rgba(0,0,0,0.2)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 2 },
+          },
           groupped: { background: '#F5F5F5', chevron: '#C7C7CC', sectionTitle: '#8E8E93' },
         },
       },
@@ -107,7 +116,7 @@ installSessionShellCommonModuleMocks({
   modal: async () =>
     createModalModuleMock({
       spies: {
-        alert: vi.fn(),
+        alert: modalAlertSpy,
         confirm: vi.fn(),
         prompt: vi.fn(),
       },
@@ -124,6 +133,7 @@ installSessionShellCommonModuleMocks({
       useIsDataReady: () => true,
       useRealtimeStatus: () => ({ status: 'connected' }),
       useSessionMessages: () => ({ messages: [], isLoaded: true }),
+      useSessionSubagentSourceMessages: () => [],
       useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
       useLocalSetting: (key: string) => {
         if (key === 'uiMultiPanePanelsEnabled') return false;
@@ -331,10 +341,10 @@ vi.mock('@/utils/system/fireAndForget', () => ({
   fireAndForget: (p: any) => void p,
 }));
 vi.mock('@/sync/domains/input/slashCommands/resolveSessionComposerSend', () => ({
-  resolveSessionComposerSend: async () => ({ kind: 'noop' }),
+  resolveSessionComposerSend: resolveSessionComposerSendMock,
 }));
 vi.mock('@/sync/domains/input/slashCommands/executeSessionComposerResolution', () => ({
-  executeSessionComposerResolution: vi.fn(),
+  executeSessionComposerResolution: executeSessionComposerResolutionMock,
 }));
 vi.mock('@/sync/domains/session/control/submitMode', () => ({
   chooseSubmitMode: () => 'direct',
@@ -357,6 +367,13 @@ vi.mock('@/sync/domains/automations/automationSessionLink', () => ({
 const { SessionView } = await import('./SessionView');
 
 describe('SessionView attachments gating', () => {
+  beforeEach(() => {
+    executeSessionComposerResolutionMock.mockReset();
+    modalAlertSpy.mockReset();
+    resolveSessionComposerSendMock.mockReset();
+    resolveSessionComposerSendMock.mockImplementation(() => ({ kind: 'noop' }));
+  });
+
   it('does not wire drag/drop/paste attachments when attachments.uploads is disabled', async () => {
     attachmentsFeatureScopeState.enabledForServerId = null;
     featureEnabledState['attachments.uploads'] = false;
@@ -397,5 +414,33 @@ describe('SessionView attachments gating', () => {
 
     const agentInput = tree.findByType('AgentInput' as any);
     expect(agentInput.props.onAttachmentsAdded).toEqual(expect.any(Function));
+  });
+
+  it('preserves slash-command alert titles from the command executor', async () => {
+    resolveSessionComposerSendMock.mockReturnValue({ kind: 'goal', command: 'set', objective: 'Ship goal UI' } as any);
+    executeSessionComposerResolutionMock.mockImplementation(async (args: any) => {
+      args.modalAlert('Goal unavailable', 'This backend does not support editable session goals yet.');
+      return true;
+    });
+
+    let tree!: renderer.ReactTestRenderer;
+    tree = (await renderScreen(<AppPaneProvider>
+          <SessionView id="s1" />
+        </AppPaneProvider>)).tree;
+
+    let agentInput = tree.findByType('AgentInput' as any);
+    await renderer.act(async () => {
+      agentInput.props.onChangeText('/goal Ship goal UI');
+    });
+    agentInput = tree.findByType('AgentInput' as any);
+    expect(agentInput.props.value).toBe('/goal Ship goal UI');
+    await renderer.act(async () => {
+      agentInput.props.onSend();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(executeSessionComposerResolutionMock).toHaveBeenCalled();
+    expect(modalAlertSpy).toHaveBeenCalledWith('Goal unavailable', 'This backend does not support editable session goals yet.');
   });
 });

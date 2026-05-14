@@ -20,7 +20,7 @@ import { t } from '@/text';
 import { sessionArchiveWithServerScope, sessionRename, sessionSetManualReadStateWithServerScope, sessionStopWithServerScope } from '@/sync/ops';
 import {
     useSessionListAttentionState,
-    useSessionListMeaningfulActivityAt,
+    useSessionListActivityTimeLabel,
     useSessionListRowRenderable,
     useSetting,
 } from '@/sync/domains/state/storage';
@@ -34,7 +34,6 @@ import { PinIcon, PinSlashIcon } from './sessionPinIcons';
 import { TagIcon } from './sessionTagIcons';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ContextMenu } from '@/components/ui/forms/dropdown/ContextMenu';
-import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { SessionRowAttentionIndicator } from './row/SessionRowAttentionIndicator';
 import {
     resolveSessionRowAttentionState,
@@ -44,8 +43,11 @@ import {
     SESSION_LIST_ROW_HEIGHT_COMPACT,
     SESSION_LIST_ROW_HEIGHT_DEFAULT,
     SESSION_LIST_ROW_HEIGHT_MINIMAL,
+    SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE,
 } from './sessionListRowHeights';
+import { shouldUseReadableNativePhoneMinimalSessionRow } from './sessionListRowDensity';
 import { clearSessionVisibleWhenInactive, isSessionActiveArchiveResult, stopSessionAndMaybeArchive } from '../sessionStopArchiveFlow';
+import { useIsTablet } from '@/utils/platform/responsive';
 
 const AVATAR_SIZE_DEFAULT = 48;
 const AVATAR_SIZE_COMPACT = 30;
@@ -113,6 +115,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     sessionItemMinimal: {
         height: SESSION_LIST_ROW_HEIGHT_MINIMAL,
         paddingHorizontal: 8,
+    },
+    sessionItemMinimalNativePhone: {
+        height: SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE,
     },
     sessionItemSelected: {
         backgroundColor: theme.colors.surface.selected,
@@ -214,6 +219,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     sessionTitleMinimal: {
         fontSize: 12,
         lineHeight: 16,
+    },
+    sessionTitleMinimalNativePhone: {
+        fontSize: 14,
+        lineHeight: 18,
     },
     sessionTitleEmphasized: {
         ...Typography.default('semiBold'),
@@ -566,6 +575,13 @@ export const SessionItem = React.memo(
         const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
         const isWeb = Platform.OS === 'web';
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
+        const isTablet = useIsTablet();
+        const useReadableNativePhoneMinimalRow = shouldUseReadableNativePhoneMinimalSessionRow({
+            compact: Boolean(compact),
+            compactMinimal: Boolean(compactMinimal),
+            isTablet,
+            platform: Platform.OS,
+        });
         const showRowActions = isWeb && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen || isBeingDragged === true);
         const rowActionIconColor = theme.colors.text.secondary;
         const readStateAction = React.useMemo(() => {
@@ -879,12 +895,7 @@ export const SessionItem = React.memo(
         }, [resolvedSession]);
         const pendingCount = resolvedSession.pendingCount ?? 0;
         const pendingBadge = formatPendingCountBadge(pendingCount);
-        const meaningfulActivityAt = useSessionListMeaningfulActivityAt(resolvedSession.id);
-
-        const activityTimeLabel = React.useMemo(() => {
-            const ts = meaningfulActivityAt;
-            return typeof ts === 'number' && ts > 0 ? formatShortRelativeTime(ts) : '';
-        }, [meaningfulActivityAt]);
+        const activityTimeLabel = useSessionListActivityTimeLabel(resolvedSession.id);
         const tagChipDensity: 'default' | 'compact' | 'minimal' = isMinimal ? 'minimal' : compact ? 'compact' : 'default';
         const tagLimit = isMinimal ? 1 : compact ? 2 : 3;
         const tagChips = React.useMemo(() => {
@@ -984,6 +995,7 @@ export const SessionItem = React.memo(
                     isLast ? styles.sessionItemLast : null,
                     compact ? styles.sessionItemCompact : null,
                     isMinimal ? styles.sessionItemMinimal : null,
+                    useReadableNativePhoneMinimalRow ? styles.sessionItemMinimalNativePhone : null,
                     selected ? styles.sessionItemSelected : null,
                     embedded && !embeddedIsLast ? styles.embeddedSeparator : null,
                 ]}
@@ -1065,6 +1077,7 @@ export const SessionItem = React.memo(
                                     styles.sessionTitle,
                                     compact ? styles.sessionTitleCompact : null,
                                     isMinimal ? styles.sessionTitleMinimal : null,
+                                    useReadableNativePhoneMinimalRow ? styles.sessionTitleMinimalNativePhone : null,
                                     shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
                                     shouldMuteTitle ? null : sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
                                     selected ? styles.sessionTitleSelected : null,

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Platform, Pressable, ScrollView, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
@@ -21,6 +21,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separators/TranscriptSeparatorRow';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { PendingMessagesDragReorderList } from './PendingMessagesDragReorderList';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
@@ -431,7 +432,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             ]}
                         >
                             {isAccepted ? (
-                                <ActivityIndicator
+                                <ActivitySpinner
                                     testID={`pendingMessages.acceptedIndicator:${message.id}`}
                                     size="small"
                                     color={theme.colors.text.secondary}

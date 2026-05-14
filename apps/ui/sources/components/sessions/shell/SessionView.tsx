@@ -108,7 +108,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { usePathname, useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
-import { ActivityIndicator, Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { sessionSwitch } from '@/sync/ops';
@@ -267,6 +268,39 @@ function SessionAuthRecoveryBanner({ message }: Readonly<{ message: string }>) {
 
 const MemoizedSessionViewLoaded = React.memo(SessionViewLoaded);
 
+type SessionAgentInputWithUsageProps = Omit<React.ComponentProps<typeof AgentInput>, 'usageData'> & {
+    sessionId: string;
+    sessionLatestUsage: Session['latestUsage'] | null | undefined;
+};
+
+const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsage({
+    sessionId,
+    sessionLatestUsage,
+    ...agentInputProps
+}: SessionAgentInputWithUsageProps) {
+    const sessionUsage = useSessionUsage(sessionId);
+    const agentInputUsageData = React.useMemo(() => {
+        const usage = sessionUsage ?? sessionLatestUsage ?? null;
+        return usage ? {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheCreation: usage.cacheCreation,
+            cacheRead: usage.cacheRead,
+            contextSize: usage.contextSize,
+            ...(typeof usage.contextWindowTokens === 'number'
+                ? { contextWindowTokens: usage.contextWindowTokens }
+                : {}),
+        } : undefined;
+    }, [sessionLatestUsage, sessionUsage]);
+
+    return (
+        <AgentInput
+            {...agentInputProps}
+            usageData={agentInputUsageData}
+        />
+    );
+});
+
 function SessionAuthRecoveryFallback({ message }: Readonly<{ message: string }>) {
     return (
         <View
@@ -305,6 +339,8 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const debugRouterEnabled = process.env.EXPO_PUBLIC_DEBUG === '1';
     const auth = useAuth();
     const session = useSession(sessionId);
+    const stableSessionForLoadedView = useStableSessionViewShellSession(session);
+    const stableSessionForHeader = stableSessionForLoadedView ?? session;
     const isDataReady = useIsDataReady();
     const { theme } = useUnistyles();
     const automations = useAutomations();
@@ -362,18 +398,18 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const workspaceLabelsV1 = useSetting('workspaceLabelsV1');
     const workspacePathDisplayModeV1 = useSetting('workspacePathDisplayModeV1');
     const sessionWorkspacePresentation = React.useMemo(() => {
-        if (!session) return null;
+        if (!stableSessionForHeader) return null;
         return resolveSessionWorkspacePresentation({
-            metadata: session.metadata ?? null,
+            metadata: stableSessionForHeader.metadata ?? null,
             machines: machinesById,
             target: readDisplayMachineTargetForSession({
-                sessionId: session.id,
-                metadata: session.metadata ?? null,
+                sessionId: stableSessionForHeader.id,
+                metadata: stableSessionForHeader.metadata ?? null,
             }),
             workspaceLabelsV1,
             workspacePathDisplayModeV1,
         });
-    }, [machinesById, session, workspaceLabelsV1, workspacePathDisplayModeV1]);
+    }, [machinesById, stableSessionForHeader, workspaceLabelsV1, workspacePathDisplayModeV1]);
     const sessionEncryptionMode: 'e2ee' | 'plain' = (session?.encryptionMode ?? 'e2ee');
     const isEncryptedSessionLocked = Boolean(session && sessionEncryptionMode === 'e2ee' && !hasAuthCredentials);
     const showTopHeader = !(isLandscape && deviceType === 'phone' && Platform.OS !== 'web');
@@ -394,6 +430,8 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             suffix,
         });
     }, [currentSessionRouteServerId, sessionId]);
+    const routerRef = React.useRef(router);
+    routerRef.current = router;
 
     // Treat multi-pane panels as enabled unless explicitly disabled. `useLocalSetting` can return
     // `undefined` during hydration; failing closed here causes deep links like `?right=git` to be
@@ -401,9 +439,10 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const paneScopeId = useRegisterSessionPaneDriver(sessionId);
     const pane = useAppPaneScope(paneScopeId);
+    const paneRef = React.useRef(pane);
+    paneRef.current = pane;
     const { messages: pendingMessages } = useSessionPendingMessages(sessionId);
     const subagentSourceMessages = useSessionSubagentSourceMessages(sessionId);
-    const stableSessionForLoadedView = useStableSessionViewShellSession(session);
     const directSessionRuntime = useDirectSessionRuntime({
         sessionId,
         metadata: session?.metadata ?? null,
@@ -435,17 +474,19 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         () => resolveMobileWorkspaceExperienceToggleActionId(mobileWorkspaceExperienceState.mobileWorkspaceExperience),
         [mobileWorkspaceExperienceState.mobileWorkspaceExperience],
     );
+    const toggleWorkspaceExperienceRef = React.useRef(mobileWorkspaceExperienceState.toggleWorkspaceExperience);
+    toggleWorkspaceExperienceRef.current = mobileWorkspaceExperienceState.toggleWorkspaceExperience;
 
     const handleHeaderExtraItemSelect = React.useCallback((actionId: string) => {
         if (actionId === mobileWorkspaceExperienceToggleActionId) {
-            mobileWorkspaceExperienceState.toggleWorkspaceExperience();
+            toggleWorkspaceExperienceRef.current();
             return true;
         }
         if (actionId !== 'header.openSubagents') return false;
-        pane.openRight({ tabId: 'agents' });
-        pane.setRightTab('agents');
+        paneRef.current.openRight({ tabId: 'agents' });
+        paneRef.current.setRightTab('agents');
         return true;
-    }, [mobileWorkspaceExperienceState, mobileWorkspaceExperienceToggleActionId, pane]);
+    }, [mobileWorkspaceExperienceToggleActionId]);
 
     // Compute header props based on session state
     const headerProps = useMemo(() => {
@@ -476,8 +517,9 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         }
 
         // Normal state - show session info
-        const isConnected = session.presence === 'online';
-        const directSessionLink = readDirectSessionLink(session.metadata);
+        const headerSession = stableSessionForHeader ?? session;
+        const isConnected = headerSession.presence === 'online';
+        const directSessionLink = readDirectSessionLink(headerSession.metadata);
         const shouldFoldHeaderIconActions = windowWidth < 520;
         const badgeLabel =
             sessionAutomationsEnabledCount > 99 ? '99+' : String(sessionAutomationsEnabledCount);
@@ -485,8 +527,8 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         const providerBadge = directSessionLink
             ? [
                 t(getAgentCore(directSessionLink.providerId).displayNameKey),
-                typeof session.metadata?.host === 'string' && session.metadata.host.trim()
-                    ? session.metadata.host.trim()
+                typeof headerSession.metadata?.host === 'string' && headerSession.metadata.host.trim()
+                    ? headerSession.metadata.host.trim()
                     : directSessionLink.machineId,
             ].join(' · ')
             : null;
@@ -528,7 +570,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <SessionHeaderActionMenu
                     sessionId={sessionId}
-                    session={session}
+                    session={headerSession}
                     extraItems={headerExtraItems.length > 0 ? headerExtraItems : undefined}
                     onSelectExtraItem={handleHeaderExtraItemSelect}
                 />
@@ -546,7 +588,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 />
                 {!shouldFoldHeaderIconActions && sessionExecutionRunsSupported ? (
                     <Pressable
-                        onPress={() => router.push(buildCurrentSessionHref('/runs') as any)}
+                        onPress={() => routerRef.current.push(buildCurrentSessionHref('/runs') as any)}
                         hitSlop={15}
                         style={({ pressed }) => ({
                             width: 44,
@@ -563,7 +605,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 ) : null}
                 {!shouldFoldHeaderIconActions && showAutomations ? (
                     <Pressable
-                        onPress={() => navigateWithBlurOnWeb(() => router.push(buildCurrentSessionHref('/automations') as any))}
+                        onPress={() => navigateWithBlurOnWeb(() => routerRef.current.push(buildCurrentSessionHref('/automations') as any))}
                         hitSlop={15}
                         style={({ pressed }) => ({
                             width: 44,
@@ -605,11 +647,11 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             </View>
         );
         return {
-            title: getSessionName(session),
+            title: getSessionName(headerSession),
             subtitle: sessionWorkspacePresentation?.displayTitle || undefined,
             subtitleEllipsizeMode: sessionWorkspacePresentation?.displayPath && !sessionWorkspacePresentation.hasCustomLabel ? 'head' as const : undefined,
-            avatarId: getSessionAvatarId(session),
-            onAvatarPress: () => router.navigate(buildCurrentSessionHref('/info') as any, {
+            avatarId: getSessionAvatarId(headerSession),
+            onAvatarPress: () => routerRef.current.navigate(buildCurrentSessionHref('/info') as any, {
                 dangerouslySingular() {
                     return 'session-info';
                 },
@@ -617,7 +659,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
 	            rightElement,
 	            badges: providerBadge ? [storageBadge, providerBadge] : [storageBadge],
 	            isConnected: isConnected,
-	            flavor: session.metadata?.flavor || null,
+	            flavor: headerSession.metadata?.flavor || null,
 	        };
 	    }, [
 	        handleHeaderExtraItemSelect,
@@ -626,8 +668,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
         mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey,
         mobileWorkspaceExperienceToggleActionId,
         paneScopeId,
-        router,
-        session,
+        stableSessionForHeader,
         sessionWorkspacePresentation,
         sessionAutomationsEnabledCount,
         sessionExecutionRunsSupported,
@@ -719,7 +760,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 ) : !isDataReady && !session ? (
                     // Loading state
                     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                     </View>
                 ) : !session ? (
                     // Deleted state
@@ -1102,7 +1143,6 @@ function SessionViewLoaded({
         subscribeToSession: false,
         subscribeToTranscript: false,
     });
-    const sessionUsage = useSessionUsage(sessionId);
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const scmSessionAutoRefreshIntervalMsSetting = useSetting('scmSessionAutoRefreshIntervalMs' as any);
     const scmSessionAutoRefreshIntervalMs =
@@ -1761,7 +1801,7 @@ function SessionViewLoaded({
             ) : isLoaded ? (
                 <EmptyMessages session={session} />
             ) : (
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             )}
         </>
     ) : null;
@@ -1851,20 +1891,6 @@ function SessionViewLoaded({
         sessionStatus.statusDotColor,
         sessionStatus.statusText,
     ]);
-    const agentInputUsageData = React.useMemo(() => {
-        const usage = sessionUsage ?? session.latestUsage ?? null;
-        return usage ? {
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cacheCreation: usage.cacheCreation,
-            cacheRead: usage.cacheRead,
-            contextSize: usage.contextSize,
-            ...(typeof usage.contextWindowTokens === 'number'
-                ? { contextWindowTokens: usage.contextWindowTokens }
-                : {}),
-        } : undefined;
-    }, [session.latestUsage, sessionUsage]);
-
     const input = shouldShowInput ? (
         <View>
             {voiceEnabled && voiceProviderId !== 'off' && !isHiddenSystemSessionSession ? <VoiceSurface variant="session" sessionId={sessionId} /> : null}
@@ -1948,7 +1974,8 @@ function SessionViewLoaded({
                     />
                 </SessionCockpitModeSwipeGesture>
             ) : null}
-            <AgentInput
+            <SessionAgentInputWithUsage
+                sessionLatestUsage={session.latestUsage}
                 placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
                 value={message}
                 onChangeText={setMessage}
@@ -2410,7 +2437,8 @@ function SessionViewLoaded({
                             clearSessionGoal: canEditSessionGoals
                                 ? (targetSessionId) => sessionGoalClear(targetSessionId)
                                 : undefined,
-                            modalAlert: (_title, msg) => Modal.alert(t('common.error'), msg),
+                            sendGoalObjectiveMessage: (objective) => sendComposerText(objective, previousMessage, sendOptions),
+                            modalAlert: (title, msg) => Modal.alert(title, msg),
                         });
                         return;
                     }
@@ -2428,7 +2456,6 @@ function SessionViewLoaded({
                 autocompletePrefixes={SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES}
                 autocompleteSuggestions={handleAutocompleteSuggestions}
                 disabled={isReadOnly}
-                usageData={agentInputUsageData}
                 alwaysShowContextSize={alwaysShowContextSize}
                 extraActionChips={agentInputExtraActionChips}
             />

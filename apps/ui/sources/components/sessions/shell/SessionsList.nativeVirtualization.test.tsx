@@ -575,6 +575,17 @@ function findPressableByAccessibilityLabel(
     )[0] ?? null;
 }
 
+function childTreeContainsType(root: any, type: string): boolean {
+    return root.children.some((child: unknown) => (
+        typeof child === 'object'
+        && child !== null
+        && (
+            (child as any).type === type
+            || childTreeContainsType(child, type)
+        )
+    ));
+}
+
 describe('SessionsList (native virtualization)', () => {
     beforeEach(() => {
         platformOs = 'ios';
@@ -658,6 +669,8 @@ describe('SessionsList (native virtualization)', () => {
         const initialKeyExtractor = initialList.props.keyExtractor;
         const initialRenderItem = initialList.props.renderItem;
         const initialContentContainerStyle = initialList.props.contentContainerStyle;
+        const initialListHeaderComponent = initialList.props.ListHeaderComponent;
+        const initialListFooterComponent = initialList.props.ListFooterComponent;
         const { SessionsList } = await import('./SessionsList');
 
         await screen.update(<SessionsList />);
@@ -669,6 +682,31 @@ describe('SessionsList (native virtualization)', () => {
         expect(updatedList.props.keyExtractor).toBe(initialKeyExtractor);
         expect(updatedList.props.renderItem).toBe(initialRenderItem);
         expect(updatedList.props.contentContainerStyle).toBe(initialContentContainerStyle);
+        expect(updatedList.props.ListHeaderComponent).toBe(initialListHeaderComponent);
+        expect(updatedList.props.ListFooterComponent).toBe(initialListFooterComponent);
+    });
+
+    it('keeps native list chrome callbacks stable when an equivalent session-list refresh has no folder breadcrumbs', async () => {
+        platformOs = 'android';
+
+        const screen = await renderSessionsList();
+        const initialList = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const initialListHeaderComponent = initialList.props.ListHeaderComponent;
+        const initialListFooterComponent = initialList.props.ListFooterComponent;
+        const { SessionsList } = await import('./SessionsList');
+
+        mockVisibleSessionListViewData = mockVisibleSessionListViewData?.map((item) => ({ ...item })) ?? null;
+        await screen.update(<SessionsList />);
+
+        const updatedList = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected updated native FlashListCompat',
+        );
+        expect(updatedList.props.ListHeaderComponent).toBe(initialListHeaderComponent);
+        expect(updatedList.props.ListFooterComponent).toBe(initialListFooterComponent);
     });
 
     it('keeps hook order stable when session list data loads after an empty state', async () => {
@@ -1419,6 +1457,43 @@ describe('SessionsList (native virtualization)', () => {
         expect(findChevronOpacityForHeaderPressable(collapsedHeader)).toBe(1);
     });
 
+    it('does not nest project header pressable controls inside another pressable on web', async () => {
+        platformOs = 'web';
+        const { ProjectGroupHeader } = await import('./SessionsList');
+
+        const screen = await renderScreen(
+            <ProjectGroupHeader
+                item={{
+                    type: 'header',
+                    title: '/repo',
+                    headerKind: 'project',
+                    groupKey: 'server:server_a:active:project:abc',
+                    workspaceKey: 'wl_abc',
+                    workspaceScopeHint: {
+                        serverId: 'server_a',
+                        machineId: 'machine-target',
+                        rootPath: '/repo',
+                    },
+                    serverId: 'server_a',
+                    serverName: 'Server A',
+                } as any}
+                hasMultipleMachines={false}
+                workspaceLabelsV1={{}}
+                onRenameWorkspace={vi.fn()}
+                onResetWorkspaceName={vi.fn()}
+                onCreateSession={vi.fn()}
+                onAddFolder={vi.fn()}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                headerTestId="project-header"
+            />,
+        );
+
+        for (const pressable of screen.root.findAllByType('Pressable')) {
+            expect(childTreeContainsType(pressable, 'Pressable')).toBe(false);
+        }
+    });
+
     it('shows detected workspace favicons on project headers when enabled', async () => {
         resolveWorkspaceFaviconMock.mockResolvedValueOnce({
             status: 'found',
@@ -1467,6 +1542,16 @@ describe('SessionsList (native virtualization)', () => {
         const images = screen.root.findAllByType('Image' as any);
         expect(images).toHaveLength(1);
         expect(images[0].props.source).toEqual({ uri: 'data:image/svg+xml;base64,PHN2Zy8+' });
+        expect(screen.root.findByProps({ testID: 'session-list-workspace-favicon' }).props.style).toEqual(expect.objectContaining({
+            width: 16,
+            minWidth: 16,
+            height: 16,
+            flexShrink: 0,
+        }));
+        expect(images[0].props.style).toEqual(expect.objectContaining({
+            width: 16,
+            height: 16,
+        }));
     });
 
     it('hides expanded section chevrons until hover on web and keeps date headers on the subheader typography tier', async () => {

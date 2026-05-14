@@ -19,12 +19,12 @@ const FOLDER_INDENT_CAP = 3;
 const stylesheet = StyleSheet.create((theme) => ({
     section: {
         backgroundColor: theme.colors.background.canvas,
-        paddingHorizontal: 24,
-        paddingTop: 2,
-        paddingBottom: 3,
+        paddingHorizontal: 10,
+        paddingTop: 0,
+        paddingBottom: 0,
     },
     row: {
-        minHeight: 30,
+        minHeight: 22,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -42,6 +42,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
         opacity: 0,
     },
+    dropTargetActive: {
+        borderColor: theme.colors.accent.blue,
+        backgroundColor: theme.colors.state.active.background,
+        opacity: 1,
+    },
     content: {
         flex: 1,
         minWidth: 0,
@@ -57,11 +62,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
     },
     actionButton: {
-        width: 22,
-        height: 22,
+        width: 18,
+        height: 20,
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 999,
+    },
+    dragHandle: {
+        opacity: 0.42,
+    },
+    dragHandleActive: {
+        opacity: 1,
     },
     hidden: {
         opacity: 0,
@@ -82,6 +93,7 @@ export function FolderGroupHeader(props: Readonly<{
     onDelete: () => void | Promise<void>;
     onRegisterDropTarget?: (target: SessionFolderDropTarget) => void;
     onUnregisterDropTarget?: (id: string) => void;
+    activeDropTargetId?: string | null;
     disabled?: boolean;
 }>) {
     const styles = stylesheet;
@@ -95,6 +107,7 @@ export function FolderGroupHeader(props: Readonly<{
     const indent = Math.min(Math.max(0, props.item.depth), FOLDER_INDENT_CAP) * FOLDER_INDENT_STEP;
     const rowRef = React.useRef<View | null>(null);
     const dropTargetId = `folder:${props.item.folderId}`;
+    const isActiveDropTarget = props.activeDropTargetId === dropTargetId;
 
     React.useEffect(() => {
         return () => {
@@ -152,7 +165,6 @@ export function FolderGroupHeader(props: Readonly<{
         <View style={styles.section}>
             <View
                 ref={rowRef as React.Ref<View>}
-                testID={`session-folder-header-${props.item.folderId}`}
                 style={[styles.row, { paddingLeft: indent }]}
                 onLayout={(event) => {
                     const layout = event.nativeEvent.layout;
@@ -178,7 +190,7 @@ export function FolderGroupHeader(props: Readonly<{
                 <View
                     pointerEvents="none"
                     testID={`session-folder-drop-target-${props.item.folderId}`}
-                    style={styles.dropTarget}
+                    style={[styles.dropTarget, isActiveDropTarget ? styles.dropTargetActive : null]}
                 />
                 <Pressable
                     style={styles.actionButton}
@@ -197,6 +209,7 @@ export function FolderGroupHeader(props: Readonly<{
                     />
                 </Pressable>
                 <Pressable
+                    testID={`session-folder-header-${props.item.folderId}`}
                     style={styles.content}
                     accessibilityRole="button"
                     accessibilityLabel={props.item.title}
@@ -206,6 +219,18 @@ export function FolderGroupHeader(props: Readonly<{
                     <Ionicons name="folder-outline" size={14} color={iconColor} />
                     <Text style={styles.title} numberOfLines={1}>{props.item.title}</Text>
                 </Pressable>
+                <View
+                    style={styles.actionButton}
+                    testID={`session-folder-reorder-handle-${props.item.folderId}`}
+                    pointerEvents="none"
+                >
+                    <Ionicons
+                        name="reorder-three-outline"
+                        size={14}
+                        color={iconColor}
+                        style={[styles.dragHandle, showActions ? styles.dragHandleActive : null]}
+                    />
+                </View>
                 <View
                     onPointerEnter={isWeb ? () => setActionsHovered(true) : undefined}
                     onPointerLeave={isWeb ? () => setActionsHovered(false) : undefined}

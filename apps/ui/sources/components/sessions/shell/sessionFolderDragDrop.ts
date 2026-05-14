@@ -51,23 +51,25 @@ export async function measureSessionFolderDropTargetBounds(params: Readonly<{
     });
 }
 
-function findDropTargetAtPoint(
+export function resolveSessionFolderDropTargetAtPoint(
     targets: ReadonlyArray<SessionFolderDropTarget>,
     pointer: Readonly<{ x: number; y: number }> | null,
 ): SessionFolderDropTarget | null {
     if (!pointer) return null;
-    return targets.find((target) =>
+    const matches = targets.filter((target) =>
         pointer.x >= target.bounds.x
         && pointer.x <= target.bounds.x + target.bounds.width
         && pointer.y >= target.bounds.y
         && pointer.y <= target.bounds.y + target.bounds.height
-    ) ?? null;
+    );
+    matches.sort((a, b) => (a.bounds.width * a.bounds.height) - (b.bounds.width * b.bounds.height));
+    return matches[0] ?? null;
 }
 
 export function resolveSessionFolderDragDropIntent(
     params: ResolveSessionFolderDragDropIntentParams,
 ): SessionFolderDragDropIntent {
-    const target = findDropTargetAtPoint(params.dropTargets, params.pointer);
+    const target = resolveSessionFolderDropTargetAtPoint(params.dropTargets, params.pointer);
     if (!target) {
         return {
             kind: 'reorder',
@@ -104,10 +106,14 @@ export function useSessionFolderDropTargetRegistry() {
         ...params,
         dropTargets: targetsRef.current,
     }), []);
+    const resolveTarget = React.useCallback((
+        pointer: Readonly<{ x: number; y: number }> | null,
+    ) => resolveSessionFolderDropTargetAtPoint(targetsRef.current, pointer), []);
 
     return React.useMemo(() => ({
         registerTarget,
         unregisterTarget,
         resolveIntent,
-    }), [registerTarget, resolveIntent, unregisterTarget]);
+        resolveTarget,
+    }), [registerTarget, resolveIntent, resolveTarget, unregisterTarget]);
 }

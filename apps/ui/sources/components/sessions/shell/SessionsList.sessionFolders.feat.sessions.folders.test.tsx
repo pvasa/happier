@@ -277,9 +277,22 @@ describe('SessionsList session folders shell', () => {
         const screen = await renderSessionsList();
 
         expect(screen.findByTestId('session-folder-header-folder_a')).toBeTruthy();
+        expect(screen.findByTestId('session-folder-reorder-handle-folder_a')).toBeTruthy();
         expect(screen.findByTestId('session-folder-menu-trigger-folder_a')).toBeTruthy();
         expect(screen.findByTestId('session-folder-drop-target-folder_a')).toBeTruthy();
         expect(screen.getTextContent()).not.toContain('47');
+    });
+
+    it('attaches the folder drag gesture on web', async () => {
+        const folderGesture = { __kind: 'folder-gesture' };
+        useSessionInlineDragSpy.mockImplementation((params: any): any => ({
+            gesture: params?.sessionKey === 'folder:folder_a' ? folderGesture : undefined,
+            animatedStyle: {},
+        }));
+
+        const screen = await renderSessionsList();
+
+        expect(screen.root.findAllByType('GestureDetector').some((node) => node.props.gesture === folderGesture)).toBe(true);
     });
 
     it('focuses a folder and renders breadcrumbs above the list sections', async () => {
@@ -377,6 +390,43 @@ describe('SessionsList session folders shell', () => {
             serverUrl: 'https://server-a.test',
             sessionId: 'sess_b',
             folderId: 'folder_a',
+        }));
+    });
+
+    it('moves folder headers through the folder drag/drop hook', async () => {
+        sessionFoldersV1 = {
+            v: 1,
+            folders: [
+                ...sessionFoldersV1.folders,
+                {
+                    id: 'folder_b',
+                    workspace,
+                    renderWorkspaceKey: 'project_a',
+                    parentId: null,
+                    name: 'Archive',
+                    createdAt: 2,
+                    updatedAt: 2,
+                },
+            ],
+        };
+        await renderSessionsList();
+        const dragParams = useSessionInlineDragSpy.mock.calls
+            .map((call) => call[0])
+            .find((params) => params?.sessionKey === 'folder:folder_a');
+
+        await act(async () => {
+            dragParams.onDropIntent({
+                sessionKey: 'folder:folder_a',
+                groupKey: folderGroupKey,
+                positionDelta: 0,
+                intent: { kind: 'moveToFolder', folderId: 'folder_b' },
+            });
+        });
+
+        expect(setSessionFoldersV1).toHaveBeenCalledWith(expect.objectContaining({
+            folders: expect.arrayContaining([
+                expect.objectContaining({ id: 'folder_a', parentId: 'folder_b' }),
+            ]),
         }));
     });
 
