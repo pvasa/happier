@@ -63,6 +63,8 @@ export const DEFAULT_ACTIONS_SETTINGS_V1: ActionsSettingsV1 = ActionsSettingsV1S
     'session.unarchive': { disabledSurfaces: ['session_agent'] },
     'session.status.get': { disabledSurfaces: ['session_agent'] },
     'session.history.get': { disabledSurfaces: ['session_agent'] },
+    'session.transcript.get': { disabledSurfaces: ['session_agent'] },
+    'session.events.get': { disabledSurfaces: ['session_agent'] },
     'session.wait.idle': { disabledSurfaces: ['session_agent'] },
     'session.message.send': { disabledSurfaces: ['session_agent'] },
     'session.permission.respond': { disabledSurfaces: ['session_agent'] },

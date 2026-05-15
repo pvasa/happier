@@ -141,6 +141,74 @@ describe('createCodexAppServerStreamEventBridge', () => {
         ).toEqual([{ type: 'context-compaction', phase: 'completed', itemId: 'compact_1' }]);
     });
 
+    it('maps native review-mode lifecycle notifications', () => {
+        const bridge = createCodexAppServerStreamEventBridge();
+
+        expect(
+            bridge.onNotification({
+                method: 'item/started',
+                params: {
+                    item: {
+                        id: 'review_entered_1',
+                        type: 'enteredReviewMode',
+                        review: 'current changes',
+                    },
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'review-mode-started',
+                itemId: 'review_entered_1',
+                review: 'current changes',
+            },
+        ]);
+
+        expect(
+            bridge.onNotification({
+                method: 'item/completed',
+                params: {
+                    item: {
+                        id: 'review_entered_1',
+                        type: 'enteredReviewMode',
+                        review: 'current changes',
+                    },
+                },
+            }),
+        ).toEqual([]);
+
+        expect(
+            bridge.onNotification({
+                method: 'item/started',
+                params: {
+                    item: {
+                        id: 'review_exited_1',
+                        type: 'exitedReviewMode',
+                        review: 'Native review text',
+                    },
+                },
+            }),
+        ).toEqual([]);
+
+        expect(
+            bridge.onNotification({
+                method: 'item/completed',
+                params: {
+                    item: {
+                        id: 'review_exited_1',
+                        type: 'exitedReviewMode',
+                        review: 'Native review text',
+                    },
+                },
+            }),
+        ).toEqual([
+            {
+                type: 'review-mode-completed',
+                itemId: 'review_exited_1',
+                review: 'Native review text',
+            },
+        ]);
+    });
+
     it('maps final image generation results to transient session media and ignores partials', () => {
         const bridge = createCodexAppServerStreamEventBridge();
 

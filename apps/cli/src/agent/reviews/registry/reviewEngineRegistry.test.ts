@@ -10,5 +10,8 @@ describe('reviewEngineRegistry', () => {
       expect(resolveReviewOutputNormalizer(engine.id)).toBeTruthy();
     }
   });
-});
 
+  it('provides a review output normalizer for Codex agent reviews', () => {
+    expect(resolveReviewOutputNormalizer('codex')).toBeTruthy();
+  });
+});

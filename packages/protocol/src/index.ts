@@ -4,6 +4,7 @@ export {
   SessionGoalClearRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
+  SessionInitialGoalRequestV1Schema,
   SessionSkillCatalogItemV1Schema,
   SessionSkillCatalogListRequestV1Schema,
   SessionSkillCatalogListResponseV1Schema,
@@ -15,6 +16,7 @@ export {
   SessionWorkStateItemKindV1Schema,
   SessionWorkStateItemOriginV1Schema,
   SessionWorkStateItemV1Schema,
+  SessionWorkStateStatusReasonV1Schema,
   SessionWorkStateStatusV1Schema,
   SessionWorkStateTruncationV1Schema,
   SessionWorkStateV1Schema,
@@ -26,6 +28,7 @@ export {
   type SessionGoalClearRequestV1,
   type SessionGoalGetRequestV1,
   type SessionGoalSetRequestV1,
+  type SessionInitialGoalRequestV1,
   type SessionSkillCatalogItemV1,
   type SessionSkillCatalogListRequestV1,
   type SessionSkillCatalogListResponseV1,
@@ -37,6 +40,7 @@ export {
   type SessionWorkStateItemKindV1,
   type SessionWorkStateItemOriginV1,
   type SessionWorkStateItemV1,
+  type SessionWorkStateStatusReasonV1,
   type SessionWorkStateStatusV1,
   type SessionWorkStateTruncationV1,
   type SessionWorkStateUnknownItemV1,
@@ -334,12 +338,18 @@ export {
 export {
   ClaudeSdkSkillsOptionSchema,
   ClaudeTaskEventSchema,
+  ClaudeTaskToolInputSchema,
+  ClaudeTaskToolRecordSchema,
   ClaudeTodoWriteTodoSchema,
+  normalizeClaudeTaskToolRecordsToWorkStateItems,
+  normalizeClaudeTaskToolUseToWorkStateItem,
   normalizeClaudeSdkInitSkills,
   normalizeClaudeTaskEventToWorkStateItem,
   normalizeClaudeTodoWriteTodosToWorkStateItems,
   type ClaudeSdkSkillsOption,
   type ClaudeTaskEvent,
+  type ClaudeTaskToolInput,
+  type ClaudeTaskToolRecord,
   type ClaudeTodoWriteTodo,
 } from './providers/claude/index.js';
 
@@ -1762,8 +1772,10 @@ export {
 // Approvals (global inbox approvals queue)
 export {
   ApprovalRequestCreatedBySchema,
+  ApprovalRequestOriginV1Schema,
   ApprovalRequestV1Schema,
   type ApprovalRequestCreatedBy,
+  type ApprovalRequestOriginV1,
   type ApprovalRequestV1,
 } from './approvals/approvalRequestV1.js';
 

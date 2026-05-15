@@ -145,6 +145,8 @@ describe('accountSettings', () => {
     expect(isActionEnabledByActionsSettings('session.title.set' as any, settings, { surface: 'session_agent' } as any)).toBe(true);
     expect(isActionEnabledByActionsSettings('session.message.send' as any, settings, { surface: 'session_agent' } as any)).toBe(false);
     expect(isActionEnabledByActionsSettings('session.list' as any, settings, { surface: 'session_agent' } as any)).toBe(false);
+    expect(isActionEnabledByActionsSettings('session.transcript.get' as any, settings, { surface: 'session_agent' } as any)).toBe(false);
+    expect(isActionEnabledByActionsSettings('session.events.get' as any, settings, { surface: 'session_agent' } as any)).toBe(false);
   });
 
   it('migrates legacy default session-agent action settings to keep session.title.set enabled', () => {

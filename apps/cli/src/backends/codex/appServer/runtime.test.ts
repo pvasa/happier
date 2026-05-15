@@ -186,6 +186,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            continue;',
         '        }',
         '        const turnId = "turn-review-native";',
+        '        if (typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("invalid-review-input")) {',
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "invalid params: review target is invalid" } }) + "\\n");',
+        '            continue;',
+        '        }',
         '        const reviewText = typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("different-final") ? "Native review body" : "Native review text";',
         '        const finalText = typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("different-final") ? "Different final assistant text" : reviewText;',
         '        const completionDelayMs = typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("delayed-review") ? 50 : 15;',
@@ -708,6 +712,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectGoalMethods?: boolean;
             rejectGoalMethodsAsInvalidRequest?: boolean;
             emitGoalContinuationTurn?: boolean;
+            rejectReviewStartMethodUnavailable?: boolean;
         }> = {},
     ): Promise<{
         root: string;
@@ -726,6 +731,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectGoalMethods: options.rejectGoalMethods,
             rejectGoalMethodsAsInvalidRequest: options.rejectGoalMethodsAsInvalidRequest,
             emitGoalContinuationTurn: options.emitGoalContinuationTurn,
+            rejectReviewStartMethodUnavailable: options.rejectReviewStartMethodUnavailable,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -1130,6 +1136,122 @@ describe('createCodexAppServerRuntime', () => {
                 { type: 'localImage', path: '/tmp/screenshot.png' },
                 { type: 'image', url: 'https://example.test/image.png' },
             ],
+        });
+    });
+
+    it('sends native reviews over review/start and waits for completion', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-review-start-');
+
+        const onThinkingChange = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange,
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            startReview: (request: { target: Record<string, unknown> }) => Promise<unknown>;
+        }).startReview({
+            target: {
+                type: 'custom',
+                instructions: 'Review current changes',
+            },
+        });
+
+        expect(runtime.isTurnInFlight()).toBe(false);
+        expect(onThinkingChange).toHaveBeenCalledWith(true);
+        expect(onThinkingChange).toHaveBeenLastCalledWith(false);
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'turn/start')).toEqual([]);
+        expect(requestLog.filter((entry) => entry.method === 'review/start')).toEqual([
+            expect.objectContaining({
+                params: {
+                    threadId: 'thread-started',
+                    target: {
+                        type: 'custom',
+                        instructions: 'Review current changes',
+                    },
+                    delivery: 'inline',
+                },
+            }),
+        ]);
+    });
+
+    it('rejects prompts while a native review turn is pending', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-review-pending-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+        });
+
+        await runtime.startOrLoad({});
+        const reviewPromise = (runtime as unknown as {
+            startReview: (request: { target: Record<string, unknown> }) => Promise<unknown>;
+        }).startReview({
+            target: {
+                type: 'custom',
+                instructions: 'delayed-review',
+            },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+
+        await expect(runtime.sendPrompt('second prompt')).rejects.toThrow(/turn in flight/);
+        await reviewPromise;
+    });
+
+    it('clears native review pending state after invalid request failures', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-review-invalid-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await expect((runtime as unknown as {
+            startReview: (request: { target: Record<string, unknown> }) => Promise<unknown>;
+        }).startReview({
+            target: {
+                type: 'custom',
+                instructions: 'invalid-review-input',
+            },
+        })).rejects.toThrow(/review target is invalid/);
+        await runtime.sendPrompt('after-review-failure');
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'review/start')).toHaveLength(1);
+        expect(requestLog.filter((entry) => entry.method === 'turn/start')).toHaveLength(1);
+    });
+
+    it('returns an unsupported result when native review/start is unavailable', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-review-unsupported-', {
+            rejectReviewStartMethodUnavailable: true,
+        });
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await expect((runtime as unknown as {
+            startReview: (request: { target: Record<string, unknown> }) => Promise<unknown>;
+        }).startReview({
+            target: {
+                type: 'custom',
+                instructions: 'Review current changes',
+            },
+        })).resolves.toEqual({
+            ok: false,
+            errorCode: 'unsupported_session_runtime_method',
+            error: 'unsupported_session_runtime_method:review/start',
         });
     });
 
@@ -1630,6 +1752,77 @@ describe('createCodexAppServerRuntime', () => {
                 [expect.objectContaining({ type: 'tool-call-result', callId: 'patch_1', output: { stdout: 'patched', success: true } })],
             ]),
         );
+    });
+
+    it('commits native review completion text without duplicating identical assistant finals', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-review-dedupe-');
+
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            startReview: (request: { target: Record<string, unknown> }) => Promise<unknown>;
+        }).startReview({
+            target: {
+                type: 'custom',
+                instructions: 'Review current changes',
+            },
+        });
+
+        const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
+            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+        >;
+        const assistantMessages = committedCalls
+            .map(([, body]) => body as CommittedSnapshotBody)
+            .filter((body) => body.type === 'message' && !body.sidechainId)
+            .map((body) => String(body.message ?? ''));
+        expect(assistantMessages.filter((message) => message === 'Native review text')).toHaveLength(1);
+    });
+
+    it('preserves assistant final text that differs from native review completion text', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-review-different-final-');
+
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            startReview: (request: { target: Record<string, unknown> }) => Promise<unknown>;
+        }).startReview({
+            target: {
+                type: 'custom',
+                instructions: 'different-final',
+            },
+        });
+
+        const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
+            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+        >;
+        const assistantMessages = committedCalls
+            .map(([, body]) => body as CommittedSnapshotBody)
+            .filter((body) => body.type === 'message' && !body.sidechainId)
+            .map((body) => String(body.message ?? ''));
+        expect(assistantMessages).toEqual(expect.arrayContaining([
+            'Native review body',
+            'Different final assistant text',
+        ]));
     });
 
     it('uses the explicit transcript session port for live and durable transcript snapshots', async () => {

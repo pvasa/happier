@@ -15,6 +15,26 @@ export const ApprovalRequestCreatedBySchema = z.object({
 }).strict();
 export type ApprovalRequestCreatedBy = z.infer<typeof ApprovalRequestCreatedBySchema>;
 
+export const ApprovalRequestOriginV1Schema = z.object({
+  kind: z.literal('transcript_tool_call'),
+  sessionId: z.string().min(1),
+  messageId: z.string().min(1).optional(),
+  parentMessageId: z.string().min(1).optional(),
+  toolCallId: z.string().min(1).optional(),
+  mcpRequestId: z.string().min(1).optional(),
+  toolName: z.string().min(1).optional(),
+  toolInput: z.unknown().optional(),
+}).strict().superRefine((value, ctx) => {
+  if (!value.messageId && !value.parentMessageId && !value.toolCallId && !value.toolName) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['origin'],
+      message: 'transcript tool-call origin requires a messageId, parentMessageId, toolCallId, or toolName',
+    });
+  }
+});
+export type ApprovalRequestOriginV1 = z.infer<typeof ApprovalRequestOriginV1Schema>;
+
 export const ApprovalDecisionV1Schema = z.object({
   kind: z.enum(['approve', 'reject']),
   decidedAtMs: z.number().int().min(0),
@@ -41,6 +61,7 @@ export const ApprovalRequestV1Schema = z.object({
   actionArgs: z.unknown(),
   summary: z.string().min(1),
   approval: ActionApprovalSchema.optional(),
+  origin: ApprovalRequestOriginV1Schema.optional(),
   preview: z.unknown().optional(),
   decision: ApprovalDecisionV1Schema.optional(),
   execution: ApprovalExecutionV1Schema.optional(),

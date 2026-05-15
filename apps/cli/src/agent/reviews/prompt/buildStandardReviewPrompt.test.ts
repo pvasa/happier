@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { buildReviewScopeGuidanceBlock } from './buildReviewScopeGuidanceBlock';
 import { buildStandardReviewPrompt } from './buildStandardReviewPrompt';
 
 describe('buildStandardReviewPrompt', () => {
@@ -28,5 +29,32 @@ describe('buildStandardReviewPrompt', () => {
     expect(prompt).toContain('Change type: committed');
     expect(prompt).toContain('Base: infer the repository');
     expect(prompt).toContain('Do not broaden the review to unrelated repository areas');
+  });
+
+  it('builds prompt-based review instructions when the user leaves instructions blank', () => {
+    const prompt = buildStandardReviewPrompt({
+      instructions: '',
+      intentInput: {
+        engineIds: ['codex'],
+        changeType: 'uncommitted',
+        base: { kind: 'none' },
+      },
+    });
+
+    expect(prompt).toContain('Review the scoped changes');
+    expect(prompt).toContain('Review scope:');
+    expect(prompt).toContain('output ONE final JSON object');
+  });
+
+  it('exposes reusable review scope guidance for native review mappers', () => {
+    const scope = buildReviewScopeGuidanceBlock({
+      engineIds: ['codex'],
+      changeType: 'all',
+      base: { kind: 'commit', baseCommit: 'abc123' },
+    });
+
+    expect(scope).toContain('Review scope:');
+    expect(scope).toContain('Change type: all');
+    expect(scope).toContain('Base commit: abc123');
   });
 });

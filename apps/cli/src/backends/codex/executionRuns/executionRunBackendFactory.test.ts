@@ -209,6 +209,10 @@ describe('executionRunBackendFactory (codex)', () => {
     expect(appServerCalls[0]).toMatchObject({
       cwd: '/tmp/happier-worktree',
       permissionMode: 'read-only',
+      start: {
+        intent: 'delegate',
+        retentionPolicy: 'ephemeral',
+      },
       env: expect.objectContaining({
         HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT: 'appServer',
         PATH: `${resolve('/tmp/happier-worktree', 'scripts', 'shims')}${delimiter}/tmp/isolated-bin:/usr/bin`,

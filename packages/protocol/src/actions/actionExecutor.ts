@@ -14,7 +14,7 @@ import type { ActionId } from './actionIds.js';
 import type { ActionUiPlacement } from './actionUiPlacements.js';
 import type { MemorySearchQueryV1, MemorySearchResultV1 } from '../memory/memorySearch.js';
 import type { MemoryWindowV1 } from '../memory/memoryWindow.js';
-import { ApprovalRequestV1Schema, type ApprovalRequestV1 } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestOriginV1Schema, ApprovalRequestV1Schema, type ApprovalRequestOriginV1, type ApprovalRequestV1 } from '../approvals/approvalRequestV1.js';
 import type { PromptRegistryConfiguredSourceV1 } from '../promptLibrary/promptRegistriesV1.js';
 import { BackendTargetKeySchema, buildBackendTargetKey, parseBackendTargetKey } from '../backendTargets/backendTargetRef.js';
 import type { SessionRollbackTarget } from '../sessionRollback.js';
@@ -61,6 +61,12 @@ export type ActionExecutorContext = Readonly<{
    * on the same surface that originally required approvals.
    */
   bypassApprovals?: boolean;
+
+  /**
+   * Optional origin metadata for approval requests created while handling a transcript tool call.
+   * Stored on the approval so UI surfaces can link the approval back to the exact tool row.
+   */
+  approvalOrigin?: ApprovalRequestOriginV1 | null;
 }>;
 
 export type ActionExecutorDeps = Readonly<{
@@ -124,7 +130,7 @@ export type ActionExecutorDeps = Readonly<{
   sessionGoalGet?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionGoalSet?: (args: Readonly<{
     sessionId: string;
-    objective: string;
+    objective?: string;
     status?: string;
     tokenBudget?: number | null;
     serverId?: string | null;
@@ -316,6 +322,23 @@ export type ActionExecutorDeps = Readonly<{
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
+}
+
+function resolveApprovalOriginForRequest(
+  rawOrigin: unknown,
+  expectedSessionId: string | null,
+): ApprovalRequestOriginV1 | null {
+  if (rawOrigin == null) return null;
+
+  const parsed = ApprovalRequestOriginV1Schema.safeParse(rawOrigin);
+  if (!parsed.success) return null;
+
+  const normalizedExpectedSessionId = normalizeId(expectedSessionId);
+  if (normalizedExpectedSessionId && parsed.data.sessionId !== normalizedExpectedSessionId) {
+    return null;
+  }
+
+  return parsed.data;
 }
 
 function pickBoolean(input: any, key: string): boolean | undefined {
@@ -769,6 +792,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         const now = Date.now();
         const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
+        const approvalOrigin = resolveApprovalOriginForRequest(ctx.approvalOrigin, sessionId);
         const requestedSurface = parseActionSurfaceKey(ctx.surface);
         const createdBy = {
           surface: mapApprovalCreatedBySurface(ctx.surface ?? null),
@@ -788,6 +812,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             flow: approvalRouting.flow,
             result: approvalRouting.result,
           },
+          ...(approvalOrigin ? { origin: approvalOrigin } : {}),
           summary: buildApprovalSummary(spec, sessionId),
           preview: { actionId, actionArgs: parsed.data },
           ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
@@ -1383,12 +1408,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.goal.set' };
           }
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const data = parsed.data as Record<string, unknown>;
+          const tokenBudget = data.tokenBudget;
           const res = await deps.sessionGoalSet({
             sessionId,
-            objective: String((parsed.data as any).objective),
-            ...(typeof (parsed.data as any).status === 'string' ? { status: (parsed.data as any).status } : {}),
-            ...(Object.prototype.hasOwnProperty.call(parsed.data, 'tokenBudget')
-              ? { tokenBudget: ((parsed.data as any).tokenBudget ?? null) as any }
+            ...(typeof data.objective === 'string' ? { objective: data.objective } : {}),
+            ...(typeof data.status === 'string' ? { status: data.status } : {}),
+            ...(Object.prototype.hasOwnProperty.call(data, 'tokenBudget') && (typeof tokenBudget === 'number' || tokenBudget === null)
+              ? { tokenBudget }
               : {}),
             ...(serverId ? { serverId } : {}),
           });
@@ -1854,12 +1881,17 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const forcedSurface = mapApprovalCreatedBySurface(ctx.surface ?? null);
         const actionArgsSessionId = normalizeId((parsedTargetArgs.data as any)?.sessionId);
         const ctxDefaultSessionId = normalizeId(ctx.defaultSessionId);
+        const requestSessionId = actionArgsSessionId || ctxDefaultSessionId || null;
+        const rawApprovalOrigin = Object.prototype.hasOwnProperty.call(parsed.data, 'origin')
+          ? (parsed.data as any).origin
+          : ctx.approvalOrigin;
+        const approvalOrigin = resolveApprovalOriginForRequest(rawApprovalOrigin, requestSessionId);
         const rawAgentId = rawCreatedBy && typeof rawCreatedBy === 'object' ? normalizeId((rawCreatedBy as any).agentId) : null;
         const requestedSurface = parseActionSurfaceKey(ctx.surface);
         const createdBy: ApprovalRequestV1['createdBy'] = {
           surface: forcedSurface,
           ...(rawAgentId ? { agentId: rawAgentId } : {}),
-          ...(actionArgsSessionId ? { sessionId: actionArgsSessionId } : ctxDefaultSessionId ? { sessionId: ctxDefaultSessionId } : {}),
+          ...(requestSessionId ? { sessionId: requestSessionId } : {}),
         };
 
         const summary = String((parsed.data as any).summary ?? '').trim();
@@ -1875,6 +1907,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           actionId: targetActionId,
           actionArgs: parsedTargetArgs.data,
           approval: buildApprovalMetadata(targetSpec),
+          ...(approvalOrigin ? { origin: approvalOrigin } : {}),
           summary,
           ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
           ...(Object.prototype.hasOwnProperty.call(parsed.data, 'preview') ? { preview: (parsed.data as any).preview } : {}),

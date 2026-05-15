@@ -35,6 +35,73 @@ describe('ApprovalRequestV1Schema', () => {
     expect(parsed.approval).toEqual({ flow: 'blocking', result: 'required' });
   });
 
+  it('parses transcript tool-call origin metadata on new approval requests', () => {
+    const parsed = ApprovalRequestV1Schema.parse({
+      v: 1,
+      status: 'open',
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      createdBy: { surface: 'session_agent', sessionId: 's1' },
+      actionId: 'session.list',
+      actionArgs: {},
+      summary: 'List sessions',
+      origin: {
+        kind: 'transcript_tool_call',
+        sessionId: 's1',
+        messageId: 'msg-1',
+        toolCallId: 'tool-1',
+        toolName: 'session_list',
+        toolInput: { limit: 20 },
+      },
+    });
+
+    expect(parsed.origin).toEqual({
+      kind: 'transcript_tool_call',
+      sessionId: 's1',
+      messageId: 'msg-1',
+      toolCallId: 'tool-1',
+      toolName: 'session_list',
+      toolInput: { limit: 20 },
+    });
+  });
+
+  it('parses transcript tool-call origin metadata with only a parent message id', () => {
+    const parsed = ApprovalRequestV1Schema.parse({
+      v: 1,
+      status: 'open',
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      createdBy: { surface: 'session_agent', sessionId: 's1' },
+      actionId: 'session.list',
+      actionArgs: {},
+      summary: 'List sessions',
+      origin: {
+        kind: 'transcript_tool_call',
+        sessionId: 's1',
+        parentMessageId: 'msg-parent',
+      },
+    });
+
+    expect(parsed.origin?.parentMessageId).toBe('msg-parent');
+  });
+
+  it('rejects malformed transcript tool-call origin metadata', () => {
+    expect(() => ApprovalRequestV1Schema.parse({
+      v: 1,
+      status: 'open',
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      createdBy: { surface: 'session_agent', sessionId: 's1' },
+      actionId: 'session.list',
+      actionArgs: {},
+      summary: 'List sessions',
+      origin: {
+        kind: 'transcript_tool_call',
+        messageId: 'msg-1',
+      },
+    })).toThrow(/origin/i);
+  });
+
   it('rejects malformed approval flow metadata', () => {
     expect(() => ApprovalRequestV1Schema.parse({
       v: 1,

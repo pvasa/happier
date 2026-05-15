@@ -65,6 +65,7 @@ describe('feature catalog', () => {
     expect(isFeatureId('providers.codex.appServer.structuredInput')).toBe(true);
     expect(isFeatureId('providers.codex.appServer.permissionProfiles')).toBe(true);
     expect(FEATURE_CATALOG['providers.codex.appServer.goals']?.representation).toBe('client');
+    expect(FEATURE_CATALOG['providers.codex.appServer.goals']?.dependencies).toEqual([]);
     expect(FEATURE_CATALOG['providers.codex.appServer.plugins']?.dependencies).toContain('prompts.skills.registries');
     expect(FEATURE_CATALOG['providers.codex.appServer.structuredInput']?.dependencies).toContain('attachments.uploads');
   });

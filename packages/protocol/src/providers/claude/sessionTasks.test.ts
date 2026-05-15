@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    normalizeClaudeTaskToolRecordsToWorkStateItems,
+    normalizeClaudeTaskToolUseToWorkStateItem,
     normalizeClaudeTaskEventToWorkStateItem,
     normalizeClaudeTodoWriteTodosToWorkStateItems,
 } from './sessionTasks.js';
@@ -43,5 +45,84 @@ describe('Claude task and todo wire schemas', () => {
 
         expect(items.map((item) => item.status)).toEqual(['active', 'pending']);
         expect(items[0]?.id).toMatch(/^todo:derived:/);
+    });
+
+    it('normalizes TaskCreate tool uses into provisional task items', () => {
+        const item = normalizeClaudeTaskToolUseToWorkStateItem({
+            backendId: 'claude',
+            updatedAt: 101,
+            toolName: 'TaskCreate',
+            toolUseId: 'toolu_create_1',
+            input: {
+                subject: 'Patch work-state projection',
+                description: 'Update Claude task tracking',
+                activeForm: 'Patching work-state projection',
+            },
+        });
+
+        expect(item).toMatchObject({
+            id: 'task:tool_use:toolu_create_1',
+            kind: 'task',
+            origin: 'vendor',
+            status: 'pending',
+            title: 'Patch work-state projection',
+            summary: 'Patching work-state projection',
+            vendorRef: 'tool_use:toolu_create_1',
+            updatedAt: 101,
+        });
+    });
+
+    it('normalizes TaskUpdate tool uses by Claude task id', () => {
+        const item = normalizeClaudeTaskToolUseToWorkStateItem({
+            backendId: 'claude',
+            updatedAt: 102,
+            toolName: 'TaskUpdate',
+            input: {
+                taskId: 'task_123',
+                subject: 'Run regression tests',
+                status: 'in_progress',
+            },
+        });
+
+        expect(item).toMatchObject({
+            id: 'task:task_123',
+            kind: 'task',
+            origin: 'vendor',
+            status: 'active',
+            title: 'Run regression tests',
+            vendorRef: 'task_123',
+            updatedAt: 102,
+        });
+    });
+
+    it('omits deleted TaskUpdate items', () => {
+        const item = normalizeClaudeTaskToolUseToWorkStateItem({
+            backendId: 'claude',
+            updatedAt: 103,
+            toolName: 'TaskUpdate',
+            input: {
+                taskId: 'task_123',
+                status: 'deleted',
+            },
+        });
+
+        expect(item).toBeNull();
+    });
+
+    it('normalizes TaskList result records into task items', () => {
+        const items = normalizeClaudeTaskToolRecordsToWorkStateItems({
+            backendId: 'claude',
+            updatedAt: 104,
+            tasks: [
+                { id: 'task_a', subject: 'Check docs', status: 'completed' },
+                { taskId: 'task_b', subject: 'Fix parser', status: 'pending', activeForm: 'Fixing parser' },
+                { id: 'task_deleted', subject: 'Old task', status: 'deleted' },
+            ],
+        });
+
+        expect(items.map((item) => [item.vendorRef, item.status, item.title, item.summary])).toEqual([
+            ['task_a', 'complete', 'Check docs', undefined],
+            ['task_b', 'pending', 'Fix parser', 'Fixing parser'],
+        ]);
     });
 });

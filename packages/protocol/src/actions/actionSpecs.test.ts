@@ -323,6 +323,15 @@ describe('Action Spec Registry', () => {
     expect(getActionSpec('session.skill_catalog.list' as any).bindings?.mcpToolName).toBe('session_skill_catalog_list');
   });
 
+  it('accepts status-only and budget-only session goal mutations', () => {
+    const schema = getActionSpec('session.goal.set' as any).inputSchema;
+
+    expect(schema.safeParse({ sessionId: 's1', status: 'paused' }).success).toBe(true);
+    expect(schema.safeParse({ sessionId: 's1', tokenBudget: 50_000 }).success).toBe(true);
+    expect(schema.safeParse({ sessionId: 's1', tokenBudget: null }).success).toBe(true);
+    expect(schema.safeParse({ sessionId: 's1' }).success).toBe(false);
+  });
+
   it('surfaces approval actions on external mcp and cli (power user/internal)', () => {
     expect(getActionSpec('approval.request.create').surfaces.mcp).toBe(true);
     expect(getActionSpec('approval.request.create').surfaces.cli).toBe(true);
@@ -676,6 +685,13 @@ describe('Action Spec Registry', () => {
     expect(planFields.map((f: any) => f.path)).toContain('instructions');
     expect(delegateFields.map((f: any) => f.path)).toContain('backendTargetKeys');
     expect(delegateFields.map((f: any) => f.path)).toContain('instructions');
+  });
+
+  it('does not require review instructions in action hints', () => {
+    const spec = getActionSpec('review.start');
+    const instructionsField = spec.inputHints?.fields.find((field) => field.path === 'instructions');
+
+    expect(instructionsField?.required).not.toBe(true);
   });
 
   it('defaults delegate start permission mode to workspace_write', () => {

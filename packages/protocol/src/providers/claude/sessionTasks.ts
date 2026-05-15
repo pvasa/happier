@@ -28,6 +28,24 @@ export const ClaudeTodoWriteTodoSchema = z
   .passthrough();
 export type ClaudeTodoWriteTodo = z.infer<typeof ClaudeTodoWriteTodoSchema>;
 
+export const ClaudeTaskToolInputSchema = z
+  .object({
+    taskId: z.union([z.string(), z.number()]).optional(),
+    subject: z.string().trim().min(1).optional(),
+    title: z.string().trim().min(1).optional(),
+    content: z.string().trim().min(1).optional(),
+    description: z.string().trim().min(1).optional(),
+    activeForm: z.string().trim().min(1).optional(),
+    status: z.string().trim().min(1).optional(),
+  })
+  .passthrough();
+export type ClaudeTaskToolInput = z.infer<typeof ClaudeTaskToolInputSchema>;
+
+export const ClaudeTaskToolRecordSchema = ClaudeTaskToolInputSchema.extend({
+  id: z.union([z.string(), z.number()]).optional(),
+});
+export type ClaudeTaskToolRecord = z.infer<typeof ClaudeTaskToolRecordSchema>;
+
 function normalizeTimestampMs(value: unknown): number | null {
   if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value;
   if (typeof value !== 'string') return null;
@@ -49,6 +67,30 @@ function normalizeClaudeTodoStatus(status: string): SessionWorkStateStatusV1 {
   if (status === 'in_progress') return 'active';
   if (status === 'completed') return 'complete';
   return 'unknown';
+}
+
+function normalizeClaudeTaskToolStatus(status: unknown, fallback: SessionWorkStateStatusV1): SessionWorkStateStatusV1 {
+  if (status === 'pending') return 'pending';
+  if (status === 'in_progress' || status === 'active' || status === 'running') return 'active';
+  if (status === 'completed' || status === 'complete') return 'complete';
+  if (status === 'failed' || status === 'error' || status === 'blocked') return 'blocked';
+  if (status === 'cancelled' || status === 'canceled' || status === 'stopped') return 'cancelled';
+  return fallback;
+}
+
+function readTaskToolTitle(record: ClaudeTaskToolInput): string | null {
+  return record.subject ?? record.title ?? record.content ?? record.description ?? record.activeForm ?? null;
+}
+
+function readTaskToolSummary(record: ClaudeTaskToolInput, title: string): string | null {
+  const summary = record.activeForm ?? record.description ?? null;
+  return summary && summary !== title ? summary : null;
+}
+
+function readTaskToolId(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
 }
 
 export function normalizeClaudeTaskEventToWorkStateItem(params: Readonly<{
@@ -75,6 +117,72 @@ export function normalizeClaudeTaskEventToWorkStateItem(params: Readonly<{
     ...(completedAt !== null ? { completedAt } : {}),
     updatedAt: params.updatedAt,
   };
+}
+
+export function normalizeClaudeTaskToolUseToWorkStateItem(params: Readonly<{
+  backendId: string;
+  agentId?: string;
+  updatedAt: number;
+  toolName: unknown;
+  toolUseId?: unknown;
+  input: unknown;
+}>): SessionWorkStateItemV1 | null {
+  if (params.toolName !== 'TaskCreate' && params.toolName !== 'TaskUpdate') return null;
+  const parsed = ClaudeTaskToolInputSchema.safeParse(params.input);
+  if (!parsed.success) return null;
+  if (parsed.data.status === 'deleted') return null;
+
+  const vendorRef = params.toolName === 'TaskCreate'
+    ? readTaskToolId(params.toolUseId)
+    : readTaskToolId(parsed.data.taskId);
+  if (!vendorRef) return null;
+
+  const normalizedVendorRef = params.toolName === 'TaskCreate' ? `tool_use:${vendorRef}` : vendorRef;
+  const title = readTaskToolTitle(parsed.data) ?? normalizedVendorRef;
+  const summary = readTaskToolSummary(parsed.data, title);
+
+  return {
+    id: buildVendorSessionWorkStateItemId('task', normalizedVendorRef),
+    kind: 'task',
+    origin: 'vendor',
+    status: normalizeClaudeTaskToolStatus(parsed.data.status, params.toolName === 'TaskCreate' ? 'pending' : 'unknown'),
+    title,
+    ...(summary ? { summary } : {}),
+    backendId: params.backendId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    vendorRef: normalizedVendorRef,
+    updatedAt: params.updatedAt,
+  };
+}
+
+export function normalizeClaudeTaskToolRecordsToWorkStateItems(params: Readonly<{
+  backendId: string;
+  agentId?: string;
+  updatedAt: number;
+  tasks: unknown;
+}>): SessionWorkStateItemV1[] {
+  const tasks = Array.isArray(params.tasks) ? params.tasks : [];
+  return tasks.flatMap((task, index): SessionWorkStateItemV1[] => {
+    const parsed = ClaudeTaskToolRecordSchema.safeParse(task);
+    if (!parsed.success || parsed.data.status === 'deleted') return [];
+    const vendorRef = readTaskToolId(parsed.data.id) ?? readTaskToolId(parsed.data.taskId);
+    if (!vendorRef) return [];
+    const title = readTaskToolTitle(parsed.data) ?? vendorRef;
+    const summary = readTaskToolSummary(parsed.data, title);
+    return [{
+      id: buildVendorSessionWorkStateItemId('task', vendorRef),
+      kind: 'task',
+      origin: 'vendor',
+      status: normalizeClaudeTaskToolStatus(parsed.data.status, 'unknown'),
+      title,
+      ...(summary ? { summary } : {}),
+      backendId: params.backendId,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      vendorRef,
+      order: index,
+      updatedAt: params.updatedAt,
+    }];
+  });
 }
 
 export function normalizeClaudeTodoWriteTodosToWorkStateItems(params: Readonly<{

@@ -348,7 +348,7 @@ const FEATURE_CATALOG_DEFINITION = {
   'providers.codex.appServer.goals': {
     description: 'Codex app-server native session goal controls and work-state projection.',
     defaultFailMode: 'fail_closed',
-    dependencies: ['sessions.direct'],
+    dependencies: [],
     representation: 'client',
   },
   'providers.codex.appServer.plugins': {

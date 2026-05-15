@@ -5,7 +5,7 @@ import { ActionUiPlacementSchema, type ActionUiPlacement } from './actionUiPlace
 import { ReviewStartInputSchema } from '../reviews/reviewStart.js';
 import { ActionInputPredicateSchema, type ActionInputPredicate } from './actionInputPredicates.js';
 import { MemorySearchQueryV1Schema } from '../memory/memorySearch.js';
-import { ApprovalRequestCreatedBySchema } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestCreatedBySchema, ApprovalRequestOriginV1Schema } from '../approvals/approvalRequestV1.js';
 import { PromptRegistryConfiguredSourceV1Schema } from '../promptLibrary/promptRegistriesV1.js';
 import { PromptAssetInstallModeV1Schema, PromptAssetScopeV1Schema } from '../promptLibrary/promptAssetsV1.js';
 import { BackendTargetKeySchema, BackendTargetRefSchema, parseBackendTargetKey } from '../backendTargets/backendTargetRef.js';
@@ -336,10 +336,14 @@ const SessionWaitIdleInputSchema = z.object({
 
 const SessionGoalSetInputSchema = z.object({
   sessionId: z.string().min(1),
-  objective: z.string().trim().min(1).max(4000),
+  objective: z.string().trim().min(1).max(4000).optional(),
   status: SessionWorkStateStatusV1Schema.optional(),
   tokenBudget: z.number().finite().positive().nullable().optional(),
-}).passthrough();
+}).passthrough().refine((value) => (
+  typeof value.objective === 'string'
+  || typeof value.status === 'string'
+  || Object.prototype.hasOwnProperty.call(value, 'tokenBudget')
+), { message: 'At least one goal mutation field is required' });
 
 const SessionCatalogListInputSchema = z.object({
   sessionId: z.string().min(1),
@@ -669,6 +673,7 @@ const ApprovalRequestCreateInputSchema = z.object({
   actionArgs: z.unknown(),
   summary: z.string().min(1),
   createdBy: ApprovalRequestCreatedBySchema,
+  origin: ApprovalRequestOriginV1Schema.optional(),
   preview: z.unknown().optional(),
 }).passthrough();
 
@@ -749,7 +754,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       ui_button: false,
       ui_slash_command: false,
       voice_tool: true,
-      voice_action_block: true,
+      voice_action_block: false,
       session_agent: true,
       mcp: true,
       cli: false,
@@ -1929,7 +1934,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       title: 'Set session goal',
       fields: [
         { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
-        { path: 'objective', title: 'Objective', widget: 'textarea', required: true },
+        { path: 'objective', title: 'Objective', widget: 'textarea' },
         { path: 'status', title: 'Status', widget: 'text' },
         { path: 'tokenBudget', title: 'Token budget', widget: 'text' },
       ],
