@@ -55,10 +55,8 @@ type SessionFolderAssignmentListResponse = {
 };
 
 type SessionFolderAssignmentSetResponse = {
-  assignment?: {
-    sessionId?: string;
-    folderId?: string | null;
-  };
+  sessionId?: string;
+  folderId?: string | null;
 };
 
 export function deriveServerIdFromUrl(url: string): string {
@@ -275,7 +273,7 @@ export async function setSessionFolderAssignment(params: Readonly<{
       timeoutMs: 20_000,
     },
   );
-  if (res.status !== 200 || res.data?.assignment?.sessionId !== params.sessionId) {
+  if (res.status !== 200 || res.data?.sessionId !== params.sessionId) {
     throw new Error(`Failed to set folder assignment for ${params.sessionId} (status=${res.status})`);
   }
 }

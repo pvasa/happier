@@ -10,6 +10,7 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { setUiFeatureToggle } from '../../src/testkit/uiE2e/setUiFeatureToggle';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { createTestAuthMtls } from '../../src/testkit/auth';
+import { registerMachineIdentity } from '../../src/testkit/machineIdentity';
 import { startForwardedHeaderProxy } from '../../src/testkit/uiE2e/forwardedHeaderProxy';
 import {
   createPlainSession,
@@ -167,6 +168,12 @@ test.describe('ui e2e: session folders drag and drop', () => {
       fingerprint: IDENTITY_HEADERS.fingerprint,
     });
     token = auth.token;
+    await registerMachineIdentity({
+      baseUrl: server.baseUrl,
+      token,
+      machineId: SEEDED_MACHINE_ID,
+      metadata: 'session-folders-drag-machine',
+    });
 
     ui = await startUiWeb({
       testDir: suiteDir,
@@ -192,10 +199,6 @@ test.describe('ui e2e: session folders drag and drop', () => {
   test('session folders drag supports root, nested, blocked, and scrolled drops', async ({ page }) => {
     test.setTimeout(900_000);
     if (!server || !uiBaseUrl || !token || !uiServerUrl) throw new Error('missing server/ui fixtures');
-
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
-    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
 
     const rootPath = repoRootDir();
     const serverId = deriveServerIdFromUrl(uiServerUrl);
@@ -236,6 +239,10 @@ test.describe('ui e2e: session folders drag and drop', () => {
       sessionId: nestedSessionId,
       folderId: FOLDER_ALPHA_ID,
     });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
+    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
 
     await setUiFeatureToggle({
       page,

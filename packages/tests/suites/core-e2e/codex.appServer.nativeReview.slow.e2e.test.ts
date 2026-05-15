@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 import {
   ExecutionRunActionResponseSchema,
@@ -10,13 +12,17 @@ import {
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { createRunDirs } from '../../src/testkit/runDir';
+import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
+import { createTestAuth } from '../../src/testkit/auth';
+import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { daemonControlPostJson } from '../../src/testkit/daemon/controlServerClient';
+import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 import { createUserScopedSocketCollector } from '../../src/testkit/socketClient';
 import { callLegacyEncryptedSessionRpc as callSessionRpc } from '../../src/testkit/sessionRpc';
 import { waitFor } from '../../src/testkit/timing';
 import {
   readFakeCodexAppServerRequestLog,
-  startCodexAppServerRemoteHarness,
-  type StartedCodexAppServerRemoteHarness,
+  writeFakeCodexAppServerScript,
 } from '../../src/testkit/codexAppServerRemoteHarness';
 import { fetchAllSidechainMessages } from '../../src/testkit/sessions';
 import { decryptLegacyBase64Normalized } from '../../src/testkit/decryptLegacyBase64Normalized';
@@ -35,26 +41,83 @@ function readCodexMessageText(record: unknown): string | null {
 }
 
 describe('core e2e: Codex app-server native review', () => {
-  let harness: StartedCodexAppServerRemoteHarness | null = null;
+  let server: StartedServer | null = null;
+  let daemon: StartedDaemon | null = null;
 
   afterEach(async () => {
-    await harness?.stop().catch(() => {});
-    harness = null;
+    await daemon?.stop().catch(() => {});
+    await server?.stop().catch(() => {});
+    daemon = null;
+    server = null;
   });
 
   it('routes Codex review runs through native review/start', async () => {
     const testDir = run.testDir(`codex-app-server-native-review-${randomUUID()}`);
-    harness = await startCodexAppServerRemoteHarness({
+    server = await startServerLight({
       testDir,
-      runId: run.runId,
-      testName: 'codex-app-server-native-review',
-      cliEnvOverrides: {
-        HAPPIER_SESSION_AUTOSTART_DAEMON: '0',
-        HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '0',
+      dbProvider: 'sqlite',
+      extraEnv: {
+        HAPPIER_E2E_PROVIDER_SKIP_SERVER_SHARED_DEPS_BUILD: '1',
       },
     });
+    const serverBaseUrl = server.baseUrl;
+    const auth = await createTestAuth(serverBaseUrl);
+    const daemonHomeDir = resolve(join(testDir, 'daemon-home'));
+    const workspaceDir = resolve(join(testDir, 'workspace'));
+    await mkdir(daemonHomeDir, { recursive: true });
+    await mkdir(workspaceDir, { recursive: true });
 
-    const { auth, requestLogPath, secret, serverBaseUrl, sessionId } = harness;
+    const secret = Uint8Array.from(randomBytes(32));
+    await seedCliAuthForServer({ cliHome: daemonHomeDir, serverUrl: serverBaseUrl, token: auth.token, secret });
+
+    const requestLogPath = resolve(join(testDir, 'fake-codex-app-server.requests.jsonl'));
+    const fakeAppServer = await writeFakeCodexAppServerScript({ dir: testDir, requestLogPath });
+    const codexEnv = {
+      CI: '1',
+      HAPPIER_VARIANT: 'dev',
+      HAPPIER_DISABLE_CAFFEINATE: '1',
+      HAPPIER_HOME_DIR: daemonHomeDir,
+      HAPPIER_SERVER_URL: serverBaseUrl,
+      HAPPIER_WEBAPP_URL: serverBaseUrl,
+      HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
+      HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '2000',
+      HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT: 'appServer',
+      HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+    };
+    const daemonEnv = {
+      ...process.env,
+      ...codexEnv,
+    };
+
+    daemon = await startTestDaemon({
+      testDir,
+      happyHomeDir: daemonHomeDir,
+      env: daemonEnv,
+    });
+    const controlToken = (daemon.state as { controlToken?: string }).controlToken;
+    const spawnRes = await daemonControlPostJson<{ success?: boolean; sessionId?: string }>({
+      port: daemon.state.httpPort,
+      path: '/spawn-session',
+      controlToken,
+      body: {
+        directory: workspaceDir,
+        agent: 'codex',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        codexBackendMode: 'appServer',
+        terminal: { mode: 'plain' },
+        environmentVariables: codexEnv,
+      },
+      timeoutMs: 60_000,
+    });
+
+    expect(spawnRes.status).toBe(200);
+    expect(spawnRes.data?.success).toBe(true);
+    const sessionId = spawnRes.data?.sessionId;
+    expect(typeof sessionId).toBe('string');
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      throw new Error('Missing sessionId from daemon spawn-session');
+    }
+
     const ui = createUserScopedSocketCollector(serverBaseUrl, auth.token);
     ui.connect();
 
@@ -110,13 +173,12 @@ describe('core e2e: Codex app-server native review', () => {
         threadId: expect.any(String),
         delivery: 'inline',
         target: expect.objectContaining({
-          custom: expect.objectContaining({
-            instructions: expect.stringContaining('Review the app-server native review integration.'),
-          }),
+          type: 'custom',
+          instructions: expect.stringContaining('Review the app-server native review integration.'),
         }),
       }));
 
-      let finished: ExecutionRunGetResponse | null = null;
+      let finished: ExecutionRunGetResponse | undefined;
       await waitFor(async () => {
         const res = await callSessionRpc({
           ui,
@@ -136,12 +198,16 @@ describe('core e2e: Codex app-server native review', () => {
         context: 'Codex native review execution run finishes',
       });
 
-      expect(finished?.run.status).toBe('succeeded');
-      expect(finished?.run.intent).toBe('review');
-      expect(finished?.structuredMeta?.kind).toBe('review_findings.v2');
-      expect(finished?.run.availableActionIds).toContain('review.triage');
+      const finishedRun = finished;
+      if (!finishedRun) {
+        throw new Error('Codex native review execution run did not finish');
+      }
+      expect(finishedRun.run.status).toBe('succeeded');
+      expect(finishedRun.run.intent).toBe('review');
+      expect(finishedRun.structuredMeta?.kind).toBe('review_findings.v2');
+      expect(finishedRun.run.availableActionIds).toContain('review.triage');
 
-      const payload = finished?.structuredMeta?.payload as { findings?: unknown[]; overviewMarkdown?: unknown } | undefined;
+      const payload = finishedRun.structuredMeta?.payload as { findings?: unknown[]; overviewMarkdown?: unknown } | undefined;
       expect(payload?.findings?.length ?? 0).toBe(1);
       expect(String(payload?.overviewMarkdown ?? '')).toContain(nativeReviewTextMarker);
 
