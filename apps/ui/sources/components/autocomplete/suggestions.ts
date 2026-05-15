@@ -185,6 +185,7 @@ export async function getCommandSuggestions(sessionId: string, query: string): P
             label: `/${cmd.command}`,
             description: cmd.description,
             rowHeight: COMMAND_SUGGESTION_ROW_HEIGHT,
+            ...(cmd.promptInvocation ? { promptInvocation: cmd.promptInvocation } : {}),
         }));
     } catch {
         return [];

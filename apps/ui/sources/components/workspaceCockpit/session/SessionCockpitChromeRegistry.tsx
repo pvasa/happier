@@ -10,13 +10,16 @@ export type SessionCockpitChromeRegistration = Readonly<{
 }>;
 
 type SessionCockpitChromeRegistryContextValue = Readonly<{
+    bottomChromeHeight: number;
     registration: SessionCockpitChromeRegistration | null;
     register: (registration: SessionCockpitChromeRegistration) => () => void;
+    setBottomChromeHeight: (height: number) => void;
 }>;
 
 const SessionCockpitChromeRegistryContext = React.createContext<SessionCockpitChromeRegistryContextValue | null>(null);
 
 export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children: React.ReactNode }>) {
+    const [bottomChromeHeight, setBottomChromeHeightState] = React.useState(0);
     const [registration, setRegistration] = React.useState<SessionCockpitChromeRegistration | null>(null);
     const latestRegistrationRef = React.useRef<SessionCockpitChromeRegistration | null>(null);
     const latestRegistrationTokenRef = React.useRef(0);
@@ -65,10 +68,19 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
         };
     }, []);
 
+    const setBottomChromeHeight = React.useCallback((height: number) => {
+        const nextHeight = Number.isFinite(height) ? Math.max(0, Math.round(height)) : 0;
+        setBottomChromeHeightState((currentHeight) => (
+            currentHeight === nextHeight ? currentHeight : nextHeight
+        ));
+    }, []);
+
     const value = React.useMemo(() => ({
+        bottomChromeHeight,
         registration,
         register,
-    }), [register, registration]);
+        setBottomChromeHeight,
+    }), [bottomChromeHeight, register, registration, setBottomChromeHeight]);
 
     return (
         <SessionCockpitChromeRegistryContext.Provider value={value}>
@@ -84,4 +96,13 @@ export function useSessionCockpitChromeRegistration(): SessionCockpitChromeRegis
 export function useSessionCockpitChromeRegister(): ((registration: SessionCockpitChromeRegistration) => () => void) {
     const context = React.useContext(SessionCockpitChromeRegistryContext);
     return context?.register ?? (() => () => {});
+}
+
+export function useSessionCockpitBottomChromeHeight(): number {
+    return React.useContext(SessionCockpitChromeRegistryContext)?.bottomChromeHeight ?? 0;
+}
+
+export function useSessionCockpitBottomChromeHeightSetter(): (height: number) => void {
+    const context = React.useContext(SessionCockpitChromeRegistryContext);
+    return context?.setBottomChromeHeight ?? (() => {});
 }

@@ -13,6 +13,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
 import { SessionsListContent } from '@/components/sessions/shell/SessionsList';
+import { readSessionIdFromPathname } from '@/components/sessions/shell/readSessionIdFromPathname';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
 import { SessionsListStorageChrome } from '@/components/sessions/shell/SessionsListStorageChrome';
 import { FABWide } from '@/components/ui/buttons/FABWide';
@@ -263,12 +264,13 @@ const HeaderRight = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
 export const MainView = React.memo(({ variant }: MainViewProps) => {
     const { theme } = useUnistyles();
     const { directSessionsEnabled, storageKind, setStorageKind } = useSessionListStorageKind();
-    const sessionListViewData = useVisibleSessionListViewData(variant === 'sidebar' ? storageKind : 'all');
-    const hasHiddenInactiveSessions = useHasHiddenInactiveSessions(variant === 'sidebar' ? storageKind : 'all');
-    const visibleSessionCount = countVisibleSessionListSessions(sessionListViewData);
     const isTablet = useIsTablet();
     const router = useRouter();
     const pathname = usePathname();
+    const activeSessionId = React.useMemo(() => readSessionIdFromPathname(pathname), [pathname]);
+    const sessionListViewData = useVisibleSessionListViewData(variant === 'sidebar' ? storageKind : 'all', { activeSessionId });
+    const hasHiddenInactiveSessions = useHasHiddenInactiveSessions(variant === 'sidebar' ? storageKind : 'all', { activeSessionId });
+    const visibleSessionCount = countVisibleSessionListSessions(sessionListViewData);
     const friendsEnabled = useFriendsEnabled();
     const inboxEnabled = useInboxAvailable();
     const voiceEnabled = useFeatureEnabled('voice');

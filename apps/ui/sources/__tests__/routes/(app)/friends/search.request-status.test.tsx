@@ -6,6 +6,8 @@ import { installRouteRootCommonModuleMocks } from '../../routeRootTestHelpers';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+type KeyboardControllerMockProps = React.PropsWithChildren<Record<string, unknown>>;
+
 installRouteRootCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -37,6 +39,15 @@ installRouteRootCommonModuleMocks({
         }).module;
     },
 });
+
+vi.mock('react-native-keyboard-controller', () => ({
+    KeyboardAwareScrollView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardAwareScrollView', props, children),
+    KeyboardAvoidingView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardAvoidingView', props, children),
+    KeyboardStickyView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardStickyView', props, children),
+}));
 
 vi.mock('@/hooks/friends/useRequireFriendsEnabled', () => ({
     useRequireFriendsEnabled: () => true,
@@ -87,6 +98,17 @@ vi.mock('@/components/ui/avatar/Avatar', () => ({
 }));
 
 describe('SearchFriendsScreen', () => {
+    it('keeps friend search inside the standard keyboard-aware scroll frame', async () => {
+        const { default: SearchFriendsScreen } = await import('@/app/(app)/friends/search');
+        const { KeyboardAwareScrollView } = await import('@/components/ui/keyboardAvoidance');
+        const screen = await renderScreen(<SearchFriendsScreen />);
+
+        const keyboardAwareList = screen.findByType(KeyboardAwareScrollView);
+        expect(keyboardAwareList.props.ScrollViewComponent).toBeTruthy();
+        expect(keyboardAwareList.props.keyboardShouldPersistTaps).toBe('handled');
+        expect(screen.findAllByType('KeyboardAvoidingView' as any)).toHaveLength(0);
+    });
+
     it('updates the user row status after sending a friend request', async () => {
         const { default: SearchFriendsScreen } = await import('@/app/(app)/friends/search');
         const screen = await renderScreen(<SearchFriendsScreen />);

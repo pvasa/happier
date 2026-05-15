@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sentryInitSpy = vi.fn<(...args: unknown[]) => void>(() => {});
 const sentryCaptureMessageSpy = vi.fn<(...args: unknown[]) => string>(() => 'sentry-test-event-id');
+const sentryAddBreadcrumbSpy = vi.fn<(...args: unknown[]) => void>(() => {});
 const sentryMobileReplayIntegrationSpy = vi.fn(() => ({
     name: 'mobileReplayIntegration',
     flush: (...args: unknown[]) => replayFlushSpy(...args),
@@ -18,6 +19,7 @@ const platformState = vi.hoisted(() => ({
 vi.mock('@sentry/react-native', () => ({
     init: (...args: unknown[]) => sentryInitSpy(...args),
     captureMessage: (...args: unknown[]) => sentryCaptureMessageSpy(...args),
+    addBreadcrumb: (...args: unknown[]) => sentryAddBreadcrumbSpy(...args),
     mobileReplayIntegration: () => sentryMobileReplayIntegrationSpy(),
     close: async () => {},
 }));
@@ -56,6 +58,7 @@ describe('utils/system/sentry (bug report replay)', () => {
     beforeEach(() => {
         sentryInitSpy.mockClear();
         sentryCaptureMessageSpy.mockClear();
+        sentryAddBreadcrumbSpy.mockClear();
         sentryMobileReplayIntegrationSpy.mockClear();
         replayFlushSpy.mockClear();
         platformState.os = 'ios';
@@ -97,6 +100,29 @@ describe('utils/system/sentry (bug report replay)', () => {
             eventId: 'sentry-test-event-id',
             replayId: 'replay-id-1',
         }));
+    });
+
+    it('adds breadcrumbs when crash reports are enabled', async () => {
+        const sentryModule = await import('./sentry') as typeof import('./sentry') & {
+            addBreadcrumbIfEnabled?: (breadcrumb: Readonly<{
+                category: string;
+                level: 'info';
+                data: Record<string, unknown>;
+            }>) => void;
+        };
+
+        sentryModule.addBreadcrumbIfEnabled?.({
+            category: 'theme.runtime',
+            level: 'info',
+            data: { phase: 'update-visual-theme' },
+        });
+
+        expect(sentryInitSpy).toHaveBeenCalledTimes(1);
+        expect(sentryAddBreadcrumbSpy).toHaveBeenCalledWith({
+            category: 'theme.runtime',
+            level: 'info',
+            data: { phase: 'update-visual-theme' },
+        });
     });
 
     it('disables replay on iOS 26 while keeping crash report events enabled', async () => {

@@ -98,6 +98,7 @@ const styles = StyleSheet.create((theme) => ({
         alignSelf: 'stretch',
         alignItems: 'stretch',
         justifyContent: 'flex-start',
+        textAlign: 'left',
     },
     highlight: {
         borderRadius: 8,

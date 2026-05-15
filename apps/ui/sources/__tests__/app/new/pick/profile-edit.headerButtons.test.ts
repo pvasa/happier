@@ -19,15 +19,35 @@ enableReactActEnvironment();
 type KeyboardAvoidingViewProps = Readonly<{
     children?: React.ReactNode;
 } & Record<string, unknown>>;
+type KeyboardControllerMockProps = React.PropsWithChildren<Record<string, unknown>>;
+
+const keyboardOffsetState = vi.hoisted(() => ({
+    headerHeight: 0,
+    platformOS: 'ios' as 'ios' | 'android',
+    statusBarHeight: 0,
+}));
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 vi.mock('expo-constants', () => ({
-    default: { statusBarHeight: 0 },
+    default: {
+        get statusBarHeight() {
+            return keyboardOffsetState.statusBarHeight;
+        },
+    },
 }));
 
 vi.mock('@react-navigation/elements', () => ({
-    useHeaderHeight: () => 0,
+    useHeaderHeight: () => keyboardOffsetState.headerHeight,
+}));
+
+vi.mock('react-native-keyboard-controller', () => ({
+    KeyboardAwareScrollView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardAwareScrollView', props, children),
+    KeyboardAvoidingView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardAvoidingView', props, children),
+    KeyboardStickyView: ({ children, ...props }: KeyboardControllerMockProps) =>
+        React.createElement('KeyboardStickyView', props, children),
 }));
 
 const routerMock = createRouterMock();
@@ -44,7 +64,11 @@ installPickerCommonModuleMocks({
         (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
             KeyboardAvoidingView: (props: KeyboardAvoidingViewProps) =>
                 React.createElement('KeyboardAvoidingView', props, props.children),
-            Platform: { OS: 'ios' },
+            Platform: {
+                get OS() {
+                    return keyboardOffsetState.platformOS;
+                },
+            },
             useWindowDimensions: () => ({ width: 390, height: 844 }),
         }),
     expoRouter: async () =>
@@ -119,6 +143,9 @@ describe('ProfileEditScreen (header buttons)', () => {
     });
 
     beforeEach(() => {
+        keyboardOffsetState.headerHeight = 0;
+        keyboardOffsetState.platformOS = 'ios';
+        keyboardOffsetState.statusBarHeight = 0;
         stackOptionsCapture.reset();
         navigationMock.getState = vi.fn(() => ({
             index: PICKER_NAV_STATE.index,
@@ -144,5 +171,28 @@ describe('ProfileEditScreen (header buttons)', () => {
         const headerRight = options?.headerRight;
         const saveButton = headerRight?.();
         expect(saveButton?.props?.disabled).toBe(true);
+    });
+
+    it('keeps the profile edit form inside the standard keyboard-aware screen frame', async () => {
+        const ProfileEditScreen = (await import('@/app/(app)/new/pick/profile-edit')).default;
+        const { KeyboardAwareScreen } = await import('@/components/ui/keyboardAvoidance');
+        const screen = await renderScreen(React.createElement(ProfileEditScreen));
+
+        const keyboardFrame = screen.findByType(KeyboardAwareScreen);
+        expect(keyboardFrame.props.mode).toBe('form');
+        expect(keyboardFrame.props.keyboardVerticalOffset).toBe(0);
+    });
+
+    it('does not apply the native header offset to Android keyboard avoidance', async () => {
+        keyboardOffsetState.platformOS = 'android';
+        keyboardOffsetState.statusBarHeight = 24;
+        keyboardOffsetState.headerHeight = 56;
+
+        const ProfileEditScreen = (await import('@/app/(app)/new/pick/profile-edit')).default;
+        const { KeyboardAwareScreen } = await import('@/components/ui/keyboardAvoidance');
+        const screen = await renderScreen(React.createElement(ProfileEditScreen));
+
+        const keyboardFrame = screen.findByType(KeyboardAwareScreen);
+        expect(keyboardFrame.props.keyboardVerticalOffset).toBe(0);
     });
 });

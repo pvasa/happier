@@ -39,6 +39,8 @@ const sessionDeleteSpy = vi.fn(async () => ({ success: true }));
 const modalAlertSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
 const applySessionListRenderablePatchesSpy = vi.fn();
+const createDefaultActionExecutorSpy = vi.fn<(options: unknown) => unknown>();
+const completeSessionForkNavigationSpy = vi.fn<(params: unknown) => Promise<void>>(async () => undefined);
 let hideInactiveSessions = false;
 let pinnedSessionKeysV1: unknown = null;
 let resolvedServerId = 'server-1';
@@ -222,7 +224,12 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     },
 }));
 vi.mock('@/hooks/server/useSessionExecutionRunsSupported', () => ({ useSessionExecutionRunsSupported: () => false }));
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({ createDefaultActionExecutor: () => ({}) }));
+vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
+    createDefaultActionExecutor: (options: unknown) => createDefaultActionExecutorSpy(options),
+}));
+vi.mock('@/components/sessions/transcript/forkContext/completeSessionForkNavigation', () => ({
+    completeSessionForkNavigation: (params: unknown) => completeSessionForkNavigationSpy(params),
+}));
 vi.mock(
     '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache',
     async (importOriginal) => {
@@ -331,6 +338,8 @@ describe('/session/[id]/info', () => {
         sessionDeleteSpy.mockClear();
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
+        createDefaultActionExecutorSpy.mockClear();
+        completeSessionForkNavigationSpy.mockClear();
         resolvedServerId = 'server-1';
         resolveServerIdForSessionIdFromLocalCacheSpy.mockClear();
         resolvePreferredServerIdForSessionIdSpy.mockClear();
@@ -383,6 +392,7 @@ describe('/session/[id]/info', () => {
         vi.clearAllMocks();
         useHappyActionMock.mockReset();
         useHappyActionMock.mockImplementation((fn: any) => [false, fn] as const);
+        createDefaultActionExecutorSpy.mockReturnValue({});
     });
 
     afterEach(() => {
@@ -431,6 +441,36 @@ describe('/session/[id]/info', () => {
         mockSessionId = ['session-2 '] as any;
         await renderInfoScreen();
         expect(useSessionSpy).toHaveBeenCalledWith('session-2');
+    });
+
+    it('routes forked child session opens through the shared fork completion helper with scoped hrefs', async () => {
+        mockServerId = 'server-b';
+        mockSession = {
+            id: 'session-1234567890abcdef',
+            active: false,
+            accessLevel: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {},
+        };
+
+        await renderInfoScreen();
+
+        const executorOptions = createDefaultActionExecutorSpy.mock.calls[0]?.[0] as any;
+        expect(executorOptions?.openSession).toEqual(expect.any(Function));
+
+        await executorOptions.openSession('child-session');
+
+        expect(completeSessionForkNavigationSpy).toHaveBeenCalledWith({
+            childSessionId: 'child-session',
+            parentSessionId: 'session-1234567890abcdef',
+            navigate: expect.any(Function),
+        });
+
+        const helperParams = completeSessionForkNavigationSpy.mock.calls[0]?.[0] as any;
+        helperParams.navigate('next-child');
+        expect(routerPushSpy).toHaveBeenCalledWith('/session/next-child?serverId=server-b');
     });
 
     it('fails closed and hides the handoff quick action when direct peer truth is runtime-unknown and server-routed fallback would make the UI untruthful', async () => {

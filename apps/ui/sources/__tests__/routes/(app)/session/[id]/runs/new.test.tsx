@@ -41,6 +41,7 @@ let sessionMachineReachabilityMock: any = {
     machineRpcTargetAvailable: true,
 };
 let resumeCapabilityOptionsMock: any = {};
+let machineTargetMock: { machineId: string; basePath: string | null } | null = null;
 const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => hydrateReady);
 const resumeSessionSpy = vi.fn(async () => ({ type: 'success', sessionId: 'session-1' }));
 let activeServerSnapshotMock: any = { serverId: 'server-active', serverUrl: 'http://server-active.test' };
@@ -100,6 +101,10 @@ function findStartButton(screen: RenderedNewRunScreen) {
     const button = screen.findByTestId('execution-run-new-start-button');
     expect(button).toBeTruthy();
     return button!;
+}
+
+function countProgressIndicators(screen: RenderedNewRunScreen): number {
+    return screen.tree.findAll((node: any) => node.props?.accessibilityRole === 'progressbar').length;
 }
 
 function translateText(key: string, params?: Record<string, unknown>) {
@@ -196,7 +201,10 @@ installSessionRouteCommonModuleMocks({
     },
 });
 
-vi.mock('@/components/ui/layout/layout', () => ({ layout: { maxWidth: 999 } }));
+vi.mock('@/components/ui/layout/layout', () => ({
+    layout: { maxWidth: 999 },
+    useLayoutMaxWidth: () => 999,
+}));
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
@@ -299,6 +307,9 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
 vi.mock('@/sync/ops/sessions', () => ({
     resumeSession: (...args: Parameters<typeof resumeSessionSpy>) => resumeSessionSpy(...args),
 }));
+vi.mock('@/sync/ops/sessionMachineTarget', () => ({
+    readMachineTargetForSession: () => machineTargetMock,
+}));
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => activeServerSnapshotMock,
     subscribeActiveServer: () => () => {},
@@ -351,6 +362,7 @@ describe('Session New Run Screen', () => {
             machineRpcTargetAvailable: true,
         };
         resumeCapabilityOptionsMock = {};
+        machineTargetMock = null;
         hydrateSpy.mockClear();
         resumeSessionSpy.mockClear();
         useMachineCapabilitiesCacheSpy.mockClear();
@@ -371,7 +383,7 @@ describe('Session New Run Screen', () => {
         hydrateReady = false;
         localSearchParamsMock = { id: 'session-1', intent: 'review', serverId: 'server-b' };
         const screen = await renderNewRunScreen();
-        expect(screen.findAllByType('ActivityIndicator').length).toBeGreaterThan(0);
+        expect(countProgressIndicators(screen)).toBeGreaterThan(0);
         expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionNewRunScreen.hydrate', { serverId: 'server-b' });
         hydrateReady = true;
     });
@@ -422,7 +434,7 @@ describe('Session New Run Screen', () => {
 
         const screen = await renderNewRunScreen();
 
-        expect(screen.findAllByType('ActivityIndicator').length).toBeGreaterThan(0);
+        expect(countProgressIndicators(screen)).toBeGreaterThan(0);
         expect(screen.findAllByType('TextInput')).toHaveLength(0);
     });
 
@@ -434,7 +446,7 @@ describe('Session New Run Screen', () => {
 
         const screen = await renderNewRunScreen();
 
-        expect(screen.findAllByType('ActivityIndicator').length).toBeGreaterThan(0);
+        expect(countProgressIndicators(screen)).toBeGreaterThan(0);
         expect(screen.findAllByType('TextInput')).toHaveLength(0);
     });
 
@@ -484,6 +496,7 @@ describe('Session New Run Screen', () => {
             claude: { available: true, intents: ['review', 'plan', 'delegate', 'voice_agent'] },
         };
         sessionServerIdStore.set('server-owned');
+        machineTargetMock = { machineId: 'machine-1', basePath: '/workspace/repo' };
         localSearchParamsMock = { id: 'session-1', intent: 'review' };
 
         const screen = await renderNewRunScreen();
@@ -757,7 +770,8 @@ describe('Session New Run Screen', () => {
         );
     });
 
-    it('disables start and shows a field-aware validation hint when review instructions are empty', async () => {
+    it('allows starting a review run when review instructions are empty', async () => {
+        startRunSpy.mockClear();
         localSearchParamsMock = { id: 'session-1', intent: 'review' };
 
         const screen = await renderNewRunScreen();
@@ -767,10 +781,21 @@ describe('Session New Run Screen', () => {
         await pressTestInstanceAsync(selectClaude, 'backend claude');
 
         const startButton = findStartButton(screen);
-        expect(startButton.props.disabled).toBe(true);
+        expect(startButton.props.disabled).toBe(false);
+        await screen.pressByTestIdAsync('execution-run-new-start-button');
 
-        expect(screen.getTextContent()).toContain('Instructions is required.');
-        expect(startRunSpy).not.toHaveBeenCalled();
+        expect(screen.getTextContent()).not.toContain('Instructions is required.');
+        expect(startRunSpy).toHaveBeenCalledWith(
+            'session-1',
+            expect.objectContaining({
+                intent: 'review',
+                backendId: 'claude',
+                instructions: '',
+                permissionMode: 'read-only',
+                changeType: 'uncommitted',
+                base: { kind: 'none' },
+            }),
+        );
     });
 
     it('shows an inline error when the execution run start fanout returns a failed result', async () => {

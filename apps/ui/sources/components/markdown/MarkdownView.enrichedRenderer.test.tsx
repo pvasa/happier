@@ -166,6 +166,7 @@ describe('MarkdownView (enriched renderer)', () => {
             width: '100%',
             alignSelf: 'stretch',
             alignItems: 'stretch',
+            textAlign: 'left',
         });
         expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(1);
     });

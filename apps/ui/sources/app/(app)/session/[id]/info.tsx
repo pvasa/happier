@@ -59,6 +59,7 @@ import { resolveSessionReadStateAction } from '@/sync/domains/session/readState/
 import { createSessionReadStateInfoItemProps } from '@/components/sessions/actions/sessionReadStateActionItems';
 import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
 import { storeTempData } from '@/utils/sessions/tempDataStore';
+import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
 
 function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandoff, runtimeAvailability, routeScope }: Readonly<{
     session: Session;
@@ -95,11 +96,13 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const executor = React.useMemo(
         () => createDefaultActionExecutor({
             resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
-            openSession: (childSessionId) => {
-                router.push(routeScope.buildHref(childSessionId) as any);
-            },
+            openSession: (childSessionId) => completeSessionForkNavigation({
+                childSessionId,
+                parentSessionId: session.id,
+                navigate: (targetSessionId) => router.push(routeScope.buildHref(targetSessionId) as any),
+            }),
         }),
-        [routeScope, router],
+        [routeScope, router, session.id],
     );
 
     const forkActionEnabled = React.useMemo(() => {

@@ -36,7 +36,7 @@ describe('resolveAgentUiBehaviorFromFlavor', () => {
         expect(behavior?.sessionUsage?.supportsExactContextUsageBadge).toBe(false);
     });
 
-    it('exposes editable goals only for codex app-server sessions', () => {
+    it('exposes editable goals for explicit codex app-server sessions and rejects explicit alternate modes', () => {
         expect(supportsEditableSessionGoals({
             agentId: 'codex',
             session: createRegistryBehaviorSession({
@@ -56,6 +56,47 @@ describe('resolveAgentUiBehaviorFromFlavor', () => {
                 codexBackendMode: 'acp',
             }),
         })).toBe(false);
+    });
+
+    it('allows live codex sessions without persisted runtime identity to attempt native goal controls', () => {
+        expect(supportsEditableSessionGoals({
+            agentId: 'codex',
+            session: createRegistryBehaviorSession({
+                flavor: 'codex',
+                path: '/repo',
+                host: 'host',
+            }),
+        })).toBe(true);
+    });
+
+    it('allows codex sessions with a native goal projection to edit the goal after runtime metadata is missing', () => {
+        expect(supportsEditableSessionGoals({
+            agentId: 'codex',
+            session: {
+                ...createRegistryBehaviorSession({
+                    flavor: 'codex',
+                    path: '/repo',
+                    host: 'host',
+                    sessionWorkStateV1: {
+                        v: 1,
+                        backendId: 'codex',
+                        updatedAt: 10,
+                        primaryItemId: 'goal:thread-1',
+                        items: [
+                            {
+                                id: 'goal:thread-1',
+                                kind: 'goal',
+                                origin: 'vendor',
+                                status: 'active',
+                                title: 'Ship goals',
+                                updatedAt: 10,
+                            },
+                        ],
+                    },
+                }),
+                active: false,
+            },
+        })).toBe(true);
     });
 
     it('uses the generic codex-decision footer behavior for opencode-family flavors', () => {

@@ -1,4 +1,5 @@
 import type * as React from 'react';
+import type { PromptInvocationSuggestionMetadata } from '@/sync/domains/input/slashCommands/promptInvocationSuggestion';
 
 export type AutocompleteStructuredInput =
     | Readonly<{
@@ -26,4 +27,5 @@ export type AutocompleteSuggestion = Readonly<{
     component?: React.ElementType;
     rowHeight?: number;
     structuredInput?: AutocompleteStructuredInput;
+    promptInvocation?: PromptInvocationSuggestionMetadata;
 }>;

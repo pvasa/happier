@@ -16,6 +16,7 @@ const sessionListState = vi.hoisted(() => ({
 }));
 const sessionListHookState = vi.hoisted(() => ({
     useVisibleSessionListViewDataCalls: 0,
+    visibleSessionListViewDataOptions: [] as Array<{ activeSessionId?: string | null } | undefined>,
 }));
 const emptyStateState = vi.hoisted(() => ({
     hasHiddenInactiveSessions: false,
@@ -31,6 +32,9 @@ const localSettingsState = vi.hoisted(() => ({
 const platformState = vi.hoisted(() => ({
     isTablet: true,
 }));
+const routerState = vi.hoisted(() => ({
+    pathname: '/',
+}));
 const tabState = vi.hoisted(() => ({
     activeTab: 'sessions' as 'sessions' | 'inbox' | 'friends' | 'settings',
     setActiveTab: vi.fn(async () => {}),
@@ -41,7 +45,7 @@ installNavigationShellCommonModuleMocks({
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const expoRouterMock = createExpoRouterMock({
             router: { push: routerPushSpy, replace: routerReplaceSpy },
-            pathname: '/',
+            pathname: () => routerState.pathname,
         });
         return expoRouterMock.module;
     },
@@ -66,8 +70,9 @@ vi.mock('@expo/vector-icons', () => ({
 }));
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
-    useVisibleSessionListViewData: () => {
+    useVisibleSessionListViewData: (_storageKind?: string, options?: { activeSessionId?: string | null }) => {
         sessionListHookState.useVisibleSessionListViewDataCalls += 1;
+        sessionListHookState.visibleSessionListViewDataOptions.push(options);
         return sessionListState.data;
     },
     useHasHiddenInactiveSessions: () => emptyStateState.hasHiddenInactiveSessions,
@@ -198,10 +203,12 @@ describe('MainView sidebar actions', () => {
         setSessionsListStorageTabSpy.mockReset();
         sessionListState.data = [];
         sessionListHookState.useVisibleSessionListViewDataCalls = 0;
+        sessionListHookState.visibleSessionListViewDataOptions = [];
         emptyStateState.hasHiddenInactiveSessions = false;
         directSessionsFeatureState.enabled = false;
         localSettingsState.sessionsListStorageTab = 'persisted';
         platformState.isTablet = true;
+        routerState.pathname = '/';
     });
 
     beforeAll(async () => {
@@ -252,6 +259,20 @@ describe('MainView sidebar actions', () => {
         const list = screen.tree.findByType('SessionsListContent');
         expect(list.props.data).toBe(sessionListState.data);
         expect(list.props.storageKind).toBe('persisted');
+    });
+
+    it('passes the active route session into the sidebar session list data hook', async () => {
+        routerState.pathname = '/session/session-2';
+        sessionListState.data = [{
+            type: 'session',
+            session: { id: 'session-2' },
+        }];
+
+        await renderScreen(<MainView variant="sidebar" />);
+
+        expect(sessionListHookState.visibleSessionListViewDataOptions).toEqual([
+            { activeSessionId: 'session-2' },
+        ]);
     });
 
     it('does not replay a stale settings tab state when the root sessions route remounts', async () => {
