@@ -94,9 +94,14 @@ export async function openNewSessionMachineSelection(
   const machineChipCount = await machineChip.count();
 
   if (machineChipCount > 0) {
-    await machineChip.click();
-    if (await waitForCount(params.page, machineOptions, 1, popoverWaitMs)) {
-      return 'picker_open';
+    try {
+      await machineChip.click({ timeout: 5_000 });
+      if (await waitForCount(params.page, machineOptions, 1, popoverWaitMs)) {
+        return 'picker_open';
+      }
+    } catch {
+      // The route picker is the canonical fallback when the inline composer chip
+      // is temporarily covered by an animation or overlay.
     }
   }
 

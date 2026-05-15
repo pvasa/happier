@@ -140,4 +140,23 @@ describe('startCodexAppServerRemoteHarness', () => {
       await harness.stop();
     }
   });
+
+  it('can stop only the spawned Codex runtime while keeping the test server alive', async () => {
+    const { startCodexAppServerRemoteHarness } = await import('./codexAppServerRemoteHarness');
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-codex-app-server-harness-runtime-stop-'));
+
+    const harness = await startCodexAppServerRemoteHarness({
+      testDir,
+      runId: 'run-1',
+      testName: 'codex-app-server-harness-runtime-stop',
+    });
+
+    try {
+      await harness.stopRuntime();
+      expect(events).toContain('stop-proc');
+      expect(events).not.toContain('stop-server');
+    } finally {
+      await harness.stop();
+    }
+  });
 });

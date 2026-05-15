@@ -23,9 +23,9 @@ async function maybeDismissWebModal(params: Readonly<{ page: Page; timeoutMs: nu
 }
 
 export async function approveTerminalConnect(params: Readonly<{ page: Page }>): Promise<void> {
-  const approveByTestId = params.page.getByTestId('terminal-connect-approve');
+  const approveByTestId = params.page.locator('[data-testid="terminal-connect-approve"]:visible').first();
   if ((await approveByTestId.count()) > 0) {
-    await expect(approveByTestId).toHaveCount(1, { timeout: 60_000 });
+    await expect(approveByTestId).toBeVisible({ timeout: 60_000 });
     await approveByTestId.click();
   } else {
     const approveByRole = params.page.getByRole('button', { name: 'Accept Connection' });

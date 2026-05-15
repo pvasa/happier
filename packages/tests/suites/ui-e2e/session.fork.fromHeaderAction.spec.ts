@@ -6,12 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
-import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { createSessionFromNewSessionComposer } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -122,46 +122,23 @@ test.describe('ui e2e: session fork from header action menu', () => {
 
     const testDir = resolve(join(suiteDir, 't1-fork-header'));
     await mkdir(testDir, { recursive: true });
-
-    const cliLogin: StartedCliTerminalConnect = await startCliAuthLoginForTerminalConnect({
-      testDir,
-      cliHomeDir,
-      serverUrl: server.baseUrl,
-      webappUrl: uiBaseUrl,
-      env: {
-        ...process.env,
-        HOME: cliHomeDir,
-        CI: '1',
-        HAPPIER_DISABLE_CAFFEINATE: '1',
-        HAPPIER_VARIANT: 'dev',
-      },
-    });
-
-    await page.goto(cliLogin.connectUrl, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId('terminal-connect-approve').click();
-    await cliLogin.waitForSuccess();
-    await cliLogin.stop().catch(() => {});
-
     const fakeClaudeLogPath = resolve(join(testDir, 'fake-claude.jsonl'));
     const fakeClaudePath = fakeClaudeFixturePath();
 
-    daemon = await startTestDaemon({
+    daemon = await authenticateAndStartDaemon({
+      page,
       testDir,
-      happyHomeDir: cliHomeDir,
-      env: {
+      cliHomeDir,
+      serverUrl: server.baseUrl,
+      uiBaseUrl,
+      extraEnv: {
         ...process.env,
         HOME: cliHomeDir,
-        CI: '1',
-        HAPPIER_HOME_DIR: cliHomeDir,
-        HAPPIER_SERVER_URL: server.baseUrl,
-        HAPPIER_WEBAPP_URL: uiBaseUrl,
-        HAPPIER_DISABLE_CAFFEINATE: '1',
-        HAPPIER_VARIANT: 'dev',
         HAPPIER_CLAUDE_PATH: fakeClaudePath,
         HAPPIER_E2E_FAKE_CLAUDE_LOG: fakeClaudeLogPath,
         HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID: `fake-claude-session-${run.runId}`,
         HAPPIER_E2E_FAKE_CLAUDE_INVOCATION_ID: `fake-claude-invocation-${run.runId}`,
+        HAPPIER_E2E_FAKE_CLAUDE_SCENARIO: 'transcript-activity-feed',
       },
     });
 
@@ -171,7 +148,8 @@ test.describe('ui e2e: session fork from header action menu', () => {
 
     await page.goto(`${uiBaseUrl}/session/${parentSessionId}`, { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('transcript-chat-list')).toHaveCount(1, { timeout: 120_000 });
-    await expect(page.getByText('FAKE_CLAUDE_OK_1')).toHaveCount(1, { timeout: 180_000 });
+    await expect(page.getByText(/FAKE_TRANSCRIPT_ACTIVITY_FEED_DONE_1/)).toHaveCount(1, { timeout: 180_000 });
+    await expect(page.getByTestId('transcript-tool-calls-group')).toHaveCount(1, { timeout: 120_000 });
 
     // Ensure replay-fork is enabled so the session-level fork action is available on non-native providers.
     await page.goto(`${uiBaseUrl}/settings/session`, { waitUntil: 'domcontentloaded' });
@@ -187,6 +165,15 @@ test.describe('ui e2e: session fork from header action menu', () => {
       }
     } else {
       await replayItem.click();
+    }
+    const groupedToolCallsItem = page.getByTestId('settings-session-transcript-tool-calls-group');
+    if ((await groupedToolCallsItem.count()) > 0) {
+      const groupedToolCallsSwitch = groupedToolCallsItem.locator('input[type="checkbox"]').first();
+      const checked = await groupedToolCallsSwitch.isChecked().catch(() => false);
+      if (!checked) {
+        await groupedToolCallsItem.click();
+        await expect(groupedToolCallsSwitch).toBeChecked({ timeout: 60_000 });
+      }
     }
 
     await page.goto(`${uiBaseUrl}/session/${parentSessionId}`, { waitUntil: 'domcontentloaded' });
@@ -212,5 +199,7 @@ test.describe('ui e2e: session fork from header action menu', () => {
 
     const transcript = page.getByTestId('transcript-chat-list');
     await expect(transcript.locator(`[data-testid=\"transcript-fork-divider:${parentSessionId}:${childSessionId}\"]`)).toHaveCount(1, { timeout: 120_000 });
+    const groupedToolCallRows = transcript.locator('[data-testid="transcript-tool-calls-group"]');
+    expect(await groupedToolCallRows.count()).toBeGreaterThan(0);
   });
 });
