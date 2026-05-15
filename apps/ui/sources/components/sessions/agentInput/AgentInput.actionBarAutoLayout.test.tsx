@@ -14,6 +14,7 @@ vi.mock('expo-haptics', () => ({
 }));
 
 const keyboardMockState = vi.hoisted(() => ({
+    callCount: 0,
     height: 0,
 }));
 
@@ -23,8 +24,22 @@ const layoutMockState = vi.hoisted(() => ({
     height: 800,
 }));
 
+const multiTextInputMockState = vi.hoisted(() => ({
+    renderCount: 0,
+}));
+
 vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
-    useKeyboardHeight: () => keyboardMockState.height,
+    useKeyboardHeight: () => {
+        keyboardMockState.callCount += 1;
+        return keyboardMockState.height;
+    },
+}));
+
+vi.mock('@/components/ui/forms/MultiTextInput', () => ({
+    MultiTextInput: (props: Record<string, unknown>) => {
+        multiTextInputMockState.renderCount += 1;
+        return React.createElement('MultiTextInput', props, null);
+    },
 }));
 
 let storageSettings: Settings = {
@@ -89,6 +104,7 @@ installAgentInputCommonModuleMocks({
 
 describe('AgentInput (action bar auto layout)', () => {
     beforeEach(() => {
+        keyboardMockState.callCount = 0;
         keyboardMockState.height = 0;
         layoutMockState.platform = 'ios';
         layoutMockState.width = 700;
@@ -98,6 +114,33 @@ describe('AgentInput (action bar auto layout)', () => {
             agentInputActionBarLayout: 'auto',
             agentInputChipDensity: 'labels',
         };
+        multiTextInputMockState.renderCount = 0;
+    });
+
+    it('does not subscribe to passive keyboard height while rendering the native composer', async () => {
+        layoutMockState.platform = 'ios';
+        keyboardMockState.height = 320;
+        vi.resetModules();
+        const { AgentInput } = await import('./AgentInput');
+
+        await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                onPermissionClick={() => {}}
+                onMachineClick={() => {}}
+                machineName="Builder"
+                onPathClick={() => {}}
+                currentPath="/tmp"
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                maxPanelHeight={360}
+            />,
+        );
+
+        expect(keyboardMockState.callCount).toBe(0);
     });
 
     it('uses the scrollable action bar layout in auto mode on sub-tablet widths', async () => {
@@ -198,5 +241,48 @@ describe('AgentInput (action bar auto layout)', () => {
         const textNodes = pathChip.findAll((node: any) => node?.type === 'Text');
         expect(textNodes.length).toBeGreaterThan(0);
         storageSettings = { ...storageSettings, agentInputChipDensity: 'labels' };
+    });
+
+    it('ignores fractional duplicate layout measurements that resolve to the same pixel', async () => {
+        keyboardMockState.height = 320;
+        vi.resetModules();
+        const { act } = await import('react-test-renderer');
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                onPermissionClick={() => {}}
+                onMachineClick={() => {}}
+                machineName="Builder"
+                onPathClick={() => {}}
+                currentPath="/tmp"
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+            />,
+        );
+
+        const panel = screen.tree.root.findByProps({ testID: 'agent-input-drop-zone' });
+        const input = screen.tree.root.findByType('MultiTextInput');
+        const inputContainer = input.parent;
+
+        await act(async () => {
+            panel.props.onLayout({ nativeEvent: { layout: { height: 170.2 } } });
+            inputContainer?.props.onLayout({ nativeEvent: { layout: { height: 60.2 } } });
+            input.props.onLayout({ nativeEvent: { layout: { height: 52.2 } } });
+        });
+
+        const renderCountAfterInitialMeasurements = multiTextInputMockState.renderCount;
+
+        await act(async () => {
+            panel.props.onLayout({ nativeEvent: { layout: { height: 170.8 } } });
+            inputContainer?.props.onLayout({ nativeEvent: { layout: { height: 60.8 } } });
+            input.props.onLayout({ nativeEvent: { layout: { height: 52.8 } } });
+        });
+
+        expect(multiTextInputMockState.renderCount).toBe(renderCountAfterInitialMeasurements);
     });
 });

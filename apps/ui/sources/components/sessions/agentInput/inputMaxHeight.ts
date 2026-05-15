@@ -1,5 +1,6 @@
 export function clampNumber(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
+    const effectiveMin = Math.min(min, max);
+    return Math.max(effectiveMin, Math.min(max, value));
 }
 
 export function computeAvailableHeight(screenHeight: number, keyboardHeight: number, reservedHeight = 0): number {
@@ -31,11 +32,8 @@ export function computeMeasuredPanelInputMaxHeight(params: {
 
     const fixedChromeHeight = Math.max(0, safePanelHeight - safeInputContainerHeight);
     const inputContainerChromeHeight = Math.max(0, safeInputContainerHeight - safeInputViewportHeight);
-    return clampNumber(
-        Math.round(safePanelMaxHeight - fixedChromeHeight - inputContainerChromeHeight),
-        120,
-        Math.max(120, Math.round(safePanelMaxHeight)),
-    );
+    const availableInputHeight = Math.max(0, Math.round(safePanelMaxHeight - fixedChromeHeight - inputContainerChromeHeight));
+    return clampNumber(availableInputHeight, 120, availableInputHeight);
 }
 
 export function computeAgentInputDefaultMaxHeight(params: {
@@ -81,7 +79,8 @@ export function computeAgentInputKeyboardOpenPanelMaxHeight(params: {
 }): number | undefined {
     const available = computeAvailableHeight(params.screenHeight, params.keyboardHeight);
     if (available <= 0 || params.keyboardHeight <= 0) return undefined;
-    return clampNumber(Math.round(available - 16), 220, 680);
+    const availablePanelHeight = Math.max(0, Math.round(available - 16));
+    return clampNumber(availablePanelHeight, 220, Math.min(680, availablePanelHeight));
 }
 
 export function computeAgentInputKeyboardOpenVariableSectionMaxHeight(params: {
@@ -90,5 +89,6 @@ export function computeAgentInputKeyboardOpenVariableSectionMaxHeight(params: {
 }): number {
     const safePanel = Number.isFinite(params.panelMaxHeight) ? Math.max(0, params.panelMaxHeight) : 0;
     const safeFooter = Number.isFinite(params.footerHeight) ? Math.max(0, Math.trunc(params.footerHeight)) : 0;
-    return clampNumber(safePanel - safeFooter, 120, safePanel || 120);
+    const availableVariableSectionHeight = Math.max(0, safePanel - safeFooter);
+    return clampNumber(availableVariableSectionHeight, 120, availableVariableSectionHeight);
 }

@@ -56,8 +56,6 @@ installNewSessionComponentsCommonModuleMocks({
 });
 
 vi.mock('react-native-keyboard-controller', () => ({
-    KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('KeyboardAvoidingView', props, props.children),
     useKeyboardHandler: (...args: any[]) => useKeyboardHandlerMock(...args),
     useReanimatedKeyboardAnimation: () => ({
         height: { value: 240 },
@@ -95,6 +93,20 @@ vi.mock('@/components/ui/popover', () => ({
         React.createElement(React.Fragment, null, props.children),
 }));
 
+vi.mock('@/components/sessions/keyboardAvoidance', () => ({
+    ComposerKeyboardScaffold: (props: Record<string, unknown> & {
+        children?: React.ReactNode;
+        composer?: React.ReactNode;
+    }) => React.createElement(
+        'ComposerKeyboardScaffold',
+        props,
+        props.children,
+        props.composer,
+    ),
+    useComposerAvailablePanelHeight: () => 480,
+    useComposerKeyboardLayoutContext: () => null,
+}));
+
 vi.mock('@/components/sessions/agentInput', () => ({
     AgentInput: AgentInputMock,
 }));
@@ -114,22 +126,6 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         if (typeof style === 'number') return {};
         if (typeof style === 'object') return style as Record<string, unknown>;
         return {};
-    }
-
-    function getTranslateY(style: unknown): number | null {
-        const transform = flattenStyle(style).transform;
-        if (!Array.isArray(transform)) return null;
-        for (const entry of transform) {
-            if (
-                entry
-                && typeof entry === 'object'
-                && 'translateY' in entry
-                && typeof entry.translateY === 'number'
-            ) {
-                return entry.translateY;
-            }
-        }
-        return null;
     }
 
     it('passes modelOptions to AgentInput as modelOptionsOverride', async () => {
@@ -195,7 +191,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         }
     });
 
-    it('uses translated iOS keyboard avoidance so the whole composer can move above the keyboard', async () => {
+    it('renders through the shared keyboard scaffold so the whole composer can move above the keyboard', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
         AgentInputMock.mockClear();
@@ -235,10 +231,10 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                         selectedProfileId: null,
                     } as any))).tree;
 
-            const keyboardView = tree.root.findByType('KeyboardAvoidingView');
-            expect(keyboardView.props.behavior).toBe('translate-with-padding');
-            expect(keyboardView.props.automaticOffset).toBeUndefined();
-            expect(keyboardView.props.keyboardVerticalOffset).toBe(44);
+            const scaffold = tree.root.findByType('ComposerKeyboardScaffold');
+            expect(scaffold.props.mode).toBe('newSession');
+            expect(scaffold.props.headerHeight).toBe(44);
+            expect(scaffold.props.safeAreaBottom).toBe(34);
 
             const dismissSpacer = tree.root.findAllByType('Pressable').find((node) => {
                 return flattenStyle(node.props.style).flex === 1;
@@ -253,7 +249,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         }
     });
 
-    it('passes a measured max panel height to AgentInput on simple mobile layouts', async () => {
+    it('passes the scaffold available panel height to AgentInput on simple mobile layouts', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
         AgentInputMock.mockClear();
@@ -292,24 +288,6 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                         useProfiles: false,
                         selectedProfileId: null,
                     } as any))).tree;
-
-            const layoutHost = tree.root.findAllByType('View').find((node) => {
-                const style = flattenStyle(node.props.style);
-                return typeof node.props.onLayout === 'function'
-                    && style.flex === 1
-                    && style.justifyContent === 'flex-end';
-            });
-
-            expect(layoutHost).toBeTruthy();
-
-            act(() => {
-                invokeTestInstanceHandler(
-                    layoutHost!,
-                    'onLayout',
-                    { nativeEvent: { layout: { width: 390, height: 500, x: 0, y: 0 } } },
-                    'new-session-available-height',
-                );
-            });
 
             const latestCall = AgentInputMock.mock.calls.at(-1);
             const latestProps = (latestCall?.[0] ?? {}) as any;
@@ -379,7 +357,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         }
     });
 
-    it('uses the native keyboard-shift host on Android so the whole composer can move above the keyboard', async () => {
+    it('uses the same shared keyboard scaffold on Android so the whole composer can move above the keyboard', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
         platformOs = 'android';
 
@@ -420,12 +398,8 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                     } as any))).tree;
 
             expect(tree.root.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
-            const composerHostTranslateY = tree.root
-                .findAllByType('AnimatedView')
-                .map((node) => getTranslateY(node.props.style))
-                .find((translateY) => translateY !== null);
-            expect(composerHostTranslateY).toBe(-240);
-            expect(useKeyboardHandlerMock).toHaveBeenCalled();
+            const scaffold = tree.root.findByType('ComposerKeyboardScaffold');
+            expect(scaffold.props.mode).toBe('newSession');
         } finally {
             act(() => {
                 tree?.unmount();

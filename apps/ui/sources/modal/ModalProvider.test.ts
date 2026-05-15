@@ -123,6 +123,36 @@ describe('ModalProvider', () => {
         expect(top?.props.zIndexBase).toBeGreaterThan(bottom?.props.zIndexBase);
     });
 
+    it('exposes modal keyboard-lift suppression while the modal stack is active', async () => {
+        const { ModalProvider, useModal } = await import('./ModalProvider');
+        const { Modal } = await import('./ModalManager');
+
+        function SuppressionProbe() {
+            const modal = useModal();
+            return React.createElement('SuppressionProbe', {
+                suppressed: modal.isKeyboardLiftSuppressedByModal,
+            });
+        }
+
+        const screen = await renderScreen(
+            React.createElement(
+                ModalProvider,
+                null,
+                React.createElement(SuppressionProbe),
+            ),
+        );
+
+        showCustomModal(Modal, DummyModalA);
+
+        expect(screen.findByType('SuppressionProbe' as any).props.suppressed).toBe(true);
+
+        act(() => {
+            Modal.hideAll();
+        });
+
+        expect(screen.findByType('SuppressionProbe' as any).props.suppressed).toBe(false);
+    });
+
     it('keeps a hidden custom modal mounted until the shared modal exit animation can complete', async () => {
         vi.useFakeTimers();
         const { ModalProvider } = await import('./ModalProvider');

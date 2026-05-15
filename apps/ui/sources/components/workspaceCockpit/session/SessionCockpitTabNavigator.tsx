@@ -71,7 +71,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                 animation: 'none',
                 lazy: true,
                 freezeOnBlur: true,
-                tabBarHideOnKeyboard: true,
+                tabBarHideOnKeyboard: false,
             }}
             tabBar={(tabBarProps) => (
                 <SessionCockpitNavigatorChromeBridge

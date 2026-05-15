@@ -140,13 +140,14 @@ export function useNewSessionWizardProps(params: Readonly<{
     submitAccessibilityLabel?: NewSessionWizardFooterProps['submitAccessibilityLabel'];
     emptyAutocompletePrefixes: any;
     emptyAutocompleteSuggestions: any;
+    onAutocompleteSuggestionSelect?: NewSessionWizardFooterProps['onAutocompleteSuggestionSelect'];
     connectionStatus?: any;
     machinePopover?: NewSessionWizardFooterProps['machinePopover'];
     pathPopover?: NewSessionWizardFooterProps['pathPopover'];
     resumeSessionId: string;
     resumePopover?: NewSessionWizardFooterProps['resumePopover'];
     isResumeSupportChecking: boolean;
-    sessionPromptInputMaxHeight: number;
+    sessionPromptInputMaxHeight?: number;
     agentInputExtraActionChips?: ReadonlyArray<AgentInputExtraActionChip>;
     attachmentFlowId?: string | null;
 }>): Readonly<{
@@ -450,6 +451,7 @@ export function useNewSessionWizardProps(params: Readonly<{
             submitAccessibilityLabel: params.submitAccessibilityLabel,
             emptyAutocompletePrefixes: params.emptyAutocompletePrefixes,
             emptyAutocompleteSuggestions: params.emptyAutocompleteSuggestions,
+            onAutocompleteSuggestionSelect: params.onAutocompleteSuggestionSelect,
             connectionStatus: params.connectionStatus,
             machinePopover: params.machinePopover,
             pathPopover: params.pathPopover,
@@ -471,6 +473,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.connectionStatus,
         params.emptyAutocompletePrefixes,
         params.emptyAutocompleteSuggestions,
+        params.onAutocompleteSuggestionSelect,
         params.handleCreateSession,
         params.isCreating,
         params.isResumeSupportChecking,

@@ -3,10 +3,10 @@ import {
     View,
     TouchableWithoutFeedback,
     Animated,
-    KeyboardAvoidingView,
     Platform
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { KeyboardAwareModalFrame } from '@/components/ui/keyboardAvoidance';
 import { requireRadixDialog, requireRadixDismissableLayer } from '@/utils/web/radixCjs';
 import { ModalPortalTargetProvider } from '@/modal/portal/ModalPortalTarget';
 import type { ModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
@@ -337,10 +337,9 @@ export function BaseModal({
                             />
                             <ModalPortalTargetProvider target={modalPortalTargetRef.current}>
                                 <ModalBoundaryProvider>
-                                    <KeyboardAvoidingView
+                                    <KeyboardAwareModalFrame
                                         pointerEvents="auto"
                                         style={styles.container}
-                                        behavior={undefined}
                                     >
                                         <Animated.View
                                             pointerEvents="auto"
@@ -356,7 +355,7 @@ export function BaseModal({
                                                 {children}
                                             </div>
                                         </Animated.View>
-                                    </KeyboardAvoidingView>
+                                    </KeyboardAwareModalFrame>
                                 </ModalBoundaryProvider>
                             </ModalPortalTargetProvider>
                         </Dialog.Content>
@@ -374,9 +373,8 @@ export function BaseModal({
 
       return (
           <View style={[styles.portalRoot, { zIndex: baseZ, elevation: baseZ }]} pointerEvents={visible ? 'auto' : 'none'}>
-              <KeyboardAvoidingView
+              <KeyboardAwareModalFrame
                   style={styles.container}
-                  behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                   {...webEventHandlers}
             >
                 {showBackdrop ? (
@@ -409,7 +407,7 @@ export function BaseModal({
                         </View>
                     </ModalBoundaryProvider>
                 </OverlayMotionFrame>
-            </KeyboardAvoidingView>
+            </KeyboardAwareModalFrame>
         </View>
     );
 }

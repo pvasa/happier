@@ -48,11 +48,6 @@ installNewSessionComponentsCommonModuleMocks({
     },
 });
 
-vi.mock('react-native-keyboard-controller', () => ({
-    KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('KeyboardAvoidingView', props, props.children),
-}));
-
 vi.mock('expo-linear-gradient', () => ({
     LinearGradient: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('LinearGradient', props, props.children),
@@ -112,6 +107,24 @@ vi.mock('@/components/ui/popover', () => ({
         React.createElement(React.Fragment, null, props.children),
 }));
 
+vi.mock('@/components/sessions/keyboardAvoidance', async () => {
+    const ReactModule = await import('react');
+    const { createMockComposerKeyboardLayout } = await import('@/dev/testkit');
+    return {
+        ComposerKeyboardScaffold: (props: Record<string, unknown> & {
+            children?: React.ReactNode;
+            composer?: React.ReactNode;
+        }) => ReactModule.createElement(
+            'ComposerKeyboardScaffold',
+            props,
+            props.children,
+            props.composer,
+        ),
+        useComposerKeyboardLayoutContext: () => createMockComposerKeyboardLayout(),
+        useComposerAvailablePanelHeight: () => undefined,
+    };
+});
+
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => false,
 }));
@@ -142,6 +155,8 @@ function buildProps() {
         layout: {
             theme: {
                 colors: {
+                    background: { canvas: '#fff' },
+                    border: { default: '#ddd' },
                     divider: '#ddd',
                     shadow: { color: '#000' },
                     groupped: { background: '#fff' },
@@ -149,6 +164,11 @@ function buildProps() {
                     textSecondary: '#666',
                     input: { background: '#fff' },
                     button: { secondary: { tint: '#000' } },
+                    state: {
+                        danger: { foreground: '#b91c1c' },
+                        neutral: { foreground: '#666' },
+                        warning: { background: '#fff8e1', border: '#f5d38f' },
+                    },
                     warning: '#d97706',
                     box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
                     status: { connected: '#22c55e' },

@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Svg, Circle } from 'react-native-svg';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
+import { TokenUsageRing, type TokenUsageTone } from '@/components/sessions/usage';
 
 import {
     formatContextTokenCount,
@@ -24,46 +24,12 @@ type AgentInputContextUsageBadgeProps = Readonly<{
     marginLeft?: number;
 }>;
 
-function resolveToneColor(params: Readonly<{
-    severity: ContextUsageState['severity'];
-    neutralColor: string;
-    warningColor: string;
-    criticalColor: string;
-}>): string {
-    if (params.severity === 'critical') return params.criticalColor;
-    if (params.severity === 'warning') return params.warningColor;
-    return params.neutralColor;
-}
-
 export function AgentInputContextUsageBadge(props: AgentInputContextUsageBadgeProps) {
-    const { theme } = useUnistyles();
     const styles = stylesheet;
     const anchorRef = React.useRef<any>(null);
     const [isPinnedOpen, setIsPinnedOpen] = React.useState(false);
     const [isHovered, setIsHovered] = React.useState(false);
-    const ringSize = 20;
-    const ringStrokeWidth = 2;
-    const ringRadius = (ringSize - ringStrokeWidth) / 2;
-    const ringCircumference = 2 * Math.PI * ringRadius;
-
-    const toneColor = React.useMemo(
-        () => resolveToneColor({
-            severity: props.state.severity,
-            neutralColor: theme.colors.text.secondary,
-            warningColor: theme.colors.state.neutral.foreground,
-            criticalColor: theme.colors.state.danger.foreground,
-        }),
-        [props.state.severity, theme.colors.text.secondary, theme.colors.state.neutral.foreground, theme.colors.state.danger.foreground],
-    );
-    const ringTrackColor = theme.colors.border.default;
-    const progressRatio = React.useMemo(
-        () => Math.max(0, Math.min(props.state.usedRatio, 1)),
-        [props.state.usedRatio],
-    );
-    const ringDashOffset = React.useMemo(
-        () => ringCircumference * (1 - progressRatio),
-        [progressRatio, ringCircumference],
-    );
+    const tone: TokenUsageTone = props.state.severity;
     const badgeValueLabel = React.useMemo(
         () => String(Math.max(0, Math.round(props.state.usedPercentage))),
         [props.state.usedPercentage],
@@ -113,47 +79,15 @@ export function AgentInputContextUsageBadge(props: AgentInputContextUsageBadgePr
                     ];
                 }}
             >
-                <Svg
-                    testID="agent-input-context-usage-ring"
-                    width={ringSize}
-                    height={ringSize}
-                    viewBox={`0 0 ${ringSize} ${ringSize}`}
-                    style={styles.badgeRing}
-                >
-                    <Circle
-                        cx={ringSize / 2}
-                        cy={ringSize / 2}
-                        r={ringRadius}
-                        fill="none"
-                        stroke={ringTrackColor}
-                        strokeWidth={ringStrokeWidth}
-                    />
-                    <Circle
-                        cx={ringSize / 2}
-                        cy={ringSize / 2}
-                        r={ringRadius}
-                        fill="none"
-                        stroke={toneColor}
-                        strokeWidth={ringStrokeWidth}
-                        strokeLinecap="round"
-                        strokeDasharray={`${ringCircumference} ${ringCircumference}`}
-                        strokeDashoffset={ringDashOffset}
-                        transform={`rotate(-90 ${ringSize / 2} ${ringSize / 2})`}
-                    />
-                </Svg>
-                <View pointerEvents="none" style={styles.badgeLabelOverlay}>
-                    <Text
-                        testID="agent-input-context-usage-value"
-                        style={[
-                            styles.badgeLabel,
-                            {
-                                color: toneColor,
-                            },
-                        ]}
-                    >
-                        {badgeValueLabel}
-                    </Text>
-                </View>
+                <TokenUsageRing
+                    used={props.state.usedTokens}
+                    limit={props.state.contextWindowTokens}
+                    label={popoverDetail}
+                    value={badgeValueLabel}
+                    tone={tone}
+                    ringTestID="agent-input-context-usage-ring"
+                    valueTestID="agent-input-context-usage-value"
+                />
             </Pressable>
 
             <AgentInputContentPopover
@@ -194,26 +128,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     badgePressed: {
         opacity: 0.9,
-    },
-    badgeRing: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-    },
-    badgeLabelOverlay: {
-        position: 'absolute',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        left: 0,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    badgeLabel: {
-        fontSize: 8,
-        lineHeight: 8,
-        textAlign: 'center',
-        ...Typography.default(),
     },
     popoverContent: {
         paddingHorizontal: 16,

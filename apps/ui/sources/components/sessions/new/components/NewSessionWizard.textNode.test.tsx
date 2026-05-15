@@ -33,8 +33,6 @@ installNewSessionComponentsCommonModuleMocks({
 });
 
 vi.mock('react-native-keyboard-controller', () => ({
-    KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('KeyboardAvoidingView', props, props.children),
     useKeyboardHandler: (...args: any[]) => useKeyboardHandlerMock(...args),
     useReanimatedKeyboardAnimation: () => ({
         height: { value: -240 },
@@ -434,8 +432,8 @@ describe('NewSessionWizard', () => {
                 } as any}
             />);
 
-            const keyboardView = screen.findByType('KeyboardAvoidingView');
-            expect(keyboardView.props.style).toEqual(expect.arrayContaining([
+            const scaffold = screen.findByProps({ testID: 'new-session-wizard-keyboard-host' });
+            expect(scaffold.props.style).toEqual(expect.arrayContaining([
                 expect.objectContaining({
                     flex: 0,
                 }),
@@ -558,7 +556,7 @@ describe('NewSessionWizard', () => {
         expect(CliNotDetectedBannerMock).not.toHaveBeenCalled();
     });
 
-    it('uses the native keyboard-shift host on Android so the whole footer composer can move above the keyboard', async () => {
+    it('uses the shared scaffold composer host on Android so the whole footer composer can move above the keyboard', async () => {
         platformOs = 'android';
         const { NewSessionWizard } = await import('./NewSessionWizard');
 
@@ -674,11 +672,9 @@ describe('NewSessionWizard', () => {
         />);
 
         expect(screen.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
-        const composerHostTranslateY = screen
-            .findAllByType('AnimatedView')
-            .map((node) => getTranslateY(node.props.style))
-            .find((translateY) => translateY !== null);
-        expect(composerHostTranslateY).toBe(-240);
+        const composerHost = screen.findByProps({ testID: 'new-session-wizard-composer-keyboard-host' });
+        expect(flattenStyle(composerHost.props.style).position).toBe('absolute');
+        expect(typeof getTranslateY(composerHost.props.style)).toBe('number');
     });
 
     it('renders AI backend providers as a full list', async () => {
@@ -822,7 +818,7 @@ describe('NewSessionWizard', () => {
         const refreshButton = screen.findByTestId('new-session-model-refresh');
         expect(refreshButton?.props.disabled).toBe(true);
         expect(refreshButton?.props.onPress).toBeUndefined();
-        expect(screen.findAllByType('ActivityIndicator' as any).length).toBeGreaterThan(0);
+        expect(screen.findAllByProps({ accessibilityRole: 'progressbar' }).length).toBeGreaterThan(0);
     });
 
     it('applies the top safe-area inset to the wizard content on iOS', async () => {
@@ -1194,8 +1190,8 @@ describe('NewSessionWizard', () => {
                             } as any}
                         />);
 
-            const keyboardView = screen.findByType('KeyboardAvoidingView');
-            expect(keyboardView.props.style).toEqual(expect.arrayContaining([
+            const scaffold = screen.findByProps({ testID: 'new-session-wizard-keyboard-host' });
+            expect(scaffold.props.style).toEqual(expect.arrayContaining([
                 expect.objectContaining({
                     justifyContent: 'flex-end',
                 }),

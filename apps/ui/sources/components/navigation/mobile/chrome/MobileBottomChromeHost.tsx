@@ -1,11 +1,14 @@
 import * as React from 'react';
-import { Animated, Platform, View } from 'react-native';
+import { Animated, Platform, View, type LayoutChangeEvent } from 'react-native';
 import { router as expoRouter, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { SessionCockpitTabBar } from '@/components/navigation/mobile/chrome/bars/SessionCockpitTabBar';
 import { isMobileWorkspaceCockpitEnabled } from '@/components/workspaceCockpit/mobileWorkspaceExperience';
-import { useSessionCockpitChromeRegistration } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import {
+    useSessionCockpitBottomChromeHeightSetter,
+    useSessionCockpitChromeRegistration,
+} from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import {
     resolveSessionCockpitRouteFromPathname,
     resolveSessionRoutePathForSurface,
@@ -57,13 +60,23 @@ type BottomChromeItem = Readonly<{
 
 const BOTTOM_CHROME_TRANSITION_TRANSLATE_Y = 10;
 
+/**
+ * Passive settled keyboard visibility for chrome suppression only.
+ * Composer positioning must use the keyboard scaffold instead of this React-state path.
+ */
+function usePassiveSoftwareKeyboardVisibleForBottomChrome(deviceType: ReturnType<typeof useDeviceType>): boolean {
+    const keyboardHeightPx = useKeyboardHeight();
+    return deviceType === 'phone' && keyboardHeightPx > 0;
+}
+
 export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost() {
     const pathname = usePathname();
     const router = useRouter();
     const params = useGlobalSearchParams<{ mobileSurface?: string | string[]; serverId?: string | string[] }>();
     const auth = useAuth();
     const deviceType = useDeviceType();
-    const keyboardHeightPx = useKeyboardHeight();
+    const softwareKeyboardVisible = usePassiveSoftwareKeyboardVisibleForBottomChrome(deviceType);
+    const setBottomChromeHeight = useSessionCockpitBottomChromeHeightSetter();
     const reduceMotion = useReducedMotionPreference();
     const { setActiveTab } = useTabState();
     const mobileWorkspaceExperience = useSetting('mobileWorkspaceExperienceV1');
@@ -73,7 +86,6 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const activeTab = auth.isAuthenticated === true && typeof pathname === 'string'
         ? resolveMobileBottomChromeActiveTab(pathname)
         : null;
-    const softwareKeyboardVisible = deviceType === 'phone' && keyboardHeightPx > 0;
     const sessionRouteMatch = React.useMemo(() => {
         const match = /^\/session\/([^/?#]+?)(?:\/|$)/.exec(typeof pathname === 'string' ? pathname : '');
         return match?.[1] ? decodeURIComponent(match[1]) : null;
@@ -136,11 +148,15 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     }, [cockpitRegistration, cockpitRoute, persistSessionSurface, router, serverId]);
 
     const resolvedChrome = React.useMemo((): BottomChromeItem | null => {
-        if (softwareKeyboardVisible || deviceType !== 'phone') {
+        if (deviceType !== 'phone') {
             return null;
         }
 
         if (activeTab) {
+            if (softwareKeyboardVisible) {
+                return null;
+            }
+
             return {
                 key: 'mainAppTabs',
                 signature: `mainAppTabs:${activeTab}`,
@@ -208,6 +224,10 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         (progress as Animated.Value & { stopAnimation?: () => void }).stopAnimation?.();
     }, [progress]);
 
+    const handleChromeLayout = React.useCallback((event: LayoutChangeEvent) => {
+        setBottomChromeHeight(event.nativeEvent.layout.height);
+    }, [setBottomChromeHeight]);
+
     React.useLayoutEffect(() => {
         const currentRenderedChrome = renderedChromeRef.current.current;
 
@@ -272,6 +292,12 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         stopChromeAnimation();
     }, [stopChromeAnimation]);
 
+    React.useLayoutEffect(() => {
+        if (!renderedChrome.current) {
+            setBottomChromeHeight(0);
+        }
+    }, [renderedChrome.current, setBottomChromeHeight]);
+
     if (!renderedChrome.current) {
         return null;
     }
@@ -307,7 +333,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     } as const;
 
     return (
-        <View style={{ position: 'relative' }}>
+        <View onLayout={handleChromeLayout} style={{ position: 'relative' }}>
             <Animated.View style={currentStyle}>
                 {renderedChrome.current.node}
             </Animated.View>

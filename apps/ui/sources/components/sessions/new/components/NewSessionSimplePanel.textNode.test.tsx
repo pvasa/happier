@@ -84,11 +84,6 @@ afterEach(() => {
     agentInputPropsRef.current = null;
 });
 
-vi.mock('react-native-keyboard-controller', () => ({
-    KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('KeyboardAvoidingView', props, props.children),
-}));
-
 vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
 }));
@@ -106,6 +101,20 @@ vi.mock('@/components/ui/popover', () => ({
         React.createElement(React.Fragment, null, props.children),
     PopoverScope: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement(React.Fragment, null, props.children),
+}));
+
+vi.mock('@/components/sessions/keyboardAvoidance', () => ({
+    ComposerKeyboardScaffold: (props: Record<string, unknown> & {
+        children?: React.ReactNode;
+        composer?: React.ReactNode;
+    }) => React.createElement(
+        'ComposerKeyboardScaffold',
+        props,
+        props.children,
+        props.composer,
+    ),
+    useComposerAvailablePanelHeight: () => undefined,
+    useComposerKeyboardLayoutContext: () => null,
 }));
 
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
@@ -343,8 +352,8 @@ describe('NewSessionSimplePanel', () => {
             />,
         );
 
-        const keyboardView = screen.findByType('KeyboardAvoidingView');
-        expect(keyboardView.props.style).toEqual(expect.arrayContaining([
+        const scaffold = screen.findByType('ComposerKeyboardScaffold');
+        expect(scaffold.props.style).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 flex: 0,
             }),
@@ -441,10 +450,10 @@ describe('NewSessionSimplePanel', () => {
             />,
         );
 
-        const keyboardView = screen.findByType('KeyboardAvoidingView');
+        const scaffold = screen.findByType('ComposerKeyboardScaffold');
         const pressables = screen.findAllByType('Pressable');
 
-        expect(keyboardView.props.style).toEqual(expect.arrayContaining([
+        expect(scaffold.props.style).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 justifyContent: 'flex-end',
             }),

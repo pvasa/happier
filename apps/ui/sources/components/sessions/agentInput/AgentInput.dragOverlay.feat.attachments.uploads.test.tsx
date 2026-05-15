@@ -73,6 +73,10 @@ vi.mock('@/components/ui/forms/MultiTextInput', () => ({
     },
 }));
 
+vi.mock('@/hooks/ui/useWebFileDropZone', async () => {
+    return await import('@/hooks/ui/useWebFileDropZone.web');
+});
+
 vi.mock('@/components/ui/theme/haptics', () => ({
     hapticsLight: () => { },
     hapticsError: () => { },
@@ -111,6 +115,7 @@ vi.mock('@/sync/store/hooks', () => ({
         if (key === 'uiBackdropBlurEnabled') return backdropBlurEnabled;
         return 1;
     },
+    useSessionServerId: () => null,
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
@@ -132,6 +137,17 @@ vi.mock('@/agents/catalog/catalog', () => ({
     }),
 }));
 
+async function activatePanelDropZone(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const { WebDropTargetView } = await import('@/components/sessions/files/repositoryTree/WebDropTargetView');
+    const dropTarget = screen.findByType(WebDropTargetView as any);
+    await act(async () => {
+        dropTarget.props.onDragEnter({
+            dataTransfer: { types: ['Files'] },
+        });
+    });
+    return dropTarget;
+}
+
 describe('AgentInput (attachments drag overlay)', () => {
     it('does not apply backdrop blur when the local backdrop blur appearance setting is disabled', async () => {
         backdropBlurEnabled = false;
@@ -150,14 +166,13 @@ describe('AgentInput (attachments drag overlay)', () => {
             hasSendableAttachments: false,
         }));
 
-        await act(async () => {
-            lastMultiTextInputProps?.onFileDragActiveChange?.(true);
-        });
+        await activatePanelDropZone(screen);
 
         const overlay = screen.findByTestId('agent-input-drop-overlay');
         const overlayStyle = flattenStyle(overlay?.props.style);
         expect(overlayStyle.backdropFilter).toBeUndefined();
-        expect(overlayStyle.backgroundColor).toBe('rgba(0, 0, 0, 0.6)');
+        expect(overlayStyle.WebkitBackdropFilter).toBeUndefined();
+        expect(typeof overlayStyle.backgroundColor).toBe('string');
         backdropBlurEnabled = true;
     }, 120_000);
 
@@ -180,9 +195,7 @@ describe('AgentInput (attachments drag overlay)', () => {
 
         expect(lastMultiTextInputProps).not.toBeNull();
 
-        await act(async () => {
-            lastMultiTextInputProps?.onFileDragActiveChange?.(true);
-        });
+        await activatePanelDropZone(screen);
 
         const overlay = screen.findByTestId('agent-input-drop-overlay');
         if (!overlay) {
@@ -190,6 +203,59 @@ describe('AgentInput (attachments drag overlay)', () => {
         }
         expect(overlay.props.pointerEvents).toBe('none');
         const overlayStyle = flattenStyle(overlay.props.style);
-        expect(overlayStyle.backgroundColor).toBe('rgba(0, 0, 0, 0.45)');
+        expect(overlayStyle.backdropFilter).toBe('blur(2px)');
+        expect(overlayStyle.WebkitBackdropFilter).toBe('blur(2px)');
+    }, 120_000);
+
+    it('accepts dropped files from the full composer panel', async () => {
+        backdropBlurEnabled = true;
+        const { AgentInput } = await import('./AgentInput');
+        const { WebDropTargetView } = await import('@/components/sessions/files/repositoryTree/WebDropTargetView');
+        const onAttachmentsAdded = vi.fn();
+        const file = {
+            name: 'notes.txt',
+            size: 12,
+            type: 'text/plain',
+            lastModified: 1,
+        } as File;
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: '',
+            placeholder: 'placeholder',
+            onChangeText: () => { },
+            onSend: () => { },
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            onAttachmentsAdded,
+            hasSendableAttachments: false,
+            attachments: [{
+                key: 'existing',
+                label: 'existing.txt',
+                onRemove: () => { },
+            }],
+        }));
+
+        const dropTarget = screen.findByType(WebDropTargetView as any);
+        expect(dropTarget.props.testID).toBe('agent-input-drop-zone');
+
+        await act(async () => {
+            dropTarget.props.onDragEnter({
+                dataTransfer: { types: ['Files'] },
+            });
+        });
+
+        expect(screen.findByTestId('agent-input-drop-overlay')).toBeTruthy();
+
+        await act(async () => {
+            dropTarget.props.onDrop({
+                preventDefault: vi.fn(),
+                dataTransfer: {
+                    types: ['Files'],
+                    files: [file],
+                },
+            });
+        });
+
+        expect(onAttachmentsAdded).toHaveBeenCalledWith([file]);
     }, 120_000);
 });

@@ -1,5 +1,9 @@
 import type { Theme } from '@/theme';
 import { t } from '@/text';
+import {
+    formatTokenUsageCount,
+    formatTokenUsagePercent,
+} from '@/components/sessions/usage/tokenUsageFormatting';
 
 import { toContextWarningWindowTokens } from './resolveContextWarningWindowTokens';
 
@@ -21,24 +25,12 @@ function normalizeContextWindowTokens(raw: number | null | undefined): number | 
         : null;
 }
 
-function trimTrailingZero(value: string): string {
-    return value.endsWith('.0') ? value.slice(0, -2) : value;
-}
-
 export function formatContextUsagePercent(value: number): string {
-    const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
-    return `${trimTrailingZero(safeValue.toFixed(1))}%`;
+    return formatTokenUsagePercent(value);
 }
 
 export function formatContextTokenCount(value: number): string {
-    const safeValue = Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
-    if (safeValue >= 1_000_000) {
-        return `${trimTrailingZero((safeValue / 1_000_000).toFixed(safeValue >= 10_000_000 ? 0 : 1))}M`;
-    }
-    if (safeValue >= 1_000) {
-        return `${trimTrailingZero((safeValue / 1_000).toFixed(safeValue >= 100_000 ? 0 : 1))}k`;
-    }
-    return String(safeValue);
+    return formatTokenUsageCount(value);
 }
 
 export function getContextUsageState(

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
     computeAgentInputDefaultMaxHeight,
+    computeAgentInputKeyboardOpenPanelMaxHeight,
+    computeAgentInputKeyboardOpenVariableSectionMaxHeight,
     computeMeasuredPanelInputMaxHeight,
     computeNewSessionInputMaxHeight,
 } from './inputMaxHeight';
@@ -65,6 +67,32 @@ describe('inputMaxHeight', () => {
             inputViewportHeight: 52,
             fallbackMaxHeight: 200,
         })).toBe(200);
+    });
+
+    it('does not clamp measured input height above the measured panel maximum', () => {
+        expect(computeMeasuredPanelInputMaxHeight({
+            panelMaxHeight: 80,
+            panelHeight: 220,
+            inputContainerHeight: 60,
+            inputViewportHeight: 52,
+            fallbackMaxHeight: 200,
+        })).toBeLessThanOrEqual(80);
+    });
+
+    it('does not clamp the native keyboard-open panel above the visible region', () => {
+        const panelMaxHeight = computeAgentInputKeyboardOpenPanelMaxHeight({
+            screenHeight: 420,
+            keyboardHeight: 300,
+        });
+
+        expect(panelMaxHeight).toBeLessThanOrEqual(104);
+    });
+
+    it('does not clamp the native variable section above the remaining panel height', () => {
+        expect(computeAgentInputKeyboardOpenVariableSectionMaxHeight({
+            panelMaxHeight: 80,
+            footerHeight: 24,
+        })).toBeLessThanOrEqual(56);
     });
 
     it('keeps /new wizard input cap when keyboard is open', () => {

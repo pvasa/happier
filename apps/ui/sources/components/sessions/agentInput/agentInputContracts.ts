@@ -44,6 +44,7 @@ export type AgentInputComposerAttachmentBadge = Readonly<{
 }>;
 
 export type AgentInputStatusBadgeTone = 'neutral' | 'active' | 'paused' | 'warning' | 'complete';
+export type AgentInputStatusBadgeEmphasis = 'quiet' | 'prominent';
 
 export type AgentInputStatusBadge = Readonly<{
     key: string;
@@ -51,6 +52,7 @@ export type AgentInputStatusBadge = Readonly<{
     testID?: string;
     accessibilityLabel?: string;
     tone?: AgentInputStatusBadgeTone;
+    emphasis?: AgentInputStatusBadgeEmphasis;
     icon?: (tint: string) => React.ReactNode;
     onPress?: () => void;
     renderPopover?: (ctx: Readonly<{

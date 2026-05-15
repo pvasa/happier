@@ -404,8 +404,11 @@ describe('AgentInput (context usage badge)', () => {
             />,
         );
 
-        expect(screen.findByTestId('agent-input-context-usage-badge')).toBeTruthy();
+        const badge = screen.findByTestId('agent-input-context-usage-badge');
+        expect(badge).toBeTruthy();
+        expect(screen.findByTestId('agent-input-context-usage-ring')).toBeTruthy();
         expect(screen.findByTestId('agent-input-context-usage-value')?.props.children).toBe('19');
+        expect(String(badge?.props.accessibilityLabel ?? '')).toContain('38.7k/200k');
 
         act(() => screen.tree.unmount());
     });

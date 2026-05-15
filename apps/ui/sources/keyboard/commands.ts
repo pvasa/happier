@@ -71,6 +71,30 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         when: (context) => !context.isEditableTarget,
     },
     {
+        id: 'sessions.row.moveUp',
+        defaultBinding: { binding: 'Alt+Shift+ArrowUp' },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsRowMoveUp',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.row.moveDown',
+        defaultBinding: { binding: 'Alt+Shift+ArrowDown' },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsRowMoveDown',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.row.moveToFolder',
+        defaultBinding: { binding: 'Alt+Shift+F' },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsRowMoveToFolder',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
+        id: 'sessions.row.moveToWorkspaceRoot',
+        defaultBinding: { binding: 'Alt+Shift+R' },
+        settingsTitleKey: 'settingsKeyboard.commands.sessionsRowMoveToWorkspaceRoot',
+        when: (context) => !context.isEditableTarget,
+    },
+    {
         id: 'session.visible.next',
         defaultBinding: { binding: 'Alt+ArrowDown' },
         settingsTitleKey: 'settingsKeyboard.commands.sessionVisibleNext',

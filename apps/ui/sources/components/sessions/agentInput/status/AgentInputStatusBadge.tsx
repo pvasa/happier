@@ -56,14 +56,18 @@ function resolveToneTokens(theme: ReturnType<typeof useUnistyles>['theme'], tone
 export function AgentInputStatusBadge(props: AgentInputStatusBadgeProps) {
     const { theme } = useUnistyles();
     const tone = props.tone ?? 'neutral';
+    const emphasis = props.emphasis ?? 'prominent';
     const tokens = resolveToneTokens(theme, tone);
     const content = (pressed: boolean) => (
         <View
             style={[
                 styles.badge,
+                emphasis === 'quiet' && styles.quietBadge,
                 {
-                    backgroundColor: pressed && props.onPress ? theme.colors.surface.pressed : tokens.background,
-                    borderColor: tokens.border,
+                    backgroundColor: emphasis === 'quiet'
+                        ? 'transparent'
+                        : pressed && props.onPress ? theme.colors.surface.pressed : tokens.background,
+                    borderColor: emphasis === 'quiet' ? 'transparent' : tokens.border,
                 },
             ]}
         >
@@ -122,6 +126,10 @@ const styles = StyleSheet.create(() => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexShrink: 1,
+    },
+    quietBadge: {
+        borderWidth: 0,
+        paddingHorizontal: 2,
     },
     icon: {
         marginRight: 5,

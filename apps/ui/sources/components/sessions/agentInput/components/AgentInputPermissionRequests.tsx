@@ -64,6 +64,7 @@ export const AgentInputAttentionRequests = React.memo(function AgentInputAttenti
     userActionRequests?: readonly PendingPermissionRequest[];
     approvalRequests?: readonly OpenApprovalArtifactForSession[];
     permissionLocationsById: ReadonlyMap<string, PermissionToolCallMessageLocation | null>;
+    approvalLocationsByArtifactId?: ReadonlyMap<string, PermissionToolCallMessageLocation | null>;
     metadata: Metadata | null;
     canApprovePermissions: boolean;
     disabledReason?: 'public' | 'readOnly' | 'notGranted' | 'inactive';
@@ -154,6 +155,7 @@ export const AgentInputAttentionRequests = React.memo(function AgentInputAttenti
                                             chrome="inline"
                                             artifact={entry.request.artifact}
                                             approval={entry.request.approval}
+                                            location={props.approvalLocationsByArtifactId?.get(entry.request.artifact.id) ?? null}
                                             sessionId={props.sessionId}
                                             canApprove={props.canApprovePermissions}
                                             disabledReason={props.disabledReason}

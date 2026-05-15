@@ -51,6 +51,11 @@ vi.mock('@/utils/web/radixCjs', () => {
     };
 });
 
+vi.mock('@/components/ui/keyboardAvoidance', () => ({
+    KeyboardAwareModalFrame: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
+        React.createElement('KeyboardAwareModalFrame', props, props.children),
+}));
+
 installModalComponentCommonModuleMocks({
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -205,8 +210,9 @@ describe('BaseModal (web)', () => {
         const { BaseModal } = await import('./BaseModal');
         const screen = await renderBaseModalScreen(BaseModal);
 
-        const container = screen.findAllByType('KeyboardAvoidingView' as any)?.[0];
-        expect(container?.props.pointerEvents).not.toBe('box-none');
+        const container = screen.findByType('KeyboardAwareModalFrame' as any);
+        expect(container.props.pointerEvents).toBe('auto');
+        expect(screen.findAllByType('KeyboardAvoidingView' as any)).toHaveLength(0);
     });
 
     it('does not rely on pointerEvents=\"box-none\" on the wrapper around modal children on web', async () => {

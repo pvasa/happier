@@ -73,11 +73,6 @@ installNewSessionComponentsCommonModuleMocks({
     },
 });
 
-vi.mock('react-native-keyboard-controller', () => ({
-    KeyboardAvoidingView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('KeyboardAvoidingView', props, props.children),
-}));
-
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('ItemGroup', props, props.children),

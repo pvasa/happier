@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 import { installVitestRnShim } from './vitestRnShim';
 import { resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { standardCleanup } from './testkit/cleanup/standardCleanup';
+import { createReanimatedModuleMock } from './testkit/mocks/reanimated';
 
 // UI tests should not inherit embedded build-policy gating (set in CI).
 // Clear it by default so feature tests can opt-in explicitly per case.
@@ -467,75 +468,13 @@ vi.mock('@shopify/react-native-skia', () => ({
 }));
 
 // `react-native-reanimated` requires native bindings; provide a lightweight mock for node/Vitest.
-vi.mock('react-native-reanimated', () => {
-    type SharedValue<T> = { value: T };
-
-    const useSharedValue = <T,>(initial: T): SharedValue<T> => {
-        const ref = React.useRef<SharedValue<T> | null>(null);
-        if (!ref.current) {
-            ref.current = { value: initial };
-        }
-        return ref.current;
-    };
-    const useDerivedValue = <T,>(factory: () => T): SharedValue<T> => {
-        const ref = React.useRef<SharedValue<T> | null>(null);
-        const value = factory();
-        if (!ref.current) {
-            ref.current = { value };
-        } else {
-            ref.current.value = value;
-        }
-        return ref.current;
-    };
-
-    const runOnJS = <TArgs extends unknown[], TResult>(fn: (...args: TArgs) => TResult) => fn;
-    const runOnUI = <TArgs extends unknown[], TResult>(fn: (...args: TArgs) => TResult) => fn;
-
-    const useAnimatedStyle = <T,>(factory: () => T): T => factory();
-    const useAnimatedProps = <T,>(factory: () => T): T => factory();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const useAnimatedReaction = (prepare: () => any, react: (value: any, previous: any) => void) => {
-        try {
-            const value = prepare();
-            react(value, undefined);
-        } catch {
-            // ignore
-        }
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const withTiming = (value: any) => value;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const withSpring = (value: any) => value;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const withRepeat = (value: any) => value;
-    const cancelAnimation = () => {};
-
-    const Animated = {
-        View: 'Animated.View',
-        ScrollView: 'Animated.ScrollView',
-        Text: 'Animated.Text',
-        createAnimatedComponent: (component: unknown) => component,
-    } as const;
-
-    return {
-        __esModule: true,
-        default: Animated,
-        ...Animated,
-        cancelAnimation,
-        runOnJS,
-        runOnUI,
-        useAnimatedProps,
-        useAnimatedReaction,
-        useAnimatedStyle,
-        useDerivedValue,
-        useSharedValue,
-        withRepeat,
-        withSpring,
-        withTiming,
-    };
-});
+vi.mock('react-native-reanimated', () => createReanimatedModuleMock());
+const createReanimatedSubpathMock = vi.hoisted(() => () => createReanimatedModuleMock());
+vi.mock('react-native-reanimated/lib/module', createReanimatedSubpathMock);
+vi.mock('react-native-reanimated/lib/module/index', createReanimatedSubpathMock);
+vi.mock('react-native-reanimated/lib/module/index.js', createReanimatedSubpathMock);
+vi.mock('react-native-reanimated/lib/module/publicGlobals', createReanimatedSubpathMock);
+vi.mock('react-native-reanimated/lib/module/publicGlobals.js', createReanimatedSubpathMock);
 
 // `react-native-typography` relies on React Native's platform resolution (e.g. systemWeights.web.js),
 // which Node/Vitest cannot resolve via CJS `require("../helpers/systemWeights")`. Provide a minimal

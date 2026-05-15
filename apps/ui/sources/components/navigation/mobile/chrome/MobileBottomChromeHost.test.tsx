@@ -449,6 +449,26 @@ describe('MobileBottomChromeHost', () => {
         expect(cockpitBar.props.activeSurface).toBe('browse');
     });
 
+    it('shows session cockpit chrome when cockpit mode is enabled while already viewing a session', async () => {
+        pathState.pathname = '/session/session-1';
+        searchParamsState.id = 'session-1';
+        settingsState.mobileWorkspaceExperienceV1 = 'classic';
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+
+        expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
+
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+        await act(async () => {
+            notifyStorageListeners();
+        });
+
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        expect(cockpitBar.props.sessionId).toBe('session-1');
+        expect(cockpitBar.props.activeSurface).toBe('chat');
+    });
+
     it('falls back to route replacement for cockpit tab presses before the navigator bridge is ready', async () => {
         pathState.pathname = '/session/session-1/files';
         searchParamsState.id = 'session-1';
@@ -498,6 +518,21 @@ describe('MobileBottomChromeHost', () => {
 
         expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
         expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
+    });
+
+    it('keeps session cockpit chrome mounted while the software keyboard is visible', async () => {
+        pathState.pathname = '/session/session-1';
+        searchParamsState.id = 'session-1';
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+        keyboardHeightState.value = 260;
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+
+        expect(screen.tree.findAllByType('TabBar' as never)).toHaveLength(0);
+        const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
+        expect(cockpitBar.props.sessionId).toBe('session-1');
+        expect(cockpitBar.props.activeSurface).toBe('chat');
     });
 
     it('keeps both main and cockpit bars in the global host during the route swap animation', async () => {

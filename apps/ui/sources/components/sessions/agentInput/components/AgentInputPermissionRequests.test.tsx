@@ -136,6 +136,46 @@ describe('AgentInputAttentionRequests', () => {
         expect(screen.findByTestId('agentInput.permissionRequests.divider:approval:a1')).toBeTruthy();
     });
 
+    it('passes resolved tool locations to approval prompt cards', async () => {
+        const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
+        capturedApprovalPromptCardProps.length = 0;
+
+        await renderScreen(React.createElement(AgentInputAttentionRequests, {
+            sessionId: 's1',
+            permissionRequests: [],
+            userActionRequests: [],
+            approvalRequests: [
+                {
+                    artifact: approvalArtifact('a1'),
+                    approval: {
+                        v: 1,
+                        status: 'open',
+                        createdAtMs: 1,
+                        updatedAtMs: 1,
+                        createdBy: { surface: 'session_agent', sessionId: 's1' },
+                        actionId: 'session.list',
+                        actionArgs: {},
+                        summary: 'List sessions',
+                    },
+                },
+            ],
+            permissionLocationsById: new Map(),
+            approvalLocationsByArtifactId: new Map([
+                ['a1', { kind: 'top' as const, messageId: 'tool:call-1', seq: 10 }],
+            ]),
+            metadata: null,
+            canApprovePermissions: true,
+            maxHeightPx: 200,
+            onContentSizeChange: () => {},
+            onLayout: () => {},
+            onScroll: () => {},
+            fadeVisibility: { top: false, bottom: false },
+        } satisfies React.ComponentProps<typeof AgentInputAttentionRequestsComponent>));
+
+        expect(capturedApprovalPromptCardProps).toHaveLength(1);
+        expect(capturedApprovalPromptCardProps[0].location).toEqual({ kind: 'top', messageId: 'tool:call-1', seq: 10 });
+    });
+
     it('does not render when approvals are disabled due to inactive session', async () => {
         const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;

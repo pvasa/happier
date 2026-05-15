@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { Platform } from 'react-native';
 import { Popover } from '@/components/ui/popover';
+import { useComposerKeyboardLayout } from '@/components/sessions/keyboardAvoidance/ComposerKeyboardContext';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 
 export type AgentInputSelectionPopoverProps = Readonly<{
@@ -16,6 +17,12 @@ export type AgentInputSelectionPopoverProps = Readonly<{
 
 export function AgentInputSelectionPopover(props: AgentInputSelectionPopoverProps) {
     const keyboardHeight = useKeyboardHeight();
+    const composerKeyboardLayout = useComposerKeyboardLayout();
+    const effectiveKeyboardHeight = Math.max(
+        keyboardHeight,
+        composerKeyboardLayout?.keyboardHeightLive.value ?? 0,
+        composerKeyboardLayout?.keyboardHeightForInset.value ?? 0,
+    );
     // On web, agent-input popovers should be constrained to the viewport (not to an in-modal boundary
     // provider), so they can extend outside sheet-like modal cards.
     const boundaryRef =
@@ -29,9 +36,16 @@ export function AgentInputSelectionPopover(props: AgentInputSelectionPopoverProp
     const placement =
         Platform.OS === 'web'
             ? 'top'
-            : keyboardHeight > 0
+            : effectiveKeyboardHeight > 0
                 ? 'auto-vertical'
                 : 'top';
+
+    React.useEffect(() => {
+        if (Platform.OS === 'web') return undefined;
+        if (!props.open) return undefined;
+        if (effectiveKeyboardHeight <= 0) return undefined;
+        return composerKeyboardLayout?.retainKeyboardLift?.();
+    }, [composerKeyboardLayout, effectiveKeyboardHeight, props.open]);
 
     return (
         <Popover
@@ -43,7 +57,6 @@ export function AgentInputSelectionPopover(props: AgentInputSelectionPopoverProp
             // new-session popover anchoring on native where we rely on a scroll boundary.
             boundaryRef={boundaryRef}
             placement={placement}
-            keyboardBottomInset={Platform.OS === 'web' ? 0 : keyboardHeight}
             gap={8}
             maxHeightCap={props.maxHeightCap}
             maxWidthCap={props.maxWidthCap}
@@ -67,6 +80,7 @@ export function AgentInputSelectionPopover(props: AgentInputSelectionPopoverProp
             // closure until after the click event completes.
             backdrop={{ style: { backgroundColor: 'transparent' }, blockOutsidePointerEvents: false }}
             containerStyle={{ paddingHorizontal: 0 }}
+            keyboardBottomInset={Platform.OS === 'web' ? 0 : effectiveKeyboardHeight}
         >
             {({ maxHeight }) => (
                 props.children({ maxHeight })

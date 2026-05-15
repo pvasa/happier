@@ -171,19 +171,21 @@ export function ModalProvider({ active = true, children }: ModalProviderProps) {
         };
     }, []);
 
+    const topVisibleIndex = state.modals.reduce((topIndex, modal, index) => (
+        modal.visible ? index : topIndex
+    ), -1);
+    const zIndexStep = 10;
+    const zIndexBase = 100000;
+    const isKeyboardLiftSuppressedByModal = state.modals.length > 0;
+
     const contextValue: ModalContextValue = {
+        isKeyboardLiftSuppressedByModal,
         state,
         showModal,
         hideModal,
         hideAllModals,
         updateCustomModalProps,
     };
-
-    const topVisibleIndex = state.modals.reduce((topIndex, modal, index) => (
-        modal.visible ? index : topIndex
-    ), -1);
-    const zIndexStep = 10;
-    const zIndexBase = 100000;
 
     return (
         <OverlayPortalProvider>

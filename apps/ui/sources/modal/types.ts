@@ -107,6 +107,7 @@ export interface ModalState {
 }
 
 export interface ModalContextValue {
+    isKeyboardLiftSuppressedByModal: boolean;
     state: ModalState;
     showModal: (config: Omit<ModalConfig, 'id'>) => string;
     hideModal: (id: string) => void;

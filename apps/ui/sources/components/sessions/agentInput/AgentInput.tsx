@@ -24,7 +24,7 @@ import { useActiveWord } from '@/components/autocomplete/useActiveWord';
 import { useActiveSuggestions } from '@/components/autocomplete/useActiveSuggestions';
 import { TextInputState, MultiTextInputHandle } from '@/components/ui/forms/MultiTextInput';
 import { applySuggestion } from '@/components/autocomplete/applySuggestion';
-import { findActiveWord } from '@/components/autocomplete/findActiveWord';
+import { findActiveWord, type ActiveWord } from '@/components/autocomplete/findActiveWord';
 import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
 import { type ModelPickerProbeState } from '@/components/model/ModelPickerOverlay';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
@@ -55,11 +55,9 @@ import {
     resolveAgentInputActionBarLayout,
     shouldShowSecondaryControlRow,
 } from './layout/actionBarLogic';
-import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import {
     computeAgentInputDefaultMaxHeight,
-    computeAgentInputKeyboardOpenPanelMaxHeight,
     computeAgentInputKeyboardOpenVariableSectionMaxHeight,
     computeMeasuredPanelInputMaxHeight,
 } from './inputMaxHeight';
@@ -72,6 +70,7 @@ import { AgentInputContextUsageBadge } from './components/AgentInputContextUsage
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { AgentInputAttachmentsRow } from './components/AgentInputAttachmentsRow';
 import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
+import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import type { PermissionModePickerStyles } from './components/permissionModePickerStyles';
 import { AgentInputAttentionRequests } from './components/AgentInputPermissionRequests';
 import { AgentInputSubmitButton } from './components/AgentInputSubmitButton';
@@ -99,13 +98,17 @@ import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/ap
 import { Text } from '@/components/ui/text/Text';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
 import { resolvePermissionToolCallLocations } from '@/utils/sessions/permissions/resolvePermissionToolCallLocations';
+import { resolveApprovalToolCallLocations } from '@/utils/sessions/approvals/resolveApprovalToolCallLocations';
 import {
     resolvePermissionPromptSurface,
     shouldShowGenericPermissionPromptForRequest,
 } from '@/utils/sessions/permissions/permissionPromptPolicy';
 import { buildSessionMessageRouteId } from '@/sync/domains/messages/messageRouteIds';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
+import { WebDropTargetView } from '@/components/sessions/files/repositoryTree/WebDropTargetView';
+import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import { useLocalSetting } from '@/sync/store/hooks';
+import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
 import type {
     AgentInputAttachment,
@@ -149,6 +152,37 @@ const AGENT_INPUT_TEST_IDS = {
     newSessionSend: 'new-session-composer-send',
     connectionStatusText: 'agent-input-connection-status-text',
 } as const;
+
+export type AgentInputAutocompleteSelectionResult =
+    | Readonly<{ handled: false }>
+    | Readonly<{ handled: true; text: string; cursorPosition: number }>;
+
+export type AgentInputAutocompleteSelectionHandler = (args: Readonly<{
+    suggestion: AutocompleteSuggestion;
+    inputText: string;
+    selection: Readonly<{ start: number; end: number }>;
+    activeWord: ActiveWord | null;
+}>) => AgentInputAutocompleteSelectionResult | Promise<AgentInputAutocompleteSelectionResult>;
+
+function normalizeLayoutHeightPx(height: number): number {
+    return Number.isFinite(height) ? Math.max(0, Math.trunc(height)) : 0;
+}
+
+function updateNullableLayoutHeight(
+    setHeight: React.Dispatch<React.SetStateAction<number | null>>,
+    height: number,
+): void {
+    const nextHeight = normalizeLayoutHeightPx(height);
+    setHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
+}
+
+function updateLayoutHeight(
+    setHeight: React.Dispatch<React.SetStateAction<number>>,
+    height: number,
+): void {
+    const nextHeight = normalizeLayoutHeightPx(height);
+    setHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
+}
 
 type ProgrammaticHistoryInputState = Readonly<{
     state: TextInputState;
@@ -228,6 +262,7 @@ interface AgentInputProps {
     onActiveStatusBadgeKeyChange?: (key: string | null) => void;
     autocompletePrefixes: string[];
     autocompleteSuggestions: (query: string) => Promise<AutocompleteSuggestion[]>;
+    onAutocompleteSuggestionSelect?: AgentInputAutocompleteSelectionHandler;
     usageData?: {
         inputTokens: number;
         outputTokens: number;
@@ -284,12 +319,13 @@ interface AgentInputProps {
 }
 
 function AgentInputAttentionRequestsWithLocations(
-    props: Omit<React.ComponentProps<typeof AgentInputAttentionRequests>, 'permissionLocationsById'>
+    props: Omit<React.ComponentProps<typeof AgentInputAttentionRequests>, 'permissionLocationsById' | 'approvalLocationsByArtifactId'>
 ) {
     const { ids: committedMessageIdsOldestFirst } = useSessionTranscriptIds(props.sessionId);
     const committedMessagesById = useSessionMessagesById(props.sessionId);
     const committedMessagesReducerState = useSessionMessagesReducerState(props.sessionId);
     const permissionLocationVersion = useSessionMessagesVersion(props.sessionId, props.permissionRequests.length > 0);
+    const approvalLocationVersion = useSessionMessagesVersion(props.sessionId, (props.approvalRequests?.length ?? 0) > 0);
 
     const permissionLocationsById = React.useMemo(() => {
         if (props.permissionRequests.length === 0) {
@@ -318,7 +354,45 @@ function AgentInputAttentionRequestsWithLocations(
         props.permissionRequests,
     ]);
 
-    return <AgentInputAttentionRequests {...props} permissionLocationsById={permissionLocationsById} />;
+    const approvalLocationsByArtifactId = React.useMemo(() => {
+        const approvalRequests = props.approvalRequests ?? [];
+        if (approvalRequests.length === 0) {
+            return EMPTY_PERMISSION_LOCATIONS_BY_ID;
+        }
+
+        return new Map(
+            resolveApprovalToolCallLocations({
+                approvals: approvalRequests.map((entry) => ({
+                    artifactId: entry.artifact.id,
+                    approval: entry.approval,
+                })),
+                sessionId: props.sessionId,
+                messageIdsOldestFirst: committedMessageIdsOldestFirst,
+                messagesById: committedMessagesById,
+                resolveRouteMessageId: (messageId, _message) =>
+                    buildSessionMessageRouteId({
+                        messageId,
+                        messagesById: committedMessagesById,
+                        reducerState: committedMessagesReducerState,
+                    }),
+            }),
+        );
+    }, [
+        approvalLocationVersion,
+        committedMessageIdsOldestFirst,
+        committedMessagesById,
+        committedMessagesReducerState,
+        props.approvalRequests,
+        props.sessionId,
+    ]);
+
+    return (
+        <AgentInputAttentionRequests
+            {...props}
+            permissionLocationsById={permissionLocationsById}
+            approvalLocationsByArtifactId={approvalLocationsByArtifactId}
+        />
+    );
 }
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
@@ -708,7 +782,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-    const keyboardHeight = useKeyboardHeight();
     const voiceEnabled = useFeatureEnabled('voice');
     const uiBackdropBlurEnabled = useLocalSetting('uiBackdropBlurEnabled') !== false;
     const keyboardShortcutsV2Enabled = useSetting('keyboardShortcutsV2Enabled') === true;
@@ -738,27 +811,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         return computeAgentInputDefaultMaxHeight({
             platform: Platform.OS,
             screenHeight,
-            keyboardHeight,
+            keyboardHeight: 0,
         });
-    }, [keyboardHeight, screenHeight]);
-    const keyboardOpenPanelMaxHeight = React.useMemo(() => {
-        if (Platform.OS === 'web') return undefined;
-        return computeAgentInputKeyboardOpenPanelMaxHeight({
-            screenHeight,
-            keyboardHeight,
-        });
-    }, [keyboardHeight, screenHeight]);
+    }, [screenHeight]);
+    const hostPanelMaxHeight = Platform.OS === 'web' ? undefined : props.maxPanelHeight;
     const [panelHeightPx, setPanelHeightPx] = React.useState<number | null>(null);
     const [inputContainerHeightPx, setInputContainerHeightPx] = React.useState<number | null>(null);
     const [inputViewportHeightPx, setInputViewportHeightPx] = React.useState<number | null>(null);
     const [actionFooterHeightPx, setActionFooterHeightPx] = React.useState<number>(0);
     const nativeKeyboardVariableSectionMaxHeight = React.useMemo(() => {
-        if (typeof keyboardOpenPanelMaxHeight !== 'number') return undefined;
+        if (typeof hostPanelMaxHeight !== 'number') return undefined;
         return computeAgentInputKeyboardOpenVariableSectionMaxHeight({
-            panelMaxHeight: keyboardOpenPanelMaxHeight,
+            panelMaxHeight: hostPanelMaxHeight,
             footerHeight: actionFooterHeightPx,
         });
-    }, [actionFooterHeightPx, keyboardOpenPanelMaxHeight]);
+    }, [actionFooterHeightPx, hostPanelMaxHeight]);
     const fallbackInputMaxHeight = props.inputMaxHeight ?? defaultInputMaxHeight;
     const resolvedInputMaxHeight = React.useMemo(() => {
         return computeMeasuredPanelInputMaxHeight({
@@ -1116,31 +1183,54 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const activeWordForSelection = findActiveWord(inputState.text, inputState.selection, props.autocompletePrefixes);
         const insertionStart = activeWordForSelection?.offset ?? inputState.selection.start;
 
-        // Apply the suggestion
-        const result = applySuggestion(
-            inputState.text,
-            inputState.selection,
-            suggestion.text,
-            props.autocompletePrefixes,
-            true // add space after
-        );
+        const applyResolvedSelection = (result: Readonly<{ text: string; cursorPosition: number }>) => {
+            inputRef.current?.setTextAndSelection(result.text, {
+                start: result.cursorPosition,
+                end: result.cursorPosition
+            });
+        };
 
-        // Use imperative API to set text and selection
-        inputRef.current.setTextAndSelection(result.text, {
-            start: result.cursorPosition,
-            end: result.cursorPosition
+        const applyDefaultSelection = () => {
+            const result = applySuggestion(
+                inputState.text,
+                inputState.selection,
+                suggestion.text,
+                props.autocompletePrefixes,
+                true
+            );
+            applyResolvedSelection(result);
+
+            const mention = createStructuredInputMentionFromSuggestion({ suggestion, start: insertionStart });
+            if (mention) {
+                setStructuredInputMentions((current) => [
+                    ...current.filter((existing) => existing.start !== mention.start || existing.end !== mention.end),
+                    mention,
+                ]);
+            }
+        };
+
+        const override = props.onAutocompleteSuggestionSelect?.({
+            suggestion,
+            inputText: inputState.text,
+            selection: inputState.selection,
+            activeWord: activeWordForSelection ?? null,
         });
-        const mention = createStructuredInputMentionFromSuggestion({ suggestion, start: insertionStart });
-        if (mention) {
-            setStructuredInputMentions((current) => [
-                ...current.filter((existing) => existing.start !== mention.start || existing.end !== mention.end),
-                mention,
-            ]);
+
+        if (override) {
+            void Promise.resolve(override).then((result) => {
+                if (result.handled) {
+                    applyResolvedSelection(result);
+                } else {
+                    applyDefaultSelection();
+                }
+                hapticsLight();
+            });
+            return;
         }
 
-        // Small haptic feedback
+        applyDefaultSelection();
         hapticsLight();
-    }, [suggestions, inputState, props.autocompletePrefixes]);
+    }, [suggestions, inputState, props.autocompletePrefixes, props.onAutocompleteSuggestionSelect]);
 
     // Action menu popover state
     const composerAnchorRef = React.useRef<View>(null);
@@ -1151,10 +1241,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         edgeThreshold: 2,
     });
     const permissionRequestsMaxHeightPx = React.useMemo(() => {
-        const available = Math.max(1, screenHeight - keyboardHeight);
+        const available = Math.max(1, props.maxPanelHeight ?? screenHeight);
         const desired = Math.round(available * 0.34);
         return Math.max(160, Math.min(320, desired));
-    }, [keyboardHeight, screenHeight]);
+    }, [props.maxPanelHeight, screenHeight]);
 
             const permissionModeOptions = React.useMemo(() => {
                 return getPermissionModeOptionsForSession(agentId, props.metadata ?? null);
@@ -1987,13 +2077,44 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         return enterToSendEnabled ? 'submit' : 'newline';
     }, [enterToSendEnabled]);
 
+    const handlePanelFilesDropped = React.useCallback((event: any) => {
+        const files = extractWebAttachmentFilesFromDataTransfer(event?.dataTransfer);
+        if (files.length > 0) {
+            props.onAttachmentsAdded?.(files);
+        }
+    }, [props.onAttachmentsAdded]);
+
+    const panelDropZoneHandlers = useWebFileDropZone({
+        enabled: Platform.OS === 'web' && typeof props.onAttachmentsAdded === 'function',
+        onFilesDropped: handlePanelFilesDropped,
+        onFileDragActiveChange: setFileDragActive,
+    });
+
+    const fileDropOverlayBackdropStyle = React.useMemo<ViewStyle>(() => {
+        const backgroundColor = theme.colors.overlay.scrimWizard ?? theme.colors.overlay.scrim;
+        if (Platform.OS === 'web') {
+            return createBackdropWebStyle({
+                backgroundColor,
+                blurPx: 2,
+                enableBlur: uiBackdropBlurEnabled,
+                fallbackBackgroundColorWhenBlurDisabled: theme.colors.overlay.scrimStrong ?? theme.colors.overlay.scrim,
+            }) as unknown as ViewStyle;
+        }
+        return createBackdropNativeStyle({ backgroundColor });
+    }, [
+        theme.colors.overlay.scrim,
+        theme.colors.overlay.scrimStrong,
+        theme.colors.overlay.scrimWizard,
+        uiBackdropBlurEnabled,
+    ]);
+
     const renderComposerInput = () => (
         <View
             ref={composerAnchorRef}
             collapsable={false}
             style={[styles.inputContainer, props.minHeight ? { minHeight: props.minHeight } : undefined]}
             onLayout={(event) => {
-                setInputContainerHeightPx(event.nativeEvent.layout.height);
+                updateNullableLayoutHeight(setInputContainerHeightPx, event.nativeEvent.layout.height);
             }}
         >
             <MultiTextInput
@@ -2013,11 +2134,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 onSubmitEditing={handleSubmitEditing}
                 maxHeight={resolvedInputMaxHeight}
                 editable={!props.disabled}
-                onFilesDropped={props.onAttachmentsAdded}
                 onFilesPasted={props.onAttachmentsAdded}
-                onFileDragActiveChange={typeof props.onAttachmentsAdded === 'function' ? setFileDragActive : undefined}
                 onLayout={(event) => {
-                    setInputViewportHeightPx(event.nativeEvent.layout.height);
+                    updateNullableLayoutHeight(setInputViewportHeightPx, event.nativeEvent.layout.height);
                 }}
             />
         </View>
@@ -2030,7 +2149,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 pendingUserActionRequests.length > 0 ||
                 pendingApprovalRequests.length > 0
             ) ? (
-                composerPermissionRequests.length > 0 ? (
+                composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0 ? (
                     <AgentInputAttentionRequestsWithLocations
                         sessionId={props.sessionId}
                         permissionRequests={composerPermissionRequests}
@@ -2058,6 +2177,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         userActionRequests={pendingUserActionRequests}
                         approvalRequests={pendingApprovalRequests}
                         permissionLocationsById={EMPTY_PERMISSION_LOCATIONS_BY_ID}
+                        approvalLocationsByArtifactId={EMPTY_PERMISSION_LOCATIONS_BY_ID}
                         metadata={props.metadata || null}
                         canApprovePermissions={canApprovePermissions}
                         disabledReason={props.permissionDisabledReason}
@@ -2363,15 +2483,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 })}
 
                 {/* Box 2: Action Area (Input + Send) */}
-                <View
+                <WebDropTargetView
+                    testID="agent-input-drop-zone"
                     style={[
                         styles.unifiedPanel,
                         props.panelStyle,
-                        typeof keyboardOpenPanelMaxHeight === 'number' ? { maxHeight: keyboardOpenPanelMaxHeight } : null,
+                        typeof hostPanelMaxHeight === 'number' ? { maxHeight: hostPanelMaxHeight } : null,
                     ]}
                     onLayout={(event) => {
-                        setPanelHeightPx(event.nativeEvent.layout.height);
+                        updateNullableLayoutHeight(setPanelHeightPx, event.nativeEvent.layout.height);
                     }}
+                    {...panelDropZoneHandlers}
                 >
                     {fileDragActive && typeof props.onAttachmentsAdded === 'function' ? (
                         <View
@@ -2379,12 +2501,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             pointerEvents="none"
                             style={[
                                 styles.fileDropOverlay,
-                                Platform.OS === 'web' && !uiBackdropBlurEnabled
-                                    ? ({ backgroundColor: theme.colors.overlay.scrimStrong } as ViewStyle)
-                                    : null,
-                                Platform.OS === 'web' && uiBackdropBlurEnabled
-                                    ? ({ backdropFilter: 'blur(2px)' } as unknown as ViewStyle)
-                                    : null,
+                                fileDropOverlayBackdropStyle,
                             ]}
                         >
                             <View style={styles.fileDropOverlayContent}>
@@ -2415,17 +2532,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             <View
                                 style={styles.nativeKeyboardFooterSection}
                                 onLayout={(event) => {
-                                    const nextHeight = Math.trunc(event.nativeEvent.layout.height);
-                                    setActionFooterHeightPx((currentHeight) => (
-                                        currentHeight === nextHeight ? currentHeight : nextHeight
-                                    ));
+                                    updateLayoutHeight(setActionFooterHeightPx, event.nativeEvent.layout.height);
                                 }}
                             >
                                 {renderActionRows()}
                             </View>
                         </View>
                     )}
-                </View>
+                </WebDropTargetView>
             </View>
         </View>
     );
