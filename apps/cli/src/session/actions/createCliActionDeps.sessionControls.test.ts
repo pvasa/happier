@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
+import { ReviewStartInputSchema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const mocks = vi.hoisted(() => ({
@@ -350,13 +351,13 @@ describe('createCliActionDeps session controls', () => {
       rawSession: { metadata: {} },
     });
 
-    const input = {
+    const input = ReviewStartInputSchema.parse({
       engineIds: ['codex'],
       instructions: 'Check correctness.',
       runLocation: 'current_session',
       changeType: 'uncommitted',
       base: { kind: 'none' },
-    };
+    });
     await expect(deps.reviewStartInline?.({
       sessionId: 'sess_1',
       engineId: 'codex',
