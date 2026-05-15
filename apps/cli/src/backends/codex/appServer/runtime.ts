@@ -119,6 +119,12 @@ function isCodexAppServerGoalMethodUnavailableError(error: unknown, appServerMet
         || isCodexAppServerInvalidRequestForMethodError(error, appServerMethod);
 }
 
+function isCodexAppServerReviewStartUnavailableError(error: unknown): boolean {
+    if (isCodexAppServerMethodNotFoundError(error)) return true;
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    return /review\/start/i.test(message) && /method\s+(unavailable|unsupported)/i.test(message);
+}
+
 type PendingTurn = Readonly<{
     threadId: string;
     turnId: string | null;
@@ -147,6 +153,18 @@ type CodexAppServerPermissionSupport = 'unknown' | 'supported' | 'legacy';
 
 type CodexAppServerPromptOptions = Readonly<{
     metadata?: unknown;
+}>;
+
+export type CodexAppServerReviewTarget =
+    | Readonly<{ type: 'uncommittedChanges' }>
+    | Readonly<{ type: 'baseBranch'; branch: string }>
+    | Readonly<{ type: 'commit'; sha: string; title?: string }>
+    | Readonly<{ type: 'custom'; instructions: string }>
+    | Readonly<Record<string, unknown>>;
+
+export type CodexAppServerReviewStartRequest = Readonly<{
+    target: CodexAppServerReviewTarget;
+    delivery?: 'inline' | 'detached';
 }>;
 
 type PermissionHandlerSubset = Readonly<{
@@ -484,6 +502,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     steerPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
+    startReview: (_request: CodexAppServerReviewStartRequest) => Promise<void | UnsupportedSessionRuntimeMethodResult>;
     flushTurn: () => Promise<void>;
     setGoal: (_objective: string | undefined, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult | GoalControlNotFoundResult>;
     clearGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
@@ -529,6 +548,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const reasoningTextByItemId = new Map<string, string>();
     const latestAssistantItemIdByStreamScope = new Map<string, string>();
     const normalizedAssistantFinalSeenByStreamScope = new Set<string>();
+    const nativeReviewCompletionTextByStreamScope = new Map<string, string>();
     const rawAssistantFinalByStreamScope = new Map<string, PendingRawAssistantFinal>();
     const persistedMediaDedupeKeys = new Set<string>();
     const captureCurrentSteerContext = (): CodexAppServerSteerContext => ({
@@ -834,6 +854,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
 
         if (update.type === 'assistant-text-final') {
+            const nativeReviewText = nativeReviewCompletionTextByStreamScope.get(context.streamScopeId);
+            if (nativeReviewText && nativeReviewText.trim() === update.text.trim()) {
+                normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
+                rawAssistantFinalByStreamScope.delete(context.streamScopeId);
+                return;
+            }
             latestAssistantItemIdByStreamScope.set(context.streamScopeId, update.itemId);
             normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
             rawAssistantFinalByStreamScope.delete(context.streamScopeId);
@@ -860,6 +886,35 @@ export function createCodexAppServerRuntime(params: Readonly<{
             rawAssistantFinalByStreamScope.set(context.streamScopeId, {
                 text: update.text,
                 sidechainId: context.sidechainId,
+            });
+            return;
+        }
+
+        if (update.type === 'review-mode-started') {
+            params.session.sendSessionEvent?.({
+                type: 'message',
+                message: `Codex review started: ${update.review}`,
+            });
+            return;
+        }
+
+        if (update.type === 'review-mode-completed') {
+            latestAssistantItemIdByStreamScope.set(context.streamScopeId, update.itemId);
+            normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
+            rawAssistantFinalByStreamScope.delete(context.streamScopeId);
+            nativeReviewCompletionTextByStreamScope.set(context.streamScopeId, update.review);
+            appendStreamFinal(buildItemStateKey(context.streamScopeId, update.itemId), update.review, assistantTextByItemId, (deltaText) => {
+                itemTranscriptBridge.appendAssistantDelta({
+                    deltaText,
+                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    sidechainId: context.sidechainId,
+                });
+            }, (finalText) => {
+                itemTranscriptBridge.overrideAssistantText({
+                    text: finalText,
+                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    sidechainId: context.sidechainId,
+                });
             });
             return;
         }
@@ -1030,6 +1085,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         reasoningTextByItemId.clear();
         latestAssistantItemIdByStreamScope.clear();
         normalizedAssistantFinalSeenByStreamScope.clear();
+        nativeReviewCompletionTextByStreamScope.clear();
         rawAssistantFinalByStreamScope.clear();
         pendingHappierTitleToolNamesByCallId.clear();
         await itemTranscriptBridge.flushAll({
@@ -1842,6 +1898,39 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
     };
 
+    const recoverFromCodexAuthAccountChange = async (activeThreadId: string): Promise<void> => {
+        params.session.sendSessionEvent({
+            type: 'message',
+            message: CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_RECOVERY_STATUS_MESSAGE,
+        });
+        logger.debug('[codex-app-server] restarting process after Codex auth account changed', {
+            threadId: activeThreadId,
+        });
+        await disposeClient();
+        const resumedClient = await ensureClient();
+        const resumedThread = await resumeThread(resumedClient, activeThreadId, {
+            preserveRequestedThreadId: true,
+        });
+        await applyStartOrLoadResponse(
+            resumedClient,
+            resumedThread.nextThreadId,
+            resumedThread.response,
+        );
+    };
+
+    const beginPendingTurnForThread = (activeThreadId: string): PendingTurn => {
+        pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
+        turnChangeCollector.beginTurn();
+        const activeTurn = createPendingTurn(activeThreadId);
+        pendingTurn = activeTurn;
+        latestPendingTurnId = null;
+        persistedMediaDedupeKeys.clear();
+        turnInFlight = true;
+        markActiveTurnSteerable();
+        setThinking(true);
+        return activeTurn;
+    };
+
     return {
         getSessionId: () => threadId,
         // Codex app-server exposes `turn/steer`, which appends user input to the active in-flight
@@ -2026,6 +2115,47 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw failure;
             }
         },
+        startReview: async (request: CodexAppServerReviewStartRequest) => {
+            let recoveredAuthAccountChange = false;
+            while (true) {
+                const activeThreadId = threadId;
+                if (!activeThreadId) {
+                    throw new Error('Codex app-server startReview requires an active thread');
+                }
+                if (pendingTurn) {
+                    throw new Error('Codex app-server already has a turn in flight');
+                }
+                const client = await ensureClient();
+                const activeTurn = beginPendingTurnForThread(activeThreadId);
+                try {
+                    const response = await client.request('review/start', {
+                        threadId: activeThreadId,
+                        target: request.target,
+                        delivery: request.delivery ?? 'inline',
+                    });
+                    const startedTurnId = readTurnId(response);
+                    if (startedTurnId) {
+                        pendingTurn = { ...activeTurn, turnId: startedTurnId };
+                        latestPendingTurnId = startedTurnId;
+                    }
+                    await (pendingTurn ?? activeTurn).promise;
+                    return undefined;
+                } catch (error) {
+                    const failure = error instanceof Error ? error : new Error(String(error));
+                    if (isCodexAppServerReviewStartUnavailableError(failure)) {
+                        await finishPendingTurn({ flushReason: 'abort' });
+                        return unsupportedSessionRuntimeMethod('review/start');
+                    }
+                    await finishPendingTurn({ error: failure, flushReason: 'abort' });
+                    if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
+                        recoveredAuthAccountChange = true;
+                        await recoverFromCodexAuthAccountChange(activeThreadId);
+                        continue;
+                    }
+                    throw failure;
+                }
+            }
+        },
         sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             let recoveredAuthAccountChange = false;
             while (true) {
@@ -2037,15 +2167,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     throw new Error('Codex app-server already has a turn in flight');
                 }
                 const client = await ensureClient();
-                pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
-                turnChangeCollector.beginTurn();
-                const activeTurn = createPendingTurn(activeThreadId);
-                pendingTurn = activeTurn;
-                latestPendingTurnId = null;
-                persistedMediaDedupeKeys.clear();
-                turnInFlight = true;
-                markActiveTurnSteerable();
-                setThinking(true);
+                const activeTurn = beginPendingTurnForThread(activeThreadId);
                 try {
                     const collaborationMode = currentModeId
                         ? resolveCodexAppServerCollaborationModeSelection({

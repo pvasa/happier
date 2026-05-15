@@ -2,7 +2,13 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId, StartSessionResult } from '@/agent/core';
 import type { PermissionMode } from '@/api/types';
+import type { ExecutionRunBackendStartContext } from '@/agent/executionRuns/registry/executionRunBackendTypes';
 import { createCodexAppServerRuntime } from '@/backends/codex/appServer/runtime';
+import type {
+  CodexAppServerReviewStartRequest,
+  CodexAppServerReviewStartResult,
+} from '@/backends/codex/appServer/reviews/codexAppServerReviewTypes';
+import { resolveCodexAppServerNativeReviewRequest } from '@/backends/codex/appServer/reviews/resolveCodexAppServerNativeReviewRequest';
 import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
 function isCodexProvider(provider: ACPProvider): boolean {
@@ -26,6 +32,7 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
   cwd: string;
   env?: NodeJS.ProcessEnv;
   permissionMode: PermissionMode;
+  start?: ExecutionRunBackendStartContext | null;
   permissionHandler?: Readonly<{
     handleToolCall: (toolCallId: string, toolName: string, input: unknown) => Promise<{
       decision: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
@@ -38,6 +45,7 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
   let sessionId: SessionId | null = null;
   let lastObservedMessageSeq = 0;
   let inFlightPrompt: Promise<void> | null = null;
+  let nativeReviewStartAttempted = false;
   const assistantTextByLocalId = new Map<string, string>();
   const toolNameByCallId = new Map<string, string>();
 
@@ -170,9 +178,43 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
     return sessionId;
   };
 
+  type ReviewCapableRuntime = typeof runtime & Readonly<{
+    startReview?: (request: CodexAppServerReviewStartRequest) => Promise<CodexAppServerReviewStartResult>;
+  }>;
+
+  const startNativeReviewIfAvailable = async (): Promise<'started' | 'fallback'> => {
+    if (nativeReviewStartAttempted) return 'fallback';
+    nativeReviewStartAttempted = true;
+
+    const resolution = resolveCodexAppServerNativeReviewRequest({ start: args.start ?? null });
+    if (!resolution.ok) {
+      if (resolution.reason === 'invalid_review_input') {
+        throw new Error(resolution.error ?? 'Invalid review input');
+      }
+      return 'fallback';
+    }
+
+    const startReview = (runtime as ReviewCapableRuntime).startReview;
+    if (typeof startReview !== 'function') return 'fallback';
+
+    const result = await startReview(resolution.request);
+    if (result && result.ok === false && result.errorCode === 'unsupported_session_runtime_method') {
+      return 'fallback';
+    }
+    return 'started';
+  };
+
+  const sendRuntimePrompt = (prompt: string): Promise<void> => {
+    const special = parseSpecialCommand(prompt);
+    return special.type === 'compact'
+      ? runtime.compactContext(special.originalMessage ?? prompt.trim())
+      : runtime.sendPrompt(prompt);
+  };
+
   return {
     async startSession(initialPrompt?: string): Promise<StartSessionResult> {
       assistantTextByLocalId.clear();
+      nativeReviewStartAttempted = false;
       const startedSessionId = await ensureStarted();
       if (typeof initialPrompt === 'string' && initialPrompt.trim()) {
         await this.sendPrompt(startedSessionId, initialPrompt);
@@ -189,10 +231,11 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
         sessionId = activeSessionId;
       }
       assistantTextByLocalId.clear();
-      const special = parseSpecialCommand(prompt);
-      const promptWork = special.type === 'compact'
-        ? runtime.compactContext(special.originalMessage ?? prompt.trim())
-        : runtime.sendPrompt(prompt);
+      const promptWork = (async () => {
+        const reviewStartResult = await startNativeReviewIfAvailable();
+        if (reviewStartResult === 'started') return;
+        await sendRuntimePrompt(prompt);
+      })();
       inFlightPrompt = promptWork;
       try {
         await promptWork;
@@ -218,6 +261,7 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
       await runtime.reset();
       sessionId = null;
       inFlightPrompt = null;
+      nativeReviewStartAttempted = false;
       assistantTextByLocalId.clear();
     },
   };

@@ -38,6 +38,7 @@ export const executionRunBackendFactory: ExecutionRunBackendFactory = (opts) => 
       env,
       permissionHandler: opts.permissionHandler,
       permissionMode,
+      start: opts.start ?? null,
     });
   }
 

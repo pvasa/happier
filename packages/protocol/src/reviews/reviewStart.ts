@@ -20,6 +20,9 @@ export type ReviewBase = z.infer<typeof ReviewBaseSchema>;
 export const ReviewEngineIdSchema = z.string().trim().min(1);
 export type ReviewEngineId = z.infer<typeof ReviewEngineIdSchema>;
 
+export const ReviewRunLocationSchema = z.enum(['execution_run', 'current_session']);
+export type ReviewRunLocation = z.infer<typeof ReviewRunLocationSchema>;
+
 export const CodeRabbitReviewEngineInputSchema = z
   .object({
     configFiles: z.array(z.string().min(1)).optional(),
@@ -45,7 +48,8 @@ export const ReviewStartInputSchema = z
   .object({
     sessionId: z.string().min(1).optional(),
     engineIds: z.array(ReviewEngineIdSchema).min(1),
-    instructions: z.string().trim().min(1),
+    instructions: z.string().trim().default(''),
+    runLocation: ReviewRunLocationSchema.default('execution_run'),
     // Intentionally default to uncommitted changes: the common "review what I just changed"
     // flow should stay narrowly scoped unless the user explicitly broadens it.
     changeType: ReviewChangeTypeSchema.default('uncommitted'),

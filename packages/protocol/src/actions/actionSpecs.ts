@@ -860,7 +860,6 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
           title: 'Instructions',
           description: 'What you want the reviewers to focus on.',
           widget: 'textarea',
-          required: true,
         },
         {
           path: 'changeType',

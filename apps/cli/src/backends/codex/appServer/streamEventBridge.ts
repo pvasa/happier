@@ -32,6 +32,8 @@ export type CodexAppServerStreamUpdate =
     | Readonly<{ type: 'session-media'; itemId: string; media: SessionMediaSource[] }>
     | Readonly<{ type: 'reasoning-delta'; itemId: string; text: string }>
     | Readonly<{ type: 'reasoning-final'; itemId: string; text: string }>
+    | Readonly<{ type: 'review-mode-started'; itemId: string; review: string }>
+    | Readonly<{ type: 'review-mode-completed'; itemId: string; review: string }>
     | Readonly<{ type: 'context-compaction'; phase: 'started' | 'completed'; itemId: string }>
     | Readonly<{ type: 'turn-diff-updated'; turnId: string | null; unifiedDiff: string }>
     | Readonly<{ type: 'tool-call'; toolKind: ToolKind; callId: string; name: string; input: unknown }>
@@ -105,6 +107,24 @@ function readItemType(value: RecordLike): string | null {
 
 function readContextCompactionItemId(item: RecordLike): string | null {
     return readItemType(item) === 'contextcompaction' ? readItemId(item) : null;
+}
+
+function readReviewModeUpdate(
+    item: RecordLike,
+    phase: 'started' | 'completed',
+): Extract<CodexAppServerStreamUpdate, { type: 'review-mode-started' | 'review-mode-completed' }> | null {
+    const itemType = readItemType(item);
+    if (phase === 'completed' && itemType === 'enteredreviewmode') return null;
+    if (phase === 'started' && itemType === 'exitedreviewmode') return null;
+    if (itemType !== 'enteredreviewmode' && itemType !== 'exitedreviewmode') return null;
+
+    const itemId = readItemId(item);
+    const review = readText(item, ['review', 'text', 'message']);
+    if (!itemId || !review) return null;
+
+    return itemType === 'enteredreviewmode'
+        ? { type: 'review-mode-started', itemId, review }
+        : { type: 'review-mode-completed', itemId, review };
 }
 
 function omitKeys(value: RecordLike, keys: readonly string[]): RecordLike {
@@ -227,6 +247,9 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
             if (notification.method === 'item/started') {
                 const item = readItem(params);
                 if (item) {
+                    const reviewModeUpdate = readReviewModeUpdate(item, 'started');
+                    if (reviewModeUpdate) return [reviewModeUpdate];
+
                     const itemId = readContextCompactionItemId(item);
                     if (itemId) return [{ type: 'context-compaction', phase: 'started', itemId }];
                 }
@@ -258,6 +281,9 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
             const itemId = readItemId(item);
             const itemType = readItemType(item);
             if (!itemId || !itemType) return [];
+
+            const reviewModeUpdate = readReviewModeUpdate(item, 'completed');
+            if (reviewModeUpdate) return [reviewModeUpdate];
 
             if (itemType === 'contextcompaction') {
                 return [{ type: 'context-compaction', phase: 'completed', itemId }];
