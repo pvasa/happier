@@ -615,6 +615,7 @@ export const zhHans: TranslationStructure = {
             composerAbortConfirm: '确认中止',
             composerFocus: '聚焦输入框',
             composerSendImmediate: '立即发送',
+            composerSendPending: '发送到待处理队列',
             commandPaletteOpen: '打开命令面板',
             modeCycle: '切换模式',
             shortcutsHelpOpen: '打开快捷键帮助',

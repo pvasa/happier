@@ -9,10 +9,12 @@ export type BusySteerSendPolicy = 'steer_immediately' | 'server_pending';
 export function chooseSubmitMode(opts: {
     configuredMode: MessageSendMode;
     busySteerSendPolicy?: BusySteerSendPolicy;
+    explicitMode?: MessageSendMode;
     session: Session | null;
 }): MessageSendMode {
     const configuredMode = opts.configuredMode;
-    if (configuredMode === 'interrupt') return 'interrupt';
+    const requestedMode = opts.explicitMode ?? configuredMode;
+    if (requestedMode === 'interrupt') return 'interrupt';
 
     const session = opts.session;
     // Server-side pending queue V2 support is negotiated via session summary fields.
@@ -21,7 +23,7 @@ export function chooseSubmitMode(opts: {
     if (!supportsQueue) {
         // If the user explicitly configured pending but the server doesn't support it,
         // fall back to agent_queue to avoid "phantom pending" that can never be processed.
-        return configuredMode === 'server_pending' ? 'agent_queue' : configuredMode;
+        return requestedMode === 'server_pending' ? 'agent_queue' : requestedMode;
     }
 
     // If we have an explicit CLI version published, gate server_pending on it to avoid
@@ -30,8 +32,12 @@ export function chooseSubmitMode(opts: {
     const trimmedCliVersion = typeof cliVersion === 'string' ? cliVersion.trim() : '';
     if (trimmedCliVersion) {
         if (!isVersionSupported(trimmedCliVersion, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION)) {
-            return configuredMode === 'server_pending' ? 'agent_queue' : configuredMode;
+            return requestedMode === 'server_pending' ? 'agent_queue' : requestedMode;
         }
+    }
+
+    if (opts.explicitMode === 'server_pending') {
+        return 'server_pending';
     }
 
     const controlledByUser = isSessionExclusiveLocalControl(session);

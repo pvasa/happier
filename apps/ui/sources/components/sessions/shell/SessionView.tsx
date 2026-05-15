@@ -2029,12 +2029,23 @@ function SessionViewLoaded({
                     const sendComposerText = async (
                         messageToSend: string,
                         composerTextBeforeSend: string,
-                        sendIntent?: Readonly<{ forceImmediate?: boolean; structuredInputMetaOverrides?: Record<string, unknown> }>,
+                        sendIntent?: Readonly<{
+                            forceImmediate?: boolean;
+                            deliveryIntent?: 'server_pending';
+                            structuredInputMetaOverrides?: Record<string, unknown>;
+                        }>,
                     ) => {
                         const configuredMode = storage.getState().settings.sessionMessageSendMode;
                         const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
-                        const submitMode = chooseSubmitMode({ configuredMode, busySteerSendPolicy, session });
                         const forceImmediateSend = sendIntent?.forceImmediate === true;
+                        const submitMode = chooseSubmitMode({
+                            configuredMode,
+                            busySteerSendPolicy,
+                            explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
+                                ? 'server_pending'
+                                : undefined,
+                            session,
+                        });
 
                         const additionalMessage = messageToSend;
                         const trimmedText = messageToSend.trim();

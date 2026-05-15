@@ -6,6 +6,7 @@ export type KeyboardCommandId =
     | 'composer.abortConfirm'
     | 'composer.focus'
     | 'composer.sendImmediate'
+    | 'composer.sendPending'
     | 'commandPalette.open'
     | 'mode.cycle'
     | 'permission.cycle'

@@ -488,6 +488,7 @@ export const en = {
             composerAbortConfirm: 'Confirm abort',
             composerFocus: 'Focus composer',
             composerSendImmediate: 'Send immediately',
+            composerSendPending: 'Send to pending queue',
             commandPaletteOpen: 'Open command palette',
             modeCycle: 'Cycle mode',
             shortcutsHelpOpen: 'Open shortcuts help',

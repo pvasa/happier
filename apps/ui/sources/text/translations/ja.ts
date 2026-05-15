@@ -600,6 +600,7 @@ export const ja: TranslationStructure = {
             composerAbortConfirm: '中断を確認',
             composerFocus: 'コンポーザーにフォーカス',
             composerSendImmediate: 'すぐに送信',
+            composerSendPending: '保留キューに送信',
             commandPaletteOpen: 'コマンドパレットを開く',
             modeCycle: 'モードを切り替え',
             shortcutsHelpOpen: 'ショートカットヘルプを開く',

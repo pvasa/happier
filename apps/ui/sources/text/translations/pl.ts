@@ -628,6 +628,7 @@ export const pl: TranslationStructure = {
             composerAbortConfirm: 'Potwierdź przerwanie',
             composerFocus: 'Ustaw fokus na edytorze',
             composerSendImmediate: 'Wyślij natychmiast',
+            composerSendPending: 'Wyślij do kolejki oczekujących',
             commandPaletteOpen: 'Otwórz paletę poleceń',
             modeCycle: 'Przełącz tryb',
             shortcutsHelpOpen: 'Otwórz pomoc skrótów',

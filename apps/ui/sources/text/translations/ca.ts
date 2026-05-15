@@ -607,6 +607,7 @@ export const ca: TranslationStructure = {
             composerAbortConfirm: 'Confirma la interrupció',
             composerFocus: 'Enfoca el compositor',
             composerSendImmediate: 'Envia immediatament',
+            composerSendPending: 'Envia a la cua pendent',
             commandPaletteOpen: 'Obre la paleta d’ordres',
             modeCycle: 'Canvia de mode',
             shortcutsHelpOpen: 'Obre l’ajuda de dreceres',

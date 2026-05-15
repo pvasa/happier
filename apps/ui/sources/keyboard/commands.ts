@@ -21,6 +21,11 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         settingsTitleKey: 'settingsKeyboard.commands.composerSendImmediate',
     },
     {
+        id: 'composer.sendPending',
+        defaultBinding: { binding: 'Mod+Shift+Enter', allowInEditable: true },
+        settingsTitleKey: 'settingsKeyboard.commands.composerSendPending',
+    },
+    {
         id: 'commandPalette.open',
         defaultBindings: [
             { binding: 'Alt+K', platforms: ['web'] },

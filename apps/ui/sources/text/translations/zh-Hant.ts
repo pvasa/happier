@@ -637,6 +637,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
           composerAbortConfirm: '確認中止',
           composerFocus: '聚焦輸入框',
           composerSendImmediate: '立即傳送',
+          composerSendPending: '傳送到待處理佇列',
           commandPaletteOpen: '開啟命令面板',
           modeCycle: '切換模式',
           shortcutsHelpOpen: '開啟快捷鍵說明',

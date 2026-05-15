@@ -632,6 +632,7 @@ export const ru: TranslationStructure = {
             composerAbortConfirm: 'Подтвердить остановку',
             composerFocus: 'Перейти к вводу',
             composerSendImmediate: 'Отправить сразу',
+            composerSendPending: 'Отправить в очередь ожидания',
             commandPaletteOpen: 'Открыть палитру команд',
             modeCycle: 'Переключить режим',
             shortcutsHelpOpen: 'Открыть справку по сочетаниям',

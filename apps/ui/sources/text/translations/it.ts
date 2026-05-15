@@ -615,6 +615,7 @@ export const it: TranslationStructure = {
             composerAbortConfirm: 'Conferma interruzione',
             composerFocus: 'Metti a fuoco il compositore',
             composerSendImmediate: 'Invia subito',
+            composerSendPending: 'Invia alla coda in sospeso',
             commandPaletteOpen: 'Apri palette comandi',
             modeCycle: 'Cambia modalità',
             shortcutsHelpOpen: 'Apri guida scorciatoie',
