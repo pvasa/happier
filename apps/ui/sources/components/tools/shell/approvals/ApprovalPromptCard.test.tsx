@@ -3,7 +3,8 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import type { ApprovalRequestV1 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen } from '@/dev/testkit';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -77,6 +78,16 @@ function approvalRequest(): ApprovalRequestV1 {
     };
 }
 
+function approvalArtifact(serverId?: string): Pick<DecryptedArtifact, 'id' | 'header'> {
+    return {
+        id: 'approval-1',
+        header: {
+            title: null,
+            ...(serverId ? { serverId } : {}),
+        },
+    };
+}
+
 describe('ApprovalPromptCard', () => {
     it('renders the action approval summary in inline chrome', async () => {
         const { ApprovalPromptCard } = await import('./ApprovalPromptCard');
@@ -84,7 +95,7 @@ describe('ApprovalPromptCard', () => {
         const screen = await renderScreen(
             <ApprovalPromptCard
                 chrome="inline"
-                artifact={{ id: 'approval-1', header: { serverId: 'server-1' } } as any}
+                artifact={approvalArtifact('server-1')}
                 approval={approvalRequest()}
                 sessionId="session-1"
                 canApprove={true}
@@ -102,7 +113,7 @@ describe('ApprovalPromptCard', () => {
 
         const screen = await renderScreen(
             <ApprovalPromptCard
-                artifact={{ id: 'approval-1', header: { serverId: 'server-1' } } as any}
+                artifact={approvalArtifact('server-1')}
                 approval={approvalRequest()}
                 sessionId="session-1"
                 canApprove={true}
@@ -117,6 +128,27 @@ describe('ApprovalPromptCard', () => {
         expect(routerPushSpy).toHaveBeenCalledWith('/session/session-1?jumpSeq=10');
     });
 
+    it('places the primary approve action before the reject action', async () => {
+        const { ApprovalPromptCard } = await import('./ApprovalPromptCard');
+
+        const screen = await renderScreen(
+            <ApprovalPromptCard
+                artifact={approvalArtifact('server-1')}
+                approval={approvalRequest()}
+                sessionId="session-1"
+                canApprove={true}
+            />,
+        );
+
+        const testIdOrder = collectRenderedTestIds(screen.tree.toJSON());
+
+        expect(testIdOrder.indexOf('approval-prompt-approve')).toBeGreaterThanOrEqual(0);
+        expect(testIdOrder.indexOf('approval-prompt-reject')).toBeGreaterThanOrEqual(0);
+        expect(testIdOrder.indexOf('approval-prompt-approve')).toBeLessThan(
+            testIdOrder.indexOf('approval-prompt-reject'),
+        );
+    });
+
     it('approves through approval.request.decide using the default action executor', async () => {
         const { ApprovalPromptCard } = await import('./ApprovalPromptCard');
         executeSpy.mockClear();
@@ -126,7 +158,7 @@ describe('ApprovalPromptCard', () => {
 
         const screen = await renderScreen(
             <ApprovalPromptCard
-                artifact={{ id: 'approval-1', header: { serverId: 'server-1' } } as any}
+                artifact={approvalArtifact('server-1')}
                 approval={approvalRequest()}
                 sessionId="session-1"
                 canApprove={true}
@@ -155,7 +187,7 @@ describe('ApprovalPromptCard', () => {
 
         const screen = await renderScreen(
             <ApprovalPromptCard
-                artifact={{ id: 'approval-1', header: {} } as any}
+                artifact={approvalArtifact()}
                 approval={approvalRequest()}
                 sessionId="session-1"
                 canApprove={true}
