@@ -8,10 +8,6 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import type { SessionFolderHeaderItem } from './sessionFolderShellTypes';
-import {
-    measureSessionFolderDropTargetBounds,
-    type SessionFolderDropTarget,
-} from './sessionFolderDragDrop';
 
 const FOLDER_ROOT_INDENT = 20;
 const FOLDER_NESTED_INDENT_STEP = 12;
@@ -92,8 +88,10 @@ export function FolderGroupHeader(props: Readonly<{
     onAddSubfolder: () => void | Promise<void>;
     onRename: () => void | Promise<void>;
     onDelete: () => void | Promise<void>;
-    onRegisterDropTarget?: (target: SessionFolderDropTarget) => void;
-    onUnregisterDropTarget?: (id: string) => void;
+    onMove?: () => void;
+    onMoveDown?: () => void;
+    onMoveToWorkspaceRoot?: () => void;
+    onMoveUp?: () => void;
     activeDropTargetId?: string | null;
     disabled?: boolean;
 }>) {
@@ -107,15 +105,8 @@ export function FolderGroupHeader(props: Readonly<{
     const iconColor = props.disabled ? theme.colors.text.tertiary : theme.colors.text.secondary;
     const normalizedDepth = Math.min(Math.max(0, Math.trunc(props.item.depth)), FOLDER_INDENT_CAP);
     const indent = FOLDER_ROOT_INDENT + normalizedDepth * FOLDER_NESTED_INDENT_STEP;
-    const rowRef = React.useRef<View | null>(null);
     const dropTargetId = `folder:${props.item.folderId}`;
     const isActiveDropTarget = props.activeDropTargetId === dropTargetId;
-
-    React.useEffect(() => {
-        return () => {
-            props.onUnregisterDropTarget?.(dropTargetId);
-        };
-    }, [dropTargetId, props.onUnregisterDropTarget]);
 
     const menuItems = React.useMemo((): DropdownMenuItem[] => [
         {
@@ -140,7 +131,7 @@ export function FolderGroupHeader(props: Readonly<{
             id: 'move',
             title: t('sessionsList.moveFolder'),
             icon: <Ionicons name="arrow-forward-circle-outline" size={16} color={iconColor} />,
-            disabled: true,
+            disabled: props.disabled || !props.onMove,
         },
         {
             id: 'delete',
@@ -148,7 +139,7 @@ export function FolderGroupHeader(props: Readonly<{
             icon: <Ionicons name="trash-outline" size={16} color={iconColor} />,
             disabled: props.disabled,
         },
-    ], [iconColor, props.disabled]);
+    ], [iconColor, props.disabled, props.onMove]);
 
     const handleMenuSelect = React.useCallback(async (itemId: string) => {
         if (props.disabled) return;
@@ -158,34 +149,43 @@ export function FolderGroupHeader(props: Readonly<{
             await props.onAddSubfolder();
         } else if (itemId === 'rename') {
             await props.onRename();
+        } else if (itemId === 'move') {
+            props.onMove?.();
         } else if (itemId === 'delete') {
             await props.onDelete();
+        }
+    }, [props]);
+
+    const accessibilityActions = React.useMemo(() => {
+        const actions: Array<{ name: string; label: string }> = [];
+        if (props.onMoveUp) actions.push({ name: 'moveUp', label: t('common.moveUp') });
+        if (props.onMoveDown) actions.push({ name: 'moveDown', label: t('common.moveDown') });
+        if (props.onMove) actions.push({ name: 'moveToFolder', label: t('sessionsList.moveToFolder') });
+        if (props.onMoveToWorkspaceRoot) actions.push({ name: 'moveToWorkspaceRoot', label: t('sessionsList.moveToWorkspaceRoot') });
+        return actions;
+    }, [props.onMove, props.onMoveDown, props.onMoveToWorkspaceRoot, props.onMoveUp]);
+
+    const handleAccessibilityAction = React.useCallback((event: { nativeEvent?: { actionName?: string } }) => {
+        switch (event.nativeEvent?.actionName) {
+            case 'moveUp':
+                props.onMoveUp?.();
+                break;
+            case 'moveDown':
+                props.onMoveDown?.();
+                break;
+            case 'moveToFolder':
+                props.onMove?.();
+                break;
+            case 'moveToWorkspaceRoot':
+                props.onMoveToWorkspaceRoot?.();
+                break;
         }
     }, [props]);
 
     return (
         <View style={styles.section}>
             <View
-                ref={rowRef as React.Ref<View>}
                 style={[styles.row, { paddingLeft: indent }]}
-                onLayout={(event) => {
-                    const layout = event.nativeEvent.layout;
-                    void measureSessionFolderDropTargetBounds({
-                        ref: rowRef.current,
-                        fallback: {
-                            x: layout.x,
-                            y: layout.y,
-                            width: layout.width,
-                            height: layout.height,
-                        },
-                    }).then((bounds) => props.onRegisterDropTarget?.({
-                        id: dropTargetId,
-                        kind: 'folder',
-                        folderId: props.item.folderId,
-                        workspace: props.item.workspace,
-                        bounds,
-                    }));
-                }}
                 onPointerEnter={isWeb ? () => setHovered(true) : undefined}
                 onPointerLeave={isWeb ? () => setHovered(false) : undefined}
             >
@@ -216,8 +216,10 @@ export function FolderGroupHeader(props: Readonly<{
                 <Pressable
                     testID={`session-folder-header-${props.item.folderId}`}
                     style={styles.content}
+                    accessibilityActions={accessibilityActions}
                     accessibilityRole="button"
                     accessibilityLabel={props.item.title}
+                    onAccessibilityAction={accessibilityActions.length > 0 ? handleAccessibilityAction : undefined}
                     disabled={props.disabled}
                     onPress={props.disabled ? undefined : props.onFocus}
                 >

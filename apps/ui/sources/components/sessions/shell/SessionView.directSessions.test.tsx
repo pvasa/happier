@@ -42,10 +42,14 @@ const sendVoiceSessionComposerTextSpy = vi.hoisted(() =>
 );
 const resolveVoiceSessionComposerRoutingSpy = vi.hoisted(() => vi.fn((_params: any): any => null));
 const featureEnabledState = vi.hoisted(() => ({ voice: false, 'files.reviewComments': false }));
+const keyboardAvoidanceState = vi.hoisted(() => ({
+  availablePanelHeight: undefined as number | undefined,
+}));
 const settingsState = vi.hoisted(() => ({ current: {} as any }));
 const settingByKeyState = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const participantTargetsState = vi.hoisted(() => ({ current: [] as any[] }));
 const reviewCommentDraftsState = vi.hoisted(() => ({ current: [] as any[] }));
+const sessionMessagesState = vi.hoisted(() => ({ current: [] as any[] }));
 const storageState = vi.hoisted(() => ({
   sessions: {
     s1: {
@@ -198,7 +202,7 @@ installSessionShellCommonModuleMocks({
         useSession: () => storageState.sessions.s1,
         useIsDataReady: () => true,
         useRealtimeStatus: () => 'connected',
-        useSessionMessages: () => ({ messages: [], isLoaded: true }),
+        useSessionMessages: () => ({ messages: sessionMessagesState.current, isLoaded: true }),
         useSessionTranscriptIds: () => ({ ids: ['m1'], isLoaded: true }),
         useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
         useWorkspaceReviewCommentsDrafts: () => reviewCommentDraftsState.current,
@@ -360,6 +364,9 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
 vi.mock('@/components/sessions/agentInput', () => ({
   AgentInput: (props: any) => React.createElement('AgentInput', { testID: 'session-agent-input', ...props }),
 }));
+vi.mock('@/components/sessions/keyboardAvoidance', () => ({
+  useComposerAvailablePanelHeight: () => keyboardAvoidanceState.availablePanelHeight,
+}));
 vi.mock('@/components/sessions/directSessions/takeover/showDirectSessionTakeoverDialog', () => ({
   showDirectSessionTakeoverDialog: showDirectSessionTakeoverDialogSpy,
 }));
@@ -418,6 +425,7 @@ describe('SessionView (direct sessions)', () => {
     voiceSurfacePropsSpy.mockReset();
     featureEnabledState.voice = false;
     featureEnabledState['files.reviewComments'] = false;
+    keyboardAvoidanceState.availablePanelHeight = undefined;
     settingsState.current = {};
     settingByKeyState.current = {};
     modalAlertSpy.mockReset();
@@ -438,6 +446,7 @@ describe('SessionView (direct sessions)', () => {
     resolveVoiceSessionComposerRoutingSpy.mockReturnValue(null);
     participantTargetsState.current = [];
     reviewCommentDraftsState.current = [];
+    sessionMessagesState.current = [];
     storageState.sessions.s1 = {
       id: 's1',
       seq: 1,
@@ -560,6 +569,55 @@ describe('SessionView (direct sessions)', () => {
         id: 'req_question_1',
         tool: 'AskUserQuestion',
         kind: 'user_action',
+      }),
+    ]);
+  });
+
+  it('passes scaffold available panel height to AgentInput', async () => {
+    keyboardAvoidanceState.availablePanelHeight = 384;
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.maxPanelHeight).toBe(384);
+  });
+
+  it('passes pending transcript-backed permission requests to AgentInput', async () => {
+    storageState.sessions.s1.agentState = null;
+    sessionMessagesState.current = [
+      {
+        kind: 'tool-call',
+        id: 'm-tool-1',
+        localId: null,
+        createdAt: 2,
+        children: [],
+        tool: {
+          id: 'tool-permission-1',
+          name: 'Bash',
+          state: 'running',
+          input: { command: 'rm -rf /tmp/session-permission-fixture' },
+          createdAt: 2,
+          startedAt: 2,
+          completedAt: null,
+          description: 'Remove temporary directory',
+          permission: {
+            id: 'tool-permission-1',
+            status: 'pending',
+            kind: 'permission',
+          },
+        },
+      },
+    ];
+
+    const screen = await renderSessionViewAndSettle();
+
+    const agentInput = findAgentInput(screen);
+    expect(agentInput.props.sessionId).toBe('s1');
+    expect(agentInput.props.permissionRequests).toEqual([
+      expect.objectContaining({
+        id: 'tool-permission-1',
+        tool: 'Bash',
+        kind: 'permission',
+        arguments: { command: 'rm -rf /tmp/session-permission-fixture' },
       }),
     ]);
   });

@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     createPartialStorageModuleMock,
+    findGestureByKind,
     invokeTestInstanceHandler,
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
+import { driveSessionListDragGesture } from './__tests__/driveSessionListDragGesture';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,12 +19,11 @@ const setCollapsedGroupKeysV1 = vi.fn();
 const setSessionFolderViewModeV1 = vi.fn();
 const setSessionFoldersV1 = vi.fn();
 const setSessionTagsV1 = vi.fn();
+const setSessionListFocusedFolderV1 = vi.fn();
 const modalPromptSpy = vi.hoisted(() => vi.fn(async () => null as string | null));
 const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => false));
-const useSessionInlineDragSpy = vi.hoisted(() => vi.fn((params: any) => ({
-    gesture: undefined,
-    animatedStyle: params ? {} : {},
-})));
+const modalShowSpy = vi.hoisted(() => vi.fn((_config: unknown) => 'move-sheet-modal'));
+const modalHideSpy = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlSpy = vi.hoisted(() => vi.fn(async () => ({ accessToken: 'token-a' })));
 const getServerProfileByIdSpy = vi.hoisted(() => vi.fn((serverId: string) => serverId === 'server_a'
     ? { id: 'server_a', serverUrl: 'https://server-a.test' }
@@ -32,6 +33,7 @@ const moveSessionFolderAssignmentsSpy = vi.hoisted(() => vi.fn(async () => undef
 
 let sessionFolderViewModeV1: 'off' | 'tree' = 'tree';
 let sessionFoldersV1: any = { v: 1, folders: [] };
+let sessionListFocusedFolderV1: any = null;
 let collapsedGroupKeysV1: Record<string, boolean> = {};
 let mockVisibleSessionListViewData: any[] = [];
 
@@ -65,6 +67,8 @@ installSessionShellCommonModuleMocks({
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({
             spies: {
+                show: modalShowSpy as any,
+                hide: modalHideSpy as any,
                 prompt: modalPromptSpy as any,
                 confirm: modalConfirmSpy as any,
             },
@@ -92,7 +96,20 @@ installSessionShellCommonModuleMocks({
             if (key === 'workspaceLabelsV1') return [{}, vi.fn()];
             return [null, vi.fn()];
         },
-        useLocalSettingMutable: () => [[], vi.fn()],
+        useLocalSettingMutable: (key: string) => {
+            if (key === 'sessionListFocusedFolderV1') {
+                const [focusedFolder, setFocusedFolder] = React.useState(sessionListFocusedFolderV1);
+                return [
+                    focusedFolder,
+                    (nextFocusedFolder: typeof sessionListFocusedFolderV1) => {
+                        sessionListFocusedFolderV1 = nextFocusedFolder;
+                        setSessionListFocusedFolderV1(nextFocusedFolder);
+                        setFocusedFolder(nextFocusedFolder);
+                    },
+                ];
+            }
+            return [[], vi.fn()];
+        },
     }),
 });
 
@@ -100,11 +117,16 @@ vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
     useSharedValue: (init: any) => ({ value: init }),
     useAnimatedStyle: (fn: () => any) => fn(),
+    withSpring: (value: any) => value,
 }));
 
-vi.mock('react-native-gesture-handler', () => ({
-    GestureDetector: 'GestureDetector',
-    Swipeable: 'Swipeable',
+vi.mock('react-native-gesture-handler', async () => {
+    const { createGestureHandlerMock } = await import('@/dev/testkit/mocks/gestureHandler');
+    return createGestureHandlerMock();
+});
+
+vi.mock('react-native-worklets', () => ({
+    scheduleOnRN: (fn: (...args: any[]) => void, ...args: any[]) => fn(...args),
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -171,10 +193,6 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
     ),
 }));
 
-vi.mock('./useSessionInlineDrag', () => ({
-    useSessionInlineDrag: (params: any) => useSessionInlineDragSpy(params),
-}));
-
 vi.mock('./SessionItem', () => ({
     SessionItem: (props: any) => React.createElement('SessionItem', {
         ...props,
@@ -239,6 +257,24 @@ async function renderSessionsList() {
     return renderScreen(<SessionsList />);
 }
 
+function findSessionGesture(
+    screen: Awaited<ReturnType<typeof renderSessionsList>>,
+    sessionId: string,
+) {
+    const row = screen.findByTestId(`session-list-session:${sessionId}`);
+    expect(row, `expected ${sessionId} session row`).toBeTruthy();
+    const gesture = row?.props.reorderHandleGesture;
+    expect(findGestureByKind(gesture, 'pan')).toBeTruthy();
+    return gesture;
+}
+
+function findFolderGesture(screen: Awaited<ReturnType<typeof renderSessionsList>>) {
+    const detector = screen.root.findAllByType('GestureDetector' as React.ElementType)
+        .find((node) => findGestureByKind(node.props.gesture, 'pan'));
+    expect(detector, 'expected folder GestureDetector').toBeTruthy();
+    return detector?.props.gesture;
+}
+
 describe('SessionsList session folders shell', () => {
     beforeEach(() => {
         sessionFolderViewModeV1 = 'tree';
@@ -254,17 +290,21 @@ describe('SessionsList session folders shell', () => {
                 updatedAt: 1,
             }],
         };
+        sessionListFocusedFolderV1 = null;
         collapsedGroupKeysV1 = {};
         setSessionListGroupOrderV1.mockClear();
         setCollapsedGroupKeysV1.mockClear();
         setSessionFolderViewModeV1.mockClear();
         setSessionFoldersV1.mockClear();
         setSessionTagsV1.mockClear();
+        setSessionListFocusedFolderV1.mockClear();
         modalPromptSpy.mockReset();
         modalPromptSpy.mockResolvedValue(null);
         modalConfirmSpy.mockReset();
         modalConfirmSpy.mockResolvedValue(false);
-        useSessionInlineDragSpy.mockClear();
+        modalShowSpy.mockReset();
+        modalShowSpy.mockReturnValue('move-sheet-modal');
+        modalHideSpy.mockReset();
         getCredentialsForServerUrlSpy.mockClear();
         getServerProfileByIdSpy.mockClear();
         setSessionFolderAssignmentSpy.mockClear();
@@ -284,18 +324,12 @@ describe('SessionsList session folders shell', () => {
     });
 
     it('attaches the folder drag gesture on web', async () => {
-        const folderGesture = { __kind: 'folder-gesture' };
-        useSessionInlineDragSpy.mockImplementation((params: any): any => ({
-            gesture: params?.sessionKey === 'folder:folder_a' ? folderGesture : undefined,
-            animatedStyle: {},
-        }));
-
         const screen = await renderSessionsList();
 
-        expect(screen.root.findAllByType('GestureDetector').some((node) => node.props.gesture === folderGesture)).toBe(true);
+        expect(findGestureByKind(findFolderGesture(screen), 'pan')).toBeTruthy();
     });
 
-    it('focuses a folder and renders breadcrumbs above the list sections', async () => {
+    it('persists focused folder requests', async () => {
         const screen = await renderSessionsList();
 
         await act(async () => {
@@ -307,9 +341,25 @@ describe('SessionsList session folders shell', () => {
             );
         });
 
+        expect(setSessionListFocusedFolderV1).toHaveBeenCalledWith({
+            folderId: 'folder_a',
+            workspace,
+            renderWorkspaceKey: 'project_a',
+            serverId: 'server_a',
+        });
+    });
+
+    it('restores focused folder state from local settings', async () => {
+        sessionListFocusedFolderV1 = {
+            folderId: 'folder_a',
+            workspace,
+            renderWorkspaceKey: 'project_a',
+            serverId: 'server_a',
+        };
+
+        const screen = await renderSessionsList();
+
         expect(screen.findByTestId('session-folder-breadcrumb')).toBeTruthy();
-        expect(screen.findByTestId('session-folder-clear-focus')).toBeTruthy();
-        expect(screen.findByTestId(`session-list-project-header:${projectGroupKey}`)).toBeTruthy();
         expect(screen.findByTestId('session-list-session:sess_a')).toBeTruthy();
         expect(screen.findByTestId('session-list-session:sess_b')).toBeNull();
     });
@@ -330,6 +380,35 @@ describe('SessionsList session folders shell', () => {
     });
 
     it('passes folder indentation and move menu options to session rows', async () => {
+        mockVisibleSessionListViewData.splice(3, 0, {
+            type: 'header',
+            title: 'Execution',
+            headerKind: 'folder',
+            groupKey: `${folderGroupKey}:folder:folder_b`,
+            workspace,
+            renderWorkspaceKey: 'project_a',
+            folderId: 'folder_b',
+            parentFolderId: 'folder_a',
+            depth: 2,
+            sessionCount: 3,
+            serverId: 'server_a',
+        });
+        sessionFoldersV1 = {
+            ...sessionFoldersV1,
+            folders: [
+                ...sessionFoldersV1.folders,
+                {
+                    id: 'folder_b',
+                    workspace,
+                    renderWorkspaceKey: 'project_a',
+                    parentId: 'folder_a',
+                    name: 'Execution',
+                    createdAt: 2,
+                    updatedAt: 2,
+                },
+            ],
+        };
+
         const screen = await renderSessionsList();
 
         const folderRow = screen.findByTestId('session-list-session:sess_a');
@@ -340,15 +419,63 @@ describe('SessionsList session folders shell', () => {
                 expect.objectContaining({ id: 'move-to-folder:null' }),
             ]),
         );
+
+        const moveMenuItems = folderRow?.props.folderMoveMenuItems ?? [];
+        const rootTarget = moveMenuItems.find((item: any) => item.id === 'move-to-folder:null');
+        const parentFolderTarget = moveMenuItems.find((item: any) => item.id === 'move-to-folder:folder_a');
+        const childFolderTarget = moveMenuItems.find((item: any) => item.id === 'move-to-folder:folder_b');
+        expect(rootTarget?.rowContainerStyle).toBeUndefined();
+        expect(parentFolderTarget?.rowContainerStyle).toMatchObject({ paddingLeft: expect.any(Number) });
+        expect(childFolderTarget?.rowContainerStyle).toMatchObject({ paddingLeft: expect.any(Number) });
+        expect(childFolderTarget.rowContainerStyle.paddingLeft).toBeGreaterThan(parentFolderTarget.rowContainerStyle.paddingLeft);
     });
 
-    it('passes drag/drop assignment hooks into the inline drag handler', async () => {
-        await renderSessionsList();
+    it('keeps collapsed child folders available in the row move menu', async () => {
+        mockVisibleSessionListViewData.splice(3, 0, {
+            type: 'header',
+            title: 'Execution',
+            headerKind: 'folder',
+            groupKey: `${folderGroupKey}:folder:folder_b`,
+            workspace,
+            renderWorkspaceKey: 'project_a',
+            folderId: 'folder_b',
+            parentFolderId: 'folder_a',
+            depth: 2,
+            sessionCount: 3,
+            serverId: 'server_a',
+        });
+        sessionFoldersV1 = {
+            ...sessionFoldersV1,
+            folders: [
+                ...sessionFoldersV1.folders,
+                {
+                    id: 'folder_b',
+                    workspace,
+                    renderWorkspaceKey: 'project_a',
+                    parentId: 'folder_a',
+                    name: 'Execution',
+                    createdAt: 2,
+                    updatedAt: 2,
+                },
+            ],
+        };
+        collapsedGroupKeysV1 = { [folderGroupKey]: true };
 
-        expect(useSessionInlineDragSpy).toHaveBeenCalledWith(expect.objectContaining({
-            resolveDropIntent: expect.any(Function),
-            onDropIntent: expect.any(Function),
-        }));
+        const screen = await renderSessionsList();
+
+        expect(screen.findByTestId('session-folder-header-folder_b')).toBeNull();
+
+        const rootRow = screen.findByTestId('session-list-session:sess_b');
+        const moveMenuItems = rootRow?.props.folderMoveMenuItems ?? [];
+        expect(moveMenuItems).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'move-to-folder:folder_b' }),
+        ]));
+    });
+
+    it('passes a real drag gesture into session rows', async () => {
+        const screen = await renderSessionsList();
+
+        expect(findGestureByKind(findSessionGesture(screen, 'sess_a'), 'pan')).toBeTruthy();
     });
 
     it('persists a row menu move through the row server assignment op', async () => {
@@ -356,7 +483,20 @@ describe('SessionsList session folders shell', () => {
         const row = screen.findByTestId('session-list-session:sess_b');
 
         await act(async () => {
-            row?.props.onSelectFolderMoveMenuItem('move-to-folder:folder_a');
+            row?.props.onMoveToFolder();
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        await vi.waitFor(() => {
+            expect(modalShowSpy).toHaveBeenCalled();
+        });
+        const modalConfig = modalShowSpy.mock.calls[0]?.[0] as { props?: { targets?: readonly any[]; onSelectTarget?: (target: any) => void } };
+        const target = modalConfig.props?.targets?.find((entry) => entry.id === 'folder:folder_a');
+        expect(target).toBeTruthy();
+
+        await act(async () => {
+            modalConfig.props?.onSelectTarget?.(target);
+            await Promise.resolve();
         });
 
         expect(getServerProfileByIdSpy).toHaveBeenCalledWith('server_a');
@@ -370,30 +510,46 @@ describe('SessionsList session folders shell', () => {
         });
     });
 
-    it('persists folder drop intent through the row server assignment op', async () => {
-        await renderSessionsList();
-        const dragParams = useSessionInlineDragSpy.mock.calls
-            .map((call) => call[0])
-            .find((params) => params?.sessionKey === 'server_a:sess_b');
+    it('reorders a session row down through the same tree drop commit path', async () => {
+        mockVisibleSessionListViewData.splice(4, 0, {
+            type: 'session',
+            session: { id: 'sess_c', createdAt: 3, active: true, presence: 'online', metadata: null },
+            groupKey: folderGroupKey,
+            groupKind: 'folder',
+            folderId: 'folder_a',
+            folderDepth: 1,
+            serverId: 'server_a',
+        });
+        const screen = await renderSessionsList();
+        const row = screen.findByTestId('session-list-session:sess_a');
 
         await act(async () => {
-            dragParams.onDropIntent({
-                sessionKey: 'server_a:sess_b',
-                groupKey: projectGroupKey,
-                positionDelta: 0,
-                intent: { kind: 'moveToFolder', folderId: 'folder_a' },
-            });
+            row?.props.onMoveDown();
+            await Promise.resolve();
         });
 
-        expect(setSessionFolderAssignmentSpy).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: 'server_a',
-            serverUrl: 'https://server-a.test',
-            sessionId: 'sess_b',
-            folderId: 'folder_a',
-        }));
+        expect(setSessionListGroupOrderV1).toHaveBeenCalledWith({
+            [folderGroupKey]: ['server_a:sess_c', 'server_a:sess_a'],
+        });
     });
 
-    it('moves folder headers through the folder drag/drop hook', async () => {
+    it('drives the real session-row drag gesture without legacy intent props', async () => {
+        const screen = await renderSessionsList();
+        const row = screen.findByTestId('session-list-session:sess_b');
+
+        await driveSessionListDragGesture({
+            gesture: findSessionGesture(screen, 'sess_b'),
+            pointerSequence: [
+                { x: 20, y: 220 },
+                { x: 20, y: 244 },
+            ],
+        });
+
+        expect(row?.props.onDropIntent).toBeUndefined();
+        expect(row?.props.resolveDropIntent).toBeUndefined();
+    });
+
+    it('drives the real folder header drag gesture', async () => {
         sessionFoldersV1 = {
             v: 1,
             folders: [
@@ -409,80 +565,30 @@ describe('SessionsList session folders shell', () => {
                 },
             ],
         };
-        await renderSessionsList();
-        const dragParams = useSessionInlineDragSpy.mock.calls
-            .map((call) => call[0])
-            .find((params) => params?.sessionKey === 'folder:folder_a');
+        const screen = await renderSessionsList();
 
-        await act(async () => {
-            dragParams.onDropIntent({
-                sessionKey: 'folder:folder_a',
-                groupKey: folderGroupKey,
-                positionDelta: 0,
-                intent: { kind: 'moveToFolder', folderId: 'folder_b' },
-            });
-        });
-
-        expect(setSessionFoldersV1).toHaveBeenCalledWith(expect.objectContaining({
-            folders: expect.arrayContaining([
-                expect.objectContaining({ id: 'folder_a', parentId: 'folder_b' }),
-            ]),
-        }));
-    });
-
-    it('resolves dragging a folder session into workspace root rows as an unassign intent', async () => {
-        await renderSessionsList();
-        const dragParams = useSessionInlineDragSpy.mock.calls
-            .map((call) => call[0])
-            .find((params) => params?.sessionKey === 'server_a:sess_a');
-
-        const intent = dragParams.resolveDropIntent({
-            sessionKey: 'server_a:sess_a',
-            groupKey: folderGroupKey,
-            positionDelta: 1,
-            dataIndex: 3,
-            absoluteX: null,
-            absoluteY: null,
-        });
-
-        expect(intent).toEqual({
-            kind: 'moveToWorkspaceRoot',
-            order: {
-                groupKey: projectGroupKey,
-                afterKey: 'server_a:sess_b',
-            },
+        await driveSessionListDragGesture({
+            gesture: findFolderGesture(screen),
+            pointerSequence: [
+                { x: 20, y: 80 },
+                { x: 20, y: 120 },
+            ],
         });
     });
 
-    it('moves a folder session to the workspace root before the first root folder when dropped on that line', async () => {
-        await renderSessionsList();
-        const dragParams = useSessionInlineDragSpy.mock.calls
-            .map((call) => call[0])
-            .find((params) => params?.sessionKey === 'server_a:sess_a');
+    it('does not expose legacy drag intent props to session rows', async () => {
+        const screen = await renderSessionsList();
+        const row = screen.findByTestId('session-list-session:sess_a');
 
-        await act(async () => {
-            dragParams.onDropIntent({
-                sessionKey: 'server_a:sess_a',
-                groupKey: folderGroupKey,
-                positionDelta: -1,
-                intent: dragParams.resolveDropIntent({
-                    sessionKey: 'server_a:sess_a',
-                    groupKey: folderGroupKey,
-                    positionDelta: -1,
-                    dataIndex: 3,
-                    absoluteX: null,
-                    absoluteY: null,
-                }),
-            });
-        });
+        expect(row?.props.onDragEnd).toBeUndefined();
+        expect(row?.props.onDropIntent).toBeUndefined();
+        expect(row?.props.resolveDropIntent).toBeUndefined();
+    });
 
-        expect(setSessionFolderAssignmentSpy).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId: 'sess_a',
-            folderId: null,
-        }));
-        expect(setSessionListGroupOrderV1).toHaveBeenCalledWith(expect.objectContaining({
-            [projectGroupKey]: ['server_a:sess_a', 'folder:folder_a', 'server_a:sess_b'],
-        }));
+    it('does not expose legacy drag intent props to folder header rows', async () => {
+        const screen = await renderSessionsList();
+
+        expect(findGestureByKind(findFolderGesture(screen), 'pan')).toBeTruthy();
     });
 
     it('creates a root folder from the workspace menu', async () => {

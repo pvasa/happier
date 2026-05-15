@@ -38,7 +38,7 @@ function buildFolderKey(folderIdRaw: unknown): string | null {
     return folderId ? `folder:${folderId}` : null;
 }
 
-function resolveProjectGroupKey(groupKeyRaw: unknown): string {
+export function resolveProjectGroupKey(groupKeyRaw: unknown): string {
     const groupKey = typeof groupKeyRaw === 'string' ? groupKeyRaw.trim() : '';
     const folderMarker = ':folder:';
     const folderIndex = groupKey.indexOf(folderMarker);

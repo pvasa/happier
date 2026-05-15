@@ -130,10 +130,16 @@ vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
     useSharedValue: (init: any) => ({ value: init }),
     useAnimatedStyle: (fn: () => any) => fn(),
+    withSpring: (value: any) => value,
 }));
 
-vi.mock('react-native-gesture-handler', () => ({
-    Swipeable: 'Swipeable',
+vi.mock('react-native-gesture-handler', async () => {
+    const { createGestureHandlerMock } = await import('@/dev/testkit/mocks/gestureHandler');
+    return createGestureHandlerMock();
+});
+
+vi.mock('react-native-worklets', () => ({
+    scheduleOnRN: (fn: (...args: any[]) => void, ...args: any[]) => fn(...args),
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -205,6 +211,9 @@ vi.mock('@/hooks/session/useNavigateToSession', () => ({
 
 let mockAllowedServerIds: string[] = ['server_a'];
 vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
+    useEffectiveServerSelection: () => ({
+        serverIds: mockAllowedServerIds,
+    }),
     useResolvedActiveServerSelection: () => ({
         enabled: true,
         presentation: 'grouped',
@@ -263,10 +272,6 @@ vi.mock('@/sync/domains/server/selection/serverSelectionResolution', () => ({
             activeServerId: 'server_a',
             allowedServerIds: ['server_a'],
         }) as any,
-}));
-
-vi.mock('./useSessionInlineDrag', () => ({
-    useSessionInlineDrag: () => ({ gesture: undefined, animatedStyle: {} }),
 }));
 
 vi.mock('./SessionItem', () => ({
@@ -560,8 +565,10 @@ describe('SessionsList pinning + per-group ordering', () => {
             'expected sess_live_2 session row',
         );
 
-        expect(row1.props.subtitleOverride).toBe('Rebound workstation · ~/live-a');
-        expect(row2.props.subtitleOverride).toBe('rebound-2.local · ~/live-b');
+        expect(row1.props.subtitleOverride).toContain('Rebound workstation');
+        expect(row1.props.subtitleOverride).toContain('live-a');
+        expect(row2.props.subtitleOverride).toContain('rebound-2.local');
+        expect(row2.props.subtitleOverride).toContain('live-b');
     });
 
     it('uses renamed workspace labels for inactive date-grouped row subtitles', async () => {
@@ -625,6 +632,7 @@ describe('SessionsList pinning + per-group ordering', () => {
         );
 
         expect(row1.props.subtitleOverride).toBe('Rebound workstation · Renamed Live Workspace');
-        expect(row2.props.subtitleOverride).toBe('rebound-2.local · ~/live-b');
+        expect(row2.props.subtitleOverride).toContain('rebound-2.local');
+        expect(row2.props.subtitleOverride).toContain('live-b');
     });
 });

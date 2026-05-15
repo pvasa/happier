@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SessionListViewItem } from './sessionListViewData';
-import { normalizeSessionListGroupOrderV1ForSource, PINNED_GROUP_KEY_V1, SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP } from './sessionListOrderingStateV1';
+import {
+    normalizeSessionListGroupOrderV1ForSource,
+    PINNED_GROUP_KEY_V1,
+    resolveProjectGroupKey,
+    SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP,
+} from './sessionListOrderingStateV1';
 
 function makeSessionItem(opts: Readonly<{ serverId: string; sessionId: string; groupKey: string }>): SessionListViewItem {
     return {
@@ -13,6 +18,12 @@ function makeSessionItem(opts: Readonly<{ serverId: string; sessionId: string; g
 }
 
 describe('sessionListOrderingStateV1', () => {
+    it('resolves canonical project group keys from folder child group keys', () => {
+        expect(resolveProjectGroupKey('server:s1:active:project:abc123:folder:planning')).toBe('server:s1:active:project:abc123');
+        expect(resolveProjectGroupKey('server:s1:active:project:abc123')).toBe('server:s1:active:project:abc123');
+        expect(resolveProjectGroupKey('folder:s1:workspaceScope:s1:m1:/repo:planning')).toBe('folder:s1:workspaceScope:s1:m1:/repo:planning');
+    });
+
     it('removes missing session keys from group order when the group is present in the source', () => {
         const g = 'server:s1:day:2026-02-17';
         const source: SessionListViewItem[] = [

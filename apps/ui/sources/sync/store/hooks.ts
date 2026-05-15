@@ -114,11 +114,13 @@ export function useSessionListRenderable(id: string): SessionListRenderableSessi
 
 type SessionListRowRenderableSnapshot = Readonly<{
   id: string;
+  seq: number;
   createdAt: number;
   active: boolean;
   activeAt: number;
   archivedAt: number | null;
   pendingCount: number | null;
+  lastViewedSessionSeq: number | null;
   metadataPresent: boolean;
   metadataName: string | null;
   metadataSummaryText: string | null;
@@ -155,11 +157,13 @@ export function useSessionListRowRenderable(id: string): SessionListRenderableSe
       const metadata = renderable.metadata;
       return {
         id: renderable.id,
+        seq: renderable.seq,
         createdAt: renderable.createdAt,
         active: renderable.active,
         activeAt: renderable.activeAt,
         archivedAt: renderable.archivedAt ?? null,
         pendingCount: renderable.pendingCount ?? null,
+        lastViewedSessionSeq: renderable.lastViewedSessionSeq ?? null,
         metadataPresent: metadata != null,
         metadataName: metadata?.name ?? null,
         metadataSummaryText: metadata?.summaryText ?? null,
@@ -194,7 +198,7 @@ export function useSessionListRowRenderable(id: string): SessionListRenderableSe
     if (!snapshot) return null;
     return {
       id: snapshot.id,
-      seq: 0,
+      seq: snapshot.seq,
       createdAt: snapshot.createdAt,
       updatedAt: 0,
       active: snapshot.active,
@@ -202,6 +206,7 @@ export function useSessionListRowRenderable(id: string): SessionListRenderableSe
       archivedAt: snapshot.archivedAt,
       pendingVersion: undefined,
       pendingCount: snapshot.pendingCount ?? undefined,
+      lastViewedSessionSeq: snapshot.lastViewedSessionSeq,
       metadataVersion: 0,
       agentStateVersion: 0,
       metadata: snapshot.metadataPresent

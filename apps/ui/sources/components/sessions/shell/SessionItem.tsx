@@ -1,5 +1,5 @@
 import React from 'react';
-import { Animated, Platform, Pressable, View } from 'react-native';
+import { Animated, Platform, Pressable, View, type LayoutChangeEvent } from 'react-native';
 import { GestureDetector, Swipeable, type ComposedGesture, type GestureType } from 'react-native-gesture-handler';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -10,6 +10,8 @@ import {
     WEB_START_ELLIPSIS_CONTENT_TEXT_STYLE,
 } from '@/components/ui/text/webStartEllipsisTextStyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { DEFAULT_AGENT_ID, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { Typography } from '@/constants/Typography';
 import { formatPendingCountBadge } from '@/components/sessions/pendingBadge';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
@@ -40,23 +42,39 @@ import {
     resolveSessionRowPresentation,
 } from './row/resolveSessionRowPresentation';
 import {
+    normalizeSessionListActiveColorMode,
+    resolveSessionRowTitleColorRole,
+} from './row/sessionRowTitleColorRole';
+import {
     SESSION_LIST_ROW_HEIGHT_COMPACT,
     SESSION_LIST_ROW_HEIGHT_DEFAULT,
     SESSION_LIST_ROW_HEIGHT_MINIMAL,
     SESSION_LIST_ROW_HEIGHT_MINIMAL_NATIVE_PHONE,
 } from './sessionListRowHeights';
 import { shouldUseReadableNativePhoneMinimalSessionRow } from './sessionListRowDensity';
+import { resolveSessionTagPlacement } from './sessionTagPlacement';
 import { clearSessionVisibleWhenInactive, isSessionActiveArchiveResult, stopSessionAndMaybeArchive } from '../sessionStopArchiveFlow';
 import { useIsTablet } from '@/utils/platform/responsive';
 
 const AVATAR_SIZE_DEFAULT = 48;
 const AVATAR_SIZE_COMPACT = 30;
+const AVATAR_SIZE_MINIMAL = 18;
+const AVATAR_SIZE_MINIMAL_NATIVE_PHONE = 20;
+const SESSION_LIST_MINIMAL_IDENTITY_GAP = 8;
+const SESSION_LIST_AGENT_LOGO_SIZE_RATIO = 0.78;
+const SESSION_LIST_AGENT_LOGO_MIN_SIZE = 14;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
+const CONTEXT_MENU_PRESS_IN_OPEN_DELAY_MS = 350;
 const CONTEXT_MENU_DEFERRED_ACTION_DELAY_MS = 0;
 const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
 const SESSION_FOLDER_ROW_CHROME_INDENT_BASE = 38;
 const SESSION_FOLDER_ROW_CHROME_INDENT_STEP = 12;
 const SESSION_FOLDER_ROW_INDENT_CAP = 3;
+const SESSION_MOVE_TO_FOLDER_ACTION_ID = 'session.move-to-folder';
+
+function resolveSessionListAgentLogoSize(slotSize: number): number {
+    return Math.max(SESSION_LIST_AGENT_LOGO_MIN_SIZE, Math.round(slotSize * SESSION_LIST_AGENT_LOGO_SIZE_RATIO));
+}
 
 const stylesheet = StyleSheet.create((theme) => ({
     sessionItemContainer: {
@@ -129,14 +147,36 @@ const stylesheet = StyleSheet.create((theme) => ({
         position: 'relative',
         width: AVATAR_SIZE_DEFAULT,
         height: AVATAR_SIZE_DEFAULT,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     avatarContainerCompact: {
         width: AVATAR_SIZE_COMPACT,
         height: AVATAR_SIZE_COMPACT,
     },
+    avatarContainerMinimal: {
+        width: AVATAR_SIZE_MINIMAL,
+        height: AVATAR_SIZE_MINIMAL,
+    },
+    avatarContainerMinimalNativePhone: {
+        width: AVATAR_SIZE_MINIMAL_NATIVE_PHONE,
+        height: AVATAR_SIZE_MINIMAL_NATIVE_PHONE,
+    },
     avatarLoading: {
         width: AVATAR_SIZE_DEFAULT,
         height: AVATAR_SIZE_DEFAULT,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surface.elevated,
+    },
+    avatarLoadingMinimal: {
+        width: AVATAR_SIZE_MINIMAL,
+        height: AVATAR_SIZE_MINIMAL,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surface.elevated,
+    },
+    avatarLoadingMinimalNativePhone: {
+        width: AVATAR_SIZE_MINIMAL_NATIVE_PHONE,
+        height: AVATAR_SIZE_MINIMAL_NATIVE_PHONE,
         borderRadius: 999,
         backgroundColor: theme.colors.surface.elevated,
     },
@@ -198,6 +238,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionContentMinimal: {
         marginLeft: 0,
+    },
+    sessionContentMinimalWithIdentity: {
+        marginLeft: SESSION_LIST_MINIMAL_IDENTITY_GAP,
     },
     sessionTitleRow: {
         flexDirection: 'row',
@@ -309,13 +352,19 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexWrap: 'nowrap',
         overflow: 'hidden',
         gap: 4,
-        marginTop: 4,
+        marginTop: 3,
     },
     tagsRowCompact: {
-        marginTop: 3,
+        marginTop: 1,
     },
     tagsRowMinimal: {
-        marginTop: 3,
+        marginTop: 0,
+    },
+    tagsInlineRow: {
+        alignItems: 'center',
+        marginTop: 0,
+        marginRight: 4,
+        maxWidth: 82,
     },
     tagChip: {
         borderRadius: 999,
@@ -335,6 +384,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 6,
         paddingVertical: 1,
         maxWidth: 96,
+    },
+    tagChipInline: {
+        maxWidth: 74,
     },
     tagChipText: {
         fontSize: 10,
@@ -476,6 +528,10 @@ export const SessionItem = React.memo(
         onNativeContextMenuOpenChange,
         folderDepth,
         folderMoveMenuItems,
+        onMoveDown,
+        onMoveToFolder,
+        onMoveToWorkspaceRoot,
+        onMoveUp,
         onSelectFolderMoveMenuItem,
     }: {
         embedded?: boolean;
@@ -508,6 +564,10 @@ export const SessionItem = React.memo(
         onNativeContextMenuOpenChange?: (next: boolean) => void;
         folderDepth?: number;
         folderMoveMenuItems?: readonly DropdownMenuItem[];
+        onMoveDown?: () => void;
+        onMoveToFolder?: () => void;
+        onMoveToWorkspaceRoot?: () => void;
+        onMoveUp?: () => void;
         onSelectFolderMoveMenuItem?: (itemId: string) => void;
     }) => {
         const styles = stylesheet;
@@ -560,17 +620,20 @@ export const SessionItem = React.memo(
         const isArchivedSession = resolvedSession.archivedAt != null;
         const isMinimal = Boolean(compact && compactMinimal);
         const sessionListWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
+        const sessionListIdentityDisplay = useSetting('sessionListIdentityDisplay');
+        const sessionListActiveColorMode = useSetting('sessionListActiveColorModeV1');
         const workingIndicatorMode = sessionListWorkingIndicatorStyle === 'pulse' ? 'pulse' : 'spinner';
         const canStopSession = isOwnedByCurrentUser;
         const canArchiveSession = hasAdminAccess && !isArchivedSession && (!isActiveSession || canStopSession);
         const canRenameSession = hasAdminAccess;
         const hideInactiveSessions = useSetting('hideInactiveSessions');
-        const swipeEnabled = Platform.OS !== 'web' && canArchiveSession;
+        const swipeEnabled = Platform.OS !== 'web' && nativeInlineDragEnabled !== true && canArchiveSession;
         const [isRowHovered, setIsRowHovered] = React.useState(false);
         const [isActionsHovered, setIsActionsHovered] = React.useState(false);
         const [tagMenuOpen, setTagMenuOpen] = React.useState(false);
         const [tagMenuEverOpened, setTagMenuEverOpened] = React.useState(false);
         const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
+        const [rowWidth, setRowWidth] = React.useState<number | null>(null);
         const isWeb = Platform.OS === 'web';
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
         const isTablet = useIsTablet();
@@ -603,6 +666,17 @@ export const SessionItem = React.memo(
         const suppressNextPressRef = React.useRef(false);
         const contextMenuWasOpenRef = React.useRef(false);
         const clearSuppressionTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+        const contextMenuPressInTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+        const clearContextMenuPressInTimer = React.useCallback(() => {
+            if (contextMenuPressInTimerRef.current === null) return;
+            clearTimeout(contextMenuPressInTimerRef.current);
+            contextMenuPressInTimerRef.current = null;
+        }, []);
+        React.useEffect(() => {
+            return () => {
+                clearContextMenuPressInTimer();
+            };
+        }, [clearContextMenuPressInTimer]);
         React.useEffect(() => {
             // When a context menu is opened by an external gesture (e.g. session list long-press),
             // Pressable may still fire `onPress` on touch-up. Suppress that navigation *once*,
@@ -649,6 +723,16 @@ export const SessionItem = React.memo(
 
         const handleActionsHoverOut = React.useCallback(() => {
             setIsActionsHovered(false);
+        }, []);
+
+        const handleRowLayout = React.useCallback((event: LayoutChangeEvent) => {
+            const nextWidth = event.nativeEvent.layout.width;
+            setRowWidth((previousWidth) => {
+                if (previousWidth !== null && Math.abs(previousWidth - nextWidth) < 1) {
+                    return previousWidth;
+                }
+                return nextWidth;
+            });
         }, []);
 
         const stopRowPressPropagation = React.useCallback((event: unknown) => {
@@ -814,11 +898,28 @@ export const SessionItem = React.memo(
                     icon: <Ionicons name="archive-outline" size={16} color={rowActionIconColor} />,
                 });
             }
-            if (folderMoveMenuItems && folderMoveMenuItems.length > 0) {
-                items.push(...folderMoveMenuItems);
+            if (onMoveToFolder) {
+                items.push({
+                    id: SESSION_MOVE_TO_FOLDER_ACTION_ID,
+                    title: t('sessionsList.moveToFolder'),
+                    icon: <Ionicons name="folder-outline" size={16} color={rowActionIconColor} />,
+                    disabled: folderMoveMenuItems?.every((item) => item.disabled === true) ?? false,
+                });
+            } else if (folderMoveMenuItems && folderMoveMenuItems.length > 0) {
+                items.push({
+                    id: SESSION_MOVE_TO_FOLDER_ACTION_ID,
+                    title: t('sessionsList.moveToFolder'),
+                    icon: <Ionicons name="folder-outline" size={16} color={rowActionIconColor} />,
+                    disabled: !folderMoveMenuItems.some((item) => item.disabled !== true),
+                    submenu: {
+                        items: folderMoveMenuItems,
+                        search: folderMoveMenuItems.length > 8,
+                        searchPlaceholder: t('sessionsList.moveToFolder'),
+                    },
+                });
             }
             return items;
-        }, [canArchiveSession, canRenameSession, canStopSession, folderMoveMenuItems, isActiveSession, readStateMenuItem, rowActionIconColor]);
+        }, [canArchiveSession, canRenameSession, canStopSession, folderMoveMenuItems, isActiveSession, onMoveToFolder, readStateMenuItem, rowActionIconColor]);
 
         const handleMoreMenuSelect = React.useCallback(async (itemId: string) => {
             if (itemId.startsWith('move-to-folder:')) {
@@ -831,6 +932,9 @@ export const SessionItem = React.memo(
                 return;
             }
             switch (itemId) {
+                case SESSION_MOVE_TO_FOLDER_ACTION_ID:
+                    onMoveToFolder?.();
+                    break;
                 case 'rename':
                     handleRenameSession();
                     break;
@@ -841,7 +945,33 @@ export const SessionItem = React.memo(
                     await confirmArchiveSession();
                     break;
             }
-        }, [confirmArchiveSession, confirmStopSession, handleReadStateAction, handleRenameSession, onSelectFolderMoveMenuItem]);
+        }, [confirmArchiveSession, confirmStopSession, handleReadStateAction, handleRenameSession, onMoveToFolder, onSelectFolderMoveMenuItem]);
+
+        const accessibilityActions = React.useMemo(() => {
+            const actions: Array<{ name: string; label: string }> = [];
+            if (onMoveUp) actions.push({ name: 'moveUp', label: t('common.moveUp') });
+            if (onMoveDown) actions.push({ name: 'moveDown', label: t('common.moveDown') });
+            if (onMoveToFolder) actions.push({ name: 'moveToFolder', label: t('sessionsList.moveToFolder') });
+            if (onMoveToWorkspaceRoot) actions.push({ name: 'moveToWorkspaceRoot', label: t('sessionsList.moveToWorkspaceRoot') });
+            return actions;
+        }, [onMoveDown, onMoveToFolder, onMoveToWorkspaceRoot, onMoveUp]);
+
+        const handleAccessibilityAction = React.useCallback((event: { nativeEvent?: { actionName?: string } }) => {
+            switch (event.nativeEvent?.actionName) {
+                case 'moveUp':
+                    onMoveUp?.();
+                    break;
+                case 'moveDown':
+                    onMoveDown?.();
+                    break;
+                case 'moveToFolder':
+                    onMoveToFolder?.();
+                    break;
+                case 'moveToWorkspaceRoot':
+                    onMoveToWorkspaceRoot?.();
+                    break;
+            }
+        }, [onMoveDown, onMoveToFolder, onMoveToWorkspaceRoot, onMoveUp]);
 
         const contextMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!isNativeMobile) return [];
@@ -967,12 +1097,45 @@ export const SessionItem = React.memo(
         const showTrailingAttentionIndicator = trailingAttentionIndicator !== 'none';
         const trailingAttentionReplacesTime = trailingAttentionIndicator === 'working';
         const showTrailingActivityTime = Boolean(activityTimeLabel) && !trailingAttentionReplacesTime;
+        const hasTrailingMeta = showTrailingAttentionIndicator || showTrailingActivityTime;
+        const tagPlacement = showTagChips
+            ? resolveSessionTagPlacement({
+                density: rowDensity,
+                tags: tagChips,
+                rowWidth,
+                hasTrailingMeta,
+                hasRowActions: showRowActions,
+            })
+            : 'below';
+        const showInlineTagChips = showTagChips && tagPlacement === 'inline' && !showRowActions;
+        const showBelowTagChips = showTagChips && tagPlacement === 'below' && !showRowActions;
         const enableLongPressContextMenu =
             Platform.OS === 'ios'
-            && contextMenuItems.length > 0
-            && nativeInlineDragEnabled !== true;
+            && nativeInlineDragEnabled !== true
+            && contextMenuItems.length > 0;
+        const openContextMenuFromLongPress = React.useCallback(() => {
+            clearContextMenuPressInTimer();
+            if (!enableLongPressContextMenu || isBeingDraggedRef.current) return;
+            suppressNextPressRef.current = true;
+            setContextMenuOpen(true);
+        }, [clearContextMenuPressInTimer, enableLongPressContextMenu, setContextMenuOpen]);
 
         const shouldRenderAvatarMonochrome = resolvedSession.active !== true || !sessionStatus.isConnected;
+        const resolvedSessionListIdentityDisplay =
+            sessionListIdentityDisplay === 'agentLogo' || sessionListIdentityDisplay === 'none'
+                ? sessionListIdentityDisplay
+                : 'avatar';
+        const shouldRenderSessionListIdentity = resolvedSessionListIdentityDisplay !== 'none';
+        const shouldRenderSessionListAvatar = resolvedSessionListIdentityDisplay === 'avatar';
+        const avatarSize = isMinimal
+            ? useReadableNativePhoneMinimalRow
+                ? AVATAR_SIZE_MINIMAL_NATIVE_PHONE
+                : AVATAR_SIZE_MINIMAL
+            : compact
+                ? AVATAR_SIZE_COMPACT
+                : AVATAR_SIZE_DEFAULT;
+        const agentLogoSize = resolveSessionListAgentLogoSize(avatarSize);
+        const agentLogoId = resolveAgentIdFromFlavor(resolvedSession.metadata?.flavor) ?? DEFAULT_AGENT_ID;
         const normalizedFolderDepth = typeof folderDepth === 'number' && Number.isFinite(folderDepth)
             ? Math.max(0, Math.min(SESSION_FOLDER_ROW_INDENT_CAP, Math.trunc(folderDepth)))
             : 0;
@@ -981,11 +1144,69 @@ export const SessionItem = React.memo(
             : compact
                 ? styles.sessionTitleLoadingCompact
                 : styles.sessionTitleLoading;
+        const sessionTitleColorRole = resolveSessionRowTitleColorRole({
+            mode: normalizeSessionListActiveColorMode(sessionListActiveColorMode),
+            selected: selected === true,
+            isConnected: sessionStatus.isConnected,
+            isSessionActive: resolvedSession.active === true,
+            attentionState: rowAttentionState,
+            titleTone: rowPresentation.titleTone,
+        });
+        const sessionTitleColor = sessionTitleColorRole === 'primary'
+            ? theme.colors.text.primary
+            : theme.colors.text.secondary;
+        const sessionTitleStyle = [
+            styles.sessionTitle,
+            compact ? styles.sessionTitleCompact : null,
+            isMinimal ? styles.sessionTitleMinimal : null,
+            useReadableNativePhoneMinimalRow ? styles.sessionTitleMinimalNativePhone : null,
+            shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
+            shouldMuteTitle ? null : sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
+            selected ? styles.sessionTitleSelected : null,
+            { color: sessionTitleColor },
+        ];
+        const renderTagChipRow = (placement: 'below' | 'inline') => (
+            <View
+                testID={`session-item-tags-${placement}-${resolvedSession.id}`}
+                style={[
+                    styles.tagsRow,
+                    placement === 'inline' ? styles.tagsInlineRow : null,
+                    compact ? styles.tagsRowCompact : null,
+                    isMinimal ? styles.tagsRowMinimal : null,
+                ]}
+            >
+                {tagChips.map((tag) => (
+                    <View
+                        key={tag.key}
+                        style={[
+                            styles.tagChip,
+                            tagChipDensity === 'compact' ? styles.tagChipCompact : null,
+                            tagChipDensity === 'minimal' ? styles.tagChipMinimal : null,
+                            placement === 'inline' ? styles.tagChipInline : null,
+                        ]}
+                    >
+                        <Text
+                            style={[
+                                styles.tagChipText,
+                                tagChipDensity === 'compact' ? styles.tagChipTextCompact : null,
+                                tagChipDensity === 'minimal' ? styles.tagChipTextMinimal : null,
+                            ]}
+                            numberOfLines={1}
+                        >
+                            {tag.label}
+                        </Text>
+                    </View>
+                ))}
+            </View>
+        );
 
         const itemContent = (
             <Pressable
                 testID={`session-list-item-${resolvedSession.id}`}
+                accessibilityActions={accessibilityActions}
                 accessibilityState={{ selected }}
+                onAccessibilityAction={accessibilityActions.length > 0 ? handleAccessibilityAction : undefined}
+                onLayout={showTagChips ? handleRowLayout : undefined}
                 style={[
                     styles.sessionItem,
                     isFirst ? styles.sessionItemFirst : null,
@@ -1006,32 +1227,56 @@ export const SessionItem = React.memo(
                     }
                     navigateToSession(resolvedSession.id, serverId ? { serverId } : undefined);
                 }}
-                onLongPress={enableLongPressContextMenu ? () => {
-                    if (isBeingDraggedRef.current) return;
-                    suppressNextPressRef.current = true;
-                    setContextMenuOpen(true);
+                onPressIn={enableLongPressContextMenu ? () => {
+                    clearContextMenuPressInTimer();
+                    contextMenuPressInTimerRef.current = setTimeout(() => {
+                        contextMenuPressInTimerRef.current = null;
+                        openContextMenuFromLongPress();
+                    }, CONTEXT_MENU_PRESS_IN_OPEN_DELAY_MS);
                 } : undefined}
+                onPressOut={enableLongPressContextMenu ? clearContextMenuPressInTimer : undefined}
+                onLongPress={enableLongPressContextMenu ? openContextMenuFromLongPress : undefined}
             >
-                {isMinimal ? null : (
-                    <View style={[styles.avatarContainer, compact ? styles.avatarContainerCompact : null]}>
+                {shouldRenderSessionListIdentity ? (
+                    <View
+                        style={[
+                            styles.avatarContainer,
+                            compact ? styles.avatarContainerCompact : null,
+                            isMinimal ? styles.avatarContainerMinimal : null,
+                            useReadableNativePhoneMinimalRow ? styles.avatarContainerMinimalNativePhone : null,
+                        ]}
+                    >
                         {isSessionIdentityLoading ? (
                             <Animated.View
                                 testID={`session-list-avatar-loading-${resolvedSession.id}`}
                                 style={[
-                                    compact ? styles.avatarLoadingCompact : styles.avatarLoading,
+                                    isMinimal
+                                        ? useReadableNativePhoneMinimalRow
+                                            ? styles.avatarLoadingMinimalNativePhone
+                                            : styles.avatarLoadingMinimal
+                                        : compact
+                                            ? styles.avatarLoadingCompact
+                                            : styles.avatarLoading,
                                     { opacity: identitySkeletonOpacity },
                                 ]}
                             />
-                        ) : (
+                        ) : shouldRenderSessionListAvatar ? (
                             <Avatar
                                 id={avatarId}
-                                size={compact ? AVATAR_SIZE_COMPACT : AVATAR_SIZE_DEFAULT}
+                                size={avatarSize}
                                 monochrome={shouldRenderAvatarMonochrome}
                                 flavor={resolvedSession.metadata?.flavor}
                                 hasUnreadMessages={false}
                             />
+                        ) : (
+                            <AgentIcon
+                                agentId={agentLogoId}
+                                size={agentLogoSize}
+                                color={sessionTitleColor}
+                                testID={`session-list-agent-logo-${resolvedSession.id}`}
+                            />
                         )}
-                        {pendingBadge ? (
+                        {!isMinimal && shouldRenderSessionListAvatar && pendingBadge ? (
                             <View
                                 style={[
                                     styles.pendingCountContainer,
@@ -1043,18 +1288,19 @@ export const SessionItem = React.memo(
                                 </Text>
                             </View>
                         ) : null}
-                        {'draft' in resolvedSession && resolvedSession.draft ? (
+                        {!isMinimal && shouldRenderSessionListAvatar && 'draft' in resolvedSession && resolvedSession.draft ? (
                             <View style={[styles.draftIconContainer, compact ? styles.draftIconContainerCompact : null]}>
                                 <Ionicons name="create-outline" size={compact ? 10 : 11} style={styles.draftIconOverlay} />
                             </View>
                         ) : null}
                     </View>
-                )}
+                ) : null}
                 <View
                     style={[
                         styles.sessionContent,
                         compact ? styles.sessionContentCompact : null,
                         isMinimal ? styles.sessionContentMinimal : null,
+                        isMinimal && shouldRenderSessionListIdentity ? styles.sessionContentMinimalWithIdentity : null,
                     ]}
                 >
                     <View style={styles.sessionTitleRow}>
@@ -1068,15 +1314,7 @@ export const SessionItem = React.memo(
                             />
                         ) : (
                             <Text
-                                style={[
-                                    styles.sessionTitle,
-                                    compact ? styles.sessionTitleCompact : null,
-                                    isMinimal ? styles.sessionTitleMinimal : null,
-                                    useReadableNativePhoneMinimalRow ? styles.sessionTitleMinimalNativePhone : null,
-                                    shouldEmphasizeTitle ? styles.sessionTitleEmphasized : null,
-                                    shouldMuteTitle ? null : sessionStatus.isConnected ? styles.sessionTitleConnected : styles.sessionTitleDisconnected,
-                                    selected ? styles.sessionTitleSelected : null,
-                                ]}
+                                style={sessionTitleStyle}
                                 numberOfLines={1}
                             >
                                 {sessionNameResolved}
@@ -1152,37 +1390,7 @@ export const SessionItem = React.memo(
                         )
                     ) : null}
 
-                    {showTagChips ? (
-                        <View
-                            style={[
-                                styles.tagsRow,
-                                compact ? styles.tagsRowCompact : null,
-                                isMinimal ? styles.tagsRowMinimal : null,
-                            ]}
-                        >
-                            {tagChips.map((tag) => (
-                                <View
-                                    key={tag.key}
-                                    style={[
-                                        styles.tagChip,
-                                        tagChipDensity === 'compact' ? styles.tagChipCompact : null,
-                                        tagChipDensity === 'minimal' ? styles.tagChipMinimal : null,
-                                    ]}
-                                >
-                                    <Text
-                                        style={[
-                                            styles.tagChipText,
-                                            tagChipDensity === 'compact' ? styles.tagChipTextCompact : null,
-                                            tagChipDensity === 'minimal' ? styles.tagChipTextMinimal : null,
-                                        ]}
-                                        numberOfLines={1}
-                                    >
-                                        {tag.label}
-                                    </Text>
-                                </View>
-                            ))}
-                        </View>
-                    ) : null}
+                    {showBelowTagChips ? renderTagChipRow('below') : null}
                 </View>
                 <View
                     testID="session-item-right-area"
@@ -1190,6 +1398,7 @@ export const SessionItem = React.memo(
                     onPointerEnter={isWeb ? handleActionsHoverIn : undefined}
                     onPointerLeave={isWeb ? handleActionsHoverOut : undefined}
                 >
+                    {showInlineTagChips ? renderTagChipRow('inline') : null}
                     {showRowActions ? (
                         <View style={styles.rowActionsRow}>
                             {showReorderHandle && reorderHandleGesture ? (

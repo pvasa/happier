@@ -337,6 +337,103 @@ describe('buildChatListItems', () => {
 });
 
 describe('buildChatListItemsCached', () => {
+    it('starts a new tool-call group before a fork boundary message', () => {
+        const messages: Message[] = [
+            buildToolCallMessage({ id: 'parent-tool', localId: null, createdAt: 1 }),
+            buildToolCallMessage({ id: 'child-tool', localId: null, createdAt: 2 }),
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+        const buildWithForkBoundaries = buildChatListItemsCached as (
+            opts: Parameters<typeof buildChatListItemsCached>[0] & {
+                forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+                forkBoundarySignature?: string;
+            }
+        ) => ReturnType<typeof buildChatListItemsCached>;
+
+        const result = buildWithForkBoundaries({
+            cache: null,
+            messageIdsOldestFirst: ['parent-tool', 'child-tool'],
+            messagesById,
+            pendingMessages: [],
+            groupConsecutiveToolCalls: true,
+            forkBoundaryBeforeMessageIds: new Set(['child-tool']),
+            forkBoundarySignature: 'child-tool',
+        });
+
+        expect(result.items.map((item) => item.kind)).toEqual(['tool-calls-group', 'tool-calls-group']);
+        expect(result.items[0]?.kind === 'tool-calls-group' && result.items[0].toolMessageIds).toEqual(['parent-tool']);
+        expect(result.items[1]?.kind === 'tool-calls-group' && result.items[1].toolMessageIds).toEqual(['child-tool']);
+    });
+
+    it('annotates grouped tool calls with homogeneous fork origin metadata', () => {
+        const messages: Message[] = [
+            buildToolCallMessage({ id: 'parent-tool-1', localId: null, createdAt: 1 }),
+            buildToolCallMessage({ id: 'parent-tool-2', localId: null, createdAt: 2 }),
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+        const buildWithForkMetadata = buildChatListItemsCached as (
+            opts: Parameters<typeof buildChatListItemsCached>[0] & {
+                forkMetadataByMessageId?: Readonly<Record<string, { originSessionId: string; isReadOnlyContext: boolean }>>;
+            }
+        ) => ReturnType<typeof buildChatListItemsCached>;
+
+        const result = buildWithForkMetadata({
+            cache: null,
+            messageIdsOldestFirst: ['parent-tool-1', 'parent-tool-2'],
+            messagesById,
+            pendingMessages: [],
+            groupConsecutiveToolCalls: true,
+            forkMetadataByMessageId: {
+                'parent-tool-1': { originSessionId: 'parent', isReadOnlyContext: true },
+                'parent-tool-2': { originSessionId: 'parent', isReadOnlyContext: true },
+            },
+        });
+
+        expect(result.items[0]).toMatchObject({
+            kind: 'tool-calls-group',
+            originSessionId: 'parent',
+            isReadOnlyContext: true,
+        });
+    });
+
+    it('starts a new appended tool-call group before a fork boundary message', () => {
+        const messages: Message[] = [
+            buildToolCallMessage({ id: 'parent-tool', localId: null, createdAt: 1 }),
+            buildToolCallMessage({ id: 'child-tool', localId: null, createdAt: 2 }),
+        ];
+        const messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+        const buildWithForkBoundaries = buildChatListItemsCached as (
+            opts: Parameters<typeof buildChatListItemsCached>[0] & {
+                forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+                forkBoundarySignature?: string;
+            }
+        ) => ReturnType<typeof buildChatListItemsCached>;
+
+        const before = buildWithForkBoundaries({
+            cache: null,
+            messageIdsOldestFirst: ['parent-tool'],
+            messagesById,
+            pendingMessages: [],
+            groupConsecutiveToolCalls: true,
+            forkBoundaryBeforeMessageIds: new Set(['child-tool']),
+            forkBoundarySignature: 'child-tool',
+        });
+
+        const after = buildWithForkBoundaries({
+            cache: before.cache,
+            messageIdsOldestFirst: ['parent-tool', 'child-tool'],
+            messagesById,
+            pendingMessages: [],
+            groupConsecutiveToolCalls: true,
+            forkBoundaryBeforeMessageIds: new Set(['child-tool']),
+            forkBoundarySignature: 'child-tool',
+        });
+
+        expect(after.items.map((item) => item.kind)).toEqual(['tool-calls-group', 'tool-calls-group']);
+        expect(after.items[0]).toBe(before.items[0]);
+        expect(after.items[1]?.kind === 'tool-calls-group' && after.items[1].toolMessageIds).toEqual(['child-tool']);
+    });
+
     it('reuses the item array when only an existing message body streams', () => {
         const agentMessage: AgentTextMessage = { kind: 'agent-text', id: 'm-2', localId: null, createdAt: 2, text: 'hello' };
         const initialMessagesById: Record<string, Message> = {

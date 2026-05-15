@@ -193,19 +193,20 @@ describe('settings domain: sessionListViewData rebuilds', () => {
         store.clear();
     });
 
-    it('rebuilds using reachable-target projection inputs when grouping settings change', () => {
+    it('rebuilds sessionListViewData when grouping settings change', () => {
         const { get } = createHarness();
 
         get().applySettingsLocal({
             groupInactiveSessionsByProject: true,
             sessionListInactiveGroupingV1: 'project',
+            workspacePathDisplayModeV1: 'path',
         });
 
         const projectHeader = get().sessionListViewData?.find((item) => item.type === 'header' && item.headerKind === 'project');
         const projectedSessionRow = get().sessionListViewData?.find((item) => item.type === 'session');
         expect(projectHeader).toMatchObject({
             type: 'header',
-            title: '~/work/repo',
+            title: '~/personal/repo',
             serverId: 'server_a',
             serverName: 'Server A',
         });
@@ -214,9 +215,26 @@ describe('settings domain: sessionListViewData rebuilds', () => {
             session: {
                 id: 'session-1',
                 metadata: expect.objectContaining({
-                    path: '/Users/tester/work/repo',
+                    path: '/Users/tester/personal/repo',
                 }),
             },
         });
+    });
+
+    it('rebuilds sessionListViewData when the attention placement setting changes', () => {
+        const { get } = createHarness();
+
+        get().applySettingsLocal({
+            groupInactiveSessionsByProject: true,
+            sessionListInactiveGroupingV1: 'project',
+        });
+        const initial = get().sessionListViewData;
+        expect(Array.isArray(initial)).toBe(true);
+
+        get().applySettingsLocal({
+            sessionListAttentionPromotionModeV1: 'withinGroups',
+        });
+
+        expect(get().sessionListViewData).not.toBe(initial);
     });
 });

@@ -352,6 +352,120 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         expect(get().sessionListViewData).toBe(initial);
     });
 
+    it('keeps sessionListViewData stable for attention-only updates when attention promotion is disabled', async () => {
+        vi.doMock('../../runtime/orchestration/projectManager', () => ({
+            projectManager: { updateSessions: vi.fn() },
+        }));
+        mockSessionPersistenceBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain, {
+            settings: { sessionListAttentionPromotionModeV1: 'off' },
+        });
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: false,
+                activeAt: 1,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+                latestReadyEventSeq: null,
+                latestReadyEventAt: null,
+            } as any,
+        ]);
+
+        const initial = get().sessionListViewData;
+        expect(Array.isArray(initial)).toBe(true);
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: false,
+                activeAt: 1,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+                latestReadyEventSeq: 2,
+                latestReadyEventAt: 2,
+            } as any,
+        ]);
+
+        expect(get().sessionListViewData).toBe(initial);
+    });
+
+    it('rebuilds sessionListViewData for attention-only updates when attention promotion uses a global section', async () => {
+        vi.doMock('../../runtime/orchestration/projectManager', () => ({
+            projectManager: { updateSessions: vi.fn() },
+        }));
+        mockSessionPersistenceBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain, {
+            settings: { sessionListAttentionPromotionModeV1: 'global' },
+        });
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: false,
+                activeAt: 1,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+                latestReadyEventSeq: null,
+                latestReadyEventAt: null,
+            } as any,
+        ]);
+
+        const initial = get().sessionListViewData;
+        expect(Array.isArray(initial)).toBe(true);
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: false,
+                activeAt: 1,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+                latestReadyEventSeq: 2,
+                latestReadyEventAt: 2,
+            } as any,
+        ]);
+
+        expect(get().sessionListViewData).not.toBe(initial);
+    });
+
     it('does not maintain the legacy sessionsData list during applySessions updates', async () => {
         vi.doMock('../../runtime/orchestration/projectManager', () => ({
             projectManager: { updateSessions: vi.fn() },
@@ -536,7 +650,7 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         expect(get().sessionListRenderables['s1']?.keepVisibleWhenInactive).toBe(true);
     });
 
-    it('rebuilds sessionListViewData when a peer session update changes another stale session reachable target', async () => {
+    it('keeps sessionListViewData and project sessions stable when reachable peer reevaluation does not change list structure', async () => {
         const updateSessions = vi.fn();
         vi.doMock('../../runtime/orchestration/projectManager', () => ({
             projectManager: { updateSessions },
@@ -639,8 +753,8 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
             } as any,
         ]);
 
-        expect(get().sessionListViewData).not.toBe(initial);
-        expect(updateSessions).toHaveBeenCalledTimes(2);
+        expect(get().sessionListViewData).toBe(initial);
+        expect(updateSessions).toHaveBeenCalledTimes(1);
     });
 
     it('rebuilds sessionListViewData for structural applySessions changes (grouping keys)', async () => {

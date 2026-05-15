@@ -177,4 +177,47 @@ describe('FolderGroupHeader', () => {
 
         expect(flattenStyleValue(dropTarget.props.style, 'opacity')).toBe(1);
     });
+
+    it('exposes move menu and accessibility actions for keyboard and assistive input', async () => {
+        const onMove = vi.fn();
+        const onMoveToWorkspaceRoot = vi.fn();
+        const screen = await renderScreen(
+            <FolderGroupHeader
+                item={{
+                    type: 'header',
+                    headerKind: 'folder',
+                    folderId: 'folder-a',
+                    parentFolderId: null,
+                    title: 'Folder A',
+                    depth: 0,
+                    sessionCount: 0,
+                    groupKey: 'folder:folder-a',
+                }}
+                collapsed={false}
+                onToggleCollapse={vi.fn()}
+                onFocus={vi.fn()}
+                onNewSession={vi.fn()}
+                onAddSubfolder={vi.fn()}
+                onRename={vi.fn()}
+                onDelete={vi.fn()}
+                onMove={onMove}
+                onMoveToWorkspaceRoot={onMoveToWorkspaceRoot}
+            />,
+        );
+
+        const menu = screen.root.findByType('DropdownMenu' as never);
+        const moveItem = menu.props.items.find((item: any) => item.id === 'move');
+        expect(moveItem.disabled).toBe(false);
+
+        await act(async () => {
+            menu.props.onSelect('move');
+        });
+        expect(onMove).toHaveBeenCalledTimes(1);
+
+        const header = screen.findByTestId('session-folder-header-folder-a');
+        expect(header?.props.accessibilityActions).toEqual(expect.arrayContaining([
+            expect.objectContaining({ name: 'moveToFolder' }),
+            expect.objectContaining({ name: 'moveToWorkspaceRoot' }),
+        ]));
+    });
 });

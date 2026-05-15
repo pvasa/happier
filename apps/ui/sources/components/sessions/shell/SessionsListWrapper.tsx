@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { usePathname } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { SessionGettingStartedGuidance } from '@/components/sessions/guidance/SessionGettingStartedGuidance';
 import { useSessionListStorageKind } from '@/components/sessions/model/useSessionListStorageKind';
@@ -8,6 +9,7 @@ import { useVisibleSessionListPaneState } from '@/hooks/session/useVisibleSessio
 import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
 import { SessionsListContent } from '@/components/sessions/shell/SessionsList';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { readSessionIdFromPathname } from '@/components/sessions/shell/readSessionIdFromPathname';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -42,7 +44,11 @@ const stylesheet = StyleSheet.create((theme) => ({
 export const SessionsListWrapper = React.memo(() => {
     const { theme } = useUnistyles();
     const { directSessionsEnabled, storageKind, setStorageKind } = useSessionListStorageKind();
-    const { sessionListViewData, visibleSessionCount, hasHiddenInactiveSessions } = useVisibleSessionListPaneState(storageKind);
+    const pathname = usePathname();
+    const activeSessionId = React.useMemo(() => readSessionIdFromPathname(pathname), [pathname]);
+    const { sessionListViewData, visibleSessionCount, hasHiddenInactiveSessions } = useVisibleSessionListPaneState(storageKind, {
+        activeSessionId,
+    });
     const styles = stylesheet;
     const storageChrome = (
         <SessionsListStorageChrome

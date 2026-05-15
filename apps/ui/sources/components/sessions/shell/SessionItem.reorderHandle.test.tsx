@@ -82,6 +82,10 @@ vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: 'StatusDot',
 }));
 
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
+}));
+
 vi.mock('@/hooks/session/useNavigateToSession', () => ({
     useNavigateToSession: () => vi.fn(),
 }));
@@ -146,11 +150,11 @@ describe('SessionItem reorder handle', () => {
             />,
         );
 
-        // On web, actions are only rendered on hover. Trigger hover first.
-        const row = screen.findByTestId('session-list-item-sess_1');
-        expect(row).toBeTruthy();
+        // On web, actions are only rendered when the right-side action area is hovered.
+        const rightArea = screen.findByTestId('session-item-right-area');
+        expect(rightArea).toBeTruthy();
         await act(async () => {
-            triggerHoverEnter(row!);
+            triggerHoverEnter(rightArea!);
         });
 
         const handles = screen.findAllByTestId('session-item-reorder-handle');

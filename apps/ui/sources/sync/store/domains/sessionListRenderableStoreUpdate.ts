@@ -1,5 +1,6 @@
 import {
     areSessionListRenderablesEqual,
+    didSessionListRenderableAttentionPromotionFieldsChange,
     didSessionListRenderableStructuralFieldsChange,
     didSessionListRenderableWarmCacheFieldsChange,
     preserveSessionListRenderableStaleFields,
@@ -20,6 +21,7 @@ export type SessionListRenderableStoreUpdatePlan = Readonly<{
     missingCount: number;
     noopPatchCount: number;
     listViewFieldChangeCount: number;
+    attentionPromotionFieldChangeCount: number;
     staleMetadataPreservedCount: number;
     stalePendingFlagsPreservedCount: number;
     needsSessionListViewDataRebuild: boolean;
@@ -57,6 +59,7 @@ export function planSessionListRenderableReplacement(input: Readonly<{
     previousRenderables: Record<string, SessionListRenderableSession>;
     incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
     isSessionListViewDataUninitialized: boolean;
+    rebuildOnAttentionPromotionFieldsChange?: boolean;
 }>): SessionListRenderableStoreUpdatePlan {
     const previousRenderables = input.previousRenderables;
     const previousIds = Object.keys(previousRenderables);
@@ -66,6 +69,7 @@ export function planSessionListRenderableReplacement(input: Readonly<{
     let changedCount = 0;
     let removedCount = 0;
     let listViewFieldChangeCount = 0;
+    let attentionPromotionFieldChangeCount = 0;
     let staleMetadataPreservedCount = 0;
     let stalePendingFlagsPreservedCount = 0;
     let needsSessionListViewDataRebuild = input.isSessionListViewDataUninitialized;
@@ -91,12 +95,16 @@ export function planSessionListRenderableReplacement(input: Readonly<{
         }
 
         const didListViewFieldsChange = didSessionListRenderableStructuralFieldsChange(previousRenderable, nextRenderable);
+        const didAttentionPromotionFieldsChange = didSessionListRenderableAttentionPromotionFieldsChange(previousRenderable, nextRenderable);
 
         if (!previousRenderable || nextRenderable !== previousRenderable) {
             didAnyRenderableChange = true;
             changedCount += 1;
             if (didListViewFieldsChange) {
                 listViewFieldChangeCount += 1;
+            }
+            if (didAttentionPromotionFieldsChange) {
+                attentionPromotionFieldChangeCount += 1;
             }
             if (didSessionListRenderableWarmCacheFieldsChange(previousRenderable, nextRenderable)) {
                 didWarmCacheRelevantRenderableChange = true;
@@ -108,7 +116,7 @@ export function planSessionListRenderableReplacement(input: Readonly<{
         }
 
         if (!needsSessionListViewDataRebuild) {
-            if (didListViewFieldsChange) {
+            if (didListViewFieldsChange || (input.rebuildOnAttentionPromotionFieldsChange === true && didAttentionPromotionFieldsChange)) {
                 needsSessionListViewDataRebuild = true;
             }
         }
@@ -134,6 +142,7 @@ export function planSessionListRenderableReplacement(input: Readonly<{
         missingCount: 0,
         noopPatchCount: 0,
         listViewFieldChangeCount,
+        attentionPromotionFieldChangeCount,
         staleMetadataPreservedCount,
         stalePendingFlagsPreservedCount,
         needsSessionListViewDataRebuild,
@@ -145,6 +154,7 @@ export function planSessionListRenderablePatches(input: Readonly<{
     previousRenderables: Record<string, SessionListRenderableSession>;
     patches: ReadonlyArray<SessionListRenderablePatch>;
     isSessionListViewDataUninitialized: boolean;
+    rebuildOnAttentionPromotionFieldsChange?: boolean;
 }>): SessionListRenderableStoreUpdatePlan {
     const previousRenderables = input.previousRenderables;
     let nextRenderables = previousRenderables;
@@ -152,6 +162,7 @@ export function planSessionListRenderablePatches(input: Readonly<{
     let missingCount = 0;
     let noopPatchCount = 0;
     let listViewFieldChangeCount = 0;
+    let attentionPromotionFieldChangeCount = 0;
     let needsSessionListViewDataRebuild = input.isSessionListViewDataUninitialized;
     let didWarmCacheRelevantRenderableChange = false;
 
@@ -175,15 +186,19 @@ export function planSessionListRenderablePatches(input: Readonly<{
 
         changedCount += 1;
         const didListViewFieldsChange = didSessionListRenderableStructuralFieldsChange(previousRenderable, nextRenderable);
+        const didAttentionPromotionFieldsChange = didSessionListRenderableAttentionPromotionFieldsChange(previousRenderable, nextRenderable);
         if (didListViewFieldsChange) {
             listViewFieldChangeCount += 1;
+        }
+        if (didAttentionPromotionFieldsChange) {
+            attentionPromotionFieldChangeCount += 1;
         }
         if (didSessionListRenderableWarmCacheFieldsChange(previousRenderable, nextRenderable)) {
             didWarmCacheRelevantRenderableChange = true;
         }
 
         if (!needsSessionListViewDataRebuild) {
-            if (didListViewFieldsChange) {
+            if (didListViewFieldsChange || (input.rebuildOnAttentionPromotionFieldsChange === true && didAttentionPromotionFieldsChange)) {
                 needsSessionListViewDataRebuild = true;
             }
         }
@@ -202,6 +217,7 @@ export function planSessionListRenderablePatches(input: Readonly<{
         missingCount,
         noopPatchCount,
         listViewFieldChangeCount,
+        attentionPromotionFieldChangeCount,
         staleMetadataPreservedCount: 0,
         stalePendingFlagsPreservedCount: 0,
         needsSessionListViewDataRebuild,

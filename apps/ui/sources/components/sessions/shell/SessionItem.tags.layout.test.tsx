@@ -1,4 +1,5 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -23,7 +24,7 @@ installSessionShellCommonModuleMocks({
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             Platform: {
-                OS: 'ios',
+                OS: 'web',
             },
         });
     },
@@ -46,6 +47,14 @@ installSessionShellCommonModuleMocks({
             importOriginal,
             overrides: {
                 useHasUnreadMessages: () => false,
+                useSessionListActivityTimeLabel: () => '1m',
+                useSessionListAttentionState: () => 'quiet',
+                useSetting: (key: string) => {
+                    if (key === 'sessionListIdentityDisplay') return 'avatar';
+                    if (key === 'sessionListActiveColorModeV1') return 'activityAndAttention';
+                    if (key === 'sessionListNarrowWorkingIndicatorStyle') return 'spinner';
+                    return undefined;
+                },
                 useProfile: () => ({
                     id: 'u1',
                     timestamp: 0,
@@ -94,6 +103,15 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
 
 vi.mock('@/components/ui/avatar/Avatar', () => ({
     Avatar: 'Avatar',
+}));
+
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
+}));
+
+vi.mock('@/agents/catalog/catalog', () => ({
+    DEFAULT_AGENT_ID: 'codex',
+    resolveAgentIdFromFlavor: () => null,
 }));
 
 vi.mock('@/components/ui/status/StatusDot', () => ({
@@ -215,5 +233,65 @@ describe('SessionItem tags (layout)', () => {
         );
 
         expect(screen.getTextContent()).toContain('tag-a');
+    });
+
+    it('places a short compact tag in the trailing metadata cluster', async () => {
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession()}
+                serverId="server_a"
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                tagsEnabled={true}
+                tags={['v2']}
+                allKnownTags={['v2']}
+                onTogglePinned={vi.fn()}
+            />,
+        );
+
+        const rightArea = screen.findByTestId('session-item-right-area');
+        const rightAreaText = rightArea?.findAllByType('Text').map((node) => node.props.children).join(' ');
+        expect(rightAreaText).toContain('v2');
+        expect(screen.findByTestId('session-item-tags-below-sess_1')).toBeNull();
+    });
+
+    it('hides compact tags while row hover actions are visible', async () => {
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession()}
+                serverId="server_a"
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                tagsEnabled={true}
+                tags={['v2']}
+                allKnownTags={['v2']}
+                onTogglePinned={vi.fn()}
+            />,
+        );
+
+        const rightArea = screen.findByTestId('session-item-right-area');
+        expect(rightArea?.findAllByType('Text').map((node) => node.props.children).join(' ')).toContain('v2');
+
+        await act(async () => {
+            rightArea?.props.onPointerEnter?.({} as never);
+        });
+
+        const hoveredRightArea = screen.findByTestId('session-item-right-area');
+        const hoveredRightText = hoveredRightArea?.findAllByType('Text').map((node) => node.props.children).join(' ');
+        expect(hoveredRightText).not.toContain('v2');
+        expect(screen.findByTestId('session-item-tags-below-sess_1')).toBeNull();
+        expect(screen.findAllByType('PinIcon')).toHaveLength(1);
     });
 });

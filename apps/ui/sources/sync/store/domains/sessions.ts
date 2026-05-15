@@ -11,12 +11,14 @@ import { readStoredSessionMessagesFromStateLike } from '../../domains/messages/r
 import {
     areSessionListRenderablesEqual,
     buildSessionListRenderableFromSession,
+    didSessionListRenderableAttentionPromotionFieldsChange,
     didSessionListRenderableProjectGroupingFieldsChange,
     didSessionListRenderableReachabilityPeerFieldsChange,
     didSessionListRenderableStructuralFieldsChange,
     preserveSessionListRenderableTransientState,
     type SessionListRenderableSession,
 } from '../../domains/session/listing/sessionListRenderable';
+import { normalizeSessionListAttentionPromotionMode, type SessionListAttentionPromotionMode } from '../../domains/session/listing/attentionPromotion/sessionListAttentionPromotionTypes';
 import { nowServerMs } from '../../runtime/time';
 import {
     loadSessionDrafts,
@@ -208,6 +210,7 @@ type SessionsDomainDependencies = {
         groupInactiveSessionsByProject?: boolean;
         sessionListActiveGroupingV1?: 'project' | 'date';
         sessionListInactiveGroupingV1?: 'project' | 'date';
+        sessionListAttentionPromotionModeV1?: SessionListAttentionPromotionMode;
         workspacePathDisplayModeV1?: 'name' | 'path';
     };
 };
@@ -462,6 +465,9 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             let didReachablePeerReevaluation = false;
             let didWarmCacheRelevantRenderableChange = false;
             let listViewFieldChangeCount = 0;
+            let attentionPromotionFieldChangeCount = 0;
+            const rebuildOnAttentionPromotionFieldsChange =
+                normalizeSessionListAttentionPromotionMode(state.settings.sessionListAttentionPromotionModeV1) !== 'off';
 
             measureSessionApplyPhase(
                 'sync.store.sessions.apply.merge',
@@ -594,9 +600,29 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                                     thinkingGraceUntil: null,
                                 },
                             };
-                            return {
+                            const currentRenderable = s.sessionListRenderables[sessionId];
+                            const nextRenderables = currentRenderable
+                                && (currentRenderable.thinkingGraceUntil ?? null) === expectedThinkingGraceUntil
+                                ? {
+                                    ...s.sessionListRenderables,
+                                    [sessionId]: {
+                                        ...currentRenderable,
+                                        thinkingGraceUntil: null,
+                                    },
+                                }
+                                : s.sessionListRenderables;
+                            const nextStateBase = {
                                 ...s,
                                 sessions: next,
+                                sessionListRenderables: nextRenderables,
+                            };
+                            const shouldRebuildSessionListViewData = nextRenderables !== s.sessionListRenderables
+                                && normalizeSessionListAttentionPromotionMode(s.settings.sessionListAttentionPromotionModeV1) !== 'off';
+                            return {
+                                ...nextStateBase,
+                                sessionListViewData: shouldRebuildSessionListViewData
+                                    ? buildSessionListViewDataForState(nextStateBase)
+                                    : s.sessionListViewData,
                             };
                         });
                     }, SESSION_THINKING_GRACE_TIMEOUT_MS);
@@ -695,10 +721,17 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     previousRenderable,
                     mergedRenderable,
                 );
+                const didAttentionPromotionFieldsChange = didSessionListRenderableAttentionPromotionFieldsChange(
+                    previousRenderable,
+                    mergedRenderable,
+                );
                 if (mergedRenderable !== previousRenderable) {
                     changedRenderableCount += 1;
                     if (didListViewFieldsChange) {
                         listViewFieldChangeCount += 1;
+                    }
+                    if (didAttentionPromotionFieldsChange) {
+                        attentionPromotionFieldChangeCount += 1;
                     }
                     if (!didWarmCacheRelevantRenderableChange) {
                         const previousWarmCacheEntry = previousRenderable
@@ -717,7 +750,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 }
 
                 if (!needsSessionListViewDataRebuild) {
-                    if (didListViewFieldsChange) {
+                    if (didListViewFieldsChange || (rebuildOnAttentionPromotionFieldsChange && didAttentionPromotionFieldsChange)) {
                         needsSessionListViewDataRebuild = true;
                     }
                 }
@@ -744,6 +777,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 reconciledSessionMessages: reconciledSessionMessageCount,
                 listRebuild: needsSessionListViewDataRebuild ? 1 : 0,
                 listViewFieldChanges: listViewFieldChangeCount,
+                attentionPromotionFieldChanges: attentionPromotionFieldChangeCount,
                 projectManagerUpdate: needsProjectManagerUpdate ? 1 : 0,
                 reachablePeerReevaluation: needsReachablePeerReevaluation ? 1 : 0,
                 warmCacheRelevant: didWarmCacheRelevantRenderableChange ? 1 : 0,
@@ -851,6 +885,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 reconciledSessionMessages: reconciledSessionMessageCount,
                 listRebuild: needsSessionListViewDataRebuild ? 1 : 0,
                 listViewFieldChanges: listViewFieldChangeCount,
+                attentionPromotionFieldChanges: attentionPromotionFieldChangeCount,
                 projectManagerUpdate: needsProjectManagerUpdate ? 1 : 0,
                 reachablePeerReevaluation: didReachablePeerReevaluation ? 1 : 0,
             });
@@ -881,6 +916,8 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 previousRenderables: state.sessionListRenderables ?? {},
                 incomingRenderables: sessions,
                 isSessionListViewDataUninitialized: state.sessionListViewData === null,
+                rebuildOnAttentionPromotionFieldsChange:
+                    normalizeSessionListAttentionPromotionMode(state.settings.sessionListAttentionPromotionModeV1) !== 'off',
             });
             syncPerformanceTelemetry.count('sync.store.sessions.renderables.replace', {
                 incoming: sessions.length,
@@ -890,6 +927,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 noop: plan.noop ? 1 : 0,
                 listRebuild: plan.needsSessionListViewDataRebuild ? 1 : 0,
                 listViewFieldChanges: plan.listViewFieldChangeCount,
+                attentionPromotionFieldChanges: plan.attentionPromotionFieldChangeCount,
                 staleMetadataPreserved: plan.staleMetadataPreservedCount,
                 stalePendingFlagsPreserved: plan.stalePendingFlagsPreservedCount,
                 warmCacheRelevant: plan.didWarmCacheRelevantRenderableChange ? 1 : 0,
@@ -913,6 +951,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         changed: plan.changedCount,
                         removed: plan.removedCount,
                         listViewFieldChanges: plan.listViewFieldChangeCount,
+                        attentionPromotionFieldChanges: plan.attentionPromotionFieldChangeCount,
                     }),
                     () => buildSessionListViewDataForState(nextStateBase as SessionsDomain & SessionsDomainDependencies),
                 )
@@ -954,6 +993,8 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 previousRenderables: state.sessionListRenderables ?? {},
                 patches,
                 isSessionListViewDataUninitialized: state.sessionListViewData === null,
+                rebuildOnAttentionPromotionFieldsChange:
+                    normalizeSessionListAttentionPromotionMode(state.settings.sessionListAttentionPromotionModeV1) !== 'off',
             });
             syncPerformanceTelemetry.count('sync.store.sessions.renderables.patch', {
                 patches: patches.length,
@@ -962,6 +1003,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 missing: plan.missingCount,
                 listRebuild: plan.needsSessionListViewDataRebuild ? 1 : 0,
                 listViewFieldChanges: plan.listViewFieldChangeCount,
+                attentionPromotionFieldChanges: plan.attentionPromotionFieldChangeCount,
                 warmCacheRelevant: plan.didWarmCacheRelevantRenderableChange ? 1 : 0,
             });
 
@@ -983,6 +1025,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                         changed: plan.changedCount,
                         missing: plan.missingCount,
                         listViewFieldChanges: plan.listViewFieldChangeCount,
+                        attentionPromotionFieldChanges: plan.attentionPromotionFieldChangeCount,
                     }),
                     () => buildSessionListViewDataForState(nextStateBase as SessionsDomain & SessionsDomainDependencies),
                 )
@@ -1323,10 +1366,29 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     thinkingGraceUntil: null,
                 },
             };
-
-            return {
+            const renderable = state.sessionListRenderables[sessionId];
+            const nextRenderables = renderable && (renderable.thinkingGraceUntil ?? null) !== null
+                ? {
+                    ...state.sessionListRenderables,
+                    [sessionId]: {
+                        ...renderable,
+                        thinkingGraceUntil: null,
+                    },
+                }
+                : state.sessionListRenderables;
+            const nextStateBase = {
                 ...state,
                 sessions: nextSessions,
+                sessionListRenderables: nextRenderables,
+            };
+            const shouldRebuildSessionListViewData = nextRenderables !== state.sessionListRenderables
+                && normalizeSessionListAttentionPromotionMode(state.settings.sessionListAttentionPromotionModeV1) !== 'off';
+
+            return {
+                ...nextStateBase,
+                sessionListViewData: shouldRebuildSessionListViewData
+                    ? buildSessionListViewDataForState(nextStateBase)
+                    : state.sessionListViewData,
             };
         }),
         markSessionViewed: (sessionId: string) => {

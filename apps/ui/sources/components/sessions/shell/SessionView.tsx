@@ -1,7 +1,8 @@
 import Color from 'color';
 
 import { AgentContentView } from '@/components/sessions/transcript/AgentContentView';
-import { AgentInput } from '@/components/sessions/agentInput';
+import { AgentInput, type AgentInputAutocompleteSelectionHandler } from '@/components/sessions/agentInput';
+import { useComposerAvailablePanelHeight } from '@/components/sessions/keyboardAvoidance';
 import type { AgentInputAttachment } from '@/components/sessions/agentInput/agentInputContracts';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
 import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker';
@@ -30,7 +31,7 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
 import { beginSessionViewingActivation, clearManualUnreadHold, endSessionViewingActivation, shouldSuppressAutomaticMarkViewed } from '@/sync/domains/session/readState/sessionManualUnreadHold';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
@@ -49,6 +50,8 @@ import {
 import { buildReviewCommentsOutboundMessage } from '@/sync/domains/input/reviewComments/buildReviewCommentsOutboundMessage';
 import { resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/resolveSessionComposerSend';
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
+import { resolvePromptInvocationComposerSendAction } from '@/sync/domains/input/slashCommands/promptInvocationBehavior';
+import { resolvePromptInvocationAutocompleteSelection } from '@/sync/domains/input/slashCommands/promptInvocationSuggestion';
 import { applyPermissionModeSelection } from '@/sync/domains/permissions/permissionModeApply';
 import {
     supportsSessionModeOverrides,
@@ -107,7 +110,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { usePathname, useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
-import { Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
+import { Keyboard, Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
@@ -278,6 +281,8 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
     ...agentInputProps
 }: SessionAgentInputWithUsageProps) {
     const sessionUsage = useSessionUsage(sessionId);
+    const scaffoldAvailablePanelHeight = useComposerAvailablePanelHeight();
+    const maxPanelHeight = agentInputProps.maxPanelHeight ?? scaffoldAvailablePanelHeight;
     const agentInputUsageData = React.useMemo(() => {
         const usage = sessionUsage ?? sessionLatestUsage ?? null;
         return usage ? {
@@ -295,6 +300,8 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
     return (
         <AgentInput
             {...agentInputProps}
+            sessionId={sessionId}
+            maxPanelHeight={maxPanelHeight}
             usageData={agentInputUsageData}
         />
     );
@@ -477,6 +484,9 @@ export const SessionView = React.memo((props: SessionViewProps) => {
 
     const handleHeaderExtraItemSelect = React.useCallback((actionId: string) => {
         if (actionId === mobileWorkspaceExperienceToggleActionId) {
+            if (actionId === 'header.openMobileWorkspaceCockpit') {
+                Keyboard.dismiss();
+            }
             toggleWorkspaceExperienceRef.current();
             return true;
         }
@@ -979,6 +989,15 @@ function SessionViewLoaded({
     const [message, setMessage] = React.useState('');
     const realtimeStatus = useRealtimeStatus();
     const { ids: committedMessageIds, isLoaded } = useSessionTranscriptIds(sessionId);
+    const { messages: committedMessages } = useSessionMessages(sessionId);
+    const pendingPermissionRequests = React.useMemo(
+        () => listPendingPermissionRequests(session, committedMessages),
+        [committedMessages, session],
+    );
+    const pendingUserActionRequests = React.useMemo(
+        () => listPendingUserActionRequests(session, committedMessages),
+        [committedMessages, session],
+    );
     const openToTranscriptTelemetryRef = React.useRef<{
         recorded: boolean;
         sessionId: string;
@@ -1064,10 +1083,10 @@ function SessionViewLoaded({
     );
     const canEditSessionGoals = React.useMemo(
         () => isSessionGoalEditingAvailable({
-            providerSupportsEditableGoals: supportsEditableSessionGoals({ agentId: liveComposerState.agentId, session }),
+            providerSupportsEditableGoals: supportsEditableSessionGoals({ agentId, session }),
             goalsFeatureEnabled: codexAppServerGoalsFeatureEnabled,
         }),
-        [codexAppServerGoalsFeatureEnabled, liveComposerState.agentId, session],
+        [agentId, codexAppServerGoalsFeatureEnabled, session],
     );
     const setSessionGoalForView = React.useCallback(
         (request: Parameters<typeof sessionGoalSet>[1]) => sessionGoalSet(sessionId, request),
@@ -1092,6 +1111,7 @@ function SessionViewLoaded({
             testID: 'session-work-state-status-badge',
             accessibilityLabel: t('session.workState.accessibilityLabel'),
             tone: presentation.tone,
+            emphasis: presentation.emphasis,
             icon: (tint) => <Ionicons name={iconName} size={12} color={tint} />,
             renderPopover: ({ open, anchorRef, onRequestClose }) => (
                 <SessionWorkStatePopover
@@ -1740,6 +1760,7 @@ function SessionViewLoaded({
                           controlSwitchTo={controlSwitchTo}
                           onRequestSwitchToRemote={isHiddenSystemSessionSession || !canRequestRemoteControl ? undefined : handleRequestSwitchToRemote}
                           directControlFooter={directControlFooter}
+                          approvalRequests={openApprovalRequests}
                           jumpToSeq={jumpToSeq}
                           onViewportChange={handleTranscriptViewportChange}
                       />
@@ -1868,6 +1889,22 @@ function SessionViewLoaded({
         void sessionAbort(sessionId);
     }, [sessionId]);
     const handleAutocompleteSuggestions = React.useCallback((query: string) => getSuggestions(sessionId, query), [sessionId]);
+    const handleAutocompleteSuggestionSelect = React.useCallback<AgentInputAutocompleteSelectionHandler>(
+        async (args) => {
+            try {
+                return await resolvePromptInvocationAutocompleteSelection({
+                    promptInvocation: args.suggestion.promptInvocation,
+                    inputText: args.inputText,
+                    selection: args.selection,
+                    activeWord: args.activeWord,
+                });
+            } catch (e) {
+                Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+                return { handled: true as const, text: args.inputText, cursorPosition: args.selection.start };
+            }
+        },
+        [],
+    );
     const agentInputConnectionStatus = React.useMemo(() => ({
         text: (isResuming || isPendingQueueWakeResuming || sessionStatus.state === 'resuming')
             ? t('session.resuming')
@@ -1955,8 +1992,8 @@ function SessionViewLoaded({
                 attachments={attachmentsUploadsEnabled ? agentInputAttachments : undefined}
                 onAttachmentsAdded={attachmentsUploadsEnabled ? addAttachments : undefined}
                 hasSendableAttachments={hasIncludedReviewCommentDrafts || (attachmentsUploadsEnabled && attachmentDrafts.length > 0)}
-                permissionRequests={listPendingPermissionRequests(session)}
-                userActionRequests={listPendingUserActionRequests(session)}
+                permissionRequests={pendingPermissionRequests}
+                userActionRequests={pendingUserActionRequests}
                 approvalRequests={openApprovalRequests}
                 canApprovePermissions={transcriptInteraction.canApprovePermissions}
                 permissionDisabledReason={transcriptInteraction.permissionDisabledReason}
@@ -2358,7 +2395,7 @@ function SessionViewLoaded({
                                     argsText: resolved.rest,
                                 });
 
-                                if (resolved.behavior === 'insert') {
+                                if (resolvePromptInvocationComposerSendAction(resolved.behavior) === 'insert') {
                                     setMessage(expanded);
                                     return;
                                 }
@@ -2408,7 +2445,6 @@ function SessionViewLoaded({
                             clearSessionGoal: canEditSessionGoals
                                 ? (targetSessionId) => sessionGoalClear(targetSessionId)
                                 : undefined,
-                            sendGoalObjectiveMessage: (objective) => sendComposerText(objective, previousMessage, sendOptions),
                             modalAlert: (title, msg) => Modal.alert(title, msg),
                         });
                         return;
@@ -2426,6 +2462,7 @@ function SessionViewLoaded({
                 // Autocomplete configuration
                 autocompletePrefixes={SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES}
                 autocompleteSuggestions={handleAutocompleteSuggestions}
+                onAutocompleteSuggestionSelect={handleAutocompleteSuggestionSelect}
                 disabled={isReadOnly}
                 alwaysShowContextSize={alwaysShowContextSize}
                 extraActionChips={agentInputExtraActionChips}
@@ -2460,6 +2497,7 @@ function SessionViewLoaded({
             : 0,
         inputOuterBottomPaddingPx: SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
     });
+    const agentContentSafeAreaBottom = chatBottomSpacing === 'none' ? 0 : safeArea.bottom;
 
     const main = (
         <>
@@ -2508,6 +2546,7 @@ function SessionViewLoaded({
                     content={content}
                     input={input}
                     placeholder={placeholder}
+                    safeAreaBottom={agentContentSafeAreaBottom}
                 />
             </View >
 

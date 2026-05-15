@@ -382,6 +382,60 @@ export function didSessionListRenderableStructuralFieldsChange(
     return false;
 }
 
+function isAttentionPromotionWorkingSession(session: SessionListRenderableSession): boolean {
+    return session.latestTurnStatus === 'in_progress'
+        || session.thinking === true
+        || (typeof session.optimisticThinkingAt === 'number' && Number.isFinite(session.optimisticThinkingAt) && session.optimisticThinkingAt > 0)
+        || (typeof session.thinkingGraceUntil === 'number' && Number.isFinite(session.thinkingGraceUntil) && session.thinkingGraceUntil > Date.now());
+}
+
+function hasAttentionPromotionUpdatedAtOrdering(session: SessionListRenderableSession): boolean {
+    if (isAttentionPromotionWorkingSession(session)) return false;
+    const activeOnline = session.active === true && session.presence === 'online';
+    if (activeOnline && (session.hasPendingUserActionRequests === true || session.hasPendingPermissionRequests === true)) {
+        return true;
+    }
+    if (
+        session.latestTurnStatus === 'failed'
+        && session.lastRuntimeIssue?.v === 1
+        && session.lastRuntimeIssue.scope === 'primary_session'
+        && session.lastRuntimeIssue.status === 'failed'
+        && typeof session.lastRuntimeIssue.occurredAt !== 'number'
+    ) {
+        return true;
+    }
+    if (
+        typeof session.latestReadyEventSeq === 'number'
+        && session.latestReadyEventSeq > (typeof session.lastViewedSessionSeq === 'number' ? session.lastViewedSessionSeq : 0)
+        && typeof session.latestReadyEventAt !== 'number'
+    ) {
+        return true;
+    }
+    return false;
+}
+
+export function didSessionListRenderableAttentionPromotionFieldsChange(
+    previous: SessionListRenderableSession | undefined,
+    next: SessionListRenderableSession,
+): boolean {
+    if (!previous) return true;
+    if (previous.updatedAt !== next.updatedAt && (hasAttentionPromotionUpdatedAtOrdering(previous) || hasAttentionPromotionUpdatedAtOrdering(next))) return true;
+    if ((previous.lastViewedSessionSeq ?? null) !== (next.lastViewedSessionSeq ?? null)) return true;
+    if ((previous.latestReadyEventSeq ?? null) !== (next.latestReadyEventSeq ?? null)) return true;
+    if ((previous.latestReadyEventAt ?? null) !== (next.latestReadyEventAt ?? null)) return true;
+    if ((previous.hasPendingPermissionRequests ?? null) !== (next.hasPendingPermissionRequests ?? null)) return true;
+    if ((previous.hasPendingUserActionRequests ?? null) !== (next.hasPendingUserActionRequests ?? null)) return true;
+    if ((previous.latestTurnStatus ?? null) !== (next.latestTurnStatus ?? null)) return true;
+    if (!areSessionRuntimeIssuesEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)) return true;
+    if (previous.thinking !== next.thinking) return true;
+    if (previous.thinkingAt !== next.thinkingAt) return true;
+    if ((previous.optimisticThinkingAt ?? null) !== (next.optimisticThinkingAt ?? null)) return true;
+    if ((previous.thinkingGraceUntil ?? null) !== (next.thinkingGraceUntil ?? null)) return true;
+    if (previous.active !== next.active) return true;
+    if (previous.presence !== next.presence) return true;
+    return false;
+}
+
 export function didSessionListRenderableProjectGroupingFieldsChange(
     previous: SessionListRenderableSession | undefined,
     next: SessionListRenderableSession,

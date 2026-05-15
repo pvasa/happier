@@ -36,6 +36,9 @@ const settingMutators = vi.hoisted(() => ({
 const deviceTypeState = vi.hoisted(() => ({
     value: 'tablet' as 'phone' | 'tablet' | 'desktop',
 }));
+const safeAreaState = vi.hoisted(() => ({
+    bottom: 0,
+}));
 
 vi.mock('react-native-gesture-handler', () => {
     function createGesture(kind: string) {
@@ -216,7 +219,7 @@ installSessionShellCommonModuleMocks({
 });
 
 vi.mock('react-native-safe-area-context', () => ({
-    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+    useSafeAreaInsets: () => ({ top: 0, bottom: safeAreaState.bottom, left: 0, right: 0 }),
 }));
 vi.mock('@react-navigation/native', () => ({
     useFocusEffect: () => {},
@@ -350,6 +353,7 @@ describe('SessionView (data ready gating)', () => {
         settingMutators.setMobileWorkspaceExperience.mockReset();
         gestureHandlerState.gestures = [];
         deviceTypeState.value = 'tablet';
+        safeAreaState.bottom = 0;
         standardCleanup();
     });
 
@@ -367,6 +371,7 @@ describe('SessionView (data ready gating)', () => {
     });
 
     it('can render chat content without the legacy web bottom spacer when cockpit owns bottom chrome', async () => {
+        safeAreaState.bottom = 34;
         const { SessionView } = await sessionViewModulePromise;
 
         const screen = await renderScreen(
@@ -381,6 +386,9 @@ describe('SessionView (data ready gating)', () => {
         });
         expect(chatContentContainers).toHaveLength(1);
         expect(Number(flattenStyle(chatContentContainers[0]?.props.style).paddingBottom ?? 0)).toBe(0);
+
+        const agentContentView = screen.tree.findByType('AgentContentView' as never);
+        expect(agentContentView.props.safeAreaBottom).toBe(0);
     });
 
     it('does not expose a gesture handle that can unintentionally open cockpit mode from the composer', async () => {

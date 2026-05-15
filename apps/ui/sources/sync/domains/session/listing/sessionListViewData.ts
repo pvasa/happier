@@ -1,5 +1,6 @@
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { SessionListRenderableSession } from './sessionListRenderable';
+import type { SessionListAttentionPromotionReason } from './attentionPromotion/sessionListAttentionPromotionTypes';
 import { t } from '@/text';
 import {
     resolveDisplayMachineIdForSessionFromState,
@@ -21,7 +22,7 @@ export type SessionListViewItem =
     | {
         type: 'header';
         title: string;
-        headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'project' | 'pinned' | 'shared' | 'folder';
+        headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'project' | 'pinned' | 'attention' | 'shared' | 'folder';
         groupKey?: string;
         workspaceKey?: string;
         workspace?: SessionFolderWorkspaceRefV1;
@@ -42,13 +43,15 @@ export type SessionListViewItem =
         session: SessionListRenderableSession;
         section?: 'active' | 'inactive';
         groupKey?: string;
-        groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'shared' | 'folder';
+        groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'attention' | 'shared' | 'folder';
         folderId?: string | null;
         folderDepth?: number;
         pinned?: boolean;
+        attentionPromotionReason?: SessionListAttentionPromotionReason;
         variant?: 'default' | 'no-path';
         serverId?: string;
         serverName?: string;
+        workspace?: SessionFolderWorkspaceRefV1;
     };
 
 export interface BuildSessionListViewDataOptions {

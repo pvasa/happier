@@ -43,6 +43,7 @@ const sourceData = vi.hoisted(() => ({
         },
     ] as SessionListViewItem[],
     hideInactiveSessions: false,
+    sessionListAttentionPromotionMode: 'off' as 'off' | 'global' | 'withinGroups',
     groupOrder: {} as Record<string, readonly string[] | undefined>,
     pinnedKeys: [] as string[],
     setGroupOrder: vi.fn(),
@@ -64,6 +65,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             useSessionFolderAssignmentsBySessionKey: () => sourceData.sessionFolderAssignmentsBySessionKey,
             useSetting: (key: string) => {
                 if (key === 'hideInactiveSessions') return sourceData.hideInactiveSessions;
+                if (key === 'sessionListAttentionPromotionModeV1') return sourceData.sessionListAttentionPromotionMode;
                 if (key === 'pinnedSessionKeysV1') return sourceData.pinnedKeys;
                 if (key === 'sessionFolderViewModeV1') return sourceData.sessionFolderViewModeV1;
                 if (key === 'sessionFoldersV1') return sourceData.sessionFoldersV1;
@@ -111,6 +113,7 @@ vi.mock('@/sync/ops/sessionFolders', () => ({
 describe('useVisibleSessionListViewData', () => {
     afterEach(() => {
         sourceData.hideInactiveSessions = false;
+        sourceData.sessionListAttentionPromotionMode = 'off';
         sourceData.activeData = [
             {
                 type: 'header',
@@ -307,6 +310,165 @@ describe('useVisibleSessionListViewData', () => {
         expect(hook.getCurrent()?.some((item) => item.type === 'header' && item.headerKind === 'folder'))
             .toBe(false);
         expect(sourceData.fetchAndApplySessionFolderAssignments).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
+
+    it('passes the global attention placement setting into visible list derivation', async () => {
+        sourceData.sessionListAttentionPromotionMode = 'global';
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey: 'server:server-a:day:2026-05-04',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('ready-session', {
+                    latestReadyEventSeq: 4,
+                    latestReadyEventAt: 20,
+                    lastViewedSessionSeq: 1,
+                }),
+                section: 'inactive',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('normal-session', {
+                    latestReadyEventSeq: 4,
+                    latestReadyEventAt: 10,
+                    lastViewedSessionSeq: 4,
+                }),
+                section: 'inactive',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData());
+
+        expect(hook.getCurrent()?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}`
+        )).toEqual([
+            'header:attention',
+            'session:ready-session:attention',
+            'header:date',
+            'session:normal-session:date',
+        ]);
+        await hook.unmount();
+    });
+
+    it('passes the within-groups attention placement setting into visible list derivation', async () => {
+        sourceData.sessionListAttentionPromotionMode = 'withinGroups';
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey: 'server:server-a:day:2026-05-04',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('normal-session'),
+                section: 'inactive',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('ready-session', {
+                    latestReadyEventSeq: 4,
+                    latestReadyEventAt: 20,
+                    lastViewedSessionSeq: 1,
+                }),
+                section: 'inactive',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData());
+
+        expect(hook.getCurrent()?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}`
+        )).toEqual([
+            'header:date',
+            'session:ready-session:date',
+            'session:normal-session:date',
+        ]);
+        await hook.unmount();
+    });
+
+    it('holds the selected attention row in place after its ready marker is acknowledged', async () => {
+        sourceData.sessionListAttentionPromotionMode = 'global';
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey: 'server:server-a:day:2026-05-04',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('ready-session', {
+                    latestReadyEventSeq: 4,
+                    latestReadyEventAt: 20,
+                    lastViewedSessionSeq: 1,
+                }),
+                section: 'inactive',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('normal-session'),
+                section: 'inactive',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListViewData } = await import('./useVisibleSessionListViewData');
+        const hook = await renderHook(() => useVisibleSessionListViewData('all', { activeSessionId: 'ready-session' }));
+
+        const promotedItem = hook.getCurrent()?.[1];
+        expect(promotedItem?.type === 'session' ? promotedItem.groupKind : null).toBe('attention');
+
+        sourceData.activeData = sourceData.activeData.map((item) => item.type === 'session' && item.session.id === 'ready-session'
+            ? {
+                ...item,
+                session: {
+                    ...item.session,
+                    lastViewedSessionSeq: 4,
+                },
+            }
+            : item);
+
+        const next = await hook.rerender();
+
+        expect(next?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}`
+        )).toEqual([
+            'header:attention',
+            'session:ready-session:attention',
+            'header:date',
+            'session:normal-session:date',
+        ]);
         await hook.unmount();
     });
 

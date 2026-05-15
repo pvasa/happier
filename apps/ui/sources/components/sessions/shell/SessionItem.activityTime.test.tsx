@@ -13,8 +13,16 @@ const useSessionSpy = vi.hoisted(() => vi.fn(() => null));
 const useSessionListRowRenderableSpy = vi.hoisted(() => vi.fn(() => null));
 const useSessionStatusSpy = vi.hoisted(() => vi.fn(() => mockSessionStatus));
 const AvatarMock = 'Avatar' as unknown as React.ComponentType<{
+    id?: string;
+    size?: number;
     monochrome?: boolean;
     hasUnreadMessages?: boolean;
+}>;
+const AgentIconMock = 'AgentIcon' as unknown as React.ComponentType<{
+    agentId?: string;
+    size?: number;
+    testID?: string;
+    color?: string;
 }>;
 let platformOs: 'ios' | 'android' | 'web' = 'web';
 let isTabletDevice = false;
@@ -77,9 +85,18 @@ installSessionShellCommonModuleMocks({
             useSessionListAttentionState: () => mockListAttentionState ?? (
                 mockSessionStatus.state === 'waiting' ? 'quiet' : mockSessionStatus.state
             ),
-            useSetting: (key: keyof Settings) => {
+            useSetting: (key: keyof Settings | string) => {
                 if (key === 'sessionListNarrowWorkingIndicatorStyle') {
                     return mockNarrowWorkingIndicatorStyle;
+                }
+                if (key === 'avatarStyle') {
+                    return mockAvatarStyle;
+                }
+                if (key === 'sessionListIdentityDisplay') {
+                    return mockSessionListIdentityDisplay;
+                }
+                if (key === 'sessionListActiveColorModeV1') {
+                    return mockSessionListActiveColorMode;
                 }
                 return undefined;
             },
@@ -93,6 +110,15 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
 
 vi.mock('@/components/ui/avatar/Avatar', () => ({
     Avatar: 'Avatar',
+}));
+
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
+}));
+
+vi.mock('@/agents/catalog/catalog', () => ({
+    DEFAULT_AGENT_ID: 'codex',
+    resolveAgentIdFromFlavor: (flavor: string | null | undefined) => flavor === 'claude' ? 'claude' : null,
 }));
 
 vi.mock('@/components/ui/status/StatusDot', () => ({
@@ -167,6 +193,9 @@ let mockSessionStatus: MockSessionStatus = {
 let mockListAttentionState: 'quiet' | 'unread' | 'pending' | 'ready' | 'failed' | 'thinking' | null = null;
 let mockHasUnreadMessages = false;
 let mockNarrowWorkingIndicatorStyle: 'spinner' | 'pulse' = 'spinner';
+let mockAvatarStyle = 'meshGradientColumns';
+let mockSessionListIdentityDisplay: 'avatar' | 'agentLogo' | 'none' = 'avatar';
+let mockSessionListActiveColorMode: 'activityAndAttention' | 'attentionOnly' | 'allActive' = 'activityAndAttention';
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -181,20 +210,38 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return style as Record<string, unknown>;
 }
 
-function createSession(id: string) {
+function createSession(
+    id: string,
+    metadata: ReturnType<typeof createSessionFixture>['metadata'] = null,
+) {
     return createSessionFixture({
         id,
         active: true,
         activeAt: 1,
         createdAt: 1,
         updatedAt: 1,
-        metadata: null,
+        metadata,
         presence: 'online',
     });
 }
 
+function findRowContentStyle(screen: Awaited<ReturnType<typeof renderScreen>>, sessionId: string): Record<string, unknown> {
+    const row = screen.findByTestId(`session-list-item-${sessionId}`);
+    const children = row?.children ?? [];
+    const content = children.find((child: unknown) => {
+        if (!child || typeof child !== 'object' || !('props' in child)) return false;
+        const style = flattenStyle((child as { props: { style?: unknown } }).props.style);
+        return style.flex === 1;
+    }) as { props: { style?: unknown } } | undefined;
+    return flattenStyle(content?.props.style);
+}
+
 function findSessionTitleText(screen: Awaited<ReturnType<typeof renderScreen>>, title: string) {
     return screen.findAllByType('Text').find((node) => node.props.children === title);
+}
+
+function styleEntries(style: unknown): unknown[] {
+    return Array.isArray(style) ? style : [style];
 }
 
 function findWorkingSpinner(screen: Awaited<ReturnType<typeof renderScreen>>, sessionId: string) {
@@ -209,6 +256,9 @@ describe('SessionItem activity time', () => {
         mockListAttentionState = null;
         mockHasUnreadMessages = false;
         mockNarrowWorkingIndicatorStyle = 'spinner';
+        mockAvatarStyle = 'meshGradientColumns';
+        mockSessionListIdentityDisplay = 'avatar';
+        mockSessionListActiveColorMode = 'activityAndAttention';
         platformOs = 'web';
         isTabletDevice = false;
         useProfileSpy.mockClear();
@@ -346,6 +396,254 @@ describe('SessionItem activity time', () => {
         expect(rowStyle.paddingHorizontal).toBe(8);
 
         expect(screen.findByTestId('session-row-attention-indicator-sess_compact_height')).toBeNull();
+    });
+
+    it('renders an 18px micro avatar in very compact web rows', async () => {
+        platformOs = 'web';
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_avatar_web')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_avatar_web')?.props.style);
+        expect(rowStyle.height).toBe(34);
+        expect(screen.findAllByType(AvatarMock)[0].props).toMatchObject({
+            id: 'avatar',
+            size: 18,
+        });
+        expect(findRowContentStyle(screen, 'sess_compact_avatar_web').marginLeft).toBe(8);
+    });
+
+    it('uses a 20px micro avatar for very compact native phone rows', async () => {
+        platformOs = 'ios';
+        isTabletDevice = false;
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_compact_avatar_phone')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const rowStyle = flattenStyle(screen.findByTestId('session-list-item-sess_compact_avatar_phone')?.props.style);
+        expect(rowStyle.height).toBe(42);
+        expect(screen.findAllByType(AvatarMock)[0].props.size).toBe(20);
+        expect(findRowContentStyle(screen, 'sess_compact_avatar_phone').marginLeft).toBe(8);
+    });
+
+    it('renders the selected agent logo in the same narrow identity slot', async () => {
+        mockSessionListIdentityDisplay = 'agentLogo';
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_agent_logo_narrow', { flavor: 'claude' } as any)}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        expect(screen.findAllByType(AvatarMock)).toHaveLength(0);
+        expect(screen.findAllByType(AgentIconMock)[0].props).toMatchObject({
+            agentId: 'claude',
+            size: 14,
+            testID: 'session-list-agent-logo-sess_agent_logo_narrow',
+        });
+        expect(findRowContentStyle(screen, 'sess_agent_logo_narrow').marginLeft).toBe(8);
+    });
+
+    it('passes the resolved title color to agent logos for quiet active rows', async () => {
+        mockSessionListIdentityDisplay = 'agentLogo';
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'quiet';
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_agent_logo_quiet', { flavor: 'claude' } as any)}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        const titleStyleEntries = styleEntries(findSessionTitleText(screen, 'Session')?.props.style);
+        const explicitTitleColorStyle = titleStyleEntries[titleStyleEntries.length - 1] as { color?: unknown } | undefined;
+        expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
+        expect(explicitTitleColorStyle).toMatchObject({ color: titleStyle.color });
+        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(explicitTitleColorStyle?.color);
+    });
+
+    it('can use the active title color for all active connected session rows', async () => {
+        mockSessionListIdentityDisplay = 'agentLogo';
+        mockSessionListActiveColorMode = 'allActive';
+        mockSessionStatus = {
+            state: 'waiting',
+            isConnected: true,
+            statusText: 'online',
+            shouldShowStatus: false,
+            statusColor: '#34C759',
+            statusDotColor: '#34C759',
+            isPulsing: false,
+        };
+        mockListAttentionState = 'quiet';
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_agent_logo_all_active', { flavor: 'claude' } as any)}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.primary);
+        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(titleStyle.color);
+    });
+
+    it('can keep working rows secondary when only attention rows use active color', async () => {
+        mockSessionListIdentityDisplay = 'agentLogo';
+        mockSessionListActiveColorMode = 'attentionOnly';
+        mockSessionStatus = {
+            state: 'thinking',
+            isConnected: true,
+            statusText: 'working on it',
+            shouldShowStatus: true,
+            statusColor: '#07f',
+            statusDotColor: '#0f0',
+            isPulsing: true,
+        };
+        const { SessionItem } = await import('./SessionItem');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession('sess_agent_logo_attention_only', { flavor: 'claude' } as any)}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+
+        const titleStyle = flattenStyle(findSessionTitleText(screen, 'Session')?.props.style);
+        expect(titleStyle.color).toBe(lightTheme.colors.text.secondary);
+        expect(screen.findAllByType(AgentIconMock)[0].props.color).toBe(titleStyle.color);
+    });
+
+    it('hides the session list identity slot across row densities when identity display is none', async () => {
+        mockSessionListIdentityDisplay = 'none';
+        const { SessionItem } = await import('./SessionItem');
+
+        const detailed = await renderScreen(
+            <SessionItem
+                session={createSession('sess_avatar_none_detailed')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+        expect(detailed.findAllByType(AvatarMock)).toHaveLength(0);
+        expect(detailed.findAllByType(AgentIconMock)).toHaveLength(0);
+
+        standardCleanup();
+
+        const cozy = await renderScreen(
+            <SessionItem
+                session={createSession('sess_avatar_none_cozy')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={false}
+            />,
+        );
+        expect(cozy.findAllByType(AvatarMock)).toHaveLength(0);
+        expect(cozy.findAllByType(AgentIconMock)).toHaveLength(0);
+
+        standardCleanup();
+
+        const narrow = await renderScreen(
+            <SessionItem
+                session={createSession('sess_avatar_none_narrow')}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+            />,
+        );
+        expect(narrow.findAllByType(AvatarMock)).toHaveLength(0);
+        expect(narrow.findAllByType(AgentIconMock)).toHaveLength(0);
+        expect(findRowContentStyle(narrow, 'sess_avatar_none_narrow').marginLeft).toBe(0);
     });
 
     it('keeps very compact web rows dense for the sidebar surface', async () => {

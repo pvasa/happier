@@ -4,6 +4,7 @@ import {
     areSessionListRenderablesEqual,
     buildSessionListRenderableFromSession,
     derivePendingRequestFlagsFromAgentState,
+    didSessionListRenderableAttentionPromotionFieldsChange,
     preserveSessionListRenderableStaleFields,
 } from './sessionListRenderable';
 import type { SessionListRenderableSession } from './sessionListRenderable';
@@ -246,6 +247,25 @@ describe('buildSessionListRenderableFromSession', () => {
         });
 
         expect(areSessionListRenderablesEqual(previous, next)).toBe(false);
+    });
+
+    it('treats updatedAt as an attention promotion input', () => {
+        const previous = buildRenderable({
+            id: 's_action',
+            updatedAt: 100,
+            active: true,
+            presence: 'online',
+            hasPendingUserActionRequests: true,
+        });
+        const next = buildRenderable({
+            id: 's_action',
+            updatedAt: 200,
+            active: true,
+            presence: 'online',
+            hasPendingUserActionRequests: true,
+        });
+
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, next)).toBe(true);
     });
 
     it('keeps read-state actions derived from the projected session cursor', () => {
@@ -605,5 +625,45 @@ describe('buildSessionListRenderableFromSession', () => {
 
         expect(renderable.hasPendingPermissionRequests).toBe(false);
         expect(renderable.hasPendingUserActionRequests).toBe(true);
+    });
+});
+
+describe('didSessionListRenderableAttentionPromotionFieldsChange', () => {
+    it('detects ready, pending, failed, and working-field changes that affect attention promotion', () => {
+        const previous = buildRenderable({ id: 's_attention' });
+
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
+            ...previous,
+            latestReadyEventSeq: 4,
+        })).toBe(true);
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
+            ...previous,
+            hasPendingUserActionRequests: true,
+        })).toBe(true);
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
+            ...previous,
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: {
+                v: 1,
+                scope: 'primary_session',
+                status: 'failed',
+                code: 'auth_error',
+                source: 'auth_error',
+                occurredAt: 123,
+            },
+        })).toBe(true);
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
+            ...previous,
+            thinking: true,
+        })).toBe(true);
+    });
+
+    it('ignores unread-only changes so unread sessions do not reorder the list', () => {
+        const previous = buildRenderable({ id: 's_unread_only', hasUnreadMessages: false });
+
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
+            ...previous,
+            hasUnreadMessages: true,
+        })).toBe(false);
     });
 });

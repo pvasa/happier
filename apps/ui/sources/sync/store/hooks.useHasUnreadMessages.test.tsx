@@ -161,6 +161,7 @@ describe('useHasUnreadMessages', () => {
       sessionListRenderables: {
         s1: makeRenderableSession('s1', {
           seq: 10,
+          lastViewedSessionSeq: 10,
           updatedAt: 1_000,
           pendingVersion: 1,
           metadataVersion: 1,
@@ -187,8 +188,9 @@ describe('useHasUnreadMessages', () => {
     await act(async () => {
       storage.setState({
         sessionListRenderables: {
-        s1: makeRenderableSession('s1', {
-            seq: 11,
+          s1: makeRenderableSession('s1', {
+            seq: 10,
+            lastViewedSessionSeq: 10,
             updatedAt: 1_500,
             pendingVersion: 2,
             metadataVersion: 2,
@@ -206,6 +208,32 @@ describe('useHasUnreadMessages', () => {
 
     expect(hook.getCurrent()).toBe(initial);
     expect(renderCount).toBe(1);
+    await hook.unmount();
+  });
+
+  it('keeps read-state fields on the row renderable for session item menus', async () => {
+    storage.setState({
+      sessions: {},
+      sessionMessages: {},
+      sessionPending: {},
+      sessionListRenderables: {
+        s1: makeRenderableSession('s1', {
+          seq: 12,
+          lastViewedSessionSeq: 8,
+          metadataVersion: 1,
+          agentStateVersion: 1,
+        }),
+      },
+      isDataReady: true,
+    } as never);
+
+    const { useSessionListRowRenderable } = await import('./hooks');
+    const hook = await renderHook(() => useSessionListRowRenderable('s1'));
+
+    expect(hook.getCurrent()).toMatchObject({
+      seq: 12,
+      lastViewedSessionSeq: 8,
+    });
     await hook.unmount();
   });
 

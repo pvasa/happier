@@ -76,7 +76,7 @@ function normalizeSeq(value: number | null | undefined): number | null {
 }
 
 export function resolveSessionListSecondaryLineMode(params: Readonly<{
-    groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'shared' | 'folder' | null;
+    groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'attention' | 'shared' | 'folder' | null;
 }>): SessionListSecondaryLineMode {
     if (params.groupKind === 'date') {
         return 'path';

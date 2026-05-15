@@ -69,6 +69,7 @@ function shouldRebuildSessionListViewData(previous: Settings, next: Settings): b
     return next.groupInactiveSessionsByProject !== previous.groupInactiveSessionsByProject ||
         next.sessionListActiveGroupingV1 !== previous.sessionListActiveGroupingV1 ||
         next.sessionListInactiveGroupingV1 !== previous.sessionListInactiveGroupingV1 ||
+        next.sessionListAttentionPromotionModeV1 !== previous.sessionListAttentionPromotionModeV1 ||
         next.workspacePathDisplayModeV1 !== previous.workspacePathDisplayModeV1;
 }
 

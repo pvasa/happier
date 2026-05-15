@@ -36,6 +36,7 @@ const routerBackSpy = vi.hoisted(() => vi.fn(() => {
   (globalThis as any).location.pathname = '/session/s1/previous';
 }));
 const navigateWithBlurOnWebSpy = vi.hoisted(() => vi.fn((action: () => void) => action()));
+const keyboardDismissSpy = vi.hoisted(() => vi.fn());
 const platformState = vi.hoisted(() => ({ os: 'web' as 'web' | 'android' }));
 const responsiveState = vi.hoisted(() => ({ deviceType: 'phone' as 'phone' | 'tablet', isLandscape: false }));
 const windowDimensionsState = vi.hoisted(() => ({ width: 800, height: 600 }));
@@ -226,6 +227,9 @@ installSessionShellCommonModuleMocks({
       spec && Object.prototype.hasOwnProperty.call(spec, platformState.os)
         ? (spec as any)[platformState.os]
         : (spec as any).default;
+    Object.assign(module.Keyboard, {
+      dismiss: keyboardDismissSpy,
+    });
     return module;
   },
   unistyles: async () => {
@@ -294,6 +298,11 @@ installSessionShellCommonModuleMocks({
       useSessionMessages: () => ({ messages: sessionMessagesState.messages, isLoaded: true }),
       useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
       useSessionPendingMessages: () => ({ messages: [] }),
+      useSessionSubagentSourceMessages: () => sessionMessagesState.messages,
+      useSessionRpcAvailabilityState: () => ({
+        sessionExists: true,
+        sessionRpcAvailable: true,
+      }),
       useSessionReviewCommentsDrafts: () => [],
       useSessionUsage: () => null,
       useLocalSetting: (key: string) => {
@@ -393,6 +402,7 @@ describe('SessionView header action menu visibility', () => {
     automationsSupportState.serverId = null;
     mobileWorkspaceExperienceState.value = undefined;
     mobileWorkspaceExperienceState.setValue.mockReset();
+    keyboardDismissSpy.mockReset();
     headerActionMenuSpy.mockClear();
     readMachineTargetForSessionSpy.mockReset();
     readMachineTargetForSessionSpy.mockReturnValue(null);
@@ -582,6 +592,17 @@ describe('SessionView header action menu visibility', () => {
     await renderSessionView();
 
     expect(getLastHeaderActionMenuProps().onSelectExtraItem('header.openMobileWorkspaceCockpit')).toBe(true);
+    expect(mobileWorkspaceExperienceState.setValue).toHaveBeenCalledWith('cockpit');
+  });
+
+  it('dismisses the keyboard before opening cockpit from the session header toggle', async () => {
+    responsiveState.deviceType = 'phone';
+    mobileWorkspaceExperienceState.value = 'classic';
+    await renderSessionView();
+
+    expect(getLastHeaderActionMenuProps().onSelectExtraItem('header.openMobileWorkspaceCockpit')).toBe(true);
+
+    expect(keyboardDismissSpy).toHaveBeenCalledTimes(1);
     expect(mobileWorkspaceExperienceState.setValue).toHaveBeenCalledWith('cockpit');
   });
 

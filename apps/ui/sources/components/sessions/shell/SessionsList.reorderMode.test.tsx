@@ -1,18 +1,24 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { createPartialStorageModuleMock, renderScreen } from '@/dev/testkit';
+import { createPartialStorageModuleMock, findGestureByKind, renderScreen } from '@/dev/testkit';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('react-native-gesture-handler', () => ({
-    Swipeable: 'Swipeable',
-}));
+vi.mock('react-native-gesture-handler', async () => {
+    const { createGestureHandlerMock } = await import('@/dev/testkit/mocks/gestureHandler');
+    return createGestureHandlerMock();
+});
 
 vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
     useSharedValue: (init: any) => ({ value: init }),
     useAnimatedStyle: (fn: () => any) => fn(),
+    withSpring: (value: any) => value,
+}));
+
+vi.mock('react-native-worklets', () => ({
+    scheduleOnRN: (fn: (...args: any[]) => void, ...args: any[]) => fn(...args),
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -102,14 +108,17 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
     formatPathRelativeToHome: (path: string) => path,
 }));
 
-const useSessionInlineDragSpy = vi.hoisted(() => vi.fn((params: any) => ({ gesture: undefined, animatedStyle: params ? {} : {} })));
+const selectedServerIds = vi.hoisted(() => ['server_a']);
 
 vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
+    useEffectiveServerSelection: () => ({
+        serverIds: selectedServerIds,
+    }),
     useResolvedActiveServerSelection: () => ({
         enabled: true,
         presentation: 'grouped',
         activeServerId: 'server_a',
-        allowedServerIds: ['server_a'],
+        allowedServerIds: selectedServerIds,
     }),
 }));
 
@@ -135,10 +144,6 @@ vi.mock('@/utils/system/requestReview', () => ({
     requestReview: requestReviewSpy,
 }));
 
-vi.mock('./useSessionInlineDrag', () => ({
-    useSessionInlineDrag: (params: any) => useSessionInlineDragSpy(params),
-}));
-
 vi.mock('./SessionItem', () => ({
     SessionItem: (props: any) => React.createElement('SessionItem', props),
 }));
@@ -157,7 +162,6 @@ describe('SessionsList (inline reorder)', () => {
         pinnedSessionKeysV1 = [];
         sessionListGroupOrderV1 = {};
         sessionTagsV1 = {};
-        useSessionInlineDragSpy.mockClear();
 
         const { SessionsList } = await import('./SessionsList');
 
@@ -168,9 +172,9 @@ describe('SessionsList (inline reorder)', () => {
         // reorderHandleGesture is passed from SessionListRow.
         // reorderDragStyle is no longer passed (Animated.View is in SessionListRow).
         expect(items[0].props).toHaveProperty('reorderHandleGesture');
+        expect(findGestureByKind(items[0].props.reorderHandleGesture, 'pan')).toBeTruthy();
         // isBeingDragged is passed from SessionListRow
         expect(items[0].props.isBeingDragged).toBe(false);
-        expect(useSessionInlineDragSpy).toHaveBeenCalledWith(expect.objectContaining({ rowHeight: 84 }));
     });
 
     it('keeps the recovery banner mounted across SessionsList rerenders', async () => {

@@ -22,6 +22,8 @@ export type ChatListItem =
         kind: 'tool-calls-group';
         id: string;
         toolMessageIds: string[];
+        originSessionId?: string;
+        isReadOnlyContext?: boolean;
         createdAt: number;
     }
     | {
@@ -45,11 +47,17 @@ export type ChatListItem =
 
 type CommittedTranscriptItem = Extract<ChatListItem, { kind: 'message' | 'tool-calls-group' }>;
 
+type ForkMessageMetadata = Readonly<{
+    originSessionId: string;
+    isReadOnlyContext: boolean;
+}>;
+
 export type ChatListItemsBuildCache = Readonly<{
     messageIdsOldestFirst: readonly string[];
     messageStructureKeysOldestFirst: readonly string[];
     visibleMessageIdsOldestFirst: readonly string[];
     groupConsecutiveToolCalls: boolean;
+    forkBoundarySignature?: string;
     committedItems: readonly CommittedTranscriptItem[];
     localIdsInTranscript: ReadonlySet<string>;
     pendingMessagesRef: readonly PendingMessage[] | null | undefined;
@@ -72,6 +80,21 @@ function isPrefix(params: Readonly<{ prefix: readonly string[]; full: readonly s
 
 function canGroupToolCallMessage(message: Message): boolean {
     return isToolCallMessageGroupableInTranscript(message);
+}
+
+function readForkMetadata(
+    metadataByMessageId: Readonly<Record<string, ForkMessageMetadata>> | undefined,
+    messageId: string,
+): ForkMessageMetadata | null {
+    return metadataByMessageId?.[messageId] ?? null;
+}
+
+function hasSameForkMetadata(
+    item: Extract<ChatListItem, { kind: 'tool-calls-group' }>,
+    metadata: ForkMessageMetadata | null,
+): boolean {
+    return (item.originSessionId ?? undefined) === (metadata?.originSessionId ?? undefined) &&
+        (item.isReadOnlyContext ?? undefined) === (metadata?.isReadOnlyContext ?? undefined);
 }
 
 function areSameStringList(left: readonly string[], right: readonly string[]): boolean {
@@ -208,8 +231,13 @@ export function buildChatListItemsCached(opts: {
     discardedMessages?: DiscardedPendingMessage[] | null;
     actionDrafts?: SessionActionDraft[] | null;
     groupConsecutiveToolCalls?: boolean;
+    forkBoundaryBeforeMessageIds?: ReadonlySet<string>;
+    forkBoundarySignature?: string;
+    forkMetadataByMessageId?: Readonly<Record<string, ForkMessageMetadata>>;
 }): { cache: ChatListItemsBuildCache; items: ChatListItem[] } {
     const groupConsecutiveToolCalls = opts.groupConsecutiveToolCalls === true;
+    const forkBoundarySignature = opts.forkBoundarySignature;
+    const forkBoundaryBeforeMessageIds = opts.forkBoundaryBeforeMessageIds;
     const messageStructureKeysOldestFirst = buildMessageStructureKeys(
         opts.messageIdsOldestFirst,
         opts.messagesById,
@@ -218,6 +246,7 @@ export function buildChatListItemsCached(opts: {
     const canReuse =
         opts.cache != null &&
         opts.cache.groupConsecutiveToolCalls === groupConsecutiveToolCalls &&
+        opts.cache.forkBoundarySignature === forkBoundarySignature &&
         isPrefix({ prefix: opts.cache.messageIdsOldestFirst, full: opts.messageIdsOldestFirst }) &&
         isPrefix({ prefix: opts.cache.messageStructureKeysOldestFirst, full: messageStructureKeysOldestFirst });
 
@@ -238,8 +267,10 @@ export function buildChatListItemsCached(opts: {
             }
 
             if (groupConsecutiveToolCalls && canGroupToolCallMessage(m)) {
+                const hasBoundaryBeforeMessage = forkBoundaryBeforeMessageIds?.has(messageId) === true;
+                const forkMetadata = readForkMetadata(opts.forkMetadataByMessageId, m.id);
                 const prev = committedItems[committedItems.length - 1];
-                if (prev?.kind === 'tool-calls-group') {
+                if (!hasBoundaryBeforeMessage && prev?.kind === 'tool-calls-group' && hasSameForkMetadata(prev, forkMetadata)) {
                     committedItems[committedItems.length - 1] = { ...prev, toolMessageIds: [...prev.toolMessageIds, m.id] };
                     continue;
                 }
@@ -247,6 +278,7 @@ export function buildChatListItemsCached(opts: {
                     kind: 'tool-calls-group',
                     id: toolCallsGroupIdForFirstToolMessageId(m.id),
                     toolMessageIds: [m.id],
+                    ...(forkMetadata ? { originSessionId: forkMetadata.originSessionId, isReadOnlyContext: forkMetadata.isReadOnlyContext } : {}),
                     createdAt: m.createdAt,
                 });
                 continue;
@@ -256,6 +288,12 @@ export function buildChatListItemsCached(opts: {
                 kind: 'message',
                 id: `msg:${m.id}`,
                 messageId: m.id,
+                ...(readForkMetadata(opts.forkMetadataByMessageId, m.id)
+                    ? {
+                        originSessionId: readForkMetadata(opts.forkMetadataByMessageId, m.id)!.originSessionId,
+                        isReadOnlyContext: readForkMetadata(opts.forkMetadataByMessageId, m.id)!.isReadOnlyContext,
+                    }
+                    : {}),
                 createdAt: m.createdAt,
                 seq: normalizeSeq((m as any).seq),
             });
@@ -271,8 +309,10 @@ export function buildChatListItemsCached(opts: {
             }
 
             if (groupConsecutiveToolCalls && canGroupToolCallMessage(m)) {
+                const hasBoundaryBeforeMessage = forkBoundaryBeforeMessageIds?.has(messageId) === true;
+                const forkMetadata = readForkMetadata(opts.forkMetadataByMessageId, m.id);
                 const prev = committedItems[committedItems.length - 1];
-                if (prev?.kind === 'tool-calls-group') {
+                if (!hasBoundaryBeforeMessage && prev?.kind === 'tool-calls-group' && hasSameForkMetadata(prev, forkMetadata)) {
                     committedItems[committedItems.length - 1] = { ...prev, toolMessageIds: [...prev.toolMessageIds, m.id] };
                     continue;
                 }
@@ -280,6 +320,7 @@ export function buildChatListItemsCached(opts: {
                     kind: 'tool-calls-group',
                     id: toolCallsGroupIdForFirstToolMessageId(m.id),
                     toolMessageIds: [m.id],
+                    ...(forkMetadata ? { originSessionId: forkMetadata.originSessionId, isReadOnlyContext: forkMetadata.isReadOnlyContext } : {}),
                     createdAt: m.createdAt,
                 });
                 continue;
@@ -289,6 +330,12 @@ export function buildChatListItemsCached(opts: {
                 kind: 'message',
                 id: `msg:${m.id}`,
                 messageId: m.id,
+                ...(readForkMetadata(opts.forkMetadataByMessageId, m.id)
+                    ? {
+                        originSessionId: readForkMetadata(opts.forkMetadataByMessageId, m.id)!.originSessionId,
+                        isReadOnlyContext: readForkMetadata(opts.forkMetadataByMessageId, m.id)!.isReadOnlyContext,
+                    }
+                    : {}),
                 createdAt: m.createdAt,
                 seq: normalizeSeq((m as any).seq),
             });
@@ -342,6 +389,7 @@ export function buildChatListItemsCached(opts: {
             messageStructureKeysOldestFirst,
             visibleMessageIdsOldestFirst,
             groupConsecutiveToolCalls,
+            forkBoundarySignature,
             committedItems,
             localIdsInTranscript,
             pendingMessagesRef: opts.pendingMessages,

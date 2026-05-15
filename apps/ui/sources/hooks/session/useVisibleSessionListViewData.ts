@@ -2,10 +2,17 @@ import * as React from 'react';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { SessionListViewItem, useSessionFolderAssignmentsBySessionKey, useSessionListViewData, useSessionListViewDataByServerId, useSetting, useSettingMutable } from '@/sync/domains/state/storage';
 import { resolveSessionListSourceData } from '@/sync/domains/session/listing/sessionListPresentation';
-import { computeVisibleSessionListViewData } from '@/sync/domains/session/listing/computeVisibleSessionListViewData';
+import { computeVisibleSessionListIndex } from '@/sync/domains/session/listing/computeVisibleSessionListIndex';
+import { buildSessionListIndexFromViewData } from '@/sync/domains/session/listing/sessionListIndex';
+import { buildSessionListViewDataFromIndex } from '@/sync/domains/session/listing/sessionListViewDataFromIndex';
 import { applySessionFoldersToSessionListViewData } from '@/sync/domains/session/listing/sessionListViewData';
 import { areSessionListGroupOrderMapsEqual, normalizeSessionListGroupOrderV1ForSource } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { filterSessionListViewDataByStorageKind } from '@/sync/domains/session/listing/filterSessionListViewDataByStorageKind';
+import {
+    normalizeSessionListAttentionPromotionMode,
+    type SessionListAttentionPromotionMode,
+    type SessionListAttentionPromotionOptions,
+} from '@/sync/domains/session/listing/attentionPromotion/sessionListAttentionPromotion';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
 import { normalizeSessionFolders, type SessionFoldersV1 } from '@/sync/domains/session/folders';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
@@ -15,10 +22,19 @@ import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveSer
 
 const EMPTY_PINNED_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_SESSION_LIST_GROUP_ORDER: Readonly<Record<string, ReadonlyArray<string> | undefined>> = Object.freeze({});
+const DISABLED_ATTENTION_PROMOTION_OPTIONS: SessionListAttentionPromotionOptions = Object.freeze({
+    mode: 'off',
+});
+const EMPTY_ATTENTION_RETAIN_KEYS: ReadonlyArray<string> = Object.freeze([]);
+
+export type VisibleSessionListViewDataOptions = Readonly<{
+    activeSessionId?: string | null;
+}>;
 
 type SessionListDataState = Readonly<{
     hideInactiveSessions: boolean;
     pinnedSessionKeysV1: ReadonlyArray<string>;
+    sessionListAttentionPromotionMode: SessionListAttentionPromotionMode;
     selection: Readonly<{
         enabled: boolean;
         activeServerId: string;
@@ -54,15 +70,37 @@ function applySessionListStorageFilter(
     return filterSessionListViewDataByStorageKind(data, storageFilter);
 }
 
+function buildSessionRowResolver(source: ReadonlyArray<SessionListViewItem>) {
+    const byKey = new Map<string, Extract<SessionListViewItem, { type: 'session' }>['session']>();
+    for (const item of source) {
+        if (item.type !== 'session') continue;
+        const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
+        const sessionId = typeof item.session?.id === 'string' ? item.session.id.trim() : '';
+        if (!serverId || !sessionId) continue;
+        byKey.set(`${serverId}:${sessionId}`, item.session);
+    }
+    return (serverIdRaw: string | null | undefined, sessionIdRaw: string) => {
+        const serverId = typeof serverIdRaw === 'string' ? serverIdRaw.trim() : '';
+        const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
+        if (!serverId || !sessionId) return null;
+        return byKey.get(`${serverId}:${sessionId}`) ?? null;
+    };
+}
+
 function buildVisibleSessionListViewData(
     state: SessionListDataState,
     storageFilter: SessionListStorageFilter,
     hideInactiveSessions: boolean,
+    options: Readonly<{
+        retainAttentionSessionKeys?: ReadonlyArray<string>;
+    }> = {},
 ): SessionListViewItem[] | null {
     if (!state.folderSource) return state.folderSource;
 
-    const visible = computeVisibleSessionListViewData({
-        source: state.folderSource,
+    const sourceIndex = buildSessionListIndexFromViewData(state.folderSource);
+    const visibleIndex = computeVisibleSessionListIndex({
+        source: sourceIndex,
+        resolveSessionRow: buildSessionRowResolver(state.folderSource),
         hideInactiveSessions,
         pinnedSessionKeysV1: state.pinnedSessionKeysV1,
         sessionListGroupOrderV1: state.normalizedGroupOrder,
@@ -72,9 +110,44 @@ function buildVisibleSessionListViewData(
             selectedServerIds: state.selection.allowedServerIds,
         },
         storageFilterApplied: storageFilter !== 'all',
+        attentionPromotion: state.sessionListAttentionPromotionMode !== 'off'
+            ? {
+                mode: state.sessionListAttentionPromotionMode,
+                retainSessionKeys: options.retainAttentionSessionKeys,
+            }
+            : DISABLED_ATTENTION_PROMOTION_OPTIONS,
     });
 
-    return visible;
+    return buildSessionListViewDataFromIndex({
+        index: visibleIndex,
+        source: state.folderSource,
+        sourceIndex,
+    });
+}
+
+function buildSessionListSessionKey(item: Extract<SessionListViewItem, { type: 'session' }>): string | null {
+    const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
+    const sessionId = typeof item.session?.id === 'string' ? item.session.id.trim() : '';
+    if (!serverId || !sessionId) return null;
+    return `${serverId}:${sessionId}`;
+}
+
+function collectRetainedAttentionSessionKeys(params: Readonly<{
+    previousVisible: ReadonlyArray<SessionListViewItem> | null | undefined;
+    activeSessionId: string | null | undefined;
+    mode: SessionListAttentionPromotionMode;
+}>): ReadonlyArray<string> {
+    if (params.mode === 'off') return EMPTY_ATTENTION_RETAIN_KEYS;
+    const activeSessionId = typeof params.activeSessionId === 'string' ? params.activeSessionId.trim() : '';
+    if (!activeSessionId || !params.previousVisible) return EMPTY_ATTENTION_RETAIN_KEYS;
+    for (const item of params.previousVisible) {
+        if (item.type !== 'session') continue;
+        if (item.groupKind !== 'attention' && !item.attentionPromotionReason) continue;
+        if (item.session.id !== activeSessionId) continue;
+        const key = buildSessionListSessionKey(item);
+        return key ? [key] : EMPTY_ATTENTION_RETAIN_KEYS;
+    }
+    return EMPTY_ATTENTION_RETAIN_KEYS;
 }
 
 function countRenderedSessions(data: SessionListViewItem[] | null): number {
@@ -90,6 +163,7 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
     const activeData = useSessionListViewData();
     const dataByServerId = useSessionListViewDataByServerId();
     const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
+    const sessionListAttentionPromotionMode = normalizeSessionListAttentionPromotionMode(useSetting('sessionListAttentionPromotionModeV1'));
     const pinnedSessionKeysV1 = useSetting('pinnedSessionKeysV1') ?? EMPTY_PINNED_SESSION_KEYS;
     const sessionFoldersEnabled = useFeatureEnabled('sessions.folders');
     const sessionFoldersV1 = useSetting('sessionFoldersV1') as SessionFoldersV1 | null | undefined;
@@ -198,6 +272,7 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
     return React.useMemo(() => ({
         hideInactiveSessions,
         pinnedSessionKeysV1,
+        sessionListAttentionPromotionMode,
         selection: {
             enabled: selection.enabled,
             activeServerId: selection.activeServerId,
@@ -213,6 +288,7 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
         hideInactiveSessions,
         normalizedGroupOrder,
         pinnedSessionKeysV1,
+        sessionListAttentionPromotionMode,
         sessionFoldersEnabled,
         selectedServerIdsKey,
         selection.activeServerId,
@@ -222,37 +298,73 @@ function useSessionListDataState(storageFilter: SessionListStorageFilter): Sessi
     ]);
 }
 
-export function useVisibleSessionListViewData(storageFilter: SessionListStorageFilter = 'all'): SessionListViewItem[] | null {
+export function useVisibleSessionListViewData(
+    storageFilter: SessionListStorageFilter = 'all',
+    options: VisibleSessionListViewDataOptions = {},
+): SessionListViewItem[] | null {
     const state = useSessionListDataState(storageFilter);
+    const previousVisibleRef = React.useRef<SessionListViewItem[] | null>(null);
 
-    return React.useMemo(() => {
-        return buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions);
-    }, [state, storageFilter]);
+    const visible = React.useMemo(() => {
+        return buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions, {
+            retainAttentionSessionKeys: collectRetainedAttentionSessionKeys({
+                previousVisible: previousVisibleRef.current,
+                activeSessionId: options.activeSessionId,
+                mode: state.sessionListAttentionPromotionMode,
+            }),
+        });
+    }, [options.activeSessionId, state, storageFilter]);
+
+    React.useEffect(() => {
+        previousVisibleRef.current = visible;
+    }, [visible]);
+
+    return visible;
 }
 
-export function useHasHiddenInactiveSessions(storageFilter: SessionListStorageFilter = 'all'): boolean {
+export function useHasHiddenInactiveSessions(
+    storageFilter: SessionListStorageFilter = 'all',
+    options: VisibleSessionListViewDataOptions = {},
+): boolean {
     const state = useSessionListDataState(storageFilter);
+    const previousVisibleRef = React.useRef<SessionListViewItem[] | null>(null);
 
-    return React.useMemo(() => {
+    const result = React.useMemo(() => {
         if (!state.source || state.hideInactiveSessions !== true) return false;
 
-        const visible = buildVisibleSessionListViewData(state, storageFilter, true);
+        const retainAttentionSessionKeys = collectRetainedAttentionSessionKeys({
+            previousVisible: previousVisibleRef.current,
+            activeSessionId: options.activeSessionId,
+            mode: state.sessionListAttentionPromotionMode,
+        });
+        const visible = buildVisibleSessionListViewData(state, storageFilter, true, { retainAttentionSessionKeys });
         const visibleSessionCount = countRenderedSessions(visible);
         if (visibleSessionCount > 0) return false;
-        const unhidden = buildVisibleSessionListViewData(state, storageFilter, false);
+        const unhidden = buildVisibleSessionListViewData(state, storageFilter, false, { retainAttentionSessionKeys });
         return countRenderedSessions(unhidden) > visibleSessionCount;
-    }, [state, storageFilter]);
+    }, [options.activeSessionId, state, storageFilter]);
+
+    return result;
 }
 
-export function useVisibleSessionListPaneState(storageFilter: SessionListStorageFilter = 'all'): Readonly<{
+export function useVisibleSessionListPaneState(
+    storageFilter: SessionListStorageFilter = 'all',
+    options: VisibleSessionListViewDataOptions = {},
+): Readonly<{
     sessionListViewData: SessionListViewItem[] | null;
     visibleSessionCount: number;
     hasHiddenInactiveSessions: boolean;
 }> {
     const state = useSessionListDataState(storageFilter);
+    const previousVisibleRef = React.useRef<SessionListViewItem[] | null>(null);
 
-    return React.useMemo(() => {
-        const sessionListViewData = buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions);
+    const paneState = React.useMemo(() => {
+        const retainAttentionSessionKeys = collectRetainedAttentionSessionKeys({
+            previousVisible: previousVisibleRef.current,
+            activeSessionId: options.activeSessionId,
+            mode: state.sessionListAttentionPromotionMode,
+        });
+        const sessionListViewData = buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions, { retainAttentionSessionKeys });
         const visibleSessionCount = countRenderedSessions(sessionListViewData);
         if (!state.source || state.hideInactiveSessions !== true) {
             return {
@@ -270,11 +382,17 @@ export function useVisibleSessionListPaneState(storageFilter: SessionListStorage
             };
         }
 
-        const unhidden = buildVisibleSessionListViewData(state, storageFilter, false);
+        const unhidden = buildVisibleSessionListViewData(state, storageFilter, false, { retainAttentionSessionKeys });
         return {
             sessionListViewData,
             visibleSessionCount,
             hasHiddenInactiveSessions: countRenderedSessions(unhidden) > visibleSessionCount,
         };
-    }, [state, storageFilter]);
+    }, [options.activeSessionId, state, storageFilter]);
+
+    React.useEffect(() => {
+        previousVisibleRef.current = paneState.sessionListViewData;
+    }, [paneState.sessionListViewData]);
+
+    return paneState;
 }
