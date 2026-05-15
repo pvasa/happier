@@ -1785,7 +1785,12 @@ describe('createCodexAppServerRuntime', () => {
             .map(([, body]) => body as CommittedSnapshotBody)
             .filter((body) => body.type === 'message' && !body.sidechainId)
             .map((body) => String(body.message ?? ''));
-        expect(assistantMessages.filter((message) => message === 'Native review text')).toHaveLength(1);
+        const nativeReviewLocalIds = new Set(committedCalls
+            .map(([, body, opts]) => ({ body: body as CommittedSnapshotBody, opts }))
+            .filter((call) => call.body.type === 'message' && !call.body.sidechainId && call.body.message === 'Native review text')
+            .map((call) => call.opts.localId));
+        expect(assistantMessages).toContain('Native review text');
+        expect(nativeReviewLocalIds.size).toBe(1);
     });
 
     it('preserves assistant final text that differs from native review completion text', async () => {

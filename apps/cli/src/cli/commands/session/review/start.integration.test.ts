@@ -24,6 +24,7 @@ describe('happier session review start (integration)', () => {
   let envScope = createEnvKeyScope(envKeys);
   let server: Server | null = null;
   let happyHomeDir = '';
+  let decryptedActionCalls: any[] = [];
 
   beforeEach(async () => {
     happyHomeDir = await createTempDir('happier-cli-session-review-start-');
@@ -94,6 +95,7 @@ describe('happier session review start (integration)', () => {
     reloadConfiguration();
 
     mockIo.mockReset();
+    decryptedActionCalls = [];
 
     const { decodeBase64, decrypt, encodeBase64: encodeBase64Rpc, encrypt } = await import('@/api/encryption');
 
@@ -104,6 +106,7 @@ describe('happier session review start (integration)', () => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return;
         const decodedParams = decodeBase64(String(data.params ?? ''), 'base64');
         const decrypted = decrypt(dek, 'dataKey', decodedParams) as any;
+        decryptedActionCalls.push(decrypted);
         expect(decrypted.intent).toBe('review');
         expect(decrypted.backendTarget).toEqual({ kind: 'builtInAgent', agentId: decrypted.intentInput?.engineId });
 
@@ -172,6 +175,43 @@ describe('happier session review start (integration)', () => {
       expect(parsed.data?.results?.length).toBe(2);
       expect(parsed.data?.results?.[0]?.key).toBe('claude');
       expect(parsed.data?.results?.[1]?.key).toBe('codex');
+    } finally {
+      output.restore();
+    }
+  });
+
+  it('starts a review with default instructions when --instructions is omitted', async () => {
+    const { handleSessionCommand } = await import('../handleSessionCommand');
+
+    const output = captureConsoleJsonOutput();
+
+    try {
+      const machineKeySeed = new Uint8Array(32).fill(8);
+      await handleSessionCommand(
+        [
+          'review',
+          'start',
+          'sess_integration_review_start_123',
+          '--engines',
+          'codex',
+          '--json',
+        ],
+        {
+          readCredentialsFn: async () => ({
+            token: 'token_test',
+            encryption: {
+              type: 'dataKey',
+              publicKey: deriveBoxPublicKeyFromSeed(machineKeySeed),
+              machineKey: machineKeySeed,
+            },
+          }),
+        },
+      );
+
+      const parsed = output.json();
+      expect(parsed.ok).toBe(true);
+      expect(decryptedActionCalls).toHaveLength(1);
+      expect(decryptedActionCalls[0]?.intentInput?.instructions).toBe('');
     } finally {
       output.restore();
     }

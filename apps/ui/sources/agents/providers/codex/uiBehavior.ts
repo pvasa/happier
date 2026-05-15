@@ -19,6 +19,28 @@ function getSwitch(experiments: AgentResumeExperiments, id: string): boolean {
     return experiments.switches[id] === true;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function hasCodexGoalWorkState(metadata: unknown): boolean {
+    const metadataRecord = asRecord(metadata);
+    const snapshot = asRecord(metadataRecord?.sessionWorkStateV1);
+    if (!snapshot || snapshot.v !== 1) return false;
+
+    const backendId = typeof snapshot.backendId === 'string' ? snapshot.backendId.trim() : '';
+    const agentId = typeof snapshot.agentId === 'string' ? snapshot.agentId.trim() : '';
+    if (backendId !== 'codex' && agentId !== 'codex') return false;
+    if (!Array.isArray(snapshot.items)) return false;
+
+    return snapshot.items.some((item) => {
+        const itemRecord = asRecord(item);
+        return itemRecord?.kind === 'goal';
+    });
+}
+
 export type CodexSpawnSessionExtras = Readonly<{
     codexBackendMode: 'mcp' | 'acp' | 'appServer';
 }>;
@@ -91,7 +113,9 @@ export const CODEX_UI_BEHAVIOR_OVERRIDE: AgentUiBehavior = {
     workState: {
         supportsEditableGoals: ({ agentId, session }) => {
             if (agentId !== 'codex') return false;
-            return resolvePersistedCodexRuntimeIdentity(session.metadata ?? null)?.backendMode === 'appServer';
+            const persistedIdentity = resolvePersistedCodexRuntimeIdentity(session.metadata ?? null);
+            if (persistedIdentity) return persistedIdentity.backendMode === 'appServer';
+            return session.active === true || hasCodexGoalWorkState(session.metadata ?? null);
         },
     },
     mcpServers: {

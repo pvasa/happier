@@ -2131,7 +2131,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     const response = await client.request('review/start', {
                         threadId: activeThreadId,
                         target: request.target,
-                        delivery: request.delivery ?? 'inline',
+                        delivery: 'inline',
                     });
                     const startedTurnId = readTurnId(response);
                     if (startedTurnId) {
@@ -2146,6 +2146,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         await finishPendingTurn({ flushReason: 'abort' });
                         return unsupportedSessionRuntimeMethod('review/start');
                     }
+                    activeTurn.promise.catch(() => undefined);
                     await finishPendingTurn({ error: failure, flushReason: 'abort' });
                     if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
                         recoveredAuthAccountChange = true;
@@ -2226,23 +2227,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     await finishPendingTurn({ error: failure, flushReason: 'abort' });
                     if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
                         recoveredAuthAccountChange = true;
-                        params.session.sendSessionEvent({
-                            type: 'message',
-                            message: CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_RECOVERY_STATUS_MESSAGE,
-                        });
-                        logger.debug('[codex-app-server] restarting process after Codex auth account changed', {
-                            threadId: activeThreadId,
-                        });
-                        await disposeClient();
-                        const resumedClient = await ensureClient();
-                        const resumedThread = await resumeThread(resumedClient, activeThreadId, {
-                            preserveRequestedThreadId: true,
-                        });
-                        await applyStartOrLoadResponse(
-                            resumedClient,
-                            resumedThread.nextThreadId,
-                            resumedThread.response,
-                        );
+                        await recoverFromCodexAuthAccountChange(activeThreadId);
                         continue;
                     }
                     throw failure;
