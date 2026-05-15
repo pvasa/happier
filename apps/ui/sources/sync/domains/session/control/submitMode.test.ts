@@ -127,6 +127,22 @@ describe('chooseSubmitMode', () => {
         })).toBe('agent_queue');
     });
 
+    it('honors an explicit server_pending send intent even when normal routing would steer immediately', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            explicitMode: 'server_pending',
+            session: {
+                thinking: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
+                pendingVersion: 0,
+                pendingCount: 1,
+                metadata: {},
+            } as any,
+        })).toBe('server_pending');
+    });
+
     it('prefers server_pending while thinking when in-flight steer is supported but the user prefers server_pending', () => {
         expect(chooseSubmitMode({
             configuredMode: 'agent_queue',
