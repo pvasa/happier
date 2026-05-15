@@ -79,4 +79,25 @@ describe('useSessionListA11yAnnouncements', () => {
             expect.stringContaining('sessionsList.dragA11yBlockedDescendantCycle'),
         );
     });
+
+    it('announces session-list eligibility block reasons instead of the generic tree reason', async () => {
+        announceForAccessibilitySpy.mockClear();
+        const hook = await renderHook(() => useSessionListA11yAnnouncements());
+
+        hook.getCurrent().announceDropResult({
+            label: 'Direct session',
+            result: {
+                instruction: { kind: 'blocked', reason: 'workspace-scope-mismatch' },
+                visual: { kind: 'none' },
+                sessionListBlockReason: 'direct-session',
+            },
+        });
+
+        expect(announceForAccessibilitySpy).toHaveBeenCalledWith(
+            expect.stringContaining('sessionsList.dragA11yBlockedDirectSession'),
+        );
+        expect(announceForAccessibilitySpy).not.toHaveBeenCalledWith(
+            expect.stringContaining('sessionsList.dragA11yBlockedWorkspaceScope'),
+        );
+    });
 });

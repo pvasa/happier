@@ -120,6 +120,37 @@ function buildTree(items = mixedWorkspaceItems()) {
 }
 
 describe('resolveSessionListInstruction', () => {
+    it('resolves workspace-root whitespace using implicit production drop zones', () => {
+        const tree = buildSessionListTreeRows({
+            items: mixedWorkspaceItems(),
+            rowBoundsById: new Map<string, WindowBounds>([
+                [treeRowId.workspaceRoot('project-a'), bounds(0)],
+                [treeRowId.folder('folder-a'), bounds(40)],
+                [treeRowId.session('server-a', 'inside-a'), bounds(80)],
+                [treeRowId.folder('child-a'), bounds(120)],
+                [treeRowId.folder('folder-b'), bounds(160)],
+                [treeRowId.session('server-a', 'root-a'), bounds(200)],
+                [treeRowId.workspaceRoot('project-b'), bounds(300)],
+                [treeRowId.folder('folder-c'), bounds(340)],
+            ]),
+        });
+
+        const result = resolveSessionListInstruction({
+            tree,
+            source: buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'inside-a') }),
+            pointer: pointer(250),
+            foldersFeatureEnabled: true,
+        });
+
+        expect(result.instruction).toEqual({
+            kind: 'move-to-root',
+            containerId: treeRowId.workspaceRoot('project-a'),
+            rootId: treeRowId.workspaceRoot('project-a'),
+            depth: 0,
+            placement: 'after-last',
+        });
+    });
+
     it('blocks direct sessions before resolving a target', () => {
         const items = [
             projectHeader('project-a', workspaceA),
