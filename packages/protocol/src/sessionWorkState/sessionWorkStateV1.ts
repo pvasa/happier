@@ -11,6 +11,9 @@ export const SessionWorkStateStatusV1Schema = z.enum([
 ]);
 export type SessionWorkStateStatusV1 = z.infer<typeof SessionWorkStateStatusV1Schema>;
 
+export const SessionWorkStateStatusReasonV1Schema = z.enum(['budgetLimited']);
+export type SessionWorkStateStatusReasonV1 = z.infer<typeof SessionWorkStateStatusReasonV1Schema>;
+
 export const SessionWorkStateItemKindV1Schema = z.enum(['goal', 'task', 'todo']);
 export type SessionWorkStateItemKindV1 = z.infer<typeof SessionWorkStateItemKindV1Schema>;
 
@@ -32,6 +35,7 @@ export const SessionWorkStateItemV1Schema = z
     parentId: z.string().min(1).optional(),
     priority: z.string().optional(),
     progress: z.number().finite().min(0).max(1).optional(),
+    statusReason: SessionWorkStateStatusReasonV1Schema.optional(),
     tokenBudget: z.number().finite().positive().nullable().optional(),
     tokensUsed: z.number().int().nonnegative().optional(),
     timeUsedSeconds: z.number().finite().nonnegative().optional(),

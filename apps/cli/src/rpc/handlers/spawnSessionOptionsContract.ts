@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   AcpConfigOptionOverridesV1Schema,
   AgentRuntimeDescriptorV1Schema,
+  SessionInitialGoalRequestV1Schema,
   SessionAttachMetadataIdentityPolicySchema,
   SessionMcpSelectionV1Schema,
 } from '@happier-dev/protocol';
@@ -49,6 +50,7 @@ const SpawnDaemonSessionRequestCompatSchema = z.object({
   sessionId: z.string().trim().min(1).optional(),
   existingSessionId: z.string().trim().min(1).optional(),
   initialTranscriptAfterSeq: z.number().int().min(0).optional(),
+  initialGoal: SessionInitialGoalRequestV1Schema.optional(),
   attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
   resume: z.string().trim().min(1).optional(),
   experimentalCodexAcp: z.boolean().optional(),
@@ -117,6 +119,7 @@ const SPAWN_SESSION_OPTION_KEYS = [
   'agentRuntimeDescriptorV1',
   'existingSessionId',
   'initialTranscriptAfterSeq',
+  'initialGoal',
   'attachMetadataIdentityPolicy',
   'permissionMode',
   'permissionModeUpdatedAt',

@@ -8,6 +8,7 @@ import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol';
 import {
   readFakeCodexAppServerRequestLog,
   startCodexAppServerRemoteHarness,
+  type FakeCodexAppServerRequest,
   type StartedCodexAppServerRemoteHarness,
 } from '../../src/testkit/codexAppServerRemoteHarness';
 import { decryptLegacyBase64Normalized } from '../../src/testkit/decryptLegacyBase64Normalized';
@@ -18,6 +19,9 @@ import { fetchMessagesSince, fetchSessionV2 } from '../../src/testkit/sessions';
 import { callLegacyEncryptedSessionRpc } from '../../src/testkit/sessionRpc';
 import { createUserScopedSocketCollector, type SocketCollector } from '../../src/testkit/socketClient';
 import { waitFor } from '../../src/testkit/timing';
+import { repoRootDir } from '../../src/testkit/paths';
+import { yarnCommand } from '../../src/testkit/process/commands';
+import { runLoggedCommand } from '../../src/testkit/process/spawnProcess';
 
 const run = createRunDirs({ runLabel: 'core' });
 
@@ -87,6 +91,53 @@ async function enqueuePromptAndWaitForTranscript(params: Readonly<{
     });
     return transcriptRows.some((row) => row.localId === localId);
   }, { timeoutMs: 45_000, context: 'Codex app-server materializes seed prompt before goal RPC' });
+}
+
+function countLoggedRequests(
+  requests: readonly FakeCodexAppServerRequest[],
+  method: string,
+): number {
+  return requests.filter((request) => request.method === method).length;
+}
+
+async function runCliSessionAction(params: Readonly<{
+  harness: StartedCodexAppServerRemoteHarness;
+  testDir: string;
+  actionId: string;
+  input: Record<string, unknown>;
+  label: string;
+}>): Promise<void> {
+  await runLoggedCommand({
+    command: yarnCommand(),
+    args: [
+      '-s',
+      'workspace',
+      '@happier-dev/cli',
+      'dev',
+      'session',
+      'actions',
+      'execute',
+      params.harness.sessionId,
+      params.actionId,
+      '--input-json',
+      JSON.stringify({ sessionId: params.harness.sessionId, ...params.input }),
+      '--json',
+    ],
+    cwd: repoRootDir(),
+    env: {
+      ...process.env,
+      CI: '1',
+      HAPPIER_VARIANT: 'dev',
+      HAPPIER_HOME_DIR: params.harness.cliHome,
+      HAPPIER_SERVER_URL: params.harness.serverBaseUrl,
+      HAPPIER_WEBAPP_URL: params.harness.serverBaseUrl,
+      HAPPIER_CODEX_APP_SERVER_BIN: params.harness.fakeAppServerPath,
+      HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '5000',
+    },
+    stdoutPath: `${params.testDir}/${params.label}.stdout.log`,
+    stderrPath: `${params.testDir}/${params.label}.stderr.log`,
+    timeoutMs: 120_000,
+  });
 }
 
 describe('core e2e: Codex app-server goal session controls', () => {
@@ -201,4 +252,101 @@ describe('core e2e: Codex app-server goal session controls', () => {
       }),
     ]));
   }, 240_000);
+
+  it('mutates inactive native goal controls without starting a continuation turn', async () => {
+    const testDir = run.testDir('codex-app-server-inactive-goal-controls');
+    harness = await startCodexAppServerRemoteHarness({
+      testDir,
+      runId: run.runId,
+      testName: 'codex-app-server-inactive-goal-controls',
+      goalSetBehavior: 'nativePartial',
+    });
+    const { auth, requestLogPath, secret, serverBaseUrl, sessionId } = harness;
+    const baselineSeq = harness.readySession.seq ?? 0;
+    const objective = `inactive control goal ${randomUUID()}`;
+
+    await enqueuePromptAndWaitForTranscript({
+      baseUrl: serverBaseUrl,
+      token: auth.token,
+      sessionId,
+      secret,
+      afterSeq: baselineSeq,
+      text: `start app-server thread before inactive goal action ${randomUUID()}`,
+    });
+
+    const socket = await connectUserSocket({ baseUrl: serverBaseUrl, token: auth.token });
+    try {
+      await callLegacyEncryptedSessionRpc({
+        ui: socket,
+        sessionId,
+        method: SESSION_RPC_METHODS.SESSION_GOAL_SET,
+        req: { objective, tokenBudget: 7000 },
+        secret,
+        schema: SessionWorkStateGetResponseV1Schema,
+        timeoutMs: 45_000,
+      });
+    } finally {
+      socket.close();
+    }
+
+    const beforeInactiveControls = await readFakeCodexAppServerRequestLog(requestLogPath);
+    const turnStartsBeforeInactiveControls = countLoggedRequests(beforeInactiveControls, 'turn/start');
+    const resumesBeforeInactiveControls = countLoggedRequests(beforeInactiveControls, 'thread/resume');
+
+    await harness.stopRuntime();
+    await waitFor(async () => {
+      const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
+      return snap.active !== true;
+    }, { timeoutMs: 45_000, context: 'Codex app-server session becomes inactive before inactive goal controls' });
+
+    await runCliSessionAction({
+      harness,
+      testDir,
+      actionId: 'session.goal.set',
+      input: { status: 'paused' },
+      label: 'pause-inactive-goal',
+    });
+
+    await waitFor(async () => {
+      const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
+      const metadata = decryptLegacyBase64Normalized(snap.metadata, secret) as Record<string, unknown> | null;
+      const workState = metadata?.sessionWorkStateV1 as { items?: Array<{ id?: unknown; status?: unknown }> } | undefined;
+      return workState?.items?.some((item) => item.id === 'goal:thread-started' && item.status === 'paused') === true;
+    }, { timeoutMs: 45_000, context: 'inactive session.goal.set status-only persists paused Codex goal metadata' });
+
+    await runCliSessionAction({
+      harness,
+      testDir,
+      actionId: 'session.goal.clear',
+      input: {},
+      label: 'clear-inactive-goal',
+    });
+
+    await waitFor(async () => {
+      const snap = await fetchSessionV2(serverBaseUrl, auth.token, sessionId);
+      const metadata = decryptLegacyBase64Normalized(snap.metadata, secret) as Record<string, unknown> | null;
+      const workState = metadata?.sessionWorkStateV1 as { items?: Array<{ id?: unknown }> } | undefined;
+      return !(workState?.items ?? []).some((item) => item.id === 'goal:thread-started');
+    }, { timeoutMs: 45_000, context: 'inactive session.goal.clear removes persisted Codex goal metadata' });
+
+    const requests = await readFakeCodexAppServerRequestLog(requestLogPath);
+    const inactiveControlRequests = requests.slice(beforeInactiveControls.length);
+    expect(inactiveControlRequests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        method: 'thread/goal/set',
+        params: expect.objectContaining({
+          threadId: 'thread-started',
+          status: 'paused',
+        }),
+      }),
+      expect.objectContaining({
+        method: 'thread/goal/clear',
+        params: expect.objectContaining({
+          threadId: 'thread-started',
+        }),
+      }),
+    ]));
+    expect(countLoggedRequests(requests, 'turn/start')).toBe(turnStartsBeforeInactiveControls);
+    expect(countLoggedRequests(requests, 'thread/resume')).toBe(resumesBeforeInactiveControls);
+  }, 300_000);
 });

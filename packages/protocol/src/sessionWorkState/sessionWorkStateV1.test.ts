@@ -65,6 +65,31 @@ describe('SessionWorkStateV1', () => {
         ).toThrow();
     });
 
+    it('accepts only provider-neutral status reasons', () => {
+        const item = SessionWorkStateItemV1Schema.parse({
+            id: 'goal:thread-1',
+            kind: 'goal',
+            origin: 'vendor',
+            status: 'blocked',
+            statusReason: 'budgetLimited',
+            title: 'Budget-limited goal',
+            updatedAt: 1,
+        });
+
+        expect(item.statusReason).toBe('budgetLimited');
+        expect(() =>
+            SessionWorkStateItemV1Schema.parse({
+                id: 'goal:thread-1',
+                kind: 'goal',
+                origin: 'vendor',
+                status: 'blocked',
+                statusReason: 'codexOnlyReason',
+                title: 'Provider reason leaked',
+                updatedAt: 1,
+            }),
+        ).toThrow();
+    });
+
     it('builds stable vendor and deterministic fallback item ids', () => {
         expect(buildVendorSessionWorkStateItemId('goal', 'thread-1')).toBe('goal:thread-1');
 

@@ -7,6 +7,14 @@ import { supportsCodexVendorResume } from './resume/vendorResumeSupport';
 import { codexDaemonSpawnHooks } from '@/backends/codex/daemon/spawnHooks';
 import { readCodexEnvironmentAuthState } from '@/backends/codex/cli/auth/readCodexEnvironmentAuthState';
 import type { AgentCatalogEntry } from '../types';
+import type { SessionGoalControlAdapter } from '@/session/goalControls/sessionGoalControlTypes';
+
+type CodexGoalControlAdapterModule = Readonly<{
+  codexAppServerGoalControlAdapter?: SessionGoalControlAdapter;
+}>;
+
+const CODEX_APP_SERVER_GOAL_CONTROL_ADAPTER_MODULE =
+  './appServer/goalControl/codexAppServerGoalControlAdapter';
 
 export const agent = {
   id: AGENTS_CORE.codex.id,
@@ -19,6 +27,10 @@ export const agent = {
   getCloudConnectTarget: async () => (await import('@/backends/codex/cloud/connect')).codexCloudConnect,
   getDaemonSpawnHooks: async () => codexDaemonSpawnHooks,
   getDirectSessionProviderOps: async () => (await import('@/backends/codex/directSessions/providerOps')).codexDirectSessionProviderOps,
+  getSessionGoalControlAdapter: async () => {
+    const mod = await import(CODEX_APP_SERVER_GOAL_CONTROL_ADAPTER_MODULE) as CodexGoalControlAdapterModule;
+    return mod.codexAppServerGoalControlAdapter ?? null;
+  },
   vendorResumeSupport: AGENTS_CORE.codex.resume.vendorResume,
   getVendorResumeSupport: async () => supportsCodexVendorResume,
   getAcpBackendFactory: async () => {

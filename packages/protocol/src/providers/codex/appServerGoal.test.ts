@@ -24,6 +24,7 @@ describe('Codex app-server goal wire schema', () => {
             kind: 'goal',
             origin: 'vendor',
             status: 'blocked',
+            statusReason: 'budgetLimited',
             title: 'Ship plugin support',
             backendId: 'codex',
             agentId: 'agent-codex',
@@ -31,6 +32,7 @@ describe('Codex app-server goal wire schema', () => {
             tokenBudget: 123,
             tokensUsed: 45,
             timeUsedSeconds: 6,
+            createdAt: Date.parse('2026-05-13T10:00:00.000Z'),
         });
         expect(item?.updatedAt).toBe(Date.parse('2026-05-13T10:05:00.000Z'));
     });

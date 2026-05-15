@@ -3,6 +3,40 @@ import { describe, expect, it } from 'vitest';
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
 
 describe('createActionToolExecutorBridge', () => {
+  it('passes approval origin metadata through to action executor context', async () => {
+    const calls: unknown[] = [];
+    const bridge = createActionToolExecutorBridge({
+      surface: 'session_agent',
+      executor: {
+        execute: async (_actionId, _input, ctx) => {
+          calls.push(ctx);
+          return {
+            ok: true,
+            result: { sessions: [] },
+          };
+        },
+      },
+    });
+
+    const approvalOrigin = {
+      kind: 'transcript_tool_call' as const,
+      sessionId: 'sess-1',
+      toolCallId: 'tool-1',
+      toolName: 'session_list',
+      toolInput: { limit: 20 },
+    };
+    const res = await bridge.executeActionByToolName('session_list', { limit: 20 }, 'sess-1', { approvalOrigin });
+
+    expect(res.ok).toBe(true);
+    expect(calls).toEqual([
+      expect.objectContaining({
+        defaultSessionId: 'sess-1',
+        surface: 'session_agent',
+        approvalOrigin,
+      }),
+    ]);
+  });
+
   it('returns approved result-bearing action results without converting them to approval requests', async () => {
     const bridge = createActionToolExecutorBridge({
       surface: 'session_agent',

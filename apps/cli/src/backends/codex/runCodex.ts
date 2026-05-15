@@ -126,6 +126,7 @@ import {
 	import type { CodexMcpClient } from './codexMcpClient';
 	import { resolveCodexBackendModeForRun } from './utils/resolveCodexBackendModeForRun';
 	import { resolveCodexRequestedDirectory } from './utils/resolveCodexRequestedDirectory';
+import { readDaemonInitialGoalFromEnv } from '@/agent/runtime/sessionInitialGoal';
 
 /**
  * Main entry point for the codex command with ink UI
@@ -173,7 +174,12 @@ export async function runCodex(opts: {
         beginTurn: () => void;
         cancel: () => Promise<void>;
         reset: () => Promise<void>;
-        startOrLoad: (options: { resumeId?: string | null; existingSessionId?: string | null; importHistory?: boolean }) => Promise<unknown>;
+        startOrLoad: (options: {
+            resumeId?: string | null;
+            existingSessionId?: string | null;
+            importHistory?: boolean;
+            initialGoal?: import('@happier-dev/protocol').SessionInitialGoalRequestV1;
+        }) => Promise<unknown>;
         setSessionMode: (mode: string) => Promise<void>;
         setSessionModel: (model: string) => Promise<void>;
         setSessionConfigOption: (key: string, value: string | number | boolean | null) => Promise<void>;
@@ -182,7 +188,7 @@ export async function runCodex(opts: {
         compactContext: (command: string) => Promise<void>;
         refreshGoal?: () => Promise<unknown>;
         setGoal?: (
-            objective: string,
+            objective: string | undefined,
             options?: Readonly<{ status?: string; tokenBudget?: number | null }>,
         ) => Promise<unknown>;
         clearGoal?: () => Promise<unknown>;
@@ -197,6 +203,12 @@ export async function runCodex(opts: {
     //
 
     const sessionTag = randomUUID();
+    let initialGoalForStartOrLoad = readDaemonInitialGoalFromEnv();
+    const consumeInitialGoalForStartOrLoad = () => {
+        const goal = initialGoalForStartOrLoad;
+        initialGoalForStartOrLoad = null;
+        return goal ? { initialGoal: goal } : {};
+    };
 
     // Set backend for offline warnings (before any API calls)
     connectionState.setBackend('Codex');
@@ -1413,6 +1425,7 @@ export async function runCodex(opts: {
                         resumeId,
                         // Avoid importing ACP replay history into Happier on resume; Happier transcript is the source of truth.
                         importHistory: false,
+                        ...consumeInitialGoalForStartOrLoad(),
                     })).then(() => undefined);
                     let resumeAborted = false;
                     try {
@@ -1484,6 +1497,7 @@ export async function runCodex(opts: {
                         await seedCodexAppServerOverridesBeforeStartOrLoad();
                         const startOrLoadPromise = Promise.resolve(codexRuntime.startOrLoad({
                             existingSessionId: existingAppServerSessionId,
+                            ...consumeInitialGoalForStartOrLoad(),
                         })).then(() => undefined);
                         try {
                             await awaitWithAbortSignal(
@@ -1610,6 +1624,17 @@ export async function runCodex(opts: {
                     if (!codexRuntime) {
                         throw new Error('Codex remote runtime was not initialized');
                     }
+                    if (wasCreated && useCodexAppServer && codexRuntime.isTurnInFlight() && specialCommand.type === null) {
+                        if (shouldLogAcpDebug) {
+                            logger.debug('[CodexAppServer] steerPrompt begin for queued message while turn is in flight');
+                        }
+                        const providerPromptText = await resolveProviderPromptText();
+                        await codexRuntime.steerPrompt(providerPromptText, { metadata: message.mode.promptMetadata });
+                        if (shouldLogAcpDebug) {
+                            logger.debug('[CodexAppServer] steerPrompt complete for queued message while turn is in flight');
+                        }
+                        continue;
+                    }
                     codexRuntime.beginTurn();
                     if (shouldLogAcpDebug) {
                         logger.debug('[CodexACP] beginTurn');
@@ -1630,6 +1655,7 @@ export async function runCodex(opts: {
                                 resumeId,
                                 // Avoid importing ACP replay history into Happier on resume; Happier transcript is the source of truth.
                                 importHistory: false,
+                                ...consumeInitialGoalForStartOrLoad(),
                             })).then(() => undefined);
                             try {
                                 await awaitWithAbortSignal(
@@ -1681,7 +1707,9 @@ export async function runCodex(opts: {
                                 session.sendSessionEvent({ type: 'message', message: 'Resume failed; starting a new session.' });
                                 const startSignal = startOrLoadAbortController.signal;
                                 await seedCodexAppServerOverridesBeforeStartOrLoad();
-                                const fallbackPromise = Promise.resolve(codexRuntime.startOrLoad({})).then(() => undefined);
+                                const fallbackPromise = Promise.resolve(codexRuntime.startOrLoad({
+                                    ...consumeInitialGoalForStartOrLoad(),
+                                })).then(() => undefined);
                                 try {
                                     await awaitWithAbortSignal(
                                         fallbackPromise,
@@ -1708,7 +1736,9 @@ export async function runCodex(opts: {
                         } else {
                             const startSignal = startOrLoadAbortController.signal;
                             await seedCodexAppServerOverridesBeforeStartOrLoad();
-                            const startOrLoadPromise = Promise.resolve(codexRuntime.startOrLoad({})).then(() => undefined);
+                            const startOrLoadPromise = Promise.resolve(codexRuntime.startOrLoad({
+                                ...consumeInitialGoalForStartOrLoad(),
+                            })).then(() => undefined);
                             try {
                                 await awaitWithAbortSignal(
                                     startOrLoadPromise,
@@ -1897,27 +1927,36 @@ export async function runCodex(opts: {
                     }
                 }
             } finally {
+                const remoteRuntime = useCodexAcp || useCodexAppServer ? getCodexRemoteRuntime() : null;
+                const preserveActiveAppServerTurn = useCodexAppServer && remoteRuntime?.isTurnInFlight() === true;
                 if (useCodexAcp || useCodexAppServer) {
-                    await getCodexRemoteRuntime()?.flushTurn();
+                    if (!preserveActiveAppServerTurn) {
+                        await remoteRuntime?.flushTurn();
+                    }
                 }
                 if (useCodexAcp) {
                     modelSync?.syncFromMetadata();
                 }
 
-                // Reset permission handler, reasoning processor, and diff processor
-                permissionHandler.reset();
-                diffProcessor.flushTurn();
-                diffProcessor.reset();
-                thinking = false;
-                session.keepAlive(thinking, 'remote');
-                const popped = !shouldExit ? await session.popPendingMessage() : false;
-                if (!popped) {
-                    emitReadyIfIdle({
-                        pending,
-                        queueSize: () => messageQueue.size(),
-                        shouldExit,
-                        sendReady: () => sendReady(readyTurnContext),
-                    });
+                if (preserveActiveAppServerTurn) {
+                    thinking = true;
+                    session.keepAlive(thinking, 'remote');
+                } else {
+                    // Reset permission handler, reasoning processor, and diff processor
+                    permissionHandler.reset();
+                    diffProcessor.flushTurn();
+                    diffProcessor.reset();
+                    thinking = false;
+                    session.keepAlive(thinking, 'remote');
+                    const popped = !shouldExit ? await session.popPendingMessage() : false;
+                    if (!popped) {
+                        emitReadyIfIdle({
+                            pending,
+                            queueSize: () => messageQueue.size(),
+                            shouldExit,
+                            sendReady: () => sendReady(readyTurnContext),
+                        });
+                    }
                 }
                 logActiveHandles('after-turn');
             }

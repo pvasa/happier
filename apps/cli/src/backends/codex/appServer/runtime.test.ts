@@ -36,6 +36,8 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rejectPermissionsProfile?: boolean;
     rejectGoalMethods?: boolean;
     rejectGoalMethodsAsInvalidRequest?: boolean;
+    emitGoalContinuationTurn?: boolean;
+    rejectReviewStartMethodUnavailable?: boolean;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -99,8 +101,33 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: thread/goal/set" } }) + "\\n");',
         '            continue;',
         '        }',
-        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "", status: "active", updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
-        '        process.stdout.write(JSON.stringify({ method: "thread/goal/updated", params: { threadId: msg.params?.threadId ?? "thread-started", goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "", status: "active", updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "Current objective", status: msg.params?.status ?? "active", tokenBudget: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "tokenBudget") ? msg.params.tokenBudget : undefined, updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
+        '        process.stdout.write(JSON.stringify({ method: "thread/goal/updated", params: { threadId: msg.params?.threadId ?? "thread-started", goal: { threadId: msg.params?.threadId ?? "thread-started", objective: msg.params?.objective ?? "Current objective", status: msg.params?.status ?? "active", tokenBudget: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "tokenBudget") ? msg.params.tokenBudget : undefined, updatedAt: "2026-05-13T10:05:00.000Z" } } }) + "\\n");',
+        `        if (${JSON.stringify(params.emitGoalContinuationTurn === true)}) {`,
+        '            const goalThreadId = msg.params?.threadId ?? "thread-started";',
+        '            const goalTurnId = "turn-goal-continuation";',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: goalThreadId, turn: { id: goalTurnId } } }) + "\\n");',
+        '            }, 5);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: goalThreadId, turnId: goalTurnId, itemId: "goal_msg_1", delta: "Goal " } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: goalThreadId, turnId: goalTurnId, item: { id: "goal_cmd_1", type: "commandExecution", command: "git status", cwd: "/repo" } } }) + "\\n");',
+        '            }, 7);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: goalThreadId, turnId: goalTurnId, item: { id: "goal_cmd_1", type: "commandExecution", stdout: "clean", exitCode: 0 } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: goalThreadId, turnId: goalTurnId, itemId: "goal_msg_1", delta: "continuation" } }) + "\\n");',
+        '            }, 9);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: goalThreadId, turnId: goalTurnId, item: { id: "goal_msg_1", type: "agentMessage", text: "Goal continuation" } } }) + "\\n");',
+        '            }, 10);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: goalThreadId, turn: { id: goalTurnId } } }) + "\\n");',
+        '            }, 15);',
+        '        }',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/clear") {',
@@ -151,6 +178,36 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        setTimeout(() => {',
         '            process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: "turn-manual-compact" } } }) + "\\n");',
         '        }, 16);',
+        '        continue;',
+        '    }',
+        '    if (msg.method === "review/start") {',
+        `        if (${JSON.stringify(params.rejectReviewStartMethodUnavailable === true)}) {`,
+        '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "Method not found: review/start" } }) + "\\n");',
+        '            continue;',
+        '        }',
+        '        const turnId = "turn-review-native";',
+        '        const reviewText = typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("different-final") ? "Native review body" : "Native review text";',
+        '        const finalText = typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("different-final") ? "Different final assistant text" : reviewText;',
+        '        const completionDelayMs = typeof msg.params?.target?.instructions === "string" && msg.params.target.instructions.includes("delayed-review") ? 50 : 15;',
+        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId }, reviewThreadId: msg.params?.threadId ?? null } }) + "\\n");',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "review_entered_1", type: "enteredReviewMode", review: "current changes" } } }) + "\\n");',
+        '        }, 5);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "review_entered_1", type: "enteredReviewMode", review: "current changes" } } }) + "\\n");',
+        '        }, 6);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "review_exited_1", type: "exitedReviewMode", review: reviewText } } }) + "\\n");',
+        '        }, 7);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "review_exited_1", type: "exitedReviewMode", review: reviewText } } }) + "\\n");',
+        '        }, 8);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: msg.params?.threadId ?? null, turnId, item: { id: "review_msg_1", type: "agentMessage", text: finalText } } }) + "\\n");',
+        '        }, 9);',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '        }, completionDelayMs);',
         '        continue;',
         '    }',
         '    if (msg.method === "turn/start") {',
@@ -650,6 +707,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectPermissionsProfile?: boolean;
             rejectGoalMethods?: boolean;
             rejectGoalMethodsAsInvalidRequest?: boolean;
+            emitGoalContinuationTurn?: boolean;
         }> = {},
     ): Promise<{
         root: string;
@@ -667,6 +725,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectPermissionsProfile: options.rejectPermissionsProfile,
             rejectGoalMethods: options.rejectGoalMethods,
             rejectGoalMethodsAsInvalidRequest: options.rejectGoalMethodsAsInvalidRequest,
+            emitGoalContinuationTurn: options.emitGoalContinuationTurn,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -952,6 +1011,47 @@ describe('createCodexAppServerRuntime', () => {
         expect(popPendingMessage).toHaveBeenCalledTimes(2);
     });
 
+    it('sets an initial resume goal before draining pending queue rows', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-resume-initial-goal-');
+        const popPendingMessage = vi
+            .fn<() => Promise<boolean>>()
+            .mockResolvedValueOnce(true)
+            .mockResolvedValueOnce(false);
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'read-only',
+            pendingQueue: {
+                drainAfterStartOrLoad: true,
+                popPendingMessage,
+            },
+        });
+
+        await runtime.startOrLoad({
+            resumeId: 'resume-123',
+            importHistory: false,
+            initialGoal: {
+                objective: 'Line one\nLine two',
+            },
+        } as any);
+
+        expect(popPendingMessage).toHaveBeenCalledTimes(2);
+        const requestLog = await readRequestLog(requestLogPath);
+        const resumeIndex = requestLog.findIndex((entry) => entry.method === 'thread/resume');
+        const goalSetIndex = requestLog.findIndex((entry) => entry.method === 'thread/goal/set');
+        expect(resumeIndex).toBeGreaterThanOrEqual(0);
+        expect(goalSetIndex).toBeGreaterThan(resumeIndex);
+        expect(requestLog[goalSetIndex]).toMatchObject({
+            method: 'thread/goal/set',
+            params: {
+                threadId: 'resume-123',
+                objective: 'Line one\nLine two',
+            },
+        });
+    });
+
     it('sends prompts over the persistent client and waits for turn completion notifications', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-turn-');
 
@@ -1091,6 +1191,107 @@ describe('createCodexAppServerRuntime', () => {
             expect.objectContaining({ id: 'todo:other:1', title: 'Keep me' }),
         ]);
         expect(updateMetadata).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it('sends live status-only goal mutations without starting a turn', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-goal-status-only-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            setGoal: (objective: string | undefined, options?: { status?: string }) => Promise<void>;
+        }).setGoal(undefined, { status: 'paused' });
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'thread/goal/set',
+                params: {
+                    threadId: 'thread-started',
+                    status: 'paused',
+                },
+            }),
+        ]));
+        expect(requestLog.filter((entry) => entry.method === 'turn/start')).toEqual([]);
+    });
+
+    it('sends live budget-only goal mutations without starting a turn', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-goal-budget-only-');
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            setGoal: (objective: string | undefined, options?: { tokenBudget?: number | null }) => Promise<void>;
+        }).setGoal(undefined, { tokenBudget: null });
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'thread/goal/set',
+                params: {
+                    threadId: 'thread-started',
+                    tokenBudget: null,
+                },
+            }),
+        ]));
+        expect(requestLog.filter((entry) => entry.method === 'turn/start')).toEqual([]);
+    });
+
+    it('adopts native app-server goal continuation turns and bridges their stream events', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-goal-continuation-', {
+            emitGoalContinuationTurn: true,
+        });
+
+        const session = {
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+            permissionMode: 'default',
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as { setGoal: (objective: string) => Promise<void> }).setGoal('Continue autonomously');
+
+        await waitForCondition(() => {
+            const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
+                [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+            >;
+            const assistantText = committedCalls
+                .filter(([, body]) => body.type === 'message')
+                .map(([, body]) => String(body.message ?? ''))
+                .join('');
+            return assistantText.includes('Goal continuation');
+        }, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'native Codex goal continuation transcript event',
+        });
+
+        expect(session.sendCodexMessage.mock.calls).toEqual(
+            expect.arrayContaining([
+                [expect.objectContaining({ type: 'tool-call', callId: 'goal_cmd_1', name: 'CodexBash', input: { command: 'git status', cwd: '/repo' } })],
+                [expect.objectContaining({ type: 'tool-call-result', callId: 'goal_cmd_1', output: { stdout: 'clean', exitCode: 0 } })],
+            ]),
+        );
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog.filter((entry) => entry.method === 'turn/start')).toEqual([]);
     });
 
     it('returns stable unsupported results when app-server goal methods are unavailable', async () => {
@@ -2550,7 +2751,7 @@ describe('createCodexAppServerRuntime', () => {
         );
     });
 
-    it('includes preselected model and Fast service tier in fresh thread/start requests', async () => {
+    it('includes preselected model, reasoning, and Fast service tier in fresh thread/start requests', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-thread-start-overrides-');
 
         const runtime = createCodexAppServerRuntime({
@@ -2561,6 +2762,7 @@ describe('createCodexAppServerRuntime', () => {
 
         await runtime.setSessionModel('gpt-5.4');
         await runtime.setSessionConfigOption('service_tier', 'fast');
+        await runtime.setSessionConfigOption('reasoning_effort', 'high');
         await runtime.startOrLoad({});
 
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
@@ -2572,6 +2774,9 @@ describe('createCodexAppServerRuntime', () => {
                         cwd: root,
                         model: 'gpt-5.4',
                         serviceTier: 'fast',
+                        config: {
+                            model_reasoning_effort: 'high',
+                        },
                         persistExtendedHistory: true,
                     }),
                 }),

@@ -18,6 +18,7 @@ import {
   BackendTargetRefSchema,
   SessionContinueWithReplayRpcParamsSchema,
   SessionForkRpcParamsSchema,
+  SessionInitialGoalRequestV1Schema,
   SessionMcpSelectionV1Schema,
 } from '@happier-dev/protocol';
 import { isPermissionMode } from '@/api/types';
@@ -215,6 +216,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       modelUpdatedAt,
       accountSettingsVersionHint,
       initialTranscriptAfterSeq,
+      initialGoal,
       sessionConfigOptionOverrides,
       windowsRemoteSessionLaunchMode,
       windowsRemoteSessionConsole,
@@ -245,6 +247,11 @@ export function registerMachineRpcHandlers(params: Readonly<{
       && initialTranscriptAfterSeq >= 0
         ? initialTranscriptAfterSeq
         : undefined;
+    const normalizedInitialGoal = (() => {
+      if (initialGoal === undefined) return undefined;
+      const parsed = SessionInitialGoalRequestV1Schema.safeParse(initialGoal);
+      return parsed.success ? parsed.data : undefined;
+    })();
     const normalizedEnvironmentVariables = environmentVariables && typeof environmentVariables === 'object'
       ? environmentVariables as Record<string, string>
       : undefined;
@@ -332,6 +339,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       mcpSelectionForceExcludeCount: normalizedMcpSelection?.forceExcludeServerIds.length ?? 0,
       hasResume: normalizedResume !== undefined,
       hasInitialTranscriptAfterSeq: normalizedInitialTranscriptAfterSeq !== undefined,
+      hasInitialGoal: normalizedInitialGoal !== undefined,
       codexBackendMode: normalizedCodexBackendMode,
     });
 
@@ -352,6 +360,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       permissionModeUpdatedAt: normalizedPermissionModeUpdatedAt,
       accountSettingsVersionHint: normalizedAccountSettingsVersionHint,
       initialTranscriptAfterSeq: normalizedInitialTranscriptAfterSeq,
+      initialGoal: normalizedInitialGoal,
       agentModeId: normalizedAgentModeId,
       agentModeUpdatedAt: normalizedAgentModeUpdatedAt,
       modelId: normalizedModelId,

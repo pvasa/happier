@@ -355,6 +355,9 @@ describe('runCodex app-server startup plan mode', () => {
             threadId: 'thread-existing',
             model: 'gpt-5.4',
             serviceTier: 'fast',
+            config: {
+              model_reasoning_effort: 'high',
+            },
             persistExtendedHistory: true,
           }),
         }),
@@ -518,6 +521,9 @@ describe('runCodex app-server startup plan mode', () => {
             cwd: root,
             model: 'gpt-5.4',
             serviceTier: 'fast',
+            config: {
+              model_reasoning_effort: 'high',
+            },
             persistExtendedHistory: true,
           }),
         }),

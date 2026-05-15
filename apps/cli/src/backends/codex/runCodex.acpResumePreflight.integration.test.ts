@@ -7,6 +7,10 @@ import {
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 
 import type { Credentials } from '@/persistence';
+import {
+  HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY,
+  serializeDaemonInitialGoalForEnv,
+} from '@/agent/runtime/sessionInitialGoal';
 import { createCodexPermissionHandler } from './utils/createCodexPermissionHandler';
 
 const modelSyncFlushPendingAfterStartSpy = vi.fn(async () => {});
@@ -302,6 +306,8 @@ vi.mock('@/agent/runtime/initializeBackendApiContext', () => ({
         keepAlive: vi.fn(),
         sendAgentMessageCommitted: vi.fn(async () => {}),
         sendAgentMessageEphemeral: vi.fn(),
+        getLastObservedMessageSeq: vi.fn(() => 0),
+        beginTurnAssistantTextSnapshot: vi.fn(() => ({ id: 'turn-token' })),
         sendSessionDeath: vi.fn(),
         flush: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
@@ -328,6 +334,8 @@ const initializeBackendRunSessionSpy = vi.fn(async (opts: any) => {
   // Ensure optional methods exist for codepaths that may call them during startup.
   Object.assign(session, {
     fetchLatestUserPermissionIntentFromTranscript: vi.fn(async () => null),
+    getLastObservedMessageSeq: vi.fn(() => 0),
+    beginTurnAssistantTextSnapshot: vi.fn(() => ({ id: 'turn-token' })),
     sendCodexMessage: vi.fn(),
     sendAgentMessage: vi.fn(),
   });
@@ -354,6 +362,8 @@ function mockAttachedSessionMetadata(metadata: Record<string, unknown>): void {
       fetchLatestUserPermissionIntentFromTranscript: vi.fn(async () => null),
       sendCodexMessage: vi.fn(),
       sendAgentMessage: vi.fn(),
+      getLastObservedMessageSeq: vi.fn(() => 0),
+      beginTurnAssistantTextSnapshot: vi.fn(() => ({ id: 'turn-token' })),
       getMetadataSnapshot: vi.fn(() => ({ ...metadata })),
     });
     return {
@@ -395,6 +405,7 @@ describe('runCodex CodexACP resume behavior', () => {
     lastSessionClient = null;
     lastOnUserMessageHandler = null;
     lastOnSwitchToLocal = null;
+    delete process.env[HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY];
     const experiments = await import('@/backends/codex/experiments');
     (experiments.isExperimentalCodexAcpEnabled as unknown as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const { resolveCodexStartingMode } = await import('./utils/resolveCodexStartingMode');
@@ -1579,5 +1590,86 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(sendPrompt).toHaveBeenCalledWith(expect.any(String), {
       metadata: structuredInputMetadata,
     });
+  });
+
+  it('preserves a native app-server goal continuation turn after initial-goal resume', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+
+    process.env[HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY] = serializeDaemonInitialGoalForEnv({
+      objective: 'continue the goal',
+    });
+
+    let turnInFlight = false;
+    const startOrLoad = vi.fn(async () => {
+      turnInFlight = true;
+    });
+    const appServerRuntime = {
+      getSessionId: () => 'thread-goal-resume',
+      supportsInFlightSteer: () => true,
+      isTurnInFlight: () => turnInFlight,
+      beginTurn: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      reset: vi.fn(async () => {}),
+      startOrLoad,
+      setSessionMode: vi.fn(async () => {}),
+      setSessionModel: vi.fn(async () => {}),
+      setSessionConfigOption: vi.fn(async () => {}),
+      steerPrompt: vi.fn(async () => {}),
+      sendPrompt: vi.fn(async () => {
+        throw new Error('sendPrompt-called');
+      }),
+      compactContext: vi.fn(async () => {}),
+      flushTurn: vi.fn(async () => {
+        turnInFlight = false;
+      }),
+      rollbackConversation: vi.fn(async () => ({ ok: true as const, target: { type: 'latest_turn' }, threadId: 'thread-goal-resume' })),
+    };
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => appServerRuntime);
+
+    let waitCallCount = 0;
+    waitForMessagesOrPendingImpl = async () => {
+      waitCallCount += 1;
+      if (waitCallCount === 1) {
+        return {
+          message: 'stale transcript replay',
+          mode: {
+            permissionMode: 'default',
+            permissionModeUpdatedAt: 1,
+          },
+          isolate: false,
+          hash: 'hash-stale-replay',
+        };
+      }
+      throw new Error('wait-called');
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      codexBackendMode: 'appServer',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+      resume: 'thread-goal-resume',
+    } as any)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    expect(startOrLoad).toHaveBeenCalledWith(expect.objectContaining({
+      resumeId: 'thread-goal-resume',
+      importHistory: false,
+      initialGoal: { objective: 'continue the goal' },
+    }));
+    expect(appServerRuntime.sendPrompt).not.toHaveBeenCalled();
+    expect(appServerRuntime.flushTurn).not.toHaveBeenCalled();
+    expect(turnInFlight).toBe(true);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual(expect.objectContaining({ message: 'wait-called' }));
+    }
   });
 });

@@ -1,5 +1,6 @@
 import {
   type ActionId,
+  type ApprovalRequestOriginV1,
   type ResolvedActionOption,
 } from '@happier-dev/protocol';
 import { createActionToolNameToIdMap } from './actionToolCatalog';
@@ -14,8 +15,16 @@ type ActionExecutorLike = Readonly<{
   execute: (
     actionId: ActionId,
     input: unknown,
-    ctx: Readonly<{ defaultSessionId: string; surface: 'mcp' | 'cli' | 'session_agent' }>,
+    ctx: Readonly<{
+      defaultSessionId: string;
+      surface: 'mcp' | 'cli' | 'session_agent';
+      approvalOrigin?: ApprovalRequestOriginV1 | null;
+    }>,
   ) => Promise<ActionExecutorResult>;
+}>;
+
+export type ActionToolExecutionOptions = Readonly<{
+  approvalOrigin?: ApprovalRequestOriginV1 | null;
 }>;
 
 type ActionToolBridgeResult =
@@ -59,7 +68,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
   isActionEnabled?: (id: ActionId) => boolean;
   surface?: 'mcp' | 'cli' | 'session_agent';
 }>): Readonly<{
-  executeActionByToolName: (toolName: string, toolArgs: unknown, defaultSessionId: string) => Promise<ActionToolBridgeResult>;
+  executeActionByToolName: (toolName: string, toolArgs: unknown, defaultSessionId: string, options?: ActionToolExecutionOptions) => Promise<ActionToolBridgeResult>;
   resolveActionOptions: (args: Readonly<{
     actionId: ActionId | null;
     fieldPath: string | null;
@@ -75,7 +84,12 @@ export function createActionToolExecutorBridge(params: Readonly<{
   const actionToolNameToId = createActionToolNameToIdMap({ surface, isActionEnabled });
 
   return {
-    executeActionByToolName: async (toolName, toolArgs, defaultSessionId) => {
+    executeActionByToolName: async (toolName, toolArgs, defaultSessionId, options) => {
+      const context = {
+        defaultSessionId,
+        surface,
+        ...(options?.approvalOrigin ? { approvalOrigin: options.approvalOrigin } : {}),
+      } as const;
       if (toolName === 'action_execute') {
         const actionId = typeof (toolArgs as any)?.actionId === 'string' ? String((toolArgs as any).actionId).trim() : '';
         if (!actionId) {
@@ -84,7 +98,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
         return normalizeActionToolResult(actionId as ActionId, await params.executor.execute(
           actionId as ActionId,
           Object.prototype.hasOwnProperty.call(toolArgs ?? {}, 'input') ? (toolArgs as any).input : {},
-          { defaultSessionId, surface },
+          context,
         ));
       }
 
@@ -96,7 +110,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
       return normalizeActionToolResult(actionId, await params.executor.execute(
         actionId,
         toolArgs,
-        { defaultSessionId, surface },
+        context,
       ));
     },
     resolveActionOptions: async (args, defaultSessionId) => {

@@ -13,6 +13,7 @@ import {
     type SessionRollbackRpcResult,
     SESSION_MEDIA_MESSAGE_META_KIND_V1,
     type SessionMediaItemV1,
+    type SessionInitialGoalRequestV1,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isChangeTitleToolNameAlias } from '@happier-dev/protocol/tools/v2';
@@ -77,6 +78,7 @@ type CodexAppServerStartOrLoadOptions = Readonly<{
     resumeId?: string | null;
     existingSessionId?: string | null;
     importHistory?: boolean;
+    initialGoal?: SessionInitialGoalRequestV1 | null;
 }>;
 
 type CodexAppServerThreadResponse = Readonly<{
@@ -94,6 +96,12 @@ type CodexAppServerTurnResponse = Readonly<{
 type UnsupportedSessionRuntimeMethodResult = Readonly<{
     ok: false;
     errorCode: 'unsupported_session_runtime_method';
+    error: string;
+}>;
+
+type GoalControlNotFoundResult = Readonly<{
+    ok: false;
+    errorCode: 'goal_not_found';
     error: string;
 }>;
 
@@ -392,6 +400,19 @@ function buildThreadServiceTierParams(
     return currentServiceTier === 'fast' ? { serviceTier: 'fast' } : { serviceTier: null };
 }
 
+function buildThreadConfigOverrideParams(
+    currentReasoningEffort: string | null,
+): { config?: Record<string, string> } {
+    if (!currentReasoningEffort) {
+        return {};
+    }
+    return {
+        config: {
+            model_reasoning_effort: currentReasoningEffort,
+        },
+    };
+}
+
 type CodexAppServerSteerContext = Readonly<{
     modeId: string | null;
     modelId: string | null;
@@ -464,7 +485,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     flushTurn: () => Promise<void>;
-    setGoal: (_objective: string, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult>;
+    setGoal: (_objective: string | undefined, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult | GoalControlNotFoundResult>;
     clearGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
     refreshGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
     listVendorPlugins: () => ReturnType<typeof listCodexVendorPlugins>;
@@ -1432,6 +1453,34 @@ export function createCodexAppServerRuntime(params: Readonly<{
         });
     };
 
+    const adoptNativeStartedTurn = (notificationParams: unknown): PendingTurn | null => {
+        if (pendingTurn) return pendingTurn;
+
+        const notificationThreadId = readThreadId(notificationParams);
+        if (threadId && notificationThreadId && notificationThreadId !== threadId) {
+            return null;
+        }
+        const activeThreadId = threadId ?? notificationThreadId;
+        if (!activeThreadId) return null;
+
+        if (!threadId && notificationThreadId) {
+            threadId = notificationThreadId;
+            publishThreadId();
+        }
+
+        pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
+        turnChangeCollector.beginTurn();
+        const startedTurnId = readTurnId(notificationParams);
+        const adoptedTurn = createPendingTurn(activeThreadId);
+        pendingTurn = startedTurnId ? { ...adoptedTurn, turnId: startedTurnId } : adoptedTurn;
+        latestPendingTurnId = startedTurnId ?? null;
+        persistedMediaDedupeKeys.clear();
+        turnInFlight = true;
+        markActiveTurnSteerable();
+        setThinking(true);
+        return pendingTurn;
+    };
+
     const notificationMatchesPendingTurn = (notificationParams: unknown): boolean => {
         const activeTurn = pendingTurn;
         if (!activeTurn) return false;
@@ -1452,6 +1501,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 sidechainId: notificationThreadId,
                 streamScopeId: notificationThreadId,
             };
+        }
+        const notificationTurnId = readTurnId(notificationParams);
+        if (notificationTurnId && activeTurn.turnId && notificationTurnId !== activeTurn.turnId) {
+            return null;
         }
         return {
             sidechainId: null,
@@ -1489,7 +1542,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 .then((client) => {
                     client.registerNotificationHandler('turn/started', (notificationParams) => {
                         void runBridgeWork(async () => {
-                            const activeTurn = pendingTurn;
+                            const activeTurn = pendingTurn ?? adoptNativeStartedTurn(notificationParams);
                             if (!activeTurn || !notificationMatchesPendingTurn(notificationParams)) {
                                 return;
                             }
@@ -1664,6 +1717,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             threadId: requestedThreadId,
             ...(currentModelId ? { model: currentModelId } : {}),
             ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+            ...buildThreadConfigOverrideParams(currentReasoningEffort),
             ...buildCurrentPermissionParams('thread'),
             persistExtendedHistory: true,
         };
@@ -1682,6 +1736,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 threadId: requestedThreadId,
                 ...(currentModelId ? { model: currentModelId } : {}),
                 ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                ...buildThreadConfigOverrideParams(currentReasoningEffort),
                 ...buildCurrentLegacyPermissionParams('thread'),
                 persistExtendedHistory: true,
             });
@@ -1734,6 +1789,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 cwd: params.directory,
                 ...(currentModelId ? { model: currentModelId } : {}),
                 ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                ...buildThreadConfigOverrideParams(currentReasoningEffort),
                 ...buildCurrentPermissionParams('thread'),
                 experimentalRawEvents: true,
                 persistExtendedHistory: true,
@@ -1753,6 +1809,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     cwd: params.directory,
                     ...(currentModelId ? { model: currentModelId } : {}),
                     ...buildThreadServiceTierParams(currentServiceTier, hasServiceTierOverride),
+                    ...buildThreadConfigOverrideParams(currentReasoningEffort),
                     ...buildCurrentLegacyPermissionParams('thread'),
                     experimentalRawEvents: true,
                     persistExtendedHistory: true,
@@ -1765,6 +1822,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return { nextThreadId: startedThreadId, response };
         })();
         await applyStartOrLoadResponse(client, startOrLoadResult.nextThreadId, startOrLoadResult.response);
+        const initialGoal = options.initialGoal;
+        if (initialGoal?.objective) {
+            const response = await client.request('thread/goal/set', {
+                threadId: startOrLoadResult.nextThreadId,
+                objective: trimStringValue(initialGoal.objective),
+                ...(initialGoal.status ? { status: initialGoal.status } : {}),
+                ...(Object.prototype.hasOwnProperty.call(initialGoal, 'tokenBudget')
+                    ? { tokenBudget: initialGoal.tokenBudget ?? null }
+                    : {}),
+            });
+            await publishGoalWorkState(response);
+        }
         if (params.pendingQueue?.drainAfterStartOrLoad === true) {
             await drainPendingQueueMessages({
                 pendingQueue: params.pendingQueue,
@@ -2074,7 +2143,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             return undefined;
         },
         setGoal: async (
-            objective: string,
+            objective: string | undefined,
             options?: Readonly<{ status?: string; tokenBudget?: number | null }>,
         ) => {
             const activeThreadId = threadId;
@@ -2082,22 +2151,36 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw new Error('Codex app-server setGoal requires an active thread');
             }
             const trimmedObjective = trimStringValue(objective);
-            if (!trimmedObjective) {
+            const hasStatus = typeof options?.status === 'string' && options.status.trim().length > 0;
+            const hasTokenBudget = Boolean(options && Object.prototype.hasOwnProperty.call(options, 'tokenBudget'));
+            if (!trimmedObjective && !hasStatus && !hasTokenBudget) {
                 throw new Error('Codex app-server setGoal requires a non-empty objective');
             }
             const client = await ensureClient();
+            const buildRequest = (fallbackObjective?: string | null): Record<string, unknown> => ({
+                threadId: activeThreadId,
+                ...(trimmedObjective ? { objective: trimmedObjective } : {}),
+                ...(!trimmedObjective && fallbackObjective ? { objective: fallbackObjective } : {}),
+                ...(hasStatus ? { status: options?.status } : {}),
+                ...(hasTokenBudget ? { tokenBudget: options?.tokenBudget ?? null } : {}),
+            });
             try {
-                const response = await client.request('thread/goal/set', {
-                    threadId: activeThreadId,
-                    objective: trimmedObjective,
-                    ...(options?.status ? { status: options.status } : {}),
-                    ...(options && Object.prototype.hasOwnProperty.call(options, 'tokenBudget')
-                        ? { tokenBudget: options.tokenBudget ?? null }
-                        : {}),
-                });
+                const response = await client.request('thread/goal/set', buildRequest());
                 await publishGoalWorkState(response);
                 return undefined;
             } catch (error) {
+                if (!trimmedObjective
+                    && (isCodexAppServerInvalidParamsError(error)
+                        || isCodexAppServerInvalidRequestForMethodError(error, 'thread/goal/set'))) {
+                    const currentGoal = await client.request('thread/goal/get', { threadId: activeThreadId });
+                    const fallbackObjective = trimStringValue(readRecord(readGoalFromResponse(currentGoal))?.objective);
+                    if (!fallbackObjective) {
+                        return { ok: false, errorCode: 'goal_not_found', error: 'goal_not_found' };
+                    }
+                    const response = await client.request('thread/goal/set', buildRequest(fallbackObjective));
+                    await publishGoalWorkState(response);
+                    return undefined;
+                }
                 if (isCodexAppServerGoalMethodUnavailableError(error, 'thread/goal/set')) {
                     logger.debug('[codex-app-server] Native goal set unsupported by app-server', {
                         threadId: activeThreadId,

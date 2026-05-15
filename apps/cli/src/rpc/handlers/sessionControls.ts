@@ -16,7 +16,7 @@ import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 export type SessionRuntimeControls = {
   refreshGoal?: () => unknown;
   setGoal?: (
-    objective: string,
+    objective: string | undefined,
     options?: Readonly<{
       status?: string;
       tokenBudget?: number | null;
@@ -37,10 +37,6 @@ function unsupported(method: string): Readonly<{ ok: false; errorCode: string; e
 
 function invalidInput(): Readonly<{ ok: false; errorCode: string; error: string }> {
   return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-}
-
-function goalObjectiveRequired(): Readonly<{ ok: false; errorCode: string; error: string }> {
-  return { ok: false, errorCode: 'goal_objective_required', error: 'goal_objective_required' };
 }
 
 function readWorkState(getSessionMetadata?: (() => Metadata | null) | null): unknown {
@@ -103,8 +99,7 @@ export function registerSessionControlHandlers(
     if (typeof opts.sessionRuntimeControls?.setGoal !== 'function') {
       return unsupported(SESSION_RPC_METHODS.SESSION_GOAL_SET);
     }
-    const objective = parsed.data.objective ?? readCurrentGoalObjective(opts.getSessionMetadata);
-    if (!objective) return goalObjectiveRequired();
+    const objective = parsed.data.objective ?? readCurrentGoalObjective(opts.getSessionMetadata) ?? undefined;
     const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.setGoal(objective, {
       ...(parsed.data.status ? { status: parsed.data.status } : {}),
       ...(Object.prototype.hasOwnProperty.call(parsed.data, 'tokenBudget')

@@ -1,11 +1,39 @@
 import { listBuiltInHappierTools, type BuiltInHappierToolsSurface } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
+import type { ApprovalRequestOriginV1 } from '@happier-dev/protocol';
 
 type ToolRegistrar = Readonly<{
-    registerTool: (name: string, meta: unknown, handler: (args: unknown) => Promise<unknown>) => void;
+    registerTool: (name: string, meta: unknown, handler: (args: unknown, extra?: unknown) => Promise<unknown>) => void;
 }>;
 
 type DispatchDeps = Parameters<typeof dispatchBuiltInHappierTool>[0]['deps'];
+
+function normalizeString(value: unknown): string | null {
+    const normalized = typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    return normalized || null;
+}
+
+function buildApprovalOrigin(params: Readonly<{
+    surface: BuiltInHappierToolsSurface;
+    sessionId: string;
+    toolName: string;
+    extra: unknown;
+}>): ApprovalRequestOriginV1 | null {
+    if (params.surface !== 'session_agent') return null;
+    const sessionId = params.sessionId.trim();
+    if (!sessionId) return null;
+
+    const extraRecord = params.extra && typeof params.extra === 'object' ? params.extra as Record<string, unknown> : {};
+    const mcpRequestId = normalizeString(extraRecord.requestId);
+    return {
+        kind: 'transcript_tool_call',
+        sessionId,
+        ...(mcpRequestId ? { toolCallId: mcpRequestId, mcpRequestId } : {}),
+        toolName: params.toolName,
+    };
+}
 
 export function registerHappierMcpBuiltInTools(
     server: ToolRegistrar,
@@ -29,14 +57,21 @@ export function registerHappierMcpBuiltInTools(
                 title: tool.title,
                 inputSchema: tool.inputSchema,
             } as any,
-            async (args: unknown) => {
+            async (args: unknown, extra?: unknown) => {
                 try {
                     const sessionId = params.resolveSessionId ? params.resolveSessionId(args) : params.sessionId;
+                    const approvalOrigin = buildApprovalOrigin({
+                        surface: params.surface,
+                        sessionId,
+                        toolName: tool.name,
+                        extra,
+                    });
                     const result = await dispatchBuiltInHappierTool({
                         toolName: tool.name,
                         args,
                         sessionId,
                         surface: params.surface,
+                        ...(approvalOrigin ? { approvalOrigin } : {}),
                         deps: params.deps,
                     });
 

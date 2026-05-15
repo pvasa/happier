@@ -9,6 +9,7 @@ import {
     AcpConfigOptionOverridesV1,
     type AgentRuntimeDescriptorV1,
     BackendTargetRefV1,
+    type SessionInitialGoalRequestV1,
     type SessionAttachMetadataIdentityPolicy,
     SessionMcpSelectionV1,
     SpawnSessionErrorCode,
@@ -92,6 +93,11 @@ export interface SpawnSessionOptions {
      * delivered once without replaying older turns.
      */
     initialTranscriptAfterSeq?: number;
+    /**
+     * Optional native goal to apply immediately after provider attach/resume and before
+     * pending queue replay.
+     */
+    initialGoal?: SessionInitialGoalRequestV1;
     /**
      * Optional attach-only metadata identity policy.
      * Preserve current persisted machine identity for normal attaches, but allow runtime replacement

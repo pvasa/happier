@@ -33,6 +33,10 @@ function normalizeCodexGoalStatus(status: CodexAppServerGoalStatus): SessionWork
   return status;
 }
 
+function normalizeCodexGoalStatusReason(status: CodexAppServerGoalStatus): 'budgetLimited' | undefined {
+  return status === 'budgetLimited' ? 'budgetLimited' : undefined;
+}
+
 export function normalizeCodexAppServerGoalToSessionWorkStateItem(params: Readonly<{
   backendId: string;
   agentId?: string;
@@ -44,12 +48,14 @@ export function normalizeCodexAppServerGoalToSessionWorkStateItem(params: Readon
   const updatedAt = normalizeTimestampMs(parsed.data.updatedAt);
   if (updatedAt === null) return null;
   const createdAt = normalizeTimestampMs(parsed.data.createdAt);
+  const statusReason = normalizeCodexGoalStatusReason(parsed.data.status);
 
   return {
     id: buildVendorSessionWorkStateItemId('goal', parsed.data.threadId),
     kind: 'goal',
     origin: 'vendor',
     status: normalizeCodexGoalStatus(parsed.data.status),
+    ...(statusReason ? { statusReason } : {}),
     title: parsed.data.objective.trim(),
     backendId: params.backendId,
     ...(params.agentId ? { agentId: params.agentId } : {}),

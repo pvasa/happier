@@ -24,8 +24,17 @@ describe('session work-state RPC contracts', () => {
             status: 'active',
             tokenBudget: null,
         });
+        expect(SessionGoalSetRequestV1Schema.parse({ objective: 'Line one\nLine two' })).toEqual({
+            objective: 'Line one\nLine two',
+        });
         expect(SessionGoalSetRequestV1Schema.parse({ status: 'paused' })).toEqual({
             status: 'paused',
+        });
+        expect(SessionGoalSetRequestV1Schema.parse({ tokenBudget: 50_000 })).toEqual({
+            tokenBudget: 50_000,
+        });
+        expect(SessionGoalSetRequestV1Schema.parse({ tokenBudget: null })).toEqual({
+            tokenBudget: null,
         });
         expect(() => SessionGoalSetRequestV1Schema.parse({})).toThrow();
         expect(SessionVendorPluginCatalogListResponseV1Schema.parse({

@@ -20,6 +20,7 @@ import {
 } from '@happier-dev/agents';
 import { createCliApprovalsArtifactStore } from '@/approvals/cliApprovalsArtifactStore';
 import type { Credentials } from '@/persistence';
+import { readSettings } from '@/persistence';
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
 import { getSessionEvents } from '@/session/services/getSessionEvents';
 import { getSessionHistory } from '@/session/services/getSessionHistory';
@@ -56,10 +57,11 @@ import {
 } from '@/session/services/executionRuns';
 import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import { fetchSessionById, fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionById, fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
 
 function notSupported(): never {
   throw new Error('action_not_supported_in_cli');
@@ -69,6 +71,12 @@ function normalizeLimit(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.max(1, Math.min(200, Math.floor(parsed)));
+}
+
+function normalizeString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function readSessionMetadata(params: Readonly<{
@@ -174,7 +182,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         normalizedSessionId === params.sessionId && params.mode
           ? params.mode
           : resolveSessionStoredContentEncryptionMode(rawSession ?? undefined);
-      const rawMetadata = (rawSession as any)?.metadata;
+      const rawMetadata = rawSession?.metadata;
       const metadataRequiresDecryption = typeof rawMetadata === 'string' && rawMetadata.trim().length > 0;
       const ctx =
         metadataRequiresDecryption && normalizedSessionId !== params.sessionId && params.credentials
@@ -286,12 +294,14 @@ export function createCliActionDeps(params: Readonly<{
     mode: params.mode,
     ctx: params.ctx,
   });
-  const sessionTransportCache = new Map<string, Readonly<{
+  type ResolvedSessionTransport = Readonly<{
     sessionId: string;
-    rawSession: any;
+    rawSession: RawSessionRecord;
     ctx: SessionEncryptionContext;
     mode: SessionStoredContentEncryptionMode;
-  }>>();
+  }>;
+
+  const sessionTransportCache = new Map<string, ResolvedSessionTransport>();
 
   const readCurrentSessionMetadata = async (): Promise<Record<string, unknown> | null> => {
     if (currentSessionMetadata) return currentSessionMetadata;
@@ -326,7 +336,7 @@ export function createCliActionDeps(params: Readonly<{
   const resolveTransportForSession = async (idOrPrefix: string): Promise<Readonly<{
     ok: true;
     sessionId: string;
-    rawSession: any;
+    rawSession: RawSessionRecord;
     ctx: SessionEncryptionContext;
     mode: SessionStoredContentEncryptionMode;
   }> | Readonly<{
@@ -342,9 +352,8 @@ export function createCliActionDeps(params: Readonly<{
     if (!normalized) {
       return { ok: false, code: 'session_not_found' };
     }
-    if (sessionTransportCache.has(normalized)) {
-      return { ok: true, ...(sessionTransportCache.get(normalized) as any) };
-    }
+    const cachedTransport = sessionTransportCache.get(normalized);
+    if (cachedTransport) return { ok: true, ...cachedTransport };
 
     const resolved = await resolveSessionTransportContext({ credentials: params.credentials, idOrPrefix: normalized });
     if (!resolved.ok) {
@@ -367,23 +376,13 @@ export function createCliActionDeps(params: Readonly<{
     return { ok: true, ...cached };
   };
 
-  const callResolvedSessionRpc = async (
-    sessionId: string,
+  const callSessionRpcForTransport = async (
+    transport: ResolvedSessionTransport,
     methodSuffix: string,
     request: unknown,
   ): Promise<unknown> => {
     if (!params.credentials) {
       return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
-    }
-
-    const transport = await resolveTransportForSession(sessionId);
-    if (!transport.ok) {
-      return {
-        ok: false,
-        errorCode: transport.code,
-        error: transport.code,
-        ...(transport.candidates ? { candidates: transport.candidates } : {}),
-      };
     }
 
     try {
@@ -405,6 +404,83 @@ export function createCliActionDeps(params: Readonly<{
         sessionId: transport.sessionId,
       };
     }
+  };
+
+  const callResolvedSessionRpc = async (
+    sessionId: string,
+    methodSuffix: string,
+    request: unknown,
+  ): Promise<unknown> => {
+    if (!params.credentials) {
+      return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+    }
+
+    const transport = await resolveTransportForSession(sessionId);
+    if (!transport.ok) {
+      return {
+        ok: false,
+        errorCode: transport.code,
+        error: transport.code,
+        ...(transport.candidates ? { candidates: transport.candidates } : {}),
+      };
+    }
+
+    return await callSessionRpcForTransport(transport, methodSuffix, request);
+  };
+
+  const readCurrentMachineId = async (): Promise<string | null> => {
+    try {
+      return normalizeString((await readSettings()).machineId);
+    } catch {
+      return null;
+    }
+  };
+
+  const callRoutedSessionGoalControl = async (
+    sessionId: string,
+    operation: 'get' | 'set' | 'clear',
+    request: Record<string, unknown>,
+  ): Promise<unknown> => {
+    if (!params.credentials) {
+      return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+    }
+
+    const transport = await resolveTransportForSession(sessionId);
+    if (!transport.ok) {
+      return {
+        ok: false,
+        errorCode: transport.code,
+        error: transport.code,
+        ...(transport.candidates ? { candidates: transport.candidates } : {}),
+      };
+    }
+
+    const metadata = readSessionMetadata({
+      rawSession: transport.rawSession,
+      mode: transport.mode,
+      ctx: transport.ctx,
+    });
+    return await routeSessionGoalControl({
+      token: params.credentials.token,
+      credentials: params.credentials,
+      sessionId: transport.sessionId,
+      rawSession: transport.rawSession,
+      metadata,
+      currentMachineId: await readCurrentMachineId(),
+      ctx: transport.ctx,
+      mode: transport.mode,
+      operation,
+      ...(operation === 'set' ? { request } : {}),
+      callLiveSessionRpc: async () => await callSessionRpcForTransport(
+        transport,
+        operation === 'get'
+          ? SESSION_RPC_METHODS.SESSION_GOAL_GET
+          : operation === 'clear'
+            ? SESSION_RPC_METHODS.SESSION_GOAL_CLEAR
+            : SESSION_RPC_METHODS.SESSION_GOAL_SET,
+        request,
+      ),
+    });
   };
 
   return {
@@ -712,19 +788,19 @@ export function createCliActionDeps(params: Readonly<{
     },
 
     sessionGoalGet: async ({ sessionId }) => {
-      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_GOAL_GET, {});
+      return await callRoutedSessionGoalControl(sessionId, 'get', {});
     },
 
     sessionGoalSet: async ({ sessionId, objective, status, tokenBudget }) => {
-      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_GOAL_SET, {
-        objective,
+      return await callRoutedSessionGoalControl(sessionId, 'set', {
+        ...(typeof objective === 'string' ? { objective } : {}),
         ...(typeof status === 'string' && status.trim().length > 0 ? { status: status.trim() } : {}),
         ...(typeof tokenBudget !== 'undefined' ? { tokenBudget: tokenBudget ?? null } : {}),
       });
     },
 
     sessionGoalClear: async ({ sessionId }) => {
-      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_GOAL_CLEAR, {});
+      return await callRoutedSessionGoalControl(sessionId, 'clear', {});
     },
 
     sessionVendorPluginCatalogList: async ({ sessionId, cwd }) => {

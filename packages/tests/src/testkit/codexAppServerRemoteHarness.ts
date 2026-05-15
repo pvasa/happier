@@ -77,21 +77,37 @@ export async function writeFakeCodexAppServerScript(params: Readonly<{
   dir: string;
   requestLogPath: string;
   initialGoal?: FakeCodexAppServerGoal | null;
+  goalSetBehavior?: 'objectiveRequired' | 'nativePartial';
   vendorPlugins?: readonly FakeCodexAppServerVendorPlugin[];
   skills?: readonly FakeCodexAppServerSkill[];
 }>): Promise<string> {
   const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
   const initialGoal = params.initialGoal ?? null;
+  const goalSetBehavior = params.goalSetBehavior ?? 'objectiveRequired';
   const vendorPlugins = params.vendorPlugins ?? createDefaultFakeCodexVendorPlugins();
   const skills = params.skills ?? createDefaultFakeCodexSkills(params.dir);
   const script = [
     '#!/usr/bin/env node',
-    'import { appendFile } from "node:fs/promises";',
+    'import { appendFile, readFile, rm, writeFile } from "node:fs/promises";',
     'import readline from "node:readline";',
     `const requestLogPath = ${JSON.stringify(params.requestLogPath)};`,
+    `const goalStatePath = ${JSON.stringify(join(params.dir, 'fake-codex-app-server.goal.json'))};`,
     `let currentGoal = ${JSON.stringify(initialGoal)};`,
+    `const goalSetBehavior = ${JSON.stringify(goalSetBehavior)};`,
     `const vendorPlugins = ${JSON.stringify(vendorPlugins)};`,
     `const skills = ${JSON.stringify(skills)};`,
+    'try {',
+    '  const persistedGoalRaw = await readFile(goalStatePath, "utf8");',
+    '  const persistedGoal = JSON.parse(persistedGoalRaw);',
+    '  currentGoal = persistedGoal && typeof persistedGoal === "object" ? persistedGoal : currentGoal;',
+    '} catch {}',
+    'async function persistGoal() {',
+    '  if (!currentGoal) {',
+    '    await rm(goalStatePath, { force: true });',
+    '    return;',
+    '  }',
+    '  await writeFile(goalStatePath, JSON.stringify(currentGoal), "utf8");',
+    '}',
     'const turnDelayMsRaw = process.env.HAPPIER_E2E_FAKE_CODEX_APP_SERVER_TURN_DELAY_MS;',
     'const turnDelayMs = (() => {',
     '  if (!turnDelayMsRaw) return 0;',
@@ -131,21 +147,26 @@ export async function writeFakeCodexAppServerScript(params: Readonly<{
     '  }',
     '  if (msg.method === "thread/goal/set") {',
     '    const nowIso = new Date().toISOString();',
-    '    const objective = typeof msg.params?.objective === "string" ? msg.params.objective.trim() : "";',
+    '    const providedObjective = typeof msg.params?.objective === "string" ? msg.params.objective.trim() : "";',
+    '    const objective = providedObjective || (goalSetBehavior === "nativePartial" && currentGoal?.objective ? currentGoal.objective : "");',
     '    if (!objective) {',
     '      process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "objective required" } }) + "\\n");',
     '      continue;',
     '    }',
+    '    const tokenBudget = Object.prototype.hasOwnProperty.call(msg.params ?? {}, "tokenBudget")',
+    '      ? msg.params.tokenBudget',
+    '      : (goalSetBehavior === "nativePartial" && currentGoal && Object.prototype.hasOwnProperty.call(currentGoal, "tokenBudget") ? currentGoal.tokenBudget : null);',
     '    currentGoal = {',
     '      threadId: typeof msg.params?.threadId === "string" ? msg.params.threadId : "thread-started",',
     '      objective,',
-    '      status: typeof msg.params?.status === "string" ? msg.params.status : "active",',
-    '      tokenBudget: Object.prototype.hasOwnProperty.call(msg.params ?? {}, "tokenBudget") ? msg.params.tokenBudget : null,',
-    '      tokensUsed: 0,',
-    '      timeUsedSeconds: 0,',
-    '      createdAt: nowIso,',
+    '      status: typeof msg.params?.status === "string" ? msg.params.status : (goalSetBehavior === "nativePartial" && currentGoal?.status ? currentGoal.status : "active"),',
+    '      tokenBudget,',
+    '      tokensUsed: goalSetBehavior === "nativePartial" && typeof currentGoal?.tokensUsed === "number" ? currentGoal.tokensUsed : 0,',
+    '      timeUsedSeconds: goalSetBehavior === "nativePartial" && typeof currentGoal?.timeUsedSeconds === "number" ? currentGoal.timeUsedSeconds : 0,',
+    '      createdAt: goalSetBehavior === "nativePartial" && typeof currentGoal?.createdAt === "string" ? currentGoal.createdAt : nowIso,',
     '      updatedAt: nowIso',
     '    };',
+    '    await persistGoal();',
     '    process.stdout.write(JSON.stringify({ id: msg.id, result: currentGoal }) + "\\n");',
     '    process.stdout.write(JSON.stringify({ method: "thread/goal/updated", params: { threadId: currentGoal.threadId, goal: currentGoal } }) + "\\n");',
     '    continue;',
@@ -153,6 +174,7 @@ export async function writeFakeCodexAppServerScript(params: Readonly<{
     '  if (msg.method === "thread/goal/clear") {',
     '    const threadId = typeof msg.params?.threadId === "string" ? msg.params.threadId : currentGoal?.threadId ?? "thread-started";',
     '    currentGoal = null;',
+    '    await persistGoal();',
     '    process.stdout.write(JSON.stringify({ id: msg.id, result: { threadId } }) + "\\n");',
     '    process.stdout.write(JSON.stringify({ method: "thread/goal/cleared", params: { threadId } }) + "\\n");',
     '    continue;',
@@ -238,7 +260,9 @@ export type StartedCodexAppServerRemoteHarness = Readonly<{
   secret: Uint8Array;
   sessionId: string;
   requestLogPath: string;
+  fakeAppServerPath: string;
   readySession: SessionV2;
+  stopRuntime: () => Promise<void>;
   stop: () => Promise<void>;
 }>;
 
@@ -246,6 +270,7 @@ export async function startCodexAppServerRemoteHarness(params: Readonly<{
   testDir: string;
   runId: string;
   testName: string;
+  goalSetBehavior?: 'objectiveRequired' | 'nativePartial';
   cliEnvOverrides?: NodeJS.ProcessEnv;
   manifestEnv?: Record<string, string>;
   metadataOverrides?: Record<string, unknown>;
@@ -294,7 +319,11 @@ export async function startCodexAppServerRemoteHarness(params: Readonly<{
 
   const attachFile = await writeCliSessionAttachFile({ cliHome, sessionId, secret });
   const requestLogPath = resolve(join(params.testDir, 'fake-codex-app-server.requests.jsonl'));
-  const fakeAppServer = await writeFakeCodexAppServerScript({ dir: params.testDir, requestLogPath });
+  const fakeAppServer = await writeFakeCodexAppServerScript({
+    dir: params.testDir,
+    requestLogPath,
+    goalSetBehavior: params.goalSetBehavior,
+  });
 
   writeTestManifestForServer({
     testDir: params.testDir,
@@ -340,9 +369,16 @@ export async function startCodexAppServerRemoteHarness(params: Readonly<{
     stderrPath: resolve(join(params.testDir, 'cli.stderr.log')),
   });
 
-  const stop = async (): Promise<void> => {
+  let runtimeStopped = false;
+  const stopRuntime = async (): Promise<void> => {
+    if (runtimeStopped) return;
+    runtimeStopped = true;
     await proc.stop().catch(() => {});
     await stopDaemonFromHomeDir(cliHome).catch(() => {});
+  };
+
+  const stop = async (): Promise<void> => {
+    await stopRuntime();
     await server.stop().catch(() => {});
   };
 
@@ -356,7 +392,9 @@ export async function startCodexAppServerRemoteHarness(params: Readonly<{
       secret,
       sessionId,
       requestLogPath,
+      fakeAppServerPath: fakeAppServer,
       readySession: await fetchSessionV2(serverBaseUrl, auth.token, sessionId),
+      stopRuntime,
       stop,
     };
   } catch (error) {

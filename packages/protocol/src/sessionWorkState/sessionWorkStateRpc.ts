@@ -29,6 +29,12 @@ export const SessionGoalSetRequestV1Schema = z
   ), { message: 'At least one goal mutation field is required' });
 export type SessionGoalSetRequestV1 = z.infer<typeof SessionGoalSetRequestV1Schema>;
 
+export const SessionInitialGoalRequestV1Schema = SessionGoalSetRequestV1Schema.refine(
+  (value) => typeof value.objective === 'string' && value.objective.trim().length > 0,
+  { message: 'Initial goal requires an objective' },
+);
+export type SessionInitialGoalRequestV1 = z.infer<typeof SessionInitialGoalRequestV1Schema>;
+
 export const SessionGoalClearRequestV1Schema = z.object({}).passthrough();
 export type SessionGoalClearRequestV1 = z.infer<typeof SessionGoalClearRequestV1Schema>;
 
