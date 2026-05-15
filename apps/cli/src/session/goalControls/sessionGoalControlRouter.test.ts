@@ -111,6 +111,50 @@ describe('routeSessionGoalControl', () => {
     }));
   });
 
+  it('persists only returned goal work-state metadata without clobbering concurrent metadata keys', async () => {
+    const rawSession = createRawSession();
+    const nextWorkState = { v: 1, items: [], primaryItemId: null, updatedAt: 7 };
+    mocks.updateSessionMetadataWithRetry.mockImplementationOnce(async (params: {
+      updater: (metadata: Record<string, unknown>) => Record<string, unknown>;
+    }) => ({
+      version: 3,
+      metadata: params.updater({
+        concurrent: 'latest',
+        unrelatedKey: 'fresh-value',
+      }),
+    }));
+    const setGoal = vi.fn(async () => ({
+      metadata: {
+        machineId: 'machine-local',
+        sessionWorkStateV1: nextWorkState,
+        unrelatedKey: 'stale-value',
+      },
+      workState: nextWorkState,
+    }));
+    const resolveAdapter = vi.fn(async () => ({ setGoal }));
+
+    await expect(routeSessionGoalControl({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      rawSession,
+      metadata: createMetadata({ unrelatedKey: 'original-value' }),
+      currentMachineId: 'machine-local',
+      ctx,
+      mode: 'plain',
+      operation: 'set',
+      request: { status: 'paused' },
+      callLiveSessionRpc: vi.fn(),
+      resolveAdapter,
+    })).resolves.toMatchObject({
+      metadata: {
+        concurrent: 'latest',
+        unrelatedKey: 'fresh-value',
+        sessionWorkStateV1: nextWorkState,
+      },
+    });
+  });
+
   it('uses live session RPC without provider delegation when the session is active', async () => {
     const callLiveSessionRpc = vi.fn(async () => ({ ok: true, live: true }));
     const resolveAdapter = vi.fn(async () => ({ setGoal: vi.fn() }));
@@ -132,6 +176,45 @@ describe('routeSessionGoalControl', () => {
 
     expect(resolveAdapter).not.toHaveBeenCalled();
     expect(mocks.updateSessionMetadataWithRetry).not.toHaveBeenCalled();
+  });
+
+  it('falls back to local provider control when an active session live RPC is unavailable', async () => {
+    const nextWorkState = { v: 1, items: [], primaryItemId: null, updatedAt: 9 };
+    const callLiveSessionRpc = vi.fn(async () => ({
+      ok: false,
+      errorCode: 'RPC_METHOD_NOT_AVAILABLE',
+      error: 'RPC_METHOD_NOT_AVAILABLE',
+    }));
+    const setGoal = vi.fn(async () => ({
+      metadata: createMetadata({ sessionWorkStateV1: nextWorkState }),
+      workState: nextWorkState,
+    }));
+    const resolveAdapter = vi.fn(async () => ({ setGoal }));
+
+    await expect(routeSessionGoalControl({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      rawSession: createRawSession({ active: true }),
+      metadata: createMetadata(),
+      currentMachineId: 'machine-local',
+      ctx,
+      mode: 'plain',
+      operation: 'set',
+      request: { status: 'paused' },
+      callLiveSessionRpc,
+      resolveAdapter,
+    })).resolves.toMatchObject({
+      metadata: expect.objectContaining({ sessionWorkStateV1: nextWorkState }),
+      workState: nextWorkState,
+    });
+
+    expect(callLiveSessionRpc).toHaveBeenCalledTimes(1);
+    expect(resolveAdapter).toHaveBeenCalledWith('codex');
+    expect(setGoal).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sess_1',
+      request: { status: 'paused' },
+    }));
   });
 
   it('returns stable errors without persisting when inactive control lacks local metadata', async () => {
@@ -230,6 +313,6 @@ describe('routeSessionGoalControl', () => {
 
     expect(getGoal).toHaveBeenCalledTimes(1);
     expect(clearGoal).toHaveBeenCalledTimes(1);
-    expect(mocks.updateSessionMetadataWithRetry).toHaveBeenCalledTimes(2);
+    expect(mocks.updateSessionMetadataWithRetry).not.toHaveBeenCalled();
   });
 });

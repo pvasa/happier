@@ -24,6 +24,9 @@ export {
 } from './sessionWorkStateItemIds.js';
 export { mergeSessionWorkStateMetadataV1, mergeSessionWorkStateV1 } from './sessionWorkStateMerge.js';
 export {
+  DaemonSessionGoalClearRequestV1Schema,
+  DaemonSessionGoalGetRequestV1Schema,
+  DaemonSessionGoalSetRequestV1Schema,
   SessionGoalClearRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
@@ -36,6 +39,9 @@ export {
   SessionVendorPluginSummaryV1Schema,
   SessionWorkStateGetRequestV1Schema,
   SessionWorkStateGetResponseV1Schema,
+  type DaemonSessionGoalClearRequestV1,
+  type DaemonSessionGoalGetRequestV1,
+  type DaemonSessionGoalSetRequestV1,
   type SessionGoalClearRequestV1,
   type SessionGoalGetRequestV1,
   type SessionGoalSetRequestV1,

@@ -1,6 +1,9 @@
 export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
 
 export {
+  DaemonSessionGoalClearRequestV1Schema,
+  DaemonSessionGoalGetRequestV1Schema,
+  DaemonSessionGoalSetRequestV1Schema,
   SessionGoalClearRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
@@ -25,6 +28,9 @@ export {
   mergeSessionWorkStateMetadataV1,
   mergeSessionWorkStateV1,
   readDisplayableSessionWorkStateV1,
+  type DaemonSessionGoalClearRequestV1,
+  type DaemonSessionGoalGetRequestV1,
+  type DaemonSessionGoalSetRequestV1,
   type SessionGoalClearRequestV1,
   type SessionGoalGetRequestV1,
   type SessionGoalSetRequestV1,

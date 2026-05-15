@@ -51,6 +51,7 @@ import { registerMachinePromptAssetsRpcHandlers } from './rpcHandlers.promptAsse
 import { registerMachinePromptAssetTransferRpcHandlers } from './rpcHandlers.promptAssetTransfers';
 import { registerMachinePromptRegistriesRpcHandlers } from './rpcHandlers.promptRegistries';
 import { registerMachinePromptRegistryTransferRpcHandlers } from './rpcHandlers.promptRegistryTransfers';
+import { registerMachineSessionGoalRpcHandlers } from './rpcHandlers.sessionGoals';
 import { registerPetRpcHandlers } from '@/pets/rpc/registerPetRpcHandlers';
 import { runReplaySummaryForDialog } from '@/session/replay/summary/runReplaySummaryForDialog';
 import { configuration } from '@/configuration';
@@ -480,6 +481,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
     stopSession,
     emitDirectSessionTranscriptUpdate: params.deps?.emitDirectSessionTranscriptUpdate,
   });
+  registerMachineSessionGoalRpcHandlers({ rpcHandlerManager });
   registerPetRpcHandlers({
     rpcHandlerManager,
     createAccountPet: params.deps?.createAccountPet,

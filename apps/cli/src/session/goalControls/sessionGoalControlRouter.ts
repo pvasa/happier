@@ -3,6 +3,7 @@ import {
   type AgentId,
 } from '@happier-dev/agents';
 import type { SessionGoalSetRequestV1 } from '@happier-dev/protocol';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { getSessionGoalControlAdapter } from '@/backends/catalog';
 import type { Credentials } from '@/persistence';
@@ -77,12 +78,35 @@ function readMetadataResult(value: unknown): Record<string, unknown> | null {
   return metadata as Record<string, unknown>;
 }
 
+function shouldFallbackFromLiveSessionGoalRpc(result: unknown): boolean {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  const raw = result as Record<string, unknown>;
+  const errorCode = typeof raw.errorCode === 'string' ? raw.errorCode : '';
+  const error = typeof raw.error === 'string' ? raw.error : '';
+  return errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+    || errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND
+    || errorCode === 'unsupported_session_runtime_method'
+    || errorCode === 'session_rpc_failed'
+    || error === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+    || error === RPC_ERROR_CODES.METHOD_NOT_FOUND
+    || error === 'unsupported_session_runtime_method'
+    || error === 'session_rpc_failed';
+}
+
+function buildGoalMetadataPatch(metadata: Record<string, unknown>): Record<string, unknown> | null {
+  if (!Object.prototype.hasOwnProperty.call(metadata, 'sessionWorkStateV1')) return null;
+  return {
+    sessionWorkStateV1: metadata.sessionWorkStateV1,
+  };
+}
+
 async function persistAdapterMetadataResult(
   params: RouteSessionGoalControlParams,
   result: unknown,
 ): Promise<unknown> {
   const nextMetadata = readMetadataResult(result);
-  if (!nextMetadata || !params.credentials) return result;
+  const metadataPatch = nextMetadata ? buildGoalMetadataPatch(nextMetadata) : null;
+  if (!metadataPatch || !params.credentials) return result;
 
   const persisted = await updateSessionMetadataWithRetry({
     token: params.token,
@@ -91,7 +115,7 @@ async function persistAdapterMetadataResult(
     rawSession: params.rawSession,
     updater: (currentMetadata) => ({
       ...currentMetadata,
-      ...nextMetadata,
+      ...metadataPatch,
     }),
   });
 
@@ -103,7 +127,10 @@ async function persistAdapterMetadataResult(
 
 export async function routeSessionGoalControl(params: RouteSessionGoalControlParams): Promise<unknown> {
   if (params.rawSession.active === true) {
-    return await params.callLiveSessionRpc();
+    const liveResult = await params.callLiveSessionRpc();
+    if (!shouldFallbackFromLiveSessionGoalRpc(liveResult)) {
+      return liveResult;
+    }
   }
 
   const metadata = params.metadata;

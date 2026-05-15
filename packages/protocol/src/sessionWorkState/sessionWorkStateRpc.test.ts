@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    DaemonSessionGoalClearRequestV1Schema,
+    DaemonSessionGoalSetRequestV1Schema,
     SessionGoalSetRequestV1Schema,
     SessionVendorPluginCatalogListResponseV1Schema,
     SessionWorkStateGetResponseV1Schema,
 } from './sessionWorkStateRpc.js';
-import { SESSION_RPC_METHODS } from '../rpc.js';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '../rpc.js';
 
 describe('session work-state RPC contracts', () => {
     it('defines session-scoped RPC method ids', () => {
@@ -13,6 +15,9 @@ describe('session work-state RPC contracts', () => {
         expect(SESSION_RPC_METHODS.SESSION_GOAL_GET).toBe('session.goal.get');
         expect(SESSION_RPC_METHODS.SESSION_GOAL_SET).toBe('session.goal.set');
         expect(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR).toBe('session.goal.clear');
+        expect(RPC_METHODS.DAEMON_SESSION_GOAL_GET).toBe('daemon.sessionGoal.get');
+        expect(RPC_METHODS.DAEMON_SESSION_GOAL_SET).toBe('daemon.sessionGoal.set');
+        expect(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR).toBe('daemon.sessionGoal.clear');
         expect(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST).toBe('session.vendorPluginCatalog.list');
         expect(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST).toBe('session.skillCatalog.list');
     });
@@ -37,6 +42,12 @@ describe('session work-state RPC contracts', () => {
             tokenBudget: null,
         });
         expect(() => SessionGoalSetRequestV1Schema.parse({})).toThrow();
+        expect(DaemonSessionGoalSetRequestV1Schema.parse({ sessionId: 's1', status: 'paused' })).toEqual({
+            sessionId: 's1',
+            status: 'paused',
+        });
+        expect(() => DaemonSessionGoalSetRequestV1Schema.parse({ status: 'paused' })).toThrow();
+        expect(DaemonSessionGoalClearRequestV1Schema.parse({ sessionId: 's1' })).toEqual({ sessionId: 's1' });
         expect(SessionVendorPluginCatalogListResponseV1Schema.parse({
             vendorPlugins: [{ vendorPluginRef: 'plugin://gmail@openai-curated', name: 'gmail', enabled: true }],
         }).vendorPlugins[0]?.vendorPluginRef).toBe('plugin://gmail@openai-curated');

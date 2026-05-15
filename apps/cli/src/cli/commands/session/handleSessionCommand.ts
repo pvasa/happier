@@ -130,7 +130,7 @@ export async function handleSessionCommand(
       console.log('happier session set-model <session-id-or-prefix> <model-id> [--json]');
       console.log('happier session archive <session-id-or-prefix> [--json]');
       console.log('happier session unarchive <session-id-or-prefix> [--json]');
-      console.log('happier session review start <session-id> --engines <id1,id2> --instructions <text> [--json]');
+      console.log('happier session review start <session-id> --engines <id1,id2> [--instructions <text>] [--json]');
       console.log('happier session plan start <session-id> --backends <id1,id2> --instructions <text> [--json]');
       console.log('happier session delegate start <session-id> --backends <id1,id2> --instructions <text> [--json]');
       console.log('happier session voice-agent start <session-id> --backends <id1,id2> --instructions <text> [--json]');

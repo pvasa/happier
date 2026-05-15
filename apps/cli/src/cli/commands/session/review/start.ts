@@ -24,7 +24,7 @@ export async function cmdSessionReviewStart(
   const json = wantsJson(argv);
   const idOrPrefix = String(argv[2] ?? '').trim();
   if (!idOrPrefix) {
-    throw new Error('Usage: happier session review start <session-id-or-prefix> --engines <id1,id2> --instructions <text> [--json]');
+    throw new Error('Usage: happier session review start <session-id-or-prefix> --engines <id1,id2> [--instructions <text>] [--json]');
   }
 
   const enginesRaw = readFlagValue(argv, '--engines') ?? readFlagValue(argv, '--engine');
@@ -37,8 +37,8 @@ export async function cmdSessionReviewStart(
   const coderabbitConfigFiles = splitCsv(readFlagValue(argv, '--coderabbit-config'));
   const permissionMode = readFlagValue(argv, '--permission-mode') ?? undefined;
 
-  if (engineIds.length === 0 || !instructions.trim()) {
-    throw new Error('Usage: happier session review start <session-id> --engines <id1,id2> --instructions <text> [--json]');
+  if (engineIds.length === 0) {
+    throw new Error('Usage: happier session review start <session-id> --engines <id1,id2> [--instructions <text>] [--json]');
   }
 
   const base = (() => {

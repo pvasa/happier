@@ -10,8 +10,33 @@ import { createCodexMcpExecutionRunBackend } from './createCodexMcpExecutionRunB
 import { probeCodexAppServerExecutionRunAvailability } from './probeCodexAppServerExecutionRunAvailability';
 import { selectCodexExecutionRunTransport } from './selectCodexExecutionRunTransport';
 
+const CODEX_EXECUTION_RUN_PROCESS_ENV_KEYS = [
+  'HAPPIER_CODEX_APP_SERVER_BIN',
+  'HAPPIER_CODEX_TUI_BIN',
+  'HAPPY_CODEX_TUI_BIN',
+  'HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT',
+  'HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS',
+  'HAPPIER_CODEX_APP_SERVER_STARTUP_RPC_TIMEOUT_MS',
+] as const;
+
+function buildCodexExecutionRunBaseEnv(isolationEnv: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv | undefined {
+  const inherited: NodeJS.ProcessEnv = {};
+  for (const key of CODEX_EXECUTION_RUN_PROCESS_ENV_KEYS) {
+    const value = process.env[key];
+    if (typeof value === 'string' && value.length > 0) {
+      inherited[key] = value;
+    }
+  }
+
+  if (Object.keys(inherited).length === 0) return isolationEnv;
+  return {
+    ...inherited,
+    ...(isolationEnv ?? {}),
+  };
+}
+
 export const executionRunBackendFactory: ExecutionRunBackendFactory = (opts) => {
-  const baseEnv = opts.isolation?.env;
+  const baseEnv = buildCodexExecutionRunBaseEnv(opts.isolation?.env);
   const env = buildCodexAcpEnvOverrides({ baseEnv, projectDir: opts.cwd });
   const permissionMode = permissionModeForExecutionRunPolicy(opts.permissionMode);
   const runtimeExtras = opts.accountSettings

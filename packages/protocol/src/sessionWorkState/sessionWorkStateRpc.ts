@@ -15,18 +15,26 @@ export type SessionWorkStateGetResponseV1 = z.infer<typeof SessionWorkStateGetRe
 export const SessionGoalGetRequestV1Schema = z.object({}).passthrough();
 export type SessionGoalGetRequestV1 = z.infer<typeof SessionGoalGetRequestV1Schema>;
 
-export const SessionGoalSetRequestV1Schema = z
+const sessionGoalMutationHasField = (value: Readonly<{
+  objective?: unknown;
+  status?: unknown;
+  tokenBudget?: unknown;
+}>): boolean => (
+  typeof value.objective === 'string'
+  || typeof value.status === 'string'
+  || Object.prototype.hasOwnProperty.call(value, 'tokenBudget')
+);
+
+const SessionGoalMutationFieldsV1Schema = z
   .object({
     objective: z.string().trim().min(1).max(4000).optional(),
     status: SessionWorkStateStatusV1Schema.optional(),
     tokenBudget: z.number().finite().positive().nullable().optional(),
   })
   .passthrough()
-  .refine((value) => (
-    typeof value.objective === 'string'
-    || typeof value.status === 'string'
-    || Object.prototype.hasOwnProperty.call(value, 'tokenBudget')
-  ), { message: 'At least one goal mutation field is required' });
+  .refine(sessionGoalMutationHasField, { message: 'At least one goal mutation field is required' });
+
+export const SessionGoalSetRequestV1Schema = SessionGoalMutationFieldsV1Schema;
 export type SessionGoalSetRequestV1 = z.infer<typeof SessionGoalSetRequestV1Schema>;
 
 export const SessionInitialGoalRequestV1Schema = SessionGoalSetRequestV1Schema.refine(
@@ -37,6 +45,31 @@ export type SessionInitialGoalRequestV1 = z.infer<typeof SessionInitialGoalReque
 
 export const SessionGoalClearRequestV1Schema = z.object({}).passthrough();
 export type SessionGoalClearRequestV1 = z.infer<typeof SessionGoalClearRequestV1Schema>;
+
+export const DaemonSessionGoalGetRequestV1Schema = z
+  .object({
+    sessionId: z.string().trim().min(1),
+  })
+  .passthrough();
+export type DaemonSessionGoalGetRequestV1 = z.infer<typeof DaemonSessionGoalGetRequestV1Schema>;
+
+export const DaemonSessionGoalSetRequestV1Schema = z
+  .object({
+    sessionId: z.string().trim().min(1),
+    objective: z.string().trim().min(1).max(4000).optional(),
+    status: SessionWorkStateStatusV1Schema.optional(),
+    tokenBudget: z.number().finite().positive().nullable().optional(),
+  })
+  .passthrough()
+  .refine(sessionGoalMutationHasField, { message: 'At least one goal mutation field is required' });
+export type DaemonSessionGoalSetRequestV1 = z.infer<typeof DaemonSessionGoalSetRequestV1Schema>;
+
+export const DaemonSessionGoalClearRequestV1Schema = z
+  .object({
+    sessionId: z.string().trim().min(1),
+  })
+  .passthrough();
+export type DaemonSessionGoalClearRequestV1 = z.infer<typeof DaemonSessionGoalClearRequestV1Schema>;
 
 export const SessionVendorPluginSummaryV1Schema = z
   .object({

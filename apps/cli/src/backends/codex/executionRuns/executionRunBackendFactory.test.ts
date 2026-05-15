@@ -13,6 +13,7 @@ describe('executionRunBackendFactory (codex)', () => {
   afterEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     probeCodexAppServerExecutionRunAvailabilityMock.mockImplementation(() => true);
   });
 
@@ -217,6 +218,48 @@ describe('executionRunBackendFactory (codex)', () => {
         HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT: 'appServer',
         PATH: `${resolve('/tmp/happier-worktree', 'scripts', 'shims')}${delimiter}/tmp/isolated-bin:/usr/bin`,
       }),
+    });
+  });
+
+  it('preserves Codex app-server process overrides when execution-run isolation is enabled', async () => {
+    const appServerCalls: Array<Record<string, unknown>> = [];
+
+    vi.stubEnv('HAPPIER_CODEX_APP_SERVER_BIN', '/tmp/fake-codex-app-server');
+    vi.stubEnv('HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT', 'appServer');
+    vi.stubEnv('HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS', '1234');
+
+    vi.doMock('./createCodexAppServerExecutionRunBackend', () => ({
+      createCodexAppServerExecutionRunBackend: (options: Record<string, unknown>) => {
+        appServerCalls.push(options);
+        return { dispose: async () => undefined };
+      },
+    }));
+
+    const { executionRunBackendFactory } = await import('./executionRunBackendFactory');
+
+    executionRunBackendFactory({
+      cwd: '/tmp/happier-worktree',
+      backendId: 'codex',
+      permissionMode: 'read_only',
+      start: {
+        intent: 'review',
+        retentionPolicy: 'ephemeral',
+      },
+      isolation: {
+        env: {
+          PATH: '/tmp/isolated-bin:/usr/bin',
+          XDG_STATE_HOME: '/tmp/state',
+        },
+      },
+    } as any);
+
+    expect(appServerCalls).toHaveLength(1);
+    expect(appServerCalls[0]?.env).toMatchObject({
+      HAPPIER_CODEX_APP_SERVER_BIN: '/tmp/fake-codex-app-server',
+      HAPPIER_CODEX_EXECUTION_RUN_TRANSPORT: 'appServer',
+      HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '1234',
+      XDG_STATE_HOME: '/tmp/state',
+      PATH: `${resolve('/tmp/happier-worktree', 'scripts', 'shims')}${delimiter}/tmp/isolated-bin:/usr/bin`,
     });
   });
 
