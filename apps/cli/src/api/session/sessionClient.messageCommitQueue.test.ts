@@ -183,6 +183,36 @@ describe('ApiSessionClient message commit queue', () => {
     await expect.poll(() => supervisorStartCount).toBeGreaterThan(1);
   });
 
+  it('preserves computed event roles for queued reconnect commits', async () => {
+    vi.resetModules();
+    supervisorStartCount = 0;
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: false,
+      emitWithAck: async (_event: string, payload: any) => {
+        return { ok: true, id: 'm1', seq: 1, localId: payload?.localId ?? 'l1' };
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendAgentMessage('opencode' as any, { type: 'turn_failed', id: 'turn-1' } as any, { localId: 'queued-event-1' });
+
+    await expect.poll(() => (client as any).queuedDisconnectedSessionMessages.get('queued-event-1')?.messageRole).toBe('event');
+
+    sessionSocketStub.connected = true;
+    await (client as any).flushQueuedSessionMessagesOnReconnect();
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        localId: 'queued-event-1',
+        messageRole: 'event',
+      }),
+    );
+  });
+
   it('serializes best-effort message commits to avoid concurrent socket acks', async () => {
     vi.resetModules();
     supervisorStartCount = 0;

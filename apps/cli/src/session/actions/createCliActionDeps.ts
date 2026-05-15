@@ -21,9 +21,11 @@ import {
 import { createCliApprovalsArtifactStore } from '@/approvals/cliApprovalsArtifactStore';
 import type { Credentials } from '@/persistence';
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
+import { getSessionEvents } from '@/session/services/getSessionEvents';
 import { getSessionHistory } from '@/session/services/getSessionHistory';
 import { getSessionRecentMessages } from '@/session/services/getSessionRecentMessages';
 import { getSessionStatus } from '@/session/services/getSessionStatus';
+import { getSessionTranscript } from '@/session/services/getSessionTranscript';
 import { listSessions } from '@/session/services/listSessions';
 import { requestSessionStop } from '@/session/services/requestSessionStop';
 import { sendSessionMessage } from '@/session/services/sendSessionMessage';
@@ -737,7 +739,85 @@ export function createCliActionDeps(params: Readonly<{
       });
     },
 
-	    sessionHistoryGet: async ({ sessionId, limit, format, includeMeta, includeStructuredPayload }) => {
+    sessionTranscriptGet: async ({
+      sessionId,
+      limit,
+      cursor,
+      direction,
+      scope,
+      sidechainId,
+      roles,
+      includeTools,
+      includeReasoning,
+      includeEvents,
+      includeMeta,
+      includeStructuredPayload,
+      includeRaw,
+      maxCharsPerMessage,
+      maxRawPayloadChars,
+    }) => {
+      if (!params.credentials) {
+        return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
+      }
+      return await getSessionTranscript({
+        credentials: params.credentials,
+        idOrPrefix: sessionId,
+        ...(typeof limit === 'number' ? { limit } : {}),
+        ...(cursor !== undefined ? { cursor: cursor ?? null } : {}),
+        ...(direction ? { direction } : {}),
+        ...(scope ? { scope } : {}),
+        ...(sidechainId ? { sidechainId } : {}),
+        ...(roles ? { roles } : {}),
+        ...(includeTools === true ? { includeTools: true } : {}),
+        ...(includeReasoning === true ? { includeReasoning: true } : {}),
+        ...(includeEvents === true ? { includeEvents: true } : {}),
+        ...(includeMeta === true ? { includeMeta: true } : {}),
+        ...(includeStructuredPayload === true ? { includeStructuredPayload: true } : {}),
+        ...(includeRaw === true ? { includeRaw: true } : {}),
+        ...(maxCharsPerMessage !== undefined ? { maxCharsPerMessage: maxCharsPerMessage ?? null } : {}),
+        ...(maxRawPayloadChars !== undefined ? { maxRawPayloadChars: maxRawPayloadChars ?? null } : {}),
+      });
+    },
+
+    sessionEventsGet: async ({
+      sessionId,
+      limit,
+      cursor,
+      direction,
+      scope,
+      sidechainId,
+      roles,
+      kinds,
+      format,
+      includeMeta,
+      includeStructuredPayload,
+      includeRaw,
+      maxTextChars,
+      maxPayloadChars,
+    }) => {
+      if (!params.credentials) {
+        return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
+      }
+      return await getSessionEvents({
+        credentials: params.credentials,
+        idOrPrefix: sessionId,
+        ...(typeof limit === 'number' ? { limit } : {}),
+        ...(cursor !== undefined ? { cursor: cursor ?? null } : {}),
+        ...(direction ? { direction } : {}),
+        ...(scope ? { scope } : {}),
+        ...(sidechainId ? { sidechainId } : {}),
+        ...(roles ? { roles } : {}),
+        ...(kinds ? { kinds } : {}),
+        ...(format ? { format } : {}),
+        ...(includeMeta === true ? { includeMeta: true } : {}),
+        ...(includeStructuredPayload === true ? { includeStructuredPayload: true } : {}),
+        ...(includeRaw === true ? { includeRaw: true } : {}),
+        ...(typeof maxTextChars === 'number' ? { maxTextChars } : {}),
+        ...(typeof maxPayloadChars === 'number' ? { maxPayloadChars } : {}),
+      });
+    },
+
+    sessionHistoryGet: async ({ sessionId, limit, format, includeMeta, includeStructuredPayload }) => {
 	      if (!params.credentials) {
 	        return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
 	      }
@@ -897,10 +977,11 @@ export function createCliActionDeps(params: Readonly<{
       return { ok: true, sessionIds: trackedSessionIds };
     },
 
-    sessionList: async ({ limit, cursor, activeOnly, archivedOnly, includeSystem, resumableOnly }) => {
+    sessionList: async (args) => {
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      const { limit, cursor, activeOnly, archivedOnly, includeSystem, resumableOnly, includeLastMessagePreview, includeRows } = args;
       const normalizedActiveOnly = activeOnly === true;
       const normalizedArchivedOnly = archivedOnly === true;
       if (normalizedActiveOnly && normalizedArchivedOnly) {
@@ -912,6 +993,8 @@ export function createCliActionDeps(params: Readonly<{
         archivedOnly: normalizedArchivedOnly,
         includeSystem: includeSystem === true,
         resumableOnly: resumableOnly === true,
+        includeLastMessagePreview: includeLastMessagePreview === true,
+        includeRows: includeRows === true,
         ...(typeof limit === 'number' ? { limit } : {}),
         ...(typeof cursor === 'string' && cursor.trim().length > 0 ? { cursor: cursor.trim() } : {}),
       });

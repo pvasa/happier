@@ -79,6 +79,13 @@ export const catchupFollowupReturnedCounter = new Counter({
     registers: [register]
 });
 
+export const sessionMessageRoleMismatchCounter = new Counter({
+    name: 'session_message_role_mismatch_total',
+    help: 'Total session message role mismatches between supplied metadata and derived plaintext content',
+    labelNames: ['supplied_role', 'derived_role', 'final_role', 'content_kind', 'storage_mode', 'source'] as const,
+    registers: [register]
+});
+
 export const httpRequestsCounter = new Counter({
     name: 'http_requests_total',
     help: 'Total number of HTTP requests',

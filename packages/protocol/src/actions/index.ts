@@ -27,6 +27,8 @@ export {
   ActionSafetySchema,
   ActionSpecSchema,
   ActionSurfaceSchema,
+  SessionEventsGetInputSchema,
+  SessionTranscriptGetInputSchema,
   ActionInputFieldHintSchema,
   ActionInputHintsSchema,
   ActionInputOptionSchema,
@@ -47,6 +49,12 @@ export {
   type ActionInputWidget,
   type ActionSpec,
   type ActionSurfaces,
+  type SessionEventsGetInput,
+  type SessionEventsGetItem,
+  type SessionEventsGetOutput,
+  type SessionTranscriptGetInput,
+  type SessionTranscriptGetItem,
+  type SessionTranscriptGetOutput,
 } from './actionSpecs.js';
 
 export {

@@ -217,6 +217,118 @@ const SessionHistoryGetInputSchema = z.object({
   includeStructuredPayload: z.boolean().optional(),
 }).passthrough();
 
+const SessionTranscriptRoleSchema = z.enum(['user', 'assistant']);
+const SessionTranscriptScopeSchema = z.enum(['main', 'sidechain', 'all']);
+const SessionTranscriptDirectionSchema = z.enum(['before', 'after']);
+
+export const SessionTranscriptGetInputSchema = z.object({
+  sessionId: z.string().min(1),
+  limit: z.number().int().min(1).max(100).optional(),
+  cursor: z.string().min(1).nullable().optional(),
+  direction: SessionTranscriptDirectionSchema.optional(),
+  scope: SessionTranscriptScopeSchema.optional(),
+  sidechainId: z.string().min(1).nullable().optional(),
+  roles: z.array(SessionTranscriptRoleSchema).optional(),
+  includeTools: z.boolean().optional(),
+  includeReasoning: z.boolean().optional(),
+  includeEvents: z.boolean().optional(),
+  includeMeta: z.boolean().optional(),
+  includeStructuredPayload: z.boolean().optional(),
+  includeRaw: z.boolean().optional(),
+  maxCharsPerMessage: z.number().int().min(0).max(4000).nullable().optional(),
+  maxRawPayloadChars: z.number().int().min(0).max(32768).nullable().optional(),
+}).passthrough();
+export type SessionTranscriptGetInput = z.infer<typeof SessionTranscriptGetInputSchema>;
+export type SessionTranscriptGetItem = Readonly<{
+  id: string;
+  seq?: number;
+  createdAt: number;
+  role: 'user' | 'assistant' | 'tool' | 'event' | 'reasoning' | 'unknown';
+  kind: string;
+  text?: string;
+  summary?: string;
+  toolName?: string;
+  callId?: string;
+  raw?: unknown;
+  truncated?: boolean;
+  rawTruncated?: boolean;
+}>;
+export type SessionTranscriptGetOutput =
+  | Readonly<{
+    ok: true;
+    sessionId: string;
+    items: readonly SessionTranscriptGetItem[];
+    nextCursor: string | null;
+    hasMore: boolean;
+    diagnostics?: Readonly<{
+      rawRowsScanned: number;
+      pagesFetched: number;
+      scanLimitReached: boolean;
+    }>;
+  }>
+  | Readonly<{
+    ok: false;
+    errorCode: string;
+    errorMessage: string;
+    candidates?: readonly string[];
+  }>;
+
+const SessionEventRoleSchema = z.enum(['event', 'agent', 'user', 'unknown']);
+
+export const SessionEventsGetInputSchema = z.object({
+  sessionId: z.string().min(1),
+  limit: z.number().int().min(1).max(200).optional(),
+  cursor: z.string().min(1).nullable().optional(),
+  direction: SessionTranscriptDirectionSchema.optional(),
+  scope: SessionTranscriptScopeSchema.optional(),
+  sidechainId: z.string().min(1).nullable().optional(),
+  roles: z.array(SessionEventRoleSchema).optional(),
+  kinds: z.array(z.string().min(1)).optional(),
+  format: z.enum(['compact', 'raw']).optional(),
+  includeMeta: z.boolean().optional(),
+  includeStructuredPayload: z.boolean().optional(),
+  includeRaw: z.boolean().optional(),
+  maxTextChars: z.number().int().min(0).max(4000).optional(),
+  maxPayloadChars: z.number().int().min(0).max(32768).optional(),
+}).passthrough();
+export type SessionEventsGetInput = z.infer<typeof SessionEventsGetInputSchema>;
+export type SessionEventsGetItem = Readonly<{
+  id: string;
+  seq?: number;
+  createdAt: number;
+  storedMessageRole?: 'user' | 'agent' | 'event' | 'unknown';
+  semanticRole: 'user' | 'assistant' | 'tool' | 'event' | 'reasoning' | 'unknown';
+  kind: string;
+  provider?: string;
+  text?: string;
+  summary?: string;
+  toolName?: string;
+  callId?: string;
+  raw?: unknown;
+  truncated?: boolean;
+  rawTruncated?: boolean;
+}>;
+export type SessionEventsGetOutput =
+  | Readonly<{
+    ok: true;
+    sessionId: string;
+    items: readonly SessionEventsGetItem[];
+    nextCursor: string | null;
+    hasMore: boolean;
+    diagnostics?: Readonly<{
+      rawRowsScanned: number;
+      pagesFetched: number;
+      scanLimitReached: boolean;
+      payloadTruncations: number;
+    }>;
+  }>
+  | Readonly<{
+    ok: false;
+    errorCode: string;
+    errorMessage: string;
+    candidates?: readonly string[];
+  }>;
+
 const SessionWaitIdleInputSchema = z.object({
   sessionId: z.string().min(1),
   timeoutSeconds: z.number().int().min(1).max(3600).optional(),
@@ -514,6 +626,7 @@ const SessionListInputSchema = z.object({
   archivedOnly: z.boolean().optional(),
   includeSystem: z.boolean().optional(),
   resumableOnly: z.boolean().optional(),
+  includeRows: z.boolean().optional(),
 }).passthrough();
 
 const SessionActivityInputSchema = z.object({
@@ -1910,7 +2023,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
   {
     id: 'session.history.get',
     title: 'Get session history',
-    description: 'Fetch a slice of session history/transcript records.',
+    description: 'DEPRECATED: use session_events_get. Returns diagnostic session events with cleaner pagination.',
     safety: 'safe',
     approval: APPROVAL_RESULT_REQUIRED,
     placements: [],
@@ -1946,6 +2059,150 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       ],
     },
     inputSchema: SessionHistoryGetInputSchema,
+  },
+  {
+    id: 'session.transcript.get',
+    title: 'Get session transcript',
+    description: 'Read the semantic transcript for a session as clean user/assistant messages with optional tool/reasoning/event flags.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: ['voice_panel'],
+    bindings: { voiceClientToolName: 'getSessionTranscript', mcpToolName: 'session_transcript_get' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"]}' },
+      voice: { argsExample: '{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"]}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: true,
+      voice_action_block: true,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Get session transcript',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'limit', title: 'Limit', widget: 'text' },
+        { path: 'cursor', title: 'Cursor', widget: 'text' },
+        {
+          path: 'direction',
+          title: 'Direction',
+          widget: 'select',
+          options: [
+            { value: 'before', label: 'Before' },
+            { value: 'after', label: 'After' },
+          ],
+        },
+        {
+          path: 'scope',
+          title: 'Scope',
+          widget: 'select',
+          options: [
+            { value: 'main', label: 'Main' },
+            { value: 'sidechain', label: 'Sidechain' },
+            { value: 'all', label: 'All' },
+          ],
+        },
+        { path: 'sidechainId', title: 'Sidechain id', widget: 'text' },
+        {
+          path: 'roles',
+          title: 'Roles',
+          widget: 'multiselect',
+          options: [
+            { value: 'user', label: 'User' },
+            { value: 'assistant', label: 'Assistant' },
+          ],
+        },
+        { path: 'includeTools', title: 'Include tools', widget: 'toggle' },
+        { path: 'includeReasoning', title: 'Include reasoning', widget: 'toggle' },
+        { path: 'includeEvents', title: 'Include events', widget: 'toggle' },
+        { path: 'includeMeta', title: 'Include meta', widget: 'toggle' },
+        { path: 'includeStructuredPayload', title: 'Include structured payload', widget: 'toggle' },
+        { path: 'includeRaw', title: 'Include raw', widget: 'toggle' },
+        { path: 'maxCharsPerMessage', title: 'Max chars per message', widget: 'text' },
+        { path: 'maxRawPayloadChars', title: 'Max raw payload chars', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionTranscriptGetInputSchema,
+  },
+  {
+    id: 'session.events.get',
+    title: 'Get session events',
+    description: 'Inspect raw session events (tool calls, tool results, token counts, lifecycle, permission, stream, session events) for diagnostics. Use session_transcript_get for normal transcript reading.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_events_get' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}","limit":50,"kinds":["tool_call","tool_result"]}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Get session events',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'limit', title: 'Limit', widget: 'text' },
+        { path: 'cursor', title: 'Cursor', widget: 'text' },
+        {
+          path: 'direction',
+          title: 'Direction',
+          widget: 'select',
+          options: [
+            { value: 'before', label: 'Before' },
+            { value: 'after', label: 'After' },
+          ],
+        },
+        {
+          path: 'scope',
+          title: 'Scope',
+          widget: 'select',
+          options: [
+            { value: 'main', label: 'Main' },
+            { value: 'sidechain', label: 'Sidechain' },
+            { value: 'all', label: 'All' },
+          ],
+        },
+        { path: 'sidechainId', title: 'Sidechain id', widget: 'text' },
+        {
+          path: 'roles',
+          title: 'Roles',
+          widget: 'multiselect',
+          options: [
+            { value: 'event', label: 'Event' },
+            { value: 'agent', label: 'Agent' },
+            { value: 'user', label: 'User' },
+            { value: 'unknown', label: 'Unknown' },
+          ],
+        },
+        { path: 'kinds', title: 'Kinds', widget: 'text_list', listSeparator: 'comma' },
+        {
+          path: 'format',
+          title: 'Format',
+          widget: 'select',
+          options: [
+            { value: 'compact', label: 'Compact' },
+            { value: 'raw', label: 'Raw' },
+          ],
+        },
+        { path: 'includeMeta', title: 'Include meta', widget: 'toggle' },
+        { path: 'includeStructuredPayload', title: 'Include structured payload', widget: 'toggle' },
+        { path: 'includeRaw', title: 'Include raw', widget: 'toggle' },
+        { path: 'maxTextChars', title: 'Max text chars', widget: 'text' },
+        { path: 'maxPayloadChars', title: 'Max payload chars', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionEventsGetInputSchema,
   },
   {
     id: 'session.wait.idle',
@@ -2195,7 +2452,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     prompting: { voiceHotPath: true },
     bindings: { voiceClientToolName: 'listSessions', mcpToolName: 'session_list' },
     examples: {
-      voice: { argsExample: '{"limit":20,"cursor":null,"includeLastMessagePreview":true}' },
+      voice: { argsExample: '{"limit":20,"cursor":null}' },
     },
     surfaces: {
       ui_button: false,
@@ -2212,6 +2469,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
         { path: 'limit', title: 'Limit', widget: 'text' },
         { path: 'cursor', title: 'Cursor', widget: 'text' },
         { path: 'includeLastMessagePreview', title: 'Include last message preview', widget: 'toggle' },
+        { path: 'includeRows', title: 'Include rows', widget: 'toggle' },
       ],
     },
     inputSchema: SessionListInputSchema,
@@ -2248,7 +2506,7 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
   {
     id: 'session.messages.recent.get',
     title: 'Get recent messages',
-    description: 'Get a small slice of recent messages for a session (privacy guarded).',
+    description: 'DEPRECATED: use session_transcript_get. Returns semantic transcript items with cleaner pagination.',
     safety: 'safe',
     approval: APPROVAL_RESULT_REQUIRED,
     placements: ['voice_panel'],
@@ -2259,8 +2517,8 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     surfaces: {
       ui_button: false,
       ui_slash_command: false,
-      voice_tool: true,
-      voice_action_block: true,
+      voice_tool: false,
+      voice_action_block: false,
       session_agent: true,
       mcp: true,
       cli: true,

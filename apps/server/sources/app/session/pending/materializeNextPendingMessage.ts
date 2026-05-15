@@ -172,6 +172,11 @@ export async function materializeNextPendingMessage(params: {
             const messageRole = resolveSessionMessageRole({
                 content,
                 suppliedRole: nextPending.messageRole,
+                telemetry: {
+                    sessionId,
+                    storageMode: sessionEncryptionMode,
+                    source: "pending-materialization",
+                },
             }).messageRole;
 
             const writeKind: SessionStoredContentKind = content.t === "plain" ? "plain" : "encrypted";

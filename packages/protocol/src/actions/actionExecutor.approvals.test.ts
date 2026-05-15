@@ -277,6 +277,7 @@ describe('createActionExecutor (approvals)', () => {
       archivedOnly: undefined,
       includeSystem: undefined,
       resumableOnly: undefined,
+      includeRows: undefined,
     });
     expect(approvalsUpdate).toHaveBeenCalledWith(expect.objectContaining({
       artifactId: 'a1',

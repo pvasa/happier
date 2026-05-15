@@ -15,6 +15,8 @@ describe('ActionIdSchema', () => {
     expect(ActionIdSchema.parse('session.goal.clear')).toBe('session.goal.clear');
     expect(ActionIdSchema.parse('session.vendor_plugin_catalog.list')).toBe('session.vendor_plugin_catalog.list');
     expect(ActionIdSchema.parse('session.skill_catalog.list')).toBe('session.skill_catalog.list');
+    expect(ActionIdSchema.parse('session.transcript.get')).toBe('session.transcript.get');
+    expect(ActionIdSchema.parse('session.events.get')).toBe('session.events.get');
     expect(ActionIdSchema.parse('prompt_asset.export')).toBe('prompt_asset.export');
     expect(ActionIdSchema.parse('prompt_registry.install')).toBe('prompt_registry.install');
   });

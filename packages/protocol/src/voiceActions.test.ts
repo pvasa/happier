@@ -194,11 +194,11 @@ describe('extractVoiceActionsFromAssistantText', () => {
       JSON.stringify({
         actions: [
           {
-            t: 'voice_agent.start',
+            t: 'session.transcript.get',
             args: {
               sessionId: 's1',
-              backendTargetKeys: ['agent:claude'],
-              instructions: 'Start the voice assistant.',
+              limit: 20,
+              roles: ['user', 'assistant'],
             },
           },
         ],
@@ -210,15 +210,11 @@ describe('extractVoiceActionsFromAssistantText', () => {
     expect(result.assistantText).toBe('Starting the voice agent.');
     expect(result.actions).toEqual([
       {
-        t: 'startVoiceAgentRun',
+        t: 'getSessionTranscript',
         args: {
           sessionId: 's1',
-          backendTargetKeys: ['agent:claude'],
-          instructions: 'Start the voice assistant.',
-          permissionMode: 'read_only',
-          retentionPolicy: 'ephemeral',
-          runClass: 'long_lived',
-          ioMode: 'streaming',
+          limit: 20,
+          roles: ['user', 'assistant'],
         },
       },
     ]);

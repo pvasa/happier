@@ -140,6 +140,41 @@ export type ActionExecutorDeps = Readonly<{
     includeStructuredPayload?: boolean;
     serverId?: string | null;
   }>) => Promise<unknown>;
+  sessionTranscriptGet?: (args: Readonly<{
+    sessionId: string;
+    limit?: number;
+    cursor?: string | null;
+    direction?: 'before' | 'after';
+    scope?: 'main' | 'sidechain' | 'all';
+    sidechainId?: string | null;
+    roles?: readonly ('user' | 'assistant')[];
+    includeTools?: boolean;
+    includeReasoning?: boolean;
+    includeEvents?: boolean;
+    includeMeta?: boolean;
+    includeStructuredPayload?: boolean;
+    includeRaw?: boolean;
+    maxCharsPerMessage?: number | null;
+    maxRawPayloadChars?: number | null;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
+  sessionEventsGet?: (args: Readonly<{
+    sessionId: string;
+    limit?: number;
+    cursor?: string | null;
+    direction?: 'before' | 'after';
+    scope?: 'main' | 'sidechain' | 'all';
+    sidechainId?: string | null;
+    roles?: readonly ('event' | 'agent' | 'user' | 'unknown')[];
+    kinds?: readonly string[];
+    format?: 'compact' | 'raw';
+    includeMeta?: boolean;
+    includeStructuredPayload?: boolean;
+    includeRaw?: boolean;
+    maxTextChars?: number;
+    maxPayloadChars?: number;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
   sessionWaitIdle?: (args: Readonly<{ sessionId: string; timeoutSeconds?: number; serverId?: string | null }>) => Promise<unknown>;
 
   // Permission response (session RPC, server-scoped)
@@ -172,6 +207,7 @@ export type ActionExecutorDeps = Readonly<{
     archivedOnly?: boolean;
     includeSystem?: boolean;
     resumableOnly?: boolean;
+    includeRows?: boolean;
   }>) => Promise<unknown>;
   sessionActivityGet: (args: Readonly<{ sessionId: string; windowSeconds?: number }>) => Promise<unknown>;
   sessionRecentMessagesGet: (args: Readonly<{
@@ -280,6 +316,14 @@ export type ActionExecutorDeps = Readonly<{
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
+}
+
+function pickBoolean(input: any, key: string): boolean | undefined {
+  return typeof input?.[key] === 'boolean' ? input[key] : undefined;
+}
+
+function hasOwn(input: any, key: string): boolean {
+  return Boolean(input && Object.prototype.hasOwnProperty.call(input, key));
 }
 
 const ActionSurfaceKeySchema = ActionSurfaceSchema.keyof();
@@ -1395,20 +1439,78 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'session.history.get') {
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          if (!deps.sessionHistoryGet) {
-            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.history.get' };
+          if (!deps.sessionEventsGet) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.events.get' };
           }
-          const limit = typeof (parsed.data as any).limit === 'number' ? (parsed.data as any).limit : 50;
+          const limit = typeof (parsed.data as any).limit === 'number' ? (parsed.data as any).limit : undefined;
           const format = (parsed.data as any).format === 'raw' ? 'raw' : 'compact';
           const includeMeta = (parsed.data as any).includeMeta === true;
           const includeStructuredPayload = (parsed.data as any).includeStructuredPayload === true;
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionHistoryGet({
+          const res = await deps.sessionEventsGet({
             sessionId,
-            limit,
+            ...(typeof limit === 'number' ? { limit } : {}),
             format,
             includeMeta,
             includeStructuredPayload,
+            ...(format === 'raw' ? { includeRaw: includeStructuredPayload } : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.transcript.get') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionTranscriptGet) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.transcript.get' };
+          }
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const data = parsed.data as any;
+          const res = await deps.sessionTranscriptGet({
+            sessionId,
+            ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
+            ...(hasOwn(data, 'cursor') ? { cursor: ((data.cursor ?? null) as any) } : {}),
+            ...(data.direction === 'before' || data.direction === 'after' ? { direction: data.direction } : {}),
+            ...(data.scope === 'main' || data.scope === 'sidechain' || data.scope === 'all' ? { scope: data.scope } : {}),
+            ...(hasOwn(data, 'sidechainId') ? { sidechainId: ((data.sidechainId ?? null) as any) } : {}),
+            ...(Array.isArray(data.roles) ? { roles: data.roles } : {}),
+            ...(pickBoolean(data, 'includeTools') !== undefined ? { includeTools: pickBoolean(data, 'includeTools') } : {}),
+            ...(pickBoolean(data, 'includeReasoning') !== undefined ? { includeReasoning: pickBoolean(data, 'includeReasoning') } : {}),
+            ...(pickBoolean(data, 'includeEvents') !== undefined ? { includeEvents: pickBoolean(data, 'includeEvents') } : {}),
+            ...(pickBoolean(data, 'includeMeta') !== undefined ? { includeMeta: pickBoolean(data, 'includeMeta') } : {}),
+            ...(pickBoolean(data, 'includeStructuredPayload') !== undefined ? { includeStructuredPayload: pickBoolean(data, 'includeStructuredPayload') } : {}),
+            ...(pickBoolean(data, 'includeRaw') !== undefined ? { includeRaw: pickBoolean(data, 'includeRaw') } : {}),
+            ...(hasOwn(data, 'maxCharsPerMessage') ? { maxCharsPerMessage: ((data.maxCharsPerMessage ?? null) as any) } : {}),
+            ...(hasOwn(data, 'maxRawPayloadChars') ? { maxRawPayloadChars: ((data.maxRawPayloadChars ?? null) as any) } : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.events.get') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionEventsGet) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.events.get' };
+          }
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const data = parsed.data as any;
+          const res = await deps.sessionEventsGet({
+            sessionId,
+            ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
+            ...(hasOwn(data, 'cursor') ? { cursor: ((data.cursor ?? null) as any) } : {}),
+            ...(data.direction === 'before' || data.direction === 'after' ? { direction: data.direction } : {}),
+            ...(data.scope === 'main' || data.scope === 'sidechain' || data.scope === 'all' ? { scope: data.scope } : {}),
+            ...(hasOwn(data, 'sidechainId') ? { sidechainId: ((data.sidechainId ?? null) as any) } : {}),
+            ...(Array.isArray(data.roles) ? { roles: data.roles } : {}),
+            ...(Array.isArray(data.kinds) ? { kinds: data.kinds } : {}),
+            ...(data.format === 'raw' || data.format === 'compact' ? { format: data.format } : {}),
+            ...(pickBoolean(data, 'includeMeta') !== undefined ? { includeMeta: pickBoolean(data, 'includeMeta') } : {}),
+            ...(pickBoolean(data, 'includeStructuredPayload') !== undefined ? { includeStructuredPayload: pickBoolean(data, 'includeStructuredPayload') } : {}),
+            ...(pickBoolean(data, 'includeRaw') !== undefined ? { includeRaw: pickBoolean(data, 'includeRaw') } : {}),
+            ...(typeof data.maxTextChars === 'number' ? { maxTextChars: data.maxTextChars } : {}),
+            ...(typeof data.maxPayloadChars === 'number' ? { maxPayloadChars: data.maxPayloadChars } : {}),
             ...(serverId ? { serverId } : {}),
           });
           return { ok: true, result: res };
@@ -1511,6 +1613,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof (parsed.data as any).archivedOnly === 'boolean' ? { archivedOnly: (parsed.data as any).archivedOnly } : {}),
             ...(typeof (parsed.data as any).includeSystem === 'boolean' ? { includeSystem: (parsed.data as any).includeSystem } : {}),
             ...(typeof (parsed.data as any).resumableOnly === 'boolean' ? { resumableOnly: (parsed.data as any).resumableOnly } : {}),
+            ...(typeof (parsed.data as any).includeRows === 'boolean' ? { includeRows: (parsed.data as any).includeRows } : {}),
           });
           return { ok: true, result: res };
         }
@@ -1528,13 +1631,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (actionId === 'session.messages.recent.get') {
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          const res = await deps.sessionRecentMessagesGet({
+          if (!deps.sessionTranscriptGet) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.transcript.get' };
+          }
+          const includeUser = (parsed.data as any).includeUser !== false;
+          const includeAssistant = (parsed.data as any).includeAssistant !== false;
+          const roles: ('user' | 'assistant')[] = [];
+          if (includeUser) roles.push('user');
+          if (includeAssistant) roles.push('assistant');
+          const res = await deps.sessionTranscriptGet({
             sessionId,
-            defaultSessionId: normalizeId(ctx.defaultSessionId) || null,
             ...(typeof (parsed.data as any).limit === 'number' ? { limit: (parsed.data as any).limit } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, 'cursor') ? { cursor: (((parsed.data as any).cursor ?? null) as any) } : {}),
-            ...(typeof (parsed.data as any).includeUser === 'boolean' ? { includeUser: (parsed.data as any).includeUser } : {}),
-            ...(typeof (parsed.data as any).includeAssistant === 'boolean' ? { includeAssistant: (parsed.data as any).includeAssistant } : {}),
+            roles,
             ...(Object.prototype.hasOwnProperty.call(parsed.data, 'maxCharsPerMessage') ? { maxCharsPerMessage: (((parsed.data as any).maxCharsPerMessage ?? null) as any) } : {}),
           });
           return { ok: true, result: res };

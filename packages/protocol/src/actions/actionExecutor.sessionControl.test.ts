@@ -38,6 +38,8 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
     sessionGoalClear: async () => ({}),
     sessionVendorPluginCatalogList: async () => ({}),
     sessionSkillCatalogList: async () => ({}),
+    sessionTranscriptGet: async () => ({}),
+    sessionEventsGet: async () => ({}),
     daemonMemorySearch: async () => ({ v: 1, ok: true as const, hits: [] }),
     daemonMemoryGetWindow: async () => ({ v: 1, snippets: [], citations: [] }),
     daemonMemoryEnsureUpToDate: async () => ({}),
@@ -195,26 +197,123 @@ describe('createActionExecutor (session control)', () => {
     expect(sessionStatusGet).toHaveBeenCalledWith({ sessionId: 's1', live: true, serverId: 'server-a' });
   });
 
-  it('executes session.history.get via deps.sessionHistoryGet', async () => {
-    const sessionHistoryGet = vi.fn(async () => ({ ok: true }));
+  it('executes session.transcript.get via deps.sessionTranscriptGet', async () => {
+    const sessionTranscriptGet = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({
-      sessionHistoryGet,
+      sessionTranscriptGet,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    const res = await executor.execute(
+      'session.transcript.get' as any,
+      {
+        sessionId: 's1',
+        limit: 25,
+        cursor: '10',
+        direction: 'after',
+        scope: 'sidechain',
+        sidechainId: 'side-1',
+        roles: ['user'],
+        includeTools: true,
+        includeReasoning: true,
+        includeEvents: true,
+        includeMeta: true,
+        includeStructuredPayload: true,
+        includeRaw: true,
+        maxCharsPerMessage: 100,
+        maxRawPayloadChars: 8192,
+      },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionTranscriptGet).toHaveBeenCalledWith({
+      sessionId: 's1',
+      limit: 25,
+      cursor: '10',
+      direction: 'after',
+      scope: 'sidechain',
+      sidechainId: 'side-1',
+      roles: ['user'],
+      includeTools: true,
+      includeReasoning: true,
+      includeEvents: true,
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
+      maxCharsPerMessage: 100,
+      maxRawPayloadChars: 8192,
+      serverId: 'server-a',
+    });
+  });
+
+  it('executes session.events.get via deps.sessionEventsGet', async () => {
+    const sessionEventsGet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionEventsGet,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    const res = await executor.execute(
+      'session.events.get' as any,
+      {
+        sessionId: 's1',
+        limit: 25,
+        cursor: '10',
+        direction: 'before',
+        scope: 'all',
+        roles: ['event'],
+        kinds: ['tool_call'],
+        format: 'raw',
+        includeMeta: true,
+        includeStructuredPayload: true,
+        includeRaw: true,
+        maxTextChars: 100,
+        maxPayloadChars: 8192,
+      },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionEventsGet).toHaveBeenCalledWith({
+      sessionId: 's1',
+      limit: 25,
+      cursor: '10',
+      direction: 'before',
+      scope: 'all',
+      roles: ['event'],
+      kinds: ['tool_call'],
+      format: 'raw',
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
+      maxTextChars: 100,
+      maxPayloadChars: 8192,
+      serverId: 'server-a',
+    });
+  });
+
+  it('routes deprecated session.history.get to deps.sessionEventsGet', async () => {
+    const sessionEventsGet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionEventsGet,
       resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
     });
 
     const res = await executor.execute(
       'session.history.get' as any,
-      { sessionId: 's1', limit: 25, format: 'compact', includeMeta: false, includeStructuredPayload: false },
+      { sessionId: 's1', limit: 25, format: 'raw', includeMeta: true, includeStructuredPayload: true },
       { surface: 'cli', defaultSessionId: null },
     );
 
     expect(res).toEqual({ ok: true, result: { ok: true } });
-    expect(sessionHistoryGet).toHaveBeenCalledWith({
+    expect(sessionEventsGet).toHaveBeenCalledWith({
       sessionId: 's1',
       limit: 25,
-      format: 'compact',
-      includeMeta: false,
-      includeStructuredPayload: false,
+      format: 'raw',
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
       serverId: 'server-a',
     });
   });
@@ -268,6 +367,44 @@ describe('createActionExecutor (session control)', () => {
       serverId: 'server-a',
     });
     expect(sessionGoalClear).toHaveBeenCalledWith({ sessionId: 's1', serverId: 'server-a' });
+  });
+
+  it('executes status-only session goal mutations through protocol deps', async () => {
+    const sessionGoalSet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionGoalSet,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    const res = await executor.execute(
+      'session.goal.set' as any,
+      { sessionId: 's1', status: 'paused' },
+      { surface: 'cli' },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionGoalSet).toHaveBeenCalledWith({
+      sessionId: 's1',
+      status: 'paused',
+      serverId: 'server-a',
+    });
+  });
+
+  it('preserves budget-clearing session goal mutations through protocol deps', async () => {
+    const sessionGoalSet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({ sessionGoalSet });
+
+    const res = await executor.execute(
+      'session.goal.set' as any,
+      { sessionId: 's1', tokenBudget: null },
+      { surface: 'cli' },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionGoalSet).toHaveBeenCalledWith({
+      sessionId: 's1',
+      tokenBudget: null,
+    });
   });
 
   it('executes vendor plugin and skill catalog list actions through protocol deps', async () => {
@@ -324,6 +461,7 @@ describe('createActionExecutor (session control)', () => {
         activeOnly: true,
         includeSystem: true,
         resumableOnly: true,
+        includeRows: true,
       },
       { surface: 'cli', defaultSessionId: null },
     );
@@ -335,7 +473,28 @@ describe('createActionExecutor (session control)', () => {
       activeOnly: true,
       includeSystem: true,
       resumableOnly: true,
+      includeRows: true,
     }));
+  });
+
+  it('routes deprecated session.messages.recent.get to deps.sessionTranscriptGet', async () => {
+    const sessionTranscriptGet = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({ sessionTranscriptGet });
+
+    const res = await executor.execute(
+      'session.messages.recent.get' as any,
+      { sessionId: 's1', limit: 3, cursor: 'cursor-1', includeUser: true, includeAssistant: false, maxCharsPerMessage: 80 },
+      { surface: 'cli', defaultSessionId: null },
+    );
+
+    expect(res).toEqual({ ok: true, result: { ok: true } });
+    expect(sessionTranscriptGet).toHaveBeenCalledWith({
+      sessionId: 's1',
+      limit: 3,
+      cursor: 'cursor-1',
+      roles: ['user'],
+      maxCharsPerMessage: 80,
+    });
   });
 
   it('returns unsupported_action when session.permission.respond is not implemented by deps', async () => {

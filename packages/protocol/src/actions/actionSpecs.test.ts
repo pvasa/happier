@@ -18,6 +18,8 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'session.vendor_plugin_catalog.list',
   'session.skill_catalog.list',
   'session.history.get',
+  'session.transcript.get',
+  'session.events.get',
   'session.wait.idle',
   'session.list',
   'session.activity.get',
@@ -179,7 +181,10 @@ describe('Action Spec Registry', () => {
     expect(getActionSpec('session.target.tracked.set').surfaces.mcp).toBe(true);
     expect(getActionSpec('session.list').surfaces.mcp).toBe(true);
     expect(getActionSpec('session.activity.get').surfaces.mcp).toBe(true);
+    expect(getActionSpec('session.transcript.get').bindings?.mcpToolName).toBe('session_transcript_get');
+    expect(getActionSpec('session.events.get').bindings?.mcpToolName).toBe('session_events_get');
     expect(getActionSpec('session.messages.recent.get').surfaces.mcp).toBe(true);
+    expect(getActionSpec('session.history.get').surfaces.mcp).toBe(true);
   });
 
   it('accepts session.list filter fields in the action schema', () => {
@@ -194,6 +199,7 @@ describe('Action Spec Registry', () => {
         archivedOnly: false,
         includeSystem: true,
         resumableOnly: true,
+        includeRows: true,
       }),
     ).toEqual({
       limit: 200,
@@ -203,7 +209,109 @@ describe('Action Spec Registry', () => {
       archivedOnly: false,
       includeSystem: true,
       resumableOnly: true,
+      includeRows: true,
     });
+  });
+
+  it('declares transcript and events actions with the locked public contract', () => {
+    const transcript = getActionSpec('session.transcript.get');
+    const events = getActionSpec('session.events.get');
+    const history = getActionSpec('session.history.get');
+    const recent = getActionSpec('session.messages.recent.get');
+
+    expect(transcript.description).toBe('Read the semantic transcript for a session as clean user/assistant messages with optional tool/reasoning/event flags.');
+    expect(transcript.bindings).toEqual({
+      voiceClientToolName: 'getSessionTranscript',
+      mcpToolName: 'session_transcript_get',
+    });
+    expect(transcript.examples?.mcp?.argsExample).toBe('{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"]}');
+    expect(transcript.surfaces).toEqual({
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: true,
+      voice_action_block: true,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    });
+    expect(recent.surfaces.voice_tool).toBe(false);
+    expect(recent.surfaces.voice_action_block).toBe(false);
+    expect(transcript.approval).toEqual(recent.approval);
+    expect(transcript.inputSchema.parse({
+      sessionId: 's1',
+      limit: 100,
+      cursor: null,
+      direction: 'after',
+      scope: 'sidechain',
+      sidechainId: 'side-1',
+      roles: ['user', 'assistant'],
+      includeTools: true,
+      includeReasoning: true,
+      includeEvents: true,
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
+      maxCharsPerMessage: 4000,
+      maxRawPayloadChars: 32768,
+    })).toEqual({
+      sessionId: 's1',
+      limit: 100,
+      cursor: null,
+      direction: 'after',
+      scope: 'sidechain',
+      sidechainId: 'side-1',
+      roles: ['user', 'assistant'],
+      includeTools: true,
+      includeReasoning: true,
+      includeEvents: true,
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
+      maxCharsPerMessage: 4000,
+      maxRawPayloadChars: 32768,
+    });
+    expect(() => transcript.inputSchema.parse({ sessionId: 's1', limit: 101 })).toThrow();
+
+    expect(events.description).toBe('Inspect raw session events (tool calls, tool results, token counts, lifecycle, permission, stream, session events) for diagnostics. Use session_transcript_get for normal transcript reading.');
+    expect(events.bindings).toEqual({ mcpToolName: 'session_events_get' });
+    expect(events.examples?.mcp?.argsExample).toBe('{"sessionId":"{{sessionId}}","limit":50,"kinds":["tool_call","tool_result"]}');
+    expect(events.surfaces).toEqual(history.surfaces);
+    expect(events.approval).toEqual(history.approval);
+    expect(events.inputSchema.parse({
+      sessionId: 's1',
+      limit: 200,
+      cursor: null,
+      direction: 'before',
+      scope: 'all',
+      sidechainId: null,
+      roles: ['event', 'agent', 'user', 'unknown'],
+      kinds: ['tool_call'],
+      format: 'raw',
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
+      maxTextChars: 4000,
+      maxPayloadChars: 32768,
+    })).toEqual({
+      sessionId: 's1',
+      limit: 200,
+      cursor: null,
+      direction: 'before',
+      scope: 'all',
+      sidechainId: null,
+      roles: ['event', 'agent', 'user', 'unknown'],
+      kinds: ['tool_call'],
+      format: 'raw',
+      includeMeta: true,
+      includeStructuredPayload: true,
+      includeRaw: true,
+      maxTextChars: 4000,
+      maxPayloadChars: 32768,
+    });
+    expect(() => events.inputSchema.parse({ sessionId: 's1', limit: 201 })).toThrow();
+
+    expect(history.description).toContain('DEPRECATED: use session_events_get. Returns diagnostic session events with cleaner pagination.');
+    expect(recent.description).toContain('DEPRECATED: use session_transcript_get. Returns semantic transcript items with cleaner pagination.');
   });
 
   it('registers work-state, goal, vendor plugin, and skill catalog actions', () => {
@@ -622,7 +730,8 @@ describe('Action Spec Registry', () => {
     expect(byVoiceToolName.has('setTrackedSessions')).toBe(true);
     expect(byVoiceToolName.has('listSessions')).toBe(true);
     expect(byVoiceToolName.has('getSessionActivity')).toBe(true);
-    expect(byVoiceToolName.has('getSessionRecentMessages')).toBe(true);
+    expect(byVoiceToolName.has('getSessionTranscript')).toBe(true);
+    expect(byVoiceToolName.has('getSessionRecentMessages')).toBe(false);
     expect(byVoiceToolName.has('teleportVoiceAgentToSessionRoot')).toBe(true);
 
     // Inventory + discovery tools (safe by default; may be gated by user settings in the UI).

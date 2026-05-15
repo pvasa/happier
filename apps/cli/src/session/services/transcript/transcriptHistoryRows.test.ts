@@ -56,4 +56,51 @@ describe('extractCompactRow', () => {
       text: 'provider compact text',
     });
   });
+
+  it('does not emit compact rows for event-only provider payloads', () => {
+    const row = extractCompactRow({
+      createdAt: 1,
+      fallbackId: '5',
+      decrypted: {
+        role: 'agent',
+        content: {
+          type: 'codex',
+          provider: 'codex',
+          data: {
+            type: 'token_count',
+            input_tokens: 10,
+            output_tokens: 5,
+          },
+        },
+      },
+    });
+
+    expect(row).toBeNull();
+  });
+
+  it('extracts assistant text from Codex message rows', () => {
+    const row = extractCompactRow({
+      createdAt: 1,
+      fallbackId: '6',
+      decrypted: {
+        role: 'agent',
+        content: {
+          type: 'codex',
+          provider: 'codex',
+          data: {
+            type: 'message',
+            message: 'codex provider text',
+          },
+        },
+      },
+    });
+
+    expect(row).toMatchObject({
+      id: '6',
+      createdAt: 1,
+      role: 'agent',
+      kind: 'codex',
+      text: 'codex provider text',
+    });
+  });
 });

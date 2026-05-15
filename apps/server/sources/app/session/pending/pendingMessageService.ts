@@ -110,7 +110,6 @@ export async function enqueuePendingMessage(params: {
     if (!actorUserId || !sessionId || !localId || !content) return { ok: false, error: "invalid-params" };
     if (content.t === "encrypted" && (!content.c || typeof content.c !== "string")) return { ok: false, error: "invalid-params" };
     if (content.t === "plain" && !("v" in content)) return { ok: false, error: "invalid-params" };
-    const messageRole = resolveSessionMessageRole({ content, suppliedRole: params.messageRole }).messageRole;
 
     const access = await resolveSessionPendingEditAccess(actorUserId, sessionId);
     if (!access.ok) return { ok: false, error: access.error };
@@ -124,6 +123,15 @@ export async function enqueuePendingMessage(params: {
             if (!session) return { ok: false, error: "session-not-found" } as const;
 
             const sessionEncryptionMode: "e2ee" | "plain" = session.encryptionMode === "plain" ? "plain" : "e2ee";
+            const messageRole = resolveSessionMessageRole({
+                content,
+                suppliedRole: params.messageRole,
+                telemetry: {
+                    sessionId,
+                    storageMode: sessionEncryptionMode,
+                    source: "pending-message",
+                },
+            }).messageRole;
             const writeKind: SessionStoredContentKind = content.t === "plain" ? "plain" : "encrypted";
             const policy = readEncryptionFeatureEnv(process.env);
             if (!isStoredContentKindAllowedForSessionByStoragePolicy(policy.storagePolicy, sessionEncryptionMode, writeKind)) {
@@ -253,7 +261,6 @@ export async function updatePendingMessage(params: {
     if (!actorUserId || !sessionId || !localId || !content) return { ok: false, error: "invalid-params" };
     if (content.t === "encrypted" && (!content.c || typeof content.c !== "string")) return { ok: false, error: "invalid-params" };
     if (content.t === "plain" && !("v" in content)) return { ok: false, error: "invalid-params" };
-    const messageRole = resolveSessionMessageRole({ content, suppliedRole: params.messageRole }).messageRole;
 
     const access = await resolveSessionPendingEditAccess(actorUserId, sessionId);
     if (!access.ok) return { ok: false, error: access.error };
@@ -267,6 +274,15 @@ export async function updatePendingMessage(params: {
             if (!session) return { ok: false, error: "session-not-found" } as const;
 
             const sessionEncryptionMode: "e2ee" | "plain" = session.encryptionMode === "plain" ? "plain" : "e2ee";
+            const messageRole = resolveSessionMessageRole({
+                content,
+                suppliedRole: params.messageRole,
+                telemetry: {
+                    sessionId,
+                    storageMode: sessionEncryptionMode,
+                    source: "pending-message",
+                },
+            }).messageRole;
             const writeKind: SessionStoredContentKind = content.t === "plain" ? "plain" : "encrypted";
             const policy = readEncryptionFeatureEnv(process.env);
             if (!isStoredContentKindAllowedForSessionByStoragePolicy(policy.storagePolicy, sessionEncryptionMode, writeKind)) {

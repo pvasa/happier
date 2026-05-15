@@ -36,6 +36,8 @@ export const ACTION_IDS = [
   'session.vendor_plugin_catalog.list',
   'session.skill_catalog.list',
   'session.history.get',
+  'session.transcript.get',
+  'session.events.get',
   'session.wait.idle',
   // Intent start actions (first-class)
   'review.start',

@@ -502,6 +502,56 @@ describe("sessionWriteService", () => {
                 }),
             );
         });
+
+        it("stores supplied role for plaintext ACP tool rows instead of envelope role", async () => {
+            const createdAt = new Date("2020-01-01T00:00:00.000Z");
+            const content = {
+                t: "plain",
+                v: {
+                    role: "agent",
+                    content: {
+                        type: "acp",
+                        data: { type: "tool-call", name: "CodexBash" },
+                    },
+                },
+            } satisfies PrismaJson.SessionMessageContent;
+            storagePolicyEnv.set("HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY", "optional");
+
+            currentTx.sessionMessage.findUnique.mockResolvedValue(null);
+            currentTx.session.findUnique.mockResolvedValue({ accountId: "u1", encryptionMode: "plain" });
+            currentTx.sessionShare.findUnique.mockResolvedValue(null);
+            currentTx.session.update.mockResolvedValue({ seq: 1 });
+            currentTx.sessionMessage.create.mockResolvedValue({
+                id: "m1",
+                seq: 1,
+                localId: null,
+                messageRole: "event",
+                content,
+                createdAt,
+                updatedAt: createdAt,
+            });
+            getSessionParticipantUserIds.mockResolvedValue(["u1"]);
+            markAccountChanged.mockResolvedValueOnce(101);
+
+            const res = await createSessionMessage({
+                actorUserId: "u1",
+                sessionId: "s1",
+                content,
+                messageRole: "event",
+            });
+
+            expect(res.ok).toBe(true);
+            if (!res.ok) throw new Error("expected ok");
+            expect(res.message.messageRole).toBe("event");
+            expect(currentTx.sessionMessage.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        content,
+                        messageRole: "event",
+                    }),
+                }),
+            );
+        });
     });
 
     describe("updateSessionMetadata", () => {

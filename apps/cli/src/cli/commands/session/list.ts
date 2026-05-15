@@ -46,6 +46,7 @@ export async function cmdSessionList(
       ...(resumableOnly ? { resumableOnly: true } : {}),
       ...(limit ? { limit } : {}),
       ...(cursor ? { cursor } : {}),
+      ...(!json ? { includeRows: true } : {}),
     },
     { surface: 'cli', defaultSessionId: null },
   );

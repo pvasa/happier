@@ -56,6 +56,193 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
 }));
 
 describe('ApiSessionClient transcript vNext transport', () => {
+  it('stamps ACP assistant prose as agent', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendAgentMessage('opencode' as any, { type: 'message', message: 'hello' } as any, { localId: 'acp-message-1' });
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        localId: 'acp-message-1',
+        messageRole: 'agent',
+      }),
+    );
+  });
+
+  it('stamps ACP tool and lifecycle records as event', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendAgentMessage('opencode' as any, { type: 'thinking', text: 'working' } as any, { localId: 'thinking-1' });
+    client.sendAgentMessage('opencode' as any, { type: 'reasoning', message: 'because' } as any, { localId: 'reasoning-1' });
+    client.sendAgentMessage('opencode' as any, { type: 'tool-call', callId: 'call-1', name: 'Read', input: {}, id: 'tool-1' } as any, { localId: 'tool-call-1' });
+    client.sendAgentMessage('opencode' as any, { type: 'tool-result', callId: 'call-1', output: 'ok', id: 'tool-result-1' } as any, { localId: 'tool-result-1' });
+    client.sendAgentMessage('opencode' as any, { type: 'token_count', tokens: { total: 1 } } as any, { localId: 'usage-1' });
+    client.sendAgentMessage('opencode' as any, { type: 'task_complete', id: 'turn-1' } as any, { localId: 'lifecycle-1' });
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    const messageCalls = sessionSocketStub.emitWithAck.mock.calls.filter((call) => call[0] === 'message');
+    for (const localId of ['thinking-1', 'reasoning-1', 'tool-call-1', 'tool-result-1', 'usage-1', 'lifecycle-1']) {
+      expect(messageCalls).toContainEqual([
+        'message',
+        expect.objectContaining({
+          localId,
+          messageRole: 'event',
+        }),
+      ]);
+    }
+  });
+
+  it('stamps Codex structured events as event', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendCodexMessage({ type: 'tool-call', callId: 'call-1', name: 'Read', input: {}, id: 'tool-1' });
+    client.sendCodexMessage({ type: 'tool-call-result', callId: 'call-1', output: 'ok', id: 'tool-result-1' });
+    client.sendCodexMessage({ type: 'token_count', tokens: { total: 1 } });
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    const roles = sessionSocketStub.emitWithAck.mock.calls
+      .filter((call) => call[0] === 'message')
+      .map((call) => call[1]?.messageRole);
+    expect(roles).toEqual(['event', 'event', 'event']);
+  });
+
+  it('stamps Codex assistant prose as agent', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendCodexMessage({ type: 'message', message: 'hello' });
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ messageRole: 'agent' }),
+    );
+  });
+
+  it('stamps Claude user text as user', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendClaudeSessionMessage({
+      type: 'user',
+      uuid: 'user-1',
+      message: { content: 'hello' },
+    } as RawJSONLines);
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ messageRole: 'user' }),
+    );
+  });
+
+  it('stamps Claude assistant prose as agent', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendClaudeSessionMessage({
+      type: 'assistant',
+      uuid: 'assistant-1',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+    } as RawJSONLines);
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ messageRole: 'agent' }),
+    );
+  });
+
+  it('stamps Claude structured rows as event', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendClaudeSessionMessage({
+      type: 'assistant',
+      uuid: 'tool-use-1',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }] },
+    } as RawJSONLines);
+    client.sendClaudeSessionMessage({
+      type: 'user',
+      uuid: 'tool-result-1',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
+    } as RawJSONLines);
+    client.sendClaudeSessionMessage({
+      type: 'summary',
+      summary: 'previous context',
+      leafUuid: 'leaf-1',
+    } as RawJSONLines);
+    client.sendClaudeSessionMessage({
+      type: 'system',
+      uuid: 'system-1',
+      message: 'init',
+    } as RawJSONLines);
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    const roles = sessionSocketStub.emitWithAck.mock.calls
+      .filter((call) => call[0] === 'message')
+      .map((call) => call[1]?.messageRole);
+    expect(roles).toEqual(['event', 'event', 'event', 'event']);
+  });
+
+  it('stamps session events as event', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendSessionEvent({ type: 'ready' });
+
+    await flushQueuedCommits(client as unknown as ClientWithQueuedCommits);
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ messageRole: 'event' }),
+    );
+  });
+
   it('uses ephemeral assistant transcript snapshots as the current turn fallback', async () => {
     vi.resetModules();
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'l1', didWrite: true } });
@@ -226,6 +413,68 @@ describe('ApiSessionClient transcript vNext transport', () => {
             }),
           },
         }),
+      }),
+    );
+  });
+
+  it('stamps ephemeral thinking stream segments as event', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'segment-1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    client.sendAgentMessageEphemeral(
+      'codex',
+      { type: 'thinking', text: 'Working' },
+      {
+        localId: 'thinking-segment-1',
+        createdAt: 1_000,
+        meta: {
+          happierStreamSegmentV1: {
+            v: 1,
+            segmentKind: 'thinking',
+            segmentLocalId: 'thinking-segment-1',
+            segmentState: 'streaming',
+            startedAtMs: 1_000,
+            updatedAtMs: 1_025,
+          },
+        },
+      },
+    );
+
+    expect(sessionSocketStub.emitWithAck).not.toHaveBeenCalled();
+    expect(sessionSocketStub.emit).toHaveBeenCalledWith(
+      'transcript-stream-segment',
+      expect.objectContaining({
+        message: expect.objectContaining({
+          localId: 'thinking-segment-1',
+          messageRole: 'event',
+        }),
+      }),
+    );
+  });
+
+  it('stamps durable thinking stream snapshots as event', async () => {
+    vi.resetModules();
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true, id: 'm1', seq: 1, localId: 'thinking-segment-1', didWrite: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+
+    const { ApiSessionClient } = await import('./sessionClient');
+
+    const client = new ApiSessionClient('tok', createPlainSessionFixture({ id: 's1' }));
+    await client.sendAgentMessageCommitted(
+      'codex',
+      { type: 'thinking', text: 'Working' },
+      { localId: 'thinking-segment-1' },
+    );
+
+    expect(sessionSocketStub.emitWithAck).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        localId: 'thinking-segment-1',
+        messageRole: 'event',
       }),
     );
   });

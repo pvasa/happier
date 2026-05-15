@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import Fastify from "fastify";
 
 import {
     catchupFetchesInc,
@@ -63,6 +64,106 @@ describe("sessionRoutes v1 messages pagination", () => {
         const { reply } = await route.invoke({
             params: { sessionId: "s1" },
             query: { role: "tool" },
+        });
+
+        expect(reply.code).toHaveBeenCalledWith(400);
+        expect(sessionMessageFindMany).not.toHaveBeenCalled();
+    });
+
+    it("filters by CSV roles using a multi-role query", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+
+        const t0 = new Date(1);
+        sessionMessageFindMany.mockResolvedValue([
+            { id: "m4", seq: 4, localId: null, sidechainId: null, messageRole: "agent", content: { t: "encrypted", c: "c4" }, createdAt: t0, updatedAt: t0 },
+            { id: "m3", seq: 3, localId: null, sidechainId: null, messageRole: "user", content: { t: "encrypted", c: "c3" }, createdAt: t0, updatedAt: t0 },
+        ]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { response: res } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { limit: 2, roles: "user,agent" },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: { sessionId: "s1", sidechainId: null, messageRole: { in: ["user", "agent"] } },
+                take: 3,
+            }),
+        );
+
+        expect(res).toMatchObject({
+            messages: [
+                { id: "m4", seq: 4, content: { t: "encrypted", c: "c4" }, localId: null, messageRole: "agent", createdAt: 1, updatedAt: 1 },
+                { id: "m3", seq: 3, content: { t: "encrypted", c: "c3" }, localId: null, messageRole: "user", createdAt: 1, updatedAt: 1 },
+            ],
+        });
+    });
+
+    it("unions singular role with CSV roles and dedupes them", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+        sessionMessageFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        await route.invoke({
+            params: { sessionId: "s1" },
+            query: { role: "user", roles: "agent,user,event" },
+        });
+
+        expect(sessionMessageFindMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: { sessionId: "s1", sidechainId: null, messageRole: { in: ["user", "agent", "event"] } },
+            }),
+        );
+    });
+
+    it("rejects invalid CSV role values without widening the query", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+        sessionMessageFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { reply } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { roles: "user,tool" },
+        });
+
+        expect(reply.code).toHaveBeenCalledWith(400);
+        expect(sessionMessageFindMany).not.toHaveBeenCalled();
+    });
+
+    it("rejects repeated role query params as arrays instead of widening the query", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { reply } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { role: ["user", "agent"] },
+        });
+
+        expect(reply.code).toHaveBeenCalledWith(400);
+        expect(sessionMessageFindMany).not.toHaveBeenCalled();
+    });
+
+    it("documents Fastify repeated role query params as arrays", async () => {
+        const app = Fastify({ logger: false });
+        app.get("/query", async (request) => request.query);
+        await app.ready();
+        try {
+            const res = await app.inject("/query?role=user&role=agent&roles=user&roles=agent");
+            expect(res.json()).toEqual({ role: ["user", "agent"], roles: ["user", "agent"] });
+        } finally {
+            await app.close();
+        }
+    });
+
+    it("rejects repeated roles query params as arrays instead of widening the query", async () => {
+        checkSessionAccess.mockResolvedValue({ level: "owner" });
+        sessionMessageFindMany.mockResolvedValue([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v1/sessions/:sessionId/messages");
+        const { reply } = await route.invoke({
+            params: { sessionId: "s1" },
+            query: { roles: ["user", "agent"] },
         });
 
         expect(reply.code).toHaveBeenCalledWith(400);

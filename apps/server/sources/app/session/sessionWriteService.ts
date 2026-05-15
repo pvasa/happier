@@ -213,10 +213,16 @@ export async function createSessionMessage(
         return { ok: false, error: "invalid-params" };
     }
 
-    const resolvedRole = resolveSessionMessageRole({
-        content,
-        suppliedRole: params.messageRole,
-    }).messageRole;
+    const resolveRoleForStorageMode = (storageMode: "e2ee" | "plain") =>
+        resolveSessionMessageRole({
+            content,
+            suppliedRole: params.messageRole,
+            telemetry: {
+                sessionId,
+                storageMode,
+                source: "session-message",
+            },
+        }).messageRole;
 
     try {
         return await inTx(async (tx) => {
@@ -224,6 +230,7 @@ export async function createSessionMessage(
             if (!access.ok) {
                 return { ok: false, error: access.error };
             }
+            const resolvedRole = resolveRoleForStorageMode(access.sessionEncryptionMode);
 
             const encryptionPolicy = readEncryptionFeatureEnv(process.env);
             const writeKind: SessionStoredContentKind = content.t === "plain" ? "plain" : "encrypted";
@@ -353,6 +360,7 @@ export async function createSessionMessage(
             if (!access.ok) {
                 return { ok: false, error: access.error };
             }
+            const resolvedRole = resolveRoleForStorageMode(access.sessionEncryptionMode);
             const existing = await db.sessionMessage.findUnique({
                 where: { sessionId_localId: { sessionId, localId } },
                 select: SESSION_MESSAGE_WRITE_SELECT,

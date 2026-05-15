@@ -1146,6 +1146,10 @@ describe('voice tool handlers', () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
+    const defaultRes = await tools.listSessions({ limit: 1 });
+    const defaultParsed = JSON.parse(defaultRes) as any;
+    expect(defaultParsed.sessions[0].lastMessagePreview).toBeUndefined();
+
     const res = await tools.listSessions({ limit: 1, includeLastMessagePreview: true });
     const parsed = JSON.parse(res) as any;
     expect(Array.isArray(parsed.sessions)).toBe(true);
@@ -1164,6 +1168,7 @@ describe('voice tool handlers', () => {
     expect(s2?.lastMessagePreview?.text).toContain('Tool: read');
     expect(s2?.lastMessagePreview?.text).not.toContain('/Users/alice/SecretRepo/README.md');
     expect(s2?.lastMessagePreview?.text).not.toContain('Args:');
+
   });
 
   it('includes cached sessions from other servers in listSessions (with serverId)', async () => {
@@ -1307,26 +1312,27 @@ describe('voice tool handlers', () => {
     expect(s2?.lastMessagePreview?.text).toContain('Tool: read');
   });
 
-  it('returns recent assistant messages for a session when allowed', async () => {
+  it('returns transcript messages for a session when allowed', async () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
-    const res = await tools.getSessionRecentMessages({ sessionId: 's1', limit: 2 });
+    const res = await tools.getSessionTranscript({ sessionId: 's1', limit: 2 });
     const parsed = JSON.parse(res) as any;
-    expect(Array.isArray(parsed.messages)).toBe(true);
-    expect(parsed.messages.length).toBe(2);
-    expect(parsed.messages[0].role).toBe('user');
-    expect(parsed.messages[1].role).toBe('assistant');
+    expect(Array.isArray(parsed.items)).toBe(true);
+    expect(parsed.items.length).toBe(2);
+    expect(parsed.items[0].role).toBe('user');
+    expect(parsed.items[1].role).toBe('assistant');
+    expect(tools.getSessionRecentMessages).toBeUndefined();
   });
 
-  it('accepts larger on-demand limits for getSessionRecentMessages (up to 50)', async () => {
+  it('accepts larger on-demand limits for getSessionTranscript (up to 50)', async () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
-    const res = await tools.getSessionRecentMessages({ sessionId: 's1', limit: 20 });
+    const res = await tools.getSessionTranscript({ sessionId: 's1', limit: 20 });
     const parsed = JSON.parse(res) as any;
     expect(parsed.error).toBeUndefined();
-    expect(Array.isArray(parsed.messages)).toBe(true);
+    expect(Array.isArray(parsed.items)).toBe(true);
   });
 
   it('treats tracked sessions as active for otherSessions snippets gating', async () => {
@@ -1336,7 +1342,7 @@ describe('voice tool handlers', () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
-    const res = await tools.getSessionRecentMessages({ sessionId: 's2', limit: 1 });
+    const res = await tools.getSessionTranscript({ sessionId: 's2', limit: 1 });
     const parsed = JSON.parse(res) as any;
     expect(parsed.error).toBeUndefined();
     expect(parsed.sessionId).toBe('s2');
@@ -1355,10 +1361,10 @@ describe('voice tool handlers', () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
-    const res = await tools.getSessionRecentMessages({ sessionId: 's1', limit: 1, includeAssistant: true, includeUser: false, maxCharsPerMessage: null });
+    const res = await tools.getSessionTranscript({ sessionId: 's1', limit: 1, roles: ['assistant'], maxCharsPerMessage: null });
     const parsed = JSON.parse(res) as any;
-    expect(parsed.messages[0].text).toContain('<path_redacted>');
-    expect(parsed.messages[0].text).not.toContain('/Users/alice/SecretRepo/README.md');
+    expect(parsed.items[0].text).toContain('<path_redacted>');
+    expect(parsed.items[0].text).not.toContain('/Users/alice/SecretRepo/README.md');
   });
 
   it('does not clamp message text by default', async () => {
@@ -1370,9 +1376,9 @@ describe('voice tool handlers', () => {
     const { createVoiceToolHandlers } = await import('./handlers');
     const tools = createVoiceToolHandlers({ resolveSessionId: (explicit) => (explicit ? (explicit as any) : 's1') });
 
-    const res = await tools.getSessionRecentMessages({ sessionId: 's1', limit: 1, includeAssistant: true, includeUser: false });
+    const res = await tools.getSessionTranscript({ sessionId: 's1', limit: 1, roles: ['assistant'] });
     const parsed = JSON.parse(res) as any;
-    expect(parsed.messages[0].text.length).toBe(9001);
+    expect(parsed.items[0].text.length).toBe(9001);
   });
 
   it('returns a session activity digest without transcript content', async () => {

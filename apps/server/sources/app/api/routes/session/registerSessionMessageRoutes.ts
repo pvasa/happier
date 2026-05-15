@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
 import { catchupFollowupFetchesCounter, catchupFollowupReturnedCounter } from "@/app/monitoring/metrics2";
-import { SessionMessageRoleSchema, SessionStoredMessageContentSchema } from "@happier-dev/protocol";
+import { SessionMessageRoleSchema, SessionStoredMessageContentSchema, type SessionMessageRole } from "@happier-dev/protocol";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createSessionMessage } from "@/app/session/sessionWriteService";
 import { parseSessionMessageSidechainId } from "@/app/session/parseSessionMessageSidechainId";
@@ -15,6 +15,42 @@ import { refreshSessionParticipantBadgePushes } from "@/app/activity/refreshAcco
 import { type Fastify } from "../../types";
 
 type SessionStoredMessageContent = z.infer<typeof SessionStoredMessageContentSchema>;
+
+function parseSessionMessageRoleCsv(value: unknown): { ok: true; roles: string[] } | { ok: false } {
+    if (typeof value !== "string") return { ok: false };
+
+    const roles = value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    if (roles.length === 0) return { ok: false };
+
+    return { ok: true, roles };
+}
+
+function resolveRequestedMessageRoles(query: Readonly<{ role?: unknown; roles?: unknown }> | undefined): { ok: true; roles: SessionMessageRole[] } | { ok: false } {
+    if (!query || (query.role === undefined && query.roles === undefined)) return { ok: true, roles: [] };
+    if (Array.isArray(query.role) || Array.isArray(query.roles)) return { ok: false };
+
+    const roles: SessionMessageRole[] = [];
+    if (query.role !== undefined) {
+        const parsed = SessionMessageRoleSchema.safeParse(query.role);
+        if (!parsed.success) return { ok: false };
+        roles.push(parsed.data);
+    }
+
+    if (query.roles !== undefined) {
+        const csv = parseSessionMessageRoleCsv(query.roles);
+        if (!csv.ok) return { ok: false };
+        for (const rawRole of csv.roles) {
+            const parsed = SessionMessageRoleSchema.safeParse(rawRole);
+            if (!parsed.success) return { ok: false };
+            roles.push(parsed.data);
+        }
+    }
+
+    return { ok: true, roles: Array.from(new Set(roles)) };
+}
 
 export function registerSessionMessageRoutes(app: Fastify) {
     app.get('/v2/sessions/:sessionId/messages/by-local-id/:localId', {
@@ -96,6 +132,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 beforeSeq: z.coerce.number().int().min(1).optional(),
                 afterSeq: z.coerce.number().int().min(0).optional(),
                 role: SessionMessageRoleSchema.optional(),
+                roles: z.string().optional(),
             }).superRefine((value, ctx) => {
                 if (value.beforeSeq !== undefined && value.afterSeq !== undefined) {
                     ctx.addIssue({
@@ -126,14 +163,15 @@ export function registerSessionMessageRoutes(app: Fastify) {
                   beforeSeq?: number;
                   afterSeq?: number;
                   role?: unknown;
+                  roles?: unknown;
               }>
             | undefined;
         const { limit = 150, beforeSeq, afterSeq } = query ?? {};
-        const parsedRole = query?.role === undefined ? null : SessionMessageRoleSchema.safeParse(query.role);
-        if (parsedRole !== null && !parsedRole.success) {
+        const parsedRoles = resolveRequestedMessageRoles(query);
+        if (!parsedRoles.ok) {
             return reply.code(400).send({ error: "Invalid parameters", code: "invalid-role" });
         }
-        const role = parsedRole?.data;
+        const roles = parsedRoles.roles;
 
         const scope = (() => {
             const raw = query?.scope;
@@ -160,7 +198,8 @@ export function registerSessionMessageRoutes(app: Fastify) {
         const where: Prisma.SessionMessageWhereInput = { sessionId };
         if (scope === "main") where.sidechainId = null;
         if (scope === "sidechain") where.sidechainId = sidechainId;
-        if (role !== undefined) where.messageRole = role;
+        if (roles.length === 1) where.messageRole = roles[0];
+        if (roles.length > 1) where.messageRole = { in: roles };
         if (beforeSeq !== undefined) {
             where.seq = { lt: beforeSeq };
         }

@@ -32,6 +32,12 @@ import type { SessionMessageRole } from '@happier-dev/protocol';
 import { calculateCost } from '@/utils/pricing';
 import { buildAcpAgentMessageEnvelope, shouldTraceAcpMessageType } from './acpMessageEnvelope';
 import { normalizeAcpSessionMessageBody, normalizeCodexSessionMessageBody } from './sessionOutboundMessageNormalization';
+import {
+    resolveAcpSessionMessageRole,
+    resolveClaudeSessionMessageRole,
+    resolveCodexSessionMessageRole,
+    resolveSessionEventMessageRole,
+} from './messageRole';
 import { buildUsageReportFromAcpTokenCount } from './acpTokenCountUsageReport';
 import {
     fetchLatestUserPermissionIntentFromEncryptedTranscript,
@@ -1645,7 +1651,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId,
-            messageRole: content.role === 'user' ? 'user' : 'agent',
+            messageRole: resolveClaudeSessionMessageRole(body),
             logErrorMessage: '[SOCKET] Failed to commit Claude session message (non-fatal)',
         });
 
@@ -1710,7 +1716,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId: null,
-            messageRole: 'agent',
+            messageRole: resolveCodexSessionMessageRole(normalizedBody),
             logErrorMessage: '[SOCKET] Failed to commit Codex message (non-fatal)',
         });
 
@@ -1807,7 +1813,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId,
-            messageRole: 'agent',
+            messageRole: resolveAcpSessionMessageRole(normalizedBody),
             logErrorMessage: '[SOCKET] Failed to commit agent message (non-fatal)',
         });
 
@@ -1845,7 +1851,7 @@ export class ApiSessionClient extends EventEmitter {
     ): void {
         if (!this.socket.connected) return;
 
-        const { content, localId, sidechainId } = this.prepareAcpAgentMessage({
+        const { normalizedBody, content, localId, sidechainId } = this.prepareAcpAgentMessage({
             provider,
             body,
             meta: opts.meta,
@@ -1883,7 +1889,7 @@ export class ApiSessionClient extends EventEmitter {
                 sid: this.sessionId,
                 message: {
                     localId,
-                    messageRole: 'agent',
+                    messageRole: resolveAcpSessionMessageRole(normalizedBody),
                     ...(sidechainId ? { sidechainId } : {}),
                     content: payload,
                     createdAt,
@@ -2000,7 +2006,7 @@ export class ApiSessionClient extends EventEmitter {
 
         const payload = this.buildOutboundSessionMessagePayload(content);
         const seq = await this.enqueueMessageCommit(() =>
-            this.commitSessionMessage({ message: payload, localId, sidechainId, messageRole: 'agent', requireCommit: true }),
+            this.commitSessionMessage({ message: payload, localId, sidechainId, messageRole: resolveAcpSessionMessageRole(normalizedBody), requireCommit: true }),
         );
         this.observeTurnAssistantTextFromSessionContent(content, {
             source: 'committed',
@@ -2069,7 +2075,7 @@ export class ApiSessionClient extends EventEmitter {
             message: payload,
             localId,
             sidechainId: null,
-            messageRole: 'agent',
+            messageRole: resolveSessionEventMessageRole(),
             logErrorMessage: '[SOCKET] Failed to commit session event (non-fatal)',
         });
     }

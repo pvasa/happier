@@ -28,8 +28,85 @@ const queryParams = {
 }
 
 describe('transcriptQueries (plaintext envelopes)', () => {
-  it('resolves permission intent from plaintext transcript messages', async () => {
+  it('prefilters ACP import candidates to user and agent rows while validating semantic transcript text', async () => {
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        messages: [
+          {
+            createdAt: 300,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'agent',
+                content: { type: 'acp', data: { type: 'tool-call', name: 'Bash' } },
+              },
+            },
+          },
+          {
+            createdAt: 200,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'agent',
+                content: { type: 'acp', data: { type: 'message', message: 'assistant reply' } },
+              },
+            },
+          },
+          {
+            createdAt: 100,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'user prompt' },
+              },
+            },
+          },
+        ],
+      },
+    } as any)
+
+    await expect(fetchRecentTranscriptTextItemsForAcpImportFromServer({
+      ...queryParams,
+      take: 25,
+    })).resolves.toEqual([
+      { role: 'user', text: 'user prompt' },
+      { role: 'agent', text: 'assistant reply' },
+    ])
+
+    expect(getSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      params: { limit: 25, roles: 'user,agent' },
+    }))
+  })
+
+  it('uses canonical semantic extraction for Codex assistant text during ACP import', async () => {
     vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        messages: [
+          {
+            createdAt: 100,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'agent',
+                content: { type: 'codex', data: { type: 'message', message: 'codex reply' } },
+              },
+            },
+          },
+        ],
+      },
+    } as any)
+
+    await expect(fetchRecentTranscriptTextItemsForAcpImportFromServer(queryParams)).resolves.toEqual([
+      { role: 'agent', text: 'codex reply' },
+    ])
+  })
+
+  it('resolves permission intent from plaintext transcript messages', async () => {
+    const getSpy = vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
       data: {
         messages: [
           {
@@ -52,6 +129,57 @@ describe('transcriptQueries (plaintext envelopes)', () => {
     })
 
     expect(res).toEqual({ intent: 'yolo', updatedAt: 123 })
+    expect(getSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      params: { limit: 200, role: 'user' },
+    }))
+  })
+
+  it('keeps permission intent resolution scoped to semantically valid user rows', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      status: 200,
+      data: {
+        messages: [
+          {
+            createdAt: 300,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'agent',
+                content: { type: 'text', text: 'assistant text' },
+                meta: { permissionMode: 'yolo' },
+              },
+            },
+          },
+          {
+            createdAt: 200,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'acp', data: { type: 'tool-call', name: 'Bash' } },
+                meta: { permissionMode: 'acceptEdits' },
+              },
+            },
+          },
+          {
+            createdAt: 100,
+            content: {
+              t: 'plain',
+              v: {
+                role: 'user',
+                content: { type: 'text', text: 'real user prompt' },
+                meta: { permissionMode: 'read-only' },
+              },
+            },
+          },
+        ],
+      },
+    } as any)
+
+    await expect(fetchLatestUserPermissionIntentFromEncryptedTranscript(queryParams)).resolves.toEqual({
+      intent: 'read-only',
+      updatedAt: 100,
+    })
   })
 
   it.each([401, 403] as const)('rethrows auth failures while fetching ACP import transcript text (%s)', async (status) => {
