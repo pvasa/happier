@@ -28,6 +28,7 @@ import {
 } from '../domains/session/listing/deriveSessionListActivity';
 import { computeHasUnreadActivity } from '../domains/messages/unread';
 import { resolveLastViewedSessionSeq } from '../domains/session/readCursor/resolveLastViewedSessionSeq';
+import { resolveSessionWorkspacePath } from '../domains/session/resolveSessionWorkspacePath';
 import type { SessionState } from '@/utils/sessions/sessionUtils';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
 import type { SessionActionDraft } from '../domains/sessionActions/sessionActionDraftTypes';
@@ -1052,6 +1053,31 @@ export function useProject(projectId: string | null) {
 export function useProjectForSession(sessionId: string | null) {
   return getStorage()(
     useShallow((state) => (sessionId ? state.getProjectForSession(sessionId) : null))
+  );
+}
+
+export function useSessionWorkspacePath(sessionId: string | null): string | null {
+  return getStorage()(
+    (state) => resolveSessionWorkspacePath({
+      sessionPath: sessionId ? state.sessions[sessionId]?.metadata?.path ?? null : null,
+      projectPath: sessionId ? state.getProjectForSession(sessionId)?.key?.path ?? null : null,
+    })
+  );
+}
+
+export function useSessionRpcAvailabilityState(sessionId: string | null): Readonly<{
+  sessionExists: boolean;
+  sessionRpcAvailable: boolean;
+}> {
+  return getStorage()(
+    useShallow((state) => {
+      const session = sessionId ? state.sessions[sessionId] ?? null : null;
+      const sessionExists = Boolean(session);
+      return {
+        sessionExists,
+        sessionRpcAvailable: sessionExists && session?.active !== false,
+      };
+    })
   );
 }
 

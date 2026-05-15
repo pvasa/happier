@@ -1,5 +1,4 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import * as React from 'react';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveMachineTargetForSessionFromState } from '@/sync/ops/sessionMachineTarget';
 import { resolveServerIdForSessionIdFromLocalState } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
@@ -41,20 +40,21 @@ export function resolveWorkspaceScopeForSession(sessionId: string): WorkspaceSco
 
 export function useWorkspaceScopeForSession(sessionId: string | null | undefined): WorkspaceScopeBase | null {
     const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
-    const selector = useShallow((state: StorageState): WorkspaceScopeState => ({
-        sessions: state.sessions,
-        machines: state.machines,
-        sessionListViewDataByServerId: state.sessionListViewDataByServerId,
-        getProjectForSession: state.getProjectForSession,
-    }));
+    const selector = useShallow((state: StorageState): WorkspaceScopeBase | null => {
+        if (!normalizedSessionId) return null;
+        return resolveWorkspaceScopeForSessionFromState({
+            sessions: state.sessions,
+            machines: state.machines,
+            sessionListViewDataByServerId: state.sessionListViewDataByServerId,
+            getProjectForSession: state.getProjectForSession,
+        }, normalizedSessionId);
+    });
     const workspaceState = typeof storage === 'function'
         ? storage(selector)
         : (
-            (storage as unknown as { getState?: () => StorageState }).getState?.() ?? null
+            (storage as unknown as { getState?: () => StorageState }).getState
+                ? selector((storage as unknown as { getState: () => StorageState }).getState())
+                : null
         );
-
-    return React.useMemo(() => {
-        if (!workspaceState || !normalizedSessionId) return null;
-        return resolveWorkspaceScopeForSessionFromState(workspaceState, normalizedSessionId);
-    }, [normalizedSessionId, workspaceState]);
+    return workspaceState;
 }

@@ -61,6 +61,7 @@ import {
 } from '../buildSessionListViewDataWithServerScope';
 import { setActiveServerSessionListCache } from '../sessionListCache';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
+import { areScmWorkingSnapshotsEquivalentIgnoringFetchedAt } from '@/scm/sync/snapshotDiff';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 import type { SessionActionDraft } from '@/sync/domains/sessionActions/sessionActionDraftTypes';
 import type { SessionActionDraftStatus } from '@/sync/domains/sessionActions/sessionActionDraftTypes';
@@ -1446,6 +1447,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         },
         updateSessionProjectScmSnapshot: (sessionId: string, snapshot: ScmWorkingSnapshot | null) => {
             ensureProjectManagerSession(sessionId);
+            const previous = projectManager.getSessionProjectScmSnapshot(sessionId);
+            if (areScmWorkingSnapshotsEquivalentIgnoringFetchedAt(previous, snapshot)) {
+                return;
+            }
             projectManager.updateSessionProjectScmSnapshot(sessionId, snapshot);
             // Trigger a state update to notify hooks
             set((state) => ({ ...state }));

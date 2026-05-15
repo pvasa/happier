@@ -98,16 +98,18 @@ function createHarness(createSessionsDomain: any, initialState: Record<string, a
         ...initialState,
     };
     storageStateRef.current = state;
+    let setCount = 0;
 
     const get = () => state;
     const set = (updater: any) => {
+        setCount += 1;
         const next = typeof updater === 'function' ? updater(state) : updater;
         state = { ...state, ...next };
         storageStateRef.current = state;
     };
 
     const domain = createSessionsDomain({ get, set } as any);
-    return { get, domain };
+    return { get, domain, getSetCount: () => setCount };
 }
 
 describe('sessions domain: sessionListViewData rebuild gating', () => {
@@ -156,6 +158,96 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
 
         expect(domain.getSessionProjectScmSnapshot('s1')).toBe(snapshot);
         expect(projectManager.getProjectForSession('s1')?.sessionIds).toEqual(['s1']);
+    });
+
+    it('does not notify storage when SCM snapshot refresh only changes fetchedAt', async () => {
+        mockSessionPersistenceBoundaries();
+        const { projectManager } = await import('../../runtime/orchestration/projectManager');
+        projectManager.clear();
+
+        const session = {
+            id: 's1',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: { machineId: 'm1', host: 'h1', path: '/home/u/repo', homeDir: '/home/u' },
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        };
+        const snapshot = {
+            projectKey: 'm1:/home/u/repo',
+            fetchedAt: 123,
+            repo: {
+                isRepo: true,
+                rootPath: '/home/u/repo',
+                backendId: 'git',
+                mode: '.git',
+                worktrees: [{ path: '/home/u/repo', branch: 'main', isCurrent: true }],
+            },
+            capabilities: {
+                writeInclude: true,
+                writeExclude: true,
+                worktreeCreate: true,
+            },
+            branch: {
+                head: 'main',
+                upstream: 'origin/main',
+                ahead: 0,
+                behind: 0,
+                detached: false,
+            },
+            entries: [{
+                path: 'src/a.ts',
+                previousPath: null,
+                kind: 'modified',
+                includeStatus: 'unmodified',
+                pendingStatus: 'modified',
+                hasIncludedDelta: false,
+                hasPendingDelta: true,
+                stats: {
+                    includedAdded: 0,
+                    includedRemoved: 0,
+                    pendingAdded: 1,
+                    pendingRemoved: 0,
+                    isBinary: false,
+                },
+            }],
+            hasConflicts: false,
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 1,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 1,
+                pendingRemoved: 0,
+            },
+        };
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { domain, getSetCount } = createHarness(createSessionsDomain, {
+            sessions: { s1: session },
+            machines: { m1: { id: 'm1', metadata: { homeDir: '/home/u' } } },
+        });
+
+        domain.updateSessionProjectScmSnapshot('s1', snapshot as any);
+        expect(getSetCount()).toBe(1);
+
+        domain.updateSessionProjectScmSnapshot('s1', {
+            ...snapshot,
+            fetchedAt: 456,
+        } as any);
+
+        expect(getSetCount()).toBe(1);
+        expect(domain.getSessionProjectScmSnapshot('s1')).toBe(snapshot);
+        projectManager.clear();
     });
 
     it('does not call projectManager.updateSessions for non-project-structural session updates', async () => {
