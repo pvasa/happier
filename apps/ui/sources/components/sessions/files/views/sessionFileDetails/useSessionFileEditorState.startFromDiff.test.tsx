@@ -15,6 +15,7 @@ type SessionWriteFileFn = typeof import('@/sync/ops').sessionWriteFile;
 const sessionWriteFileSpy = vi.hoisted(() => vi.fn<SessionWriteFileFn>(async () => ({ success: true, hash: 'saved-hash' })));
 
 vi.mock('@/sync/ops', () => ({
+    SESSION_WRITE_FILE_TOO_LARGE_ERROR: 'File exceeds the inline file write size limit',
     sessionWriteFile: (...args: Parameters<SessionWriteFileFn>) => sessionWriteFileSpy(...args),
 }));
 

@@ -133,6 +133,7 @@ import {
     COMPOSER_ABORT_CONFIRMATION_WINDOW_MS,
     resolveComposerEnterAction,
     resolveComposerEscapeAction,
+    resolveComposerSendShortcutAction,
     shouldRunComposerModeCycleShortcut,
 } from '@/keyboard/composer';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
@@ -207,7 +208,11 @@ interface AgentInputProps {
     placeholder: string;
     onChangeText: (text: string) => void;
     sessionId?: string;
-    onSend: (options?: Readonly<{ forceImmediate?: boolean; structuredInputMetaOverrides?: Record<string, unknown> }>) => void;
+    onSend: (options?: Readonly<{
+        forceImmediate?: boolean;
+        deliveryIntent?: 'server_pending';
+        structuredInputMetaOverrides?: Record<string, unknown>;
+    }>) => void;
     submitAccessibilityLabel?: string;
     sendIcon?: React.ReactNode;
     onMicPress?: () => void;
@@ -1051,7 +1056,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }
     }, [props.value]);
 
-    const handleSend = React.useCallback((options?: Readonly<{ forceImmediate?: boolean }>) => {
+    const handleSend = React.useCallback((options?: Readonly<{ forceImmediate?: boolean; deliveryIntent?: 'server_pending' }>) => {
         if (sendActionDisabled) {
             return;
         }
@@ -1070,9 +1075,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         });
         const hasStructuredInputMeta = Object.keys(structuredInputMetaOverrides).length > 0;
         props.onSend(
-            options?.forceImmediate === true || hasStructuredInputMeta
+            options?.forceImmediate === true || options?.deliveryIntent != null || hasStructuredInputMeta
                 ? {
                     ...(options?.forceImmediate === true ? { forceImmediate: true } : {}),
+                    ...(options?.deliveryIntent != null ? { deliveryIntent: options.deliveryIntent } : {}),
                     ...(hasStructuredInputMeta ? { structuredInputMetaOverrides } : {}),
                 }
                 : undefined,
@@ -1956,18 +1962,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
         const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
+        const sendShortcutAction = resolveComposerSendShortcutAction(event, {
+            keyboardShortcutsV2Enabled,
+            keyboardSingleKeyShortcutsEnabled,
+            keyboardShortcutOverridesV1,
+            keyboardShortcutDisabledCommandIdsV1,
+            hasSendableInput,
+            sendActionDisabled,
+            platformOS: Platform.OS,
+        });
+        if (sendShortcutAction === 'sendImmediate') {
+            // Explicit immediate-send bypasses autocomplete.
+            handleSend({ forceImmediate: true });
+            return true;
+        }
+        if (sendShortcutAction === 'sendPending') {
+            // Explicit pending-send bypasses steering so the message can be reviewed/reordered.
+            handleSend({ deliveryIntent: 'server_pending' });
+            return true;
+        }
+
         const enterAction = resolveComposerEnterAction(event, {
             enterToSendEnabled,
             hasSendableInput,
             sendActionDisabled,
             platformOS: Platform.OS,
         });
-        if (enterAction === 'sendImmediate') {
-            // Explicit Mod+Enter is an immediate-send command and intentionally bypasses autocomplete.
-            handleSend({ forceImmediate: true });
-            return true;
-        }
-
         const escapeAction = resolveComposerEscapeAction(event, {
             canAbort: Boolean(props.showAbortButton && props.onAbort),
             isAborting,

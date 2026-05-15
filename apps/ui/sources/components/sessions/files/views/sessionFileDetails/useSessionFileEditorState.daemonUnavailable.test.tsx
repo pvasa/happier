@@ -33,6 +33,7 @@ installSessionFileDetailsCommonModuleMocks({
 });
 
 vi.mock('@/sync/ops', () => ({
+    SESSION_WRITE_FILE_TOO_LARGE_ERROR: 'File exceeds the inline file write size limit',
     sessionWriteFile: (...args: Parameters<SessionWriteFileFn>) => sessionWriteFileSpy(...args),
 }));
 
@@ -44,6 +45,7 @@ vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
 type SessionFileEditorState = {
     editorSurfaceEnabled: boolean;
     isEditingFile: boolean;
+    fileChangedExternally: boolean;
     startEditingFile: () => void;
     onEditorChange: (value: string) => void;
     saveFileEdits: () => void;
@@ -201,5 +203,65 @@ describe('useSessionFileEditorState (daemon unavailable)', () => {
 
         mountedRef.current = false;
         expect(params?.shouldContinue?.()).toBe(false);
+    });
+
+    it('does not show daemon unavailable or mark external change for guarded inline-size failures', async () => {
+        const { useSessionFileEditorState } = await import('./useSessionFileEditorState');
+
+        sessionWriteFileSpy.mockResolvedValueOnce({
+            success: false,
+            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            error: 'File exceeds the inline file write size limit',
+        });
+
+        const mountedRef = { current: true };
+        let latest: unknown = null;
+        const getState = () => latest as SessionFileEditorState;
+
+        const Harness = () => {
+            latest = useSessionFileEditorState({
+                sessionId: 's1',
+                sessionPath: '/tmp/workspace',
+                filePath: 'a.txt',
+                displayMode: 'file',
+                fileText: 'hello',
+                fileHash: 'loaded-hash',
+                fileWriteSupported: true,
+                setFileWriteSupported: () => {},
+                fileEditorFeatureEnabled: true,
+                filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false,
+                filesEditorChangeDebounceMs: 0,
+                filesEditorMaxFileBytes: 1_000_000,
+                filesEditorBridgeMaxChunkBytes: 1_000_000,
+                mountedRef,
+                refreshAll: async () => {},
+            });
+            return null;
+        };
+
+        await renderScreen(<Harness />);
+
+        await act(async () => {
+            getState().startEditingFile();
+            getState().onEditorChange('hello changed');
+        });
+
+        await act(async () => {
+            getState().saveFileEdits();
+        });
+
+        for (let i = 0; i < 10; i++) {
+            await act(async () => {
+                await flushHookEffects({ cycles: 1, turns: 1 });
+            });
+            if (modalAlertSpy.mock.calls.length > 0) break;
+        }
+
+        expect(showDaemonUnavailableAlertSpy).not.toHaveBeenCalled();
+        expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'File exceeds the inline file write size limit', undefined);
+        expect(getState().fileChangedExternally).toBe(false);
+        expect(getState().isEditingFile).toBe(true);
     });
 });

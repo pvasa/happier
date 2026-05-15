@@ -276,26 +276,6 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     }, [fileRefreshFingerprint, refreshAll]);
 
     React.useEffect(() => {
-        const language = getFileLanguageFromPath(filePath);
-        const markdownPreviewAvailable = (language === 'markdown' || language === 'mdx')
-            && fileContent?.isBinary !== true
-            && typeof fileContent?.content === 'string';
-        const hasRenderableDiff = resolveShowDiffToggle({
-            diffContent,
-            hasPendingDelta,
-            hasIncludedDelta,
-            fileIsBinary: isBinaryFile,
-        });
-        setDisplayMode(resolveFileDetailsDisplayMode({
-            persistedEditing: persistedDraft?.isEditingFile === true,
-            deepLinkSource: deepLinkAnchor?.source ?? null,
-            hasRenderableDiff,
-            hasFileContent: Boolean(fileContent),
-            markdownPreviewAvailable,
-        }));
-    }, [deepLinkAnchor?.source, diffContent, fileContent, filePath, hasIncludedDelta, hasPendingDelta, isBinaryFile, persistedDraft?.isEditingFile]);
-
-    React.useEffect(() => {
         if (!deepLinkAnchor) {
             setJumpToAnchor(null);
             return;
@@ -402,6 +382,26 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         persistedDraft: persistedDraft ?? null,
         persistDraft,
     });
+
+    React.useEffect(() => {
+        const language = getFileLanguageFromPath(filePath);
+        const markdownPreviewAvailable = (language === 'markdown' || language === 'mdx')
+            && fileContent?.isBinary !== true
+            && typeof fileContent?.content === 'string';
+        const hasRenderableDiff = resolveShowDiffToggle({
+            diffContent,
+            hasPendingDelta,
+            hasIncludedDelta,
+            fileIsBinary: isBinaryFile,
+        });
+        setDisplayMode(resolveFileDetailsDisplayMode({
+            persistedEditing: isEditingFile || persistedDraft?.isEditingFile === true,
+            deepLinkSource: deepLinkAnchor?.source ?? null,
+            hasRenderableDiff,
+            hasFileContent: Boolean(fileContent),
+            markdownPreviewAvailable,
+        }));
+    }, [deepLinkAnchor?.source, diffContent, fileContent, filePath, hasIncludedDelta, hasPendingDelta, isBinaryFile, isEditingFile, persistedDraft?.isEditingFile]);
 
     const handleStartEditingFile = React.useCallback(() => {
         props.onStartEditingFile?.();

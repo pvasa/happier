@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
-import { sessionWriteFile } from '@/sync/ops';
+import { SESSION_WRITE_FILE_TOO_LARGE_ERROR, sessionWriteFile } from '@/sync/ops';
 import { t } from '@/text';
 import { Modal } from '@/modal';
 import { showDaemonUnavailableAlert, tryShowDaemonUnavailableAlertForRpcError } from '@/utils/errors/daemonUnavailableAlert';
@@ -10,6 +10,13 @@ import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTyp
 import { createAdvancedDebounce } from '@/utils/timing/debounce';
 import { sessionFileEditorDraftCache } from './sessionFileEditorDraftCache';
 import type { FileDisplayMode } from '@/components/sessions/files/file/FileActionToolbar';
+
+function isGuardedWriteConflictError(error: string | undefined): boolean {
+    if (!error) return false;
+    return error.startsWith('File hash mismatch.')
+        || error === 'File does not exist but hash was provided'
+        || error === 'File already exists but was expected to be new';
+}
 
 export type SessionFileEditorState = Readonly<{
     editorSurfaceEnabled: boolean;
@@ -335,11 +342,13 @@ export function useSessionFileEditorState(input: Readonly<{
                 const response = await sessionWriteFile(latestInput.sessionId, latestInput.filePath, latestText, expectedHash);
 
                 if (!response.success) {
-                    if (expectedHash !== undefined) {
+                    if (expectedHash !== undefined && isGuardedWriteConflictError(response.error)) {
                         setFileChangedExternally(true);
+                        Modal.alert(t('common.error'), t('files.fileChangedExternally'));
+                        return;
                     }
                     const code = response.errorCode;
-                    if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
+                    if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && response.error !== SESSION_WRITE_FILE_TOO_LARGE_ERROR) {
                         showDaemonUnavailableAlert({
                             titleKey: 'errors.daemonUnavailableTitle',
                             bodyKey: 'errors.daemonUnavailableBody',
