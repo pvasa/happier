@@ -554,7 +554,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const nativeReviewCompletionTextByStreamScope = new Map<string, string>();
     const rawAssistantFinalByStreamScope = new Map<string, PendingRawAssistantFinal>();
     const persistedMediaDedupeKeys = new Set<string>();
-    let activeInlineReviewContext: Readonly<{ input: unknown }> | null = null;
+    let activeInlineReview = false;
     const captureCurrentSteerContext = (): CodexAppServerSteerContext => ({
         modeId: currentModeId,
         modelId: currentModelId,
@@ -942,7 +942,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
             rawAssistantFinalByStreamScope.delete(context.streamScopeId);
             nativeReviewCompletionTextByStreamScope.set(context.streamScopeId, update.review);
-            if (activeInlineReviewContext && !context.sidechainId) {
+            if (activeInlineReview && !context.sidechainId) {
                 await commitInlineReviewFindings(update);
                 return;
             }
@@ -2218,12 +2218,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 return { ok: false, errorCode: 'invalid_parameters', error: resolved.error ?? resolved.reason };
             }
 
-            activeInlineReviewContext = { input };
+            activeInlineReview = true;
             let reviewTurnResult: string | void | UnsupportedSessionRuntimeMethodResult;
             try {
                 reviewTurnResult = await startReviewTurn(resolved.request);
             } finally {
-                activeInlineReviewContext = null;
+                activeInlineReview = false;
             }
             if (reviewTurnResult && typeof reviewTurnResult === 'object') return reviewTurnResult;
             return { ok: true, reviewTurnId: reviewTurnResult ?? null };
