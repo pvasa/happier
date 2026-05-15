@@ -79,6 +79,16 @@ function normalizeString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isCodexInlineReviewTarget(args: Readonly<{
+  engineId: string;
+  backendTarget: unknown;
+}>): boolean {
+  if (args.engineId !== 'codex') return false;
+  if (!args.backendTarget || typeof args.backendTarget !== 'object') return false;
+  const target = args.backendTarget as Readonly<Record<string, unknown>>;
+  return target.kind === 'builtInAgent' && target.agentId === 'codex';
+}
+
 function readSessionMetadata(params: Readonly<{
   rawSession?: Readonly<{ metadata?: unknown }> | null;
   mode?: SessionStoredContentEncryptionMode;
@@ -587,6 +597,16 @@ export function createCliActionDeps(params: Readonly<{
         timeoutMs: normalizeExecutionRunWaitTimeoutMs((request as any)?.timeoutSeconds),
         pollIntervalMs,
       });
+    },
+    reviewStartInline: async ({ sessionId, engineId, backendTarget, input }) => {
+      if (!params.credentials) {
+        return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      }
+      if (!isCodexInlineReviewTarget({ engineId, backendTarget })) {
+        return { ok: false, errorCode: 'inline_review_not_supported', error: 'inline_review_not_supported' };
+      }
+
+      return await callResolvedSessionRpc(sessionId, SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE, input);
     },
 
     daemonMemorySearch: async () => notSupported(),

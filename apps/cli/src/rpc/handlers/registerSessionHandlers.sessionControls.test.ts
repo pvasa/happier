@@ -105,6 +105,59 @@ describe('registerSessionHandlers session controls', () => {
     });
   });
 
+  it('routes inline review RPCs to runtime review controls', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const startInlineReview = vi.fn(async () => ({ ok: true, reviewTurnId: 'turn-review-native' }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        startInlineReview,
+      },
+    });
+
+    const request = {
+      engineIds: ['codex'],
+      instructions: 'Check correctness.',
+      runLocation: 'current_session',
+      changeType: 'uncommitted',
+      base: { kind: 'none' },
+    };
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE)?.(request)).resolves.toEqual({
+      ok: true,
+      reviewTurnId: 'turn-review-native',
+    });
+
+    expect(startInlineReview).toHaveBeenCalledWith(request);
+  });
+
+  it('intercepts /codex.review before enqueueing a normal user message', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const startInlineReview = vi.fn(async () => ({ ok: true, reviewTurnId: 'turn-review-native' }));
+    const enqueueSessionUserMessage = vi.fn(async () => {});
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      enqueueSessionUserMessage,
+      sessionRuntimeControls: {
+        startInlineReview,
+      },
+    });
+
+    await expect(handlers.get(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND)?.({
+      text: '/codex.review focus on regressions',
+      localId: 'local-review-command',
+      meta: { source: 'test' },
+    })).resolves.toEqual({ ok: true, reviewTurnId: 'turn-review-native' });
+
+    expect(startInlineReview).toHaveBeenCalledWith({
+      engineIds: ['codex'],
+      instructions: 'focus on regressions',
+      runLocation: 'current_session',
+      changeType: 'uncommitted',
+      base: { kind: 'none' },
+    });
+    expect(enqueueSessionUserMessage).not.toHaveBeenCalled();
+  });
+
   it('uses the current goal objective for status-only goal updates', async () => {
     const { handlers, registrar } = createRegistrar();
     const setGoal = vi.fn(async () => {});

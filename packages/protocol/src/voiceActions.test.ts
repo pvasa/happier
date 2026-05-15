@@ -105,6 +105,7 @@ describe('extractVoiceActionsFromAssistantText', () => {
           base: { kind: 'none' },
           engines: { coderabbit: {} },
           permissionMode: 'read_only',
+          runLocation: 'execution_run',
         },
       },
     ]);

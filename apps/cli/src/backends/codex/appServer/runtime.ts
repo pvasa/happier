@@ -73,6 +73,8 @@ import {
     mergeCodexGoalIntoSessionWorkStateMetadata,
     removeCodexGoalFromSessionWorkStateMetadata,
 } from './workState';
+import { buildCodexNativeReviewFindingsV2Payload } from '@/agent/reviews/normalize/codex/buildCodexNativeReviewFindingsV2Payload';
+import { resolveCodexAppServerNativeReviewRequest } from './reviews/resolveCodexAppServerNativeReviewRequest';
 
 type CodexAppServerStartOrLoadOptions = Readonly<{
     resumeId?: string | null;
@@ -503,6 +505,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     startReview: (_request: CodexAppServerReviewStartRequest) => Promise<void | UnsupportedSessionRuntimeMethodResult>;
+    startInlineReview: (_input: unknown) => Promise<Readonly<{ ok: true; reviewTurnId: string | null }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: 'invalid_parameters'; error: string }>>;
     flushTurn: () => Promise<void>;
     setGoal: (_objective: string | undefined, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult | GoalControlNotFoundResult>;
     clearGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
@@ -551,6 +554,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const nativeReviewCompletionTextByStreamScope = new Map<string, string>();
     const rawAssistantFinalByStreamScope = new Map<string, PendingRawAssistantFinal>();
     const persistedMediaDedupeKeys = new Set<string>();
+    let activeInlineReviewContext: Readonly<{ input: unknown }> | null = null;
     const captureCurrentSteerContext = (): CodexAppServerSteerContext => ({
         modeId: currentModeId,
         modelId: currentModelId,
@@ -840,6 +844,41 @@ export function createCodexAppServerRuntime(params: Readonly<{
         syntheticSubagentTracker.finalize({ threadId, status });
     };
 
+    const commitInlineReviewFindings = async (
+        update: Extract<CodexAppServerStreamUpdate, { type: 'review-mode-completed' }>,
+    ): Promise<void> => {
+        const reviewText = update.review.trim();
+        if (!reviewText) return;
+
+        const reviewTurnId = latestPendingTurnId ?? pendingTurn?.turnId ?? 'unknown-turn';
+        const sessionId = trimSessionId(params.session.sessionId) ?? 'current-session';
+        const payload = buildCodexNativeReviewFindingsV2Payload({
+            runId: `session-review:${sessionId}:${reviewTurnId}`,
+            callId: update.itemId,
+            backendId: 'codex',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            rawText: reviewText,
+            generatedAtMs: Date.now(),
+        });
+        if (!payload) return;
+
+        const commitSession = params.transcriptSession ?? params.session;
+        if (typeof commitSession.sendAgentMessageCommitted !== 'function') return;
+        await commitSession.sendAgentMessageCommitted(
+            'codex',
+            { type: 'message', message: reviewText },
+            {
+                localId: `codex-inline-review:${reviewTurnId}:${update.itemId}`,
+                meta: {
+                    happier: {
+                        kind: 'review_findings.v2',
+                        payload,
+                    },
+                },
+            },
+        );
+    };
+
     const applyStreamUpdate = async (update: CodexAppServerStreamUpdate, context: StreamUpdateContext): Promise<void> => {
         if (update.type === 'assistant-text-delta') {
             latestAssistantItemIdByStreamScope.set(context.streamScopeId, update.itemId);
@@ -903,6 +942,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
             normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
             rawAssistantFinalByStreamScope.delete(context.streamScopeId);
             nativeReviewCompletionTextByStreamScope.set(context.streamScopeId, update.review);
+            if (activeInlineReviewContext && !context.sidechainId) {
+                await commitInlineReviewFindings(update);
+                return;
+            }
             appendStreamFinal(buildItemStateKey(context.streamScopeId, update.itemId), update.review, assistantTextByItemId, (deltaText) => {
                 itemTranscriptBridge.appendAssistantDelta({
                     deltaText,
@@ -1931,6 +1974,51 @@ export function createCodexAppServerRuntime(params: Readonly<{
         return activeTurn;
     };
 
+    const startReviewTurn = async (
+        request: CodexAppServerReviewStartRequest,
+    ): Promise<string | UnsupportedSessionRuntimeMethodResult | void> => {
+        let recoveredAuthAccountChange = false;
+        while (true) {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                throw new Error('Codex app-server startReview requires an active thread');
+            }
+            if (pendingTurn) {
+                throw new Error('Codex app-server already has a turn in flight');
+            }
+            const client = await ensureClient();
+            const activeTurn = beginPendingTurnForThread(activeThreadId);
+            try {
+                const response = await client.request('review/start', {
+                    threadId: activeThreadId,
+                    target: request.target,
+                    delivery: 'inline',
+                });
+                const startedTurnId = readTurnId(response);
+                if (startedTurnId) {
+                    pendingTurn = { ...activeTurn, turnId: startedTurnId };
+                    latestPendingTurnId = startedTurnId;
+                }
+                await (pendingTurn ?? activeTurn).promise;
+                return startedTurnId ?? undefined;
+            } catch (error) {
+                const failure = error instanceof Error ? error : new Error(String(error));
+                if (isCodexAppServerReviewStartUnavailableError(failure)) {
+                    await finishPendingTurn({ flushReason: 'abort' });
+                    return unsupportedSessionRuntimeMethod('review/start');
+                }
+                activeTurn.promise.catch(() => undefined);
+                await finishPendingTurn({ error: failure, flushReason: 'abort' });
+                if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
+                    recoveredAuthAccountChange = true;
+                    await recoverFromCodexAuthAccountChange(activeThreadId);
+                    continue;
+                }
+                throw failure;
+            }
+        }
+    };
+
     return {
         getSessionId: () => threadId,
         // Codex app-server exposes `turn/steer`, which appends user input to the active in-flight
@@ -2116,46 +2204,29 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
         },
         startReview: async (request: CodexAppServerReviewStartRequest) => {
-            let recoveredAuthAccountChange = false;
-            while (true) {
-                const activeThreadId = threadId;
-                if (!activeThreadId) {
-                    throw new Error('Codex app-server startReview requires an active thread');
-                }
-                if (pendingTurn) {
-                    throw new Error('Codex app-server already has a turn in flight');
-                }
-                const client = await ensureClient();
-                const activeTurn = beginPendingTurnForThread(activeThreadId);
-                try {
-                    const response = await client.request('review/start', {
-                        threadId: activeThreadId,
-                        target: request.target,
-                        delivery: 'inline',
-                    });
-                    const startedTurnId = readTurnId(response);
-                    if (startedTurnId) {
-                        pendingTurn = { ...activeTurn, turnId: startedTurnId };
-                        latestPendingTurnId = startedTurnId;
-                    }
-                    await (pendingTurn ?? activeTurn).promise;
-                    return undefined;
-                } catch (error) {
-                    const failure = error instanceof Error ? error : new Error(String(error));
-                    if (isCodexAppServerReviewStartUnavailableError(failure)) {
-                        await finishPendingTurn({ flushReason: 'abort' });
-                        return unsupportedSessionRuntimeMethod('review/start');
-                    }
-                    activeTurn.promise.catch(() => undefined);
-                    await finishPendingTurn({ error: failure, flushReason: 'abort' });
-                    if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
-                        recoveredAuthAccountChange = true;
-                        await recoverFromCodexAuthAccountChange(activeThreadId);
-                        continue;
-                    }
-                    throw failure;
-                }
+            const result = await startReviewTurn(request);
+            return typeof result === 'string' ? undefined : result;
+        },
+        startInlineReview: async (input: unknown) => {
+            const resolved = resolveCodexAppServerNativeReviewRequest({
+                start: {
+                    intent: 'review',
+                    intentInput: input,
+                },
+            });
+            if (!resolved.ok) {
+                return { ok: false, errorCode: 'invalid_parameters', error: resolved.error ?? resolved.reason };
             }
+
+            activeInlineReviewContext = { input };
+            let reviewTurnResult: string | void | UnsupportedSessionRuntimeMethodResult;
+            try {
+                reviewTurnResult = await startReviewTurn(resolved.request);
+            } finally {
+                activeInlineReviewContext = null;
+            }
+            if (reviewTurnResult && typeof reviewTurnResult === 'object') return reviewTurnResult;
+            return { ok: true, reviewTurnId: reviewTurnResult ?? null };
         },
         sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             let recoveredAuthAccountChange = false;

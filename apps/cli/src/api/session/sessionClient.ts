@@ -576,12 +576,14 @@ export class ApiSessionClient extends EventEmitter {
         delete this.sessionRuntimeControls.clearGoal;
         delete this.sessionRuntimeControls.listVendorPlugins;
         delete this.sessionRuntimeControls.listSkills;
+        delete this.sessionRuntimeControls.startInlineReview;
         if (!controls) return;
         if (typeof controls.refreshGoal === 'function') this.sessionRuntimeControls.refreshGoal = controls.refreshGoal;
         if (typeof controls.setGoal === 'function') this.sessionRuntimeControls.setGoal = controls.setGoal;
         if (typeof controls.clearGoal === 'function') this.sessionRuntimeControls.clearGoal = controls.clearGoal;
         if (typeof controls.listVendorPlugins === 'function') this.sessionRuntimeControls.listVendorPlugins = controls.listVendorPlugins;
         if (typeof controls.listSkills === 'function') this.sessionRuntimeControls.listSkills = controls.listSkills;
+        if (typeof controls.startInlineReview === 'function') this.sessionRuntimeControls.startInlineReview = controls.startInlineReview;
     }
 
     private debugTranscriptRecoveryFetchError(localId: string, error: unknown): void {

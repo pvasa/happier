@@ -16,13 +16,14 @@ import type { MemorySearchQueryV1, MemorySearchResultV1 } from '../memory/memory
 import type { MemoryWindowV1 } from '../memory/memoryWindow.js';
 import { ApprovalRequestOriginV1Schema, ApprovalRequestV1Schema, type ApprovalRequestOriginV1, type ApprovalRequestV1 } from '../approvals/approvalRequestV1.js';
 import type { PromptRegistryConfiguredSourceV1 } from '../promptLibrary/promptRegistriesV1.js';
-import { BackendTargetKeySchema, buildBackendTargetKey, parseBackendTargetKey } from '../backendTargets/backendTargetRef.js';
+import { BackendTargetKeySchema, buildBackendTargetKey, parseBackendTargetKey, type BackendTargetRefV1 } from '../backendTargets/backendTargetRef.js';
 import type { SessionRollbackTarget } from '../sessionRollback.js';
 import {
   SessionHandoffWorkspaceTransferSchema,
   type SessionHandoffWorkspaceTransfer,
 } from '../sessionControl/handoff/handoffSchemas.js';
 import { SessionControlErrorCodeSchema } from '../sessionControl/contract.js';
+import type { ReviewStartInput } from '../reviews/reviewStart.js';
 
 export type ActionExecuteResult =
   | Readonly<{ ok: true; result: unknown }>
@@ -78,6 +79,14 @@ export type ActionExecutorDeps = Readonly<{
   executionRunStop: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
   executionRunAction: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
   executionRunWait: (sessionId: string, request: any, opts?: Readonly<{ serverId?: string | null }>) => Promise<unknown>;
+  reviewStartInline?: (args: Readonly<{
+    sessionId: string;
+    engineId: string;
+    backendTarget: BackendTargetRefV1;
+    instructions: string;
+    input: ReviewStartInput;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
 
   // Session navigation/spawn (client-side)
   sessionOpen: (args: Readonly<{ sessionId: string }>) => Promise<unknown>;
@@ -689,6 +698,19 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
   return { errorCode: 'action_failed', error: message || 'action_failed' };
 }
 
+function readActionExecuteFailure(result: unknown): Readonly<{ errorCode: string; error: string }> | null {
+  if (!result || typeof result !== 'object') return null;
+  const record = result as Readonly<Record<string, unknown>>;
+  if (record.ok !== false) return null;
+  const errorCode = typeof record.errorCode === 'string' && record.errorCode.trim().length > 0
+    ? record.errorCode
+    : 'action_failed';
+  const error = typeof record.error === 'string' && record.error.trim().length > 0
+    ? record.error
+    : errorCode;
+  return { errorCode, error };
+}
+
 export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
   execute: (actionId: ActionId, input: unknown, context?: ActionExecutorContext) => Promise<ActionExecuteResult>;
 }> {
@@ -896,9 +918,42 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const serverId = resolveServerIdForSession(deps, ctx, sessionId);
         const opts = serverId ? { serverId } : undefined;
 
-        const engineIds: readonly string[] = Array.isArray((parsed.data as any).engineIds) ? (parsed.data as any).engineIds : [];
-        const instructions = String((parsed.data as any).instructions ?? '').trim();
-        const intentInputBase = { ...(parsed.data as any) };
+        const reviewInput = parsed.data as ReviewStartInput;
+        const engineIds = reviewInput.engineIds;
+        const instructions = reviewInput.instructions.trim();
+        const permissionMode = reviewInput.permissionMode;
+        const intentInputBase = { ...reviewInput };
+        const runLocation = reviewInput.runLocation;
+
+        if (runLocation === 'current_session') {
+          if (engineIds.length !== 1) {
+            return {
+              ok: false,
+              errorCode: 'inline_review_requires_single_engine',
+              error: 'inline_review_requires_single_engine',
+            };
+          }
+          if (!deps.reviewStartInline) {
+            return {
+              ok: false,
+              errorCode: 'inline_review_not_supported',
+              error: 'inline_review_not_supported',
+            };
+          }
+
+          const engineId = engineIds[0]!;
+          const result = await deps.reviewStartInline({
+            sessionId,
+            engineId,
+            backendTarget: parseBackendTargetKey(normalizeExecutionBackendOptionValue(engineId)),
+            instructions,
+            input: intentInputBase,
+            ...(serverId ? { serverId } : {}),
+          });
+          const failure = readActionExecuteFailure(result);
+          if (failure) return { ok: false, ...failure };
+          return { ok: true, result };
+        }
 
         const results = await fanoutStarts({
           keys: engineIds,
@@ -909,7 +964,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 intent: 'review',
                 backendTarget: parseBackendTargetKey(normalizeExecutionBackendOptionValue(engineId)),
                 instructions,
-                permissionMode: (parsed.data as any).permissionMode ?? 'read_only',
+                permissionMode,
                 retentionPolicy: 'resumable',
                 runClass: 'bounded',
                 // Reviews should stream sidechain progress (and tool traffic) into the parent session.

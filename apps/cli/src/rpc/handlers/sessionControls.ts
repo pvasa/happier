@@ -2,6 +2,7 @@ import {
   SessionGoalClearRequestV1Schema,
   SessionGoalGetRequestV1Schema,
   SessionGoalSetRequestV1Schema,
+  ReviewStartInputSchema,
   SessionSkillCatalogListRequestV1Schema,
   SessionVendorPluginCatalogListRequestV1Schema,
   SessionWorkStateGetRequestV1Schema,
@@ -25,6 +26,7 @@ export type SessionRuntimeControls = {
   clearGoal?: () => unknown;
   listVendorPlugins?: () => Promise<unknown>;
   listSkills?: () => Promise<unknown>;
+  startInlineReview?: (input: unknown) => Promise<unknown> | unknown;
 };
 
 function unsupported(method: string): Readonly<{ ok: false; errorCode: string; error: string }> {
@@ -119,6 +121,15 @@ export function registerSessionControlHandlers(
     const result = readRuntimeControlErrorResult(await opts.sessionRuntimeControls.clearGoal());
     if (result) return result;
     return { workState: readWorkState(opts.getSessionMetadata) };
+  });
+
+  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE, async (raw: unknown) => {
+    const parsed = ReviewStartInputSchema.safeParse(raw);
+    if (!parsed.success) return invalidInput();
+    if (typeof opts.sessionRuntimeControls?.startInlineReview !== 'function') {
+      return unsupported(SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE);
+    }
+    return await opts.sessionRuntimeControls.startInlineReview(raw);
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST, async (raw: unknown) => {

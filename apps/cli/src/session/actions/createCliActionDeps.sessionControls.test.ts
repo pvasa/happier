@@ -336,4 +336,41 @@ describe('createCliActionDeps session controls', () => {
     }));
     expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
   });
+
+  it('calls native inline review RPCs without sending user prompts', async () => {
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_1',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+    });
+
+    const input = {
+      engineIds: ['codex'],
+      instructions: 'Check correctness.',
+      runLocation: 'current_session',
+      changeType: 'uncommitted',
+      base: { kind: 'none' },
+    };
+    await expect(deps.reviewStartInline?.({
+      sessionId: 'sess_1',
+      engineId: 'codex',
+      backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      instructions: 'Check correctness.',
+      input,
+    })).resolves.toEqual({ ok: true });
+
+    expect(mocks.callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
+      token: 'token',
+      sessionId: 'sess_1',
+      method: `sess_1:${SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE}`,
+      request: input,
+    }));
+    expect(mocks.sendSessionMessage).not.toHaveBeenCalled();
+  });
 });

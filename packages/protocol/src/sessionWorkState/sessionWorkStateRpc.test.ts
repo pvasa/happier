@@ -15,6 +15,7 @@ describe('session work-state RPC contracts', () => {
         expect(SESSION_RPC_METHODS.SESSION_GOAL_GET).toBe('session.goal.get');
         expect(SESSION_RPC_METHODS.SESSION_GOAL_SET).toBe('session.goal.set');
         expect(SESSION_RPC_METHODS.SESSION_GOAL_CLEAR).toBe('session.goal.clear');
+        expect(SESSION_RPC_METHODS.SESSION_REVIEW_START_INLINE).toBe('session.review.startInline');
         expect(RPC_METHODS.DAEMON_SESSION_GOAL_GET).toBe('daemon.sessionGoal.get');
         expect(RPC_METHODS.DAEMON_SESSION_GOAL_SET).toBe('daemon.sessionGoal.set');
         expect(RPC_METHODS.DAEMON_SESSION_GOAL_CLEAR).toBe('daemon.sessionGoal.clear');

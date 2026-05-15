@@ -1727,7 +1727,7 @@ describe('createCodexAppServerRuntime', () => {
         await runtime.sendPrompt('bridge-streams');
 
         const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
-            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, unknown> }]
         >;
         const assistantMessages = committedCalls
             .map(([, body, opts]) => ({ body: body as CommittedSnapshotBody, opts }))
@@ -1779,7 +1779,7 @@ describe('createCodexAppServerRuntime', () => {
         });
 
         const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
-            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, unknown> }]
         >;
         const assistantMessages = committedCalls
             .map(([, body]) => body as CommittedSnapshotBody)
@@ -1828,6 +1828,56 @@ describe('createCodexAppServerRuntime', () => {
             'Native review body',
             'Different final assistant text',
         ]));
+    });
+
+    it('commits inline native review results as structured review findings without duplicating final text', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-inline-review-');
+
+        const session = {
+            sessionId: 'sess-inline-review',
+            updateMetadata: vi.fn(),
+            sendAgentMessageCommitted: vi.fn(async () => {}),
+            sendCodexMessage: vi.fn(),
+        };
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: session as any,
+        });
+
+        await runtime.startOrLoad({});
+        await (runtime as unknown as {
+            startInlineReview: (input: unknown) => Promise<unknown>;
+        }).startInlineReview({
+            engineIds: ['codex'],
+            instructions: 'Review current changes',
+            runLocation: 'current_session',
+            changeType: 'uncommitted',
+            base: { kind: 'none' },
+        });
+
+        const committedCalls = session.sendAgentMessageCommitted.mock.calls as unknown as Array<
+            [string, { type?: string; message?: string; text?: string }, { localId: string; meta?: Record<string, any> }]
+        >;
+        const nativeReviewMessages = committedCalls
+            .map(([, body, opts]) => ({ body: body as CommittedSnapshotBody, opts }))
+            .filter((call) => call.body.type === 'message' && !call.body.sidechainId && call.body.message === 'Native review text');
+
+        expect(nativeReviewMessages).toHaveLength(1);
+        expect(nativeReviewMessages[0]?.opts.meta?.happier).toMatchObject({
+            kind: 'review_findings.v2',
+            payload: {
+                runRef: {
+                    runId: 'session-review:sess-inline-review:turn-review-native',
+                    callId: 'review_exited_1',
+                    backendId: 'codex',
+                    backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                },
+                summary: 'Native review text',
+                overviewMarkdown: 'Native review text',
+                findings: [],
+            },
+        });
     });
 
     it('uses the explicit transcript session port for live and durable transcript snapshots', async () => {

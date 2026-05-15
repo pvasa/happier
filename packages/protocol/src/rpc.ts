@@ -157,6 +157,7 @@ export const SESSION_RPC_METHODS = {
   SESSION_GOAL_GET: 'session.goal.get',
   SESSION_GOAL_SET: 'session.goal.set',
   SESSION_GOAL_CLEAR: 'session.goal.clear',
+  SESSION_REVIEW_START_INLINE: 'session.review.startInline',
   SESSION_VENDOR_PLUGIN_CATALOG_LIST: 'session.vendorPluginCatalog.list',
   SESSION_SKILL_CATALOG_LIST: 'session.skillCatalog.list',
   EXECUTION_RUN_START: 'execution.run.start',

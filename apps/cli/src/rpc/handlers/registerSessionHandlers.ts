@@ -251,6 +251,7 @@ export function registerSessionHandlers(
     registerDifftasticHandler(rpcHandlerManager, effectiveWorkingDirectory, { accessPolicy });
     registerSessionUserMessageSendHandler(rpcHandlerManager, {
         enqueueSessionUserMessage: opts?.enqueueSessionUserMessage ?? null,
+        sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
     });
     registerSessionControlHandlers(rpcHandlerManager, {
         getSessionMetadata: opts?.getSessionMetadata ?? null,
