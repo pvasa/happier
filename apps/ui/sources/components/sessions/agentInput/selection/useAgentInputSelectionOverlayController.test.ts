@@ -79,6 +79,52 @@ describe('useAgentInputSelectionOverlayController', () => {
         await hook.unmount();
     });
 
+    it('retains keyboard lift before opening chip overlays and releases it when they close', async () => {
+        let retained = false;
+        let releaseCount = 0;
+        const retainKeyboardLift = () => {
+            retained = true;
+            return () => {
+                retained = false;
+                releaseCount += 1;
+            };
+        };
+        const hook = await renderHook(() => useAgentInputSelectionOverlayController({
+            shouldRenderSessionModeChip: true,
+            canChangePermission: true,
+            hasMachinePopover: true,
+            hasPathPopover: true,
+            hasResumePopover: true,
+            hasProfilePopover: true,
+            hasEnvVarsPopover: true,
+            hasAgentPickerOptions: true,
+            extraActionChips: [],
+            retainKeyboardLift,
+        }));
+
+        await act(async () => {
+            hook.getCurrent().toggleSelectionOverlay('agent', 'chip');
+            expect(retained).toBe(true);
+        });
+
+        expect(hook.getCurrent().activeSelectionOverlay).toEqual({
+            id: 'agent',
+            anchor: 'chip',
+        });
+        expect(retained).toBe(true);
+        expect(releaseCount).toBe(0);
+
+        await act(async () => {
+            hook.getCurrent().toggleSelectionOverlay('agent', 'chip');
+        });
+
+        expect(hook.getCurrent().activeSelectionOverlay).toBeNull();
+        expect(retained).toBe(false);
+        expect(releaseCount).toBe(1);
+
+        await hook.unmount();
+    });
+
     it('tracks collapsed extra chips and clears them when the chip disappears', async () => {
         const extraActionChips = [{
             key: 'checkout',

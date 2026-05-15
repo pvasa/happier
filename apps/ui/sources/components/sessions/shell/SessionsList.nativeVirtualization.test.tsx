@@ -207,6 +207,7 @@ vi.mock('react-native-safe-area-context', () => ({
 vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
     useSharedValue: (init: any) => ({ value: init }),
+    useAnimatedReaction: vi.fn(),
     useAnimatedStyle: (fn: () => any) => fn(),
     withSpring: (value: any) => value,
 }));
@@ -1188,7 +1189,7 @@ describe('SessionsList (native virtualization)', () => {
         expect(findGestureByKind(nativeRowGestureDetectors[0]?.props.gesture, 'pan')).toBeTruthy();
     });
 
-    it('passes scroll events to session-list row bound rebasing on native lists', async () => {
+    it('passes scroll and viewport events to session-list drag autoscroll on native lists', async () => {
         const screen = await renderSessionsList();
         const list = expectPresent(
             screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
@@ -1196,6 +1197,8 @@ describe('SessionsList (native virtualization)', () => {
         );
 
         expect(typeof list.props.onScroll).toBe('function');
+        expect(typeof list.props.onLayout).toBe('function');
+        expect(typeof list.props.onContentSizeChange).toBe('function');
         expect(list.props.scrollEventThrottle).toBe(16);
     });
 
