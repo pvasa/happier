@@ -22,6 +22,8 @@ import {
   resolveConfiguredRelayRuntimeBinaryOverride,
   resolveConfiguredRelayRuntimePaths,
   resolveRelayRuntimeDefaults,
+  renderPrismaCompatibleSqliteDatabaseUrl,
+  resolvePrismaSqliteDatabaseUrlOptionsFromEnv,
   type RelayRuntimeHealthResult,
   type RelayRuntimeNormalizedStatus,
 } from '@happier-dev/cli-common/firstPartyRuntime';
@@ -188,27 +190,20 @@ function resolveRelayRuntimeConfig(params: RelayRuntimeTaskParams): RelayRuntime
   };
 }
 
-function buildDatabaseUrl(params: Readonly<{ dbFilePath: string; platform: NodeJS.Platform }>): string {
-  if (params.platform !== 'win32') {
-    return `file:${params.dbFilePath}`;
-  }
-  const normalized = params.dbFilePath.replaceAll('\\', '/');
-  if (/^[a-zA-Z]:\//u.test(normalized)) return `file:///${normalized}`;
-  if (normalized.startsWith('//')) return `file:${normalized}`;
-  return `file:///${normalized}`;
-}
-
 function renderRelayRuntimeEnv(config: RelayRuntimeConfig, existingEnvText: string): string {
+  const existing = parseEnvText(existingEnvText);
+  const sqliteEnv = { ...process.env, ...existing };
   const defaults: Record<string, string> = {
     PORT: String(config.serverPort),
     HAPPIER_SERVER_HOST: config.serverHost,
     METRICS_ENABLED: 'false',
     HAPPIER_DB_PROVIDER: 'sqlite',
-    DATABASE_URL: buildDatabaseUrl({
-      dbFilePath: config.platform === 'win32'
+    DATABASE_URL: renderPrismaCompatibleSqliteDatabaseUrl({
+      dbPath: config.platform === 'win32'
         ? join(config.dataDir, 'happier-server-light.sqlite')
         : `${config.dataDir}/happier-server-light.sqlite`,
       platform: config.platform,
+      sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(sqliteEnv),
     }),
     HAPPIER_FILES_BACKEND: 'local',
     HAPPIER_SQLITE_AUTO_MIGRATE: '1',
@@ -219,7 +214,6 @@ function renderRelayRuntimeEnv(config: RelayRuntimeConfig, existingEnvText: stri
     NODE_PATH: join(config.currentPath, 'node_modules'),
   };
 
-  const existing = parseEnvText(existingEnvText);
   return renderEnvText({
     ...defaults,
     ...existing,

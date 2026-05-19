@@ -52,7 +52,49 @@ describe("light env helpers", () => {
         "win32",
       ),
     ).toBe(
-      "file:C:/Users/me/Happier%20QA/self-host/data/happier-server-light.sqlite",
+      "file:C:/Users/me/Happier%20QA/self-host/data/happier-server-light.sqlite?socket_timeout=30",
+    );
+  });
+
+  it("resolveLightSqliteDatabaseUrl includes canonical sqlite URL params", () => {
+    expect(resolveLightSqliteDatabaseUrl("/tmp/happier-data", "linux")).toBe(
+      "file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=30",
+    );
+  });
+
+  it("resolveLightSqliteDatabaseUrl honors explicit sqlite connection limit env", () => {
+    const render = resolveLightSqliteDatabaseUrl as (
+      dataDir: string,
+      platform?: NodeJS.Platform,
+      env?: NodeJS.ProcessEnv,
+    ) => string;
+
+    expect(render("/tmp/happier-data", "linux", { HAPPIER_SQLITE_CONNECTION_LIMIT: "1" })).toBe(
+      "file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=30&connection_limit=1",
+    );
+  });
+
+  it("resolveLightSqliteDatabaseUrl rounds positive sub-second sqlite busy timeout env up to one second", () => {
+    const render = resolveLightSqliteDatabaseUrl as (
+      dataDir: string,
+      platform?: NodeJS.Platform,
+      env?: NodeJS.ProcessEnv,
+    ) => string;
+
+    expect(render("/tmp/happier-data", "linux", { HAPPIER_SQLITE_BUSY_TIMEOUT_MS: "500" })).toBe(
+      "file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=1",
+    );
+  });
+
+  it("resolveLightSqliteDatabaseUrl rejects invalid sqlite connection limit env", () => {
+    const render = resolveLightSqliteDatabaseUrl as (
+      dataDir: string,
+      platform?: NodeJS.Platform,
+      env?: NodeJS.ProcessEnv,
+    ) => string;
+
+    expect(() => render("/tmp/happier-data", "linux", { HAPPIER_SQLITE_CONNECTION_LIMIT: "0" })).toThrow(
+      /HAPPIER_SQLITE_CONNECTION_LIMIT/i,
     );
   });
 
@@ -101,7 +143,7 @@ describe("light env helpers", () => {
 
       applyPackagedLightRuntimeSqliteDefaults(env, { executablePath });
 
-      expect(env.DATABASE_URL).toBe("file:///tmp/happier-data/happier-server-light.sqlite");
+      expect(env.DATABASE_URL).toBe("file:///tmp/happier-data/happier-server-light.sqlite?socket_timeout=30");
       expect(env.HAPPIER_SQLITE_AUTO_MIGRATE).toBe("1");
       expect(env.HAPPIER_SQLITE_MIGRATIONS_DIR).toBe(migrationsDir);
     } finally {

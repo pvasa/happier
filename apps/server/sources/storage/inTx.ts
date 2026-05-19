@@ -1,30 +1,89 @@
+import { parseIntEnv } from "@/config/env";
 import { delay } from "@/utils/runtime/delay";
 import { db } from "@/storage/db";
 import { getDbProviderFromEnv, isPrismaErrorCode, type TransactionClient } from "@/storage/prisma";
+import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 
 export type Tx = TransactionClient;
 
 const symbol = Symbol();
 
-function errorMessage(err: unknown): string {
-    if (err instanceof Error && typeof err.message === "string") return err.message;
-    if (err && typeof err === "object" && "message" in err) {
-        const value = (err as any).message;
-        if (typeof value === "string") return value;
-    }
-    return "";
+type SqliteTransactionConfig = Readonly<{
+    maxRetries: number;
+    maxWaitMs: number;
+    retryBaseDelayMs: number;
+    retryMaxDelayMs: number;
+    timeoutMs: number;
+    totalRetryBudgetMs: number;
+}>;
+
+const DEFAULT_SQLITE_TRANSACTION_MAX_RETRIES = 8;
+const DEFAULT_SQLITE_TRANSACTION_MAX_WAIT_MS = 5_000;
+const DEFAULT_SQLITE_TRANSACTION_RETRY_BASE_DELAY_MS = 100;
+const DEFAULT_SQLITE_TRANSACTION_RETRY_MAX_DELAY_MS = 800;
+const DEFAULT_SQLITE_TRANSACTION_TIMEOUT_MS = 10_000;
+// Keep default inTx retry scheduling inside request/client timeout envelopes; raise via env only for known background paths.
+const DEFAULT_SQLITE_TRANSACTION_TOTAL_RETRY_BUDGET_MS = 25_000;
+
+function readSqliteTransactionConfigFromEnv(env: NodeJS.ProcessEnv): SqliteTransactionConfig {
+    const retryBaseDelayMs = parseIntEnv(
+        env.HAPPIER_DB_TX_RETRY_BASE_DELAY_MS ?? env.HAPPY_DB_TX_RETRY_BASE_DELAY_MS,
+        DEFAULT_SQLITE_TRANSACTION_RETRY_BASE_DELAY_MS,
+        { min: 0, max: 60_000 },
+    );
+
+    return {
+        maxRetries: parseIntEnv(
+            env.HAPPIER_DB_TX_MAX_RETRIES ?? env.HAPPY_DB_TX_MAX_RETRIES,
+            DEFAULT_SQLITE_TRANSACTION_MAX_RETRIES,
+            { min: 0, max: 100 },
+        ),
+        maxWaitMs: parseIntEnv(
+            env.HAPPIER_DB_TX_MAX_WAIT_MS ?? env.HAPPY_DB_TX_MAX_WAIT_MS,
+            DEFAULT_SQLITE_TRANSACTION_MAX_WAIT_MS,
+            { min: 1_000, max: 600_000 },
+        ),
+        retryBaseDelayMs,
+        retryMaxDelayMs: parseIntEnv(
+            env.HAPPIER_DB_TX_RETRY_MAX_DELAY_MS ?? env.HAPPY_DB_TX_RETRY_MAX_DELAY_MS,
+            DEFAULT_SQLITE_TRANSACTION_RETRY_MAX_DELAY_MS,
+            { min: retryBaseDelayMs, max: 600_000 },
+        ),
+        timeoutMs: parseIntEnv(
+            env.HAPPIER_DB_TX_TIMEOUT_MS ?? env.HAPPY_DB_TX_TIMEOUT_MS,
+            DEFAULT_SQLITE_TRANSACTION_TIMEOUT_MS,
+            { min: 1_000, max: 600_000 },
+        ),
+        totalRetryBudgetMs: parseIntEnv(
+            env.HAPPIER_DB_TX_TOTAL_RETRY_BUDGET_MS ?? env.HAPPY_DB_TX_TOTAL_RETRY_BUDGET_MS,
+            DEFAULT_SQLITE_TRANSACTION_TOTAL_RETRY_BUDGET_MS,
+            { min: 1, max: 600_000 },
+        ),
+    };
+}
+
+function resolveSqliteTransactionRetryDelayMs(
+    attempt: number,
+    config: Pick<SqliteTransactionConfig, "retryBaseDelayMs" | "retryMaxDelayMs">,
+): number {
+    return Math.min(config.retryMaxDelayMs, attempt * config.retryBaseDelayMs);
+}
+
+function canStartAnotherSqliteTransactionAttempt(params: Readonly<{
+    config: SqliteTransactionConfig;
+    retryDelayMs: number;
+    startedAtMs: number;
+}>): boolean {
+    const elapsedMs = Math.max(0, Date.now() - params.startedAtMs);
+    const nextAttemptBudgetMs = params.config.maxWaitMs + params.config.timeoutMs;
+    return elapsedMs + params.retryDelayMs + nextAttemptBudgetMs <= params.config.totalRetryBudgetMs;
 }
 
 export function isRetryableTransactionError(params: Readonly<{ provider: string; err: unknown }>): boolean {
     if (isPrismaErrorCode(params.err, "P2034")) return true;
 
     if (params.provider === "sqlite") {
-        if (isPrismaErrorCode(params.err, "P1008")) return true;
-        if (isPrismaErrorCode(params.err, "P2028")) return true;
-        const message = errorMessage(params.err).toLowerCase();
-        if (message.includes("socket timeout")) return true;
-        if (message.includes("database is locked")) return true;
-        if (message.includes("sqlite_busy")) return true;
+        if (isRetryableSqliteWriteError(params.err)) return true;
     }
 
     return false;
@@ -45,7 +104,9 @@ export function afterTx(tx: Tx, callback: () => void) {
 
 export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     const provider = getDbProviderFromEnv(process.env, "postgres");
-    const maxRetries = provider === "sqlite" ? 8 : 3;
+    const sqliteTransactionConfig = provider === "sqlite" ? readSqliteTransactionConfigFromEnv(process.env) : null;
+    const maxRetries = sqliteTransactionConfig?.maxRetries ?? 3;
+    const startedAtMs = Date.now();
     let counter = 0;
     let wrapped = async (tx: Tx) => {
         (tx as any)[symbol] = [];
@@ -55,8 +116,10 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
     }
     while (true) {
         try {
-            const txOpts = provider === "sqlite" ? null : { isolationLevel: "Serializable" as const, timeout: 10000 };
-            let result = txOpts ? await db.$transaction(wrapped, txOpts) : await db.$transaction(wrapped);
+            const txOpts = sqliteTransactionConfig
+                ? { timeout: sqliteTransactionConfig.timeoutMs, maxWait: sqliteTransactionConfig.maxWaitMs }
+                : { isolationLevel: "Serializable" as const, timeout: 10000 };
+            let result = await db.$transaction(wrapped, txOpts);
             for (let callback of result.callbacks) {
                 try {
                     callback();
@@ -67,8 +130,22 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
             return result.result;
         } catch (e) {
             if (isRetryableTransactionError({ provider, err: e }) && counter < maxRetries) {
-                counter++;
-                await delay(counter * 100);
+                const nextAttempt = counter + 1;
+                const retryDelayMs = sqliteTransactionConfig
+                    ? resolveSqliteTransactionRetryDelayMs(nextAttempt, sqliteTransactionConfig)
+                    : nextAttempt * 100;
+                if (
+                    sqliteTransactionConfig &&
+                    !canStartAnotherSqliteTransactionAttempt({
+                        config: sqliteTransactionConfig,
+                        retryDelayMs,
+                        startedAtMs,
+                    })
+                ) {
+                    throw e;
+                }
+                counter = nextAttempt;
+                await delay(retryDelayMs);
                 continue;
             }
             throw e;

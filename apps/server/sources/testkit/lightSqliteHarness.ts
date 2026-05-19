@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { renderPrismaCompatibleSqliteDatabaseUrl } from "@happier-dev/cli-common/firstPartyRuntime";
+
 import { applyLightDefaultEnv, ensureHandyMasterSecret } from "@/flavors/light/env";
+import { resolveLightSqliteDatabaseUrlOptionsFromEnv } from "@/flavors/light/sqliteConnectionConfig";
 import { auth } from "@/app/auth/auth";
 import { initEncrypt } from "@/modules/encrypt";
 import { initFilesLocalFromEnv, loadFiles } from "@/storage/blob/files";
@@ -55,10 +58,18 @@ export async function createLightSqliteHarness(options: LightSqliteHarnessOption
     const baseDir = await mkdtemp(join(tempDirBase, options.tempDirPrefix));
     const dbPath = join(baseDir, "test.sqlite");
     try {
+        const envForSqliteOptions = {
+            ...process.env,
+            ...options.env,
+        };
         applyEnvValues({
             HAPPIER_DB_PROVIDER: "sqlite",
             HAPPY_DB_PROVIDER: "sqlite",
-            DATABASE_URL: `file:${dbPath}`,
+            DATABASE_URL: renderPrismaCompatibleSqliteDatabaseUrl({
+                dbPath,
+                platform: process.platform,
+                sqlite: resolveLightSqliteDatabaseUrlOptionsFromEnv(envForSqliteOptions),
+            }),
             HAPPY_SERVER_LIGHT_DATA_DIR: baseDir,
             HAPPIER_SERVER_LIGHT_DATA_DIR: baseDir,
             ...options.env,

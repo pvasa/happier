@@ -33,6 +33,8 @@ import {
   resolveSelfHostSqliteAutoMigrateValue,
   renderSelfHostServerEnvTextFromResolvedValues,
   resolveConfiguredSelfHostBaseUrl,
+  renderPrismaCompatibleSqliteDatabaseUrl,
+  resolvePrismaSqliteDatabaseUrlOptionsFromEnv,
 } from '../firstPartyRuntime/selfHostServerEnv.js';
 import { buildRelayRuntimeHealthProbeCommand, RELAY_RUNTIME_HEALTH_OK_TOKEN } from './buildRelayRuntimeHealthProbeCommand.js';
 
@@ -283,13 +285,22 @@ async function resolveLocalDesiredRelayUrl(params: Readonly<{
     configuredPort,
   });
 
+  const sqliteEnv = {
+    ...process.env,
+    ...(existingEnvText ? parseEnvText(existingEnvText) : {}),
+    ...(params.envOverrides ?? {}),
+  };
   const baseEnvText = renderSelfHostServerEnvTextFromResolvedValues({
     port: resolvedPort,
     host: defaults.serverHost,
     dataDir: defaults.dataDir,
     filesDir: join(defaults.dataDir, 'files'),
     dbDir: join(defaults.dataDir, 'pglite'),
-    databaseUrl: `file:${join(defaults.dataDir, 'happier-server-light.sqlite')}`,
+    databaseUrl: renderPrismaCompatibleSqliteDatabaseUrl({
+      dbPath: join(defaults.dataDir, 'happier-server-light.sqlite'),
+      platform: process.platform,
+      sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(sqliteEnv),
+    }),
     sqliteAutoMigrate: resolveSelfHostSqliteAutoMigrateValue(),
     sqliteMigrationsDir: join(defaults.dataDir, 'migrations', 'sqlite'),
   });
@@ -316,13 +327,21 @@ function resolveRemoteDesiredRelayUrl(params: Readonly<{
     channel: params.channel,
     mode: params.mode,
   });
+  const sqliteEnv = {
+    ...(params.existingEnvText ? parseEnvText(params.existingEnvText) : {}),
+    ...(params.envOverrides ?? {}),
+  };
   const baseEnvText = renderSelfHostServerEnvTextFromResolvedValues({
     port: defaults.serverPort,
     host: defaults.serverHost,
     dataDir: defaults.dataDir,
     filesDir: `${defaults.dataDir}/files`,
     dbDir: `${defaults.dataDir}/pglite`,
-    databaseUrl: `file:${defaults.dataDir}/happier-server-light.sqlite`,
+    databaseUrl: renderPrismaCompatibleSqliteDatabaseUrl({
+      dbPath: `${defaults.dataDir}/happier-server-light.sqlite`,
+      platform: params.platform,
+      sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(sqliteEnv),
+    }),
     sqliteAutoMigrate: resolveSelfHostSqliteAutoMigrateValue(),
     sqliteMigrationsDir: `${defaults.dataDir}/migrations/sqlite`,
   });
@@ -399,7 +418,14 @@ function buildRemoteRelayRuntimeEnvText(params: Readonly<{
   const normalizedDataDir = String(params.defaults.dataDir ?? '').replace(/\/+$/, '') || String(params.defaults.dataDir ?? '');
   const migrationsDir = posixPath.join(params.serverBinDir, 'prisma', 'sqlite', 'migrations');
   const dbPath = `${normalizedDataDir}/happier-server-light.sqlite`;
-  const databaseUrl = `file:${dbPath}`;
+  const databaseUrl = renderPrismaCompatibleSqliteDatabaseUrl({
+    dbPath,
+    platform: params.platform,
+    sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv({
+      ...(params.existingEnvText ? parseEnvText(params.existingEnvText) : {}),
+      ...(params.envOverrides ?? {}),
+    }),
+  });
   const filesDir = `${params.defaults.dataDir}/files`;
   const dbDir = `${params.defaults.dataDir}/pglite`;
   const baseText = renderSelfHostServerEnvTextFromResolvedValues({

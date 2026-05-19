@@ -2,6 +2,7 @@ import { z } from "zod";
 import { db } from "@/storage/db";
 import { buildUsageEphemeral, eventRouter } from "@/app/events/eventRouter";
 import { log } from "@/utils/logging/log";
+import { recordUsageReportForAccount } from "@/app/usage/usageReportWriteService";
 import { type Fastify } from "../../types";
 
 export function registerAccountUsageRoutes(app: Fastify): void {
@@ -170,36 +171,18 @@ export function registerAccountUsageRoutes(app: Fastify): void {
         }
 
         try {
-            const session = await db.session.findFirst({
-                where: { id: sessionId, accountId: userId },
-                select: { id: true },
+            const result = await recordUsageReportForAccount({
+                userId,
+                key,
+                sessionId,
+                tokens,
+                cost,
             });
-            if (!session) {
+            if (!result.ok) {
                 return reply.code(404).send({ error: 'Session not found' });
             }
 
-            const usageData: PrismaJson.UsageReportData = { tokens, cost };
-            const report = await db.usageReport.upsert({
-                where: {
-                    accountId_sessionId_key: {
-                        accountId: userId,
-                        sessionId,
-                        key,
-                    },
-                },
-                update: {
-                    data: usageData,
-                    updatedAt: new Date(),
-                },
-                create: {
-                    accountId: userId,
-                    sessionId,
-                    key,
-                    data: usageData,
-                },
-            });
-
-            const usageEvent = buildUsageEphemeral(sessionId, key, usageData.tokens, usageData.cost);
+            const usageEvent = buildUsageEphemeral(sessionId, key, result.usageData.tokens, result.usageData.cost);
             eventRouter.emitEphemeral({
                 userId,
                 payload: usageEvent,
@@ -208,9 +191,9 @@ export function registerAccountUsageRoutes(app: Fastify): void {
 
             return reply.send({
                 success: true,
-                reportId: report.id,
-                createdAt: report.createdAt.getTime(),
-                updatedAt: report.updatedAt.getTime(),
+                reportId: result.report.id,
+                createdAt: result.report.createdAt.getTime(),
+                updatedAt: result.report.updatedAt.getTime(),
             });
         } catch (error) {
             log({ module: 'api', level: 'error' }, `Failed to save usage report: ${error}`);

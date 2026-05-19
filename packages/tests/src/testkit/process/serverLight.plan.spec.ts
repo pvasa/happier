@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasServerSharedDepsOutputs,
   hasServerGeneratedProviderOutputs,
+  resolveServerLightSqliteDatabaseUrl,
   resolveServerStartLaunchSpec,
   shouldRetryServerStartFromFailureContext,
   resolveSharedDepsBuildArgs,
@@ -77,6 +78,22 @@ describe("startServerLight planning helpers", () => {
 
   it("builds shared server dependencies before startup", () => {
     expect(resolveSharedDepsBuildArgs()).toEqual(["-s", "workspace", resolveServerAppWorkspaceName(), "build:shared"]);
+  });
+
+  it("generates canonical SQLite DATABASE_URL params while preserving explicit DATABASE_URL", () => {
+    const generated = resolveServerLightSqliteDatabaseUrl({
+      dataDir: "/tmp/happier-e2e",
+      env: {},
+      platform: "linux",
+    });
+    expect(generated).toBe("file:///tmp/happier-e2e/happier-server-light.sqlite?socket_timeout=30");
+
+    const explicitDatabaseUrl = "file:/tmp/custom-happier.sqlite?mode=rw";
+    expect(resolveServerLightSqliteDatabaseUrl({
+      dataDir: "/tmp/happier-e2e",
+      env: { DATABASE_URL: explicitDatabaseUrl },
+      platform: "linux",
+    })).toBe(explicitDatabaseUrl);
   });
 
   it("serializes shared deps builds across concurrent callers", async () => {

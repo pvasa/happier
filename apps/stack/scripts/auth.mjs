@@ -50,6 +50,10 @@ import {
 import { decodeJwtPayloadUnsafe } from './utils/auth/decode_jwt_payload_unsafe.mjs';
 import { fileHasContent } from './utils/fs/file_has_content.mjs';
 import { buildConfigureServerLinks } from '@happier-dev/cli-common/links';
+import {
+  renderPrismaCompatibleSqliteDatabaseUrl,
+  resolvePrismaSqliteDatabaseUrlOptionsFromEnv,
+} from '@happier-dev/cli-common/firstPartyRuntime';
 import { getStackRuntimeStatePath, isPidAlive as isRuntimePidAlive, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
 import { resolveStackRuntimeLaunchContext } from './runtime/launch/resolveStackRuntimeLaunchContext.mjs';
 
@@ -624,8 +628,12 @@ function resolveDbProviderForFullFromEnv(env) {
   return 'postgres';
 }
 
-function resolveSqliteDatabaseUrlForLight({ dataDir }) {
-  return `file:${join(dataDir, 'happier-server-light.sqlite')}`;
+function resolveSqliteDatabaseUrlForLight({ dataDir, env }) {
+  return renderPrismaCompatibleSqliteDatabaseUrl({
+    dbPath: join(dataDir, 'happier-server-light.sqlite'),
+    platform: process.platform,
+    sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(env ?? {}),
+  });
 }
 
 async function ensureLightMigrationsApplied({ serverDir, baseDir, envIn, quiet = false }) {
@@ -1302,7 +1310,7 @@ async function cmdCopyFrom({ argv, json }) {
         quiet: json,
       });
       if (lightProvider === 'sqlite') {
-        const url = resolveSqliteDatabaseUrlForLight({ dataDir });
+        const url = resolveSqliteDatabaseUrlForLight({ dataDir, env: sourceEnv });
         return await listAccountsFromPostgres({ cwd: sourceCwd, clientImport: sourceClientImport, databaseUrl: url });
       }
       return await listAccountsFromPglite({ cwd: sourceCwd, dbDir });
@@ -1432,7 +1440,7 @@ async function cmdCopyFrom({ argv, json }) {
 	        const lightProvider = resolveDbProviderForLightFromEnv(targetEnv);
 	        const { dataDir, dbDir } = await ensureLightMigrationsApplied({ serverDir: targetCwd, baseDir: targetBaseDir, envIn: targetEnv, quiet: json });
 	        if (lightProvider === 'sqlite') {
-	          const url = resolveSqliteDatabaseUrlForLight({ dataDir });
+	          const url = resolveSqliteDatabaseUrlForLight({ dataDir, env: targetEnv });
 	          return await insertAccountsIntoPostgres({
 	            cwd: targetCwd,
 	            clientImport: targetClientImport,

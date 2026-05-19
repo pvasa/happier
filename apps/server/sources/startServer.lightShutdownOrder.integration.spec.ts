@@ -45,19 +45,41 @@ describe("startServer light shutdown ordering", () => {
         startServerHarness.restore();
     });
 
-    it("disconnects Prisma before stopping pglite", async () => {
+    it("flushes the activity cache before disconnecting Prisma and stopping pglite", async () => {
         callOrder.length = 0;
         startServerHarness.prepareImport({
             SERVER_ROLE: "all",
             REDIS_URL: undefined,
         });
 
+        let resolveActivityCacheShutdown: () => void = () => {
+            throw new Error("resolveActivityCacheShutdown not initialized");
+        };
+        const activityCacheShutdownBarrier = new Promise<void>((resolve) => {
+            resolveActivityCacheShutdown = () => resolve();
+        });
+        const { activityCache } = await import("@/app/presence/sessionCache");
+        vi.mocked(activityCache.shutdown).mockImplementation(async () => {
+            callOrder.push("activityCache.shutdown:start");
+            await activityCacheShutdownBarrier;
+            callOrder.push("activityCache.shutdown:done");
+        });
+
         const { startServer } = await import("./startServer");
         const { initiateShutdown } = await import("@/utils/process/shutdown");
 
         await startServer("light");
-        await initiateShutdown("test");
+        const shutdownPromise = initiateShutdown("test");
 
-        expect(callOrder).toEqual(["db.$disconnect", "shutdownDbPglite"]);
+        await Promise.resolve();
+        resolveActivityCacheShutdown();
+        await shutdownPromise;
+
+        expect(callOrder).toEqual([
+            "activityCache.shutdown:start",
+            "activityCache.shutdown:done",
+            "db.$disconnect",
+            "shutdownDbPglite",
+        ]);
     });
 });

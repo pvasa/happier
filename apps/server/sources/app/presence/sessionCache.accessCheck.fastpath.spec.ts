@@ -29,8 +29,8 @@ describe("ActivityCache session validation fast path", () => {
         } as any);
     });
 
-    afterEach(() => {
-        activityCache?.shutdown?.();
+    afterEach(async () => {
+        await activityCache?.shutdown?.();
         activityCache = null;
     });
 

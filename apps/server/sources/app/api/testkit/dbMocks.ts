@@ -16,7 +16,10 @@ export type DbMockFromShape<TShape> =
             : never;
 
 type TransactionalDb<TDb extends object, TTx extends object> = TDb & {
-    $transaction: <T>(fn: (tx: TTx) => Promise<T>) => Promise<T>;
+    $transaction: {
+        <T>(fn: (tx: TTx) => Promise<T>): Promise<T>;
+        <T extends readonly unknown[]>(queries: T): Promise<{ [K in keyof T]: Awaited<T[K]> }>;
+    };
 };
 
 function isDbMockLeaf(value: DbMockValue): value is DbMockLeaf {
@@ -73,14 +76,19 @@ export function createDbTransactionMock<TTx extends object>(createTxState: () =>
     transaction: ReturnType<typeof vi.fn>;
     wrapDb: <TDb extends object>(db: TDb) => TransactionalDb<TDb, TTx>;
 } {
-    const transaction = vi.fn(async <T>(fn: (tx: TTx) => Promise<T>): Promise<T> => await fn(createTxState()));
+    const transaction = vi.fn(async <T>(input: ((tx: TTx) => Promise<T>) | readonly unknown[]): Promise<T> => {
+        if (typeof input !== "function") {
+            return await Promise.all(input) as T;
+        }
+        return await input(createTxState());
+    });
 
     return {
         transaction,
         wrapDb<TDb extends object>(db: TDb): TransactionalDb<TDb, TTx> {
             return {
                 ...db,
-                $transaction: async <T>(fn: (tx: TTx) => Promise<T>): Promise<T> => await transaction(fn) as T,
+                $transaction: async <T>(input: ((tx: TTx) => Promise<T>) | readonly unknown[]): Promise<T> => await transaction(input) as T,
             };
         },
     };

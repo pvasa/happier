@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { resolvePrismaClientImportForDbProvider, resolvePrismaClientImportForServerComponent } from '../server/flavor_scripts.mjs';
 import { findAnyCredentialPathInCliHome } from '../auth/credentials_paths.mjs';
+import {
+  renderPrismaCompatibleSqliteDatabaseUrl,
+  resolvePrismaSqliteDatabaseUrlOptionsFromEnv,
+} from '@happier-dev/cli-common/firstPartyRuntime';
 
 function looksLikeMissingTableError(msg) {
   const s = String(msg ?? '').toLowerCase();
@@ -27,6 +31,9 @@ function resolveLightDbProviderFromEnv(env) {
 }
 
 async function probeAccountCount({ serverComponentName, serverDir, env, lightDbProvider = 'sqlite' }) {
+  const runEnv = lightDbProvider === 'sqlite'
+    ? resolveSqliteDatabaseUrlEnvForProbe(env)
+    : env;
   const probe =
     serverComponentName === 'happier-server-light' && lightDbProvider === 'pglite'
       ? `
@@ -89,11 +96,13 @@ async function probeAccountCount({ serverComponentName, serverDir, env, lightDbP
 		  const { PrismaClient } = await import(${JSON.stringify(
         resolvePrismaClientImportForDbProvider({ serverDir, provider: 'sqlite' })
       )});
+      const { join: joinPath } = await import('node:path');
+      const { pathToFileURL } = await import('node:url');
       const dataDirPrimary = (process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? '').toString().trim();
       const dataDirLegacy = (process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').toString().trim();
       const dataDir = dataDirPrimary || dataDirLegacy;
       const fromEnv = (process.env.DATABASE_URL ?? '').toString().trim();
-      const url = fromEnv || (dataDir ? \`file:\${dataDir}/happier-server-light.sqlite\` : '');
+      const url = fromEnv || (dataDir ? \`\${pathToFileURL(joinPath(dataDir, 'happier-server-light.sqlite')).href}?socket_timeout=30\` : '');
       if (!url) throw new Error('Missing DATABASE_URL and HAPPIER_SERVER_LIGHT_DATA_DIR or HAPPY_SERVER_LIGHT_DATA_DIR for sqlite probe');
       process.env.DATABASE_URL = url;
 		  db = new PrismaClient();
@@ -145,7 +154,7 @@ async function probeAccountCount({ serverComponentName, serverDir, env, lightDbP
 		}
 		`.trim();
 
-  const out = await runCapture(process.execPath, ['--input-type=module', '-e', probe], { cwd: serverDir, env, timeoutMs: 15_000 });
+  const out = await runCapture(process.execPath, ['--input-type=module', '-e', probe], { cwd: serverDir, env: runEnv, timeoutMs: 15_000 });
   const parsed = out.trim() ? JSON.parse(out.trim()) : {};
   if (parsed?.error) {
     const e = new Error(parsed.error.message || 'unknown prisma probe error');
@@ -154,6 +163,24 @@ async function probeAccountCount({ serverComponentName, serverDir, env, lightDbP
     throw e;
   }
   return Number(parsed.accountCount ?? 0);
+}
+
+function resolveSqliteDatabaseUrlEnvForProbe(env) {
+  if ((env?.DATABASE_URL ?? '').toString().trim()) {
+    return env;
+  }
+  const dataDir = firstNonEmptyEnv(env?.HAPPIER_SERVER_LIGHT_DATA_DIR, env?.HAPPY_SERVER_LIGHT_DATA_DIR);
+  if (!dataDir) {
+    return env;
+  }
+  return {
+    ...env,
+    DATABASE_URL: renderPrismaCompatibleSqliteDatabaseUrl({
+      dbPath: join(dataDir, 'happier-server-light.sqlite'),
+      platform: process.platform,
+      sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(env),
+    }),
+  };
 }
 
 export async function probeExistingAccountCountForServerComponent({
@@ -241,7 +268,11 @@ export async function ensureServerLightSchemaReady({ serverDir, env, bestEffort 
     dataDir &&
     !(env?.DATABASE_URL ?? '').toString().trim()
   ) {
-    env.DATABASE_URL = `file:${join(dataDir, 'happier-server-light.sqlite')}`;
+    env.DATABASE_URL = renderPrismaCompatibleSqliteDatabaseUrl({
+      dbPath: join(dataDir, 'happier-server-light.sqlite'),
+      platform: process.platform,
+      sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(env),
+    });
   }
 
   const probe = async () =>

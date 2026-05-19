@@ -5,6 +5,8 @@ import { randomInt } from 'node:crypto';
 import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { renderPrismaCompatibleSqliteDatabaseUrl } from '@happier-dev/cli-common/firstPartyRuntime';
+
 import { repoRootDir } from '../paths';
 import { runLoggedCommand, spawnLoggedProcess, type SpawnedProcess } from './spawnProcess';
 import { terminateProcessTreeByPid } from './processTree';
@@ -238,6 +240,19 @@ export function resolveTestDbProvider(env: NodeJS.ProcessEnv): TestDbProvider {
 export function resolveStartCommandArgs(provider: TestDbProvider): string[] {
   const script = provider === 'postgres' || provider === 'mysql' ? 'start' : 'start:light';
   return ['-s', 'workspace', resolveServerAppWorkspaceName(), script];
+}
+
+export function resolveServerLightSqliteDatabaseUrl(params: Readonly<{
+  dataDir: string;
+  env: NodeJS.ProcessEnv;
+  platform?: string;
+}>): string {
+  const explicitDatabaseUrl = params.env.DATABASE_URL?.toString().trim();
+  if (explicitDatabaseUrl) return explicitDatabaseUrl;
+  return renderPrismaCompatibleSqliteDatabaseUrl({
+    dbPath: join(params.dataDir, 'happier-server-light.sqlite'),
+    platform: params.platform ?? process.platform,
+  });
 }
 
 function resolveServerWorkspaceDir(rootDir: string): string {
@@ -662,16 +677,19 @@ async function prepareServerLightDataDir(params: {
   baseEnv: NodeJS.ProcessEnv;
   dbProvider: TestDbProvider;
   sqliteUrl: string;
+  sqliteUrlIsExplicit?: boolean;
   databaseUrlForExternalProvider?: string;
 }): Promise<void> {
-  if (!supportsServerLightTemplateCache(params.dbProvider)) {
+  if (!supportsServerLightTemplateCache(params.dbProvider) || (params.dbProvider === 'sqlite' && params.sqliteUrlIsExplicit === true)) {
     await runServerMigrationCommand({
       provider: params.dbProvider,
       env: {
         ...params.baseEnv,
         PORT: '0',
         PUBLIC_URL: 'http://127.0.0.1:0',
-        ...(params.dbProvider === 'postgres' || params.dbProvider === 'mysql'
+        ...(params.dbProvider === 'sqlite'
+          ? { DATABASE_URL: params.sqliteUrl }
+          : params.dbProvider === 'postgres' || params.dbProvider === 'mysql'
           ? { DATABASE_URL: params.databaseUrlForExternalProvider }
           : {}),
       },
@@ -692,7 +710,10 @@ async function prepareServerLightDataDir(params: {
     templateKey,
     targetDir: params.dataDir,
     buildTemplateInto: async (templateDataDir) => {
-      const templateSqliteUrl = `file:${join(templateDataDir, 'happier-server-light.sqlite')}`;
+      const templateSqliteUrl = renderPrismaCompatibleSqliteDatabaseUrl({
+        dbPath: join(templateDataDir, 'happier-server-light.sqlite'),
+        platform: process.platform,
+      });
       await runServerMigrationCommand({
         provider: params.dbProvider,
         env: {
@@ -860,7 +881,8 @@ export async function startServerLight(params: {
   // Keep workspace package ESM exports current before booting server processes.
   await ensureServerSharedDepsBuilt({ testDir: params.testDir, env: baseEnv });
 
-  const sqliteUrl = `file:${join(dataDir, 'happier-server-light.sqlite')}`;
+  const sqliteUrl = resolveServerLightSqliteDatabaseUrl({ dataDir, env: mergedEnv });
+  const sqliteUrlIsExplicit = dbProvider === 'sqlite' && !!mergedEnv.DATABASE_URL?.toString().trim();
   const databaseUrlForExternalProvider = mergedEnv.DATABASE_URL?.toString().trim();
   if ((dbProvider === 'postgres' || dbProvider === 'mysql') && !databaseUrlForExternalProvider) {
     throw new Error(`Missing DATABASE_URL for HAPPIER_E2E_DB_PROVIDER or HAPPY_E2E_DB_PROVIDER=${dbProvider}`);
@@ -893,6 +915,7 @@ export async function startServerLight(params: {
       baseEnv,
       dbProvider,
       sqliteUrl,
+      sqliteUrlIsExplicit,
       databaseUrlForExternalProvider,
     });
   }
