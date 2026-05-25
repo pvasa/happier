@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Platform } from 'react-native';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -105,6 +106,19 @@ function resolveStyleTranslateY(style: unknown): number | undefined {
         }
     }
     return translateY;
+}
+
+async function withNativePlatform<TPlatform extends 'android' | 'ios', TResult>(
+    platform: TPlatform,
+    run: () => Promise<TResult>,
+): Promise<TResult> {
+    const originalPlatformOS = Platform.OS;
+    Object.defineProperty(Platform, 'OS', { value: platform, configurable: true });
+    try {
+        return await run();
+    } finally {
+        Object.defineProperty(Platform, 'OS', { value: originalPlatformOS, configurable: true });
+    }
 }
 
 describe('ComposerKeyboardScaffold native', () => {
@@ -220,20 +234,22 @@ describe('ComposerKeyboardScaffold native', () => {
         });
     });
 
-    it('caps new-session scaffold height to the visible sheet region on cold modal frames', async () => {
-        const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.native');
-        const modalGeometryProps = { safeAreaTop: 62 };
-        const screen = await renderScreen(
-            <ComposerKeyboardScaffold
-                {...modalGeometryProps}
-                mode="newSession"
-                headerHeight={44}
-                testID="scaffold"
-                composer={<React.Fragment>composer</React.Fragment>}
-            >
-                <React.Fragment>content</React.Fragment>
-            </ComposerKeyboardScaffold>,
-        );
+    it('caps iOS new-session scaffold height to the visible sheet region on cold modal frames', async () => {
+        const screen = await withNativePlatform('ios', async () => {
+            const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.native');
+            const modalGeometryProps = { safeAreaTop: 62 };
+            return renderScreen(
+                <ComposerKeyboardScaffold
+                    {...modalGeometryProps}
+                    mode="newSession"
+                    headerHeight={44}
+                    testID="scaffold"
+                    composer={<React.Fragment>composer</React.Fragment>}
+                >
+                    <React.Fragment>content</React.Fragment>
+                </ComposerKeyboardScaffold>,
+            );
+        });
 
         const scaffold = screen.tree.root
             .findAllByType('View' as never)
@@ -249,6 +265,40 @@ describe('ComposerKeyboardScaffold native', () => {
                 : value
         ), undefined);
         expect(maxHeight).toBe(494);
+
+        act(() => {
+            screen.tree.unmount();
+        });
+    });
+
+    it('does not cap Android new-session scaffold height because the native modal frame is already stable', async () => {
+        const screen = await withNativePlatform('android', async () => {
+            const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.native');
+            return renderScreen(
+                <ComposerKeyboardScaffold
+                    mode="newSession"
+                    safeAreaTop={62}
+                    headerHeight={44}
+                    testID="scaffold"
+                    composer={<React.Fragment>composer</React.Fragment>}
+                >
+                    <React.Fragment>content</React.Fragment>
+                </ComposerKeyboardScaffold>,
+            );
+        });
+
+        const scaffold = screen.tree.root
+            .findAllByType('View' as never)
+            .find((node) => node.props.testID === 'scaffold');
+        if (!scaffold) {
+            throw new Error('Expected scaffold root to render as a view');
+        }
+
+        const flattened = Array.isArray(scaffold.props.style) ? scaffold.props.style.flat() : [scaffold.props.style];
+        const hasMaxHeight = flattened.some(
+            (entry: unknown) => entry && typeof entry === 'object' && 'maxHeight' in (entry as Record<string, unknown>),
+        );
+        expect(hasMaxHeight).toBe(false);
 
         act(() => {
             screen.tree.unmount();

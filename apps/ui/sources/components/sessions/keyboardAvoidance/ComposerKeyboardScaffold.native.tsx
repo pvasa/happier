@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useWindowDimensions, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, useWindowDimensions, View, type LayoutChangeEvent } from 'react-native';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -25,6 +25,7 @@ export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): 
     const { style: contentPropsStyle, ...contentProps } = props.contentProps ?? {};
     const newSessionScaffoldMaxHeight = React.useMemo(() => {
         if (props.mode !== 'newSession') return undefined;
+        if (Platform.OS !== 'ios') return undefined;
         if (typeof props.safeAreaTop !== 'number' || !Number.isFinite(props.safeAreaTop)) return undefined;
         const safeTop = Math.max(0, props.safeAreaTop);
         const headerHeight = typeof props.headerHeight === 'number' && Number.isFinite(props.headerHeight)
