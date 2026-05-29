@@ -145,7 +145,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
     harness = null;
   });
 
-  it('lists vendor plugin and skill catalogs through session RPC and sends structured mentions and local images', async () => {
+  it('lists vendor plugin and skill catalogs through session RPC and sends structured mentions and remote images', async () => {
     const testDir = run.testDir('codex-app-server-structured-input');
     harness = await startCodexAppServerRemoteHarness({
       testDir,
@@ -209,7 +209,7 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
     const localId = `pending-${randomUUID()}`;
     const userText = `structured input ${randomUUID()}`;
     const skillPath = resolve(testDir, 'skills', 'code-review', 'SKILL.md');
-    const imagePath = resolve(testDir, 'uploads', 'screenshot.png');
+    const imagePath = resolve(testDir, 'happier', 'uploads', 'session-structured-input', 'messages', 'm1', 'screenshot.png');
     const imageUrl = `https://images.example.test/${randomUUID()}.png`;
     const enqueue = await enqueuePendingQueueV2({
       baseUrl: serverBaseUrl,
@@ -233,7 +233,12 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
                 { name: 'code-review', path: skillPath },
               ],
               attachments: [
-                { kind: 'image', mimeType: 'image/png', localPath: imagePath },
+                {
+                  kind: 'image',
+                  mimeType: 'image/png',
+                  localPath: imagePath,
+                  provenance: { kind: 'sessionAttachmentUpload' },
+                },
                 { kind: 'image', mimeType: 'image/png', url: imageUrl },
               ],
             },
@@ -290,12 +295,14 @@ describe('core e2e: Codex app-server vendor catalog and structured input', () =>
             expect.objectContaining({ type: 'text', text: expect.stringContaining(userText) }),
             expect.objectContaining({ type: 'mention', path: 'plugin://reviewer@codex' }),
             expect.objectContaining({ type: 'skill', name: 'code-review', path: skillPath }),
-            expect.objectContaining({ type: 'localImage', path: imagePath }),
             expect.objectContaining({ type: 'image', url: imageUrl }),
           ]),
         }),
       }),
     ]));
+    const turnStart = requests.find((entry) => entry.method === 'turn/start');
+    const turnInput = Array.isArray(turnStart?.params?.input) ? turnStart.params.input : [];
+    expect(turnInput).not.toContainEqual(expect.objectContaining({ type: 'localImage', path: imagePath }));
     const pluginList = requests.find((entry) => entry.method === 'plugin/list');
     expect(pluginList?.params).not.toHaveProperty('forceReload');
   }, 240_000);

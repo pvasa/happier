@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -23,9 +23,11 @@ describe('core e2e: connected services v2 materialize codex auth.json on spawn',
   let server: StartedServer | null = null;
   let daemon: StartedDaemon | null = null;
 
-  afterAll(async () => {
+  afterEach(async () => {
     await daemon?.stop().catch(() => {});
     await server?.stop();
+    daemon = null;
+    server = null;
   });
 
   it('seals a credential to cloud and materializes CODEX_HOME/auth.json on daemon spawn', async () => {
@@ -205,11 +207,14 @@ describe('core e2e: connected services v2 materialize codex auth.json on spawn',
 
     const materialized = JSON.parse(await readFile(authPath, 'utf8')) as any;
     expect(materialized).toMatchObject({
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
       access_token: 'e2e-access',
       refresh_token: 'e2e-refresh',
       id_token: 'e2e-id',
       account_id: 'acct-1',
     });
+    expect(typeof materialized.last_refresh).toBe('string');
 
     await daemonControlPostJson({
       port: daemonPort,
@@ -219,4 +224,5 @@ describe('core e2e: connected services v2 materialize codex auth.json on spawn',
       timeoutMs: 30_000,
     }).catch(() => {});
   }, 240_000);
+
 });
