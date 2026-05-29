@@ -30,7 +30,8 @@ import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { registerKillSessionHandler } from '@/rpc/handlers/killSession';
 import { stopCaffeinate } from '@/integrations/caffeinate';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
-import { waitForMessagesOrPending } from '@/agent/runtime/waitForMessagesOrPending';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import type { MessageBatch } from '@/agent/runtime/sessionInput/types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createCurrentSessionTranscriptPort } from '@/api/session/createCurrentSessionTranscriptPort';
 import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
@@ -53,6 +54,12 @@ import { archiveAndCloseRuntimeSession } from '@/session/services/archiveAndClos
 import { resolveTerminationArchiveDecision } from '@/agent/runtime/terminationArchivePolicy';
 
 import type { AgentBackend } from '@/agent';
+import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
+import { abortPendingAcpPermissionRequests } from '@/agent/acp/backend/permissions/acpPermissionFinalization';
+import {
+  recordSessionTurnCompleted,
+  surfacePrimarySessionRuntimeIssue,
+} from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { GeminiDiffProcessor } from '@/backends/gemini/utils/diffProcessor';
 import type { GeminiMode, CodexMessagePayload } from '@/backends/gemini/types';
 import type { PermissionMode } from '@/api/types';
@@ -74,6 +81,7 @@ import { ConversationHistory } from '@/backends/gemini/utils/conversationHistory
 import { createGeminiBackendMessageHandler } from '@/backends/gemini/runtime/createGeminiBackendMessageHandler';
 import {
   createGeminiTurnMessageState,
+  resolveGeminiTurnCompletionSignal,
   resetGeminiTurnMessageStateAfterTurn,
   resetGeminiTurnMessageStateForPrompt,
 } from '@/backends/gemini/runtime/geminiTurnMessageState';
@@ -91,6 +99,22 @@ import { buildGeminiPromptForMessage } from '@/backends/gemini/utils/buildGemini
 import { resolveGeminiSystemPromptText } from '@/backends/gemini/prompting/resolveGeminiSystemPromptText';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 
+
+function buildGeminiTurnOutcomeError(outcome: AcpTurnOutcome | null | undefined | void): Error {
+  if (!outcome) return new Error('Gemini turn ended without assistant output');
+  switch (outcome.kind) {
+    case 'failed':
+      return outcome.error;
+    case 'refused':
+      return new Error('Gemini refused the turn');
+    case 'timed_out':
+      return new Error(`Gemini turn timed out after ${outcome.capMs}ms`);
+    case 'completed':
+      return new Error(`Gemini turn ended with stop reason ${outcome.stopReason}`);
+    case 'aborted':
+      return new Error(`Gemini turn was ${outcome.stopReason}`);
+  }
+}
 
 /**
  * Main entry point for the gemini command with ink UI
@@ -422,6 +446,9 @@ export async function runGemini(opts: {
       reason: 'abort',
       interruptedReason: 'abort-requested',
     });
+    turnMessageState.thinking = false;
+    turnMessageState.isResponseInProgress = false;
+    session.keepAlive(false, 'remote');
     
     // Send turn_aborted event (like Codex) when abort is requested
     session.sendAgentMessage('gemini', {
@@ -601,7 +628,7 @@ export async function runGemini(opts: {
   }
 
   const adoptGeminiBackend = (
-    backendResult: { backend: AgentBackend; model: string; modelSource: string },
+    backendResult: { backend: AgentBackend; model?: string; modelSource: string },
     opts: { reason: 'initial' | 'mode-change'; modelToUse: string | null | undefined },
   ): AgentBackend => {
     const backend = backendResult.backend;
@@ -626,7 +653,7 @@ export async function runGemini(opts: {
 
   try {
 	    let currentModeHash: string | null = null;
-	    let pending: { message: string; mode: GeminiMode; isolate: boolean; hash: string } | null = null;
+	    let pending: MessageBatch<GeminiMode, string> | null = null;
 
 	    runtimeOverridesSync = await initializeRuntimeOverridesSynchronizer({
 	      explicitPermissionMode:
@@ -662,21 +689,28 @@ export async function runGemini(opts: {
 	      runtimeOverridesSync?.syncFromMetadata();
 	    };
 	    let didReplaySeedBootstrap = false;
+	    const inputConsumer = createSessionProviderInputConsumer<GeminiMode, string>({
+	      messageQueue,
+	      session: {
+	        materializeNextPendingMessageSafely: (materializeOpts) =>
+	          session.materializeNextPendingMessageSafely(materializeOpts),
+	        popPendingMessage: async () =>
+	          (await session.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).type === 'materialized',
+	        shouldAttemptPendingMaterialization: () => session.shouldAttemptPendingMaterialization?.() ?? true,
+	        reconcilePendingQueueState: (reconcileOpts) => session.reconcilePendingQueueState?.(reconcileOpts),
+	        waitForMetadataUpdate: (signal) => session.waitForMetadataUpdate(signal),
+	      },
+	      onMetadataUpdate: syncControlsFromMetadata,
+	    });
 
     while (!shouldExit) {
-      let message: { message: string; mode: GeminiMode; isolate: boolean; hash: string } | null = pending;
+      let message: MessageBatch<GeminiMode, string> | null = pending;
       pending = null;
 
       if (!message) {
         logger.debug('[gemini] Main loop: waiting for messages from queue...');
         const waitSignal = abortController.signal;
-        const batch = await waitForMessagesOrPending({
-          messageQueue,
-          abortSignal: waitSignal,
-          popPendingMessage: () => session.popPendingMessage(),
-          waitForMetadataUpdate: (signal) => session.waitForMetadataUpdate(signal),
-          onMetadataUpdate: syncControlsFromMetadata,
-        });
+        const batch = await inputConsumer.waitForNextInput({ abortSignal: waitSignal });
         if (!batch) {
           if (waitSignal.aborted && !shouldExit) {
             logger.debug('[gemini] Main loop: wait aborted, continuing...');
@@ -765,6 +799,8 @@ export async function runGemini(opts: {
       isProcessingMessage = true;
 
       let readyTurnContext: ReadyNotificationTurnContext | undefined;
+      let promptTurnOutcome: AcpTurnOutcome | void = undefined;
+      let promptTurnError: unknown = null;
       try {
         const startSeqExclusive = session.getLastObservedMessageSeq();
         const turnToken = session.beginTurnAssistantTextSnapshot({ startSeqExclusive });
@@ -827,7 +863,9 @@ export async function runGemini(opts: {
         // Reset accumulator when sending a new prompt (not when tool calls start)
         // Reset accumulated response for new prompt
         // This ensures a new assistant message will be created (not updating previous one)
-        resetGeminiTurnMessageStateForPrompt(turnMessageState, message.message);
+        resetGeminiTurnMessageStateForPrompt(turnMessageState, message.message, (thinking) => {
+          session.keepAlive(thinking, 'remote');
+        });
         turnAssistantPreviewTracker.reset();
         
         if (!geminiBackend || !acpSessionId) {
@@ -869,7 +907,7 @@ export async function runGemini(opts: {
 
         logger.debug(formatGeminiPromptDebugSummary(promptToSend));
         
-        await sendGeminiPromptWithRetry({
+        promptTurnOutcome = await sendGeminiPromptWithRetry({
           backend: geminiBackend,
           acpSessionId,
           prompt: promptToSend,
@@ -886,6 +924,7 @@ export async function runGemini(opts: {
           first = false;
         }
       } catch (error) {
+        promptTurnError = error;
         logger.debug('[gemini] Error in gemini session:', error);
         const isAbortError = error instanceof Error && error.name === 'AbortError';
 
@@ -915,13 +954,25 @@ export async function runGemini(opts: {
         // next turn observes the latest session-scoped control overrides.
         syncControlsFromMetadata();
 
+        await abortPendingAcpPermissionRequests(
+          permissionHandler,
+          promptTurnError ? 'Gemini turn failed' : 'Gemini turn ended',
+          (error) => {
+            logger.debug('[Gemini] Failed to abort pending permission requests at turn boundary', error);
+          },
+        );
+
         // Reset permission handler and diff processor after turn (like Codex)
         permissionHandler.reset();
         diffProcessor.completeTurn(); // Emit per-turn diffs (if any), then reset
+        const hasAssistantOutput = turnMessageState.accumulatedResponse.trim().length > 0;
+        const hadToolCallInTurn = turnMessageState.hadToolCallInTurn;
+        const hadThinkingInTurn = turnMessageState.hadThinkingInTurn;
+        const hadPermissionInTurn = turnMessageState.hadPermissionInTurn;
         
         // Send accumulated response to mobile app ONLY when turn is complete
         // This prevents message fragmentation from Gemini's chunked responses
-        if (turnMessageState.accumulatedResponse.trim()) {
+        if (hasAssistantOutput) {
           const { text: messageText, options } = parseOptionsFromText(turnMessageState.accumulatedResponse);
           
           // Record assistant response in conversation history for context preservation
@@ -951,20 +1002,54 @@ export async function runGemini(opts: {
         }
 
         await transcriptStream.flushAll({ reason: 'turn-end' });
-        
-        // Send task_complete ONCE at the end of turn (not on every idle)
-        // This signals to the UI that the agent has finished processing
-        session.sendAgentMessage('gemini', {
-          type: 'task_complete',
-          id: randomUUID(),
+
+        const completionSignal = resolveGeminiTurnCompletionSignal({
+          outcome: promptTurnError
+            ? promptTurnError instanceof Error && promptTurnError.name === 'AbortError'
+              ? { kind: 'aborted', stopReason: 'cancelled' }
+              : { kind: 'failed', error: promptTurnError instanceof Error ? promptTurnError : new Error(String(promptTurnError)) }
+            : promptTurnOutcome,
+          hasAssistantOutput,
+          hadToolCallInTurn,
+          hadThinkingInTurn,
+          hadPermissionInTurn,
         });
+
+        if (completionSignal === 'task_complete') {
+          session.sendAgentMessage('gemini', {
+            type: 'task_complete',
+            id: randomUUID(),
+          });
+          await recordSessionTurnCompleted({ session, provider: 'gemini' });
+        } else if (completionSignal === 'turn_cancelled') {
+          await surfacePrimarySessionRuntimeIssue({
+            provider: 'gemini',
+            session,
+            sessionSeq: session.getLastObservedMessageSeq(),
+            cause: 'cancelled',
+          });
+        } else {
+          await surfacePrimarySessionRuntimeIssue({
+            provider: 'gemini',
+            session,
+            sessionSeq: session.getLastObservedMessageSeq(),
+            cause: 'status_error',
+            error: promptTurnError ?? buildGeminiTurnOutcomeError(promptTurnOutcome),
+          });
+        }
         
         // Reset tracking flags
         resetGeminiTurnMessageStateAfterTurn(turnMessageState);
         session.keepAlive(turnMessageState.thinking, 'remote');
         
-        const popped = !shouldExit ? await session.popPendingMessage() : false;
-        if (!popped) {
+        const drainResult = !shouldExit
+          ? await inputConsumer.drainPending({
+              reason: 'gemini-turn-complete',
+              logPrefix: '[Gemini]',
+              abortSignal: abortController.signal,
+            })
+          : null;
+        if (drainResult?.materialized === 0 && drainResult.stoppedReason === 'no_pending') {
           // Use same logic as Codex - emit ready if idle (no pending operations, no queue)
           emitReadyIfIdleShared({
             pending: turnMessageState.thinking || turnMessageState.isResponseInProgress,

@@ -64,10 +64,10 @@ describe('Gemini ACP backend permissions', () => {
   });
 
   it.each([
-    { mode: 'default', approvalMode: 'default', sandbox: false },
+    { mode: 'default', approvalMode: null, sandbox: false },
     { mode: 'acceptEdits', approvalMode: 'auto_edit', sandbox: false },
     { mode: 'plan', approvalMode: 'plan', sandbox: false },
-    { mode: 'read-only', approvalMode: 'default', sandbox: false },
+    { mode: 'read-only', approvalMode: null, sandbox: false },
     { mode: 'safe-yolo', approvalMode: 'auto_edit', sandbox: false },
     { mode: 'yolo', approvalMode: 'yolo', sandbox: false },
     { mode: 'bypassPermissions', approvalMode: 'yolo', sandbox: false },
@@ -75,7 +75,7 @@ describe('Gemini ACP backend permissions', () => {
     'maps permissionMode=$mode to --approval-mode $approvalMode and sandbox=$sandbox',
     ({ mode, approvalMode, sandbox }) => {
       const args = getBackendArgsForMode({ permissionMode: mode as PermissionMode });
-      expect(args[0]).toBe('--experimental-acp');
+      expect(args[0]).toBe('--acp');
       expect(readFlagValue(args, '--approval-mode')).toBe(approvalMode);
       expect(args.includes('--sandbox')).toBe(sandbox);
     },

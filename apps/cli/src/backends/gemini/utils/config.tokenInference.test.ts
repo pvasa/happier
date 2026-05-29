@@ -4,7 +4,13 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readGeminiLocalConfig } from './config';
+import { DEFAULT_GEMINI_MODEL } from '../constants';
+import {
+  determineGeminiModel,
+  getGeminiModelSource,
+  getInitialGeminiModelFromEnv,
+  readGeminiLocalConfig,
+} from './config';
 
 function withTempHome<T>(fn: (homeDir: string) => T): T {
   const prevHome = process.env.HOME;
@@ -60,5 +66,55 @@ describe('readGeminiLocalConfig token inference', () => {
       rmSync(homeDir, { recursive: true, force: true });
       rmSync(cliHomeDir, { recursive: true, force: true });
     }
+  });
+
+  it('reads the upstream settings.json model.name shape', () => {
+    withTempHome((homeDir) => {
+      const geminiDir = join(homeDir, '.gemini');
+      mkdirSync(geminiDir, { recursive: true });
+      writeFileSync(join(geminiDir, 'settings.json'), JSON.stringify({ model: { name: 'auto-gemini-3' } }), 'utf8');
+
+      const cfg = readGeminiLocalConfig();
+      expect(cfg.model).toBe('auto-gemini-3');
+    });
+  });
+
+  it('does not let inherited GEMINI_MODEL defeat upstream settings when no model is selected', () => {
+    const localConfig = {
+      token: null,
+      model: 'settings-model',
+      googleCloudProject: null,
+      googleCloudProjectEmail: null,
+    };
+    const env = { GEMINI_MODEL: 'host-model' };
+
+    expect(determineGeminiModel(undefined, localConfig, env)).toBe('settings-model');
+    expect(getGeminiModelSource(undefined, localConfig, env)).toBe('local-config');
+  });
+
+  it('uses the default model instead of inherited GEMINI_MODEL when no model is selected', () => {
+    const localConfig = {
+      token: null,
+      model: null,
+      googleCloudProject: null,
+      googleCloudProjectEmail: null,
+    };
+    const env = { GEMINI_MODEL: 'host-model' };
+
+    expect(determineGeminiModel(undefined, localConfig, env)).toBe(DEFAULT_GEMINI_MODEL);
+    expect(getGeminiModelSource(undefined, localConfig, env)).toBe('default');
+  });
+
+  it('does not display inherited GEMINI_MODEL when upstream settings has a model', () => {
+    withTempHome((homeDir) => {
+      const geminiDir = join(homeDir, '.gemini');
+      mkdirSync(geminiDir, { recursive: true });
+      writeFileSync(join(geminiDir, 'settings.json'), JSON.stringify({ model: { name: 'settings-display-model' } }), 'utf8');
+
+      expect(getInitialGeminiModelFromEnv({
+        HOME: homeDir,
+        GEMINI_MODEL: 'host-model',
+      })).toBe('settings-display-model');
+    });
   });
 });

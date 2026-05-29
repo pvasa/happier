@@ -1,8 +1,22 @@
 import { AGENTS_CORE } from '@happier-dev/agents';
 
 import { checklists } from './cli/checklists';
+import { createGeminiConnectedServiceRuntimeAuthAdapter } from '@/backends/gemini/connectedServices/createGeminiConnectedServiceRuntimeAuthAdapter';
+import { createGeminiConnectedServicesMaterializer } from '@/backends/gemini/connectedServices/createGeminiConnectedServicesMaterializer';
+import { geminiConnectedServiceStateSharingDescriptor } from '@/backends/gemini/connectedServices/geminiConnectedServiceStateSharingDescriptor';
+import { geminiUsageLimitRecoveryControlAdapter } from '@/backends/gemini/connectedServices/geminiUsageLimitRecoveryControlAdapter';
+import { resolveGeminiConnectedServiceSwitchContinuity } from '@/backends/gemini/connectedServices/resolveGeminiConnectedServiceSwitchContinuity';
 import { geminiDaemonSpawnHooks } from '@/backends/gemini/daemon/spawnHooks';
 import type { AgentCatalogEntry } from '../types';
+import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
+
+const geminiConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
+  providerId: 'gemini',
+  serviceIds: AGENTS_CORE.gemini.connectedServices.supportedServiceIds,
+  refreshTokenRuntimeHandling: 'daemon_only',
+  refreshedCredentialApplication: { mode: 'restart_required' },
+  runtimeAuthFailureClassifier: { available: true },
+};
 
 export const agent = {
   id: AGENTS_CORE.gemini.id,
@@ -13,6 +27,14 @@ export const agent = {
   getCliAuthSpec: async () => (await import('@/backends/gemini/cli/auth/geminiCliAuthSpec')).geminiCliAuthSpec,
   getCloudConnectTarget: async () => (await import('@/backends/gemini/cloud/connect')).geminiCloudConnect,
   getDaemonSpawnHooks: async () => geminiDaemonSpawnHooks,
+  getConnectedServiceMaterializer: async () => createGeminiConnectedServicesMaterializer(),
+  getConnectedServiceRuntimeAuthAdapter: async () => createGeminiConnectedServiceRuntimeAuthAdapter(),
+  getConnectedServiceCredentialLifecycleDescriptor: async () => geminiConnectedServiceCredentialLifecycleDescriptor,
+  getConnectedServiceStateSharingDescriptor: async () => geminiConnectedServiceStateSharingDescriptor,
+  resolveConnectedServiceSwitchContinuity: async (params) => await resolveGeminiConnectedServiceSwitchContinuity(params),
+  verifyResumeReachable: async (input) =>
+    await (await import('@/backends/gemini/connectedServices/verifyResumeReachableGemini')).verifyResumeReachableGemini(input),
+  getSessionUsageLimitRecoveryControlAdapter: async () => geminiUsageLimitRecoveryControlAdapter,
   vendorResumeSupport: AGENTS_CORE.gemini.resume.vendorResume,
   getAcpBackendFactory: async () => {
     const { createGeminiBackend } = await import('@/backends/gemini/acp/backend');

@@ -20,7 +20,8 @@ export function wrapBackendDisposeWithCleanup(
         };
       }
 
-      return Reflect.get(target, prop, receiver);
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
     },
   }) as AgentBackend;
 }

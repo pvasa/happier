@@ -1,9 +1,61 @@
 import type { AgentBackend } from '@/agent';
+import type { AcpTurnOutcome } from '@/agent/acp/backend/turn/_types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 
+type GeminiPromptBackend = Omit<AgentBackend, 'waitForResponseComplete'> & {
+  waitForResponseComplete?: (timeoutMs?: number | null) => Promise<AcpTurnOutcome | void>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isAcpTurnOutcome(value: unknown): value is AcpTurnOutcome {
+  if (!isRecord(value)) return false;
+  return (
+    value.kind === 'completed' ||
+    value.kind === 'aborted' ||
+    value.kind === 'refused' ||
+    value.kind === 'failed' ||
+    value.kind === 'timed_out'
+  );
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function getErrorCode(error: unknown): unknown {
+  return isRecord(error) ? error.code : null;
+}
+
+function getErrorDetails(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (!isRecord(error)) return '';
+  const data = isRecord(error.data) ? error.data : null;
+  const details = data?.details ?? error.details ?? error.message;
+  return typeof details === 'string' ? details : '';
+}
+
+function isRetryableAcpTurnOutcome(outcome: AcpTurnOutcome | void): outcome is AcpTurnOutcome {
+  return (
+    outcome?.kind === 'timed_out' ||
+    (outcome?.kind === 'completed' && outcome.stopReason === 'max_turn_requests')
+  );
+}
+
+function describeRetryableAcpTurnOutcome(outcome: AcpTurnOutcome): string {
+  if (outcome.kind === 'timed_out') return `turn timed out after ${outcome.capMs}ms`;
+  if (outcome.kind === 'completed' && outcome.stopReason === 'max_turn_requests') {
+    return 'turn reached the maximum turn request cap';
+  }
+  return 'turn ended before producing a final response';
+}
+
 export async function sendGeminiPromptWithRetry(params: {
-  backend: AgentBackend;
+  backend: GeminiPromptBackend;
   acpSessionId: string;
   prompt: string;
   messageBuffer: MessageBuffer;
@@ -12,12 +64,12 @@ export async function sendGeminiPromptWithRetry(params: {
   maxRetries?: number;
   retryDelayMs?: number;
   waitForResponseTimeoutMs?: number;
-}): Promise<void> {
+}): Promise<AcpTurnOutcome | void> {
   const maxRetries = typeof params.maxRetries === 'number' ? params.maxRetries : 3;
   const retryDelayMs = typeof params.retryDelayMs === 'number' ? params.retryDelayMs : 2_000;
-  const waitForResponseTimeoutMs = typeof params.waitForResponseTimeoutMs === 'number'
+  const waitForResponseTimeoutMs: number | null = typeof params.waitForResponseTimeoutMs === 'number'
     ? params.waitForResponseTimeoutMs
-    : 120_000;
+    : null;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -28,16 +80,22 @@ export async function sendGeminiPromptWithRetry(params: {
       // Wait for Gemini to finish responding (all chunks received + final idle)
       // This ensures we don't send task_complete until response is truly done.
       if (params.backend.waitForResponseComplete) {
-        await params.backend.waitForResponseComplete(waitForResponseTimeoutMs);
+        const outcome = await params.backend.waitForResponseComplete(waitForResponseTimeoutMs);
         params.onDebug('[gemini] Response complete');
+        if (isRetryableAcpTurnOutcome(outcome) && attempt < maxRetries) {
+          params.onDebug(`[gemini] Retryable turn outcome on attempt ${attempt}/${maxRetries}: ${describeRetryableAcpTurnOutcome(outcome)}`);
+          params.messageBuffer.addMessage(`Gemini turn did not finish cleanly, retrying (${attempt}/${maxRetries})...`, 'status');
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+          continue;
+        }
+        return isAcpTurnOutcome(outcome) ? outcome : undefined;
       }
 
-      break;
+      return undefined;
     } catch (promptError) {
       lastError = promptError;
-      const errObj = promptError as any;
-      const errorDetails = errObj?.data?.details || errObj?.details || errObj?.message || '';
-      const errorCode = errObj?.code;
+      const errorDetails = getErrorDetails(promptError);
+      const errorCode = getErrorCode(promptError);
 
       // Quota/capacity errors are not retryable.
       const isQuotaError = errorDetails.includes('exhausted') ||
@@ -60,7 +118,14 @@ export async function sendGeminiPromptWithRetry(params: {
       const isEmptyResponseError = errorDetails.includes('empty response') ||
         errorDetails.includes('Model stream ended');
       const isInternalError = errorCode === -32603;
-      const isRetryable = isEmptyResponseError || isInternalError;
+      const isStallTimeout =
+        /Timeout waiting for response to complete/i.test(errorDetails) ||
+        /turn inactivity timeout/i.test(errorDetails);
+      const isRetryable = !isAbortLikeError(promptError) && (
+        isEmptyResponseError ||
+        isInternalError ||
+        isStallTimeout
+      );
 
       if (isRetryable && attempt < maxRetries) {
         params.onDebug(`[gemini] Retryable error on attempt ${attempt}/${maxRetries}: ${errorDetails}`);

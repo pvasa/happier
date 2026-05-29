@@ -114,7 +114,39 @@ describe('Gemini ACP backend CLI path resolution', () => {
     const backend = result.backend as unknown as { options: { command: string; args: readonly string[] } };
     expect(backend.options.command).toBe(runtimePath);
     expect(backend.options.args[0]).toBe(fake);
+    expect(backend.options.args).toContain('--acp');
+    expect(backend.options.args).not.toContain('--experimental-acp');
+  });
+
+  it('falls back to deprecated --experimental-acp when the CLI help lacks --acp', async () => {
+    process.env.PATH = '';
+    const dir = await createTempDir('happier-gemini-path-');
+    tempDirs.add(dir);
+    const fake = join(dir, 'gemini');
+    await writeTextFile(
+      fake,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--help" ]; then',
+        '  echo "Usage: gemini --experimental-acp"',
+        '  exit 0',
+        'fi',
+        'echo ok',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    process.env.HAPPIER_GEMINI_PATH = fake;
+
+    const result = createGeminiBackend({
+      cwd: '/tmp',
+      env: {},
+      model: null,
+    });
+
+    const backend = result.backend as unknown as { options: { args: readonly string[] } };
     expect(backend.options.args).toContain('--experimental-acp');
+    expect(backend.options.args).not.toContain('--acp');
   });
 
   it('uses managed install path when available', async () => {

@@ -8,11 +8,13 @@ import {
   handleAcpStatusRunning,
 } from '@/agent/acp/bridge/acpCommonHandlers';
 import { createAcpAgentMessageForwarder } from '@/agent/acp/bridge/createAcpAgentMessageForwarder';
+import { publishAcpSessionModelsState } from '@/agent/acp/runtime/sessionModelsState';
 import { isChangeTitleToolNameAlias } from '@happier-dev/protocol/tools/v2';
 import { logger } from '@/ui/logger';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import type { TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
+import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 
 import { normalizeAvailableCommands, publishSlashCommandsToMetadata } from '@/agent/acp/commands/publishSlashCommands';
 import { GeminiDiffProcessor } from '../utils/diffProcessor';
@@ -65,10 +67,6 @@ export function createGeminiBackendMessageHandler(params: {
 
         if (msg.status === 'error') {
           logger.debug(`[gemini] ⚠️ Error status received: ${statusDetail || 'Unknown error'}`);
-          params.session.sendAgentMessage('gemini', {
-            type: 'turn_aborted',
-            id: randomUUID(),
-          });
         }
 
         if (msg.status === 'running') {
@@ -81,7 +79,17 @@ export function createGeminiBackendMessageHandler(params: {
             setTaskStartedSent: (value: boolean) => { params.state.taskStartedSent = value; },
             makeId: () => randomUUID(),
           });
+        } else if (msg.status === 'idle') {
+          params.state.thinking = false;
+          params.session.keepAlive(params.state.thinking, 'remote');
         } else if (msg.status === 'error') {
+          const hadActiveTurn =
+            params.state.thinking ||
+            params.state.taskStartedSent ||
+            params.state.isResponseInProgress ||
+            params.state.hadToolCallInTurn ||
+            params.state.hadThinkingInTurn ||
+            params.state.hadPermissionInTurn;
           params.state.thinking = false;
           params.session.keepAlive(params.state.thinking, 'remote');
           params.state.accumulatedResponse = '';
@@ -105,6 +113,20 @@ export function createGeminiBackendMessageHandler(params: {
           }
 
           params.messageBuffer.addMessage(`Error: ${errorMessage}`, 'status');
+          void (async () => {
+            if (hadActiveTurn && !params.state.taskStartedSent && params.session.sessionTurnLifecycle) {
+              await params.session.sessionTurnLifecycle.beginTurn({ provider: 'gemini' });
+            }
+            await surfacePrimarySessionRuntimeIssue({
+              cause: 'status_error',
+              provider: 'gemini',
+              error: errorMessage,
+              sessionSeq: params.session.getLastObservedMessageSeq?.() ?? null,
+              session: params.session,
+            });
+          })().catch((error) => {
+            logger.debug('[gemini] Failed to persist primary session runtime issue (non-fatal)', error);
+          });
           params.session.sendAgentMessage('gemini', {
             type: 'message',
             message: `Error: ${errorMessage}`,
@@ -208,6 +230,12 @@ export function createGeminiBackendMessageHandler(params: {
         break;
 
       case 'permission-request':
+        params.state.hadPermissionInTurn = true;
+        forwarder.forward(msg);
+        break;
+
+      case 'permission-response':
+        params.state.hadPermissionInTurn = true;
         forwarder.forward(msg);
         break;
 
@@ -257,6 +285,16 @@ export function createGeminiBackendMessageHandler(params: {
           const details = normalizeAvailableCommands(payload?.availableCommands ?? payload);
           publishSlashCommandsToMetadata({ session: params.session, details });
         }
+        if (msg.name === 'session_models_state' || msg.name === 'current_model_update') {
+          publishAcpSessionModelsState({
+            session: params.session,
+            provider: 'gemini',
+            payload: msg.payload,
+            logPrefix: '[gemini]',
+            reason: msg.name,
+            preservePreviousAvailableModels: true,
+          });
+        }
         if (msg.name === 'thinking') {
           const thinkingPayload = msg.payload as { text?: string } | undefined;
           const thinkingText =
@@ -264,6 +302,7 @@ export function createGeminiBackendMessageHandler(params: {
               ? String(thinkingPayload.text || '')
               : '';
           if (thinkingText) {
+            params.state.hadThinkingInTurn = true;
             logger.debug(`[gemini] 💭 Thinking chunk received (${thinkingText.length} chars)`);
             if (!thinkingText.startsWith('**')) {
               const thinkingPreview = thinkingText.substring(0, 100);
