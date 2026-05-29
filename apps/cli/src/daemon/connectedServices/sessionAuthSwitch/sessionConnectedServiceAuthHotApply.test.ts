@@ -1,0 +1,220 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import type { ConnectedServiceProviderRuntimeAuthAdapter } from '../runtimeAuth/types';
+import { createSessionConnectedServiceAuthHotApply } from './sessionConnectedServiceAuthHotApply';
+
+describe('createSessionConnectedServiceAuthHotApply', () => {
+  it('invokes the provider runtime auth adapter for connected bindings', async () => {
+    const hotApply = vi.fn(async () => ({ applied: true }));
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply,
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+        },
+      },
+    })).resolves.toEqual({ ok: true });
+
+    expect(hotApply).toHaveBeenCalledWith({
+      target: { agentId: 'codex' },
+      selection: expect.objectContaining({
+        serviceId: 'openai-codex',
+        profileId: 'work',
+        binding: { source: 'connected', selection: 'profile', profileId: 'work' },
+      }),
+    });
+  });
+
+  it('returns failure when the provider runtime adapter rejects hot apply', async () => {
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply: async () => ({ applied: false, reason: 'not_ready' }),
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+        },
+      },
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'hot_apply_failed',
+      serviceId: 'openai-codex',
+      serviceResultsByServiceId: {
+        'openai-codex': { status: 'failed', errorCode: 'hot_apply_failed' },
+      },
+    });
+  });
+
+  it('returns restart-required when the provider can recover a hot-apply miss by restart', async () => {
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply: async () => ({
+        applied: false,
+        reason: 'transport_invalidation_failed',
+        recovery: 'restart_resume',
+      }),
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+        },
+      },
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'hot_apply_restart_required',
+      serviceId: 'openai-codex',
+      serviceResultsByServiceId: {
+        'openai-codex': { status: 'failed', errorCode: 'hot_apply_restart_required' },
+      },
+    });
+  });
+
+  it('reports per-service hot-apply progress when a later service fails', async () => {
+    const hotApply = vi
+      .fn()
+      .mockResolvedValueOnce({ applied: true })
+      .mockResolvedValueOnce({ applied: false, reason: 'not_ready' });
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply,
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+          openai: { source: 'connected', selection: 'profile', profileId: 'api' },
+        },
+      },
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'hot_apply_failed',
+      serviceId: 'openai',
+      serviceResultsByServiceId: {
+        'openai-codex': { status: 'applied' },
+        openai: { status: 'failed', errorCode: 'hot_apply_failed' },
+      },
+    });
+  });
+
+  it('applies only requested connected service bindings when a switch scope is provided', async () => {
+    const hotApply = vi.fn(async () => ({ applied: true }));
+    const adapter = {
+      classifyRuntimeAuthFailure: () => null,
+      materializeActiveProfile: async () => ({}),
+      canHotApply: () => ({ supported: true }),
+      hotApply,
+      recoverAfterRuntimeAuthSwitch: async () => ({}),
+      probeQuota: async () => ({}),
+      refreshActiveProfile: async () => ({}),
+    } satisfies ConnectedServiceProviderRuntimeAuthAdapter;
+    const apply = createSessionConnectedServiceAuthHotApply({
+      resolveRuntimeAuthAdapter: async () => adapter,
+    });
+
+    await expect(apply({
+      tracked: {
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+      },
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+          openai: { source: 'connected', selection: 'profile', profileId: 'api' },
+        },
+      },
+      serviceIds: new Set(['openai-codex']),
+    })).resolves.toEqual({ ok: true });
+
+    expect(hotApply).toHaveBeenCalledOnce();
+    expect(hotApply).toHaveBeenCalledWith(expect.objectContaining({
+      selection: expect.objectContaining({ serviceId: 'openai-codex' }),
+    }));
+  });
+});

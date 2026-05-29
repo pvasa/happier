@@ -1,0 +1,98 @@
+import type { ConnectedServiceAuthGroupV1, ConnectedServiceCredentialHealthStatusV1 } from '@happier-dev/protocol';
+
+import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
+import {
+  DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+  type ConnectedServiceAuthGroupMemberRuntimeState,
+  type ConnectedServiceAuthGroupPolicyV1,
+} from '../selection/selectConnectedServiceAuthGroupCandidate';
+import type { ConnectedServiceAuthGroupSwitchState } from './ConnectedServiceAuthGroupSwitchCoordinator';
+
+export function normalizeConnectedServiceAuthGroupPolicy(value: ConnectedServiceAuthGroupV1['policy']): ConnectedServiceAuthGroupPolicyV1 {
+  return {
+    ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+    ...value,
+    switchOn: {
+      ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1.switchOn,
+      ...value.switchOn,
+    },
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return Math.trunc(value);
+}
+
+function readCredentialHealthStatus(value: unknown): ConnectedServiceCredentialHealthStatusV1 | null {
+  return value === 'connected' || value === 'refreshing' || value === 'needs_reauth' || value === 'refresh_failed_retryable'
+    ? value
+    : null;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function mergePersistedMemberRuntimeState(
+  runtimeState: ConnectedServiceAuthGroupMemberRuntimeState | null,
+  persistedState: unknown,
+): ConnectedServiceAuthGroupMemberRuntimeState {
+  const record = readRecord(persistedState);
+  if (!record) return runtimeState ?? {};
+  return {
+    ...(runtimeState ?? {}),
+    ...(readCredentialHealthStatus(record.credentialHealthStatus) ? { credentialHealthStatus: readCredentialHealthStatus(record.credentialHealthStatus) } : {}),
+    cooldownUntilMs: readNonNegativeNumber(record.cooldownUntilMs),
+    exhaustedUntilMs: readNonNegativeNumber(record.exhaustedUntilMs),
+    quotaExhaustedUntilMs: readNonNegativeNumber(record.quotaExhaustedUntilMs),
+    rateLimitedUntilMs: readNonNegativeNumber(record.rateLimitedUntilMs),
+    capacityLimitedUntilMs: readNonNegativeNumber(record.capacityLimitedUntilMs),
+    authInvalidUntilMs: readNonNegativeNumber(record.authInvalidUntilMs),
+    planUnavailableUntilMs: readNonNegativeNumber(record.planUnavailableUntilMs),
+    validationBlockedUntilMs: readNonNegativeNumber(record.validationBlockedUntilMs),
+    providerResetsAtMs: readNonNegativeNumber(record.providerResetsAtMs),
+    lastFailureKind: readString(record.lastFailureKind),
+    lastObservedAtMs: readNonNegativeNumber(record.lastObservedAtMs),
+  };
+}
+
+export function buildConnectedServiceAuthGroupSwitchState(input: Readonly<{
+  group: ConnectedServiceAuthGroupV1;
+  runtimeQuotaSnapshots: ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore;
+  nowMs: number;
+}>): ConnectedServiceAuthGroupSwitchState {
+  const runtimeMemberStates = input.runtimeQuotaSnapshots.buildMemberStates({
+    serviceId: input.group.serviceId,
+    groupId: input.group.groupId,
+    capturedAtMs: input.nowMs,
+  });
+  const memberStatesByProfileId = new Map<string, ConnectedServiceAuthGroupMemberRuntimeState>();
+  for (const member of input.group.members) {
+    memberStatesByProfileId.set(
+      member.profileId,
+      mergePersistedMemberRuntimeState(runtimeMemberStates.get(member.profileId) ?? null, member.state),
+    );
+  }
+
+  return {
+    serviceId: input.group.serviceId,
+    groupId: input.group.groupId,
+    activeProfileId: input.group.activeProfileId,
+    generation: input.group.generation,
+    policy: normalizeConnectedServiceAuthGroupPolicy(input.group.policy),
+    members: input.group.members.map((member) => ({
+      profileId: member.profileId,
+      priority: member.priority,
+      enabled: member.enabled,
+      createdAtMs: member.createdAt,
+    })),
+    memberStatesByProfileId,
+  };
+}

@@ -1,27 +1,45 @@
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rename, rm } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 
 import type {
+  AccountSettings,
   ConnectedServiceCredentialRecordV1,
   ConnectedServiceId,
+  ConnectedServiceMaterializationIdentityV1,
 } from '@happier-dev/protocol';
 
 import type { CatalogAgentId } from '@/backends/types';
-import { materializeClaudeConnectedServiceAuth } from '@/backends/claude/connectedServices/materializeClaudeConnectedServiceAuth';
-import { materializeClaudeSubscriptionConnectedServiceAuth } from '@/backends/claude/connectedServices/materializeClaudeSubscriptionConnectedServiceAuth';
-import { materializeCodexConnectedServiceAuth } from '@/backends/codex/connectedServices/materializeCodexConnectedServiceAuth';
-import { materializeGeminiConnectedServiceAuth } from '@/backends/gemini/connectedServices/materializeGeminiConnectedServiceAuth';
-import { materializeOpenCodeConnectedServiceAuth } from '@/backends/opencode/connectedServices/materializeOpenCodeConnectedServiceAuth';
-import { materializePiConnectedServiceAuth } from '@/backends/pi/connectedServices/materializePiConnectedServiceAuth';
+import { getConnectedServiceMaterializer } from '@/backends/catalog';
+import {
+  HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+  HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+  HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY,
+  serializeConnectedServiceMaterializedEnvKeys,
+  serializeConnectedServiceChildSelections,
+} from '../connectedServiceChildEnvironment';
 import { normalizeMaterializationKeyForPath } from './normalizeMaterializationKeyForPath';
-import { requireConnectedServiceTokenCredentialRecord } from '@/daemon/connectedServices/shared/connectedServiceCredentialRecord';
-import { resolveConnectedServiceHomeDir } from '../homes/resolveConnectedServiceHomeDir';
+import { readConnectedServiceMaterializationIdentityV1 } from './createConnectedServiceMaterializationIdentity';
+import type { ConnectedServicesMaterializeResult } from './providerMaterializerTypes';
+import { resolveConnectedServiceTargetMaterializedRoot } from './resolveConnectedServiceTargetMaterializedRoot';
 
-type MaterializeResult = Readonly<{
-  env: Record<string, string>;
-  cleanupOnFailure: (() => void) | null;
-  cleanupOnExit: (() => void) | null;
-}>;
+export type ConnectedServiceResolvedSelection =
+  | Readonly<{
+      kind: 'profile';
+      serviceId: ConnectedServiceId;
+      profileId: string;
+      record: ConnectedServiceCredentialRecordV1;
+    }>
+  | Readonly<{
+      kind: 'group';
+      serviceId: ConnectedServiceId;
+      groupId: string;
+      activeProfileId: string;
+      fallbackProfileId: string;
+      generation: number;
+      record: ConnectedServiceCredentialRecordV1;
+      policy: unknown;
+    }>;
 
 function bestEffortCleanupDirectory(path: string): () => void {
   let cleaned = false;
@@ -32,84 +50,120 @@ function bestEffortCleanupDirectory(path: string): () => void {
   };
 }
 
+function rewriteEnvRoot(
+  env: Readonly<Record<string, string>>,
+  fromRoot: string,
+  toRoot: string,
+): Record<string, string> {
+  const rewritten: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    const rel = relative(fromRoot, value);
+    rewritten[key] = rel === ''
+      ? toRoot
+      : !rel.startsWith('..') && !isAbsolute(rel)
+        ? join(toRoot, rel)
+        : value;
+  }
+  return rewritten;
+}
+
+async function commitAttemptRoot(input: Readonly<{
+  attemptRoot: string;
+  finalRoot: string;
+}>): Promise<void> {
+  await mkdir(dirname(input.finalRoot), { recursive: true });
+  const backupRoot = `${input.finalRoot}.previous-${randomUUID()}`;
+  let hasBackup = false;
+  try {
+    await rename(input.finalRoot, backupRoot);
+    hasBackup = true;
+  } catch {
+    hasBackup = false;
+  }
+  try {
+    await rename(input.attemptRoot, input.finalRoot);
+    if (hasBackup) {
+      await rm(backupRoot, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (hasBackup) {
+      await rename(backupRoot, input.finalRoot).catch(() => {});
+    }
+    throw error;
+  }
+}
+
 export async function materializeConnectedServicesForSpawn(params: Readonly<{
   agentId: CatalogAgentId;
   materializationKey: string;
+  connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1 | null;
   activeServerDir: string;
   baseDir: string;
+  sessionDirectory?: string | null;
   recordsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceCredentialRecordV1>;
-}>): Promise<MaterializeResult | null> {
-  const env: Record<string, string> = {};
-
-  const materializationSegment = normalizeMaterializationKeyForPath(params.materializationKey);
+  selectionsByServiceId?: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedSelection>;
+  accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
+  processEnv?: NodeJS.ProcessEnv;
+}>): Promise<ConnectedServicesMaterializeResult | null> {
+  const materializationIdentity = readConnectedServiceMaterializationIdentityV1(
+    params.connectedServiceMaterializationIdentityV1,
+  );
+  const materializationSegment =
+    materializationIdentity?.id ?? normalizeMaterializationKeyForPath(params.materializationKey);
   const rootDir = join(params.baseDir, materializationSegment, params.agentId);
-  const cleanupRoot = bestEffortCleanupDirectory(rootDir);
+  const attemptRoot = join(params.baseDir, '.attempts', `${materializationSegment}-${params.agentId}-${randomUUID()}`);
+  const cleanupRoot = bestEffortCleanupDirectory(attemptRoot);
 
-  const codex = params.recordsByServiceId.get('openai-codex') ?? null;
-  const openai = params.recordsByServiceId.get('openai') ?? null;
-  const claudeSubscription = params.recordsByServiceId.get('claude-subscription') ?? null;
-  const anthropic = params.recordsByServiceId.get('anthropic') ?? null;
-  const gemini = params.recordsByServiceId.get('gemini') ?? null;
-
-  if (params.agentId === 'codex') {
-    if (codex) {
-      const stableRootDir = resolveConnectedServiceHomeDir({
-        activeServerDir: params.activeServerDir,
-        serviceId: codex.serviceId,
-        profileId: codex.profileId,
-        agentId: params.agentId,
-      });
-      const materialized = await materializeCodexConnectedServiceAuth({ rootDir: stableRootDir, record: codex });
-      Object.assign(env, materialized.env);
-      return { env, cleanupOnFailure: null, cleanupOnExit: null };
-    }
-    if (!openai) return null;
-    const token = requireConnectedServiceTokenCredentialRecord(openai);
-    env.OPENAI_API_KEY = token.token.token;
-    return { env, cleanupOnFailure: null, cleanupOnExit: null };
-  }
-
-  if (params.agentId === 'claude') {
-    if (claudeSubscription) {
-      Object.assign(env, materializeClaudeSubscriptionConnectedServiceAuth({ record: claudeSubscription }).env);
-      return { env, cleanupOnFailure: null, cleanupOnExit: null };
-    }
-    if (!anthropic) return null;
-    Object.assign(env, materializeClaudeConnectedServiceAuth({ record: anthropic }).env);
-    return { env, cleanupOnFailure: null, cleanupOnExit: null };
-  }
-
-  if (params.agentId === 'opencode') {
-    if (!codex && !openai && !anthropic) return null;
-    const materialized = await materializeOpenCodeConnectedServiceAuth({
-      rootDir,
-      openaiCodex: codex,
-      openai,
-      anthropic,
+  const materializer = await getConnectedServiceMaterializer(params.agentId);
+  if (!materializer) return null;
+  await mkdir(attemptRoot, { recursive: true });
+  let materialized: ConnectedServicesMaterializeResult | null;
+  try {
+    materialized = await materializer({
+      agentId: params.agentId,
+      activeServerDir: params.activeServerDir,
+      rootDir: attemptRoot,
+      sessionDirectory: params.sessionDirectory ?? null,
+      recordsByServiceId: params.recordsByServiceId,
+      selectionsByServiceId: params.selectionsByServiceId,
+      accountSettings: params.accountSettings ?? null,
+      processEnv: params.processEnv ?? process.env,
+      cleanupRoot,
     });
-    Object.assign(env, materialized.env);
-    return { env, cleanupOnFailure: cleanupRoot, cleanupOnExit: cleanupRoot };
+  } catch (error) {
+    cleanupRoot();
+    throw error;
   }
-
-  if (params.agentId === 'pi') {
-    if (!codex && !openai && !anthropic && !claudeSubscription) return null;
-    const materialized = await materializePiConnectedServiceAuth({
-      rootDir,
-      openaiCodex: codex,
-      openai,
-      claudeSubscription,
-      anthropic,
-    });
-    Object.assign(env, materialized.env);
-    return { env, cleanupOnFailure: cleanupRoot, cleanupOnExit: cleanupRoot };
+  if (!materialized) {
+    cleanupRoot();
+    return null;
   }
-
-  if (params.agentId === 'gemini') {
-    if (!gemini) return null;
-    const materialized = await materializeGeminiConnectedServiceAuth({ rootDir, record: gemini });
-    Object.assign(env, materialized.env);
-    return { env, cleanupOnFailure: cleanupRoot, cleanupOnExit: cleanupRoot };
-  }
-
-  return null;
+  await commitAttemptRoot({ attemptRoot, finalRoot: rootDir });
+  const materializedEnv = rewriteEnvRoot(materialized.env, attemptRoot, rootDir);
+  const serializedSelections = serializeConnectedServiceChildSelections(params.selectionsByServiceId);
+  const serializedMaterializedEnvKeys = serializeConnectedServiceMaterializedEnvKeys(materializedEnv);
+  const targetMaterializedRoot = resolveConnectedServiceTargetMaterializedRoot({
+    agentId: params.agentId,
+    targetMaterializedEnv: materializedEnv,
+  }) ?? (materialized.cleanupOnFailure ? rootDir : null);
+  const cleanupFinalRoot = bestEffortCleanupDirectory(rootDir);
+  const cleanupOnFailure = materialized.cleanupOnFailure ? cleanupFinalRoot : materialized.cleanupOnFailure;
+  const cleanupOnExit = materialized.cleanupOnExit ? cleanupFinalRoot : materialized.cleanupOnExit;
+  return {
+    ...materialized,
+    cleanupOnFailure,
+    cleanupOnExit,
+    env: {
+      ...materializedEnv,
+      ...(targetMaterializedRoot
+        ? { [HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]: targetMaterializedRoot }
+        : null),
+      ...(serializedSelections
+        ? { [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: serializedSelections }
+        : null),
+      ...(serializedMaterializedEnvKeys
+        ? { [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: serializedMaterializedEnvKeys }
+        : null),
+    },
+  };
 }

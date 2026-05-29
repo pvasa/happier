@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+function buildJwt(payload: Record<string, unknown>): string {
+  return [
+    'hdr',
+    Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url'),
+    'sig',
+  ].join('.');
+}
+
 describe('connected account descriptors', () => {
   it('describes existing connected service credential families', async () => {
     const mod = await import('./connectedAccountDescriptors').catch(() => null);
@@ -64,5 +72,36 @@ describe('connected account descriptors', () => {
       refreshTokenBody: 'form',
       scopes: expect.any(Array),
     });
+  });
+
+  it('maps OpenAI Codex OAuth id_token claims to friendly account identity', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+    const descriptor = mod.requireConnectedAccountDescriptor('openai-codex');
+    const mapped = descriptor.oauth?.mapCredentialPayload({
+      now: 1_000,
+      payload: {
+        access_token: 'access',
+        refresh_token: 'refresh',
+        id_token: buildJwt({
+          chatgpt_account_id: 'acct-from-token',
+          email: 'codex-user@example.test',
+        }),
+        expires_in: 60,
+      },
+    });
+
+    expect(mapped).toMatchObject({
+      providerAccountId: 'acct-from-token',
+      providerEmail: 'codex-user@example.test',
+    });
+  });
+
+  it('resolves provider-facing display names from the descriptor catalog', async () => {
+    const mod = await import('./connectedAccountDescriptors');
+
+    expect(mod.resolveConnectedServiceProviderDisplayName('openai-codex')).toBe('OpenAI');
+    expect(mod.resolveConnectedServiceProviderDisplayName('claude-subscription')).toBe('Claude');
+    expect(mod.resolveConnectedServiceProviderDisplayName('claude-subscription', 'Claude subscription')).toBe('Claude');
+    expect(mod.resolveConnectedServiceProviderDisplayName('unknown-service')).toBe('Provider');
   });
 });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -6,11 +6,27 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 import { materializeConnectedServicesForSpawn } from './materializeConnectedServicesForSpawn';
+import { normalizeMaterializationKeyForPath } from './normalizeMaterializationKeyForPath';
+import { HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY } from '../connectedServiceChildEnvironment';
+import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
+import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '../connectedServiceChildEnvironment';
 
 describe('materializeConnectedServicesForSpawn', () => {
   it('materializes Codex auth.json and CODEX_HOME env', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceCodexHome = await mkdtemp(join(tmpdir(), 'happier-source-codex-home-test-'));
+    await writeFile(join(sourceCodexHome, 'config.toml'), 'model = "gpt-5.2-codex"\n');
+    await writeFile(join(sourceCodexHome, 'AGENTS.md'), '# User Codex instructions\n');
+    await writeFile(join(sourceCodexHome, 'auth.json'), '{"access_token":"source-access"}\n');
+    await mkdir(join(sourceCodexHome, 'prompts'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'prompts', 'review.md'), 'Review prompt\n');
+    await mkdir(join(sourceCodexHome, 'skills', 'reviewer'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'skills', 'reviewer', 'SKILL.md'), '# Reviewer\n');
+    await mkdir(join(sourceCodexHome, 'accounts'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'accounts', 'personal.json'), '{"account":"personal"}\n');
+    await mkdir(join(sourceCodexHome, 'sessions', '2026', '05', '20'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'sessions', '2026', '05', '20', 'rollout-test.jsonl'), '{}\n');
     const record = buildConnectedServiceCredentialRecord({
       now: 10,
       serviceId: 'openai-codex',
@@ -34,11 +50,20 @@ describe('materializeConnectedServicesForSpawn', () => {
       activeServerDir,
       baseDir,
       recordsByServiceId: new Map([['openai-codex', record]]),
+      processEnv: {
+        CODEX_HOME: sourceCodexHome,
+        CODEX_SQLITE_HOME: join(tmpdir(), 'must-not-leak-native-codex-sqlite-home'),
+        HOME: tmpdir(),
+      },
     });
 
     expect(result).not.toBeNull();
     expect(result!.env.CODEX_HOME).toBe(
       join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex', 'codex-home'),
+    );
+    expect(result!.env.CODEX_SQLITE_HOME).toBe(result!.env.CODEX_HOME);
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(
+      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', 'work', 'codex'),
     );
     expect(result!.cleanupOnFailure).toBeNull();
     expect(result!.cleanupOnExit).toBeNull();
@@ -46,20 +71,223 @@ describe('materializeConnectedServicesForSpawn', () => {
     const authPath = join(result!.env.CODEX_HOME, 'auth.json');
     const auth = JSON.parse(await readFile(authPath, 'utf8'));
     expect(auth).toMatchObject({
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
       access_token: 'access',
       refresh_token: 'refresh',
       id_token: 'id',
       account_id: 'acct',
     });
+    expect(typeof auth.last_refresh).toBe('string');
     expect(auth.tokens).toEqual({
       access_token: 'access',
       refresh_token: 'refresh',
       id_token: 'id',
       account_id: 'acct',
     });
+    const copiedConfig = await readFile(join(result!.env.CODEX_HOME, 'config.toml'), 'utf8');
+    expect(copiedConfig).toContain('model = "gpt-5.2-codex"');
+    expect(copiedConfig).toContain('cli_auth_credentials_store = "file"');
+    await expect(readFile(join(result!.env.CODEX_HOME, 'AGENTS.md'), 'utf8')).resolves.toBe('# User Codex instructions\n');
+    await expect(readFile(join(result!.env.CODEX_HOME, 'prompts', 'review.md'), 'utf8')).resolves.toBe('Review prompt\n');
+    await expect(readFile(join(result!.env.CODEX_HOME, 'skills', 'reviewer', 'SKILL.md'), 'utf8')).resolves.toBe('# Reviewer\n');
+    // Auth secrets (accounts) are never shared, regardless of state-sharing mode.
+    await expect(lstat(join(result!.env.CODEX_HOME, 'accounts'))).rejects.toThrow();
+    // Session state is shared by default now (no explicit account setting required),
+    // so the source rollout is reachable from the materialized Codex home.
+    await expect(
+      readFile(join(result!.env.CODEX_HOME, 'sessions', '2026', '05', '20', 'rollout-test.jsonl'), 'utf8'),
+    ).resolves.toBe('{}\n');
 
     result!.cleanupOnFailure?.();
     result!.cleanupOnExit?.();
+  });
+
+  it('shares Codex session state only when the account setting opts in', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceCodexHome = await mkdtemp(join(tmpdir(), 'happier-source-codex-home-test-'));
+    await mkdir(join(sourceCodexHome, 'sessions', '2026', '05', '20'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'sessions', '2026', '05', '20', 'rollout-shared.jsonl'), '{"id":"shared"}\n');
+    await mkdir(join(sourceCodexHome, 'archived_sessions'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'archived_sessions', 'rollout-archived.jsonl'), '{"id":"archived"}\n');
+    await writeFile(join(sourceCodexHome, 'session_index.jsonl'), '{"id":"shared"}\n');
+    await writeFile(join(sourceCodexHome, 'history.jsonl'), '{"text":"source prompt"}\n');
+    await mkdir(join(sourceCodexHome, 'memories'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'memories', 'raw_memories.md'), '# Source memory\n');
+    await writeFile(join(sourceCodexHome, 'state_5.sqlite'), 'sqlite');
+    await writeFile(join(sourceCodexHome, 'state_5.sqlite-wal'), 'wal');
+    await writeFile(join(sourceCodexHome, 'goals_1.sqlite'), 'goals');
+    await writeFile(join(sourceCodexHome, 'logs_5.sqlite'), 'logs');
+    const record = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: 'id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+
+    const result = await materializeConnectedServicesForSpawn({
+      agentId: 'codex',
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([['openai-codex', record]]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {
+            codex: {
+              configMode: 'linked',
+              stateMode: 'shared',
+            },
+          },
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+      processEnv: {
+        CODEX_HOME: sourceCodexHome,
+        HOME: tmpdir(),
+      },
+    });
+
+    expect(result).not.toBeNull();
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'sessions', '2026', '05', '20', 'rollout-shared.jsonl'), 'utf8')).resolves.toBe('{"id":"shared"}\n');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'archived_sessions', 'rollout-archived.jsonl'), 'utf8')).resolves.toBe('{"id":"archived"}\n');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'session_index.jsonl'), 'utf8')).resolves.toBe('{"id":"shared"}\n');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"source prompt"}\n');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'memories', 'raw_memories.md'), 'utf8')).resolves.toBe('# Source memory\n');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'state_5.sqlite'), 'utf8')).resolves.toBe('sqlite');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'state_5.sqlite-wal'), 'utf8')).resolves.toBe('wal');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'goals_1.sqlite'), 'utf8')).resolves.toBe('goals');
+    await expect(readFile(join(result!.env.CODEX_HOME!, 'logs_5.sqlite'), 'utf8')).resolves.toBe('logs');
+  });
+
+  it('removes managed Codex home shares when settings are isolated', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceCodexHome = await mkdtemp(join(tmpdir(), 'happier-source-codex-home-test-'));
+    await writeFile(join(sourceCodexHome, 'config.toml'), 'model = "gpt-5.2-codex"\n');
+    await mkdir(join(sourceCodexHome, 'prompts'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'prompts', 'review.md'), 'Review prompt\n');
+    await mkdir(join(sourceCodexHome, 'sessions'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'sessions', 'rollout-shared.jsonl'), '{"id":"shared"}\n');
+    const record = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: 'id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+
+    const first = await materializeConnectedServicesForSpawn({
+      agentId: 'codex',
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([['openai-codex', record]]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {
+            codex: {
+              configMode: 'linked',
+              stateMode: 'shared',
+            },
+          },
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+      processEnv: {
+        CODEX_HOME: sourceCodexHome,
+        HOME: tmpdir(),
+      },
+    });
+
+    expect(first).not.toBeNull();
+    const copiedConfig = await readFile(join(first!.env.CODEX_HOME!, 'config.toml'), 'utf8');
+    expect(copiedConfig).toContain('model = "gpt-5.2-codex"');
+    expect(copiedConfig).toContain('cli_auth_credentials_store = "file"');
+    await expect(readFile(join(first!.env.CODEX_HOME!, 'prompts', 'review.md'), 'utf8')).resolves.toBe('Review prompt\n');
+    await expect(readFile(join(first!.env.CODEX_HOME!, 'sessions', 'rollout-shared.jsonl'), 'utf8')).resolves.toBe('{"id":"shared"}\n');
+
+    const isolatedRecord = buildConnectedServiceCredentialRecord({
+      now: 20,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'isolated-access',
+        refreshToken: 'isolated-refresh',
+        idToken: 'isolated-id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+
+    const second = await materializeConnectedServicesForSpawn({
+      agentId: 'codex',
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([['openai-codex', isolatedRecord]]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {
+            codex: {
+              configMode: 'isolated',
+              stateMode: 'isolated',
+            },
+          },
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+      processEnv: {
+        CODEX_HOME: sourceCodexHome,
+        HOME: tmpdir(),
+      },
+    });
+
+    expect(second).not.toBeNull();
+    const auth = JSON.parse(await readFile(join(second!.env.CODEX_HOME!, 'auth.json'), 'utf8'));
+    expect(auth.access_token).toBe('isolated-access');
+    await expect(lstat(join(second!.env.CODEX_HOME!, 'config.toml'))).rejects.toThrow();
+    await expect(lstat(join(second!.env.CODEX_HOME!, 'prompts'))).rejects.toThrow();
+    await expect(lstat(join(second!.env.CODEX_HOME!, 'sessions'))).rejects.toThrow();
   });
 
   it('materializes Codex OPENAI_API_KEY when OpenAI API key connected service is selected', async () => {
@@ -88,6 +316,67 @@ describe('materializeConnectedServicesForSpawn', () => {
     expect(result).not.toBeNull();
     expect(result!.env.OPENAI_API_KEY).toBe('sk-openai-test');
     expect(result!.env.CODEX_HOME).toBeUndefined();
+  });
+
+  it('materializes Codex group selections into the stable group home', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const record = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'backup',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'backup-access',
+        refreshToken: 'backup-refresh',
+        idToken: 'backup-id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'backup-acct',
+        providerEmail: null,
+      },
+    });
+
+    const result = await materializeConnectedServicesForSpawn({
+      agentId: 'codex',
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([['openai-codex', record]]),
+      selectionsByServiceId: new Map([[
+        'openai-codex',
+        {
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'fallback',
+          generation: 7,
+          record,
+          policy: { v: 1, strategy: 'priority' },
+        },
+      ]]),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.env.CODEX_HOME).toBe(
+      join(activeServerDir, 'daemon', 'connected-services', 'homes', 'openai-codex', '__groups', 'main', 'codex', 'codex-home'),
+    );
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]!)).toEqual([
+      {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'backup',
+        fallbackProfileId: 'fallback',
+        generation: 7,
+      },
+    ]);
+    const auth = JSON.parse(await readFile(join(result!.env.CODEX_HOME, 'auth.json'), 'utf8'));
+    expect(auth.access_token).toBe('backup-access');
+    expect(auth.auth_mode).toBe('chatgpt');
+    expect(auth.OPENAI_API_KEY).toBeNull();
   });
 
   it('does not allow materializationKey to affect filesystem path resolution', async () => {
@@ -124,7 +413,7 @@ describe('materializeConnectedServicesForSpawn', () => {
     expect(codexHome).not.toContain('evil');
   });
 
-  it('materializes OpenCode auth.json with openai-codex oauth + anthropic api key credentials', async () => {
+  it('materializes OpenCode OPENCODE_AUTH_CONTENT with openai-codex oauth without probing the refresh token', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
     const codex = buildConnectedServiceCredentialRecord({
@@ -150,12 +439,9 @@ describe('materializeConnectedServicesForSpawn', () => {
       kind: 'token',
       token: { token: 'sk-ant-123', providerAccountId: null, providerEmail: 'user@example.com' },
     });
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      text: async () => '',
-    }));
+    const fetchMock = vi.fn(async () => {
+      throw new Error('OAuth refresh must not be probed during materialization');
+    });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
     const result = await materializeConnectedServicesForSpawn({
@@ -170,14 +456,20 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result!.cleanupOnFailure).toEqual(expect.any(Function));
+    expect(result!.cleanupOnExit).toBeNull();
     expect(result!.env.HOME).toBeUndefined();
     expect(result!.env.USERPROFILE).toBeUndefined();
     expect(result!.env.OPENCODE_TEST_HOME).toBeUndefined();
-    expect(result!.env.XDG_DATA_HOME.startsWith(baseDir)).toBe(true);
-    expect(result!.env.XDG_DATA_HOME.endsWith(join('opencode', 'home', '.local', 'share'))).toBe(true);
+    expect(result!.env.XDG_DATA_HOME).toBeUndefined();
+    expect(result!.env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(result!.env.XDG_CACHE_HOME).toBeUndefined();
+    expect(result!.env.XDG_STATE_HOME).toBeUndefined();
+    expect(result!.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]).toBe(
+      join(baseDir, normalizeMaterializationKeyForPath('session-2'), 'opencode'),
+    );
 
-    const authPath = join(result!.env.XDG_DATA_HOME, 'opencode', 'auth.json');
-    const auth = JSON.parse(await readFile(authPath, 'utf8'));
+    const auth = JSON.parse(result!.env.OPENCODE_AUTH_CONTENT ?? '{}');
     expect(auth).toEqual({
       openai: {
         type: 'oauth',
@@ -191,14 +483,14 @@ describe('materializeConnectedServicesForSpawn', () => {
         key: 'sk-ant-123',
       },
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
 
     result!.cleanupOnFailure?.();
     result!.cleanupOnExit?.();
     vi.unstubAllGlobals();
   });
 
-  it('materializes OpenCode auth.json with OpenAI API key credentials', async () => {
+  it('materializes OpenCode OPENCODE_AUTH_CONTENT with OpenAI API key credentials', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
     const openai = buildConnectedServiceCredentialRecord({
@@ -227,11 +519,12 @@ describe('materializeConnectedServicesForSpawn', () => {
     expect(result!.env.HOME).toBeUndefined();
     expect(result!.env.USERPROFILE).toBeUndefined();
     expect(result!.env.OPENCODE_TEST_HOME).toBeUndefined();
-    expect(result!.env.XDG_DATA_HOME.startsWith(baseDir)).toBe(true);
-    expect(result!.env.XDG_DATA_HOME.endsWith(join('opencode', 'home', '.local', 'share'))).toBe(true);
+    expect(result!.env.XDG_DATA_HOME).toBeUndefined();
+    expect(result!.env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(result!.env.XDG_CACHE_HOME).toBeUndefined();
+    expect(result!.env.XDG_STATE_HOME).toBeUndefined();
 
-    const authPath = join(result!.env.XDG_DATA_HOME, 'opencode', 'auth.json');
-    const auth = JSON.parse(await readFile(authPath, 'utf8'));
+    const auth = JSON.parse(result!.env.OPENCODE_AUTH_CONTENT ?? '{}');
     expect(auth).toEqual({
       openai: {
         type: 'api',
@@ -240,7 +533,7 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
   });
 
-  it('rejects OpenCode oauth materialization when the refresh token is already invalid', async () => {
+  it('keeps OpenCode oauth materialization local when the network would reject the refresh token', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
     const codex = buildConnectedServiceCredentialRecord({
@@ -272,7 +565,7 @@ describe('materializeConnectedServicesForSpawn', () => {
     }));
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 
-    await expect(materializeConnectedServicesForSpawn({
+    const result = await materializeConnectedServicesForSpawn({
       agentId: 'opencode',
       materializationKey: 'session-2-stale',
       activeServerDir,
@@ -280,9 +573,12 @@ describe('materializeConnectedServicesForSpawn', () => {
       recordsByServiceId: new Map([
         ['openai-codex', codex],
       ]),
-    })).rejects.toThrow(/stale or invalid/i);
+    });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeNull();
+    const auth = JSON.parse(result!.env.OPENCODE_AUTH_CONTENT ?? '{}');
+    expect(auth.openai.refresh).toBe('stale-refresh');
+    expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -317,7 +613,7 @@ describe('materializeConnectedServicesForSpawn', () => {
     })).rejects.toThrow(/anthropic oauth/i);
   });
 
-  it('materializes Pi auth.json with openai-codex oauth and injects Anthropic API key via env', async () => {
+  it('materializes Pi auth.json with openai-codex oauth and Anthropic API key credentials', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
     const codex = buildConnectedServiceCredentialRecord({
@@ -356,8 +652,10 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result!.cleanupOnFailure).toEqual(expect.any(Function));
+    expect(result!.cleanupOnExit).toBeNull();
     expect(result!.env.PI_CODING_AGENT_DIR).toContain(baseDir);
-    expect(result!.env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
+    expect(result!.env).not.toHaveProperty('ANTHROPIC_API_KEY');
 
     const authPath = join(result!.env.PI_CODING_AGENT_DIR, 'auth.json');
     const auth = JSON.parse(await readFile(authPath, 'utf8'));
@@ -368,6 +666,10 @@ describe('materializeConnectedServicesForSpawn', () => {
         refresh: 'refresh',
         expires: 123,
         accountId: 'acct',
+      },
+      anthropic: {
+        type: 'api_key',
+        key: 'sk-ant-123',
       },
     });
 
@@ -413,6 +715,50 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
   });
 
+  it('does not export PI_CODING_AGENT_SESSION_DIR when Pi state sharing is enabled', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const openai = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai',
+      profileId: 'work',
+      kind: 'token',
+      token: {
+        token: 'sk-openai-test',
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+
+    const result = await materializeConnectedServicesForSpawn({
+      agentId: 'pi',
+      materializationKey: 'session-3-openai',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([
+        ['openai', openai],
+      ]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {
+            pi: {
+              stateMode: 'shared',
+            },
+          },
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.env).not.toHaveProperty('PI_CODING_AGENT_SESSION_DIR');
+  });
+
   it('materializes Gemini API key env vars from a gemini oauth credential', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
@@ -442,6 +788,8 @@ describe('materializeConnectedServicesForSpawn', () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result!.cleanupOnFailure).toEqual(expect.any(Function));
+    expect(result!.cleanupOnExit).toBeNull();
     expect(typeof result!.env.HOME).toBe('string');
 
     const homeDir = result!.env.HOME!;
@@ -502,6 +850,10 @@ describe('materializeConnectedServicesForSpawn', () => {
 
     expect(result).not.toBeNull();
     expect(result!.env.CLAUDE_CODE_SETUP_TOKEN).toBe('sk-ant-oat01-123');
+    expect('CLAUDE_CONFIG_DIR' in result!.env).toBe(false);
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
+      ['CLAUDE_CODE_SETUP_TOKEN'],
+    );
     expect('CLAUDE_CODE_OAUTH_TOKEN' in result!.env).toBe(false);
     expect('ANTHROPIC_API_KEY' in result!.env).toBe(false);
   });
@@ -536,6 +888,10 @@ describe('materializeConnectedServicesForSpawn', () => {
 
     expect(result).not.toBeNull();
     expect(result!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('claude-access');
+    expect('CLAUDE_CONFIG_DIR' in result!.env).toBe(false);
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
+      ['CLAUDE_CODE_OAUTH_TOKEN'],
+    );
     expect('CLAUDE_CODE_SETUP_TOKEN' in result!.env).toBe(false);
     expect('ANTHROPIC_API_KEY' in result!.env).toBe(false);
   });
@@ -561,7 +917,97 @@ describe('materializeConnectedServicesForSpawn', () => {
 
     expect(result).not.toBeNull();
     expect(result!.env.ANTHROPIC_API_KEY).toBe('sk-ant-123');
+    expect('CLAUDE_CONFIG_DIR' in result!.env).toBe(false);
+    expect(JSON.parse(result!.env[HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]!)).toEqual(
+      ['ANTHROPIC_API_KEY'],
+    );
     expect('CLAUDE_CODE_SETUP_TOKEN' in result!.env).toBe(false);
     expect('CLAUDE_CODE_OAUTH_TOKEN' in result!.env).toBe(false);
+  });
+
+  it('returns a Codex state-sharing diagnostic when shared symlinks are unavailable', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-test-'));
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-test-'));
+    const sourceCodexHome = await mkdtemp(join(tmpdir(), 'happier-source-codex-home-test-'));
+    await mkdir(join(sourceCodexHome, 'sessions'), { recursive: true });
+    await writeFile(join(sourceCodexHome, 'sessions', 'rollout-shared.jsonl'), '{"id":"shared"}\n');
+    const record = buildConnectedServiceCredentialRecord({
+      now: 10,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: null,
+      oauth: {
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        idToken: 'id',
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: null,
+      },
+    });
+
+    vi.resetModules();
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return {
+        ...actual,
+        symlink: vi.fn(async (...args: Parameters<typeof actual.symlink>) => {
+          const [, destinationPath] = args;
+          if (String(destinationPath).includes('sessions.happier-link')) {
+            const error = new Error('symlink unavailable') as NodeJS.ErrnoException;
+            error.code = 'EPERM';
+            throw error;
+          }
+          return actual.symlink(...args);
+        }),
+      };
+    });
+    const { materializeConnectedServicesForSpawn: materializeForSpawn } = await import('./materializeConnectedServicesForSpawn');
+
+    const result = await materializeForSpawn({
+      agentId: 'codex',
+      materializationKey: 'session-1',
+      activeServerDir,
+      baseDir,
+      recordsByServiceId: new Map([['openai-codex', record]]),
+      accountSettings: {
+        connectedServicesProviderStateSharingSettingsV1: {
+          v: 1,
+          defaults: {
+            configMode: 'linked',
+            stateMode: 'isolated',
+          },
+          byAgentId: {
+            codex: {
+              configMode: 'linked',
+              stateMode: 'shared',
+            },
+          },
+          acknowledgedRisksByAgentId: {},
+        },
+      },
+      processEnv: {
+        CODEX_HOME: sourceCodexHome,
+        HOME: tmpdir(),
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'state_symlink_unavailable',
+        providerId: 'codex',
+        requestedStateMode: 'shared',
+        effectiveStateMode: 'isolated',
+        entryName: 'sessions',
+      }),
+    ]);
+    await expect(lstat(join(result!.env.CODEX_HOME!, 'sessions'))).rejects.toThrow();
+    const auth = JSON.parse(await readFile(join(result!.env.CODEX_HOME!, 'auth.json'), 'utf8'));
+    expect(auth.access_token).toBe('access');
+    vi.doUnmock('node:fs/promises');
+    vi.restoreAllMocks();
   });
 });

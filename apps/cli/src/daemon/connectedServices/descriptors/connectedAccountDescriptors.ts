@@ -1,4 +1,9 @@
-import type { ConnectedServiceId } from '@happier-dev/protocol';
+import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol';
+
+import {
+  extractOpenAiCodexAccountId,
+  extractOpenAiCodexEmail,
+} from './openAiCodexIdentityClaims';
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 
@@ -31,6 +36,7 @@ export type ConnectedAccountOauthCredentialPayload = Readonly<{
 export type ConnectedAccountDescriptor = Readonly<{
   id: ConnectedServiceId;
   displayName: string;
+  providerDisplayName?: string;
   credentialKind: 'oauth' | 'token' | 'oauth-or-token';
   oauth?: ConnectedAccountOAuthDescriptor;
   ui?: Readonly<{
@@ -87,6 +93,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
   {
     id: 'openai-codex',
     displayName: 'OpenAI Codex',
+    providerDisplayName: 'OpenAI',
     credentialKind: 'oauth',
     oauth: {
       clientIdEnv: 'HAPPIER_CONNECTED_SERVICES_OPENAI_CODEX_OAUTH_CLIENT_ID',
@@ -97,14 +104,15 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
       scopes: [],
       mapCredentialPayload: ({ now, payload }) => {
         const data = isRecord(payload) ? payload : {};
+        const idToken = readString(data.id_token);
         return {
           accessToken: readRequiredString(data.access_token),
           refreshToken: readRequiredString(data.refresh_token),
-          idToken: readString(data.id_token),
+          idToken,
           scope: null,
           tokenType: null,
-          providerAccountId: readString(data.account_id),
-          providerEmail: null,
+          providerAccountId: readString(data.account_id) ?? extractOpenAiCodexAccountId(idToken),
+          providerEmail: extractOpenAiCodexEmail(idToken),
           expiresAt: resolveExpiresAtFromPayload({ now, payload: data, allowAbsoluteExpiresAt: true }),
         };
       },
@@ -114,18 +122,21 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
   {
     id: 'openai',
     displayName: 'OpenAI',
+    providerDisplayName: 'OpenAI',
     credentialKind: 'token',
     ui: { iconName: 'openai', oauthAddActionModes: [] },
   },
   {
     id: 'anthropic',
     displayName: 'Anthropic',
+    providerDisplayName: 'Claude',
     credentialKind: 'token',
     ui: { iconName: 'anthropic', oauthAddActionModes: [] },
   },
   {
     id: 'claude-subscription',
     displayName: 'Claude subscription',
+    providerDisplayName: 'Claude',
     credentialKind: 'oauth',
     oauth: {
       clientIdEnv: 'HAPPIER_CONNECTED_SERVICES_CLAUDE_SUBSCRIPTION_OAUTH_CLIENT_ID',
@@ -154,6 +165,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
   {
     id: 'gemini',
     displayName: 'Gemini',
+    providerDisplayName: 'Gemini',
     credentialKind: 'oauth',
     oauth: {
       clientIdEnv: 'HAPPIER_CONNECTED_SERVICES_GEMINI_OAUTH_CLIENT_ID',
@@ -183,6 +195,7 @@ export const CONNECTED_ACCOUNT_DESCRIPTORS = [
   {
     id: 'github',
     displayName: 'GitHub',
+    providerDisplayName: 'GitHub',
     credentialKind: 'token',
     ui: { iconName: 'github', oauthAddActionModes: [] },
   },
@@ -193,6 +206,17 @@ const DESCRIPTORS_BY_ID: ReadonlyMap<ConnectedServiceId, ConnectedAccountDescrip
 
 export function getConnectedAccountDescriptor(serviceId: ConnectedServiceId): ConnectedAccountDescriptor | null {
   return DESCRIPTORS_BY_ID.get(serviceId) ?? null;
+}
+
+export function resolveConnectedServiceProviderDisplayName(serviceId: string, explicit?: string | null): string {
+  const serviceIdParsed = ConnectedServiceIdSchema.safeParse(serviceId);
+  const normalizedExplicit = readString(explicit?.replace(/\s+/g, ' ').trim());
+  if (!serviceIdParsed.success) return normalizedExplicit ?? 'Provider';
+  const descriptor = getConnectedAccountDescriptor(serviceIdParsed.data);
+  return readString(descriptor?.providerDisplayName)
+    ?? normalizedExplicit
+    ?? readString(descriptor?.displayName)
+    ?? 'Provider';
 }
 
 export function requireConnectedAccountDescriptor(serviceId: ConnectedServiceId): ConnectedAccountDescriptor {

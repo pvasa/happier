@@ -1,79 +1,241 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { CatalogAgentId } from '@/backends/types';
+import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
+import type { TrackedSession } from '@/daemon/types';
 import { createConnectedServicesAuthUpdatedRestartHandler } from './createConnectedServicesAuthUpdatedRestartHandler';
 
 describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
-  it('marks pi spawn targets for restart and SIGTERMs the child process', () => {
+  type RestartHandlerParams = Parameters<typeof createConnectedServicesAuthUpdatedRestartHandler>[0];
+  type RestartSignalParams = Parameters<RestartHandlerParams['requestRestartSignal']>[0];
+
+  function createTrackedSession(input: Readonly<{
+    pid: number;
+    sessionId: string;
+    startedBy?: TrackedSession['startedBy'];
+  }>): TrackedSession {
+    return {
+      pid: input.pid,
+      startedBy: input.startedBy ?? 'daemon',
+      happySessionId: input.sessionId,
+    };
+  }
+
+  function createLifecycleDescriptor(
+    agentId: CatalogAgentId,
+    mode: 'restart_required' | 'no_restart_required',
+  ): ConnectedServiceCredentialLifecycleDescriptor {
+    return {
+      providerId: agentId,
+      serviceIds: ['claude-subscription'],
+      refreshTokenRuntimeHandling: 'daemon_only',
+      refreshedCredentialApplication: { mode },
+      runtimeAuthFailureClassifier: { available: mode === 'restart_required' },
+    };
+  }
+
+  it('marks restart-required targets and requests a restart signal without killing the child directly', async () => {
     const restartRequestedPids = new Set<number>();
     const kill = vi.fn();
-    const pidToTrackedSession = new Map<number, any>([
-      [1, { pid: 1, startedBy: 'daemon', happySessionId: 's1', childProcess: { kill } }],
-      [2, { pid: 2, startedBy: 'daemon', happySessionId: 's2', childProcess: { kill } }],
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const pidToTrackedSession = new Map<number, TrackedSession>([
+      [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
+      [2, createTrackedSession({ pid: 2, sessionId: 's2' })],
     ]);
 
     const handler = createConnectedServicesAuthUpdatedRestartHandler({
       restartRequestedPids,
       pidToTrackedSession,
-      restartAgentIds: new Set(['pi']),
-    });
+      resolveLifecycleDescriptor: async (agentId) =>
+        createLifecycleDescriptor(agentId, agentId === 'claude' ? 'restart_required' : 'no_restart_required'),
+      resolveProcessGroupPid: (tracked) => tracked.pid,
+      requestRestartSignal,
+      restartSignalDelayMs: 250,
+    } satisfies RestartHandlerParams);
 
-    handler({
-      binding: { serviceId: 'openai-codex', profileId: 'work' },
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 7 },
       affectedTargets: [
-        { pid: 1, agentId: 'pi' },
+        { pid: 1, agentId: 'claude' },
         { pid: 2, agentId: 'codex' },
       ],
     });
 
     expect(restartRequestedPids.has(1)).toBe(true);
     expect(restartRequestedPids.has(2)).toBe(false);
-    expect(kill).toHaveBeenCalledTimes(1);
-    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(kill).not.toHaveBeenCalled();
+    expect(requestRestartSignal).toHaveBeenCalledWith(expect.objectContaining({
+      pid: 1,
+      processGroupPid: 1,
+      delayMs: 250,
+      restartDiagnostic: expect.objectContaining({
+        trigger: 'refresh_triggered_restart',
+        sessionId: 's1',
+        agentId: 'claude',
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: 'team',
+        generation: 7,
+      }),
+    }));
   });
 
-  it('does not double-restart the same pid', () => {
-    const restartRequestedPids = new Set<number>([1]);
-    const kill = vi.fn();
-    const pidToTrackedSession = new Map<number, any>([
-      [1, { pid: 1, startedBy: 'daemon', happySessionId: 's1', childProcess: { kill } }],
+  it('passes the resolved tracked session and gated-restart target to the restart-signal dependency (K3)', async () => {
+    // K3: the wiring site routes the restart through the gated deferral primitive
+    // (requestConnectedServiceRestartWithDeferral), which needs the tracked
+    // session + the switch target descriptor. The handler must therefore hand
+    // both to its requestRestartSignal dependency instead of only a bare pid.
+    const restartRequestedPids = new Set<number>();
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const tracked = createTrackedSession({ pid: 1, sessionId: 's1' });
+    const pidToTrackedSession = new Map<number, TrackedSession>([[1, tracked]]);
+
+    const handler = createConnectedServicesAuthUpdatedRestartHandler({
+      restartRequestedPids,
+      pidToTrackedSession,
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: (target) => target.pid,
+      requestRestartSignal,
+      restartSignalDelayMs: 250,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 9 },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    });
+
+    expect(requestRestartSignal).toHaveBeenCalledWith(expect.objectContaining({
+      pid: 1,
+      tracked,
+      sessionId: 's1',
+      target: {
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: 'team',
+        generation: 9,
+      },
+    }));
+  });
+
+  it('marks external credential updates as reconnect propagation restart diagnostics', async () => {
+    const restartRequestedPids = new Set<number>();
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const pidToTrackedSession = new Map<number, TrackedSession>([
+      [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
     ]);
 
     const handler = createConnectedServicesAuthUpdatedRestartHandler({
       restartRequestedPids,
       pidToTrackedSession,
-      restartAgentIds: new Set(['pi']),
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: (tracked) => tracked.pid,
+      requestRestartSignal,
+      restartSignalDelayMs: 250,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work', groupId: 'team', generation: 4 },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+      trigger: 'reconnect_propagation',
     });
 
-    handler({
-      binding: { serviceId: 'openai-codex', profileId: 'work' },
-      affectedTargets: [{ pid: 1, agentId: 'pi' }],
-    });
-
-    expect(kill).toHaveBeenCalledTimes(0);
+    expect(requestRestartSignal).toHaveBeenCalledWith(expect.objectContaining({
+      restartDiagnostic: expect.objectContaining({
+        trigger: 'reconnect_propagation',
+        sessionId: 's1',
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: 'team',
+        generation: 4,
+      }),
+    }));
   });
 
-  it('does not mark the pid for restart when SIGTERM throws', () => {
+  it('does not double-restart the same pid', async () => {
+    const restartRequestedPids = new Set<number>([1]);
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const pidToTrackedSession = new Map<number, TrackedSession>([
+      [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
+    ]);
+
+    const handler = createConnectedServicesAuthUpdatedRestartHandler({
+      restartRequestedPids,
+      pidToTrackedSession,
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: () => null,
+      requestRestartSignal,
+      restartSignalDelayMs: 0,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work' },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    });
+
+    expect(requestRestartSignal).toHaveBeenCalledTimes(0);
+  });
+
+  it('does not mark the pid for restart when restart signaling throws', async () => {
     const restartRequestedPids = new Set<number>();
-    const kill = vi.fn(() => {
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {
       throw new Error('kill-failed');
     });
-    const pidToTrackedSession = new Map<number, any>([
-      [1, { pid: 1, startedBy: 'daemon', happySessionId: 's1', childProcess: { kill } }],
+    const pidToTrackedSession = new Map<number, TrackedSession>([
+      [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
     ]);
 
     const handler = createConnectedServicesAuthUpdatedRestartHandler({
       restartRequestedPids,
       pidToTrackedSession,
-      restartAgentIds: new Set(['pi']),
-    });
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: () => null,
+      requestRestartSignal,
+      restartSignalDelayMs: 0,
+    } satisfies RestartHandlerParams);
 
-    expect(() => {
-      handler({
-        binding: { serviceId: 'openai-codex', profileId: 'work' },
-        affectedTargets: [{ pid: 1, agentId: 'pi' }],
-      });
-    }).not.toThrow();
+    await expect(handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work' },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    })).resolves.toBeUndefined();
 
     expect(restartRequestedPids.size).toBe(0);
+  });
+
+  it('records a blocked diagnostic when a restart-required target cannot be safely signaled', async () => {
+    const restartRequestedPids = new Set<number>();
+    const requestRestartSignal = vi.fn(async (_params: RestartSignalParams) => {});
+    const onRestartBlocked = vi.fn();
+    const pidToTrackedSession = new Map<number, TrackedSession>([
+      [1, createTrackedSession({ pid: 1, sessionId: 's1' })],
+    ]);
+
+    const handler = createConnectedServicesAuthUpdatedRestartHandler({
+      restartRequestedPids,
+      pidToTrackedSession,
+      resolveLifecycleDescriptor: async (agentId) => createLifecycleDescriptor(agentId, 'restart_required'),
+      resolveProcessGroupPid: () => null,
+      requestRestartSignal,
+      restartSignalDelayMs: 0,
+      onRestartBlocked,
+    } satisfies RestartHandlerParams);
+
+    await handler({
+      binding: { serviceId: 'claude-subscription', profileId: 'work' },
+      affectedTargets: [{ pid: 1, agentId: 'claude' }],
+    });
+
+    expect(requestRestartSignal).not.toHaveBeenCalled();
+    expect(restartRequestedPids.size).toBe(0);
+    expect(onRestartBlocked).toHaveBeenCalledWith({
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      agentId: 'claude',
+      pid: 1,
+      reason: 'unsupported_restart_signal',
+      startedBy: 'daemon',
+      hasChildProcess: false,
+      hasProcessGroupPid: false,
+      reattachedFromDiskMarker: false,
+    });
   });
 });

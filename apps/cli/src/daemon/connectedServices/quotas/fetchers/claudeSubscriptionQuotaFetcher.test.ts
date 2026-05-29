@@ -5,6 +5,83 @@ import { ConnectedServiceQuotaSnapshotV1Schema, buildConnectedServiceCredentialR
 import { createClaudeSubscriptionQuotaFetcher } from './claudeSubscriptionQuotaFetcher';
 
 describe('createClaudeSubscriptionQuotaFetcher', () => {
+  it('polls the Anthropic OAuth usage endpoint by default as best-effort quota telemetry', async () => {
+    const now = 1_000_000;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 10, resets_at: '2026-02-16T00:00:00Z' },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createClaudeSubscriptionQuotaFetcher({ staleAfterMs: 300_000 });
+    await expect(fetcher.fetch({ record, now, signal: new AbortController().signal }))
+      .resolves
+      .toMatchObject({ serviceId: 'claude-subscription', profileId: 'work' });
+    expect(fetchMock).toHaveBeenCalledWith('https://api.anthropic.com/api/oauth/usage', expect.objectContaining({
+      method: 'GET',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer at',
+        'anthropic-beta': 'oauth-2025-04-20',
+      }),
+    }));
+  });
+
+  it('allows an explicitly configured Anthropic OAuth usage endpoint', async () => {
+    const now = 1_000_000;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 20, resets_at: '2026-02-16T00:00:00Z' },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://api.anthropic.com/api/oauth/usage',
+      staleAfterMs: 300_000,
+    });
+
+    const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
+    expect(snapshot?.meters.find((meter) => meter.meterId === 'five_hour')?.utilizationPct).toBe(20);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('fetches and parses Claude subscription oauth usage into a quota snapshot', async () => {
     const now = 1_000_000;
     const fetchMock = vi.fn(async (_input: unknown, _init?: unknown) => ({
@@ -34,7 +111,10 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       },
     });
 
-    const fetcher = createClaudeSubscriptionQuotaFetcher({ staleAfterMs: 300_000 });
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+    });
     expect(fetcher.serviceId).toBe('claude-subscription');
     const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
 
@@ -59,28 +139,16 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
     }
   });
 
-  it('refreshes oauth token and retries usage when the first usage call is unauthorized', async () => {
+  it('does not refresh oauth credentials when usage polling is unauthorized', async () => {
     const now = 2_000_000;
-    let usageCalls = 0;
     const fetchMock = vi.fn(async (input: unknown, init?: unknown) => {
       const url = String(input ?? '');
-      if (url.includes('/api/oauth/usage')) {
-        usageCalls += 1;
-        if (usageCalls === 1) {
-          return {
-            ok: false,
-            status: 401,
-            statusText: 'Unauthorized',
-            text: async () => 'unauthorized',
-          };
-        }
+      if (url.includes('/anthropic/oauth/usage')) {
         return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            five_hour: { utilization: 12, resets_at: '2026-02-16T00:00:00Z' },
-            seven_day: { utilization: 34, resets_at: '2026-02-23T00:00:00Z' },
-          }),
+          ok: false,
+          status: 401,
+          statusText: 'Unauthorized',
+          text: async () => 'unauthorized',
         };
       }
 
@@ -117,43 +185,69 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       },
     });
 
-    const fetcher = createClaudeSubscriptionQuotaFetcher({ staleAfterMs: 300_000 });
-    const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
-    const parsed = ConnectedServiceQuotaSnapshotV1Schema.safeParse(snapshot);
-    expect(parsed.success).toBe(true);
-
-    expect(usageCalls).toBe(2);
-
-    const usageCallsWithExpiredToken = fetchMock.mock.calls.filter((call) => {
-      const url = String(call[0] ?? '');
-      const initArg = call[1];
-      if (!url.includes('/api/oauth/usage')) return false;
-      const headers =
-        initArg && typeof initArg === 'object' && 'headers' in initArg
-          ? (initArg as { headers?: Record<string, unknown> }).headers
-          : undefined;
-      return headers?.Authorization === 'Bearer expired-access-token';
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
     });
-    expect(usageCallsWithExpiredToken.length).toBe(1);
+    await expect(fetcher.fetch({ record, now, signal: new AbortController().signal }))
+      .rejects
+      .toThrow(/anthropic usage fetch failed/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain('/anthropic/oauth/usage');
+  });
 
-    const usageCallsWithRefreshedToken = fetchMock.mock.calls.filter((call) => {
-      const url = String(call[0] ?? '');
-      const initArg = call[1];
-      if (!url.includes('/api/oauth/usage')) return false;
-      const headers =
-        initArg && typeof initArg === 'object' && 'headers' in initArg
-          ? (initArg as { headers?: Record<string, unknown> }).headers
-          : undefined;
-      return headers?.Authorization === 'Bearer refreshed-access-token';
+  it('backs off after 429 Retry-After and leaves existing snapshots stale until polling is allowed again', async () => {
+    const now = 5_000_000;
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input ?? '');
+      if (!url.includes('/anthropic/oauth/usage')) {
+        throw new Error(`Unexpected URL in test: ${url}`);
+      }
+      return {
+        ok: false,
+        status: 429,
+        statusText: 'Too Many Requests',
+        headers: { get: (name: string) => (name.toLowerCase() === 'retry-after' ? '120' : null) },
+        text: async () => 'rate limited',
+      };
     });
-    expect(usageCallsWithRefreshedToken.length).toBe(1);
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: null,
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    let clock = now;
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+      nowMs: () => clock,
+    });
+
+    await expect(fetcher.fetch({ record, now: clock, signal: new AbortController().signal })).resolves.toBeNull();
+    clock += 60_000;
+    await expect(fetcher.fetch({ record, now: clock, signal: new AbortController().signal })).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces a reconnect-required error when the token lacks usage scopes', async () => {
     const now = 3_000_000;
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input ?? '');
-      if (url.includes('/api/oauth/usage')) {
+      if (url.includes('/anthropic/oauth/usage')) {
         return {
           ok: false,
           status: 403,
@@ -187,7 +281,10 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       },
     });
 
-    const fetcher = createClaudeSubscriptionQuotaFetcher({ staleAfterMs: 300_000 });
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+    });
     await expect(fetcher.fetch({ record, now, signal: new AbortController().signal }))
       .rejects
       .toThrow(/reconnect claude/i);
@@ -198,7 +295,7 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
     let usageCalls = 0;
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input ?? '');
-      if (!url.includes('/api/oauth/usage')) {
+      if (!url.includes('/anthropic/oauth/usage')) {
         throw new Error(`Unexpected URL in test: ${url}`);
       }
       usageCalls += 1;
@@ -238,7 +335,10 @@ describe('createClaudeSubscriptionQuotaFetcher', () => {
       },
     });
 
-    const fetcher = createClaudeSubscriptionQuotaFetcher({ staleAfterMs: 300_000 });
+    const fetcher = createClaudeSubscriptionQuotaFetcher({
+      usageUrl: 'https://quota.happier.dev/anthropic/oauth/usage',
+      staleAfterMs: 300_000,
+    });
     const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
     expect(snapshot?.meters.length).toBeGreaterThan(0);
     expect(usageCalls).toBe(2);

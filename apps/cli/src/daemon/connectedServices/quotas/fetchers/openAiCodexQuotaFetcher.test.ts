@@ -5,7 +5,50 @@ import { ConnectedServiceQuotaSnapshotV1Schema, buildConnectedServiceCredentialR
 import { createOpenAiCodexQuotaFetcher } from './openAiCodexQuotaFetcher';
 
 describe('createOpenAiCodexQuotaFetcher', () => {
-  it('fetches and parses ChatGPT wham usage into a quota snapshot', async () => {
+  it('polls the ChatGPT wham usage endpoint by default with connected account headers', async () => {
+    const now = 1_000_000;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        plan_type: 'pro',
+        rate_limit: {
+          primary_window: { used_percent: 10, reset_at: 1700000000 },
+          secondary_window: { used_percent: 25, reset_at: 1700003600 },
+        },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher();
+    const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
+    expect(snapshot?.serviceId).toBe('openai-codex');
+    expect(fetchMock).toHaveBeenCalledWith('https://chatgpt.com/backend-api/wham/usage', expect.objectContaining({
+      method: 'GET',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer at',
+        'ChatGPT-Account-Id': 'acct',
+      }),
+    }));
+  });
+
+  it('fetches and parses approved OpenAI Codex usage proxy data into a quota snapshot', async () => {
     const now = 1_000_000;
     const fetchMock = vi.fn(async (_input: unknown, _init?: unknown) => ({
       ok: true,
@@ -37,7 +80,7 @@ describe('createOpenAiCodexQuotaFetcher', () => {
     });
 
     const fetcher = createOpenAiCodexQuotaFetcher({
-      usageUrl: 'https://chatgpt.com/backend-api/wham/usage',
+      usageUrl: 'https://quota.happier.dev/openai-codex/usage',
       staleAfterMs: 300_000,
     });
 
@@ -60,5 +103,82 @@ describe('createOpenAiCodexQuotaFetcher', () => {
       expect(headerRecord.Authorization).toBe('Bearer at');
       expect(headerRecord['ChatGPT-Account-Id']).toBe('acct');
     }
+  });
+
+  it('allows an explicitly configured ChatGPT wham usage endpoint', async () => {
+    const now = 1_000_000;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        rate_limit: {
+          primary_window: { used_percent: 55, reset_at: 1700000000 },
+        },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher({
+      usageUrl: 'https://chatgpt.com/backend-api/wham/usage',
+      staleAfterMs: 300_000,
+    });
+
+    const snapshot = await fetcher.fetch({ record, now, signal: new AbortController().signal });
+    expect(snapshot?.meters.find((meter) => meter.meterId === 'session')?.utilizationPct).toBe(55);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes Retry-After backoff from non-ok provider responses', async () => {
+    const now = 1_000_000;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: {
+        get: (name: string) => name.toLowerCase() === 'retry-after' ? '120' : null,
+      },
+    })) as unknown as typeof fetch);
+
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      kind: 'oauth',
+      expiresAt: now + 60_000,
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: null,
+        tokenType: null,
+        providerAccountId: 'acct',
+        providerEmail: 'user@example.com',
+      },
+    });
+
+    const fetcher = createOpenAiCodexQuotaFetcher();
+
+    await expect(fetcher.fetch({ record, now, signal: new AbortController().signal }))
+      .rejects
+      .toMatchObject({
+        status: 503,
+        retryAfterMs: 120_000,
+      });
   });
 });

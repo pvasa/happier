@@ -6,6 +6,10 @@ import type {
 
 export type ConnectedServiceQuotaFetcher = Readonly<{
   serviceId: ConnectedServiceId;
+  pollPolicy?: Readonly<{
+    minPollIntervalMs?: number;
+    retryAfterBackoffMinMs?: number;
+  }>;
   fetch: (params: Readonly<{
     record: ConnectedServiceCredentialRecordV1;
     now: number;
@@ -13,3 +17,47 @@ export type ConnectedServiceQuotaFetcher = Readonly<{
   }>) => Promise<ConnectedServiceQuotaSnapshotV1 | null>;
 }>;
 
+/**
+ * Stable machine codes for quota fetch failures. Do not change existing values;
+ * add new ones only.
+ *
+ * - auth_failure   : HTTP 401 / missing or expired credentials
+ * - missing_auth   : credential record is of the wrong kind (e.g. token instead of oauth)
+ * - network        : underlying fetch threw a network-level error (no HTTP response)
+ * - malformed      : HTTP 2xx but response body could not be parsed / schema invalid
+ * - provider_backoff : any other non-2xx HTTP status (4xx except 401, 5xx, 429)
+ */
+export type ConnectedServiceQuotaFetchErrorCode =
+  | 'auth_failure'
+  | 'missing_auth'
+  | 'network'
+  | 'malformed'
+  | 'provider_backoff';
+
+export class ConnectedServiceQuotaFetchError extends Error {
+  readonly status: number | null;
+  readonly retryAfterMs: number | null;
+  readonly quotaFetchErrorCode: ConnectedServiceQuotaFetchErrorCode;
+  /** Provider-supplied machine code extracted from the error response body, when present. */
+  readonly providerCode: string | null;
+
+  constructor(message: string, options: Readonly<{
+    status?: number | null;
+    retryAfterMs?: number | null;
+    quotaFetchErrorCode: ConnectedServiceQuotaFetchErrorCode;
+    providerCode?: string | null;
+  }>) {
+    super(message);
+    this.name = 'ConnectedServiceQuotaFetchError';
+    this.status = typeof options.status === 'number' && Number.isFinite(options.status)
+      ? Math.trunc(options.status)
+      : null;
+    this.retryAfterMs = typeof options.retryAfterMs === 'number' && Number.isFinite(options.retryAfterMs)
+      ? Math.max(0, Math.trunc(options.retryAfterMs))
+      : null;
+    this.quotaFetchErrorCode = options.quotaFetchErrorCode;
+    this.providerCode = typeof options.providerCode === 'string' && options.providerCode.trim()
+      ? options.providerCode.trim()
+      : null;
+  }
+}

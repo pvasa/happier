@@ -1,0 +1,245 @@
+import { describe, expect, it, vi } from 'vitest';
+
+type ContinuationModule = Readonly<{
+  createSessionContinuationRecoveryController: (deps: {
+    nowMs: () => number;
+    store: {
+      read: (sessionId: string) => Promise<unknown | null> | unknown | null;
+      write: (sessionId: string, state: unknown) => Promise<void> | void;
+    };
+  }) => {
+    beginAttempt: (input: {
+      sessionId: string;
+      attemptId: string;
+      failureAtMs: number;
+      resumePromptMode: 'standard' | 'off';
+    }) => Promise<unknown>;
+    resolveAttempt: (input: {
+      sessionId: string;
+      attemptId: string;
+      failureAtMs: number;
+      resumePromptMode: 'standard' | 'off';
+      exactProviderContextAvailable: boolean;
+      hasUserMessageAfterFailure: () => Promise<boolean> | boolean;
+      sendContinuationPrompt: (input: { prompt: string }) => Promise<void> | void;
+    }) => Promise<{ status: string }>;
+    resolvePendingAttempts: (input: {
+      sessionId: string;
+      exactProviderContextAvailable: boolean;
+      hasUserMessageAfterFailure: (input: { failureAtMs: number }) => Promise<boolean> | boolean;
+      sendContinuationPrompt: (input: { prompt: string }) => Promise<void> | void;
+    }) => Promise<{ resolved: Array<{ attemptId: string; status: string }> }>;
+  };
+}>;
+
+async function loadContinuationModule(): Promise<ContinuationModule> {
+  const modulePath = './sessionContinuationRecovery';
+  const mod = await import(modulePath).catch(() => null);
+  expect(mod).not.toBeNull();
+  expect(typeof (mod as Partial<ContinuationModule> | null)?.createSessionContinuationRecoveryController).toBe('function');
+  return mod as ContinuationModule;
+}
+
+function createStore() {
+  const stored = new Map<string, unknown>();
+  return {
+    read: (sessionId: string) => stored.get(sessionId) ?? null,
+    write: (sessionId: string, state: unknown) => {
+      stored.set(sessionId, state);
+    },
+    stored,
+  };
+}
+
+describe('session continuation recovery', () => {
+  it('sends one continuation per persisted session attempt across controller instances', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sentPrompts: string[] = [];
+    const first = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await first.beginAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+    });
+    await expect(first.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'sent' });
+
+    const second = createSessionContinuationRecoveryController({ nowMs: () => 3_000, store });
+    await expect(second.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'already_sent' });
+
+    expect(sentPrompts).toHaveLength(1);
+    expect(sentPrompts[0]).toContain('continue');
+  });
+
+  it('preserves idempotency through async metadata stores', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const stored = new Map<string, unknown>();
+    const store = {
+      read: async (sessionId: string) => stored.get(sessionId) ?? null,
+      write: async (sessionId: string, state: unknown) => {
+        stored.set(sessionId, state);
+      },
+    };
+    const sentPrompts: string[] = [];
+    const first = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(first.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'sent' });
+
+    const second = createSessionContinuationRecoveryController({ nowMs: () => 3_000, store });
+    await expect(second.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({ status: 'already_sent' });
+
+    expect(sentPrompts).toHaveLength(1);
+  });
+
+  it('resolves persisted pending attempts once provider context is available', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sentPrompts: string[] = [];
+    const first = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await first.beginAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+    });
+
+    const second = createSessionContinuationRecoveryController({ nowMs: () => 3_000, store });
+    await expect(second.resolvePendingAttempts({
+      sessionId: 'session-1',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: ({ prompt }) => {
+        sentPrompts.push(prompt);
+      },
+    })).resolves.toEqual({
+      resolved: [{ attemptId: 'generation-1:restart-1', status: 'sent' }],
+    });
+
+    expect(sentPrompts).toHaveLength(1);
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'generation-1:restart-1': {
+          status: 'sent',
+        },
+      },
+    });
+  });
+
+  it('suppresses continuation when newer user input exists after the failure', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sendContinuationPrompt = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => true,
+      sendContinuationPrompt,
+    })).resolves.toEqual({ status: 'suppressed_newer_user_input' });
+
+    expect(sendContinuationPrompt).not.toHaveBeenCalled();
+  });
+
+  it('marks retry required without sending when provider context is unavailable or prompts are off', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const sendContinuationPrompt = vi.fn();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: false,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt,
+    })).resolves.toEqual({ status: 'retry_required' });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-2',
+      failureAtMs: 1_500,
+      resumePromptMode: 'off',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt,
+    })).resolves.toEqual({ status: 'retry_required' });
+
+    expect(sendContinuationPrompt).not.toHaveBeenCalled();
+  });
+
+  it('marks retry required when sending the continuation prompt fails', async () => {
+    const { createSessionContinuationRecoveryController } = await loadContinuationModule();
+    const store = createStore();
+    const controller = createSessionContinuationRecoveryController({ nowMs: () => 2_000, store });
+
+    await expect(controller.resolveAttempt({
+      sessionId: 'session-1',
+      attemptId: 'generation-1:restart-1',
+      failureAtMs: 1_000,
+      resumePromptMode: 'standard',
+      exactProviderContextAvailable: true,
+      hasUserMessageAfterFailure: () => false,
+      sendContinuationPrompt: async () => {
+        throw new Error('provider transport closed');
+      },
+    })).resolves.toEqual({ status: 'retry_required' });
+
+    expect(store.stored.get('session-1')).toMatchObject({
+      attemptsById: {
+        'generation-1:restart-1': {
+          status: 'retry_required',
+          errorCode: 'continuation_prompt_failed',
+        },
+      },
+    });
+  });
+});

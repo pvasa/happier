@@ -1,0 +1,708 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from '../selection/selectConnectedServiceAuthGroupCandidate';
+import {
+  ConnectedServiceAuthGroupSwitchCoordinator,
+  InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry,
+  type ConnectedServiceAuthGroupSwitchState,
+} from './ConnectedServiceAuthGroupSwitchCoordinator';
+
+function state(activeProfileId: string, generation: number): ConnectedServiceAuthGroupSwitchState {
+  return {
+    serviceId: 'openai-codex',
+    groupId: 'main',
+    activeProfileId,
+    generation,
+    policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'priority', autoSwitch: true },
+    members: [
+      { profileId: 'primary', priority: 1, createdAtMs: 1, enabled: true },
+      { profileId: 'backup', priority: 2, createdAtMs: 2, enabled: true },
+    ],
+    memberStatesByProfileId: new Map(),
+  };
+}
+
+class TestGenerationConflictError extends Error {
+  constructor(readonly generation: number) {
+    super('connect_group_generation_conflict');
+  }
+}
+
+describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
+  it('expires lease losers instead of waiting forever for an abandoned owner', async () => {
+    vi.useFakeTimers();
+    try {
+      const leases = new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry({ leaseTimeoutMs: 10 });
+      const owner = leases.acquire({ serviceId: 'openai-codex', groupId: 'main' });
+      expect(owner.kind).toBe('owner');
+      const loser = leases.acquire({ serviceId: 'openai-codex', groupId: 'main' });
+      expect(loser.kind).toBe('loser');
+      const wait = loser.kind === 'loser' ? loser.waitForOwner() : Promise.resolve({ activeProfileId: null, generation: 0, serviceId: '', groupId: '' });
+      const assertion = expect(wait).rejects.toThrow('connected_service_auth_group_switch_lease_expired');
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not switch when automatic switching is disabled by group policy', async () => {
+    let didCommit = false;
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => ({
+        ...state('primary', 1),
+        policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, autoSwitch: false },
+      }),
+      commitSwitch: async () => {
+        didCommit = true;
+        return state('backup', 2);
+      },
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    })).resolves.toEqual({ status: 'auto_switch_disabled', generation: 1 });
+    expect(didCommit).toBe(false);
+  });
+
+  it('honors recoveryMode off without committing an automatic recovery switch', async () => {
+    const commitSwitch = vi.fn(async () => state('backup', 2));
+    const applyGeneration = vi.fn();
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => ({
+        ...state('primary', 1),
+        policy: {
+          ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+          autoSwitch: true,
+          recoveryMode: 'off',
+        },
+      }),
+      commitSwitch,
+      applyGeneration,
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    })).resolves.toEqual({ status: 'auto_switch_disabled', generation: 1 });
+    expect(commitSwitch).not.toHaveBeenCalled();
+    expect(applyGeneration).not.toHaveBeenCalled();
+  });
+
+  it('honors recoveryMode wait_until_reset by recording failure state without switching accounts', async () => {
+    const commitSwitch = vi.fn(async () => state('backup', 2));
+    const applyGeneration = vi.fn();
+    const recordObservedFailureState = vi.fn(async () => {});
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => ({
+        ...state('primary', 1),
+        policy: {
+          ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+          autoSwitch: true,
+          recoveryMode: 'wait_until_reset',
+        },
+      }),
+      recordObservedFailureState,
+      commitSwitch,
+      applyGeneration,
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      resetsAtMs: 9_000,
+    })).resolves.toEqual({
+      status: 'no_eligible_member',
+      generation: 1,
+      groupExhausted: true,
+      retryAtMs: 9_000,
+      excluded: [],
+    });
+    expect(recordObservedFailureState).toHaveBeenCalledOnce();
+    expect(commitSwitch).not.toHaveBeenCalled();
+    expect(applyGeneration).not.toHaveBeenCalled();
+  });
+
+  it('treats permanent refresh failure as auth recovery when auth-expired fallback is enabled', async () => {
+    let didCommit = false;
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => state('primary', 1),
+      commitSwitch: async ({ toProfileId }) => {
+        didCommit = true;
+        return state(toProfileId, 2);
+      },
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'refresh_failed',
+      observedProfileId: 'primary',
+    })).resolves.toMatchObject({
+      status: 'switched',
+      activeProfileId: 'backup',
+      generation: 2,
+    });
+    expect(didCommit).toBe(true);
+  });
+
+  it('reloads state after recording observed failure before committing a switch', async () => {
+    let generation = 1;
+    const committedGenerations: number[] = [];
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => state('primary', generation),
+      recordObservedFailureState: async () => {
+        generation += 1;
+      },
+      commitSwitch: async ({ expectedGeneration, toProfileId }) => {
+        committedGenerations.push(expectedGeneration);
+        if (expectedGeneration !== generation) {
+          throw new Error('connected_service_auth_group_generation_conflict');
+        }
+        generation += 1;
+        return state(toProfileId, generation);
+      },
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'refresh_failed',
+      observedProfileId: 'primary',
+    })).resolves.toMatchObject({
+      status: 'switched',
+      activeProfileId: 'backup',
+      generation: 3,
+    });
+    expect(committedGenerations).toEqual([2]);
+  });
+
+  it('retries a stale-generation switch when the observed generation keeps the same active profile', async () => {
+    let loadCount = 0;
+    const committedGenerations: number[] = [];
+    const generationConflict = new TestGenerationConflictError(2);
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => {
+        loadCount += 1;
+        return state('primary', loadCount === 1 ? 1 : 2);
+      },
+      commitSwitch: async ({ expectedGeneration, toProfileId }) => {
+        committedGenerations.push(expectedGeneration);
+        if (expectedGeneration === 1) throw generationConflict;
+        return state(toProfileId, 3);
+      },
+      resolveGenerationConflict: (error) => error instanceof TestGenerationConflictError ? error.generation : null,
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'refresh_failed',
+      observedProfileId: 'primary',
+    })).resolves.toMatchObject({
+      status: 'switched',
+      activeProfileId: 'backup',
+      generation: 3,
+    });
+    expect(committedGenerations).toEqual([1, 2]);
+  });
+
+  it('honors per-turn switch limits from group policy', async () => {
+    const events: unknown[] = [];
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      emitEvent: (event) => events.push(event),
+      loadState: async () => state('primary', 1),
+      commitSwitch: async () => state('backup', 2),
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      switchesThisTurn: 1,
+    })).resolves.toEqual({ status: 'switch_limit_reached', generation: 1 });
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'connected_service_auth_group_switch',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        fromProfileId: 'primary',
+        toProfileId: null,
+        reason: 'usage_limit',
+        fromGeneration: 1,
+        toGeneration: 1,
+        resultStatus: 'switch_limit_reached',
+        success: false,
+      }),
+    ]);
+  });
+
+  it('honors per-session hourly switch limits from group policy', async () => {
+    let current = {
+      ...state('primary', 1),
+      policy: {
+        ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1,
+        strategy: 'priority' as const,
+        autoSwitch: true,
+        maxSwitchesPerSessionHour: 1,
+      },
+    };
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => current,
+      commitSwitch: async ({ toProfileId }) => {
+        current = { ...current, activeProfileId: toProfileId, generation: current.generation + 1 };
+        return current;
+      },
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    })).resolves.toMatchObject({ status: 'switched', generation: 2 });
+    await expect(coordinator.switchAfterClassifiedFailure({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    })).resolves.toEqual({ status: 'switch_limit_reached', generation: 2 });
+  });
+
+
+  it('returns structured exhaustion context when no eligible member remains', async () => {
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => ({
+        ...state('primary', 1),
+        memberStatesByProfileId: new Map([
+          ['backup', {
+            providerResetsAtMs: 5_000,
+            quotaSnapshot: {
+              capturedAtMs: 900,
+              exhausted: true,
+            },
+          }],
+        ]),
+      }),
+      commitSwitch: async () => state('backup', 2),
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    })).resolves.toEqual({
+      status: 'no_eligible_member',
+      generation: 1,
+      groupExhausted: true,
+      retryAtMs: 5_000,
+      excluded: [
+        { profileId: 'primary', reason: 'current_active' },
+        { profileId: 'backup', reason: 'quota_exhausted', retryAtMs: 5_000 },
+      ],
+    });
+  });
+
+  it('emits structured switch telemetry for successful attempts', async () => {
+    const events: unknown[] = [];
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      emitEvent: (event) => events.push(event),
+      loadState: async () => state('primary', 1),
+      commitSwitch: async ({ toProfileId }) => state(toProfileId, 2),
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      retryAtMs: 30_000,
+      limitCategory: 'quota',
+      quotaScope: 'account',
+      providerLimitId: 'weekly',
+      action: { kind: 'open_url', url: 'https://chatgpt.com/codex/settings/usage' },
+    })).resolves.toMatchObject({ status: 'switched', activeProfileId: 'backup', generation: 2 });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'connected_service_auth_group_switch',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        fromProfileId: 'primary',
+        toProfileId: 'backup',
+        reason: 'usage_limit',
+        retryAfterMs: 30_000,
+        limitCategory: 'quota',
+        quotaScope: 'account',
+        providerLimitId: 'weekly',
+        action: { kind: 'open_url', url: 'https://chatgpt.com/codex/settings/usage' },
+        fromGeneration: 1,
+        toGeneration: 2,
+        resultStatus: 'switched',
+        success: true,
+      }),
+    ]);
+  });
+
+  it('attributes runtime recovery switch events to the observed failing profile', async () => {
+    const events: unknown[] = [];
+    const initialState: ConnectedServiceAuthGroupSwitchState = {
+      ...state('primary', 1),
+      activeProfileId: null,
+    };
+    let currentState = initialState;
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      emitEvent: (event) => events.push(event),
+      loadState: async () => currentState,
+      recordObservedFailureState: async ({ observedProfileId }) => {
+        expect(observedProfileId).toBe('primary');
+        currentState = {
+          ...initialState,
+          memberStatesByProfileId: new Map([
+            ['primary', {
+              quotaExhaustedUntilMs: 30_000,
+              lastFailureKind: 'usage_limit',
+              lastObservedAtMs: 1_000,
+            }],
+          ]),
+        };
+      },
+      commitSwitch: async ({ fromProfileId, toProfileId }) => {
+        expect(fromProfileId).toBeNull();
+        expect(toProfileId).toBe('backup');
+        return state(toProfileId, 2);
+      },
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      observedProfileId: 'primary',
+      retryAtMs: 30_000,
+    })).resolves.toMatchObject({ status: 'switched', activeProfileId: 'backup', generation: 2 });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'connected_service_auth_group_switch',
+        fromProfileId: 'primary',
+        toProfileId: 'backup',
+        resultStatus: 'switched',
+        success: true,
+      }),
+    ]);
+  });
+
+  it('probes stale candidate quota state before selecting a runtime failure recovery member', async () => {
+    let current = {
+      ...state('primary', 1),
+      members: [
+        { profileId: 'primary', priority: 1, createdAtMs: 1, enabled: true },
+        { profileId: 'backup', priority: 2, createdAtMs: 2, enabled: true },
+        { profileId: 'tertiary', priority: 3, createdAtMs: 3, enabled: true },
+      ],
+    };
+    const probeQuotaSnapshotsForGroup = vi.fn(async () => {
+      current = {
+        ...current,
+        memberStatesByProfileId: new Map([
+          ['primary', {
+            quotaExhaustedUntilMs: 30_000,
+            lastFailureKind: 'usage_limit',
+            lastObservedAtMs: 1_000,
+          }],
+          ['backup', {
+            quotaSnapshot: {
+              capturedAtMs: 1_000,
+              effectiveRemainingPercent: 0,
+              exhausted: true,
+            },
+          }],
+          ['tertiary', {
+            quotaSnapshot: {
+              capturedAtMs: 1_000,
+              effectiveRemainingPercent: 80,
+            },
+          }],
+        ]),
+      };
+    });
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => current,
+      recordObservedFailureState: async (input) => {
+        expect(input.observedProfileId).toBe('primary');
+        current = {
+          ...current,
+          memberStatesByProfileId: new Map([
+            ['primary', {
+              quotaExhaustedUntilMs: 30_000,
+              lastFailureKind: 'usage_limit',
+              lastObservedAtMs: 1_000,
+            }],
+          ]),
+        };
+      },
+      commitSwitch: async (input) => state(input.toProfileId, 2),
+      applyGeneration: async () => {},
+      probeQuotaSnapshotsForGroup,
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      observedProfileId: 'primary',
+      retryAtMs: 30_000,
+    })).resolves.toMatchObject({ status: 'switched', activeProfileId: 'tertiary', generation: 2 });
+    expect(probeQuotaSnapshotsForGroup).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileIds: ['backup', 'tertiary'],
+      reason: 'usage_limit',
+    });
+  });
+
+  it('switches before a turn through the coordinator without recording a failure state', async () => {
+    const events: unknown[] = [];
+    const recordObservedFailureState = vi.fn();
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      emitEvent: (event) => events.push(event),
+      recordObservedFailureState,
+      loadState: async () => ({
+        ...state('primary', 1),
+        policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'least_limited', autoSwitch: true },
+        memberStatesByProfileId: new Map([
+          ['primary', {
+            quotaSnapshot: {
+              capturedAtMs: 900,
+              effectiveRemainingPercent: 5,
+            },
+          }],
+          ['backup', {
+            quotaSnapshot: {
+              capturedAtMs: 900,
+              effectiveRemainingPercent: 80,
+            },
+          }],
+        ]),
+      }),
+      commitSwitch: async ({ toProfileId }) => state(toProfileId, 2),
+      applyGeneration: async () => {},
+    });
+
+    await expect(coordinator.switchBeforeTurn({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'soft_threshold',
+    })).resolves.toEqual({ status: 'switched', activeProfileId: 'backup', generation: 2 });
+    expect(recordObservedFailureState).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({
+        fromProfileId: 'primary',
+        toProfileId: 'backup',
+        reason: 'soft_threshold',
+        resultStatus: 'switched',
+        success: true,
+      }),
+    ]);
+  });
+
+  it('probes stale group quota state before selecting a soft-threshold pre-turn candidate', async () => {
+    let current = state('primary', 1);
+    const probeQuotaSnapshotsForGroup = vi.fn(async () => {
+      current = {
+        ...current,
+        memberStatesByProfileId: new Map([
+          ['primary', {
+            quotaSnapshot: {
+              capturedAtMs: 1_000,
+              effectiveRemainingPercent: 5,
+            },
+          }],
+          ['backup', {
+            quotaSnapshot: {
+              capturedAtMs: 1_000,
+              effectiveRemainingPercent: 80,
+            },
+          }],
+        ]),
+      };
+    });
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => current,
+      commitSwitch: async (input) => state(input.toProfileId, 2),
+      applyGeneration: async () => {},
+      probeQuotaSnapshotsForGroup,
+    });
+
+    await expect(coordinator.switchBeforeTurn({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'soft_threshold',
+    })).resolves.toEqual({ status: 'switched', activeProfileId: 'backup', generation: 2 });
+    expect(probeQuotaSnapshotsForGroup).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileIds: ['primary', 'backup'],
+      reason: 'soft_threshold',
+    });
+  });
+
+  it('commits one switch while lease losers only apply the observed generation', async () => {
+    let current = state('primary', 1);
+    let commitCount = 0;
+    const applied: string[] = [];
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => current,
+      commitSwitch: async ({ toProfileId }) => {
+        commitCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        current = state(toProfileId, current.generation + 1);
+        return current;
+      },
+      applyGeneration: async ({ activeProfileId, generation }) => {
+        applied.push(`${activeProfileId}:${generation}`);
+      },
+    });
+
+    const first = coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    });
+    const second = coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    });
+
+    await expect(first).resolves.toMatchObject({ status: 'switched', activeProfileId: 'backup', generation: 2 });
+    await expect(second).resolves.toMatchObject({ status: 'observed_generation', activeProfileId: 'backup', generation: 2 });
+    expect(commitCount).toBe(1);
+    expect(applied).toEqual(['backup:2', 'backup:2']);
+  });
+
+  it('reloads and applies observed state when a cross-daemon generation conflict wins first', async () => {
+    let loadCount = 0;
+    const applied: string[] = [];
+    const commitSwitch = vi.fn(async () => {
+      throw new TestGenerationConflictError(2);
+    });
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => {
+        loadCount += 1;
+        return loadCount === 1 ? state('primary', 1) : state('backup', 2);
+      },
+      commitSwitch,
+      applyGeneration: async ({ activeProfileId, generation }) => {
+        applied.push(`${activeProfileId}:${generation}`);
+      },
+      resolveGenerationConflict: (error) => error instanceof TestGenerationConflictError ? error.generation : null,
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    })).resolves.toEqual({ status: 'observed_generation', activeProfileId: 'backup', generation: 2 });
+    expect(commitSwitch).toHaveBeenCalledTimes(1);
+    expect(loadCount).toBe(2);
+    expect(applied).toEqual(['backup:2']);
+  });
+
+  it('rejects lease losers without applying a synthetic generation when the owner switch fails', async () => {
+    const applied: string[] = [];
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => state('primary', 1),
+      commitSwitch: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        throw new Error('commit failed');
+      },
+      applyGeneration: async ({ activeProfileId, generation }) => {
+        applied.push(`${activeProfileId}:${generation}`);
+      },
+    });
+
+    const first = coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    });
+    const second = coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+    });
+
+    await expect(first).rejects.toThrow('commit failed');
+    await expect(second).rejects.toThrow('commit failed');
+    expect(applied).toEqual([]);
+  });
+});

@@ -2,16 +2,56 @@ import { URLSearchParams } from 'node:url';
 
 import type { ConnectedServiceId } from '@happier-dev/protocol';
 
+import { readSafeOauthProviderErrorCode } from '@/cloud/safeOauthProviderError';
 import { resolveConnectedAccountOauthConfig } from '@/daemon/connectedServices/descriptors/connectedAccountDescriptors';
+import {
+  extractOpenAiCodexAccountId,
+  extractOpenAiCodexEmail,
+} from '@/daemon/connectedServices/descriptors/openAiCodexIdentityClaims';
+import type { ConnectedServiceRefreshFailureCategory } from '@/daemon/connectedServices/credentials/lifecycleTypes';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function classifyProviderRefreshFailure(params: Readonly<{
+  status: number | null;
+  providerErrorCode: string | null;
+}>): ConnectedServiceRefreshFailureCategory {
+  if (params.providerErrorCode === 'invalid_grant') return 'invalid_grant';
+  if (params.providerErrorCode === 'invalid_client') return 'invalid_client';
+  if (params.status === 401) return 'provider_401';
+  if (params.status === 403) return 'provider_403';
+  return 'unknown';
+}
+
+export class ConnectedServiceOauthRefreshError extends Error {
+  readonly category: ConnectedServiceRefreshFailureCategory;
+  readonly status: number | null;
+  readonly providerErrorCode: string | null;
+
+  constructor(params: Readonly<{
+    serviceId: ConnectedServiceId;
+    category: ConnectedServiceRefreshFailureCategory;
+    status: number | null;
+    providerErrorCode: string | null;
+    detail: string;
+  }>) {
+    const statusText = params.status === null ? 'unknown_status' : String(params.status);
+    super(`${params.serviceId} refresh failed (${statusText}): ${params.detail}`);
+    this.name = 'ConnectedServiceOauthRefreshError';
+    this.category = params.category;
+    this.status = params.status;
+    this.providerErrorCode = params.providerErrorCode;
+  }
 }
 
 export type ConnectedAccountOauthRefreshResult = Readonly<{
   accessToken: string;
   refreshToken: string;
   idToken: string | null;
+  providerAccountId?: string | null;
+  providerEmail?: string | null;
   expiresAt: number | null;
 }>;
 
@@ -58,29 +98,73 @@ export async function refreshConnectedAccountOauthTokens(params: Readonly<{
     clientSecret: config.clientSecret,
     refreshToken: params.refreshToken,
   });
-  const response = await fetch(config.tokenUrl, {
-    method: 'POST',
-    headers: request.headers,
-    body: request.body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(config.tokenUrl, {
+      method: 'POST',
+      headers: request.headers,
+      body: request.body,
+    });
+  } catch {
+    throw new ConnectedServiceOauthRefreshError({
+      serviceId: params.serviceId,
+      category: 'network_error',
+      status: null,
+      providerErrorCode: null,
+      detail: 'network_error',
+    });
+  }
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`${params.serviceId} refresh failed (${response.status}): ${body || response.statusText}`);
+    const providerErrorCode = readSafeOauthProviderErrorCode(body);
+    const safeError = providerErrorCode ?? response.statusText;
+    throw new ConnectedServiceOauthRefreshError({
+      serviceId: params.serviceId,
+      category: classifyProviderRefreshFailure({ status: response.status, providerErrorCode }),
+      status: response.status,
+      providerErrorCode,
+      detail: safeError || 'provider_error',
+    });
   }
-  const json: unknown = await response.json();
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new ConnectedServiceOauthRefreshError({
+      serviceId: params.serviceId,
+      category: 'malformed_response',
+      status: response.status,
+      providerErrorCode: null,
+      detail: 'malformed_response',
+    });
+  }
   const data = isRecord(json) ? json : {};
   const accessToken = typeof data.access_token === 'string' ? data.access_token.trim() : '';
   if (!accessToken) {
-    throw new Error(`${params.serviceId} refresh response missing access_token`);
+    throw new ConnectedServiceOauthRefreshError({
+      serviceId: params.serviceId,
+      category: 'missing_access_token',
+      status: response.status,
+      providerErrorCode: null,
+      detail: 'missing_access_token',
+    });
   }
   const expiresAt =
     typeof data.expires_in === 'number' && Number.isFinite(data.expires_in)
       ? params.now + Math.max(0, Math.trunc(data.expires_in)) * 1000
       : null;
+  const idToken = typeof data.id_token === 'string' ? data.id_token : null;
+  const openAiCodexIdentity = params.serviceId === 'openai-codex'
+    ? {
+      providerAccountId: extractOpenAiCodexAccountId(idToken),
+      providerEmail: extractOpenAiCodexEmail(idToken),
+    }
+    : {};
   return {
     accessToken,
     refreshToken: typeof data.refresh_token === 'string' && data.refresh_token.trim() ? data.refresh_token : params.refreshToken,
-    idToken: typeof data.id_token === 'string' ? data.id_token : null,
+    idToken,
+    ...openAiCodexIdentity,
     expiresAt,
   };
 }

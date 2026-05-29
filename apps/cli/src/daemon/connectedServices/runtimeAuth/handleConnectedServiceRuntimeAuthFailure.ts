@@ -1,0 +1,211 @@
+import type { ConnectedServiceAuthGroupSwitchCoordinator } from '../accountGroups/switching/ConnectedServiceAuthGroupSwitchCoordinator';
+import type { ConnectedServiceRuntimeFailureClassification } from './types';
+import {
+  decideConnectedServiceRecovery,
+  type ConnectedServiceRecoveryPolicyDecision,
+} from './ConnectedServiceRecoveryPolicy';
+
+type RuntimeSelection =
+  | Readonly<{
+      kind: 'profile';
+      serviceId: string;
+      profileId: string;
+    }>
+  | Readonly<{
+      kind: 'group';
+      serviceId: string;
+      groupId: string;
+      activeProfileId: string;
+    }>;
+
+type SwitchCoordinatorLike = Pick<ConnectedServiceAuthGroupSwitchCoordinator, 'switchAfterClassifiedFailure'>;
+type TemporaryThrottleRecoveryLike = Readonly<{
+  enable(input: Readonly<{
+    sessionId: string;
+    issueFingerprint: string;
+    retryAfterMs?: number | null;
+  }>): Promise<Readonly<{
+    status: string;
+    nextRetryAtMs: number | null;
+    attemptCount: number;
+  }>>;
+}>;
+
+type RuntimeRecoveryActionRequired = Readonly<{
+  status: 'recovery_action_required';
+  action: Readonly<{
+    kind: 'reconnect_profile' | 'profile_action_required' | 'provider_state_sharing_required' | 'connected_service_required';
+    serviceId: string;
+    profileId: string | null;
+    groupId: string | null;
+    reason: ConnectedServiceRuntimeFailureClassification['kind'];
+  }>;
+}>;
+
+type RuntimeTemporaryRetryArmed = Readonly<{
+  status: 'temporary_retry_armed';
+  serviceId: string;
+  profileId: string | null;
+  groupId: string | null;
+  retryAfterMs: number | null;
+  recovery: Awaited<ReturnType<TemporaryThrottleRecoveryLike['enable']>>;
+}>;
+
+type RuntimeTemporaryRetryUnavailable = Readonly<{
+  status: 'temporary_retry_unavailable';
+  serviceId: string;
+  profileId: string | null;
+  groupId: string | null;
+  retryAfterMs: number | null;
+  reason: 'session_id_missing' | 'scheduler_unavailable';
+}>;
+
+function mapRecoveryDecisionToActionRequired(input: Readonly<{
+  decision: ConnectedServiceRecoveryPolicyDecision;
+  classification: ConnectedServiceRuntimeFailureClassification;
+}>): RuntimeRecoveryActionRequired | null {
+  const decision = input.decision;
+  if (
+    decision.action !== 'reconnect_required'
+    && decision.action !== 'profile_action_required'
+    && decision.action !== 'connected_service_required'
+    && decision.action !== 'shared_state_required'
+  ) return null;
+
+  return {
+    status: 'recovery_action_required',
+    action: {
+      kind: decision.action === 'reconnect_required'
+        ? 'reconnect_profile'
+        : decision.action === 'shared_state_required'
+        ? 'provider_state_sharing_required'
+        : decision.action,
+      serviceId: decision.serviceId,
+      profileId: decision.profileId,
+      groupId: decision.groupId,
+      reason: input.classification.kind,
+    },
+  };
+}
+
+function normalizeFingerprintPart(value: string | null | undefined, fallback: string): string {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function buildTemporaryThrottleIssueFingerprint(
+  decision: Extract<ConnectedServiceRecoveryPolicyDecision, Readonly<{ action: 'temporary_retry' }>>,
+): string {
+  return [
+    'temporary-throttle',
+    normalizeFingerprintPart(decision.serviceId, 'unknown-service'),
+    normalizeFingerprintPart(decision.groupId, 'no-group'),
+    normalizeFingerprintPart(decision.profileId, 'no-profile'),
+  ].join(':');
+}
+
+export async function handleConnectedServiceRuntimeAuthFailure(input: Readonly<{
+  sessionId?: string;
+  selection: RuntimeSelection | null;
+  classification: ConnectedServiceRuntimeFailureClassification | null;
+  switchesThisTurn: number;
+  sessionSwitchesThisHour?: number;
+  switchCoordinator: SwitchCoordinatorLike;
+  temporaryThrottleRecovery?: TemporaryThrottleRecoveryLike | null;
+}>): Promise<
+  | Readonly<{ status: 'not_classified' }>
+  | RuntimeRecoveryActionRequired
+  | RuntimeTemporaryRetryArmed
+  | RuntimeTemporaryRetryUnavailable
+  | Readonly<{ status: 'selection_mismatch' }>
+  | Readonly<{
+      status: 'switch_attempted';
+      result: Awaited<ReturnType<SwitchCoordinatorLike['switchAfterClassifiedFailure']>>;
+    }>
+> {
+  if (!input.classification) return { status: 'not_classified' };
+  const decision = decideConnectedServiceRecovery({
+    actor: 'automatic',
+    issue: input.classification,
+    selection: input.selection,
+  });
+  const actionRequired = mapRecoveryDecisionToActionRequired({
+    decision,
+    classification: input.classification,
+  });
+  if (actionRequired) return actionRequired;
+
+  if (decision.action === 'temporary_retry') {
+    if (!input.sessionId) {
+      return {
+        status: 'temporary_retry_unavailable',
+        serviceId: decision.serviceId,
+        profileId: decision.profileId,
+        groupId: decision.groupId,
+        retryAfterMs: decision.retryAfterMs,
+        reason: 'session_id_missing',
+      };
+    }
+    if (!input.temporaryThrottleRecovery) {
+      return {
+        status: 'temporary_retry_unavailable',
+        serviceId: decision.serviceId,
+        profileId: decision.profileId,
+        groupId: decision.groupId,
+        retryAfterMs: decision.retryAfterMs,
+        reason: 'scheduler_unavailable',
+      };
+    }
+    const recovery = await input.temporaryThrottleRecovery.enable({
+      sessionId: input.sessionId,
+      issueFingerprint: buildTemporaryThrottleIssueFingerprint(decision),
+      retryAfterMs: decision.retryAfterMs,
+    });
+    return {
+      status: 'temporary_retry_armed',
+      serviceId: decision.serviceId,
+      profileId: decision.profileId,
+      groupId: decision.groupId,
+      retryAfterMs: decision.retryAfterMs,
+      recovery,
+    };
+  }
+
+  if (!input.selection || input.selection.kind !== 'group') {
+    return {
+      status: 'recovery_action_required',
+      action: {
+        kind: 'connected_service_required',
+        serviceId: input.classification.serviceId,
+        profileId: input.classification.profileId,
+        groupId: input.classification.groupId,
+        reason: input.classification.kind,
+      },
+    };
+  }
+
+  if (
+    input.selection.serviceId !== input.classification.serviceId
+    || input.selection.groupId !== input.classification.groupId
+  ) {
+    return { status: 'selection_mismatch' };
+  }
+
+  const result = await input.switchCoordinator.switchAfterClassifiedFailure({
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    serviceId: input.selection.serviceId,
+    groupId: input.selection.groupId,
+    reason: input.classification.kind,
+    observedProfileId: input.classification.profileId ?? input.selection.activeProfileId,
+    retryAfterMs: input.classification.retryAfterMs,
+    resetsAtMs: input.classification.resetsAtMs,
+    limitCategory: input.classification.limitCategory,
+    quotaScope: input.classification.quotaScope,
+    providerLimitId: input.classification.providerLimitId,
+    action: input.classification.action,
+    planType: input.classification.planType,
+    switchesThisTurn: input.switchesThisTurn,
+    sessionSwitchesThisHour: input.sessionSwitchesThisHour,
+  });
+  return { status: 'switch_attempted', result };
+}

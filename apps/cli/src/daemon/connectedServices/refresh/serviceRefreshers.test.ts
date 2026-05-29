@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { refreshClaudeSubscriptionOauthTokens, refreshGeminiOauthTokens, refreshOpenAiCodexOauthTokens } from './serviceRefreshers';
+import {
+  refreshClaudeSubscriptionOauthTokens,
+  refreshConnectedAccountOauthTokens,
+  refreshGeminiOauthTokens,
+  refreshOpenAiCodexOauthTokens,
+} from './serviceRefreshers';
+
+function buildJwt(payload: Record<string, unknown>): string {
+  return [
+    'hdr',
+    Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url'),
+    'sig',
+  ].join('.');
+}
 
 describe('serviceRefreshers', () => {
   it('refreshes OpenAI Codex tokens via refresh_token grant', async () => {
@@ -28,6 +41,32 @@ describe('serviceRefreshers', () => {
     expect(refreshed.expiresAt).toBe(now + 3600 * 1000);
   });
 
+  it('extracts OpenAI Codex account email from refreshed id_token claims', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'new-access',
+        refresh_token: 'new-refresh',
+        id_token: buildJwt({
+          chatgpt_account_id: 'acct-from-token',
+          'https://api.openai.com/profile': {
+            email: 'codex-user@example.test',
+          },
+        }),
+        expires_in: 3600,
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const refreshed = await refreshOpenAiCodexOauthTokens({
+      refreshToken: 'old-refresh',
+      now: 1000,
+    });
+
+    expect(refreshed.providerAccountId).toBe('acct-from-token');
+    expect(refreshed.providerEmail).toBe('codex-user@example.test');
+  });
+
   it('throws when OpenAI Codex refresh response is missing access_token', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
@@ -42,6 +81,62 @@ describe('serviceRefreshers', () => {
       refreshToken: 'old-refresh',
       now: 1000,
     })).rejects.toThrow(/access_token/i);
+  });
+
+  it('does not include raw refresh failure response bodies in thrown errors', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: async () => JSON.stringify({
+        error: 'invalid_grant',
+        refresh_token: 'secret-refresh-token',
+        access_token: 'secret-access-token',
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    await expect(refreshOpenAiCodexOauthTokens({
+      refreshToken: 'old-refresh',
+      now: 1000,
+    })).rejects.toThrow(/openai-codex refresh failed \(400\): invalid_grant/);
+    await expect(refreshOpenAiCodexOauthTokens({
+      refreshToken: 'old-refresh',
+      now: 1000,
+    })).rejects.not.toThrow(/secret-refresh-token|secret-access-token|old-refresh/);
+  });
+
+  it('classifies provider refresh failures without retaining response secrets', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: async () => JSON.stringify({
+        error: 'invalid_grant',
+        error_description: 'refresh token secret-refresh-token was rejected',
+        refresh_token: 'secret-refresh-token',
+        access_token: 'secret-access-token',
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    let caught: unknown = null;
+    try {
+      await refreshConnectedAccountOauthTokens({
+        serviceId: 'openai-codex',
+        refreshToken: 'old-refresh',
+        now: 1000,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      category: 'invalid_grant',
+      status: 400,
+      providerErrorCode: 'invalid_grant',
+    });
+    expect(String(caught)).not.toMatch(/secret-refresh-token|secret-access-token|old-refresh/);
   });
 
   it('refreshes Claude subscription tokens via refresh_token grant', async () => {

@@ -1,7 +1,8 @@
-import type { ConnectedServiceQuotaFetcher } from '../types';
-import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
+import { ConnectedServiceQuotaFetchError, type ConnectedServiceQuotaFetcher } from '../types';
+import type { ConnectedServiceCredentialRecordV1, ConnectedServiceQuotaMeterV1 } from '@happier-dev/protocol';
 
 import { isRecord, normalizeNonEmptyString, normalizePct, resolveConnectedServiceQuotaAccountLabel } from '../quotaNormalization';
+import { parseRetryAfterHeader } from '../normalization';
 
 function normalizeResetAtMs(value: unknown): number | null {
   const num = typeof value === 'number' ? value : Number(value);
@@ -14,37 +15,142 @@ function resolveAccountLabel(record: ConnectedServiceCredentialRecordV1): string
   return resolveConnectedServiceQuotaAccountLabel(record);
 }
 
+function readProviderCodeFromBody(body: unknown): string | null {
+  if (!isRecord(body)) return null;
+  const code = body.code ?? body.error_code ?? body.errorCode;
+  if (typeof code === 'string' && code.trim()) return code.trim();
+  const errorRecord = isRecord(body.error) ? body.error : null;
+  if (errorRecord) {
+    const innerCode = errorRecord.code ?? errorRecord.error_code;
+    if (typeof innerCode === 'string' && innerCode.trim()) return innerCode.trim();
+  }
+  return null;
+}
+
+/**
+ * Builds a quota-unknown meter placeholder for the given meterId.
+ * Used when the endpoint is disabled or data is unavailable.
+ */
+function buildQuotaUnknownMeter(meterId: string, label: string): ConnectedServiceQuotaMeterV1 {
+  return {
+    meterId,
+    label,
+    used: null,
+    limit: null,
+    unit: 'unknown',
+    utilizationPct: null,
+    resetsAt: null,
+    status: 'unavailable',
+    details: { code: 'quota_unknown' },
+  };
+}
+
+const DEFAULT_OPENAI_CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+
 export function createOpenAiCodexQuotaFetcher(params?: Readonly<{
   usageUrl?: string;
   staleAfterMs?: number;
   userAgent?: string;
+  /**
+   * When true, skip the private endpoint entirely and return a quota_unknown
+   * snapshot. Equivalent to setting HAPPIER_CONNECTED_SERVICES_DISABLE_CODEX_QUOTA_ENDPOINT=1.
+   * The per-call usageUrl override (if set) takes precedence over this flag.
+   */
+  disablePrivateEndpoint?: boolean;
 }>): ConnectedServiceQuotaFetcher {
-  const usageUrl = params?.usageUrl ?? 'https://chatgpt.com/backend-api/wham/usage';
+  const usageUrl = typeof params?.usageUrl === 'string' && params.usageUrl.trim()
+    ? params.usageUrl.trim()
+    : DEFAULT_OPENAI_CODEX_USAGE_URL;
+  const disablePrivateEndpoint = params?.disablePrivateEndpoint === true
+    && usageUrl === DEFAULT_OPENAI_CODEX_USAGE_URL;
   const staleAfterMs = typeof params?.staleAfterMs === 'number' && Number.isFinite(params.staleAfterMs) ? Math.max(1, Math.trunc(params.staleAfterMs)) : 300_000;
   const userAgent = params?.userAgent ?? 'happier';
 
   return {
     serviceId: 'openai-codex',
+    pollPolicy: {
+      minPollIntervalMs: 5 * 60_000,
+    },
     fetch: async ({ record, now, signal }) => {
-      if (record.kind !== 'oauth') return null;
-
-      const response = await fetch(usageUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${record.oauth.accessToken}`,
-          ...(record.oauth.providerAccountId ? { 'ChatGPT-Account-Id': record.oauth.providerAccountId } : {}),
-          'Accept': 'application/json',
-          'User-Agent': userAgent,
-        },
-        signal,
-      });
-
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`OpenAI usage fetch failed (${response.status}): ${body || response.statusText}`);
+      if (record.kind !== 'oauth') {
+        throw new ConnectedServiceQuotaFetchError(
+          'OpenAI Codex quota requires an OAuth credential record',
+          { quotaFetchErrorCode: 'missing_auth' },
+        );
       }
 
-      const json: unknown = await response.json();
+      // Kill-switch: skip private endpoint and return quota_unknown placeholder.
+      // The usageUrl override (non-default URL) takes precedence — it is the documented
+      // escape hatch and indicates the caller wants to use a specific endpoint.
+      if (disablePrivateEndpoint) {
+        return {
+          v: 1,
+          serviceId: record.serviceId,
+          profileId: record.profileId,
+          fetchedAt: now,
+          staleAfterMs,
+          planLabel: null,
+          accountLabel: resolveAccountLabel(record),
+          meters: [
+            buildQuotaUnknownMeter('session', 'Session'),
+            buildQuotaUnknownMeter('weekly', 'Weekly'),
+          ],
+        };
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(usageUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${record.oauth.accessToken}`,
+            ...(record.oauth.providerAccountId ? { 'ChatGPT-Account-Id': record.oauth.providerAccountId } : {}),
+            'Accept': 'application/json',
+            'User-Agent': userAgent,
+          },
+          signal,
+        });
+      } catch (fetchErr) {
+        throw new ConnectedServiceQuotaFetchError(
+          `OpenAI usage fetch network error: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+          { quotaFetchErrorCode: 'network' },
+        );
+      }
+
+      if (!response.ok) {
+        const retryAfter = parseRetryAfterHeader(response.headers?.get?.('retry-after'), { nowMs: now });
+
+        // Attempt to read a provider code from the response body (best-effort).
+        let providerCode: string | null = null;
+        try {
+          const body = await response.json() as unknown;
+          providerCode = readProviderCodeFromBody(body);
+        } catch {
+          // Ignore body parse errors on non-ok responses.
+        }
+
+        const quotaFetchErrorCode = response.status === 401 ? 'auth_failure' : 'provider_backoff';
+        throw new ConnectedServiceQuotaFetchError(
+          `OpenAI usage fetch failed (${response.status}): ${response.statusText}`,
+          {
+            status: response.status,
+            retryAfterMs: retryAfter.retryAfterMs,
+            quotaFetchErrorCode,
+            providerCode,
+          },
+        );
+      }
+
+      let json: unknown;
+      try {
+        json = await response.json();
+      } catch (parseErr) {
+        throw new ConnectedServiceQuotaFetchError(
+          `OpenAI usage response body is malformed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+          { quotaFetchErrorCode: 'malformed' },
+        );
+      }
+
       const data = isRecord(json) ? json : {};
 
       const planLabel = normalizeNonEmptyString(data.plan_type);

@@ -1,0 +1,189 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { requestConnectedServiceSessionRestartSignal } from './requestConnectedServiceSessionRestartSignal';
+
+describe('requestConnectedServiceSessionRestartSignal', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('waits for a delayed restart signal before resolving', async () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    let settled = false;
+    const promise = requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      delayMs: 50,
+      onSignalFailure: () => {},
+    }).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(kill).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(50);
+    await promise;
+
+    expect(kill).toHaveBeenCalledWith(123, 'SIGTERM');
+    expect(settled).toBe(true);
+  });
+
+  it('rejects when the restart signal fails', async () => {
+    const error = new Error('no such process');
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw error;
+    });
+    const onSignalFailure = vi.fn();
+
+    await expect(requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      delayMs: 0,
+      onSignalFailure,
+    })).rejects.toThrow(error);
+
+    expect(kill).toHaveBeenCalledWith(123, 'SIGTERM');
+    expect(onSignalFailure).toHaveBeenCalledWith(error);
+  });
+
+  it('records a uniform daemon restart diagnostic before signaling', async () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const records: unknown[] = [];
+
+    await expect(requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      processGroupPid: 456,
+      delayMs: 0,
+      onSignalFailure: () => {},
+      nowMs: () => 10_000,
+      recordRestartDiagnostic: (record: unknown) => records.push(record),
+      restartDiagnostic: {
+        trigger: 'manual_switch',
+        sessionId: 'session-1',
+        agentId: 'claude',
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        groupId: null,
+        generation: null,
+        reason: 'manual',
+      },
+    })).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledWith(-456, 'SIGTERM');
+    expect(records).toEqual([{
+      type: 'connected_service_daemon_restart',
+      trigger: 'manual_switch',
+      status: 'requested',
+      sessionId: 'session-1',
+      agentId: 'claude',
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      groupId: null,
+      generation: null,
+      reason: 'manual',
+      pid: 123,
+      processGroupPid: 456,
+      delayMs: 0,
+      atMs: 10_000,
+    }]);
+  });
+
+  it('records a signal-failed daemon restart diagnostic when signaling fails', async () => {
+    const error = new Error('no such process');
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw error;
+    });
+    const records: unknown[] = [];
+
+    await expect(requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      delayMs: 0,
+      onSignalFailure: () => {},
+      nowMs: () => 10_000,
+      recordRestartDiagnostic: (record: unknown) => records.push(record),
+      restartDiagnostic: {
+        trigger: 'runtime_auth_recovery_restart',
+        sessionId: 'session-1',
+        agentId: 'codex',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        generation: 2,
+        reason: 'auth_expired',
+      },
+    })).rejects.toThrow(error);
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        type: 'connected_service_daemon_restart',
+        trigger: 'runtime_auth_recovery_restart',
+        status: 'requested',
+        sessionId: 'session-1',
+        pid: 123,
+      }),
+      expect.objectContaining({
+        type: 'connected_service_daemon_restart',
+        trigger: 'runtime_auth_recovery_restart',
+        status: 'signal_failed',
+        sessionId: 'session-1',
+        pid: 123,
+      }),
+    ]);
+  });
+
+  it('prefers signaling the daemon-spawned process group before falling back to the child pid', async () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    await expect(requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      processGroupPid: 456,
+      delayMs: 0,
+      onSignalFailure: () => {},
+    })).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith(-456, 'SIGTERM');
+  });
+
+  it('falls back to the child pid when process-group signaling is unavailable', async () => {
+    const error = new Error('group missing');
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      if (pid === -456) throw error;
+      return true;
+    });
+    const onSignalFailure = vi.fn();
+
+    await expect(requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      processGroupPid: 456,
+      delayMs: 0,
+      onSignalFailure,
+    })).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenNthCalledWith(1, -456, 'SIGTERM');
+    expect(kill).toHaveBeenNthCalledWith(2, 123, 'SIGTERM');
+    expect(onSignalFailure).not.toHaveBeenCalled();
+  });
+
+  it('skips a delayed signal when the session no longer owns the pid', async () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const shouldSignal = vi.fn(() => false);
+
+    const promise = requestConnectedServiceSessionRestartSignal({
+      pid: 123,
+      delayMs: 50,
+      shouldSignal,
+      onSignalFailure: () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+    await promise;
+
+    expect(shouldSignal).toHaveBeenCalledOnce();
+    expect(kill).not.toHaveBeenCalled();
+  });
+});

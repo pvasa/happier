@@ -1,38 +1,211 @@
 import type { CatalogAgentId } from '@/backends/types';
 import type { TrackedSession } from '@/daemon/types';
+import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
+import { readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import type {
+  ConnectedServiceDaemonRestartDiagnosticInput,
+  ConnectedServiceDaemonRestartDiagnosticRecorder,
+  ConnectedServiceDaemonRestartTrigger,
+} from '../sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 
-type ConnectedServiceBindingRef = Readonly<{ serviceId: string; profileId: string }>;
+type ConnectedServiceBindingRef = Readonly<{
+  serviceId: string;
+  profileId: string;
+  groupId?: string;
+  generation?: number;
+}>;
 
 type ConnectedServiceSpawnTargetRef = Readonly<{
   pid: number;
   agentId: CatalogAgentId;
 }>;
 
+export type ConnectedServicesAuthUpdatedRestartBlockedDiagnostic = Readonly<{
+  serviceId: string;
+  profileId: string;
+  agentId: CatalogAgentId;
+  pid: number;
+  reason:
+    | 'tracked_session_missing'
+    | 'not_daemon_started'
+    | 'reattached_session'
+    | 'unsupported_restart_signal';
+  startedBy: string | null;
+  hasChildProcess: boolean;
+  hasProcessGroupPid: boolean;
+  reattachedFromDiskMarker: boolean;
+}>;
+
+function normalizeGroupGeneration(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.trunc(value));
+}
+
+function resolveConnectedServiceBindingGroupMetadata(input: Readonly<{
+  tracked: TrackedSession;
+  binding: ConnectedServiceBindingRef;
+}>): Readonly<{ groupId: string | null; generation: number | null }> {
+  const explicitGroupId = typeof input.binding.groupId === 'string' && input.binding.groupId.trim()
+    ? input.binding.groupId.trim()
+    : '';
+  const explicitGeneration = normalizeGroupGeneration(input.binding.generation);
+  if (explicitGroupId || explicitGeneration !== null) {
+    return {
+      groupId: explicitGroupId || null,
+      generation: explicitGeneration,
+    };
+  }
+
+  const selections = readConnectedServiceChildSelectionsFromEnv(
+    input.tracked.spawnOptions?.environmentVariables ?? {},
+  );
+  const groupSelection = selections.find((selection) =>
+    selection.kind === 'group'
+    && selection.serviceId === input.binding.serviceId
+    && selection.activeProfileId === input.binding.profileId
+  );
+  if (!groupSelection || groupSelection.kind !== 'group') {
+    return { groupId: null, generation: null };
+  }
+
+  return {
+    groupId: groupSelection.groupId,
+    generation: normalizeGroupGeneration(groupSelection.generation),
+  };
+}
+
 export function createConnectedServicesAuthUpdatedRestartHandler(params: Readonly<{
   restartRequestedPids: Set<number>;
   pidToTrackedSession: Map<number, TrackedSession>;
-  restartAgentIds: ReadonlySet<CatalogAgentId>;
+  resolveLifecycleDescriptor: (agentId: CatalogAgentId) => Promise<ConnectedServiceCredentialLifecycleDescriptor>;
+  /**
+   * K3: the handler hands the resolved tracked session, its session id, and the
+   * gated-restart target descriptor to this dependency in addition to the raw
+   * pid/signal fields. The daemon wires this to the gated restart primitive
+   * (requestConnectedServiceRestartWithDeferral) so a credential-refresh /
+   * reconnect restart inherits turn-deferral + the spawn-time reachability gate
+   * instead of sending a raw mid-turn SIGTERM. A raw-signal adapter may still be
+   * supplied in tests; the extra context is additive.
+   */
+  requestRestartSignal: (params: Readonly<{
+    pid: number;
+    tracked: TrackedSession;
+    sessionId: string | null;
+    target: Readonly<{
+      serviceId: string;
+      profileId: string;
+      groupId: string;
+      generation: number | null;
+    }>;
+    processGroupPid?: number | null;
+    delayMs: number;
+    shouldSignal?: () => boolean;
+    onSignalFailure: (error: unknown) => void;
+    restartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticInput;
+    recordRestartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticRecorder;
+    nowMs?: () => number;
+  }>) => Promise<void>;
+  resolveProcessGroupPid: (tracked: TrackedSession) => number | null;
+  restartSignalDelayMs: number;
+  recordRestartDiagnostic?: ConnectedServiceDaemonRestartDiagnosticRecorder;
+  nowMs?: () => number;
+  onRestartSignalFailure?: (error: unknown, target: ConnectedServiceSpawnTargetRef) => void;
+  onRestartBlocked?: (diagnostic: ConnectedServicesAuthUpdatedRestartBlockedDiagnostic) => void;
 }>): (event: Readonly<{
   binding: ConnectedServiceBindingRef;
   affectedTargets: ReadonlyArray<ConnectedServiceSpawnTargetRef>;
-}>) => void {
-  return (event) => {
+  trigger?: Extract<ConnectedServiceDaemonRestartTrigger, 'refresh_triggered_restart' | 'reconnect_propagation'>;
+}>) => Promise<void> {
+  return async (event) => {
+    const trigger = event.trigger ?? 'refresh_triggered_restart';
+    const emitBlocked = (
+      target: ConnectedServiceSpawnTargetRef,
+      tracked: TrackedSession | null,
+      processGroupPid: number | null,
+      reason: ConnectedServicesAuthUpdatedRestartBlockedDiagnostic['reason'],
+    ) => {
+      params.onRestartBlocked?.({
+        serviceId: event.binding.serviceId,
+        profileId: event.binding.profileId,
+        agentId: target.agentId,
+        pid: target.pid,
+        reason,
+        startedBy: tracked?.startedBy ?? null,
+        hasChildProcess: Boolean(tracked?.childProcess),
+        hasProcessGroupPid: processGroupPid !== null,
+        reattachedFromDiskMarker: Boolean(tracked?.reattachedFromDiskMarker),
+      });
+    };
+
     for (const target of event.affectedTargets) {
-      if (!params.restartAgentIds.has(target.agentId)) continue;
+      const descriptor = await params.resolveLifecycleDescriptor(target.agentId);
+      if (!(descriptor.serviceIds as readonly string[]).includes(event.binding.serviceId)) continue;
+      if (descriptor.refreshedCredentialApplication.mode !== 'restart_required') continue;
       if (params.restartRequestedPids.has(target.pid)) continue;
 
       const tracked = params.pidToTrackedSession.get(target.pid);
-      if (!tracked) continue;
-      if (tracked.startedBy !== 'daemon') continue;
-      if (tracked.reattachedFromDiskMarker) continue;
-      if (!tracked.childProcess) continue;
-
-      try {
-        tracked.childProcess.kill('SIGTERM');
-      } catch {
+      if (!tracked) {
+        emitBlocked(target, null, null, 'tracked_session_missing');
         continue;
       }
+      if (tracked.startedBy !== 'daemon') {
+        emitBlocked(target, tracked, null, 'not_daemon_started');
+        continue;
+      }
+      if (tracked.reattachedFromDiskMarker) {
+        emitBlocked(target, tracked, null, 'reattached_session');
+        continue;
+      }
+
+      const processGroupPid = params.resolveProcessGroupPid(tracked);
+      if (!tracked.childProcess && processGroupPid === null) {
+        emitBlocked(target, tracked, processGroupPid, 'unsupported_restart_signal');
+        continue;
+      }
+
       params.restartRequestedPids.add(target.pid);
+      try {
+        const bindingGroupMetadata = resolveConnectedServiceBindingGroupMetadata({
+          tracked,
+          binding: event.binding,
+        });
+        // K5:gated_restart credential refresh / reconnect routes through the gated
+        // restart primitive (deferral + spawn-time reachability) via the wired
+        // requestRestartSignal adapter; no raw mid-turn SIGTERM.
+        await params.requestRestartSignal({
+          pid: target.pid,
+          tracked,
+          sessionId: tracked.happySessionId ?? null,
+          target: {
+            serviceId: event.binding.serviceId,
+            profileId: event.binding.profileId,
+            groupId: bindingGroupMetadata.groupId ?? '',
+            generation: bindingGroupMetadata.generation,
+          },
+          processGroupPid,
+          delayMs: params.restartSignalDelayMs,
+          shouldSignal: () => params.pidToTrackedSession.get(target.pid) === tracked,
+          restartDiagnostic: {
+            trigger,
+            sessionId: tracked.happySessionId ?? null,
+            agentId: target.agentId,
+            serviceId: event.binding.serviceId,
+            profileId: event.binding.profileId,
+            groupId: bindingGroupMetadata.groupId,
+            generation: bindingGroupMetadata.generation,
+            reason: trigger,
+          },
+          recordRestartDiagnostic: params.recordRestartDiagnostic,
+          nowMs: params.nowMs,
+          onSignalFailure: (error) => {
+            params.restartRequestedPids.delete(target.pid);
+            params.onRestartSignalFailure?.(error, target);
+          },
+        });
+      } catch (error) {
+        params.restartRequestedPids.delete(target.pid);
+        params.onRestartSignalFailure?.(error, target);
+      }
     }
   };
 }

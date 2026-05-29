@@ -1,0 +1,116 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { reportConnectedServiceRuntimeAuthFailureToDaemon } from './reportConnectedServiceRuntimeAuthFailureToDaemon';
+
+describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
+  it('returns the daemon report and resolved status message when recovery is actionable', async () => {
+    const classification = {
+      kind: 'auth_expired',
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+      resetsAtMs: null,
+      planType: null,
+      rateLimits: null,
+      source: 'stable_provider_message',
+    };
+    const notify = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'credential_refreshed',
+        restartRequested: true,
+      },
+    }));
+
+    await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: 'sess_1',
+      switchesThisTurn: 2,
+      classification,
+      notify,
+    })).resolves.toEqual({
+      handled: true,
+      report: {
+        ok: true,
+        result: {
+          status: 'credential_refreshed',
+          restartRequested: true,
+        },
+      },
+      statusCode: 'credential_refreshed_restart_requested',
+      statusMessage: expect.stringContaining('refreshed'),
+    });
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      switchesThisTurn: 2,
+      classification,
+    });
+  });
+
+  it('treats typed generation apply failures as handled recovery reports', async () => {
+    const notify = vi.fn(async () => ({
+      ok: true,
+      result: {
+        status: 'switch_attempted',
+        result: {
+          status: 'generation_apply_failed',
+          activeProfileId: 'backup',
+          generation: 2,
+          errorCode: 'provider_session_state_unavailable_for_resume',
+        },
+      },
+    }));
+
+    await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: 'sess_1',
+      switchesThisTurn: 1,
+      classification: {
+        kind: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'codex-group',
+      },
+      notify,
+    })).resolves.toEqual({
+      handled: true,
+      report: {
+        ok: true,
+        result: {
+          status: 'switch_attempted',
+          result: {
+            status: 'generation_apply_failed',
+            activeProfileId: 'backup',
+            generation: 2,
+            errorCode: 'provider_session_state_unavailable_for_resume',
+          },
+        },
+      },
+      statusCode: 'switch_attempted_generation_apply_failed',
+      statusMessage: expect.stringContaining('provider_session_state_unavailable_for_resume'),
+    });
+  });
+
+  it('logs and returns an unhandled result when daemon notification fails', async () => {
+    const debug = vi.fn();
+    const error = new Error('daemon unavailable');
+
+    await expect(reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: { kind: 'unknown' },
+      notify: vi.fn(async () => {
+        throw error;
+      }),
+      logger: { debug },
+      logPrefix: '[test]',
+    })).resolves.toEqual({
+      handled: false,
+      report: null,
+      statusCode: null,
+      statusMessage: null,
+    });
+    expect(debug).toHaveBeenCalledWith(
+      '[test] Failed to report connected-service runtime auth failure to daemon (non-fatal)',
+      error,
+    );
+  });
+});
