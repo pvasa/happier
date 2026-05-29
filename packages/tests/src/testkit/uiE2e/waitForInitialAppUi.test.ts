@@ -5,11 +5,14 @@ import { waitForInitialAppUi, type InitialAppUiPage } from './waitForInitialAppU
 
 function createFakePage(params: Readonly<{
   testIdCounts?: Record<string, number[]>;
+  selectorCounts?: Record<string, number[]>;
   roleCounts?: Record<string, number[]>;
-}>): InitialAppUiPage & { reloadCalls: number } {
+}>): InitialAppUiPage & Pick<Page, 'locator'> & { reloadCalls: number } {
   const testIdCalls = new Map<string, number>();
+  const selectorCalls = new Map<string, number>();
   const roleCalls = new Map<string, number>();
   const testIdCounts = params.testIdCounts ?? {};
+  const selectorCounts = params.selectorCounts ?? {};
   const roleCounts = params.roleCounts ?? {};
 
   const nextCount = (map: Map<string, number>, source: Record<string, number[]>, key: string): number => {
@@ -23,9 +26,10 @@ function createFakePage(params: Readonly<{
     count: async () => nextCount(calls, source, key),
   } as unknown as Locator);
 
-  const page: InitialAppUiPage & { reloadCalls: number } = {
+  const page: InitialAppUiPage & Pick<Page, 'locator'> & { reloadCalls: number } = {
     reloadCalls: 0,
     getByTestId: ((testId) => makeLocator(String(testId), testIdCounts, testIdCalls)) as Page['getByTestId'],
+    locator: ((selector) => makeLocator(String(selector), selectorCounts, selectorCalls)) as Page['locator'],
     getByRole: ((_role, options) => makeLocator(String(options?.name ?? ''), roleCounts, roleCalls)) as Page['getByRole'],
     waitForTimeout: async () => {},
     reload: async () => {
@@ -51,6 +55,42 @@ describe('waitForInitialAppUi', () => {
     expect(page.reloadCalls).toBe(0);
   });
 
+  it('returns when the unified welcome decision is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'welcome-primary-start': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the unified welcome decision is exposed only by role', async () => {
+    const page = createFakePage({
+      roleCounts: { '/First time here/': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the mobile brand hero is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'brand-hero-get-started': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the unified welcome server-unavailable panel is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'welcome-server-unavailable': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
   it('returns when provider-based welcome actions are visible', async () => {
     const page = createFakePage({
       testIdCounts: {
@@ -69,6 +109,88 @@ describe('waitForInitialAppUi', () => {
     });
 
     await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the post-auth setup screen is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'setup.postAuth': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the server-loading welcome state is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'welcome-server-loading': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the manual restore path is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'restore-open-manual': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when an authenticated session list row is visible', async () => {
+    const page = createFakePage({
+      selectorCounts: { '[data-testid^="session-list-item-"]': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('returns when the authenticated start-new-session testID is visible', async () => {
+    const page = createFakePage({
+      testIdCounts: { 'nav-new-session': [1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).resolves.toBeUndefined();
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it.each([
+    'setupWizard.surface',
+    'onboarding-wizard-relay-diagram',
+  ])('ignores unsupported startup selector %s', async (testId) => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(60);
+
+    const page = createFakePage({
+      testIdCounts: { [testId]: [1, 1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).rejects.toThrow(
+      'App did not render initial UI within 50ms.',
+    );
+    expect(page.reloadCalls).toBe(0);
+  });
+
+  it('ignores authenticated start-new-session copy without the stable testID', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(60);
+
+    const page = createFakePage({
+      roleCounts: { 'Start New Session': [1, 1] },
+    });
+
+    await expect(waitForInitialAppUi({ page, timeoutMs: 50, reloadOnFailure: false })).rejects.toThrow(
+      'App did not render initial UI within 50ms.',
+    );
     expect(page.reloadCalls).toBe(0);
   });
 

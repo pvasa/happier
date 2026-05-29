@@ -234,7 +234,12 @@ test.describe('ui e2e: machine identity and replacement surfaces', () => {
     expect(registration.status).toBe(200);
 
     await gotoDomContentLoadedWithRetries(page, `${webUrl}/machine/${legacyMachineId}?happier_hmr=0`, 60_000);
-    const repairOption = page.getByTestId(`machine-replacement-repair-option:${secondMachineId}`);
+    const repairOpen = page.getByTestId('machine-replacement-repair-open');
+    await expect(repairOpen).toHaveCount(1, { timeout: 60_000 });
+    await repairOpen.click();
+
+    await expect(page.getByTestId('machine-replacement-picker-modal')).toHaveCount(1, { timeout: 60_000 });
+    const repairOption = page.getByTestId(`machine-replacement-picker-candidate:${secondMachineId}`);
     await expect(repairOption).toHaveCount(1, { timeout: 60_000 });
     await repairOption.click();
 

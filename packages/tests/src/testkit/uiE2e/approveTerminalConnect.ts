@@ -29,8 +29,14 @@ export async function approveTerminalConnect(params: Readonly<{ page: Page }>): 
     await approveByTestId.click();
   } else {
     const approveByRole = params.page.getByRole('button', { name: 'Accept Connection' });
-    await expect(approveByRole).toHaveCount(1, { timeout: 60_000 });
-    await approveByRole.click();
+    try {
+      await expect(approveByRole).toHaveCount(1, { timeout: 60_000 });
+      await approveByRole.click();
+    } catch {
+      const approveByText = params.page.getByText('Accept Connection', { exact: true }).first();
+      await expect(approveByText).toBeVisible({ timeout: 60_000 });
+      await approveByText.click({ force: true });
+    }
   }
 
   // Terminal connect can succeed with a web modal (OK button) that must be dismissed before

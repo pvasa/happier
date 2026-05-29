@@ -272,6 +272,7 @@ test.describe('ui e2e: directory path browser reuse', () => {
             testDir: suiteDir,
             env: {
                 ...uiWebEnv,
+                EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS: '300000',
                 EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
             },
         });

@@ -39,7 +39,12 @@ const sessionListTestIds = {
     state: 'working' | 'ready',
   ) => `session-list-status-subtitle-text-${sessionId}-${state}`,
   secondaryReadyIndicator: (sessionId: string) => `session-list-attention-indicator-${sessionId}-secondary-ready`,
+  attentionHeader: 'session-list-header:attention-promotion-v1',
+  workingHeader: 'session-list-header:working-placement-v1',
+  attentionPromotionModeTrigger: 'settings-session-attentionPromotionMode-trigger',
+  workingPlacementModeTrigger: 'settings-session-workingPlacementMode-trigger',
   densityOption: (density: 'narrow' | 'cozy' | 'detailed') => `dropdown-option-${density}`,
+  placementOption: (placement: 'off' | 'global' | 'withinGroups') => `dropdown-option-${placement}`,
   densityTrigger: 'settings-session-sessionListDensity-trigger',
   workingStatusAnimatedTextToggle: 'settings-session-workingStatusAnimatedText-toggle',
   workingStatusAnimatedTextItem: 'settings-session-workingStatusAnimatedText-item',
@@ -63,17 +68,19 @@ type MessageCreateResponse = Readonly<{
   }>;
 }>;
 
-type UpdateStateAck = Readonly<{
-  result?: unknown;
-  version?: unknown;
-  agentState?: unknown;
-}>;
-
 type RuntimeStatusResponse = Readonly<{
   session?: Readonly<{
     latestTurnStatus?: unknown;
   }>;
 }>;
+
+type SessionTurnMutationResponse = Readonly<{
+  success?: unknown;
+  applied?: unknown;
+  reason?: unknown;
+}>;
+
+type PrimaryTurnStatus = 'in_progress' | 'completed' | 'cancelled';
 
 function requireString(value: unknown, context: string): string {
   if (typeof value === 'string' && value.trim()) return value;
@@ -158,50 +165,112 @@ async function markWorkingSessionInProgress(params: Readonly<{
   token: string;
   sessionId: string;
 }>): Promise<void> {
-  const socket = await connectWorkingSessionInProgress(params);
-  socket.close();
+  await updateSessionRuntimeStatus({
+    ...params,
+    latestTurnStatus: 'in_progress',
+  });
 }
 
 async function connectWorkingSessionInProgress(params: Readonly<{
   baseUrl: string;
   token: string;
   sessionId: string;
+}>): Promise<Readonly<{ close: () => void }>> {
+  await updateSessionRuntimeStatus({
+    ...params,
+    latestTurnStatus: 'in_progress',
+  });
+  return { close: () => {} };
+}
+
+async function updateSessionRuntimeStatus(params: Readonly<{
+  baseUrl: string;
+  token: string;
+  sessionId: string;
+  latestTurnStatus: PrimaryTurnStatus;
+}>): Promise<void> {
+  const observedAt = Date.now();
+  const turnId = `turn-${randomUUID()}`;
+  await postSessionTurnMutation({
+    ...params,
+    mutation: {
+      v: 1,
+      action: 'begin',
+      sessionId: params.sessionId,
+      turnId,
+      mutationId: `mutation-${randomUUID()}`,
+      observedAt,
+      provider: 'claude',
+    },
+  });
+
+  if (params.latestTurnStatus !== 'in_progress') {
+    const action = params.latestTurnStatus === 'completed' ? 'complete' : 'cancel';
+    await postSessionTurnMutation({
+      ...params,
+      mutation: {
+        v: 1,
+        action,
+        sessionId: params.sessionId,
+        turnId,
+        mutationId: `mutation-${randomUUID()}`,
+        observedAt: observedAt + 1,
+        provider: 'claude',
+      },
+    });
+  }
+
+  await waitFor(async () => {
+    const res = await fetchJson<RuntimeStatusResponse>(`${params.baseUrl}/v2/sessions/${params.sessionId}`, {
+      headers: { Authorization: `Bearer ${params.token}` },
+      timeoutMs: 15_000,
+    });
+    return res.status === 200 && res.data?.session?.latestTurnStatus === params.latestTurnStatus;
+  }, {
+    timeoutMs: 20_000,
+    context: `persist ${params.latestTurnStatus} turn status for ${params.sessionId}`,
+  });
+}
+
+async function postSessionTurnMutation(params: Readonly<{
+  baseUrl: string;
+  token: string;
+  sessionId: string;
+  mutation: Readonly<Record<string, unknown>>;
+}>): Promise<void> {
+  const res = await fetchJson<SessionTurnMutationResponse>(`${params.baseUrl}/v1/sessions/${params.sessionId}/turns/mutations`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params.mutation),
+    timeoutMs: 20_000,
+  });
+
+  if (res.status !== 200 || res.data?.success !== true) {
+    throw new Error(`Failed to post session turn mutation (status=${res.status}, reason=${String(res.data?.reason)})`);
+  }
+}
+
+async function connectLegacyThinkingFallback(params: Readonly<{
+  baseUrl: string;
+  token: string;
+  sessionId: string;
 }>): Promise<ReturnType<typeof createSessionScopedSocketCollector>> {
-  const session = await fetchSessionV2(params.baseUrl, params.token, params.sessionId);
   const socket = createSessionScopedSocketCollector(params.baseUrl, params.token, params.sessionId);
   socket.connect();
 
   try {
     await waitFor(async () => socket.isConnected(), {
       timeoutMs: 20_000,
-      context: `connect session-scoped socket for ${params.sessionId}`,
+      context: `connect legacy thinking fallback socket for ${params.sessionId}`,
     });
-
-    const ack = await socket.emitWithAck<UpdateStateAck>('update-state', {
+    socket.emit('session-alive', {
       sid: params.sessionId,
-      agentState: session.agentState,
-      expectedVersion: session.agentStateVersion,
-      runtimeIssueSummaryV1: {
-        latestTurnStatus: 'in_progress',
-        lastRuntimeIssue: null,
-      },
-    }, 20_000);
-
-    if (ack.result !== 'success' || typeof ack.version !== 'number') {
-      throw new Error(`Failed to mark session in progress (result=${String(ack.result)})`);
-    }
-
-    await waitFor(async () => {
-      const res = await fetchJson<RuntimeStatusResponse>(`${params.baseUrl}/v2/sessions/${params.sessionId}`, {
-        headers: { Authorization: `Bearer ${params.token}` },
-        timeoutMs: 15_000,
-      });
-      return res.status === 200 && res.data?.session?.latestTurnStatus === 'in_progress';
-    }, {
-      timeoutMs: 20_000,
-      context: `persist in-progress runtime status for ${params.sessionId}`,
+      time: Date.now(),
+      thinking: true,
     });
-
     return socket;
   } catch (error) {
     socket.close();
@@ -260,6 +329,18 @@ async function chooseSessionListDensity(params: Readonly<{
   await params.page.getByTestId(sessionListTestIds.densityOption(params.density)).click();
 }
 
+async function chooseSessionListPlacementMode(params: Readonly<{
+  page: Page;
+  baseUrl: string;
+  triggerTestId: string;
+  placement: 'off' | 'global' | 'withinGroups';
+}>): Promise<void> {
+  await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/settings/session?happier_hmr=0`, 180_000);
+  await expect(params.page.getByTestId(params.triggerTestId)).toHaveCount(1, { timeout: 60_000 });
+  await params.page.getByTestId(params.triggerTestId).click();
+  await params.page.getByTestId(sessionListTestIds.placementOption(params.placement)).click();
+}
+
 async function disableWorkingStatusAnimatedText(params: Readonly<{
   page: Page;
   baseUrl: string;
@@ -287,8 +368,12 @@ function row(page: Page, sessionId: string) {
   return page.getByTestId(sessionListTestIds.row(sessionId));
 }
 
-function attentionStateIndicator(page: Page, sessionId: string, state: 'working' | 'ready' | 'permission_required' | 'action_required' | 'failed') {
-  return page.getByTestId(sessionListTestIds.attentionIndicator(sessionId, state));
+function attentionHeader(page: Page) {
+  return page.getByTestId(sessionListTestIds.attentionHeader);
+}
+
+function workingHeader(page: Page) {
+  return page.getByTestId(sessionListTestIds.workingHeader);
 }
 
 function anyAttentionIndicator(page: Page, sessionId: string) {
@@ -309,6 +394,60 @@ function readySubtitleText(page: Page, sessionId: string) {
 
 function workingSubtitleText(page: Page, sessionId: string) {
   return page.getByTestId(sessionListTestIds.statusSubtitleText(sessionId, 'working'));
+}
+
+async function expectRowInSection(params: Readonly<{
+  page: Page;
+  headerTestId: string;
+  sessionId: string;
+}>): Promise<void> {
+  const rowTestId = sessionListTestIds.row(params.sessionId);
+  await expect
+    .poll(
+      async () => params.page.evaluate(({ headerTestId, rowTestId }) => {
+        const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
+        const headerIndex = elements.findIndex((element) => element.dataset.testid === headerTestId);
+        const rowIndex = elements.findIndex((element) => element.dataset.testid === rowTestId);
+        if (headerIndex < 0 || rowIndex < 0 || rowIndex <= headerIndex) return false;
+        const nextHeaderIndex = elements.findIndex((element, index) => {
+          const testId = element.dataset.testid ?? '';
+          return index > headerIndex && testId.startsWith('session-list-header:');
+        });
+        return nextHeaderIndex < 0 || rowIndex < nextHeaderIndex;
+      }, {
+        headerTestId: params.headerTestId,
+        rowTestId,
+      }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+}
+
+async function expectRowNotInSection(params: Readonly<{
+  page: Page;
+  headerTestId: string;
+  sessionId: string;
+}>): Promise<void> {
+  const rowTestId = sessionListTestIds.row(params.sessionId);
+  await expect
+    .poll(
+      async () => params.page.evaluate(({ headerTestId, rowTestId }) => {
+        const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-testid]'));
+        const headerIndex = elements.findIndex((element) => element.dataset.testid === headerTestId);
+        const rowIndex = elements.findIndex((element) => element.dataset.testid === rowTestId);
+        if (headerIndex < 0 || rowIndex < 0 || rowIndex <= headerIndex) return true;
+        const nextHeaderIndex = elements.findIndex((element, index) => {
+          const testId = element.dataset.testid ?? '';
+          return index > headerIndex && testId.startsWith('session-list-header:');
+        });
+        return nextHeaderIndex >= 0 && rowIndex > nextHeaderIndex;
+      }, {
+        headerTestId: params.headerTestId,
+        rowTestId,
+      }),
+      { timeout: 60_000 },
+    )
+    .toBe(true);
 }
 
 test.describe('ui e2e: session list attention', () => {
@@ -400,7 +539,7 @@ test.describe('ui e2e: session list attention', () => {
     await server?.stop().catch(() => {});
   });
 
-  test('shows narrow attention indicators only for meaningful row states', async ({ page }) => {
+  test('keeps narrow rows compact while quiet rows have no attention indicator', async ({ page }) => {
     test.setTimeout(420_000);
     if (!server || !token || !uiBaseUrl || !quiet || !working || !ready) throw new Error('missing session list attention fixtures');
 
@@ -417,11 +556,16 @@ test.describe('ui e2e: session list attention', () => {
 
     await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: working.id });
     await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: ready.id });
+    await updateSessionRuntimeStatus({
+      baseUrl: server.baseUrl,
+      token,
+      sessionId: ready.id,
+      latestTurnStatus: 'completed',
+    });
 
     await expect(anyAttentionIndicator(page, quiet.id)).toHaveCount(0);
-    await expect(attentionStateIndicator(page, working.id, 'working')).toHaveCount(1);
     await expect(workingSubtitle(page, working.id)).toHaveCount(0);
-    await expect(attentionStateIndicator(page, ready.id, 'ready')).toHaveCount(1);
+    await expect(readySubtitle(page, ready.id)).toHaveCount(0);
   });
 
   test('shows ready subtitle outside narrow mode and uses static working text when animation is disabled', async ({ page }) => {
@@ -441,6 +585,12 @@ test.describe('ui e2e: session list attention', () => {
     const workingRuntime = await connectWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: working.id });
     try {
       await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: ready.id });
+      await updateSessionRuntimeStatus({
+        baseUrl: server.baseUrl,
+        token,
+        sessionId: ready.id,
+        latestTurnStatus: 'completed',
+      });
 
       await expect(readySubtitle(page, ready.id)).toHaveCount(1, { timeout: 60_000 });
       await expect(page.getByTestId(sessionListTestIds.secondaryReadyIndicator(ready.id))).toHaveCount(1, { timeout: 60_000 });
@@ -456,5 +606,170 @@ test.describe('ui e2e: session list attention', () => {
     } finally {
       workingRuntime.close();
     }
+  });
+
+  test('keeps old-preview thinking fallback as a separate working placement path', async ({ page }) => {
+    test.setTimeout(420_000);
+    if (!server || !token || !uiBaseUrl) throw new Error('missing session list attention fixtures');
+
+    const legacyThinking = await createPlainSession({
+      baseUrl: server.baseUrl,
+      token,
+      title: 'Legacy thinking fallback e2e',
+    });
+    const before = await fetchSessionV2(server.baseUrl, token, legacyThinking.id);
+    expect(before.latestTurnStatus).toBeNull();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
+    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+
+    await chooseSessionListPlacementMode({
+      page,
+      baseUrl: uiBaseUrl,
+      triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
+      placement: 'global',
+    });
+    await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'narrow' });
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+
+    await expect(row(page, legacyThinking.id)).toHaveCount(1, { timeout: 120_000 });
+    const legacyRuntime = await connectLegacyThinkingFallback({
+      baseUrl: server.baseUrl,
+      token,
+      sessionId: legacyThinking.id,
+    });
+    try {
+      await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
+      await expectRowInSection({
+        page,
+        headerTestId: sessionListTestIds.workingHeader,
+        sessionId: legacyThinking.id,
+      });
+    } finally {
+      legacyRuntime.close();
+    }
+  });
+
+  test('keeps live working placement stable and moves unread completion to attention without reload', async ({ page }) => {
+    test.setTimeout(540_000);
+    if (!server || !token || !uiBaseUrl) throw new Error('missing session list attention fixtures');
+
+    const background = await createPlainSession({
+      baseUrl: server.baseUrl,
+      token,
+      title: 'Live placement background e2e',
+    });
+    const live = await createPlainSession({
+      baseUrl: server.baseUrl,
+      token,
+      title: 'Live placement working e2e',
+    });
+    const cancelled = await createPlainSession({
+      baseUrl: server.baseUrl,
+      token,
+      title: 'Live placement cancelled e2e',
+    });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
+    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+
+    await chooseSessionListPlacementMode({
+      page,
+      baseUrl: uiBaseUrl,
+      triggerTestId: sessionListTestIds.attentionPromotionModeTrigger,
+      placement: 'global',
+    });
+    await chooseSessionListPlacementMode({
+      page,
+      baseUrl: uiBaseUrl,
+      triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
+      placement: 'global',
+    });
+    await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'narrow' });
+    await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+    await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+
+    await expect(row(page, background.id)).toHaveCount(1, { timeout: 120_000 });
+    await expect(row(page, live.id)).toHaveCount(1, { timeout: 120_000 });
+
+    await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: live.id });
+    await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
+    await expectRowInSection({
+      page,
+      headerTestId: sessionListTestIds.workingHeader,
+      sessionId: live.id,
+    });
+
+    await page.evaluate(() => {
+      const globalTarget = globalThis as typeof globalThis & {
+        __HAPPIER_E2E_ORIGINAL_DATE_NOW__?: typeof Date.now;
+      };
+      globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__ = Date.now.bind(Date);
+      const staleNow = Date.now() + 180_000;
+      Date.now = () => staleNow;
+    });
+    try {
+      await row(page, background.id).click();
+      await expect(page).toHaveURL(new RegExp(`/session/${background.id}(?:\\?|$)`), { timeout: 90_000 });
+      await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
+      await expectRowInSection({
+        page,
+        headerTestId: sessionListTestIds.workingHeader,
+        sessionId: live.id,
+      });
+    } finally {
+      await page.evaluate(() => {
+        const globalTarget = globalThis as typeof globalThis & {
+          __HAPPIER_E2E_ORIGINAL_DATE_NOW__?: typeof Date.now;
+        };
+        if (globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__) {
+          Date.now = globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__;
+          delete globalTarget.__HAPPIER_E2E_ORIGINAL_DATE_NOW__;
+        }
+      });
+    }
+
+    await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: live.id });
+    await updateSessionRuntimeStatus({
+      baseUrl: server.baseUrl,
+      token,
+      sessionId: live.id,
+      latestTurnStatus: 'completed',
+    });
+    await expect(attentionHeader(page)).toHaveCount(1, { timeout: 60_000 });
+    await expectRowInSection({
+      page,
+      headerTestId: sessionListTestIds.attentionHeader,
+      sessionId: live.id,
+    });
+    await expectRowNotInSection({
+      page,
+      headerTestId: sessionListTestIds.workingHeader,
+      sessionId: live.id,
+    });
+
+    await expect(row(page, cancelled.id)).toHaveCount(1, { timeout: 120_000 });
+    await markWorkingSessionInProgress({ baseUrl: server.baseUrl, token, sessionId: cancelled.id });
+    await expect(workingHeader(page)).toHaveCount(1, { timeout: 60_000 });
+    await expectRowInSection({
+      page,
+      headerTestId: sessionListTestIds.workingHeader,
+      sessionId: cancelled.id,
+    });
+
+    await updateSessionRuntimeStatus({
+      baseUrl: server.baseUrl,
+      token,
+      sessionId: cancelled.id,
+      latestTurnStatus: 'cancelled',
+    });
+    await expectRowNotInSection({
+      page,
+      headerTestId: sessionListTestIds.workingHeader,
+      sessionId: cancelled.id,
+    });
   });
 });

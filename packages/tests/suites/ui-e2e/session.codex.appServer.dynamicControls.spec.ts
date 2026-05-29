@@ -15,6 +15,7 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
 import { selectNewSessionAgent } from '../../src/testkit/uiE2e/selectNewSessionAgent';
+import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -220,16 +221,7 @@ async function ensureSignedIn(page: Page, uiBaseUrl: string): Promise<void> {
 
         await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new`).catch(() => {});
         await waitForInitialAppUi({ page, timeoutMs: 30_000 }).catch(() => {});
-
-        const createAccountButtons = page.getByTestId('welcome-create-account')
-            .or(page.getByTestId('welcome-signup-provider'))
-            .or(page.getByRole('button', { name: 'Create account' }))
-            .first();
-        if ((await createAccountButtons.count()) > 0) {
-            await createAccountButtons.click().catch(() => {});
-            await page.waitForTimeout(750);
-            continue;
-        }
+        await ensureAccountReadyForConnect({ page, timeoutMs: 30_000 }).catch(() => {});
 
         await page.waitForTimeout(750);
     }

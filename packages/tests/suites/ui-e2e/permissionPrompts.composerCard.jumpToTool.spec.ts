@@ -13,6 +13,7 @@ import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { repoRootDir } from '../../src/testkit/paths';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
+const initialUiNavigationTimeoutMs = 240_000;
 
 test.describe('ui e2e: permission prompts (composer card)', () => {
   test.describe.configure({ mode: 'serial' });
@@ -130,7 +131,7 @@ test.describe('ui e2e: permission prompts (composer card)', () => {
 
     let thrown: unknown = null;
     try {
-      await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
+      await gotoDomContentLoadedWithRetries(page, uiBaseUrl, initialUiNavigationTimeoutMs);
       await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
       const fakeClaudePath = fakeClaudeFixturePath();

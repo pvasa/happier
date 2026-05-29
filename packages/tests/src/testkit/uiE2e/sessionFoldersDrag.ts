@@ -5,9 +5,17 @@ import { fetchJson } from '../http';
 import { gotoDomContentLoadedWithRetries } from './pageNavigation';
 
 export {
+  beginSteppedSessionDrag,
   dragFolderToTarget,
   dragSessionToTarget,
+  dragSessionWithGeometryProbe,
+  dragSessionWithLongTaskProbe,
+  readVisibleSessionRowOrder,
+  type CapturedRect,
   type DragDispatchResult,
+  type DragGeometryProbe,
+  type LongTaskSummary,
+  type SteppedSessionDrag,
 } from './sessionFoldersPointerDrag';
 
 const ACCOUNT_SETTINGS_LOGICAL_KEY_PREFIX = 'account-settings:v2:';

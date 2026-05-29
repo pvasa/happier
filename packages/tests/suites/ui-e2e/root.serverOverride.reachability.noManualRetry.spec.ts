@@ -61,7 +61,7 @@ test.describe('ui e2e: server override reachability', () => {
     const url = `${uiBaseUrl}/?server=${encodeURIComponent(server.baseUrl)}`;
     await gotoDomContentLoadedWithPathFallback(page, url, '/');
 
-    await expect(page.getByTestId('welcome-create-account')).toHaveCount(1, { timeout: 120_000 });
+    await expect(page.getByTestId('welcome-primary-start').or(page.getByTestId('welcome-create-account'))).toHaveCount(1, { timeout: 120_000 });
     await expect(page.getByTestId('welcome-retry-server')).toHaveCount(0);
   });
 });

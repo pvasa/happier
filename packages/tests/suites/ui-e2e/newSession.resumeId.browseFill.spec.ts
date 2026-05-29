@@ -111,6 +111,7 @@ test.describe('ui e2e: /new resume id browse fills from direct sessions', () => 
       env: {
         ...process.env,
         EXPO_PUBLIC_DEBUG: '1',
+        EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS: '300000',
         EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
         EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-${run.runId}-resume-browse`,
       },

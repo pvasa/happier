@@ -4,8 +4,9 @@ import { startTestDaemon, type StartedDaemon } from '../daemon/daemon';
 import { approveTerminalConnect } from './approveTerminalConnect';
 import { startCliAuthLoginForTerminalConnect } from './cliTerminalConnect';
 import { acknowledgeTerminalConnectSuccessIfPresent } from './acknowledgeTerminalConnectSuccessIfPresent';
-import { gotoDomContentLoadedWithPathFallback, gotoDomContentLoadedWithRetries } from './pageNavigation';
+import { gotoCommittedWithRetries, gotoDomContentLoadedWithPathFallback } from './pageNavigation';
 import { ensureAccountReadyForConnect } from './ensureAccountReadyForConnect';
+import { waitForInitialAppUi } from './waitForInitialAppUi';
 
 export async function authenticateAndStartDaemon(params: Readonly<{
   page: Page;
@@ -14,11 +15,18 @@ export async function authenticateAndStartDaemon(params: Readonly<{
   serverUrl: string;
   uiBaseUrl: string;
   createAccount?: boolean;
+  initialUiGotoTimeoutMs?: number;
+  initialUiReadyTimeoutMs?: number;
   terminalConnectUrlTimeoutMs?: number;
   daemonStartupTimeoutMs?: number;
   extraEnv?: NodeJS.ProcessEnv;
 }>): Promise<StartedDaemon> {
-  await gotoDomContentLoadedWithRetries(params.page, params.uiBaseUrl);
+  await gotoCommittedWithRetries(params.page, params.uiBaseUrl, params.initialUiGotoTimeoutMs);
+  await waitForInitialAppUi({
+    page: params.page,
+    timeoutMs: params.initialUiReadyTimeoutMs,
+    reloadOnFailure: false,
+  });
   await ensureAccountReadyForConnect({
     page: params.page,
     timeoutMs: 120_000,

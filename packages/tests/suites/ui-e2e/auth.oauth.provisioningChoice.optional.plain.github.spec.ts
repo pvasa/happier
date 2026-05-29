@@ -9,6 +9,7 @@ import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { reserveAvailablePort } from '../../src/testkit/network/reserveAvailablePort';
 import { startFakeGitHubOAuthServer, type StopFn } from '../../src/testkit/oauth/fakeGithubOAuthServer';
+import { clickWelcomeSignupProvider } from '../../src/testkit/uiE2e/clickWelcomeSignupProvider';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -104,7 +105,7 @@ test.describe('ui e2e: OAuth provisioning choice (optional → plain) (GitHub)',
     if (!oauthBaseUrl) throw new Error('missing oauth base url');
 
     await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
-    await page.getByTestId('welcome-signup-provider').click();
+    await clickWelcomeSignupProvider({ page, timeoutMs: 120_000 });
 
     await expect(page.getByTestId('oauth-provisioning-choice-plain')).toHaveCount(1, { timeout: 120_000 });
     await expect(page.getByTestId('oauth-provisioning-choice-e2ee')).toHaveCount(1, { timeout: 120_000 });

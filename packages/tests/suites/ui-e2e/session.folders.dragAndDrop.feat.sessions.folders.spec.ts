@@ -263,6 +263,11 @@ test.describe('ui e2e: session folders drag and drop', () => {
     await expect(page.getByTestId(`session-folder-header-${FOLDER_ALPHA_ID}`)).toHaveCount(1, { timeout: 120_000 });
     await expect(page.getByTestId(`session-folder-header-${FOLDER_BETA_ID}`)).toHaveCount(1, { timeout: 120_000 });
 
+    // The drag geometry/performance refactor replaced the per-row drop
+    // indicators with ONE viewport-level overlay. Assert that single overlay is
+    // present (and unique) before exercising drags.
+    await expect(page.getByTestId('session-list-drop-overlay')).toHaveCount(1, { timeout: 60_000 });
+
     await dragSessionToTarget(page, {
       sessionId: rootSessionId,
       targetTestId: `session-folder-header-${FOLDER_ALPHA_ID}`,

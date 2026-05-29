@@ -263,6 +263,23 @@ describe('ensureAccountReadyForConnect', () => {
     expect(page.clickCalls['Get Started'] ?? 0).toBe(0);
   });
 
+  it('dismisses the brand hero as pre-auth progression without treating it as account creation', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(300);
+    const page = createBrandHeroTransitionPage();
+
+    await expect(
+      ensureAccountReadyForConnect({ page, timeoutMs: 250, clickCreateAccount: false }),
+    ).rejects.toThrow('Account did not reach a ready UI state within 250ms.');
+
+    expect(page.clickCalls['brand-hero-get-started'] ?? 0).toBe(1);
+    expect(page.clickCalls['welcome-primary-start'] ?? 0).toBe(0);
+  });
+
   it('falls back to the role-based create-account CTA when testID is absent', async () => {
     const page = createFakePage({
       roleCounts: {
@@ -275,6 +292,20 @@ describe('ensureAccountReadyForConnect', () => {
 
     await expect(ensureAccountReadyForConnect({ page, timeoutMs: 250 })).resolves.toBeUndefined();
     expect(page.clickCalls['Create account'] ?? 0).toBe(1);
+  });
+
+  it('falls back to the role-based first-time CTA when testID is absent', async () => {
+    const page = createFakePage({
+      roleCounts: {
+        '/First time here/': [1, 0],
+      },
+      testIdCounts: {
+        'session-getting-started-kind-connect_machine': [0, 1],
+      },
+    });
+
+    await expect(ensureAccountReadyForConnect({ page, timeoutMs: 250 })).resolves.toBeUndefined();
+    expect(page.clickCalls['/First time here/'] ?? 0).toBe(1);
   });
 
   it('continues when the create-account CTA is temporarily blocked by an overlay', async () => {

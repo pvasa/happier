@@ -154,19 +154,6 @@ async function installPostHogCapture(page: Page, sink: CapturedAnalyticsRequest[
 
 }
 
-async function createAccountIfNeeded(page: Page): Promise<void> {
-  const createAccountByTestId = page.getByTestId('welcome-create-account');
-  if (await createAccountByTestId.count()) {
-    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
-    return;
-  }
-
-  const createAccountByRole = page.getByRole('button', { name: 'Create account' });
-  if (await createAccountByRole.count()) {
-    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
-  }
-}
-
 test.describe('ui e2e: settings analytics', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -220,18 +207,18 @@ test.describe('ui e2e: settings analytics', () => {
 
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 420_000);
     await waitForInitialAppUi({ page, timeoutMs: 420_000 });
-    await createAccountIfNeeded(page);
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 
     analyticsRequests.splice(0, analyticsRequests.length);
 
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/settings/appearance?happier_hmr=0`, 180_000);
-    await expect(page.getByTestId('settings-appearance-themePreference-cycle')).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId('settings-appearance-themePreference-cycle').click();
+    await expect(page.getByTestId('settings-theme-selector-trigger')).toHaveCount(1, { timeout: 60_000 });
+    await page.getByTestId('settings-theme-selector-trigger').click();
 
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/settings/session?happier_hmr=0`, 180_000);
     await expect(page.getByTestId('settings-session-sessionListDensity-trigger')).toHaveCount(1, { timeout: 60_000 });
     await page.getByTestId('settings-session-sessionListDensity-trigger').click();
-    await page.getByText('Narrow', { exact: true }).click();
+    await page.getByTestId('dropdown-option-narrow').click();
 
     await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/settings/features?happier_hmr=0`, 180_000);
     const diffSyntaxHighlightingToggle = page.getByTestId('settings-feature-toggle-files.diffSyntaxHighlighting');

@@ -14,9 +14,29 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
+const SESSION_LOADED_TEST_ID = 'transcript-chat-list';
+const SESSION_ROUTE_LOADING_TEST_ID = 'session-route-loading';
+const SESSION_ROOT_UNAVAILABLE_TEST_ID = 'session-root-unavailable';
+const SESSION_INVALID_LINK_TEST_ID = 'session-invalid-link';
+
+declare global {
+  interface Window {
+    __happierSessionRouteUnavailableMonitor?: {
+      seenUnavailableTestIds: string[];
+    };
+  }
+}
 
 function resolveServerLightSqliteDbPath(params: { suiteDir: string }): string {
   return resolve(join(params.suiteDir, 'server-light-data', 'happier-server-light.sqlite'));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function sessionRouteUrlPattern(params: { sessionId: string; suffix?: string }): RegExp {
+  return new RegExp(`/session/${escapeRegExp(params.sessionId)}${escapeRegExp(params.suffix ?? '')}(?:\\?.*)?$`);
 }
 
 function readLatestMachineIdFromServerLightDb(params: { suiteDir: string }): string {
@@ -54,6 +74,44 @@ async function createSessionFromComposer(params: {
   prompt: string;
 }): Promise<string> {
   return createSessionFromNewSessionComposer(params);
+}
+
+async function installSessionUnavailableFlashMonitor(page: Page): Promise<void> {
+  await page.addInitScript((testIds: string[]) => {
+    const state = { seenUnavailableTestIds: [] as string[] };
+    window.__happierSessionRouteUnavailableMonitor = state;
+
+    const recordVisibleUnavailable = () => {
+      for (const testId of testIds) {
+        if (document.querySelector(`[data-testid="${testId}"]`)) {
+          state.seenUnavailableTestIds.push(testId);
+        }
+      }
+    };
+
+    const start = () => {
+      recordVisibleUnavailable();
+      new MutationObserver(recordVisibleUnavailable).observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['data-testid'],
+      });
+    };
+
+    if (document.documentElement) {
+      start();
+    } else {
+      document.addEventListener('DOMContentLoaded', start, { once: true });
+    }
+  }, [SESSION_ROOT_UNAVAILABLE_TEST_ID, SESSION_INVALID_LINK_TEST_ID]);
+}
+
+async function expectNoSessionUnavailableFlash(page: Page): Promise<void> {
+  const seenUnavailableTestIds = await page.evaluate(() => {
+    return window.__happierSessionRouteUnavailableMonitor?.seenUnavailableTestIds ?? [];
+  });
+  expect(seenUnavailableTestIds).toEqual([]);
 }
 
 test.describe('ui e2e: session subroutes', () => {
@@ -155,30 +213,52 @@ test.describe('ui e2e: session subroutes', () => {
     const machineId = await waitForLatestMachineId({ suiteDir, timeoutMs: 120_000 });
     const sessionId = await createSessionFromComposer({ page, uiBaseUrl, machineId, prompt: `hello ${run.runId}` });
 
+    await installSessionUnavailableFlashMonitor(page);
     await page.goto(`${uiBaseUrl}/session/${sessionId}`, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('transcript-chat-list')).toHaveCount(1, { timeout: 120_000 });
+    await expect(
+      page.getByTestId(SESSION_ROUTE_LOADING_TEST_ID).or(page.getByTestId(SESSION_LOADED_TEST_ID)),
+    ).toHaveCount(1, { timeout: 120_000 });
+    await expect(page.getByTestId(SESSION_LOADED_TEST_ID)).toHaveCount(1, { timeout: 120_000 });
+    await expectNoSessionUnavailableFlash(page);
     await expect(page.getByText('FAKE_CLAUDE_OK_1')).toHaveCount(1, { timeout: 180_000 });
 
     // In-app navigation should resolve session subroutes.
     await expect(page.getByTestId('session-header-avatar')).toHaveCount(1, { timeout: 60_000 });
     await page.getByTestId('session-header-avatar').click();
-    await expect(page).toHaveURL(new RegExp(`/session/${sessionId}/info$`));
+    await expect(page).toHaveURL(sessionRouteUrlPattern({ sessionId, suffix: '/info' }));
     await expect(page.getByTestId('session-info-screen')).toHaveCount(1, { timeout: 60_000 });
 
     await page.goto(`${uiBaseUrl}/session/${sessionId}`, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('transcript-chat-list')).toHaveCount(1, { timeout: 120_000 });
+    await expect(page.getByTestId(SESSION_LOADED_TEST_ID)).toHaveCount(1, { timeout: 120_000 });
 
     await page.goto(`${uiBaseUrl}/session/${sessionId}/info`, { waitUntil: 'domcontentloaded' });
-    await expect(page).toHaveURL(new RegExp(`/session/${sessionId}/info$`));
+    await expect(page).toHaveURL(sessionRouteUrlPattern({ sessionId, suffix: '/info' }));
     await expect(page.getByTestId('debug-router-pathname')).toHaveText(`/session/${sessionId}/info`, { timeout: 60_000 });
     await expect(page.getByTestId('session-info-screen')).toHaveCount(1, { timeout: 60_000 });
 
     await page.goto(`${uiBaseUrl}/session/${sessionId}/runs`, { waitUntil: 'domcontentloaded' });
-    await expect(page).toHaveURL(new RegExp(`/session/${sessionId}/runs$`));
+    await expect(page).toHaveURL(sessionRouteUrlPattern({ sessionId, suffix: '/runs' }));
     await expect(page.getByTestId('session-runs-screen')).toHaveCount(1, { timeout: 60_000 });
 
     await page.goto(`${uiBaseUrl}/session/${sessionId}/files`, { waitUntil: 'domcontentloaded' });
-    await expect(page).toHaveURL(new RegExp(`/session/${sessionId}/files$`));
+    await expect(page).toHaveURL(sessionRouteUrlPattern({ sessionId, suffix: '/files' }));
     await expect(page.getByTestId('session-files-screen')).toHaveCount(1, { timeout: 60_000 });
+  });
+
+  test('renders stable unavailable selectors for missing session routes', async ({ page }) => {
+    test.setTimeout(240_000);
+    if (!uiBaseUrl) throw new Error('missing ui fixture');
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoDomContentLoadedWithRetries(page, uiBaseUrl);
+    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
+
+    const missingSessionId = `missing-session-${run.runId}`;
+
+    await page.goto(`${uiBaseUrl}/session/${missingSessionId}`, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId(SESSION_ROOT_UNAVAILABLE_TEST_ID)).toHaveCount(1, { timeout: 120_000 });
+
+    await page.goto(`${uiBaseUrl}/session/${missingSessionId}/terminal`, { waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId(SESSION_INVALID_LINK_TEST_ID)).toHaveCount(1, { timeout: 120_000 });
   });
 });

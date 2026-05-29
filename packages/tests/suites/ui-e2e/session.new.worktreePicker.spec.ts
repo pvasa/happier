@@ -6,8 +6,9 @@
  * the agent-input checkout chip and exposes the quick-actions root step. The
  * actual assertions in the test body (see :138-146) are:
  *
- *   - The popover opens from the new-session checkout chip
- *     (`new-session-checkout-chip`) and renders inside the shared
+ *   - A real pointer click on the new-session checkout chip
+ *     (`new-session-checkout-chip`) keeps `/new` mounted, preserves the
+ *     composer draft, and renders the shared
  *     `agent-input-selection-list-popover` shell.
  *   - The root step `worktree-root` exposes the quick-actions options
  *     `current_path` and `create_git_worktree` via the option testID scheme
@@ -47,27 +48,54 @@
  * testID contract surface) is what this e2e spec is for.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import { execFile } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import { createRunDirs } from '../../src/testkit/runDir';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
-import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
-import { startCliAuthLoginForTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
-import { gotoDomContentLoadedWithRetries } from '../../src/testkit/uiE2e/pageNavigation';
-import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
-import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { type StartedDaemon } from '../../src/testkit/daemon/daemon';
+import { authenticateAndStartDaemon } from '../../src/testkit/uiE2e/authenticateAndStartDaemon';
+import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
+const execFileAsync = promisify(execFile);
+
+async function createGitRepository(path: string): Promise<void> {
+    await mkdir(path, { recursive: true });
+    await execFileAsync('git', ['init', '--initial-branch=main'], { cwd: path });
+}
+
+async function selectGitWorkingDirectory(params: Readonly<{
+    page: Page;
+    repoDir: string;
+}>): Promise<void> {
+    const pathInput = params.page.getByTestId('path-selection-list:header:input');
+    if ((await pathInput.count()) === 0) {
+        await expect(params.page.getByTestId('agent-input-path-chip')).toHaveCount(1, { timeout: 60_000 });
+        await params.page.getByTestId('agent-input-path-chip').click();
+    }
+
+    await expect(pathInput).toBeVisible({ timeout: 60_000 });
+    await pathInput.fill(params.repoDir);
+    await expect(pathInput).toHaveValue(params.repoDir);
+    await pathInput.press('Enter');
+
+    await expect
+        .poll(async () => await params.page.getByTestId('new-session-checkout-chip').count(), { timeout: 120_000 })
+        .toBe(1);
+}
 
 test.describe('ui e2e: /new worktree picker (Phase 5 SelectionList migration)', () => {
     test.describe.configure({ mode: 'serial' });
 
     const suiteDir = run.testDir('new-session-worktree-picker-suite');
     const cliHomeDir = resolve(join(suiteDir, 'cli-home'));
+    const worktreeRepoDir = resolve(join(suiteDir, 'worktree-picker-repo'));
 
     let server: StartedServer | null = null;
     let ui: StartedUiWeb | null = null;
@@ -77,16 +105,24 @@ test.describe('ui e2e: /new worktree picker (Phase 5 SelectionList migration)', 
     test.beforeAll(async () => {
         test.setTimeout(540_000);
         await mkdir(cliHomeDir, { recursive: true });
+        await createGitRepository(worktreeRepoDir);
 
-        server = await startServerLight({ testDir: suiteDir });
+        server = await startServerLight({
+            testDir: suiteDir,
+            dbProvider: 'sqlite',
+            extraEnv: {
+                HAPPIER_BUILD_FEATURES_DENY: 'sharing.contentKeys',
+            },
+        });
         ui = await startUiWeb({
             testDir: suiteDir,
             env: {
                 ...process.env,
-                HAPPIER_SERVER_URL: server.baseUrl,
+                EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
+                EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-${run.runId}`,
             },
         });
-        uiBaseUrl = ui.baseUrl;
+        uiBaseUrl = normalizeLoopbackBaseUrl(ui.baseUrl);
     });
 
     test.afterAll(async () => {
@@ -101,43 +137,32 @@ test.describe('ui e2e: /new worktree picker (Phase 5 SelectionList migration)', 
         }
         test.setTimeout(540_000);
 
-        await gotoDomContentLoadedWithRetries(page, uiBaseUrl, 420_000);
-        await waitForInitialAppUi({ page, timeoutMs: 420_000 });
-        await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
-
-        const cliLogin = await startCliAuthLoginForTerminalConnect({
+        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 240_000);
+        daemon = await authenticateAndStartDaemon({
+            page,
             testDir: suiteDir,
             cliHomeDir,
             serverUrl: server.baseUrl,
-            webappUrl: uiBaseUrl,
-            env: {
-                ...process.env,
-                CI: '1',
-                HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
-                HAPPIER_DISABLE_CAFFEINATE: '1',
-                HAPPIER_VARIANT: 'dev',
-            },
-        });
-        await gotoDomContentLoadedWithRetries(page, cliLogin.connectUrl, 90_000);
-        await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-        await page.getByTestId('terminal-connect-approve').click();
-        await cliLogin.waitForSuccess();
-
-        daemon = await startTestDaemon({
-            testDir: suiteDir,
-            happyHomeDir: cliHomeDir,
-            env: {
-                ...process.env,
-                HAPPIER_SERVER_URL: server.baseUrl,
-            },
+            uiBaseUrl,
+            terminalConnectUrlTimeoutMs: 180_000,
+            daemonStartupTimeoutMs: 180_000,
         });
 
-        await enableEnhancedSessionWizard({ page, baseUrl: uiBaseUrl });
-        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new`, 60_000);
+        await enableEnhancedSessionWizard({ page, baseUrl: uiBaseUrl, timeoutMs: 180_000 });
+        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/new?happier_hmr=0`, 120_000);
+        await expect(page.getByTestId('new-session-composer-input')).toBeVisible({ timeout: 60_000 });
+
+        const draftText = 'worktree picker pointer smoke';
+        await page.getByTestId('new-session-composer-input').fill(draftText);
+        await expect(page.getByTestId('new-session-composer-input')).toHaveValue(draftText);
+        await selectGitWorkingDirectory({ page, repoDir: worktreeRepoDir });
 
         // Open the agent-input checkout chip → SelectionList popover.
         await expect(page.getByTestId('new-session-checkout-chip')).toHaveCount(1, { timeout: 60_000 });
         await page.getByTestId('new-session-checkout-chip').click();
+        expect(new URL(page.url()).pathname).toBe('/new');
+        await expect(page.getByTestId('new-session-composer-input')).toBeVisible();
+        await expect(page.getByTestId('new-session-composer-input')).toHaveValue(draftText);
 
         // The worktree picker mounts inside the shared SelectionList popover shell.
         await expect(page.getByTestId('agent-input-selection-list-popover')).toBeVisible({ timeout: 30_000 });
@@ -147,5 +172,11 @@ test.describe('ui e2e: /new worktree picker (Phase 5 SelectionList migration)', 
         // are intentionally not asserted here.
         await expect(page.getByTestId('selection-list:worktree-root:option:current_path')).toBeVisible();
         await expect(page.getByTestId('selection-list:worktree-root:option:create_git_worktree')).toBeVisible();
+
+        await page.keyboard.press('Escape');
+        await expect(page.getByTestId('agent-input-selection-list-popover')).toBeHidden({ timeout: 30_000 });
+        expect(new URL(page.url()).pathname).toBe('/new');
+        await expect(page.getByTestId('new-session-composer-input')).toBeVisible();
+        await expect(page.getByTestId('new-session-composer-input')).toHaveValue(draftText);
     });
 });

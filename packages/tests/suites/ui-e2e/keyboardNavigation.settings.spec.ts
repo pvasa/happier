@@ -16,10 +16,7 @@ import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 async function createAccountIfNeeded(page: Page): Promise<void> {
-  const createAccount = page.getByTestId('welcome-create-account');
-  if (await createAccount.count()) {
-    await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
-  }
+  await ensureAccountReadyForConnect({ page, timeoutMs: 120_000 });
 }
 
 test.describe('ui e2e: keyboard navigation settings', () => {

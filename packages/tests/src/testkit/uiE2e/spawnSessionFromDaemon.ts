@@ -32,7 +32,9 @@ export async function spawnSessionFromDaemon(params: Readonly<{
     },
     body: JSON.stringify({
       directory: params.directory,
-      agent: params.agent ?? 'claude',
+      ...(params.agent
+        ? { backendTarget: { kind: 'builtInAgent', agentId: params.agent } }
+        : {}),
     }),
   });
   const json: unknown = await res.json().catch(() => null);

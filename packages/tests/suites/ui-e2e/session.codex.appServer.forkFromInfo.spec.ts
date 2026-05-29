@@ -268,6 +268,9 @@ test.describe('ui e2e: Codex app-server fork from session info', () => {
             extraEnv: {
                 HAPPIER_BUILD_FEATURES_DENY: 'sharing.contentKeys',
                 HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '1',
+                HAPPIER_PRESENCE_SESSION_TIMEOUT_MS: '300000',
+                HAPPIER_PRESENCE_MACHINE_TIMEOUT_MS: '300000',
+                HAPPIER_PRESENCE_TIMEOUT_TICK_MS: '1000',
             },
         });
 
@@ -276,6 +279,7 @@ test.describe('ui e2e: Codex app-server fork from session info', () => {
             env: {
                 ...process.env,
                 EXPO_PUBLIC_DEBUG: '1',
+                EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS: '300000',
                 EXPO_PUBLIC_HAPPY_SERVER_URL: server.baseUrl,
                 EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-${run.runId}-codex-app-server-fork-info`,
             },

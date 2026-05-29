@@ -1,17 +1,28 @@
 import type { Page } from '@playwright/test';
 
-export type InitialAppUiPage = Pick<Page, 'getByTestId' | 'getByRole' | 'waitForTimeout' | 'reload'>;
+export type InitialAppUiPage = Pick<Page, 'getByTestId' | 'getByRole' | 'locator' | 'waitForTimeout' | 'reload'>;
 
 async function countVisible(page: InitialAppUiPage): Promise<number> {
   return (
     (await page.getByTestId('session-getting-started-kind-connect_machine').count())
+    + (await page.getByTestId('brand-hero-get-started').count())
+    + (await page.getByTestId('welcome-primary-start').count())
+    + (await page.getByTestId('setup.postAuth').count())
+    + (await page.getByTestId('welcome-server-loading').count())
+    + (await page.getByTestId('welcome-server-unavailable').count())
     + (await page.getByTestId('welcome-create-account').count())
     + (await page.getByTestId('welcome-signup-provider').count())
     + (await page.getByTestId('welcome-restore').count())
     + (await page.getByTestId('welcome-mtls-login').count())
+    + (await page.getByTestId('restore-open-manual').count())
     + (await page.getByTestId('setup.continueToAuth').count())
+    + (await page.getByRole('button', { name: /First time here/ }).count())
     + (await page.getByRole('button', { name: 'Create account' }).count())
+    + (await page.getByTestId('nav-new-session').count())
+    + (await page.getByTestId('main-header-start-new-session').count())
+    + (await page.getByTestId('home-header-start-new-session').count())
     + (await page.getByTestId('sidebar-expand-button').count())
+    + (await page.locator('[data-testid^="session-list-item-"]').count())
     + (await page.getByTestId('session-composer-input').count())
   );
 }
@@ -49,7 +60,7 @@ export async function waitForInitialAppUi(params: Readonly<{
     });
   } catch (error) {
     if (!reloadOnFailure) throw error;
-    await params.page.reload({ waitUntil: 'domcontentloaded' });
+    await params.page.reload({ waitUntil: 'commit' });
     await waitForInitialUiOnce({
       page: params.page,
       timeoutMs,
