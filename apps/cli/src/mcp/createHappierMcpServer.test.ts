@@ -28,7 +28,8 @@ describe('createHappierMcpServer', () => {
 
     const { toolNames } = createHappierMcpServer(fakeClient);
     expect(toolNames).not.toContain('review_start');
-    expect(toolNames).toContain('subagents_plan_start');
+    expect(toolNames).not.toContain('subagents_plan_start');
+    expect(toolNames).toContain('action_execute');
   });
 
   it('uses account action settings for the in-session MCP tool registry when provided', async () => {
@@ -53,7 +54,10 @@ describe('createHappierMcpServer', () => {
         actionsSettingsV1: {
           v: 1,
           actions: {
-            'session.list': { disabledSurfaces: [] },
+            'session.list': {
+              disabledSurfaces: [],
+              toolExposureModes: { session_agent: 'direct' },
+            },
           },
         },
       },

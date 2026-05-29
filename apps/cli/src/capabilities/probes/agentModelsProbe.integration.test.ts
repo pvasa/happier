@@ -96,13 +96,25 @@ describe('probeModelsFromAcpBackend', () => {
       sessionId: randomUUID(),
       configOptions: [
         {
-          id: "model",
-          name: "Model",
+          id: "cursor-choice",
+          name: "Cursor Choice",
+          category: "model",
           type: "enum",
           currentValue: "model-a",
           options: [
             { value: "model-a", name: "Model A" },
             { value: "model-b", name: "Model B" },
+          ],
+        },
+        {
+          id: "fast",
+          name: "Fast",
+          category: "model_config",
+          type: "select",
+          currentValue: "true",
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
           ],
         },
       ],
@@ -121,6 +133,18 @@ describe('probeModelsFromAcpBackend', () => {
       expect(models?.[0]).toEqual({ id: 'default', name: 'Default' });
       expect(models?.some((m) => m.id === 'model-a' && m.name === 'Model A')).toBe(true);
       expect(models?.some((m) => m.id === 'model-b' && m.name === 'Model B')).toBe(true);
+      expect(models?.find((m) => m.id === 'model-a')?.modelOptions).toEqual([
+        {
+          id: 'fast',
+          name: 'Fast',
+          type: 'select',
+          currentValue: 'true',
+          options: [
+            { value: 'false', name: 'Off' },
+            { value: 'true', name: 'Fast' },
+          ],
+        },
+      ]);
     } finally {
       await backend.dispose().catch(() => {});
       await fixture.cleanup();
@@ -452,6 +476,57 @@ process.exit(1);
         process.env.HAPPIER_AUGGIE_PATH = prevOverride;
       } else {
         delete process.env.HAPPIER_AUGGIE_PATH;
+      }
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it('returns dynamic model list from Cursor `models` hyphen output when ACP probing falls back to the CLI command', async () => {
+    const fixture = await createProbeTempDir('happier-cli-model-probe-cursor');
+    const binDir = resolve(join(fixture.dir, 'bin'));
+    await mkdir(binDir, { recursive: true });
+
+    const cursorAgentPath = resolve(join(binDir, 'cursor-agent'));
+    await writeExecutableScript(
+      cursorAgentPath,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  process.stdout.write(
+    "Available models:\\n" +
+    "composer-2.5 - Composer 2.5 (current) (default)\\n" +
+    "composer-2.5-fast - Composer 2.5 Fast\\n" +
+    "gpt-5.5 - GPT-5.5\\n"
+  );
+  process.exit(0);
+}
+process.exit(1);
+`,
+    );
+
+    const prevPath = process.env.PATH;
+    const prevOverride = process.env.HAPPIER_CURSOR_PATH;
+    process.env.PATH = `${binDir}${delimiter}${prevPath ?? ''}`;
+    process.env.HAPPIER_CURSOR_PATH = cursorAgentPath;
+    try {
+      const res = await probeAgentModelsBestEffort({
+        agentId: 'cursor',
+        cwd: fixture.dir,
+        timeoutMs: CLI_MODELS_PROBE_TEST_TIMEOUT_MS,
+      });
+      expect(res.source).toBe('dynamic');
+      expect(res.availableModels[0]).toEqual({ id: 'default', name: 'Default' });
+      expect(res.availableModels).toEqual(expect.arrayContaining([
+        { id: 'composer-2.5', name: 'Composer 2.5' },
+        { id: 'composer-2.5-fast', name: 'Composer 2.5 Fast' },
+        { id: 'gpt-5.5', name: 'GPT-5.5' },
+      ]));
+    } finally {
+      process.env.PATH = prevPath;
+      if (typeof prevOverride === 'string') {
+        process.env.HAPPIER_CURSOR_PATH = prevOverride;
+      } else {
+        delete process.env.HAPPIER_CURSOR_PATH;
       }
       await fixture.cleanup();
     }

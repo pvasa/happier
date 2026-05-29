@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   computeSelfUpdateSpec,
@@ -6,8 +6,24 @@ import {
   packageJsonPathForNodeModules,
   parseSelfChannel,
 } from './self';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS } from '@happier-dev/cli-common/firstPartyRuntime';
 
 describe('self command helpers', () => {
+  const envScope = createEnvKeyScope(STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS);
+
+  beforeEach(() => {
+    envScope.patch({
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
+      HAPPIER_RELEASE_RING: undefined,
+      HAPPIER_RELEASE_CHANNEL: undefined,
+    });
+  });
+
+  afterEach(() => {
+    envScope.restore();
+  });
+
   it('defaults to stable channel', () => {
     expect(parseSelfChannel([])).toBe('stable');
   });

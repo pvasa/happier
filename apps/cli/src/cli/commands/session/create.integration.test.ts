@@ -19,7 +19,13 @@ vi.mock('socket.io-client', () => ({
 }));
 
 describe('happier session create (integration)', () => {
-  const envKeys = ['HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_HOME_DIR'] as const;
+  const envKeys = [
+    'HAPPIER_SERVER_URL',
+    'HAPPIER_WEBAPP_URL',
+    'HAPPIER_HOME_DIR',
+    'HAPPIER_STACK_INVOKED_CWD',
+    'HAPPIER_SESSION_REQUESTED_DIRECTORY',
+  ] as const;
   let envScope = createEnvKeyScope(envKeys);
   let server: Server | null = null;
   let happyHomeDir = '';
@@ -116,6 +122,10 @@ describe('happier session create (integration)', () => {
     process.env.HAPPIER_SERVER_URL = `http://127.0.0.1:${address.port}`;
     process.env.HAPPIER_WEBAPP_URL = 'http://127.0.0.1:3000';
     process.env.HAPPIER_HOME_DIR = happyHomeDir;
+    envScope.patch({
+      HAPPIER_STACK_INVOKED_CWD: undefined,
+      HAPPIER_SESSION_REQUESTED_DIRECTORY: undefined,
+    });
 
     const { reloadConfiguration } = await import('@/configuration');
     reloadConfiguration();
@@ -205,11 +215,12 @@ describe('happier session create (integration)', () => {
       expect(parsed.data?.session?.title).toBe('My Title');
       expect(parsed.data?.session?.active).toBe(true);
       expect(parsed.data?.session?.encryption?.type).toBe('dataKey');
-      expect(observedSpawnBody).toEqual({
+      expect(observedSpawnBody).toEqual(expect.objectContaining({
         directory: process.cwd(),
         backendTarget: { kind: 'builtInAgent', agentId: DEFAULT_CATALOG_AGENT_ID },
         initialPrompt: 'Plan the refactor',
-      });
+        spawnNonce: expect.any(String),
+      }));
       expect(observedInitialMessageRpc).toBe(false);
     } finally {
       output.restore();
@@ -264,11 +275,12 @@ describe('happier session create (integration)', () => {
       const parsed = output.json();
       expect(parsed.ok).toBe(true);
       expect(parsed.kind).toBe('session_create');
-      expect(observedSpawnBody).toEqual({
+      expect(observedSpawnBody).toEqual(expect.objectContaining({
         directory: process.cwd(),
         backendTarget: { kind: 'builtInAgent', agentId: DEFAULT_CATALOG_AGENT_ID },
         initialPrompt: 'Plan the refactor',
-      });
+        spawnNonce: expect.any(String),
+      }));
       expect(observedInitialMessageRpc).toBe(false);
     } finally {
       output.restore();
@@ -295,11 +307,12 @@ describe('happier session create (integration)', () => {
       const parsed = output.json();
       expect(parsed.ok).toBe(true);
       expect(parsed.kind).toBe('session_create');
-      expect(observedSpawnBody).toEqual({
+      expect(observedSpawnBody).toEqual(expect.objectContaining({
         directory: process.cwd(),
         backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
         initialPrompt: 'Plan the refactor',
-      });
+        spawnNonce: expect.any(String),
+      }));
     } finally {
       output.restore();
     }
@@ -324,10 +337,11 @@ describe('happier session create (integration)', () => {
       const parsed = output.json();
       expect(parsed.ok).toBe(true);
       expect(parsed.kind).toBe('session_create');
-      expect(observedSpawnBody).toEqual({
+      expect(observedSpawnBody).toEqual(expect.objectContaining({
         directory: process.cwd(),
         backendTarget: { kind: 'builtInAgent', agentId: DEFAULT_CATALOG_AGENT_ID },
-      });
+        spawnNonce: expect.any(String),
+      }));
     } finally {
       output.restore();
     }

@@ -38,6 +38,8 @@ afterEach(() => {
   spawnSyncSpy.mockReset();
   selfMigrateDaemonSpawnedSessionProcessOutOfDaemonServiceCgroup.mockReset();
   delete process.env.HAPPIER_CODEX_PATH;
+  delete process.env.HAPPIER_CODEX_BACKEND_MODE;
+  delete process.env.HAPPIER_EXPERIMENTAL_CODEX_ACP;
   delete process.env.HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP;
 });
 
@@ -280,6 +282,8 @@ describe('runBackendSessionCliCommand', () => {
   it('passes provider spawn extras from account settings into the backend run', async () => {
     const credentials = { token: 'x' } as any;
 
+    delete process.env.HAPPIER_CODEX_BACKEND_MODE;
+    delete process.env.HAPPIER_EXPERIMENTAL_CODEX_ACP;
     vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
     vi.spyOn(authModule, 'ensureMachineIdForCredentials').mockResolvedValue({ machineId: 'machine-1' } as any);
     vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
@@ -337,6 +341,44 @@ describe('runBackendSessionCliCommand', () => {
     }));
     expect(run).toHaveBeenCalledWith(expect.not.objectContaining({
       codexBackendMode: expect.anything(),
+    }));
+  });
+
+  it('passes Cursor provider runtime settings through direct CLI session starts', async () => {
+    const credentials = { token: 'x' } as any;
+
+    vi.spyOn(persistenceModule, 'readCredentials').mockResolvedValue(credentials);
+    vi.spyOn(authModule, 'ensureMachineIdForCredentials').mockResolvedValue({ machineId: 'machine-1' } as any);
+    vi.spyOn(accountSettingsModule, 'bootstrapAccountSettingsContext').mockResolvedValue({
+      source: 'network',
+      settings: {
+        cursorBinaryPath: '/opt/cursor/cursor-agent',
+        cursorAgentFallbackEnabled: false,
+        cursorApiEndpoint: 'https://cursor.example.test',
+      } as any,
+      settingsVersion: 1,
+      loadedAtMs: Date.now(),
+      whenRefreshed: null,
+    } as any);
+    vi.spyOn(providerSettingsModule, 'resolveProviderSpawnExtrasForRuntime').mockReturnValue({
+      cursorBinaryPath: '/opt/cursor/cursor-agent',
+      cursorAgentFallbackEnabled: false,
+      cursorApiEndpoint: 'https://cursor.example.test',
+    });
+
+    const run = vi.fn().mockResolvedValue(undefined);
+    const loadRun = vi.fn().mockResolvedValue(run);
+
+    await runBackendSessionCliCommand({
+      context: { args: ['cursor'], terminalRuntime: null } as any,
+      loadRun,
+      agentIdForAccountSettings: 'cursor' as any,
+    });
+
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({
+      cursorBinaryPath: '/opt/cursor/cursor-agent',
+      cursorAgentFallbackEnabled: false,
+      cursorApiEndpoint: 'https://cursor.example.test',
     }));
   });
 

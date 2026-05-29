@@ -180,6 +180,7 @@ describe('configuration env url fallback', () => {
     );
 
     process.env.HAPPIER_HOME_DIR = homeDir;
+    delete process.env.HAPPIER_ACTIVE_SERVER_ID;
     delete process.env.HAPPIER_SERVER_URL;
     delete process.env.HAPPIER_WEBAPP_URL;
 

@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS } from '@happier-dev/cli-common/firstPartyRuntime';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 const {
   fetchGitHubReleaseByTagMock,
@@ -55,10 +57,21 @@ vi.mock('@/cli/runtime/update/quiesceInstalledCliWindowsPayloadOwners', () => ({
 }));
 
 describe('happier self update for binary installs', () => {
+  const envScope = createEnvKeyScope(STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS);
+
+  beforeEach(() => {
+    envScope.patch({
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
+      HAPPIER_RELEASE_RING: undefined,
+      HAPPIER_RELEASE_CHANNEL: undefined,
+    });
+  });
+
   afterEach(() => {
     maybeRunDoctorRepairMock.mockReset();
     maybeRunVersionGatedRuntimeMigrationMock.mockReset();
     quiesceInstalledCliWindowsPayloadOwnersMock.mockReset();
+    envScope.restore();
     vi.restoreAllMocks();
     vi.resetModules();
   });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
 
 import { registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';
 
@@ -14,6 +15,14 @@ describe('registerHappierMcpBuiltInTools', () => {
     }, {
       sessionId: 'sess-1',
       surface: 'session_agent',
+      actionsSettings: ActionsSettingsV1Schema.parse({
+        v: 1,
+        actions: {
+          'session.list': {
+            toolExposureModes: { session_agent: 'direct' },
+          },
+        },
+      }),
       deps: {
         changeTitle: async () => ({ success: true }),
         startExecutionRun: async () => ({ ok: false as const, errorCode: 'unsupported', error: 'unsupported' }),

@@ -40,14 +40,15 @@ export async function sendWebhookActivityNotificationAsync(params: Readonly<{
       sessionId: params.event.sessionId,
       title: params.event.sessionTitle ?? null,
     },
-    request: params.event.topic === 'ready'
-      ? null
-      : {
+    request: params.event.topic === 'permission_request' || params.event.topic === 'user_action_request'
+      ? {
         requestId: params.event.requestId,
         kind: params.event.topic === 'user_action_request' ? 'user_action' : 'permission',
         toolName: params.event.toolName,
         toolDetails: built.toolDetails ?? null,
-      },
+      }
+      : null,
+    metadata: built.data,
   });
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {

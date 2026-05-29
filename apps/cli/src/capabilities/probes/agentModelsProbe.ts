@@ -1,6 +1,7 @@
 import { createCatalogAcpBackend } from '@/agent/acp/createCatalogAcpBackend';
 import { resolveCliPathOverride } from '@/agent/acp/resolveCliPathOverride';
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
+import { isAcpModelConfigOptionLike, normalizeAcpConfigOptionChoices } from '@/agent/acp/configOptionChoiceNormalization';
 import type { AgentBackend } from '@/agent/core';
 import { AGENTS } from '@/backends/catalog';
 import type { CatalogAgentId } from '@/backends/types';
@@ -17,6 +18,7 @@ import { resolveAgentProbeVariant } from './resolveAgentProbeVariant';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import { normalizeContextWindowTokens } from '@/backends/modelCapabilities/contextWindowTokens';
+import { isAcpModelScopedConfigOption } from '@/agent/acp/runtime/sessionModelsState';
 
 type ProbedAgentModelOptionValue = string | number | boolean | null;
 
@@ -82,6 +84,10 @@ const ProbeDynamicModelInputSchema = z.object({
 const ProbeConfigOptionCandidateSchema = z.object({
   id: z.string().optional(),
   name: z.string().optional(),
+  category: z.string().optional(),
+  description: z.string().optional(),
+  type: z.string().optional(),
+  currentValue: z.unknown().optional(),
   options: z.array(z.unknown()).optional(),
 });
 
@@ -284,6 +290,18 @@ async function probeModelsFromCliModelsCommand(params: {
           continue;
         }
 
+        const hyphen = line.match(/^([a-z0-9._/:+][a-z0-9._/:+-]*)\s+-\s+(.+?)\s*$/i);
+        if (hyphen) {
+          const id = String(hyphen[1] ?? '').trim();
+          const name = String(hyphen[2] ?? '')
+            .replace(/(?:\s*\((?:current|default)\))+$/iu, '')
+            .trim();
+          if (id && name) {
+            parsed.push({ id, name });
+          }
+          continue;
+        }
+
         if (!line.startsWith('-') && !line.endsWith(':') && /^[a-z0-9._/:+-]+$/i.test(line)) {
           parsed.push({ id: line, name: line });
         }
@@ -315,29 +333,27 @@ function normalizeModelsFromConfigOptions(configOptionsRaw: unknown): ProbedAgen
   if (configOptions.length === 0) return null;
 
   const candidate =
-    configOptions.find((option) => option.id?.trim().toLowerCase() === 'model') ??
-    configOptions.find((option) => option.name?.trim().toLowerCase() === 'model') ??
+    configOptions.find(isAcpModelConfigOptionLike) ??
     null;
   if (!candidate) return null;
 
   const optionsRaw = candidate.options ?? null;
   if (!optionsRaw) return null;
 
-  const parsed = optionsRaw
-    .map((optionRaw) => {
-      const parsedChoice = ProbeModelOptionChoiceInputSchema.safeParse(optionRaw);
-      if (!parsedChoice.success) return null;
+  const modelScopedOptions = configOptions
+    .filter(isAcpModelScopedConfigOption)
+    .map((option) => normalizeProbeModelOption(option))
+    .filter((option): option is ProbedAgentModelOption => option !== null);
 
-      const id = ProbeNonEmptyStringSchema.safeParse(parsedChoice.data.value);
-      if (!id.success) return null;
-
-      return {
-        id: id.data,
-        name: parsedChoice.data.name,
-        ...(parsedChoice.data.description ? { description: parsedChoice.data.description } : {}),
-      } satisfies ProbedAgentModel;
-    })
-    .filter((model): model is ProbedAgentModel => model !== null);
+  const parsed = normalizeAcpConfigOptionChoices(optionsRaw, (value) => {
+    const id = ProbeNonEmptyStringSchema.safeParse(value);
+    return id.success ? id.data : null;
+  }).map((choice) => ({
+    id: choice.value,
+    name: choice.name,
+    ...(choice.description ? { description: choice.description } : {}),
+    ...(modelScopedOptions.length > 0 ? { modelOptions: modelScopedOptions } : {}),
+  } satisfies ProbedAgentModel));
 
   if (parsed.length === 0) return null;
 

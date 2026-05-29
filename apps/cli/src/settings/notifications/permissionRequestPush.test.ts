@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { accountSettingsParse } from '@happier-dev/protocol';
+import { logger } from '@/ui/logger';
 
 import { sendPermissionRequestPushNotificationAsync } from './permissionRequestPush';
 
@@ -66,5 +67,42 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
         settings,
       }),
     ).resolves.toBe(false);
+  });
+
+  it('redacts non-Axios push errors before logging', async () => {
+    const settings = accountSettingsParse({
+      notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
+    });
+    const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    const sendToAllDevicesAsync = async () => {
+      throw new Error(
+        'request failed for https://alice:SUPER_SECRET_PASSWORD@push.example.test/v1/send?token=secret Authorization: Bearer PUSH_SECRET',
+      );
+    };
+
+    try {
+      await expect(
+        sendPermissionRequestPushNotificationAsync({
+          pushSender: { sendToAllDevicesAsync },
+          sessionId: 's1',
+          permissionId: 'p1',
+          toolName: 'Read',
+          settings,
+        }),
+      ).resolves.toBe(false);
+
+      const [, logged] = debugSpy.mock.calls.find(([message]) =>
+        message === '[activityNotifications] Failed to dispatch outbound notification'
+      ) ?? [];
+      expect(logged).toEqual(expect.objectContaining({
+        name: 'Error',
+        message: 'request failed for https://push.example.test/v1/send Authorization: <redacted>',
+      }));
+      expect(JSON.stringify(logged)).not.toContain('SUPER_SECRET_PASSWORD');
+      expect(JSON.stringify(logged)).not.toContain('token=secret');
+      expect(JSON.stringify(logged)).not.toContain('PUSH_SECRET');
+    } finally {
+      debugSpy.mockRestore();
+    }
   });
 });

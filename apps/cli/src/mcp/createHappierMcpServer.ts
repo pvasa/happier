@@ -33,6 +33,7 @@ export function createHappierMcpServer(
   // configured separately from the external MCP surface (`mcp`).
   const toolSurface = 'session_agent' as const;
   const credentials = opts?.credentials ?? null;
+  const actionsSettings = opts?.accountSettings?.actionsSettingsV1 ?? null;
   const isActionEnabled = createMcpActionEnablement({
     accountSettings: opts?.accountSettings ?? null,
     surface: toolSurface,
@@ -179,11 +180,13 @@ export function createHappierMcpServer(
       return isActionSpecSurfacedOn(spec, toolSurface) && isActionEnabled(id as any);
     },
     surface: toolSurface,
+    actionsSettings,
   });
 
   const { toolNames } = registerHappierMcpBuiltInTools(mcp as any, {
     sessionId: client.sessionId,
     surface: toolSurface,
+    actionsSettings,
     deps: {
       changeTitle: createChangeTitleToolHandler({
         executor,

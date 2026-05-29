@@ -1,4 +1,5 @@
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import type { Credentials } from '@/persistence';
 
@@ -10,10 +11,12 @@ import { logger } from '@/ui/logger';
 import { decryptAccountSettingsCiphertext } from '@/settings/accountSettingsClient';
 import {
   accountSettingsParse,
+  AccountSettingsPersistedObjectSchema,
   AccountSettingsV2GetResponseSchema,
   AccountSettingsV2UpdateResponseSchema,
   openAccountScopedBlobCiphertext,
   sealAccountScopedBlobCiphertext,
+  type AccountSettingsPersistedObject,
   type AccountSettingsStoredContentEnvelope,
   type AccountSettingsV2UpdateResponse,
 } from '@happier-dev/protocol';
@@ -35,16 +38,66 @@ function resolveDefaultRandomBytes(): (n: number) => Uint8Array {
   return (n) => new Uint8Array(nodeRandomBytes(n));
 }
 
+function parsePersistedAccountSettingsObject(raw: unknown): AccountSettingsPersistedObject {
+  const parsed = AccountSettingsPersistedObjectSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error('Account settings content must be a JSON object');
+  }
+  return parsed.data;
+}
+
+function hasOwnRecordKey(record: Readonly<Record<string, unknown>>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function mergeMutationResultWithRawBase(params: Readonly<{
+  rawBase: AccountSettingsPersistedObject;
+  mutatedRaw: AccountSettingsPersistedObject;
+}>): AccountSettingsPersistedObject {
+  const runtimeDefaults = accountSettingsParse({});
+  const parsedBase = accountSettingsParse(params.rawBase);
+  const next: Record<string, unknown> = {};
+
+  for (const [key, baseValue] of Object.entries(params.rawBase)) {
+    if (!hasOwnRecordKey(params.mutatedRaw, key)) {
+      next[key] = baseValue;
+      continue;
+    }
+
+    const mutatedValue = params.mutatedRaw[key];
+    const parsedBaseValue = parsedBase[key];
+    const looksLikeParserMaterializedValue =
+      !isDeepStrictEqual(baseValue, parsedBaseValue)
+      && isDeepStrictEqual(mutatedValue, parsedBaseValue);
+
+    next[key] = looksLikeParserMaterializedValue ? baseValue : mutatedValue;
+  }
+
+  for (const [key, mutatedValue] of Object.entries(params.mutatedRaw)) {
+    if (hasOwnRecordKey(params.rawBase, key)) continue;
+
+    const isRuntimeDefaultAddition =
+      hasOwnRecordKey(runtimeDefaults, key)
+      && isDeepStrictEqual(mutatedValue, runtimeDefaults[key]);
+
+    if (!isRuntimeDefaultAddition) {
+      next[key] = mutatedValue;
+    }
+  }
+
+  return parsePersistedAccountSettingsObject(next);
+}
+
 async function parseSettingsFromContent(params: Readonly<{
   content: AccountSettingsStoredContentEnvelope | null;
   credentials: Credentials;
-}>): Promise<{ raw: Record<string, unknown>; envelopeKind: 'plain' | 'encrypted' }> {
+}>): Promise<{ raw: AccountSettingsPersistedObject; envelopeKind: 'plain' | 'encrypted' }> {
   if (!params.content) {
-    return { raw: accountSettingsParse({}), envelopeKind: 'encrypted' };
+    return { raw: {}, envelopeKind: 'encrypted' };
   }
 
   if (params.content.t === 'plain') {
-    return { raw: params.content.v as any, envelopeKind: 'plain' };
+    return { raw: parsePersistedAccountSettingsObject(params.content.v), envelopeKind: 'plain' };
   }
 
   const ciphertext = params.content.c;
@@ -54,12 +107,12 @@ async function parseSettingsFromContent(params: Readonly<{
     ciphertext,
   });
   if (opened?.value && typeof opened.value === 'object' && !Array.isArray(opened.value)) {
-    return { raw: opened.value as Record<string, unknown>, envelopeKind: 'encrypted' };
+    return { raw: parsePersistedAccountSettingsObject(opened.value), envelopeKind: 'encrypted' };
   }
 
   const decrypted = await decryptAccountSettingsCiphertext({ credentials: params.credentials, ciphertext });
   if (decrypted && typeof decrypted === 'object' && !Array.isArray(decrypted)) {
-    return { raw: decrypted as Record<string, unknown>, envelopeKind: 'encrypted' };
+    return { raw: parsePersistedAccountSettingsObject(decrypted), envelopeKind: 'encrypted' };
   }
 
   throw new Error('Failed to decrypt account settings ciphertext');
@@ -84,6 +137,20 @@ export async function updateAccountSettingsV2WithRetry(_params: Readonly<{
   const nowMs = params.deps?.nowMs ?? (() => Date.now());
   const resolveCachePath = params.deps?.resolveCachePath ?? resolveAccountSettingsCachePath;
   const writeCache = params.deps?.writeCache ?? writeAccountSettingsCacheAtomic;
+
+  const writeCacheSnapshot = async (settingsContent: AccountSettingsStoredContentEnvelope | null, settingsVersion: number): Promise<void> => {
+    const cachePath = resolveCachePath(params.credentials);
+    try {
+      await writeCache(cachePath, {
+        version: 2,
+        cachedAt: nowMs(),
+        settingsContent,
+        settingsVersion,
+      });
+    } catch (error) {
+      logger.debug('[accountSettings] cache write failed after settings refresh/update (ignored)', serializeAxiosErrorForLog(error));
+    }
+  };
 
   const fetchSettings = params.deps?.fetchSettings ?? (async () => {
     const accountSettingsBaseUrl = resolveAccountSettingsHttpBaseUrl();
@@ -135,34 +202,32 @@ export async function updateAccountSettingsV2WithRetry(_params: Readonly<{
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const parsed = await parseSettingsFromContent({ content, credentials: params.credentials });
-    const nextRaw = params.mutate(parsed.raw);
+    const nextRaw = mergeMutationResultWithRawBase({
+      rawBase: parsed.raw,
+      mutatedRaw: parsePersistedAccountSettingsObject(params.mutate(parsed.raw)),
+    });
+
+    if (isDeepStrictEqual(nextRaw, parsed.raw)) {
+      await writeCacheSnapshot(content, version);
+      return { version };
+    }
 
     const nextContent: AccountSettingsStoredContentEnvelope =
       parsed.envelopeKind === 'plain'
-        ? { t: 'plain', v: accountSettingsParse(nextRaw) }
+        ? { t: 'plain', v: nextRaw }
         : {
           t: 'encrypted',
           c: sealAccountScopedBlobCiphertext({
             kind: 'account_settings',
             material: resolveMaterial(params.credentials),
-            payload: accountSettingsParse(nextRaw),
+            payload: nextRaw,
             randomBytes,
           }),
         };
 
     const response = await updateSettings({ expectedVersion: version, content: nextContent });
     if (response.success === true) {
-      const cachePath = resolveCachePath(params.credentials);
-      try {
-        await writeCache(cachePath, {
-          version: 2,
-          cachedAt: nowMs(),
-          settingsContent: nextContent,
-          settingsVersion: response.version,
-        });
-      } catch (error) {
-        logger.debug('[accountSettings] cache write failed after update (ignored)', serializeAxiosErrorForLog(error));
-      }
+      await writeCacheSnapshot(nextContent, response.version);
       return { version: response.version };
     }
 

@@ -18,7 +18,13 @@ vi.mock('socket.io-client', () => ({
 }));
 
 describe('happier session create plaintext sessions (integration)', () => {
-  const envKeys = ['HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_HOME_DIR'] as const;
+  const envKeys = [
+    'HAPPIER_SERVER_URL',
+    'HAPPIER_WEBAPP_URL',
+    'HAPPIER_HOME_DIR',
+    'HAPPIER_STACK_INVOKED_CWD',
+    'HAPPIER_SESSION_REQUESTED_DIRECTORY',
+  ] as const;
   let envScope = createEnvKeyScope(envKeys);
   let server: Server | null = null;
   let happyHomeDir = '';
@@ -88,6 +94,10 @@ describe('happier session create plaintext sessions (integration)', () => {
     process.env.HAPPIER_SERVER_URL = `http://127.0.0.1:${address.port}`;
     process.env.HAPPIER_WEBAPP_URL = 'http://127.0.0.1:3000';
     process.env.HAPPIER_HOME_DIR = happyHomeDir;
+    envScope.patch({
+      HAPPIER_STACK_INVOKED_CWD: undefined,
+      HAPPIER_SESSION_REQUESTED_DIRECTORY: undefined,
+    });
 
     const { reloadConfiguration } = await import('@/configuration');
     reloadConfiguration();
@@ -107,10 +117,13 @@ describe('happier session create plaintext sessions (integration)', () => {
         const decrypted = JSON.parse(String(data?.metadata ?? '{}'));
         expect(decrypted?.summary?.text).toBe('My Title');
         expect(decrypted?.tag).toBe('MyTag');
-        expect(observedSpawnBody).toEqual({
-          directory: process.cwd(),
-          backendTarget: { kind: 'builtInAgent', agentId: DEFAULT_CATALOG_AGENT_ID },
-        });
+        expect(observedSpawnBody).toEqual(
+          expect.objectContaining({
+            directory: process.cwd(),
+            backendTarget: { kind: 'builtInAgent', agentId: DEFAULT_CATALOG_AGENT_ID },
+            spawnNonce: expect.any(String),
+          }),
+        );
         metadataJson = String(data.metadata);
         metadataVersion = 1;
         callback?.({ result: 'success', version: metadataVersion, metadata: metadataJson });

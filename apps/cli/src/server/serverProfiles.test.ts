@@ -8,8 +8,15 @@ import { existsSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('server profiles', () => {
-  const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL'] as const;
+  const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_ACTIVE_SERVER_ID'] as const;
   let envScope = createEnvKeyScope(envKeys);
+
+  function patchServerProfileEnv(values: Readonly<Partial<Record<(typeof envKeys)[number], string | undefined>>>): void {
+    envScope.patch({
+      HAPPIER_ACTIVE_SERVER_ID: undefined,
+      ...values,
+    });
+  }
 
   function deriveEnvServerIdFromUrl(url: string): string {
     const raw = String(url ?? '').trim();
@@ -49,7 +56,7 @@ describe('server profiles', () => {
 
   it('adds a server profile and can switch active server', async () => {
     await withTempDir('happier-cli-servers-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -91,7 +98,7 @@ describe('server profiles', () => {
 
   it('refuses to remove the active server profile unless forced', async () => {
     await withTempDir('happier-cli-servers-remove-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -119,7 +126,7 @@ describe('server profiles', () => {
 
   it('can resolve a server profile by name without changing the active server', async () => {
     await withTempDir('happier-cli-servers-resolve-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -143,7 +150,7 @@ describe('server profiles', () => {
 
   it('can resolve a server profile by relay URL without changing the active server', async () => {
     await withTempDir('happier-cli-servers-resolve-url-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -167,7 +174,7 @@ describe('server profiles', () => {
 
   it('refuses to create a server profile with reserved name "cloud"', async () => {
     await withTempDir('happier-cli-servers-reserved-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -188,7 +195,7 @@ describe('server profiles', () => {
 
   it('sanitizes profile ids to filesystem-safe values', async () => {
     await withTempDir('happier-cli-servers-sanitize-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -214,7 +221,7 @@ describe('server profiles', () => {
 
   it('upserts an existing profile when the comparable relay URL already exists', async () => {
     await withTempDir('happier-cli-servers-upsert-url-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -246,7 +253,7 @@ describe('server profiles', () => {
 
   it('migrates server-scoped access.key when switching from env-derived serverId to a named profile', async () => {
     await withTempDir('happier-cli-servers-migrate-access-key-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
         HAPPIER_WEBAPP_URL: 'http://localhost:33005',
@@ -266,7 +273,7 @@ describe('server profiles', () => {
       expect(envDerivedServerId).toBe(deriveEnvServerIdFromUrl('http://127.0.0.1:3005'));
       expect(existsSync(join(homeDir, 'servers', envDerivedServerId, 'access.key'))).toBe(true);
 
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -294,7 +301,7 @@ describe('server profiles', () => {
 
   it('migrates server-scoped access.key from legacy env-derived serverId when selecting a named profile', async () => {
     await withTempDir('happier-cli-servers-migrate-access-key-legacy-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
         HAPPIER_WEBAPP_URL: 'http://localhost:33005',
@@ -323,7 +330,7 @@ describe('server profiles', () => {
       expect(existsSync(newKeyPath)).toBe(false);
       expect(existsSync(legacyKeyPath)).toBe(true);
 
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -349,7 +356,7 @@ describe('server profiles', () => {
 
   it('migrates server-scoped access.key when upserting an existing profile that lacks credentials', async () => {
     await withTempDir('happier-cli-servers-migrate-access-key-upsert-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -369,7 +376,7 @@ describe('server profiles', () => {
 
       expect(existsSync(join(homeDir, 'servers', existing.id, 'access.key'))).toBe(false);
 
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
         HAPPIER_WEBAPP_URL: 'http://localhost:33005',
@@ -388,7 +395,7 @@ describe('server profiles', () => {
       const envDerivedServerId = configuration.activeServerId;
       expect(existsSync(join(homeDir, 'servers', envDerivedServerId, 'access.key'))).toBe(true);
 
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -413,7 +420,7 @@ describe('server profiles', () => {
 
   it('copies access.key from env-derived serverId when selecting a matching named profile', async () => {
     await withTempDir('happier-cli-servers-migrate-access-key-select-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
         HAPPIER_WEBAPP_URL: 'http://localhost:33005',
@@ -431,7 +438,7 @@ describe('server profiles', () => {
       const envDerivedServerId = configuration.activeServerId;
       expect(existsSync(join(homeDir, 'servers', envDerivedServerId, 'access.key'))).toBe(true);
 
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,
@@ -467,7 +474,7 @@ describe('server profiles', () => {
 
   it('copies access.key from env-derived serverId when using a named profile by id', async () => {
     await withTempDir('happier-cli-servers-migrate-access-key-use-', async (homeDir) => {
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: 'http://127.0.0.1:3005',
         HAPPIER_WEBAPP_URL: 'http://localhost:33005',
@@ -485,7 +492,7 @@ describe('server profiles', () => {
       const envDerivedServerId = configuration.activeServerId;
       expect(existsSync(join(homeDir, 'servers', envDerivedServerId, 'access.key'))).toBe(true);
 
-      envScope.patch({
+      patchServerProfileEnv({
         HAPPIER_HOME_DIR: homeDir,
         HAPPIER_SERVER_URL: undefined,
         HAPPIER_WEBAPP_URL: undefined,

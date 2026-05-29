@@ -18,6 +18,7 @@ const envKeys = [
   'HAPPIER_DAEMON_SERVICE_PLATFORM',
   'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
   'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
+  'HAPPIER_ACTIVE_SERVER_ID',
 ] as const;
 
 let envScope = createEnvKeyScope(envKeys);
@@ -49,6 +50,7 @@ describe('happier server add', () => {
 
     try {
       process.env.HAPPIER_HOME_DIR = home;
+      delete process.env.HAPPIER_ACTIVE_SERVER_ID;
       delete process.env.HAPPIER_SERVER_URL;
       delete process.env.HAPPIER_WEBAPP_URL;
       reloadConfiguration();
@@ -84,6 +86,7 @@ describe('happier server add', () => {
 
     try {
       process.env.HAPPIER_HOME_DIR = home;
+      delete process.env.HAPPIER_ACTIVE_SERVER_ID;
       delete process.env.HAPPIER_SERVER_URL;
       delete process.env.HAPPIER_WEBAPP_URL;
       reloadConfiguration();
@@ -123,6 +126,7 @@ describe('happier server add', () => {
       process.env.HAPPIER_DAEMON_SERVICE_PLATFORM = 'linux';
       process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = home;
       process.env.HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR = happierHomeDir;
+      delete process.env.HAPPIER_ACTIVE_SERVER_ID;
       delete process.env.HAPPIER_SERVER_URL;
       delete process.env.HAPPIER_WEBAPP_URL;
       writeInstalledDefaultFollowingServiceFixture(home, happierHomeDir);
@@ -163,6 +167,7 @@ describe('happier server add', () => {
       process.env.HAPPIER_DAEMON_SERVICE_PLATFORM = 'linux';
       process.env.HAPPIER_DAEMON_SERVICE_USER_HOME_DIR = home;
       process.env.HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR = happierHomeDir;
+      delete process.env.HAPPIER_ACTIVE_SERVER_ID;
       delete process.env.HAPPIER_SERVER_URL;
       delete process.env.HAPPIER_WEBAPP_URL;
       writeInstalledDefaultFollowingServiceFixture(home, happierHomeDir);

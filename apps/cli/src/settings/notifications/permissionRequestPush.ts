@@ -1,4 +1,3 @@
-import axios from 'axios';
 import type { AccountSettings } from '@happier-dev/protocol';
 import type { PermissionMode } from '@/api/types';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
@@ -92,7 +91,7 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
   } catch (error) {
     logger.debug(
       '[permissionRequestPush] Failed to send request push',
-      axios.isAxiosError(error) ? serializeAxiosErrorForLog(error) : error,
+      serializeAxiosErrorForLog(error),
     );
     return false;
   }

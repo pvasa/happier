@@ -19,6 +19,7 @@ describe('spawnHappyCLI fallback invocation', () => {
       HAPPIER_VARIANT: 'dev',
       HAPPIER_CLI_SUBPROCESS_ALLOW_TSX_FALLBACK: undefined,
       HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: join(tmpdir(), `missing-happier-default-${Date.now()}`, 'index.mjs'),
+      TSX_TSCONFIG_PATH: undefined,
     });
 
     const mod = (await import('@/utils/spawnHappyCLI')) as typeof import('@/utils/spawnHappyCLI');
@@ -44,6 +45,7 @@ describe('spawnHappyCLI fallback invocation', () => {
       HAPPIER_VARIANT: 'dev',
       HAPPIER_CLI_SUBPROCESS_ALLOW_TSX_FALLBACK: '1',
       HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: join(tmpdir(), `missing-happier-entry-${Date.now()}`, 'index.mjs'),
+      TSX_TSCONFIG_PATH: undefined,
     });
 
     const mod = (await import('@/utils/spawnHappyCLI')) as typeof import('@/utils/spawnHappyCLI');
@@ -70,6 +72,7 @@ describe('spawnHappyCLI fallback invocation', () => {
       HAPPIER_CLI_SUBPROCESS_ALLOW_TSX_FALLBACK: undefined,
       HAPPIER_STACK_STACK: 'qa-agent-1',
       HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: join(tmpdir(), `missing-happier-stack-${Date.now()}`, 'index.mjs'),
+      TSX_TSCONFIG_PATH: undefined,
     });
 
     const mod = (await import('@/utils/spawnHappyCLI')) as typeof import('@/utils/spawnHappyCLI');
@@ -96,6 +99,7 @@ describe('spawnHappyCLI fallback invocation', () => {
       HAPPIER_CLI_SUBPROCESS_ALLOW_TSX_FALLBACK: undefined,
       HAPPIER_STACK_STACK: 'qa-agent-1',
       HAPPIER_CLI_SUBPROCESS_PREFER_TSX: undefined,
+      TSX_TSCONFIG_PATH: undefined,
     });
 
     vi.doMock('node:fs', async () => {

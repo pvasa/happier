@@ -1,6 +1,6 @@
 import { listBuiltInHappierTools, type BuiltInHappierToolsSurface } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
-import type { ApprovalRequestOriginV1 } from '@happier-dev/protocol';
+import type { ActionsSettingsV1, ApprovalRequestOriginV1 } from '@happier-dev/protocol';
 
 type ToolRegistrar = Readonly<{
     registerTool: (name: string, meta: unknown, handler: (args: unknown, extra?: unknown) => Promise<unknown>) => void;
@@ -40,13 +40,16 @@ export function registerHappierMcpBuiltInTools(
     params: Readonly<{
         sessionId: string;
         surface: BuiltInHappierToolsSurface;
+        actionsSettings?: ActionsSettingsV1 | null;
         deps: DispatchDeps;
         resolveSessionId?: (toolArgs: unknown) => string;
     }>,
 ): Readonly<{ toolNames: string[] }> {
+    const isActionEnabled = params.deps.isActionEnabled ?? (() => true);
     const enabledTools = listBuiltInHappierTools({
         surface: params.surface,
-        isActionEnabled: params.deps.isActionEnabled,
+        isActionEnabled,
+        actionsSettings: params.actionsSettings ?? null,
     });
 
     for (const tool of enabledTools) {
@@ -71,6 +74,7 @@ export function registerHappierMcpBuiltInTools(
                         args,
                         sessionId,
                         surface: params.surface,
+                        actionsSettings: params.actionsSettings ?? null,
                         ...(approvalOrigin ? { approvalOrigin } : {}),
                         deps: params.deps,
                     });

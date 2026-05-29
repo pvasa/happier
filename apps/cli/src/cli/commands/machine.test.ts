@@ -1,20 +1,32 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SYSTEM_TASK_PROTOCOL_VERSION,
   type SystemTaskEvent,
   type SystemTaskResult,
 } from '@happier-dev/protocol';
+import { STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS } from '@happier-dev/cli-common/firstPartyRuntime';
 
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { handleMachineCommand } from './machine';
 
 describe('handleMachineCommand', () => {
+  const envScope = createEnvKeyScope(STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS);
   const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  beforeEach(() => {
+    envScope.patch({
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: undefined,
+      HAPPIER_RELEASE_RING: undefined,
+      HAPPIER_RELEASE_CHANNEL: undefined,
+    });
+  });
 
   afterEach(() => {
     logSpy.mockReset();
     errorSpy.mockReset();
+    envScope.restore();
     process.exitCode = undefined;
   });
 

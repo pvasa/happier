@@ -6,10 +6,27 @@ import { describe, expect, it, vi } from 'vitest';
 describe('resolveBackendIsolationBundle', () => {
   it('creates an isolation root under the active server dir and overlays XDG state/cache/data', async () => {
     const homeDir = await mkdtemp(join(os.tmpdir(), 'happier-isolation-home-'));
+    const previousEnv = {
+      HAPPIER_HOME_DIR: process.env.HAPPIER_HOME_DIR,
+      HAPPIER_SERVER_URL: process.env.HAPPIER_SERVER_URL,
+      HAPPIER_WEBAPP_URL: process.env.HAPPIER_WEBAPP_URL,
+      HAPPIER_OPENCODE_SERVER_TURN_INACTIVITY_TIMEOUT_MS: process.env.HAPPIER_OPENCODE_SERVER_TURN_INACTIVITY_TIMEOUT_MS,
+      HOME: process.env.HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+      XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+      XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+    };
     try {
       process.env.HAPPIER_HOME_DIR = homeDir;
       process.env.HAPPIER_SERVER_URL = 'https://api.example.test';
       process.env.HAPPIER_WEBAPP_URL = 'https://app.example.test';
+      process.env.HAPPIER_OPENCODE_SERVER_TURN_INACTIVITY_TIMEOUT_MS = '123456';
+      process.env.HOME = join(homeDir, 'real-home');
+      process.env.XDG_CONFIG_HOME = join(homeDir, 'real-config');
+      process.env.XDG_STATE_HOME = join(homeDir, 'real-state');
+      process.env.XDG_CACHE_HOME = join(homeDir, 'real-cache');
+      process.env.XDG_DATA_HOME = join(homeDir, 'real-data');
 
       const { reloadConfiguration } = await import('@/configuration');
       reloadConfiguration();
@@ -29,15 +46,19 @@ describe('resolveBackendIsolationBundle', () => {
       expect(bundle.env.XDG_STATE_HOME).toBe(join(root, 'xdg', 'state'));
       expect(bundle.env.XDG_CACHE_HOME).toBe(join(root, 'xdg', 'cache'));
       expect(bundle.env.XDG_DATA_HOME).toBe(join(root, 'xdg', 'data'));
-      expect(bundle.env.HOME).toBeUndefined();
-      expect(bundle.env.XDG_CONFIG_HOME).toBeUndefined();
+      expect(bundle.env.HAPPIER_OPENCODE_SERVER_TURN_INACTIVITY_TIMEOUT_MS).toBe('123456');
+      expect(bundle.env.HOME).toBe(join(homeDir, 'real-home'));
+      expect(bundle.env.XDG_CONFIG_HOME).toBe(join(homeDir, 'real-config'));
     } finally {
       vi.resetModules();
       await rm(homeDir, { recursive: true, force: true });
-      delete process.env.HAPPIER_HOME_DIR;
-      delete process.env.HAPPIER_SERVER_URL;
-      delete process.env.HAPPIER_WEBAPP_URL;
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
     }
   });
 });
-

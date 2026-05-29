@@ -96,6 +96,24 @@ describe('providerSettings', () => {
     ).toEqual({ codexBackendMode: 'acp' });
   });
 
+  it('resolves Cursor runtime spawn extras from local provider settings', () => {
+    expect(
+      resolveProviderSpawnExtrasForRuntime({
+        agentId: 'cursor',
+        settings: {
+          cursorBinaryPath: '  /opt/cursor/cursor-agent  ',
+          cursorAgentFallbackEnabled: false,
+          cursorApiEndpoint: '  https://cursor.example.test  ',
+        },
+        processEnv: {},
+      }),
+    ).toEqual({
+      cursorBinaryPath: '/opt/cursor/cursor-agent',
+      cursorAgentFallbackEnabled: false,
+      cursorApiEndpoint: 'https://cursor.example.test',
+    });
+  });
+
   it('builds Claude outgoing meta defaults from account settings', () => {
     const extras = resolveProviderOutgoingMessageMetaExtras({
       agentId: 'claude',

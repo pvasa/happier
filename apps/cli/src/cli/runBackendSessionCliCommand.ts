@@ -39,10 +39,20 @@ type CommonBackendRunOptions = ParsedSessionStartArgs & {
   accountSettingsContext: AccountSettingsContext | null;
   experimentalCodexAcp?: boolean;
   codexBackendMode?: CodexBackendMode;
+  cursorBinaryPath?: string;
+  cursorAgentFallbackEnabled?: boolean;
+  cursorApiEndpoint?: string;
 };
 
-function pickProviderRunOptions(extras: Record<string, unknown>): Pick<CommonBackendRunOptions, 'experimentalCodexAcp' | 'codexBackendMode'> {
-  const out: Pick<CommonBackendRunOptions, 'experimentalCodexAcp' | 'codexBackendMode'> = {};
+type ProviderRunOptionKeys =
+  | 'experimentalCodexAcp'
+  | 'codexBackendMode'
+  | 'cursorBinaryPath'
+  | 'cursorAgentFallbackEnabled'
+  | 'cursorApiEndpoint';
+
+function pickProviderRunOptions(extras: Record<string, unknown>): Pick<CommonBackendRunOptions, ProviderRunOptionKeys> {
+  const out: Pick<CommonBackendRunOptions, ProviderRunOptionKeys> = {};
 
   if (
     extras.codexBackendMode === 'mcp'
@@ -55,6 +65,20 @@ function pickProviderRunOptions(extras: Record<string, unknown>): Pick<CommonBac
 
   if (extras.experimentalCodexAcp === true || extras.experimentalCodexAcp === false) {
     out.experimentalCodexAcp = extras.experimentalCodexAcp;
+  }
+
+  if (typeof extras.cursorBinaryPath === 'string') {
+    const cursorBinaryPath = extras.cursorBinaryPath.trim();
+    if (cursorBinaryPath) out.cursorBinaryPath = cursorBinaryPath;
+  }
+
+  if (extras.cursorAgentFallbackEnabled === false) {
+    out.cursorAgentFallbackEnabled = false;
+  }
+
+  if (typeof extras.cursorApiEndpoint === 'string') {
+    const cursorApiEndpoint = extras.cursorApiEndpoint.trim();
+    if (cursorApiEndpoint) out.cursorApiEndpoint = cursorApiEndpoint;
   }
 
   return out;

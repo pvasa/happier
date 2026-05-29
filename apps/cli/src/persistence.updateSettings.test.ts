@@ -208,4 +208,40 @@ describe('updateSettings', () => {
     expect(existsSync(lockFile)).toBe(false);
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
+
+  it('retries transient Windows-style rename lock failures when promoting settings.json.tmp', async () => {
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      let remainingRenameFailures = 2;
+
+      return {
+        ...actual,
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          if (remainingRenameFailures > 0) {
+            remainingRenameFailures -= 1;
+            const error = Object.assign(
+              new Error('EPERM: operation not permitted, rename settings.json.tmp -> settings.json'),
+              { code: 'EPERM' as const },
+            );
+            throw error;
+          }
+          return actual.rename(...args);
+        },
+      };
+    });
+
+    const { configuration } = await import('@/configuration');
+    const { updateSettings } = await import('@/persistence');
+
+    const updated = await updateSettings((current) => ({
+      ...current,
+      onboardingCompleted: true,
+    }));
+
+    expect(updated.onboardingCompleted).toBe(true);
+    const persisted = JSON.parse(await readFile(configuration.settingsFile, 'utf8')) as {
+      onboardingCompleted?: boolean;
+    };
+    expect(persisted.onboardingCompleted).toBe(true);
+  });
 });
