@@ -308,24 +308,36 @@ describe('fake Codex app-server harness', () => {
         ]));
 
         await expect(request('plugin/list', { cwds: ['/tmp/project'] })).resolves.toMatchObject({
-          result: [
-            expect.objectContaining({
-              name: 'gmail',
-              mentionPath: 'plugin://gmail@openai-curated',
-              installed: true,
-              enabled: true,
-            }),
-          ],
+          result: {
+            marketplaces: [
+              expect.objectContaining({
+                name: 'openai-curated',
+                plugins: [
+                  expect.objectContaining({
+                    name: 'gmail',
+                    installed: true,
+                    enabled: true,
+                  }),
+                ],
+              }),
+            ],
+          },
         });
 
         await expect(request('skills/list', { cwds: ['/tmp/project'] })).resolves.toMatchObject({
-          result: [
-            expect.objectContaining({
-              name: 'code-review',
-              path: '/skills/code-review/SKILL.md',
-              enabled: true,
-            }),
-          ],
+          result: {
+            data: [
+              expect.objectContaining({
+                skills: [
+                  expect.objectContaining({
+                    name: 'code-review',
+                    path: '/skills/code-review/SKILL.md',
+                    enabled: true,
+                  }),
+                ],
+              }),
+            ],
+          },
         });
 
         await expect(request('turn/start', {
@@ -479,5 +491,107 @@ describe('fake Codex app-server harness', () => {
         ]));
       },
     );
+  });
+
+  it('models steer inside the active turn with active rollback rejection', async () => {
+    const previousDelay = process.env.HAPPIER_E2E_FAKE_CODEX_APP_SERVER_TURN_DELAY_MS;
+    process.env.HAPPIER_E2E_FAKE_CODEX_APP_SERVER_TURN_DELAY_MS = '1000';
+    try {
+      await withFakeServer(
+        {},
+        async ({ request, requestLogPath, notifications }) => {
+          await expect(request('turn/start', {
+            threadId: 'thread-started',
+            input: [{ type: 'text', text: 'primary turn' }],
+          })).resolves.toMatchObject({
+            result: {
+              threadId: 'thread-started',
+              turn: { id: expect.any(String) },
+            },
+          });
+
+          await expect(request('turn/steer', {
+            threadId: 'thread-started',
+            expectedTurnId: 'turn-1',
+            input: [{ type: 'text', text: 'steer turn' }],
+          })).resolves.toMatchObject({
+            result: {
+              threadId: 'thread-started',
+              turn: { id: 'turn-1' },
+            },
+          });
+
+          await expect(request('thread/rollback', {
+            threadId: 'thread-started',
+            numTurns: 1,
+          })).resolves.toMatchObject({
+            error: expect.objectContaining({
+              code: -32000,
+              message: expect.stringContaining('active turn'),
+            }),
+          });
+
+          await expect.poll(
+            () => notifications.some((entry) => entry.method === 'turn/completed'),
+            { timeout: 5_000 },
+          ).toBe(true);
+
+          await expect(request('thread/read', {
+            threadId: 'thread-started',
+            includeTurns: true,
+          })).resolves.toMatchObject({
+            result: {
+              threadId: 'thread-started',
+              turns: [
+                expect.objectContaining({
+                  id: 'turn-1',
+                  items: [
+                    expect.objectContaining({ type: 'userMessage', text: 'primary turn' }),
+                    expect.objectContaining({ type: 'userMessage', text: 'steer turn' }),
+                    expect.objectContaining({ type: 'agentMessage', text: expect.stringContaining('primary turn') }),
+                  ],
+                }),
+              ],
+            },
+          });
+
+          await expect(request('thread/rollback', {
+            threadId: 'thread-started',
+            numTurns: 2,
+          })).resolves.toMatchObject({
+            result: { threadId: 'thread-started' },
+          });
+
+          await expect(request('thread/read', {
+            threadId: 'thread-started',
+            includeTurns: true,
+          })).resolves.toMatchObject({
+            result: { threadId: 'thread-started', turns: [] },
+          });
+
+          const requests = await readFakeCodexAppServerRequestLog(requestLogPath);
+          expect(requests).toEqual(expect.arrayContaining([
+            expect.objectContaining({ method: 'turn/start' }),
+            expect.objectContaining({
+              method: 'turn/steer',
+              params: expect.objectContaining({
+                expectedTurnId: 'turn-1',
+                input: [expect.objectContaining({ text: 'steer turn' })],
+              }),
+            }),
+            expect.objectContaining({
+              method: 'thread/rollback',
+              params: { threadId: 'thread-started', numTurns: 2 },
+            }),
+          ]));
+        },
+      );
+    } finally {
+      if (previousDelay === undefined) {
+        delete process.env.HAPPIER_E2E_FAKE_CODEX_APP_SERVER_TURN_DELAY_MS;
+      } else {
+        process.env.HAPPIER_E2E_FAKE_CODEX_APP_SERVER_TURN_DELAY_MS = previousDelay;
+      }
+    }
   });
 });

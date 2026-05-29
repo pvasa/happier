@@ -513,7 +513,7 @@ export function hasServerGeneratedProviderOutputs(rootDir: string, provider: Tes
   ) {
     return false;
   }
-  if ((provider === 'sqlite' || provider === 'pglite') && !existsSync(outputPaths.sqliteIndex)) {
+  if (provider === 'sqlite' && !existsSync(outputPaths.sqliteIndex)) {
     return false;
   }
   if (provider === 'mysql' && !existsSync(outputPaths.mysqlIndex)) {
@@ -525,7 +525,7 @@ export function hasServerGeneratedProviderOutputs(rootDir: string, provider: Tes
   if (!postgresSource || !postgresGenerated) {
     return false;
   }
-  const sqliteRequired = provider === 'sqlite' || provider === 'pglite';
+  const sqliteRequired = provider === 'sqlite';
   const mysqlRequired = provider === 'mysql';
   const sqliteSource = sqliteRequired ? readFileIfExists(sourcePaths.sqliteSchema) : null;
   const mysqlSource = mysqlRequired ? readFileIfExists(sourcePaths.mysqlSchema) : null;

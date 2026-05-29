@@ -107,4 +107,26 @@ describe('providers: scenario capability gating', () => {
     expect(allScenarioIds.some((scenarioId) => /app(?:-|_)?server/i.test(scenarioId))).toBe(false);
     expect(codex!.cli?.env?.HAPPIER_CODEX_BACKEND_MODE).toBe('acp');
   });
+
+  it('wires Cursor scenarios through the existing ACP verification gates', async () => {
+    const providers = await loadProvidersFromCliSpecs();
+    const cursor = providers.find((provider) => provider.id === 'cursor');
+    expect(cursor).toBeTruthy();
+
+    const allScenarioIds = [
+      ...cursor!.scenarioRegistry.tiers.smoke,
+      ...cursor!.scenarioRegistry.tiers.extended,
+    ];
+    expect(cursor!.scenarioRegistry.tiers.smoke).toContain('acp_probe_capabilities');
+    expect(allScenarioIds).toEqual(expect.arrayContaining([
+      'acp_probe_capabilities',
+      'acp_probe_models',
+      'acp_set_model_dynamic',
+      'acp_resume_load_session',
+      'mcp_change_title',
+    ]));
+    expect(cursor!.auth?.mode).toBe('auto');
+    expect(cursor!.auth?.env?.requiredAnyOf).toEqual([['CURSOR_API_KEY']]);
+    expect(cursor!.cli.envFrom?.HAPPIER_CURSOR_PATH).toBe('HAPPIER_E2E_PROVIDER_CURSOR_BIN');
+  });
 });

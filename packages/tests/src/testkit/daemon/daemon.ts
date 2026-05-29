@@ -12,7 +12,8 @@ import {
   sweepProcessOwnershipLeases,
 } from '../process/processOwnershipLease';
 import { spawnLoggedProcess, type SpawnedProcess } from '../process/spawnProcess';
-import { resolveCliTestLaunchSpec } from '../process/cliLaunchSpec';
+import { resolveCliTestLaunchSpec, shouldUseCliSourceEntrypoint } from '../process/cliLaunchSpec';
+import { DEFAULT_CLI_DIST_BUILD_TIMEOUT_MS } from '../process/cliDist';
 import { terminateProcessTreeByPid } from '../process/processTree';
 import { resolveDaemonSessionMarkerDirs } from './sessionMarkerDirs';
 
@@ -39,6 +40,22 @@ function resolveDaemonCliSnapshotDir(params: { testDir: string }): string {
   // Default to a shared snapshot to avoid paying the node_modules snapshot cost per test (which can
   // otherwise consume most of the core slow E2E timeout budget).
   return resolve(repoRootDir(), '.project', 'tmp', 'cli-dist-snapshot');
+}
+
+function resolveDaemonSnapshotNodeModulesMode(env: NodeJS.ProcessEnv): 'symlink' | 'copy' {
+  const raw = (env.HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE ?? '').toString().trim().toLowerCase();
+  if (raw === 'copy' || raw === 'symlink') {
+    return raw;
+  }
+
+  // Source-entrypoint daemon runs resolve from the snapshot root with tsx. Keep snapshot node_modules
+  // immutable by default so concurrent package-tree churn in the repo root cannot invalidate in-flight
+  // daemon startup imports.
+  if (shouldUseCliSourceEntrypoint(env)) {
+    return 'copy';
+  }
+
+  return 'symlink';
 }
 
 async function resolveActiveServerIdFromSettings(happyHomeDir: string): Promise<string | null> {
@@ -323,8 +340,24 @@ function parsePositiveInteger(raw: string | undefined): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+const DEFAULT_DAEMON_STARTUP_PHASE_TIMEOUT_MS = 300_000;
+
 function resolveDaemonStartupPhaseTimeoutMs(env: NodeJS.ProcessEnv, startupTimeoutMs: number | undefined): number {
-  return parsePositiveInteger(env.HAPPIER_E2E_DAEMON_STARTUP_PHASE_TIMEOUT_MS) ?? startupTimeoutMs ?? 300_000;
+  return parsePositiveInteger(env.HAPPIER_E2E_DAEMON_STARTUP_PHASE_TIMEOUT_MS)
+    ?? startupTimeoutMs
+    ?? DEFAULT_DAEMON_STARTUP_PHASE_TIMEOUT_MS;
+}
+
+function resolveDaemonCliDistBuildTimeoutMs(env: NodeJS.ProcessEnv): number {
+  return parsePositiveInteger(env.HAPPIER_E2E_CLI_DIST_BUILD_TIMEOUT_MS ?? env.HAPPY_E2E_CLI_DIST_BUILD_TIMEOUT_MS)
+    ?? DEFAULT_CLI_DIST_BUILD_TIMEOUT_MS;
+}
+
+function resolveDaemonLaunchSpecPhaseTimeoutMs(env: NodeJS.ProcessEnv, startupTimeoutMs: number | undefined): number {
+  const explicitPhaseTimeoutMs = parsePositiveInteger(env.HAPPIER_E2E_DAEMON_STARTUP_PHASE_TIMEOUT_MS);
+  if (explicitPhaseTimeoutMs != null) return explicitPhaseTimeoutMs;
+  if (startupTimeoutMs != null) return startupTimeoutMs;
+  return Math.max(DEFAULT_DAEMON_STARTUP_PHASE_TIMEOUT_MS, resolveDaemonCliDistBuildTimeoutMs(env));
 }
 
 function isPidAlive(pid: number): boolean {
@@ -553,6 +586,12 @@ export function sanitizeDaemonEnvForSpawn(env: NodeJS.ProcessEnv): NodeJS.Proces
   delete sanitized.HAPPY_SESSION_ATTACH_FILE;
   delete sanitized.HAPPIER_STACK_TOOL_TRACE_FILE;
   delete sanitized.HAPPY_STACK_TOOL_TRACE_FILE;
+  // Test harness must not inherit host daemon/server selection overrides.
+  // These can force a different active server id than the seeded test credentials
+  // and cause false auth-gated daemon startup failures in non-interactive continuity lanes.
+  delete sanitized.HAPPIER_ACTIVE_SERVER_ID;
+  delete sanitized.HAPPIER_DAEMON_SERVICE_INSTANCE_ID;
+  delete sanitized.HAPPIER_DAEMON_SERVICE_SERVER_URL;
   if (sanitized.HAPPIER_DISABLE_CAFFEINATE === undefined || sanitized.HAPPIER_DISABLE_CAFFEINATE === '') {
     sanitized.HAPPIER_DISABLE_CAFFEINATE = '1';
   }
@@ -584,6 +623,8 @@ export async function startTestDaemon(params: {
   const stdoutPath = resolve(params.testDir, 'daemon.stdout.log');
   const stderrPath = resolve(params.testDir, 'daemon.stderr.log');
   const phaseTimeoutMs = resolveDaemonStartupPhaseTimeoutMs(params.env, params.startupTimeoutMs);
+  const cliDistBuildTimeoutMs = resolveDaemonCliDistBuildTimeoutMs(params.env);
+  const launchSpecPhaseTimeoutMs = resolveDaemonLaunchSpecPhaseTimeoutMs(params.env, params.startupTimeoutMs);
   const baseDiagnostics = {
     testDir: params.testDir,
     happyHomeDir: params.happyHomeDir,
@@ -614,19 +655,20 @@ export async function startTestDaemon(params: {
         testDir: params.testDir,
         env: {
           ...params.env,
-          // Daemon-based E2E runs can start many times; copying node_modules into a snapshot is slow
-          // enough to consume most of the slow-lane timeout budget. Prefer a symlinked snapshot unless
-          // a caller explicitly opts into the heavier copy mode.
-          HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE: params.env.HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE ?? 'symlink',
+          HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE: resolveDaemonSnapshotNodeModulesMode(params.env),
         },
       },
       {
         snapshotDir: params.snapshotDir ?? resolveDaemonCliSnapshotDir({ testDir: params.testDir }),
         skipDistIntegrityCheck: true,
         skipSourceFreshnessCheck: true,
+        buildTimeoutMs: cliDistBuildTimeoutMs,
       },
     ),
-    baseDiagnostics,
+    {
+      ...baseDiagnostics,
+      timeoutMs: launchSpecPhaseTimeoutMs,
+    },
   );
 
   await runDaemonStartupPhase(

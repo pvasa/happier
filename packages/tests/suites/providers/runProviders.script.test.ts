@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import * as runProvidersScript from '../../scripts/run-providers.mjs';
 import { parseArgs, resolveProvidersRunTimeoutFallbackMs, resolveProvidersRunTimeoutMs } from '../../scripts/run-providers.mjs';
@@ -7,6 +10,8 @@ type YarnInvocationResolver = (
   args: readonly string[],
   options?: Readonly<{ platform?: NodeJS.Platform; npmExecPath?: string; comspec?: string }>,
 ) => Readonly<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }>;
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
 describe('providers run script args', () => {
   it('defaults flake retry to enabled', () => {
@@ -77,6 +82,26 @@ describe('providers run script args', () => {
     expect(invocation.windowsVerbatimArguments).toBe(true);
     expect(invocation.args.join(' ')).toContain('yarn.cmd');
     expect(invocation.args.join(' ')).not.toContain('npm-cli.js');
+  });
+
+  it('keeps the reusable providers workflow aligned with cursor preset support', () => {
+    const workflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'tests.yml'), 'utf8');
+    const providersContractsWorkflow = readFileSync(
+      resolve(repoRoot, '.github', 'workflows', 'providers-contracts.yml'),
+      'utf8',
+    );
+    const testsDispatchWorkflow = readFileSync(resolve(repoRoot, '.github', 'workflows', 'tests-dispatch.yml'), 'utf8');
+
+    expect(workflow).toMatch(/case "\$PRESET" in[\s\S]*?\bcursor\)/);
+    expect(workflow).toMatch(/\ball\)\s+need_claude=1;\s*need_codex=1;\s*need_opencode=1;\s*need_cursor=1\s*;;/);
+    expect(workflow).toMatch(/CURSOR_API_KEY:\s+\$\{\{\s*secrets\.CURSOR_API_KEY\s*\}\}/);
+    expect(workflow).toMatch(/\bcursor\)\s+need_cursor=1\s+;;/);
+    expect(workflow).toMatch(/\ball\)\s+need_openai=1;\s*need_anthropic=1;\s*need_cursor=1\s*;;/);
+    expect(workflow).toMatch(/Missing provider secrets: set CURSOR_API_KEY to run preset=\$PRESET/);
+    expect(workflow).not.toMatch(/cursor\.com\/install[\s\S]*\|\s*bash/);
+    expect(workflow).toMatch(/Cursor provider CI requires a preinstalled cursor-agent/);
+    expect(providersContractsWorkflow).toMatch(/options:[\s\S]*?-\s+cursor/);
+    expect(testsDispatchWorkflow).toMatch(/providers_preset:[\s\S]*?options:[\s\S]*?-\s+cursor/);
   });
 });
 

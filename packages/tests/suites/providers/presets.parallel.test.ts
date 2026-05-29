@@ -19,6 +19,7 @@ describe('providers: parallel preset helpers', () => {
       'kimi',
       'auggie',
       'pi',
+      'cursor',
       'copilot',
     ]);
   });
@@ -57,6 +58,7 @@ describe('providers: parallel preset helpers', () => {
       'kimi',
       'auggie',
       'pi',
+      'cursor',
       'copilot',
     ]);
   });

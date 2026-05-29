@@ -107,6 +107,7 @@ async function buildUiWebExportCacheKeyLike(env: NodeJS.ProcessEnv): Promise<str
     CI: '1',
     NODE_ENV: 'production',
     EXPO_NO_TELEMETRY: '1',
+    EXPO_UNSTABLE_WEB_MODAL: '1',
     EXPO_PUBLIC_DEBUG: debug,
     EXPO_PUBLIC_POSTHOG_KEY: String(env.EXPO_PUBLIC_POSTHOG_KEY ?? 'phc-clear-export').trim() || 'phc-clear-export',
     EXPO_PUBLIC_HAPPIER_SERVER_URL: '',
@@ -123,6 +124,7 @@ async function buildUiWebExportCacheKeyLike(env: NodeJS.ProcessEnv): Promise<str
       || key === 'HAPPIER_APP_VARIANT_OVERRIDE'
       || key === 'EAS_BUILD_PROFILE'
       || key === 'EXPO_UPDATES_CHANNEL'
+      || key === 'EXPO_UNSTABLE_WEB_MODAL'
       || key === 'NODE_ENV'
     )
     .sort(([left], [right]) => left.localeCompare(right));
@@ -201,6 +203,7 @@ describe('startUiWeb baseUrl resolution', () => {
     try {
       expect(runLoggedCalls).toHaveLength(1);
       expect(runLoggedCalls[0]?.env?.EXPO_PUBLIC_POSTHOG_KEY).toBe('phc-clear-export');
+      expect(runLoggedCalls[0]?.env?.EXPO_UNSTABLE_WEB_MODAL).toBe('1');
     } finally {
       await started.stop();
     }

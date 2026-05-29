@@ -4,6 +4,8 @@ import {
   makeAcpResumeFreshSessionImportsHistoryScenario,
   makeAcpResumeLoadSessionScenario,
 } from '../../src/testkit/providers/scenarios/scenarios.acp';
+import { acpResumeMetadataKey } from '../../src/testkit/providers/scenarios/scenarioCatalogSupport';
+import { AGENT_IDS, AGENTS_CORE } from '@happier-dev/agents';
 
 describe('providers: ACP scenario builders (resume)', () => {
   it('resume scenarios accept execute fixture aliases (Bash/Terminal/execute)', () => {
@@ -65,5 +67,18 @@ describe('providers: ACP scenario builders (resume)', () => {
     const flat = (load.requiredAnyFixtureKeys ?? []).flat();
     expect(flat.some((key) => key.endsWith('/tool-call/unknown'))).toBe(true);
     expect(flat.some((key) => key.endsWith('/tool-result/unknown'))).toBe(true);
+  });
+
+  it('uses Cursor session metadata for Cursor resume scenarios', () => {
+    expect(acpResumeMetadataKey('cursor')).toBe('cursorSessionId');
+  });
+
+  it('derives resume metadata keys from the shared agent manifest', () => {
+    for (const agentId of AGENT_IDS) {
+      const resume = AGENTS_CORE[agentId].resume;
+      const expected = 'vendorResumeIdField' in resume ? resume.vendorResumeIdField : null;
+      if (!expected) continue;
+      expect(acpResumeMetadataKey(agentId as any)).toBe(expected);
+    }
   });
 });

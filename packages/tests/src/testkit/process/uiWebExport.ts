@@ -166,6 +166,7 @@ function buildExportEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     CI: '1',
     NODE_ENV: 'production',
     EXPO_NO_TELEMETRY: '1',
+    EXPO_UNSTABLE_WEB_MODAL: '1',
     EXPO_PUBLIC_DEBUG: debug,
     EXPO_PUBLIC_POSTHOG_KEY: String(env.EXPO_PUBLIC_POSTHOG_KEY ?? 'phc-clear-export').trim() || 'phc-clear-export',
     EXPO_PUBLIC_HAPPIER_SERVER_URL: '',
@@ -233,6 +234,7 @@ function buildUiWebExportCacheKey(env: NodeJS.ProcessEnv): string {
       || key === 'HAPPIER_APP_VARIANT_OVERRIDE'
       || key === 'EAS_BUILD_PROFILE'
       || key === 'EXPO_UPDATES_CHANNEL'
+      || key === 'EXPO_UNSTABLE_WEB_MODAL'
       || key === 'NODE_ENV'
     )
     .sort(([left], [right]) => left.localeCompare(right));

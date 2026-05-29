@@ -57,6 +57,11 @@ import {
   makeAcpWriteInWorkspaceScenario,
   makeAcpWriteThenStreamMarkdownTableScenario,
 } from './scenarios.acp';
+import {
+  makeCursorAcpStubExtensionPlanTodosScenario,
+  makeCursorAcpStubModeConfigOptionScenario,
+  makeCursorAcpStubModelConfigAliasScenario,
+} from './scenarios.cursor';
 import { cleanupOutsideWorkspacePath, makeOutsideWorkspacePath } from '../harness/outsideWorkspacePath';
 
 type ScenarioFactory = (provider: ProviderUnderTest) => ProviderScenario;
@@ -763,6 +768,12 @@ await server.connect(new StdioServerTransport());
     };
   },
 
+  cursor_acp_stub_model_config_alias: makeCursorAcpStubModelConfigAliasScenario,
+
+  cursor_acp_stub_mode_config_option: makeCursorAcpStubModeConfigOptionScenario,
+
+  cursor_acp_stub_extension_plan_todos: makeCursorAcpStubExtensionPlanTodosScenario,
+
   acp_probe_models: (provider) => {
     if (provider.protocol !== 'acp') {
       throw new Error(`acp_probe_models only supports ACP providers (got ${provider.protocol})`);
@@ -970,7 +981,7 @@ await server.connect(new StdioServerTransport());
     if (provider.protocol !== 'acp') {
       throw new Error(`acp_set_model_dynamic only supports ACP providers (got ${provider.protocol})`);
     }
-    if (!['opencode', 'kilo', 'auggie', 'codex'].includes(provider.id)) {
+    if (!['opencode', 'kilo', 'auggie', 'codex', 'cursor'].includes(provider.id)) {
       throw new Error(`acp_set_model_dynamic requires dynamic model providers (got ${provider.id})`);
     }
 

@@ -42,6 +42,8 @@
     "providers:auggie:extended": "yarn -s providers:run auggie extended",
     "providers:pi:smoke": "yarn -s providers:run pi smoke",
     "providers:pi:extended": "yarn -s providers:run pi extended",
+    "providers:cursor:smoke": "yarn -s providers:run cursor smoke",
+    "providers:cursor:extended": "yarn -s providers:run cursor extended",
     "providers:all:smoke": "yarn -s providers:run all smoke",
     "providers:all:extended": "yarn -s providers:run all extended",
     "providers:all:smoke:parallel": "yarn -s providers:run:parallel all smoke",
@@ -55,9 +57,11 @@
     "providers:qwen:smoke:update-baselines": "yarn -s providers:run qwen smoke --update-baselines",
     "providers:kimi:smoke:update-baselines": "yarn -s providers:run kimi smoke --update-baselines",
     "providers:auggie:smoke:update-baselines": "yarn -s providers:run auggie smoke --update-baselines",
-    "providers:pi:smoke:update-baselines": "yarn -s providers:run pi smoke --update-baselines"
+    "providers:pi:smoke:update-baselines": "yarn -s providers:run pi smoke --update-baselines",
+    "providers:cursor:smoke:update-baselines": "yarn -s providers:run cursor smoke --update-baselines"
   },
   "dependencies": {
+    "@happier-dev/cli-common": "0.0.0",
     "@happier-dev/protocol": "0.0.0",
     "socket.io-client": "^4.8.1",
     "tweetnacl": "^1.0.3",
@@ -67,6 +71,7 @@
     "@playwright/test": "^1.56.0",
     "@types/node": ">=20",
     "tsx": "^4.20.6",
+    "textarea-caret": "^3.1.0",
     "typescript": "5.9.3",
     "vitest": "^3.2.4"
   }

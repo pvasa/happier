@@ -1,4 +1,4 @@
-import { lstatSync, mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -297,6 +297,44 @@ describe('providers: CLI dist build invocation', () => {
     expect(launchSpec.command).toBe(process.execPath);
     expect(launchSpec.args[0]).toBe('--preserve-symlinks');
     expect(launchSpec.args[1]).toBe(resolve(snapshotDir, 'dist', 'index.mjs'));
+  });
+
+  it('replaces a healthy dist snapshot when the canonical CLI dist is newer', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'happier-cli-stale-dist-snapshot-'));
+    const distDir = resolve(repoRoot, 'apps', 'cli', 'dist');
+    const snapshotDir = resolve(repoRoot, '.project', 'tmp', 'cli-dist-snapshot');
+    const snapshotDistDir = resolve(snapshotDir, 'dist');
+    const canonicalEntrypoint = resolve(distDir, 'index.mjs');
+    const snapshotEntrypoint = resolve(snapshotDistDir, 'index.mjs');
+
+    mkdirSync(distDir, { recursive: true });
+    mkdirSync(snapshotDistDir, { recursive: true });
+    mkdirSync(resolve(snapshotDir, 'node_modules'), { recursive: true });
+    writeSharedDepsOutputs(repoRoot);
+    writeCliSources(repoRoot);
+    writeFileSync(canonicalEntrypoint, 'export const marker = "fresh";\n', 'utf8');
+    writeFileSync(snapshotEntrypoint, 'export const marker = "stale";\n', 'utf8');
+    writeFileSync(resolve(snapshotDir, '.cli-dist-snapshot.ready.json'), '{"v":1}\n', 'utf8');
+
+    const now = Date.now();
+    touchPath(snapshotEntrypoint, now - 10_000);
+    touchPath(canonicalEntrypoint, now);
+
+    const launchSpec = await resolveCliTestLaunchSpec(
+      {
+        testDir: resolve(repoRoot, 'logs'),
+        env: {},
+      },
+      {
+        repoRoot,
+        snapshotDir,
+        skipDistIntegrityCheck: true,
+        skipSourceFreshnessCheck: true,
+      },
+    );
+
+    expect(launchSpec.args[1]).toBe(snapshotEntrypoint);
+    expect(readFileSync(snapshotEntrypoint, 'utf8')).toContain('"fresh"');
   });
 });
 

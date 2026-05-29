@@ -196,6 +196,7 @@ describe("startServerLight planning helpers", () => {
     );
     writeFileSync(resolve(rootDir, "node_modules", ".prisma", "client", "schema.prisma"), "datasource db { provider = \"postgresql\" }\n", "utf8");
 
+    expect(hasServerGeneratedProviderOutputs(rootDir, "pglite")).toBe(true);
     expect(hasServerGeneratedProviderOutputs(rootDir, "sqlite")).toBe(true);
     expect(hasServerGeneratedProviderOutputs(rootDir, "mysql")).toBe(true);
 
@@ -204,6 +205,7 @@ describe("startServerLight planning helpers", () => {
     expect(hasServerGeneratedProviderOutputs(rootDir, "mysql")).toBe(false);
 
     writeFileSync(resolve(rootDir, "apps", "server", "prisma", "sqlite", "schema.prisma"), "changed\n", "utf8");
+    expect(hasServerGeneratedProviderOutputs(rootDir, "pglite")).toBe(true);
     expect(hasServerGeneratedProviderOutputs(rootDir, "sqlite")).toBe(false);
   });
 

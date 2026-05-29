@@ -75,6 +75,9 @@ describe('scenarioCatalog: ACP capability/model-set scenarios', () => {
     expect(scenario.requiredFixtureKeys).toBeUndefined();
     expect(scenario.requiredAnyFixtureKeys).toBeUndefined();
     expect(typeof scenario.postSatisfy?.run).toBe('function');
+
+    const cursorScenario = build(acpProvider('cursor'));
+    expect(cursorScenario.id).toBe('acp_set_model_dynamic');
   });
 
   it('rejects acp_set_model_dynamic for providers without known dynamic model probing', () => {

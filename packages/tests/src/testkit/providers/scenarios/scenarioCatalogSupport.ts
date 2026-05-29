@@ -1,3 +1,5 @@
+import { AGENTS_CORE, type AgentId } from '@happier-dev/agents';
+
 import type { ProviderScenario, ProviderUnderTest } from '../types';
 
 export function assertProviderId(provider: ProviderUnderTest, expected: ProviderUnderTest['id']): void {
@@ -12,13 +14,15 @@ export function acpProviderId(provider: ProviderUnderTest): string {
   return provider.traceProvider ?? provider.id;
 }
 
+function isAgentId(value: string): value is AgentId {
+  return Object.prototype.hasOwnProperty.call(AGENTS_CORE, value);
+}
+
 export function acpResumeMetadataKey(providerId: ProviderUnderTest['id']): string {
-  if (providerId === 'codex') return 'codexSessionId';
-  if (providerId === 'kilo') return 'kiloSessionId';
-  if (providerId === 'gemini') return 'geminiSessionId';
-  if (providerId === 'qwen') return 'qwenSessionId';
-  if (providerId === 'kimi') return 'kimiSessionId';
-  if (providerId === 'auggie') return 'auggieSessionId';
+  if (isAgentId(providerId)) {
+    const field = AGENTS_CORE[providerId].resume.vendorResumeIdField;
+    if (field) return field;
+  }
   return 'opencodeSessionId';
 }
 

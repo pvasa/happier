@@ -1,7 +1,10 @@
+import { spawn as spawnChild } from 'node:child_process';
+import { once } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 
 const events: string[] = [];
 let spawned = false;
@@ -157,6 +160,122 @@ describe('startCodexAppServerRemoteHarness', () => {
       expect(events).not.toContain('stop-server');
     } finally {
       await harness.stop();
+    }
+  });
+
+  it('writes structured native review payloads for review/start', async () => {
+    const { writeFakeCodexAppServerScript } = await import('./codexAppServerRemoteHarness');
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-codex-app-server-review-'));
+    const requestLogPath = join(testDir, 'requests.jsonl');
+    const scriptPath = await writeFakeCodexAppServerScript({
+      dir: testDir,
+      requestLogPath,
+    });
+
+    const child = spawnChild(process.execPath, [scriptPath], {
+      cwd: testDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let childExited = false;
+    child.once('exit', () => {
+      childExited = true;
+    });
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    const notifications: Record<string, unknown>[] = [];
+    const pendingResponses = new Map<number, Record<string, unknown>>();
+    const responseWaiters = new Map<number, (value: Record<string, unknown>) => void>();
+
+    lines.on('line', (line) => {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const id = typeof parsed.id === 'number' ? parsed.id : null;
+      if (id == null) {
+        notifications.push(parsed);
+        return;
+      }
+      const waiter = responseWaiters.get(id);
+      if (waiter) {
+        responseWaiters.delete(id);
+        waiter(parsed);
+        return;
+      }
+      pendingResponses.set(id, parsed);
+    });
+
+    const readResponse = async (id: number): Promise<Record<string, unknown>> => {
+      const existing = pendingResponses.get(id);
+      if (existing) {
+        pendingResponses.delete(id);
+        return existing;
+      }
+      return await Promise.race([
+        new Promise<Record<string, unknown>>((resolve) => {
+          responseWaiters.set(id, resolve);
+        }),
+        once(child, 'exit').then(() => {
+          throw new Error(`Fake app-server exited before response ${id}`);
+        }),
+      ]);
+    };
+
+    const send = async (id: number, method: string, params: Record<string, unknown> = {}) => {
+      child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+      return await readResponse(id);
+    };
+
+    try {
+      expect(await send(1, 'review/start', {
+        threadId: 'thread-started',
+        delivery: 'inline',
+        target: {
+          custom: {
+            instructions: 'Review the changed files for duplicate output.',
+          },
+        },
+      })).toMatchObject({
+        result: {
+          turn: {
+            id: expect.stringMatching(/^review-turn-/),
+          },
+          reviewThreadId: 'thread-started',
+        },
+      });
+
+      const startedAt = Date.now();
+      while (notifications.filter((entry) => entry.method === 'turn/completed').length < 1 && Date.now() - startedAt < 5_000) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+
+      const exitedReviewMode = notifications.find((entry) => entry.method === 'item/completed'
+        && (entry.params as { item?: { type?: unknown } } | undefined)?.item?.type === 'exitedReviewMode');
+      const agentMessage = notifications.find((entry) => entry.method === 'item/completed'
+        && (entry.params as { item?: { type?: unknown } } | undefined)?.item?.type === 'agentMessage');
+
+      const exitedPayload = JSON.parse(String((exitedReviewMode as { params?: { item?: { review?: unknown } } } | undefined)?.params?.item?.review ?? ''));
+      const agentPayload = JSON.parse(String((agentMessage as { params?: { item?: { text?: unknown } } } | undefined)?.params?.item?.text ?? ''));
+
+      expect(exitedPayload).toEqual({
+        summary: 'Native Codex review completed.',
+        overviewMarkdown: expect.stringContaining('Full review comments:'),
+        findings: [
+          expect.objectContaining({
+            id: 'fake-native-review-finding',
+            title: 'Duplicate assistant text is persisted once',
+            severity: 'medium',
+            category: 'correctness',
+            filePath: '/fake/workspace/src/nativeReview.ts',
+            startLine: 12,
+            endLine: 14,
+          }),
+        ],
+        questions: [],
+        assumptions: [],
+      });
+      expect(agentPayload).toEqual(exitedPayload);
+    } finally {
+      if (!childExited) child.kill();
+      lines.close();
+      if (!childExited) await once(child, 'exit').catch(() => {});
+      await rm(testDir, { recursive: true, force: true });
     }
   });
 });

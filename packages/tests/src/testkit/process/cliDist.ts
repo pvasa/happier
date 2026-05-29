@@ -22,7 +22,7 @@ import { runLoggedCommand } from './spawnProcess';
 
 const ensureDistPromisesByRepoRoot = new Map<string, Promise<string>>();
 const ensureSharedPromisesByRepoRoot = new Map<string, Promise<void>>();
-const DEFAULT_CLI_DIST_BUILD_TIMEOUT_MS = 600_000;
+export const DEFAULT_CLI_DIST_BUILD_TIMEOUT_MS = 600_000;
 
 type CliDistBuildLockOwner = {
   pid: number | null;
@@ -940,6 +940,19 @@ function ensureSnapshotProjectLink(snapshotDir: string, rootDir: string, relPath
   }
 }
 
+function isSnapshotFreshForDist(params: {
+  snapshotEntrypoint: string;
+  canonicalEntrypoint: string;
+}): boolean {
+  try {
+    const snapshotStat = statSync(params.snapshotEntrypoint);
+    const canonicalStat = statSync(params.canonicalEntrypoint);
+    return snapshotStat.mtimeMs >= canonicalStat.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureCliDistSnapshotEntrypoint(
   params: { testDir: string; env: NodeJS.ProcessEnv },
   options: EnsureCliDistSnapshotOptions,
@@ -954,7 +967,7 @@ export async function ensureCliDistSnapshotEntrypoint(
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     // Ensure dist is available first. We intentionally do this outside the snapshot lock to avoid
     // re-entering the same lock from ensureCliDistBuilt.
-    await ensureCliDistBuilt(params, { ...options, repoRoot: rootDir, lockPath: distLockPath });
+    const canonicalEntrypoint = await ensureCliDistBuilt(params, { ...options, repoRoot: rootDir, lockPath: distLockPath });
 
     try {
       return await withCliDistBuildLock(
@@ -1013,7 +1026,12 @@ export async function ensureCliDistSnapshotEntrypoint(
             }
           };
 
-          if (isHealthyCliDist(snapshotDistDir) && snapshotHasReadyMarker()) {
+          const snapshotFreshForCurrentDist = (): boolean => isSnapshotFreshForDist({
+            snapshotEntrypoint,
+            canonicalEntrypoint,
+          });
+
+          if (isHealthyCliDist(snapshotDistDir) && snapshotHasReadyMarker() && snapshotFreshForCurrentDist()) {
             // Fast path: keep daemon startups cheap during slow E2E lanes.
             // Still reconcile runtime deps so stale snapshots self-heal when bundled dependency shapes change.
             ensureSnapshotNodeModules();
@@ -1021,12 +1039,13 @@ export async function ensureCliDistSnapshotEntrypoint(
             return snapshotEntrypoint;
           }
 
-          // If a previous run left a partial snapshot behind, self-heal instead of failing closed.
-          if (existsSync(options.snapshotDir) && !isHealthyCliDist(snapshotDistDir)) {
+          // If a previous run left a partial or stale snapshot behind, self-heal instead of
+          // launching daemon code from an older dist than the provider process uses.
+          if (existsSync(options.snapshotDir) && (!isHealthyCliDist(snapshotDistDir) || !snapshotFreshForCurrentDist())) {
             rmSync(options.snapshotDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
           }
 
-          if (isHealthyCliDist(snapshotDistDir)) {
+          if (isHealthyCliDist(snapshotDistDir) && snapshotFreshForCurrentDist()) {
             ensureSnapshotNodeModules();
             ensureSnapshotScaffolding();
             markSnapshotReady();

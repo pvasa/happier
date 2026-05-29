@@ -1,4 +1,4 @@
-export type KnownProviderId = 'opencode' | 'codex' | 'claude' | 'kilo' | 'qwen' | 'kimi' | 'gemini' | 'auggie' | 'pi' | 'copilot';
+export type KnownProviderId = 'opencode' | 'codex' | 'claude' | 'kilo' | 'qwen' | 'kimi' | 'gemini' | 'auggie' | 'pi' | 'cursor' | 'copilot';
 export type ProviderId = KnownProviderId | (string & { readonly __providerIdBrand?: unique symbol });
 
 export type ProviderProtocol = 'acp' | 'codex' | 'claude';

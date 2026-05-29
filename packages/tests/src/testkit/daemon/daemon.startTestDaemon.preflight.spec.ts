@@ -86,6 +86,81 @@ async function writeReplacementDaemonScript(scriptPath: string, opts: { serverId
 }
 
 describe('startTestDaemon', () => {
+  it('defaults source-entrypoint daemon snapshots to copy-mode node_modules when unset', async () => {
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-source-snapshot-copy-default-'));
+    const homeDir = resolve(testDir, 'home');
+
+    try {
+      const fakeScriptDir = resolve(testDir, 'fake-daemon', 'dist');
+      await mkdir(fakeScriptDir, { recursive: true });
+      await mkdir(homeDir, { recursive: true });
+      await writeHoldingDaemonScript(resolve(fakeScriptDir, 'index.mjs'), { writesState: true, httpPort: 32_228 });
+
+      cliLaunchSpecMock.resolveCliTestLaunchSpec.mockResolvedValueOnce({
+        command: process.execPath,
+        args: [resolve(fakeScriptDir, 'index.mjs')],
+        cwd: testDir,
+        env: {},
+      });
+
+      const daemon = await startTestDaemon({
+        testDir,
+        happyHomeDir: homeDir,
+        env: {
+          HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+        },
+        startupTimeoutMs: 15_000,
+      });
+
+      const launchCall = cliLaunchSpecMock.resolveCliTestLaunchSpec.mock.calls.at(0)?.[0] as
+        | { env?: NodeJS.ProcessEnv }
+        | undefined;
+      expect(launchCall?.env?.HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE).toBe('copy');
+
+      await daemon.stop();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('respects explicit source-entrypoint node_modules snapshot mode overrides', async () => {
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-source-snapshot-copy-explicit-'));
+    const homeDir = resolve(testDir, 'home');
+
+    try {
+      const fakeScriptDir = resolve(testDir, 'fake-daemon', 'dist');
+      await mkdir(fakeScriptDir, { recursive: true });
+      await mkdir(homeDir, { recursive: true });
+      await writeHoldingDaemonScript(resolve(fakeScriptDir, 'index.mjs'), { writesState: true, httpPort: 32_229 });
+
+      cliLaunchSpecMock.resolveCliTestLaunchSpec.mockResolvedValueOnce({
+        command: process.execPath,
+        args: [resolve(fakeScriptDir, 'index.mjs')],
+        cwd: testDir,
+        env: {},
+      });
+
+      const daemon = await startTestDaemon({
+        testDir,
+        happyHomeDir: homeDir,
+        env: {
+          HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT: '1',
+          HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE: 'symlink',
+        },
+        startupTimeoutMs: 15_000,
+      });
+
+      const launchCall = cliLaunchSpecMock.resolveCliTestLaunchSpec.mock.calls.at(0)?.[0] as
+        | { env?: NodeJS.ProcessEnv }
+        | undefined;
+      expect(launchCall?.env?.HAPPIER_E2E_CLI_SNAPSHOT_NODE_MODULES_MODE).toBe('symlink');
+
+      await daemon.stop();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails with phase diagnostics when daemon startup stalls before spawning the daemon', async () => {
     const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-startup-phase-timeout-'));
     const homeDir = resolve(testDir, 'home');
@@ -107,7 +182,7 @@ describe('startTestDaemon', () => {
           () => 'started',
           (error: unknown) => error,
         ),
-        new Promise<'still-pending'>((resolvePending) => setTimeout(() => resolvePending('still-pending'), 250)),
+        new Promise<'still-pending'>((resolvePending) => setTimeout(() => resolvePending('still-pending'), 1_000)),
       ]);
 
       expect(result).toBeInstanceOf(Error);
@@ -117,6 +192,65 @@ describe('startTestDaemon', () => {
       expect(String((result as Error).message)).toContain(resolve(testDir, 'daemon.stdout.log'));
       expect(String((result as Error).message)).toContain(resolve(testDir, 'daemon.stderr.log'));
     } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('lets launch-spec resolution use the cli dist build timeout by default', async () => {
+    const testDir = await mkdtemp(join(tmpdir(), 'happier-daemon-launch-spec-build-budget-'));
+    const homeDir = resolve(testDir, 'home');
+    let daemon: Awaited<ReturnType<typeof startTestDaemon>> | null = null;
+
+    try {
+      const fakeScriptDir = resolve(testDir, 'fake-daemon', 'dist');
+      await mkdir(fakeScriptDir, { recursive: true });
+      await mkdir(homeDir, { recursive: true });
+      await writeHoldingDaemonScript(resolve(fakeScriptDir, 'index.mjs'), { writesState: true, httpPort: 32_230 });
+
+      vi.useFakeTimers();
+
+      cliLaunchSpecMock.resolveCliTestLaunchSpec.mockImplementationOnce(async () => {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 400_000));
+        return {
+          command: process.execPath,
+          args: [resolve(fakeScriptDir, 'index.mjs')],
+          cwd: testDir,
+          env: {},
+        };
+      });
+
+      const pendingDaemon = startTestDaemon({
+        testDir,
+        happyHomeDir: homeDir,
+        env: {},
+      });
+
+      for (let attempt = 0; attempt < 100 && cliLaunchSpecMock.resolveCliTestLaunchSpec.mock.calls.length === 0; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(cliLaunchSpecMock.resolveCliTestLaunchSpec).toHaveBeenCalledTimes(1);
+
+      let settled: unknown = 'pending';
+      pendingDaemon.then(
+        (value) => {
+          settled = value;
+        },
+        (error: unknown) => {
+          settled = error;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(300_001);
+      expect(settled).toBe('pending');
+
+      await vi.advanceTimersByTimeAsync(100_000);
+      vi.useRealTimers();
+
+      daemon = await pendingDaemon;
+      expect(daemon.state.httpPort).toBe(32_230);
+    } finally {
+      vi.useRealTimers();
+      if (daemon) await daemon.stop();
       await rm(testDir, { recursive: true, force: true });
     }
   });
