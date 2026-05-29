@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { ExecutionRunIntentSchema } from '../executionRuns.js';
+import {
+  SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitWaitResumeCancelRequestV1Schema,
+  SessionUsageLimitWaitResumeEnableRequestV1Schema,
+} from '../sessionWorkState/sessionWorkStateRpc.js';
 import { serializeActionSpec } from './actionCatalog.js';
 import { ActionApprovalSchema, ActionSpecSchema, ActionSurfaceSchema, getActionSpec, isActionSpecSurfacedOn, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, resolveActionApprovalFlow } from './actionSpecs.js';
 
@@ -15,6 +20,7 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'session.status.get',
   'session.work_state.get',
   'session.goal.get',
+  'session.usageLimit.checkNow',
   'session.vendor_plugin_catalog.list',
   'session.skill_catalog.list',
   'session.history.get',
@@ -45,6 +51,8 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'session.model.set',
   'session.goal.set',
   'session.goal.clear',
+  'session.usageLimit.waitResume.enable',
+  'session.usageLimit.waitResume.cancel',
   'session.archive',
   'session.unarchive',
   'session.stop',
@@ -104,6 +112,32 @@ describe('Action Spec Registry', () => {
       // Runtime safety: registry objects must validate against the schema.
       ActionSpecSchema.parse(spec);
     }
+  });
+
+  it('validates direct tool exposure metadata when action specs declare it', () => {
+    const spec = getActionSpec('subagents.delegate.start');
+    const parsed = ActionSpecSchema.parse({
+      ...spec,
+      toolExposure: {
+        session_agent: 'discoverable_only',
+        mcp: 'direct',
+        cli: 'direct',
+      },
+    });
+
+    expect(parsed.toolExposure).toEqual({
+      session_agent: 'discoverable_only',
+      mcp: 'direct',
+      cli: 'direct',
+    });
+    expect(serializeActionSpec(parsed).toolExposure).toEqual(parsed.toolExposure);
+
+    expect(ActionSpecSchema.safeParse({
+      ...spec,
+      toolExposure: {
+        session_agent: 'hidden',
+      },
+    }).success).toBe(false);
   });
 
   it('declares approval result metadata for every action spec', () => {
@@ -187,6 +221,42 @@ describe('Action Spec Registry', () => {
     expect(getActionSpec('session.history.get').surfaces.mcp).toBe(true);
   });
 
+  it('declares usage-limit recovery session controls with conservative surfaces', () => {
+    const enable = getActionSpec('session.usageLimit.waitResume.enable');
+    const cancel = getActionSpec('session.usageLimit.waitResume.cancel');
+    const checkNow = getActionSpec('session.usageLimit.checkNow');
+
+    expect(enable.bindings?.mcpToolName).toBe('session_usage_limit_wait_resume_enable');
+    expect(cancel.bindings?.mcpToolName).toBe('session_usage_limit_wait_resume_cancel');
+    expect(checkNow.bindings?.mcpToolName).toBe('session_usage_limit_check_now');
+    expect(enable.approval).toEqual({ result: 'none' });
+    expect(cancel.approval).toEqual({ result: 'none' });
+    expect(checkNow.approval).toEqual({ result: 'required' });
+    expect(enable.surfaces.session_agent).toBe(true);
+    expect(cancel.surfaces.session_agent).toBe(true);
+    expect(checkNow.surfaces.session_agent).toBe(true);
+    expect(enable.inputSchema).toBe(SessionUsageLimitWaitResumeEnableRequestV1Schema);
+    expect(cancel.inputSchema).toBe(SessionUsageLimitWaitResumeCancelRequestV1Schema);
+    expect(checkNow.inputSchema).toBe(SessionUsageLimitCheckNowRequestV1Schema);
+    expect(enable.inputSchema.parse({
+      sessionId: 's1',
+      issueFingerprint: 'usage-limit:s1:123',
+      remember: true,
+    })).toEqual({
+      sessionId: 's1',
+      issueFingerprint: 'usage-limit:s1:123',
+      remember: true,
+    });
+    expect(cancel.inputSchema.parse({
+      sessionId: 's1',
+      issueFingerprint: null,
+    })).toEqual({
+      sessionId: 's1',
+      issueFingerprint: null,
+    });
+    expect(checkNow.inputSchema.parse({ sessionId: 's1' })).toEqual({ sessionId: 's1' });
+  });
+
   it('accepts session.list filter fields in the action schema', () => {
     const spec = getActionSpec('session.list');
 
@@ -224,7 +294,14 @@ describe('Action Spec Registry', () => {
       voiceClientToolName: 'getSessionTranscript',
       mcpToolName: 'session_transcript_get',
     });
-    expect(transcript.examples?.mcp?.argsExample).toBe('{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"]}');
+    expect(transcript.examples?.mcp?.argsExample).toBe('{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"],"maxCharsPerMessage":null}');
+    expect(transcript.examples?.voice?.argsExample).toBe('{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"],"maxCharsPerMessage":null}');
+    expect(transcript.inputHints?.fields.find((field) => field.path === 'maxCharsPerMessage')).toEqual({
+      path: 'maxCharsPerMessage',
+      title: 'Message truncation chars',
+      description: 'Optional per-message truncation budget. Omit or pass null for full message text.',
+      widget: 'text',
+    });
     expect(transcript.surfaces).toEqual({
       ui_button: false,
       ui_slash_command: false,
@@ -251,7 +328,7 @@ describe('Action Spec Registry', () => {
       includeMeta: true,
       includeStructuredPayload: true,
       includeRaw: true,
-      maxCharsPerMessage: 4000,
+      maxCharsPerMessage: null,
       maxRawPayloadChars: 32768,
     })).toEqual({
       sessionId: 's1',
@@ -267,10 +344,15 @@ describe('Action Spec Registry', () => {
       includeMeta: true,
       includeStructuredPayload: true,
       includeRaw: true,
-      maxCharsPerMessage: 4000,
+      maxCharsPerMessage: null,
       maxRawPayloadChars: 32768,
     });
+    expect(transcript.inputSchema.parse({ sessionId: 's1', maxCharsPerMessage: 50_000 })).toEqual({
+      sessionId: 's1',
+      maxCharsPerMessage: 50_000,
+    });
     expect(() => transcript.inputSchema.parse({ sessionId: 's1', limit: 101 })).toThrow();
+    expect(() => transcript.inputSchema.parse({ sessionId: 's1', maxCharsPerMessage: 50_001 })).toThrow();
 
     expect(events.description).toBe('Inspect raw session events (tool calls, tool results, token counts, lifecycle, permission, stream, session events) for diagnostics. Use session_transcript_get for normal transcript reading.');
     expect(events.bindings).toEqual({ mcpToolName: 'session_events_get' });
@@ -685,6 +767,11 @@ describe('Action Spec Registry', () => {
     expect(planFields.map((f: any) => f.path)).toContain('instructions');
     expect(delegateFields.map((f: any) => f.path)).toContain('backendTargetKeys');
     expect(delegateFields.map((f: any) => f.path)).toContain('instructions');
+
+    expect(plan.inputHints?.description).toContain('provider/backend');
+    expect(delegate.inputHints?.description).toContain('provider/backend');
+    expect(planFields.find((field: any) => field.path === 'backendTargetKeys')?.description).toContain('not parallelism capacity');
+    expect(delegateFields.find((field: any) => field.path === 'backendTargetKeys')?.description).toContain('not parallelism capacity');
   });
 
   it('does not require review instructions in action hints', () => {

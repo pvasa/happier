@@ -1,9 +1,64 @@
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 
 import { BUILT_IN_PET_IDS_V1, PET_SYNC_SUPPORTED_MEDIA_TYPES_V1 } from '../../../pets/constants.js';
 import { CapabilitiesSchema } from './capabilitiesSchema.js';
 
 describe('CapabilitiesSchema (server capabilities)', () => {
+  it('parses server identity capabilities outside the strict server capability object', () => {
+    const parsed = CapabilitiesSchema.parse({
+      server: {
+        canonicalServerUrl: 'https://stack.example.test',
+      },
+      serverIdentity: {
+        serverIdentityId: 'srv_identity_123',
+      },
+    });
+
+    expect(parsed.server.canonicalServerUrl).toBe('https://stack.example.test');
+    expect(parsed.serverIdentity.serverIdentityId).toBe('srv_identity_123');
+  });
+
+  it('defaults missing server identity capabilities for older servers', () => {
+    const parsed = CapabilitiesSchema.parse({});
+
+    expect(parsed.serverIdentity.serverIdentityId).toBeNull();
+  });
+
+  it('normalizes unsafe server identity capabilities to null', () => {
+    const parsed = CapabilitiesSchema.parse({
+      serverIdentity: {
+        serverIdentityId: 'relay.example.test',
+      },
+    });
+
+    expect(parsed.serverIdentity.serverIdentityId).toBeNull();
+  });
+
+  it('keeps new server identity payloads parseable for old strict server capability shapes', () => {
+    const OldCapabilitiesSchema = z.object({
+      server: z.object({
+        canonicalServerUrl: z.string().trim().min(1).optional(),
+        webappUrl: z.string().trim().min(1).optional(),
+      }).strict().optional().default({}),
+    });
+
+    const parsed = OldCapabilitiesSchema.parse({
+      server: {
+        canonicalServerUrl: 'https://stack.example.test',
+      },
+      serverIdentity: {
+        serverIdentityId: 'srv_identity_123',
+      },
+    });
+
+    expect(parsed).toEqual({
+      server: {
+        canonicalServerUrl: 'https://stack.example.test',
+      },
+    });
+  });
+
   it('parses pet companion and sync capabilities when provided', () => {
     const parsed = CapabilitiesSchema.parse({
       pets: {

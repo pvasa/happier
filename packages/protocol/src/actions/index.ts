@@ -27,6 +27,9 @@ export {
   ActionSafetySchema,
   ActionSpecSchema,
   ActionSurfaceSchema,
+  ActionToolExposureModeSchema,
+  ActionToolExposureSchema,
+  ActionToolExposureSurfaceSchema,
   SessionEventsGetInputSchema,
   SessionTranscriptGetInputSchema,
   ActionInputFieldHintSchema,
@@ -49,6 +52,9 @@ export {
   type ActionInputWidget,
   type ActionSpec,
   type ActionSurfaces,
+  type ActionToolExposure,
+  type ActionToolExposureMode,
+  type ActionToolExposureSurface,
   type SessionEventsGetInput,
   type SessionEventsGetItem,
   type SessionEventsGetOutput,
@@ -56,6 +62,15 @@ export {
   type SessionTranscriptGetItem,
   type SessionTranscriptGetOutput,
 } from './actionSpecs.js';
+
+export {
+  ACTION_TOOL_EXPOSURE_SURFACES,
+  SESSION_AGENT_DIRECT_ACTION_TOOL_ALLOW_LIST,
+  isActionDirectToolExposedOn,
+  isActionDiscoverableOnToolSurface,
+  resolveActionToolExposureMode,
+  type ActionToolExposureResolutionContext,
+} from './actionToolExposure.js';
 
 export {
   createActionExecutor,

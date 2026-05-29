@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  ConnectedServiceAuthGroupIdSchema,
+  ConnectedServiceIdSchema,
+  ConnectedServiceProfileIdSchema,
+} from '../connect/connectedServiceSchemas.js';
 import { createSessionMessageMetaSchema } from './sessionMessageMeta.js';
 import type { SessionMessageMeta } from './sessionMessageMeta.js';
 
@@ -239,9 +244,82 @@ const ContextCompactionSourceSchema = z.enum([
   'user-command',
   'runtime',
 ]);
+const ContextCompactionContinuationSchema = z.enum(['paused']);
+const ContextCompactionPauseReasonSchema = z.enum(['provider-idle-after-compaction']);
 
 const withAgentEventLifecycle = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) =>
   schema.extend(AgentEventLifecycleShape).passthrough();
+
+function readContextCompactionEventDataFromRawRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.role !== 'agent') return null;
+  const content = record.content;
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
+  const contentRecord = content as Record<string, unknown>;
+  const data = contentRecord.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const dataRecord = data as Record<string, unknown>;
+  if (dataRecord.type !== 'context-compaction') return null;
+  return contentRecord.type === 'event' || contentRecord.type === 'acp' ? dataRecord : null;
+}
+
+function addContextCompactionEventContinuationIssues(
+  event: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+  pathPrefix: readonly (string | number)[],
+): void {
+  if (event.continuation === 'paused' && event.phase !== 'completed') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...pathPrefix, 'continuation'],
+      message: 'Context compaction paused continuation is only valid for completed phases',
+    });
+  }
+
+  if (event.pauseReason !== undefined && event.continuation !== 'paused') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...pathPrefix, 'pauseReason'],
+      message: 'Context compaction pause reason requires paused continuation',
+    });
+  }
+}
+
+function addRawRecordContextCompactionContinuationIssues(value: unknown, ctx: z.RefinementCtx): void {
+  const event = readContextCompactionEventDataFromRawRecord(value);
+  if (!event) return;
+
+  addContextCompactionEventContinuationIssues(event, ctx, ['content', 'data']);
+}
+
+const ConnectedServiceAccountSwitchReasonSchema = z.enum([
+  'usage_limit',
+  'soft_threshold',
+  'auth_expired',
+  'account_changed',
+  'refresh_failure',
+  'manual',
+]);
+
+const ConnectedServiceAccountSwitchModeSchema = z.enum([
+  'hot_apply',
+  'restart_resume',
+  'spawn_next_turn',
+]);
+
+const ConnectedServiceAccountSwitchDeferralPolicySchema = z.enum([
+  'defer_until_turn_boundary',
+  'defer_until_idle',
+]);
+
+const ConnectedServiceAccountSwitchDeferralCompletionReasonSchema = z.enum([
+  'completed_at_boundary',
+  'aborted_after_timeout',
+  'switch_cancelled',
+  'session_terminated',
+  'daemon_shutdown',
+]);
 
 const AgentEventSchema = z.discriminatedUnion('type', [
   withAgentEventLifecycle(z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) })),
@@ -264,9 +342,87 @@ const AgentEventSchema = z.discriminatedUnion('type', [
       retryAttempt: z.number().int().nonnegative().optional(),
       errorCode: z.string().optional(),
       sanitizedErrorPreview: z.string().optional(),
+      continuation: ContextCompactionContinuationSchema.optional(),
+      pauseReason: ContextCompactionPauseReasonSchema.optional(),
     })
   ),
   withAgentEventLifecycle(z.object({ type: z.literal('limit-reached'), endsAt: z.number() })),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('connected-service-account-switch'),
+      serviceId: ConnectedServiceIdSchema,
+      groupId: ConnectedServiceAuthGroupIdSchema.nullable(),
+      fromProfileId: ConnectedServiceProfileIdSchema.nullable(),
+      toProfileId: ConnectedServiceProfileIdSchema.nullable(),
+      reason: ConnectedServiceAccountSwitchReasonSchema,
+      mode: ConnectedServiceAccountSwitchModeSchema,
+      resetAtMs: z.number().int().nonnegative().optional(),
+      effectiveRemainingPct: z.number().finite().min(0).max(100).optional(),
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('connected-service-account-switch-deferral'),
+      policy: ConnectedServiceAccountSwitchDeferralPolicySchema,
+      awaitingBoundary: z.boolean(),
+      timeoutMs: z.number().int().nonnegative(),
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('connected-service-account-switch-deferral-completed'),
+      policy: ConnectedServiceAccountSwitchDeferralPolicySchema,
+      reason: ConnectedServiceAccountSwitchDeferralCompletionReasonSchema,
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('connected-service-account-switch-deferral-superseded'),
+      policy: ConnectedServiceAccountSwitchDeferralPolicySchema.optional(),
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('connected-service-account-switch-attempt'),
+      ok: z.boolean(),
+      action: z.enum(['restart_requested', 'hot_applied', 'metadata_updated']),
+      errorCode: z.string().trim().min(1).nullable().optional(),
+      partialState: z
+        .enum(['metadata_may_reference_new_binding', 'runtime_auth_applied', 'runtime_auth_partially_applied'])
+        .nullable()
+        .optional(),
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('provider-state-sharing-degraded'),
+      serviceId: ConnectedServiceIdSchema,
+      requestedStateMode: z.string().trim().min(1),
+      effectiveStateMode: z.string().trim().min(1),
+      code: z.string().trim().min(1),
+      reason: z.string().trim().min(1).optional(),
+      entryName: z.string().trim().min(1).optional(),
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('provider-quota-wait'),
+      serviceId: ConnectedServiceIdSchema,
+      profileId: ConnectedServiceProfileIdSchema.optional(),
+      groupId: ConnectedServiceAuthGroupIdSchema.optional(),
+      resetAtMs: z.number().int().nonnegative(),
+      reason: z.string().trim().min(1),
+    }),
+  ),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('provider-quota-recovered'),
+      serviceId: ConnectedServiceIdSchema,
+      profileId: ConnectedServiceProfileIdSchema.optional(),
+      groupId: ConnectedServiceAuthGroupIdSchema.optional(),
+      reason: z.string().trim().min(1).optional(),
+    }),
+  ),
   withAgentEventLifecycle(
     z.object({
       type: z.literal('task-lifecycle'),
@@ -275,7 +431,11 @@ const AgentEventSchema = z.discriminatedUnion('type', [
     })
   ),
   withAgentEventLifecycle(z.object({ type: z.literal('ready') })),
-]);
+]).superRefine((event, ctx) => {
+  if (event.type === 'context-compaction') {
+    addContextCompactionEventContinuationIssues(event as Record<string, unknown>, ctx, []);
+  }
+});
 
 const RawAgentRecordSchema = z
   .discriminatedUnion('type', [
@@ -310,6 +470,15 @@ const RawAgentRecordSchema = z
             z
               .object({
                 type: z.literal('tool-call-result'),
+                callId: z.string(),
+                output: z.unknown(),
+                id: z.string(),
+                sidechainId: z.string().optional(),
+              })
+              .passthrough(),
+            z
+              .object({
+                type: z.literal('tool-result'),
                 callId: z.string(),
                 output: z.unknown(),
                 id: z.string(),
@@ -432,6 +601,8 @@ const RawAgentRecordSchema = z
                 retryAttempt: z.number().int().nonnegative().optional(),
                 errorCode: z.string().optional(),
                 sanitizedErrorPreview: z.string().optional(),
+                continuation: ContextCompactionContinuationSchema.optional(),
+                pauseReason: ContextCompactionPauseReasonSchema.optional(),
                 sidechainId: z.string().optional(),
               })
               .passthrough(),
@@ -506,7 +677,7 @@ export function createTranscriptRawRecordV1Schema<MetaSchema extends z.ZodTypeAn
         })
         .passthrough(),
     ]),
-  );
+  ).superRefine(addRawRecordContextCompactionContinuationIssues);
 }
 
 export const TranscriptRawRecordV1Schema = createTranscriptRawRecordV1Schema(z);

@@ -63,6 +63,18 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['connectedServices'],
     representation: 'server',
   },
+  'connectedServices.accountGroups': {
+    description: 'Connected service account groups and member management APIs.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['connectedServices'],
+    representation: 'server',
+  },
+  'connectedServices.accountFallback': {
+    description: 'Connected service account group fallback and automatic active account switching APIs.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['connectedServices.accountGroups', 'sessions.usageLimitRecovery'],
+    representation: 'server',
+  },
   channelBridges: {
     description: 'Channel bridge integrations (Telegram/Discord/etc).',
     defaultFailMode: 'fail_closed',
@@ -125,6 +137,12 @@ const FEATURE_CATALOG_DEFINITION = {
   },
   'sessions.handoff': {
     description: 'Session handoff between machines.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions'],
+    representation: 'server',
+  },
+  'sessions.usageLimitRecovery': {
+    description: 'Session usage-limit recovery, wait/resume intent, and retry metadata APIs.',
     defaultFailMode: 'fail_closed',
     dependencies: ['sessions'],
     representation: 'server',
@@ -313,6 +331,12 @@ const FEATURE_CATALOG_DEFINITION = {
     description: 'Embedded file editor in the session file browser.',
     defaultFailMode: 'fail_closed',
     dependencies: [],
+    representation: 'client',
+  },
+  'files.markdownRichEditor': {
+    description: 'Rich (WYSIWYG) markdown editor surface in the embedded file editor.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['files.editor'],
     representation: 'client',
   },
   'files.syntaxHighlighting.advanced': {

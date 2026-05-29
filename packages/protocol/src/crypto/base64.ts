@@ -2,7 +2,35 @@ import { fromByteArray, toByteArray } from 'base64-js';
 
 export type Base64Variant = 'base64' | 'base64url';
 
+function isCanonicalPaddedBase64(input: string): boolean {
+  if (input.length % 4 !== 0) return false;
+  let paddingStart = input.length;
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    const isAlphabet =
+      (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122)
+      || (code >= 48 && code <= 57)
+      || code === 43
+      || code === 47;
+    if (isAlphabet) {
+      if (paddingStart !== input.length) return false;
+      continue;
+    }
+    if (code !== 61) return false;
+    if (paddingStart === input.length) {
+      paddingStart = index;
+    }
+    if (index < input.length - 2) return false;
+  }
+  return true;
+}
+
 function normalizeBase64ForDecoding(input: string, variant: Base64Variant): string {
+  if (variant === 'base64' && isCanonicalPaddedBase64(input)) {
+    return input;
+  }
+
   let normalized = input.replace(/\s+/g, '');
   if (variant === 'base64url') {
     normalized = normalized.replace(/-/g, '+').replace(/_/g, '/');

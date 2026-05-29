@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 
 import {
   ExecutionRunPublicStateSchema,
@@ -12,17 +13,88 @@ import { AccountEncryptionModeSchema } from '../features/payload/capabilities/en
 import {
   PrimaryTurnStatusV1Schema,
   SessionRuntimeIssueV1Schema,
+  SessionRuntimeTemporaryThrottleDetailsV1Schema,
 } from '../sessions/control/runtimeIssueV1.js';
+import {
+  SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
+  SessionUsageLimitRecoveryV1Schema,
+} from '../sessionMetadata/sessionUsageLimitRecoveryV1.js';
+import {
+  SESSION_CONTINUATION_RECOVERY_METADATA_KEY,
+  SessionContinuationRecoveryV1Schema,
+} from '../sessionMetadata/sessionContinuationRecoveryV1.js';
+export {
+  SessionTurnIdentifierV1Schema,
+  SessionTurnLifecycleStatusV1Schema,
+  SessionTurnProviderV1Schema,
+  SessionTurnRollbackFacetBaseV1Schema,
+  SessionTurnRollbackFacetV1Schema,
+  SessionTurnRollbackStateV1Schema,
+  SessionTurnSeqV1Schema,
+  SessionTurnTimestampV1Schema,
+  SessionTurnTranscriptAnchorsV1Schema,
+  SessionTurnV1Schema,
+  buildSessionTurnV1,
+  countCompletedSessionTurnsFromStartSeq,
+  findCompletedSessionTurnByStartUserSeq,
+  listCompletedSessionTurns,
+  resolveLatestCompletedSessionTurn,
+  type SessionTurnLifecycleStatusV1,
+  type SessionTurnRollbackFacetV1,
+  type SessionTurnRollbackStateV1,
+  type SessionTurnTranscriptAnchorsV1,
+  type SessionTurnV1,
+} from '../sessions/turns/sessionTurnV1.js';
+export {
+  SessionTurnMutationActionV1Schema,
+  SessionTurnMutationDecisionV1Schema,
+  SessionTurnMutationReceiptV1Schema,
+  SessionTurnMutationV1Schema,
+  type SessionTurnMutationActionV1,
+  type SessionTurnMutationDecisionV1,
+  type SessionTurnMutationReceiptV1,
+  type SessionTurnMutationV1,
+} from '../sessions/turns/sessionTurnMutationV1.js';
+export {
+  SessionTurnsProjectionV1Schema,
+  buildSessionTurnsProjectionV1,
+  type SessionTurnsProjectionV1,
+} from '../sessions/turns/sessionTurnsProjectionV1.js';
 export {
   PrimaryTurnStatusV1Schema,
   SessionRuntimeIssueSourceV1Schema,
+  SessionRuntimeTemporaryThrottleDetailsV1Schema,
+  SessionRuntimeUsageLimitDetailsV1Schema,
   SessionRuntimeIssueV1Schema,
   TurnTerminalStatusV1Schema,
   type PrimaryTurnStatusV1,
   type SessionRuntimeIssueSourceV1,
+  type SessionRuntimeTemporaryThrottleDetailsV1,
+  type SessionRuntimeUsageLimitDetailsV1,
   type SessionRuntimeIssueV1,
   type TurnTerminalStatusV1,
 } from '../sessions/control/runtimeIssueV1.js';
+export {
+  SESSION_CONTINUATION_RECOVERY_METADATA_KEY,
+  SessionContinuationRecoveryAttemptStatusV1Schema,
+  SessionContinuationRecoveryAttemptV1Schema,
+  SessionContinuationRecoveryV1Schema,
+  SessionContinuationResumePromptModeV1Schema,
+  isSessionContinuationRecoveryBlockingPendingDrain,
+  readSessionContinuationRecoveryFromMetadata,
+  type SessionContinuationRecoveryAttemptStatusV1,
+  type SessionContinuationRecoveryAttemptV1,
+  type SessionContinuationRecoveryV1,
+  type SessionContinuationResumePromptModeV1,
+} from '../sessionMetadata/sessionContinuationRecoveryV1.js';
+export {
+  SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
+  SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID,
+  SessionUsageLimitRecoveryAuthSelectionV1Schema,
+  SessionUsageLimitRecoveryV1Schema,
+  type SessionUsageLimitRecoveryAuthSelectionV1,
+  type SessionUsageLimitRecoveryV1,
+} from '../sessionMetadata/sessionUsageLimitRecoveryV1.js';
 
 export const SessionControlErrorCodeSchema = z.enum([
   'not_authenticated',
@@ -109,6 +181,7 @@ export const SessionSummarySchema = z.object({
   encryption: z.object({
     type: z.enum(['legacy', 'dataKey']),
   }).passthrough(),
+  latestTurnId: z.string().min(1).nullable().optional(),
   latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),
   lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable().optional(),
 }).passthrough();
@@ -134,6 +207,10 @@ export function createSessionMetadataSchema(zod: typeof z) {
   return zod
     .object({
       systemSessionV1: createSessionSystemSessionV1Schema(zod).optional(),
+      // Remote-dev does not yet have the registered session-state field catalog used by dev.
+      // This metadata key is the compatible storage binding for runtime.usageLimitRecovery.
+      [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: SessionUsageLimitRecoveryV1Schema.optional(),
+      [SESSION_CONTINUATION_RECOVERY_METADATA_KEY]: SessionContinuationRecoveryV1Schema.optional(),
     })
     .passthrough();
 }
@@ -184,6 +261,7 @@ export const V2SessionRecordSchema = z
     seq: z.number().int().nonnegative(),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
+    meaningfulActivityAt: z.number().int().nonnegative().optional(),
     active: z.boolean(),
     activeAt: z.number().int().nonnegative(),
     archivedAt: z.number().int().nonnegative().nullable().optional(),
@@ -195,11 +273,18 @@ export const V2SessionRecordSchema = z
     lastViewedSessionSeq: z.number().int().nonnegative().nullable().optional(),
     pendingPermissionRequestCount: z.number().int().min(0).optional(),
     pendingUserActionRequestCount: z.number().int().min(0).optional(),
+    pendingRequestObservedAt: z.number().int().nonnegative().nullable().optional(),
+    latestReadyEventSeq: z.number().int().nonnegative().nullable().optional(),
+    latestReadyEventAt: z.number().int().nonnegative().nullable().optional(),
+    thinking: z.boolean().optional(),
+    thinkingAt: z.number().int().nonnegative().nullable().optional(),
     pendingCount: z.number().int().min(0).optional(),
     pendingVersion: z.number().int().min(0).optional(),
     dataEncryptionKey: z.string().nullable(),
     share: SessionShareSchema.nullable().optional(),
+    latestTurnId: z.string().min(1).nullable().optional(),
     latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),
+    latestTurnStatusObservedAt: z.number().int().nonnegative().nullable().optional(),
     lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable().optional(),
   })
   .passthrough();
@@ -215,6 +300,12 @@ export const V2SessionListResponseSchema = z
 export type V2SessionListResponse = z.infer<typeof V2SessionListResponseSchema>;
 
 export const V2_SESSION_LIST_CURSOR_V1_PREFIX = 'cursor_v1_' as const;
+export const V2_SESSION_LIST_CURSOR_V2_PREFIX = 'cursor_v2_' as const;
+
+export type V2SessionListCursorV2 = Readonly<{
+  sessionId: string;
+  meaningfulActivityAt: number;
+}>;
 
 export function encodeV2SessionListCursorV1(sessionId: string): string {
   return `${V2_SESSION_LIST_CURSOR_V1_PREFIX}${sessionId}`;
@@ -225,6 +316,34 @@ export function decodeV2SessionListCursorV1(cursor: string): string | null {
   if (!cursor.startsWith(V2_SESSION_LIST_CURSOR_V1_PREFIX)) return null;
   const sessionId = cursor.slice(V2_SESSION_LIST_CURSOR_V1_PREFIX.length);
   return sessionId.length > 0 ? sessionId : null;
+}
+
+export function encodeV2SessionListCursorV2(cursor: V2SessionListCursorV2): string {
+  const sessionId = String(cursor.sessionId ?? '').trim();
+  const meaningfulActivityAt = Number.isFinite(cursor.meaningfulActivityAt)
+    ? Math.max(0, Math.trunc(cursor.meaningfulActivityAt))
+    : 0;
+  const json = JSON.stringify({ sessionId, meaningfulActivityAt });
+  const payload = encodeBase64(new TextEncoder().encode(json), 'base64url');
+  return `${V2_SESSION_LIST_CURSOR_V2_PREFIX}${payload}`;
+}
+
+export function decodeV2SessionListCursorV2(cursor: string): V2SessionListCursorV2 | null {
+  if (typeof cursor !== 'string') return null;
+  if (!cursor.startsWith(V2_SESSION_LIST_CURSOR_V2_PREFIX)) return null;
+  const payload = cursor.slice(V2_SESSION_LIST_CURSOR_V2_PREFIX.length);
+  if (!payload) return null;
+  try {
+    const json = new TextDecoder().decode(decodeBase64(payload, 'base64url'));
+    const parsed = JSON.parse(json) as Partial<V2SessionListCursorV2>;
+    const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : '';
+    const meaningfulActivityAt = typeof parsed.meaningfulActivityAt === 'number' && Number.isFinite(parsed.meaningfulActivityAt)
+      ? Math.trunc(parsed.meaningfulActivityAt)
+      : -1;
+    return sessionId && meaningfulActivityAt >= 0 ? { sessionId, meaningfulActivityAt } : null;
+  } catch {
+    return null;
+  }
 }
 
 export const V2SessionByIdResponseSchema = z

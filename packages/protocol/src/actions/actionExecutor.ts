@@ -147,6 +147,19 @@ export type ActionExecutorDeps = Readonly<{
   sessionGoalClear?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionVendorPluginCatalogList?: (args: Readonly<{ sessionId: string; cwd?: string; serverId?: string | null }>) => Promise<unknown>;
   sessionSkillCatalogList?: (args: Readonly<{ sessionId: string; cwd?: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionUsageLimitWaitResumeEnable?: (args: Readonly<{
+    sessionId: string;
+    issueFingerprint?: string;
+    remember?: boolean;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
+  sessionUsageLimitWaitResumeCancel?: (args: Readonly<{
+    sessionId: string;
+    issueFingerprint?: string | null;
+    serverId?: string | null;
+  }>) => Promise<unknown>;
+  sessionUsageLimitCheckNow?: (args: Readonly<{ sessionId: string; provider?: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionUsageLimitSwitchAccountNow?: (args: Readonly<{ sessionId: string; provider?: string; serverId?: string | null }>) => Promise<unknown>;
   sessionHistoryGet?: (args: Readonly<{
     sessionId: string;
     limit?: number;
@@ -348,6 +361,36 @@ function resolveApprovalOriginForRequest(
   }
 
   return parsed.data;
+}
+
+function resolvePolicyApprovalRequestingSessionId(
+  rawOrigin: unknown,
+  ctx: ActionExecutorContext,
+  targetSessionId: string | null,
+): string | null {
+  const origin = resolveApprovalOriginForRequest(rawOrigin, null);
+  const originSessionId = normalizeId(origin?.sessionId);
+  if (originSessionId) return originSessionId;
+
+  const defaultSessionId = normalizeId(ctx.defaultSessionId);
+  if (defaultSessionId) return defaultSessionId;
+
+  return targetSessionId;
+}
+
+function resolveExplicitApprovalRequestingSessionId(
+  rawOrigin: unknown,
+  ctx: ActionExecutorContext,
+  targetSessionId: string | null,
+): string | null {
+  const defaultSessionId = normalizeId(ctx.defaultSessionId);
+  if (defaultSessionId) return defaultSessionId;
+
+  const origin = resolveApprovalOriginForRequest(rawOrigin, null);
+  const originSessionId = normalizeId(origin?.sessionId);
+  if (originSessionId) return originSessionId;
+
+  return targetSessionId;
 }
 
 function pickBoolean(input: any, key: string): boolean | undefined {
@@ -813,12 +856,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
 
         const now = Date.now();
-        const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
-        const approvalOrigin = resolveApprovalOriginForRequest(ctx.approvalOrigin, sessionId);
+        const targetSessionId = resolveSessionIdFromInput(parsed.data, ctx);
+        const requestingSessionId = resolvePolicyApprovalRequestingSessionId(ctx.approvalOrigin, ctx, targetSessionId);
+        const approvalOrigin = resolveApprovalOriginForRequest(ctx.approvalOrigin, requestingSessionId);
         const requestedSurface = parseActionSurfaceKey(ctx.surface);
         const createdBy = {
           surface: mapApprovalCreatedBySurface(ctx.surface ?? null),
-          ...(sessionId ? { sessionId } : {}),
+          ...(requestingSessionId ? { sessionId: requestingSessionId } : {}),
         } as const;
 
         const request: ApprovalRequestV1 = {
@@ -835,7 +879,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             result: approvalRouting.result,
           },
           ...(approvalOrigin ? { origin: approvalOrigin } : {}),
-          summary: buildApprovalSummary(spec, sessionId),
+          summary: buildApprovalSummary(spec, targetSessionId),
           preview: { actionId, actionArgs: parsed.data },
           ...(normalizeId(ctx.serverId) ? { serverId: normalizeId(ctx.serverId) } : {}),
         };
@@ -1518,6 +1562,56 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: true, result: res };
         }
 
+        if (actionId === 'session.usageLimit.waitResume.enable') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionUsageLimitWaitResumeEnable) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.waitResume.enable' };
+          }
+          const data = parsed.data as Record<string, unknown>;
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const res = await deps.sessionUsageLimitWaitResumeEnable({
+            sessionId,
+            ...(typeof data.issueFingerprint === 'string' ? { issueFingerprint: data.issueFingerprint } : {}),
+            ...(data.remember === true ? { remember: true } : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.usageLimit.waitResume.cancel') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionUsageLimitWaitResumeCancel) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.waitResume.cancel' };
+          }
+          const data = parsed.data as Record<string, unknown>;
+          const issueFingerprint = data.issueFingerprint;
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const res = await deps.sessionUsageLimitWaitResumeCancel({
+            sessionId,
+            ...(typeof issueFingerprint === 'string' || issueFingerprint === null ? { issueFingerprint } : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.usageLimit.checkNow') {
+          const sessionId = normalizeId((parsed.data as any).sessionId);
+          if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          if (!deps.sessionUsageLimitCheckNow) {
+            return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.usageLimit.checkNow' };
+          }
+          const data = parsed.data as Record<string, unknown>;
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const res = await deps.sessionUsageLimitCheckNow({
+            sessionId,
+            ...(typeof data.provider === 'string' && data.provider.trim().length > 0 ? { provider: data.provider.trim() } : {}),
+            ...(serverId ? { serverId } : {}),
+          });
+          return { ok: true, result: res };
+        }
+
         if (actionId === 'session.history.get') {
           const sessionId = normalizeId((parsed.data as any).sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -1936,10 +2030,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const forcedSurface = mapApprovalCreatedBySurface(ctx.surface ?? null);
         const actionArgsSessionId = normalizeId((parsedTargetArgs.data as any)?.sessionId);
         const ctxDefaultSessionId = normalizeId(ctx.defaultSessionId);
-        const requestSessionId = actionArgsSessionId || ctxDefaultSessionId || null;
+        const targetSessionId = actionArgsSessionId || ctxDefaultSessionId || null;
         const rawApprovalOrigin = Object.prototype.hasOwnProperty.call(parsed.data, 'origin')
           ? (parsed.data as any).origin
           : ctx.approvalOrigin;
+        const requestSessionId = resolveExplicitApprovalRequestingSessionId(rawApprovalOrigin, ctx, targetSessionId);
         const approvalOrigin = resolveApprovalOriginForRequest(rawApprovalOrigin, requestSessionId);
         const rawAgentId = rawCreatedBy && typeof rawCreatedBy === 'object' ? normalizeId((rawCreatedBy as any).agentId) : null;
         const requestedSurface = parseActionSurfaceKey(ctx.surface);

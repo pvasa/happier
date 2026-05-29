@@ -14,6 +14,11 @@ import { ExecutionRunStartRequestSchema } from '../executionRunStartRequest.js';
 import { SessionRollbackTargetSchema } from '../sessionRollback.js';
 import { SessionHandoffWorkspaceTransferSchema } from '../sessionControl/handoff/handoffSchemas.js';
 import { ActionApprovalSchema, type ActionApproval } from './actionApprovalMetadata.js';
+import {
+  SessionUsageLimitCheckNowRequestV1Schema,
+  SessionUsageLimitWaitResumeCancelRequestV1Schema,
+  SessionUsageLimitWaitResumeEnableRequestV1Schema,
+} from '../sessionWorkState/sessionWorkStateRpc.js';
 import { SessionWorkStateStatusV1Schema } from '../sessionWorkState/sessionWorkStateV1.js';
 
 export {
@@ -42,6 +47,19 @@ export const ActionSurfaceSchema = z.object({
   cli: z.boolean(),
 }).strict();
 export type ActionSurfaces = z.infer<typeof ActionSurfaceSchema>;
+
+export const ActionToolExposureModeSchema = z.enum(['direct', 'discoverable_only']);
+export type ActionToolExposureMode = z.infer<typeof ActionToolExposureModeSchema>;
+
+export const ActionToolExposureSurfaceSchema = z.enum(['session_agent', 'mcp', 'cli']);
+export type ActionToolExposureSurface = z.infer<typeof ActionToolExposureSurfaceSchema>;
+
+export const ActionToolExposureSchema = z.object({
+  session_agent: ActionToolExposureModeSchema.optional(),
+  mcp: ActionToolExposureModeSchema.optional(),
+  cli: ActionToolExposureModeSchema.optional(),
+}).strict();
+export type ActionToolExposure = z.infer<typeof ActionToolExposureSchema>;
 
 export const ActionSafetySchema = z.enum(['safe', 'danger']);
 export type ActionSafety = z.infer<typeof ActionSafetySchema>;
@@ -170,6 +188,7 @@ export const ActionSpecSchema = z.object({
     .passthrough()
     .optional(),
   prompting: ActionPromptingSchema.optional(),
+  toolExposure: ActionToolExposureSchema.optional(),
   approval: ActionApprovalSchema,
   surfaces: ActionSurfaceSchema,
   inputSchema: ZodSchemaLike,
@@ -235,7 +254,7 @@ export const SessionTranscriptGetInputSchema = z.object({
   includeMeta: z.boolean().optional(),
   includeStructuredPayload: z.boolean().optional(),
   includeRaw: z.boolean().optional(),
-  maxCharsPerMessage: z.number().int().min(0).max(4000).nullable().optional(),
+  maxCharsPerMessage: z.number().int().min(0).max(50_000).nullable().optional(),
   maxRawPayloadChars: z.number().int().min(0).max(32768).nullable().optional(),
 }).passthrough();
 export type SessionTranscriptGetInput = z.infer<typeof SessionTranscriptGetInputSchema>;
@@ -936,12 +955,12 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     bindings: { voiceClientToolName: 'startPlan', mcpToolName: 'subagents_plan_start' },
     inputHints: {
       title: 'Start a planning run',
-      description: 'Start one or more parallel planning runs using selected backends.',
+      description: 'Start Happier-managed planning runs using explicit agent provider/backend targets.',
       fields: [
         {
           path: 'backendTargetKeys',
-          title: 'Backends',
-          description: 'Select one or more backends. Each backend runs as its own execution run.',
+          title: 'Provider/backend targets',
+          description: 'Select the agent provider/backend targets to use. These choose agent implementations, not parallelism capacity slots.',
           widget: 'multiselect',
           required: true,
           optionsSourceId: 'execution.backends.enabled',
@@ -980,12 +999,12 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     bindings: { voiceClientToolName: 'startDelegate', mcpToolName: 'subagents_delegate_start' },
     inputHints: {
       title: 'Start a delegation run',
-      description: 'Start one or more parallel delegation runs using selected backends.',
+      description: 'Start Happier-managed delegation runs using explicit agent provider/backend targets.',
       fields: [
         {
           path: 'backendTargetKeys',
-          title: 'Backends',
-          description: 'Select one or more backends. Each backend runs as its own execution run.',
+          title: 'Provider/backend targets',
+          description: 'Select the agent provider/backend targets to use. These choose agent implementations, not parallelism capacity slots.',
           widget: 'multiselect',
           required: true,
           optionsSourceId: 'execution.backends.enabled',
@@ -1027,8 +1046,8 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       fields: [
         {
           path: 'backendTargetKeys',
-          title: 'Backends',
-          description: 'Select one or more backends.',
+          title: 'Provider/backend targets',
+          description: 'Select the agent provider/backend targets to use for the voice agent run.',
           widget: 'multiselect',
           required: true,
           optionsSourceId: 'execution.backends.enabled',
@@ -1967,6 +1986,91 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     inputSchema: SessionIdRequiredInputSchema,
   },
   {
+    id: 'session.usageLimit.waitResume.enable',
+    title: 'Enable usage-limit wait/resume',
+    description: 'Arm a durable intent to continue a session when a provider usage limit is lifted.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
+    placements: [],
+    bindings: { mcpToolName: 'session_usage_limit_wait_resume_enable' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}","issueFingerprint":"usage-limit:s1:123"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Continue after usage limit',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'issueFingerprint', title: 'Issue fingerprint', widget: 'text' },
+        { path: 'remember', title: 'Remember preference', widget: 'toggle' },
+      ],
+    },
+    inputSchema: SessionUsageLimitWaitResumeEnableRequestV1Schema,
+  },
+  {
+    id: 'session.usageLimit.waitResume.cancel',
+    title: 'Cancel usage-limit wait/resume',
+    description: 'Cancel the active usage-limit wait/resume intent for a session.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
+    placements: [],
+    bindings: { mcpToolName: 'session_usage_limit_wait_resume_cancel' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Cancel usage-limit recovery',
+      fields: [
+        { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+        { path: 'issueFingerprint', title: 'Issue fingerprint', widget: 'text' },
+      ],
+    },
+    inputSchema: SessionUsageLimitWaitResumeCancelRequestV1Schema,
+  },
+  {
+    id: 'session.usageLimit.checkNow',
+    title: 'Check usage-limit recovery now',
+    description: 'Ask the session runtime to perform a safe provider-owned usage-limit recovery check.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_REQUIRED,
+    placements: [],
+    bindings: { mcpToolName: 'session_usage_limit_check_now' },
+    examples: {
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}"}' },
+    },
+    surfaces: {
+      ui_button: false,
+      ui_slash_command: false,
+      voice_tool: false,
+      voice_action_block: false,
+      session_agent: true,
+      mcp: true,
+      cli: true,
+    },
+    inputHints: {
+      title: 'Check usage limit',
+      fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
+    },
+    inputSchema: SessionUsageLimitCheckNowRequestV1Schema,
+  },
+  {
     id: 'session.vendor_plugin_catalog.list',
     title: 'List session vendor plugins',
     description: 'List provider-owned vendor plugins available to the session.',
@@ -2073,8 +2177,8 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'getSessionTranscript', mcpToolName: 'session_transcript_get' },
     examples: {
-      mcp: { argsExample: '{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"]}' },
-      voice: { argsExample: '{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"]}' },
+      mcp: { argsExample: '{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"],"maxCharsPerMessage":null}' },
+      voice: { argsExample: '{"sessionId":"{{sessionId}}","limit":20,"roles":["user","assistant"],"maxCharsPerMessage":null}' },
     },
     surfaces: {
       ui_button: false,
@@ -2126,7 +2230,12 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
         { path: 'includeMeta', title: 'Include meta', widget: 'toggle' },
         { path: 'includeStructuredPayload', title: 'Include structured payload', widget: 'toggle' },
         { path: 'includeRaw', title: 'Include raw', widget: 'toggle' },
-        { path: 'maxCharsPerMessage', title: 'Max chars per message', widget: 'text' },
+        {
+          path: 'maxCharsPerMessage',
+          title: 'Message truncation chars',
+          description: 'Optional per-message truncation budget. Omit or pass null for full message text.',
+          widget: 'text',
+        },
         { path: 'maxRawPayloadChars', title: 'Max raw payload chars', widget: 'text' },
       ],
     },

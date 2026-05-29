@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import {
+import * as schemas from './connectedServiceSchemas.js';
+
+const {
     ConnectedServiceIdSchema,
     ConnectedServiceCredentialRecordV1Schema,
+    ConnectedServiceCredentialHealthV1Schema,
     ConnectedServiceQuotaSnapshotV1Schema,
     SealedConnectedServiceCredentialV1Schema,
-} from './connectedServiceSchemas.js';
+} = schemas;
+
+function expectSchema(name: string): any {
+    const schema = (schemas as Record<string, any>)[name];
+    expect(typeof schema?.safeParse).toBe('function');
+    return schema;
+}
 
 describe('connectedServiceSchemas', () => {
     it('parses connected service ids', () => {
@@ -73,6 +82,30 @@ describe('connectedServiceSchemas', () => {
         expect(sealed.format).toBe('account_scoped_v1');
     });
 
+    it('parses normalized credential health without raw provider secrets', () => {
+        const now = Date.now();
+        const health = ConnectedServiceCredentialHealthV1Schema.parse({
+            v: 1,
+            status: 'needs_reauth',
+            reconnectRequired: true,
+            lastRefreshAttemptAt: now - 2_000,
+            lastRefreshFailureAt: now - 1_000,
+            lastRefreshFailureKind: 'invalid_grant',
+            providerHttpStatus: 400,
+            providerErrorCode: 'invalid_grant',
+        });
+
+        expect(health.reconnectRequired).toBe(true);
+        expect(health.lastRefreshFailureKind).toBe('invalid_grant');
+
+        expect(ConnectedServiceCredentialHealthV1Schema.safeParse({
+            v: 1,
+            status: 'needs_reauth',
+            reconnectRequired: true,
+            rawBody: '{"refresh_token":"secret"}',
+        }).success).toBe(false);
+    });
+
     it('parses connected service quota snapshots', () => {
         const now = Date.now();
         const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({
@@ -99,6 +132,194 @@ describe('connectedServiceSchemas', () => {
         });
         expect(parsed.meters).toHaveLength(1);
         expect(parsed.meters[0]?.meterId).toBe('requests');
+    });
+
+    it('parses additive quota meter source and remaining semantics', () => {
+        const now = Date.now();
+        const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            providerId: 'codex',
+            activeAccountId: 'acct-work',
+            fetchedAt: now,
+            fetchedAtMs: now,
+            staleAfterMs: 60_000,
+            staleAtMs: now + 60_000,
+            planLabel: 'team',
+            accountLabel: 'work@example.com',
+            source: 'in_band_provider_snapshot',
+            confidence: 'exact',
+            evidence: {
+                providerLimitId: 'weekly_tokens',
+                observedAtMs: now - 100,
+            },
+            meters: [
+                {
+                    meterId: 'weekly',
+                    label: 'Weekly',
+                    used: 82,
+                    limit: 100,
+                    usedPct: 82,
+                    remaining: 18,
+                    remainingPct: 18,
+                    resetAtMs: now + 60_000,
+                    resetSource: 'provider',
+                    providerLimitId: 'weekly_tokens',
+                    modelId: 'gpt-5',
+                    isExhausted: false,
+                    isSoftLimited: true,
+                    isCapacityLimited: false,
+                    unit: 'credits',
+                    utilizationPct: 82,
+                    resetsAt: now + 60_000,
+                    status: 'ok',
+                    source: 'in_band_provider_snapshot',
+                    scope: 'weekly',
+                    limitScope: 'account',
+                    confidence: 'exact',
+                    details: {
+                        code: 'near_limit',
+                        rawScope: 'account:weekly',
+                    },
+                },
+            ],
+        });
+
+        expect(parsed.source).toBe('in_band_provider_snapshot');
+        expect(parsed.providerId).toBe('codex');
+        expect(parsed.activeAccountId).toBe('acct-work');
+        expect(parsed.fetchedAtMs).toBe(now);
+        expect(parsed.staleAtMs).toBe(now + 60_000);
+        expect(parsed.confidence).toBe('exact');
+        expect(parsed.evidence).toEqual({
+            providerLimitId: 'weekly_tokens',
+            observedAtMs: now - 100,
+        });
+        expect(parsed.meters[0]).toEqual(expect.objectContaining({
+            remaining: 18,
+            remainingPct: 18,
+            usedPct: 82,
+            resetAtMs: now + 60_000,
+            resetSource: 'provider',
+            providerLimitId: 'weekly_tokens',
+            modelId: 'gpt-5',
+            isExhausted: false,
+            isSoftLimited: true,
+            isCapacityLimited: false,
+            source: 'in_band_provider_snapshot',
+            scope: 'weekly',
+            limitScope: 'account',
+            confidence: 'exact',
+            details: expect.objectContaining({
+                code: 'near_limit',
+                rawScope: 'account:weekly',
+            }),
+        }));
+    });
+
+    it('rejects unsafe raw quota evidence payloads', () => {
+        const now = Date.now();
+        const result = ConnectedServiceQuotaSnapshotV1Schema.safeParse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            fetchedAt: now,
+            staleAfterMs: 60_000,
+            planLabel: null,
+            accountLabel: null,
+            evidence: {
+                providerLimitId: 'weekly_tokens',
+                observedAtMs: now,
+                rawBody: '{"access_token":"secret"}',
+                headers: {
+                    authorization: 'Bearer secret',
+                },
+            },
+            meters: [],
+        });
+
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects auth-like quota evidence header aliases', () => {
+        const now = Date.now();
+        const result = ConnectedServiceQuotaSnapshotV1Schema.safeParse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            fetchedAt: now,
+            staleAfterMs: 60_000,
+            planLabel: null,
+            accountLabel: null,
+            evidence: {
+                headers: {
+                    'x-authorization': 'Bearer secret',
+                },
+            },
+            meters: [],
+        });
+
+        expect(result.success).toBe(false);
+    });
+
+    it('strips unsupported meter detail evidence payloads from additive quota meters', () => {
+        const now = Date.now();
+        const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            fetchedAt: now,
+            staleAfterMs: 60_000,
+            planLabel: null,
+            accountLabel: null,
+            meters: [{
+                meterId: 'weekly',
+                label: 'Weekly',
+                used: null,
+                limit: null,
+                unit: 'tokens',
+                utilizationPct: null,
+                resetsAt: null,
+                status: 'ok',
+                details: {
+                    evidence: '{"access_token":"secret"}',
+                },
+            }],
+        });
+
+        expect(parsed.meters[0]?.details).toEqual({});
+    });
+
+    it('accepts additive quota snapshot and meter fields without preserving unknown raw payloads', () => {
+        const now = Date.now();
+        const parsed = ConnectedServiceQuotaSnapshotV1Schema.parse({
+            v: 1,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            fetchedAt: now,
+            staleAfterMs: 60_000,
+            planLabel: null,
+            accountLabel: null,
+            rawBody: '{"access_token":"secret"}',
+            meters: [{
+                meterId: 'weekly',
+                label: 'Weekly',
+                used: null,
+                limit: null,
+                unit: 'tokens',
+                utilizationPct: null,
+                resetsAt: null,
+                status: 'ok',
+                rawHeaders: {
+                    authorization: 'Bearer secret',
+                },
+                details: {},
+            }],
+        });
+
+        expect((parsed as Record<string, unknown>).rawBody).toBeUndefined();
+        expect((parsed.meters[0] as Record<string, unknown>).rawHeaders).toBeUndefined();
     });
 
     it('rejects invalid profile ids', () => {
@@ -150,5 +371,274 @@ describe('connectedServiceSchemas', () => {
             token: null,
         });
         expect(rec.profileId).toBe('work:us');
+    });
+
+    it('parses account group ids as path-safe ids distinct from profile ids', () => {
+        const ConnectedServiceAuthGroupIdSchema = expectSchema('ConnectedServiceAuthGroupIdSchema');
+        expect(ConnectedServiceAuthGroupIdSchema.safeParse('codex-main').success).toBe(true);
+        expect(ConnectedServiceAuthGroupIdSchema.safeParse('groups').success).toBe(true);
+        expect(ConnectedServiceAuthGroupIdSchema.safeParse('__groups').success).toBe(false);
+        expect(ConnectedServiceAuthGroupIdSchema.safeParse('bad/group').success).toBe(false);
+        expect(ConnectedServiceAuthGroupIdSchema.safeParse('bad:group').success).toBe(false);
+    });
+
+    it('parses the default connected-service account group policy', () => {
+        const ConnectedServiceAuthGroupPolicyV1Schema = expectSchema('ConnectedServiceAuthGroupPolicyV1Schema');
+        expect(ConnectedServiceAuthGroupPolicyV1Schema.parse({ v: 1 })).toEqual({
+            v: 1,
+            strategy: 'priority',
+            autoSwitch: false,
+            switchOn: {
+                usageLimit: true,
+                authExpired: true,
+                accountChanged: true,
+                refreshFailure: false,
+            },
+            cooldownMs: 30_000,
+            honorProviderResetsAt: true,
+            autoRestorePrimaryWhenReset: false,
+            maxSwitchesPerTurn: 1,
+            maxSwitchesPerSessionHour: 3,
+            softSwitchRemainingPercent: 15,
+            probeIfSnapshotOlderThanMs: 300_000,
+            preTurnProbeMode: 'when_stale',
+            preTurnProbeOrder: 'current_first_then_candidates',
+            recoveryMode: 'switch_or_wait',
+            recoveryPromptMode: 'standard',
+            resumePromptMode: 'standard',
+            effectiveMeterStrategy: 'most_constrained',
+            memberRuntimeStatePersistence: 'server_state_json',
+        });
+        expect(ConnectedServiceAuthGroupPolicyV1Schema.parse({
+            v: 1,
+            resumePromptMode: 'off',
+        }).resumePromptMode).toBe('off');
+        expect(expectSchema('ConnectedServiceAuthGroupPolicyPatchV1Schema').parse({
+            resumePromptMode: 'off',
+        }).resumePromptMode).toBe('off');
+        expect(ConnectedServiceAuthGroupPolicyV1Schema.safeParse({ v: 1, strategy: 'round_robin' }).success).toBe(false);
+    });
+
+    it('parses persisted member runtime state by limit category', () => {
+        const ConnectedServiceAuthGroupMemberStateV1Schema = expectSchema('ConnectedServiceAuthGroupMemberStateV1Schema');
+        const parsed = ConnectedServiceAuthGroupMemberStateV1Schema.parse({
+            quotaExhaustedUntilMs: 10,
+            rateLimitedUntilMs: 20,
+            capacityLimitedUntilMs: 30,
+            authInvalidUntilMs: 40,
+            lastFailureKind: 'usage_limit',
+            lastFailureCode: 'usage_limit_reached',
+            lastObservedPlanType: 'team',
+            lastObservedAtMs: 50,
+        });
+
+        expect(parsed).toEqual({
+            quotaExhaustedUntilMs: 10,
+            rateLimitedUntilMs: 20,
+            capacityLimitedUntilMs: 30,
+            authInvalidUntilMs: 40,
+            lastFailureKind: 'usage_limit',
+            lastFailureCode: 'usage_limit_reached',
+            lastObservedPlanType: 'team',
+            lastObservedAtMs: 50,
+        });
+        expect(ConnectedServiceAuthGroupMemberStateV1Schema.safeParse({
+            quotaExhaustedUntilMs: -1,
+        }).success).toBe(false);
+    });
+
+    it('parses connected-service account group route payloads without secrets', () => {
+        const ConnectedServiceAuthGroupCreateRequestV1Schema = expectSchema('ConnectedServiceAuthGroupCreateRequestV1Schema');
+        const ConnectedServiceAuthGroupErrorResponseV1Schema = expectSchema('ConnectedServiceAuthGroupErrorResponseV1Schema');
+        const ConnectedServiceAuthGroupPatchRequestV1Schema = expectSchema('ConnectedServiceAuthGroupPatchRequestV1Schema');
+        const ConnectedServiceAuthGroupPolicyV1Schema = expectSchema('ConnectedServiceAuthGroupPolicyV1Schema');
+        const ConnectedServiceAuthGroupRouteParamsV1Schema = expectSchema('ConnectedServiceAuthGroupRouteParamsV1Schema');
+        const ConnectedServiceAuthGroupV1Schema = expectSchema('ConnectedServiceAuthGroupV1Schema');
+        const policy = ConnectedServiceAuthGroupPolicyV1Schema.parse({ v: 1, autoSwitch: true });
+        const group = ConnectedServiceAuthGroupV1Schema.parse({
+            v: 1,
+            serviceId: 'openai-codex',
+            groupId: 'codex-main',
+            displayName: 'Codex main',
+            policy,
+            activeProfileId: 'work',
+            generation: 2,
+            state: {
+                status: 'ready',
+                lastSwitchAt: 123,
+            },
+            createdAt: 1,
+            updatedAt: 2,
+            members: [
+                {
+                    v: 1,
+                    serviceId: 'openai-codex',
+                    groupId: 'codex-main',
+                    profileId: 'work',
+                    priority: 10,
+                    enabled: true,
+                    state: {
+                        cooldownUntilMs: null,
+                        exhaustedUntilMs: null,
+                    },
+                    createdAt: 1,
+                    updatedAt: 2,
+                },
+            ],
+        });
+
+        expect(group.members[0]?.profileId).toBe('work');
+        expect((group as Record<string, unknown>).credential).toBeUndefined();
+        expect(ConnectedServiceAuthGroupCreateRequestV1Schema.parse({
+            groupId: 'codex-main',
+            displayName: 'Codex main',
+            policy: { autoSwitch: true },
+            members: [{ profileId: 'work', priority: 10 }],
+            activeProfileId: 'work',
+        }).members[0]?.enabled).toBe(true);
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.parse({
+            displayName: null,
+            policy: { softSwitchRemainingPercent: 9 },
+            activeProfileId: 'personal',
+        })).toEqual({
+            displayName: null,
+            policy: { softSwitchRemainingPercent: 9 },
+            activeProfileId: 'personal',
+        });
+        expect(ConnectedServiceAuthGroupRouteParamsV1Schema.parse({
+            serviceId: 'openai-codex',
+            groupId: 'codex-main',
+        })).toEqual({
+            serviceId: 'openai-codex',
+            groupId: 'codex-main',
+        });
+        expect(ConnectedServiceAuthGroupErrorResponseV1Schema.parse({
+            error: 'connect_group_profile_runtime_cooldown',
+            resetAtMs: 123,
+        })).toEqual({
+            error: 'connect_group_profile_runtime_cooldown',
+            resetAtMs: 123,
+        });
+        expect(ConnectedServiceAuthGroupErrorResponseV1Schema.parse({
+            error: 'connect_group_generation_conflict',
+            generation: 2,
+        })).toEqual({
+            error: 'connect_group_generation_conflict',
+            generation: 2,
+        });
+        expect(ConnectedServiceAuthGroupErrorResponseV1Schema.parse({
+            error: 'connect_group_member_profile_not_found',
+        })).toEqual({
+            error: 'connect_group_member_profile_not_found',
+        });
+    });
+
+    it('parses profile and group connected-service session bindings', () => {
+        const ConnectedServiceBindingSelectionV1Schema = expectSchema('ConnectedServiceBindingSelectionV1Schema');
+        const ConnectedServiceBindingsV1Schema = expectSchema('ConnectedServiceBindingsV1Schema');
+        const SessionConnectedServiceAuthSwitchRpcParamsSchema = expectSchema('SessionConnectedServiceAuthSwitchRpcParamsSchema');
+        expect(ConnectedServiceBindingSelectionV1Schema.parse({
+            source: 'connected',
+            profileId: 'work',
+        })).toEqual({
+            source: 'connected',
+            selection: 'profile',
+            profileId: 'work',
+        });
+
+        const parsed = ConnectedServiceBindingsV1Schema.parse({
+            v: 1,
+            bindingsByServiceId: {
+                'openai-codex': {
+                    source: 'connected',
+                    selection: 'group',
+                    groupId: 'codex-main',
+                },
+                github: {
+                    source: 'native',
+                },
+            },
+        });
+
+        expect(parsed.bindingsByServiceId['openai-codex']?.selection).toBe('group');
+        expect(parsed.bindingsByServiceId['openai-codex']).toEqual({
+            source: 'connected',
+            selection: 'group',
+            groupId: 'codex-main',
+        });
+        expect(ConnectedServiceBindingSelectionV1Schema.safeParse({
+            source: 'connected',
+            selection: 'group',
+            profileId: 'work',
+        }).success).toBe(false);
+
+        expect(SessionConnectedServiceAuthSwitchRpcParamsSchema.parse({
+            sessionId: '  sess_1  ',
+            agentId: '  claude  ',
+            bindings: {
+                v: 1,
+                bindingsByServiceId: {
+                    anthropic: {
+                        source: 'connected',
+                        selection: 'profile',
+                        profileId: 'work',
+                    },
+                },
+            },
+            expectedGroupGenerationByServiceId: { anthropic: 4 },
+            rematerializeServiceId: 'anthropic',
+            accountSettingsVersionHint: 42,
+        })).toEqual({
+            sessionId: 'sess_1',
+            agentId: 'claude',
+            bindings: {
+                v: 1,
+                bindingsByServiceId: {
+                    anthropic: {
+                        source: 'connected',
+                        selection: 'profile',
+                        profileId: 'work',
+                    },
+                },
+            },
+            expectedGroupGenerationByServiceId: { anthropic: 4 },
+            rematerializeServiceId: 'anthropic',
+            accountSettingsVersionHint: 42,
+        });
+    });
+
+    it('rejects malformed account group policy values', () => {
+        const ConnectedServiceAuthGroupPolicyV1Schema = expectSchema('ConnectedServiceAuthGroupPolicyV1Schema');
+        expect(ConnectedServiceAuthGroupPolicyV1Schema.safeParse({
+            v: 1,
+            cooldownMs: -1,
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupPolicyV1Schema.safeParse({
+            v: 1,
+            switchOn: {
+                usageLimit: true,
+            },
+        }).success).toBe(false);
+    });
+
+    it('parses active profile updates with an optional expected generation', () => {
+        const ConnectedServiceAuthGroupActiveProfileRequestV1Schema = expectSchema('ConnectedServiceAuthGroupActiveProfileRequestV1Schema');
+
+        expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.parse({
+            profileId: 'backup',
+            expectedGeneration: 3,
+        })).toEqual({
+            profileId: 'backup',
+            expectedGeneration: 3,
+        });
+        expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.parse({
+            profileId: 'backup',
+        })).toEqual({
+            profileId: 'backup',
+        });
+        expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.safeParse({
+            profileId: 'backup',
+            expectedGeneration: -1,
+        }).success).toBe(false);
     });
 });

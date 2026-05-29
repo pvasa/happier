@@ -27,6 +27,10 @@ import {
   ServerCapabilitiesSchema,
 } from './serverCapabilities.js';
 import {
+  DEFAULT_SERVER_IDENTITY_CAPABILITIES,
+  ServerIdentityCapabilitiesSchema,
+} from './serverIdentityCapabilities.js';
+import {
   DEFAULT_PETS_CAPABILITIES,
   PetsCapabilitiesSchema,
 } from './petsCapabilities.js';
@@ -41,6 +45,7 @@ export const CapabilitiesSchema = z.object({
   pets: PetsCapabilitiesSchema.optional().default(DEFAULT_PETS_CAPABILITIES),
   encryption: EncryptionCapabilitiesSchema.optional().default(DEFAULT_ENCRYPTION_CAPABILITIES),
   server: ServerCapabilitiesSchema.optional().default(DEFAULT_SERVER_CAPABILITIES),
+  serverIdentity: ServerIdentityCapabilitiesSchema.optional().default(DEFAULT_SERVER_IDENTITY_CAPABILITIES),
   machines: z
     .object({
       transfer: MachineTransferCapabilitiesSchema.optional().default(DEFAULT_MACHINE_TRANSFER_CAPABILITIES),

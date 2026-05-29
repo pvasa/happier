@@ -62,6 +62,14 @@ export {
 } from './features/payload/capabilities/petsCapabilities.js';
 
 export {
+  DEFAULT_SERVER_IDENTITY_CAPABILITIES,
+  SERVER_IDENTITY_ID_PATTERN,
+  ServerIdentityCapabilitiesSchema,
+  normalizeServerIdentityIdCapability,
+  type ServerIdentityCapabilities,
+} from './features/payload/capabilities/serverIdentityCapabilities.js';
+
+export {
   DEFAULT_SESSION_CAPABILITIES,
   DEFAULT_SESSION_MESSAGES_CAPABILITIES,
   SessionCapabilitiesSchema,

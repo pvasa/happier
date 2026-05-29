@@ -113,7 +113,7 @@ describe('executionRunsGuidanceV1', () => {
     expect(result.text).toContain('- mcp.execution.list');
   });
 
-  it('includes explicit MCP delegation instructions when rules are present', () => {
+  it('uses discovery-first Happier-managed run guidance when rules are present', () => {
     const result = buildExecutionRunsGuidanceBlockV1({
       entries: [
         {
@@ -125,9 +125,13 @@ describe('executionRunsGuidanceV1', () => {
       maxChars: 10_000,
     });
 
-    expect(result.text).toContain('Delegating via MCP');
-    expect(result.text).toContain('execution_run_start');
-    expect(result.text).toContain('execution_run_get');
-    expect(result.text).toContain('execution_run_stop');
+    expect(result.text).toContain('Happier-Managed Execution Runs');
+    expect(result.text).toContain('action_spec_search');
+    expect(result.text).toContain('action_spec_get');
+    expect(result.text).toContain('action_options_resolve');
+    expect(result.text).toContain('action_execute');
+    expect(result.text).toContain('provider/backend');
+    expect(result.text).toContain('not parallelism slots');
+    expect(result.text).not.toContain('execution_run_start');
   });
 });

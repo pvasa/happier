@@ -17,6 +17,14 @@ describe('feature catalog', () => {
     expect(isFeatureId('files.diffSyntaxHighlighting')).toBe(true);
     expect(isFeatureId('files.editor')).toBe(true);
     expect(isFeatureId('files.syntaxHighlighting.advanced')).toBe(true);
+    expect(isFeatureId('files.markdownRichEditor')).toBe(true);
+  });
+
+  it('includes markdown rich editor as a client feature depending on the embedded editor', () => {
+    expect(isFeatureId('files.markdownRichEditor')).toBe(true);
+    expect(FEATURE_CATALOG['files.markdownRichEditor']?.representation).toBe('client');
+    expect(FEATURE_CATALOG['files.markdownRichEditor']?.dependencies).toEqual(['files.editor']);
+    expect(FEATURE_CATALOG['files.markdownRichEditor']?.defaultFailMode).toBe('fail_closed');
   });
 
   it('includes execution runs feature id', () => {
@@ -33,6 +41,24 @@ describe('feature catalog', () => {
 
   it('includes connected services quotas feature id', () => {
     expect(isFeatureId('connectedServices.quotas')).toBe(true);
+  });
+
+  it('includes connected services account group feature ids with dependencies', () => {
+    expect(isFeatureId('connectedServices.accountGroups')).toBe(true);
+    expect(isFeatureId('connectedServices.accountFallback')).toBe(true);
+    expect(FEATURE_CATALOG['connectedServices.accountGroups']?.representation).toBe('server');
+    expect(FEATURE_CATALOG['connectedServices.accountGroups']?.dependencies).toEqual(['connectedServices']);
+    expect(FEATURE_CATALOG['connectedServices.accountFallback']?.representation).toBe('server');
+    expect(FEATURE_CATALOG['connectedServices.accountFallback']?.dependencies).toEqual([
+      'connectedServices.accountGroups',
+      'sessions.usageLimitRecovery',
+    ]);
+  });
+
+  it('includes sessions usage-limit recovery feature id', () => {
+    expect(isFeatureId('sessions.usageLimitRecovery')).toBe(true);
+    expect(FEATURE_CATALOG['sessions.usageLimitRecovery']?.representation).toBe('server');
+    expect(FEATURE_CATALOG['sessions.usageLimitRecovery']?.dependencies).toEqual(['sessions']);
   });
 
   it('includes channel bridge feature ids', () => {

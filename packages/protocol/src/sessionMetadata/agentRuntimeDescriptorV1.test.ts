@@ -4,6 +4,7 @@ import {
   AgentRuntimeDescriptorV1Schema,
   buildCodexAgentRuntimeDescriptorV1,
   buildOpenCodeAgentRuntimeDescriptorV1,
+  buildPiAgentRuntimeDescriptorV1,
   readCanonicalAgentRuntimeDescriptorV1ForProvider,
   readAgentRuntimeDescriptorV1ForProvider,
 } from './agentRuntimeDescriptorV1';
@@ -47,6 +48,7 @@ describe('agentRuntimeDescriptorV1', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: 'work',
+      connectedServiceGroupId: 'main',
       homePath: '/tmp/codex-home',
     });
     expect(AgentRuntimeDescriptorV1Schema.parse({ ...built, extra: 'x' })).toMatchObject({
@@ -57,6 +59,7 @@ describe('agentRuntimeDescriptorV1', () => {
         home: 'connectedService',
         connectedServiceId: 'openai-codex',
         connectedServiceProfileId: 'work',
+        connectedServiceGroupId: 'main',
         homePath: '/tmp/codex-home',
         providerExtra: {
           owner: 'codex',
@@ -68,6 +71,7 @@ describe('agentRuntimeDescriptorV1', () => {
             home: 'connectedService',
             connectedServiceId: 'openai-codex',
             connectedServiceProfileId: 'work',
+            connectedServiceGroupId: 'main',
             homePath: '/tmp/codex-home',
           },
         },
@@ -135,6 +139,29 @@ describe('agentRuntimeDescriptorV1', () => {
     expect(readAgentRuntimeDescriptorV1ForProvider(built, 'codex')).toBeNull();
   });
 
+  it('builds and parses a pi descriptor that includes persisted session file metadata', () => {
+    const built = buildPiAgentRuntimeDescriptorV1({
+      resumeStrategy: 'sessionFileAbsolutePreferred',
+      vendorSessionId: 'pi-session-1',
+      sessionFile: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_pi-session-1.jsonl',
+    });
+
+    expect(AgentRuntimeDescriptorV1Schema.parse(built)).toMatchObject({
+      providerId: 'pi',
+      provider: {
+        resumeStrategy: 'sessionFileAbsolutePreferred',
+        vendorSessionId: 'pi-session-1',
+        sessionFile: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_pi-session-1.jsonl',
+      },
+    });
+    expect(readCanonicalAgentRuntimeDescriptorV1ForProvider(built, 'pi')).toEqual({
+      providerId: 'pi',
+      resumeStrategy: 'sessionFileAbsolutePreferred',
+      vendorSessionId: 'pi-session-1',
+      sessionFile: '/tmp/pi/sessions/2026-05-27T00-00-00-000Z_pi-session-1.jsonl',
+    });
+  });
+
   it('prefers providerExtra runtime affinity over stale provider fields', () => {
     expect(readCanonicalAgentRuntimeDescriptorV1ForProvider({
       v: 1,
@@ -162,6 +189,7 @@ describe('agentRuntimeDescriptorV1', () => {
       home: 'connectedService',
       connectedServiceId: 'openai-codex',
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: null,
     });
 
@@ -217,6 +245,7 @@ describe('agentRuntimeDescriptorV1', () => {
       home: null,
       connectedServiceId: null,
       connectedServiceProfileId: null,
+      connectedServiceGroupId: null,
       homePath: null,
     });
   });

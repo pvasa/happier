@@ -6,6 +6,8 @@ import {
 } from '../../sessionWorkState/sessionWorkStateItemIds.js';
 import type { SessionWorkStateItemV1, SessionWorkStateStatusV1 } from '../../sessionWorkState/sessionWorkStateV1.js';
 
+const CLAUDE_TASK_TOOL_WORK_STATE_SOURCE_FAMILY = 'claude.task';
+
 export const ClaudeTaskEventSchema = z
   .object({
     type: z.string().min(1),
@@ -93,6 +95,14 @@ function readTaskToolId(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function buildClaudeTaskToolWorkStateItemId(vendorRef: string): string {
+  return buildDeterministicSessionWorkStateItemId({
+    kind: 'task',
+    sourceFamily: CLAUDE_TASK_TOOL_WORK_STATE_SOURCE_FAMILY,
+    stableParts: [vendorRef],
+  });
+}
+
 export function normalizeClaudeTaskEventToWorkStateItem(params: Readonly<{
   backendId: string;
   agentId?: string;
@@ -142,7 +152,7 @@ export function normalizeClaudeTaskToolUseToWorkStateItem(params: Readonly<{
   const summary = readTaskToolSummary(parsed.data, title);
 
   return {
-    id: buildVendorSessionWorkStateItemId('task', normalizedVendorRef),
+    id: buildClaudeTaskToolWorkStateItemId(normalizedVendorRef),
     kind: 'task',
     origin: 'vendor',
     status: normalizeClaudeTaskToolStatus(parsed.data.status, params.toolName === 'TaskCreate' ? 'pending' : 'unknown'),
@@ -170,7 +180,7 @@ export function normalizeClaudeTaskToolRecordsToWorkStateItems(params: Readonly<
     const title = readTaskToolTitle(parsed.data) ?? vendorRef;
     const summary = readTaskToolSummary(parsed.data, title);
     return [{
-      id: buildVendorSessionWorkStateItemId('task', vendorRef),
+      id: buildClaudeTaskToolWorkStateItemId(vendorRef),
       kind: 'task',
       origin: 'vendor',
       status: normalizeClaudeTaskToolStatus(parsed.data.status, 'unknown'),

@@ -5,17 +5,45 @@ export {
   NotificationsSettingsV1Schema,
   DEFAULT_ACTIONS_SETTINGS_V1,
   DEFAULT_NOTIFICATIONS_SETTINGS_V1,
+  DEFAULT_SESSION_PROVIDER_USAGE_SETTINGS_V1,
+  DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1,
   accountSettingsParse,
   getNotificationsSettingsV1FromAccountSettings,
+  SessionProviderUsageSettingsV1Schema,
+  UsageLimitRecoverySettingsV1Schema,
   type AccountSettings,
   type ForegroundBehavior,
   type NotificationsSettingsV1,
+  type SessionProviderUsageSettingsV1,
+  type UsageLimitRecoverySettingsV1,
 } from './accountSettings.js';
+
+export {
+  ConnectedServicesDefaultAuthByAgentIdV1Schema,
+  ConnectedServicesProviderConfigSharingModeV1Schema,
+  ConnectedServicesProviderStateSharingModeV1Schema,
+  ConnectedServicesProviderStateSharingPolicyV1Schema,
+  ConnectedServicesProviderStateSharingSettingsV1Schema,
+  DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
+  DEFAULT_CONNECTED_SERVICES_PROVIDER_STATE_SHARING_SETTINGS_V1,
+  resolveConnectedServicesProviderStateSharingPolicyV1,
+  type ConnectedServicesDefaultAuthBindingByAgentIdV1,
+  type ConnectedServicesDefaultAuthByAgentIdV1,
+  type ConnectedServicesProviderConfigSharingModeV1,
+  type ConnectedServicesProviderStateSharingModeV1,
+  type ConnectedServicesProviderStateSharingPolicyV1,
+  type ConnectedServicesProviderStateSharingSettingsV1,
+} from './connectedServicesSettings.js';
 
 export {
   AccountSettingsStoredContentEnvelopeSchema,
   type AccountSettingsStoredContentEnvelope,
 } from './accountSettingsStoredContentEnvelope.js';
+
+export {
+  AccountSettingsPersistedObjectSchema,
+  type AccountSettingsPersistedObject,
+} from './accountSettingsPersistedObject.js';
 
 export {
   AccountSettingsV2GetResponseSchema,

@@ -26,6 +26,7 @@ type CodexAgentRuntimeDescriptorProvider = Readonly<{
   home?: 'user' | 'connectedService';
   connectedServiceId?: string;
   connectedServiceProfileId?: string;
+  connectedServiceGroupId?: string;
   providerExtra?: Readonly<AgentRuntimeDescriptorProviderExtraV1 & {
     runtimeAffinity?: Readonly<{
       backendMode?: CodexBackendMode;
@@ -34,9 +35,10 @@ type CodexAgentRuntimeDescriptorProvider = Readonly<{
       home?: 'user' | 'connectedService';
       connectedServiceId?: string;
       connectedServiceProfileId?: string;
+      connectedServiceGroupId?: string;
     }>;
   }>;
-}>; 
+}>;
 
 type OpenCodeAgentRuntimeDescriptorProvider = Readonly<{
   backendMode: 'server' | 'acp';
@@ -54,8 +56,9 @@ type OpenCodeAgentRuntimeDescriptorProvider = Readonly<{
 }>;
 
 type PiAgentRuntimeDescriptorProvider = Readonly<{
-  resumeStrategy: 'sessionFileBySessionId';
+  resumeStrategy: 'sessionFileBySessionId' | 'sessionFileAbsolutePreferred';
   vendorSessionId?: string;
+  sessionFile?: string;
 }>;
 
 export type CodexAgentRuntimeDescriptorV1 = AgentRuntimeDescriptorEnvelopeV1<'codex', CodexAgentRuntimeDescriptorProvider>;
@@ -71,6 +74,7 @@ type CanonicalAgentRuntimeDescriptorByProviderId = {
     home: 'user' | 'connectedService' | null;
     connectedServiceId: string | null;
     connectedServiceProfileId: string | null;
+    connectedServiceGroupId: string | null;
     homePath: string | null;
   }>;
   opencode: Readonly<{
@@ -82,8 +86,9 @@ type CanonicalAgentRuntimeDescriptorByProviderId = {
   }>;
   pi: Readonly<{
     providerId: 'pi';
-    resumeStrategy: 'sessionFileBySessionId' | null;
+    resumeStrategy: 'sessionFileBySessionId' | 'sessionFileAbsolutePreferred' | null;
     vendorSessionId: string | null;
+    sessionFile: string | null;
   }>;
 };
 
@@ -106,6 +111,14 @@ function normalizeOpenCodeServerBaseUrlExplicit(value: unknown): boolean {
   return value === true;
 }
 
+function normalizePiResumeStrategy(
+  value: unknown,
+): CanonicalAgentRuntimeDescriptorByProviderId['pi']['resumeStrategy'] {
+  return value === 'sessionFileBySessionId' || value === 'sessionFileAbsolutePreferred'
+    ? value
+    : null;
+}
+
 function readCanonicalCodexProviderExtra(value: unknown) {
   const extra = asRecord(value);
   if (!extra || extra.v !== 1) return null;
@@ -121,6 +134,9 @@ function readCanonicalCodexProviderExtra(value: unknown) {
     connectedServiceId: home === 'connectedService' ? normalizeTrimmedString(runtimeAffinity.connectedServiceId) : null,
     connectedServiceProfileId: home === 'connectedService'
       ? normalizeTrimmedString(runtimeAffinity.connectedServiceProfileId)
+      : null,
+    connectedServiceGroupId: home === 'connectedService'
+      ? normalizeTrimmedString(runtimeAffinity.connectedServiceGroupId)
       : null,
     homePath: normalizeTrimmedString(runtimeAffinity.homePath),
   };
@@ -171,6 +187,7 @@ function buildCodexRuntimeAffinityProviderExtra(params: Readonly<{
   home?: 'user' | 'connectedService' | null;
   connectedServiceId?: string | null;
   connectedServiceProfileId?: string | null;
+  connectedServiceGroupId?: string | null;
   homePath?: string | null;
 }>): NonNullable<CodexAgentRuntimeDescriptorProvider['providerExtra']> {
   return {
@@ -188,6 +205,9 @@ function buildCodexRuntimeAffinityProviderExtra(params: Readonly<{
       ...(params.home === 'connectedService' && params.connectedServiceProfileId
         ? { connectedServiceProfileId: params.connectedServiceProfileId }
         : {}),
+      ...(params.home === 'connectedService' && params.connectedServiceGroupId
+        ? { connectedServiceGroupId: params.connectedServiceGroupId }
+        : {}),
     },
   };
 }
@@ -198,6 +218,7 @@ export function buildCodexAgentRuntimeDescriptorV1(params: Readonly<{
   home?: 'user' | 'connectedService' | null;
   connectedServiceId?: string | null;
   connectedServiceProfileId?: string | null;
+  connectedServiceGroupId?: string | null;
   homePath?: string | null;
 }>): CodexAgentRuntimeDescriptorV1 {
   return {
@@ -213,6 +234,9 @@ export function buildCodexAgentRuntimeDescriptorV1(params: Readonly<{
         : {}),
       ...(params.home === 'connectedService' && params.connectedServiceProfileId
         ? { connectedServiceProfileId: params.connectedServiceProfileId }
+        : {}),
+      ...(params.home === 'connectedService' && params.connectedServiceGroupId
+        ? { connectedServiceGroupId: params.connectedServiceGroupId }
         : {}),
       providerExtra: buildCodexRuntimeAffinityProviderExtra(params),
     },
@@ -251,8 +275,9 @@ export function buildOpenCodeAgentRuntimeDescriptorV1(params: Readonly<{
 }
 
 export function buildPiAgentRuntimeDescriptorV1(params: Readonly<{
-  resumeStrategy: 'sessionFileBySessionId';
+  resumeStrategy: 'sessionFileBySessionId' | 'sessionFileAbsolutePreferred';
   vendorSessionId?: string | null;
+  sessionFile?: string | null;
 }>): PiAgentRuntimeDescriptorV1 {
   return {
     v: 1,
@@ -260,6 +285,7 @@ export function buildPiAgentRuntimeDescriptorV1(params: Readonly<{
     provider: {
       resumeStrategy: params.resumeStrategy,
       ...(params.vendorSessionId ? { vendorSessionId: params.vendorSessionId } : {}),
+      ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
     },
   };
 }
@@ -315,6 +341,8 @@ export function readCanonicalAgentRuntimeDescriptorV1ForProvider(
           ?? (home === 'connectedService' ? normalizeTrimmedString(descriptor.provider.connectedServiceId) : null),
         connectedServiceProfileId: providerExtra?.connectedServiceProfileId
           ?? (home === 'connectedService' ? normalizeTrimmedString(descriptor.provider.connectedServiceProfileId) : null),
+        connectedServiceGroupId: providerExtra?.connectedServiceGroupId
+          ?? (home === 'connectedService' ? normalizeTrimmedString(descriptor.provider.connectedServiceGroupId) : null),
         homePath: providerExtra?.homePath ?? normalizeTrimmedString(descriptor.provider.homePath),
       };
     }
@@ -335,10 +363,9 @@ export function readCanonicalAgentRuntimeDescriptorV1ForProvider(
       if (!descriptor) return null;
       return {
         providerId: 'pi' as const,
-        resumeStrategy: descriptor.provider.resumeStrategy === 'sessionFileBySessionId'
-          ? 'sessionFileBySessionId'
-          : null,
+        resumeStrategy: normalizePiResumeStrategy(descriptor.provider.resumeStrategy),
         vendorSessionId: normalizeTrimmedString(descriptor.provider.vendorSessionId),
+        sessionFile: normalizeTrimmedString(descriptor.provider.sessionFile),
       };
     }
   }

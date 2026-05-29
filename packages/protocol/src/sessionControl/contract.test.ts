@@ -93,6 +93,308 @@ describe('sessionControl contract exports', () => {
     expect(summaryParsed.success).toBe(true);
   });
 
+  it('exports and validates session turn schemas', () => {
+    expect(typeof (protocol as any).SessionTurnMutationV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).SessionTurnsProjectionV1Schema?.safeParse).toBe('function');
+
+    const mutation = {
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_1',
+      action: 'complete',
+      turnId: 'turn_1',
+      provider: 'codex',
+      providerTurnId: 'provider_turn_1',
+      observedAt: 123,
+    };
+
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse(mutation).success).toBe(true);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_begin_1',
+      action: 'begin',
+      turnId: 'turn_2',
+      provider: 'codex',
+      providerTurnId: 'provider_turn_2',
+      observedAt: 124,
+      transcriptAnchors: {
+        startUserMessageSeq: 42,
+        userMessageSeqs: [42],
+        startSeqInclusive: 41,
+        endSeqInclusive: null,
+      },
+    }).success).toBe(true);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...mutation,
+      source: 'session_turn_lifecycle',
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnsProjectionV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      latestTurnId: 'turn_1',
+      updatedAt: 123,
+      turns: [{
+        turnId: 'turn_1',
+        provider: 'codex',
+        providerTurnId: 'provider_turn_1',
+        status: 'completed',
+        startedAt: 100,
+        updatedAt: 123,
+        terminalAt: 123,
+        rollback: {
+          state: 'eligible',
+          updatedAt: 123,
+        },
+      }],
+    }).success).toBe(true);
+
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...mutation,
+      providerTurnId: null,
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...mutation,
+      observedAt: Number.POSITIVE_INFINITY,
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...mutation,
+      mutationId: '',
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...mutation,
+      action: 'append_transcript_anchors',
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnLedgerMutationV1Schema).toBeUndefined();
+  });
+
+  it('enforces session turn indexed id bounds', () => {
+    const maxIndexedId = 'x'.repeat(191);
+    const oversizedIndexedId = 'x'.repeat(192);
+    const baseMutation = {
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_1',
+      action: 'attach_provider_turn_id',
+      turnId: 'turn_1',
+      providerTurnId: 'provider_turn_1',
+      observedAt: 123,
+    };
+
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...baseMutation,
+      sessionId: maxIndexedId,
+      mutationId: maxIndexedId,
+      turnId: maxIndexedId,
+      providerTurnId: maxIndexedId,
+    }).success).toBe(true);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...baseMutation,
+      mutationId: oversizedIndexedId,
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...baseMutation,
+      turnId: oversizedIndexedId,
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...baseMutation,
+      sessionId: oversizedIndexedId,
+    }).success).toBe(false);
+    expect((protocol as any).SessionTurnMutationV1Schema.safeParse({
+      ...baseMutation,
+      providerTurnId: oversizedIndexedId,
+    }).success).toBe(false);
+  });
+
+  it('bounds session turn cancel reasons', () => {
+    const parsed = (protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_1',
+      action: 'cancel',
+      turnId: 'turn_1',
+      reason: 'x'.repeat(257),
+      observedAt: 123,
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('passes through additive transcript anchor fields', () => {
+    const parsed = (protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_1',
+      action: 'append_transcript_anchors',
+      turnId: 'turn_1',
+      transcriptAnchors: {
+        startUserMessageSeq: 1,
+        providerContinuationToken: 'anchor-v2',
+      },
+      observedAt: 123,
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.transcriptAnchors.providerContinuationToken).toBe('anchor-v2');
+  });
+
+  it('bounds runtime issue preview text accepted by session turn payloads', () => {
+    const oversizedPreview = 'x'.repeat(2_001);
+    const parsed = (protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_1',
+      action: 'fail',
+      turnId: 'turn_1',
+      issue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'provider_error',
+        source: 'provider_session_error',
+        occurredAt: 123,
+        sanitizedPreview: oversizedPreview,
+      },
+      observedAt: 123,
+    });
+
+    expect(parsed.success).toBe(false);
+
+    const legacyParsed = (protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_2',
+      source: 'session_turn_lifecycle',
+      action: 'fail',
+      turnId: 'turn_1',
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'provider_error',
+        source: 'provider_session_error',
+        occurredAt: 123,
+      },
+      observedAt: 123,
+    });
+    expect(legacyParsed.success).toBe(false);
+
+    const legacyRollbackParsed = (protocol as any).SessionTurnMutationV1Schema.safeParse({
+      v: 1,
+      sessionId: 'sess_123',
+      mutationId: 'mutation_3',
+      source: 'session_turn_lifecycle',
+      action: 'mark_rollback_eligible',
+      turnId: 'turn_1',
+      rollback: {
+        state: 'eligible',
+        reason: 'provider checkpoint',
+        providerRollbackOrdinal: 1,
+      },
+      observedAt: 123,
+    });
+    expect(legacyRollbackParsed.success).toBe(false);
+  });
+
+  it('validates structured usage-limit runtime issue details without changing the coarse source', () => {
+    const runtimeIssue = {
+      v: 1,
+      scope: 'primary_session',
+      status: 'failed',
+      code: 'usage_limit_reached',
+      source: 'usage_limit',
+      occurredAt: 123,
+      provider: 'codex',
+      usageLimit: {
+        v: 1,
+        resetAtMs: 456,
+        retryAfterMs: 300_000,
+        quotaScope: 'account',
+        recoverability: 'switch_account',
+        providerLimitId: 'primary',
+        planType: 'pro',
+        utilization: 100,
+        overage: {
+          status: 'rejected',
+          resetAtMs: 456,
+          disabledReason: null,
+        },
+        action: {
+          kind: 'open_url',
+          labelKey: 'provider_usage_settings',
+          url: 'https://chatgpt.com/codex/settings/usage',
+        },
+        connectedService: {
+          serviceId: 'openai-codex',
+          profileId: 'work',
+          groupId: 'codex-main',
+          groupExhausted: true,
+        },
+      },
+    };
+
+    const parsed = (protocol as any).SessionRuntimeIssueV1Schema.safeParse(runtimeIssue);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.source).toBe('usage_limit');
+    expect(parsed.data.usageLimit.connectedService.groupId).toBe('codex-main');
+
+    const malformedParsed = (protocol as any).SessionRuntimeIssueV1Schema.safeParse({
+      ...runtimeIssue,
+      usageLimit: {
+        ...runtimeIssue.usageLimit,
+        quotaScope: 'profile',
+      },
+    });
+    expect(malformedParsed.success).toBe(false);
+  });
+
+  it('exports and validates the metadata-backed usage-limit recovery intent schema', () => {
+    expect((protocol as any).SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID).toBe('runtime.usageLimitRecovery');
+    expect((protocol as any).SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY).toBe('sessionUsageLimitRecoveryV1');
+    expect(typeof (protocol as any).SessionUsageLimitRecoveryV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).SessionUsageLimitWaitResumeEnableRequestV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).SessionUsageLimitWaitResumeCancelRequestV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).SessionUsageLimitCheckNowRequestV1Schema?.safeParse).toBe('function');
+    expect(typeof (protocol as any).SessionUsageLimitOperationResponseV1Schema?.safeParse).toBe('function');
+
+    const intent = {
+      v: 1,
+      status: 'waiting',
+      issueFingerprint: 'usage-limit:s1:123',
+      armedAtMs: 100,
+      resetAtMs: 1_000,
+      nextCheckAtMs: 1_050,
+      attemptCount: 1,
+      maxAttempts: 5,
+      lastProbeError: null,
+      selectedAuth: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'codex-main',
+        profileId: 'work',
+      },
+    };
+
+    expect((protocol as any).SessionUsageLimitRecoveryV1Schema.safeParse(intent).success).toBe(true);
+    expect((protocol as any).SessionMetadataSchema.safeParse({
+      sessionUsageLimitRecoveryV1: intent,
+    }).success).toBe(true);
+    expect((protocol as any).SessionUsageLimitRecoveryV1Schema.safeParse({
+      ...intent,
+      attemptCount: -1,
+    }).success).toBe(false);
+    expect((protocol as any).SessionUsageLimitWaitResumeEnableRequestV1Schema.safeParse({
+      sessionId: 's1',
+      issueFingerprint: 'usage-limit:s1:123',
+      remember: true,
+    }).success).toBe(true);
+    expect((protocol as any).SessionUsageLimitOperationResponseV1Schema.safeParse({
+      ok: false,
+      error: 'invalid_parameters',
+      errorCode: 'invalid_parameters',
+    }).success).toBe(true);
+  });
+
   it('validates primary turn status and sanitized runtime issue fields on v2 session records', () => {
     const runtimeIssue = {
       v: 1,
@@ -110,6 +412,31 @@ describe('sessionControl contract exports', () => {
       seq: 7,
       createdAt: 1,
       updatedAt: 2,
+      meaningfulActivityAt: 3,
+      active: false,
+      activeAt: 0,
+      metadata: '{}',
+      metadataVersion: 1,
+      agentState: null,
+      agentStateVersion: 1,
+      dataEncryptionKey: null,
+      pendingRequestObservedAt: 789,
+      latestReadyEventSeq: 8,
+      latestReadyEventAt: 987,
+      thinking: true,
+      thinkingAt: 654,
+      latestTurnStatus: 'failed',
+      latestTurnStatusObservedAt: 456,
+      lastRuntimeIssue: runtimeIssue,
+    });
+
+    expect(parsed.success).toBe(true);
+
+    const invalidTurnStatusObservedAtParsed = (protocol as any).V2SessionRecordSchema.safeParse({
+      id: 'sess_123',
+      seq: 7,
+      createdAt: 1,
+      updatedAt: 2,
       active: false,
       activeAt: 0,
       metadata: '{}',
@@ -118,10 +445,42 @@ describe('sessionControl contract exports', () => {
       agentStateVersion: 1,
       dataEncryptionKey: null,
       latestTurnStatus: 'failed',
-      lastRuntimeIssue: runtimeIssue,
+      latestTurnStatusObservedAt: -1,
     });
+    expect(invalidTurnStatusObservedAtParsed.success).toBe(false);
 
-    expect(parsed.success).toBe(true);
+    const invalidAttentionProjectionParsed = (protocol as any).V2SessionRecordSchema.safeParse({
+      id: 'sess_123',
+      seq: 7,
+      createdAt: 1,
+      updatedAt: 2,
+      active: true,
+      activeAt: 2,
+      metadata: '{}',
+      metadataVersion: 1,
+      agentState: null,
+      agentStateVersion: 1,
+      dataEncryptionKey: null,
+      thinking: true,
+      thinkingAt: -1,
+    });
+    expect(invalidAttentionProjectionParsed.success).toBe(false);
+
+    const invalidActivityParsed = (protocol as any).V2SessionRecordSchema.safeParse({
+      id: 'sess_123',
+      seq: 7,
+      createdAt: 1,
+      updatedAt: 2,
+      meaningfulActivityAt: -1,
+      active: false,
+      activeAt: 0,
+      metadata: '{}',
+      metadataVersion: 1,
+      agentState: null,
+      agentStateVersion: 1,
+      dataEncryptionKey: null,
+    });
+    expect(invalidActivityParsed.success).toBe(false);
   });
 
   it('validates a session_wait envelope shape', () => {
@@ -318,10 +677,16 @@ describe('sessionControl contract exports', () => {
   it('encodes and decodes v2 session list cursors', () => {
     const encode = (protocol as any).encodeV2SessionListCursorV1;
     const decode = (protocol as any).decodeV2SessionListCursorV1;
+    const encodeV2 = (protocol as any).encodeV2SessionListCursorV2;
+    const decodeV2 = (protocol as any).decodeV2SessionListCursorV2;
 
     expect(encode('sess_123')).toBe('cursor_v1_sess_123');
     expect(decode('cursor_v1_sess_123')).toBe('sess_123');
     expect(decode('cursor_v1_')).toBe(null);
     expect(decode('nope')).toBe(null);
+
+    const v2Cursor = encodeV2({ sessionId: 'sess_123', meaningfulActivityAt: 12345 });
+    expect(decodeV2(v2Cursor)).toEqual({ sessionId: 'sess_123', meaningfulActivityAt: 12345 });
+    expect(decodeV2('cursor_v2_bad-json')).toBe(null);
   });
 });

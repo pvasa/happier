@@ -65,6 +65,7 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
     activeAt: TimestampMsSchema,
     createdAt: TimestampMsSchema,
     updatedAt: TimestampMsSchema,
+    meaningfulActivityAt: TimestampMsSchema.optional(),
   }).passthrough(),
   z.object({
     t: z.literal('update-session'),
@@ -74,8 +75,14 @@ export const UpdateBodySchema = z.discriminatedUnion('t', [
     lastViewedSessionSeq: z.number().int().min(0).optional(),
     pendingPermissionRequestCount: z.number().int().min(0).optional(),
     pendingUserActionRequestCount: z.number().int().min(0).optional(),
+    pendingRequestObservedAt: TimestampMsSchema.nullable().optional(),
+    latestReadyEventSeq: z.number().int().min(0).nullable().optional(),
+    latestReadyEventAt: TimestampMsSchema.nullable().optional(),
+    latestTurnId: z.string().min(1).nullable().optional(),
     latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),
+    latestTurnStatusObservedAt: TimestampMsSchema.nullable().optional(),
     lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable().optional(),
+    meaningfulActivityAt: TimestampMsSchema.optional(),
     archivedAt: TimestampMsSchema.nullable().optional(),
   }).passthrough(),
   z.object({

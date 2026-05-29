@@ -108,6 +108,15 @@ describe('protocol package root exports', () => {
         expect(typeof (protocol as any).TransferChunkEnvelopeSchema?.safeParse).toBe('function');
     });
 
+    it('exports final session turn schemas', () => {
+        expect(typeof (protocol as any).SessionTurnV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).SessionTurnMutationV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).SessionTurnsProjectionV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).SessionTurnMutationReceiptV1Schema?.safeParse).toBe('function');
+        expect((protocol as any).SessionTurnLedgerV1Schema).toBeUndefined();
+        expect((protocol as any).SessionTurnLedgerMutationV1Schema).toBeUndefined();
+    });
+
     it('exports session folder schemas', () => {
         expect(typeof (protocol as any).SessionFoldersV1Schema?.safeParse).toBe('function');
         expect(typeof (protocol as any).SessionFolderWorkspaceRefV1Schema?.safeParse).toBe('function');
@@ -130,8 +139,15 @@ describe('protocol package root exports', () => {
         expect((protocol as any).WorkspaceReplicationCoordinatorDiagnosticReasonSchema).toBeUndefined();
     });
 
-    it('exports connected service profile id schema', () => {
+    it('exports connected service account group request policy schemas', () => {
         expect(protocol.ConnectedServiceProfileIdSchema.parse('work')).toBe('work');
+        expect(protocol.ConnectedServiceAuthGroupPolicyPatchV1Schema.parse({
+            autoSwitch: true,
+            switchOn: { usageLimit: false },
+        })).toEqual({
+            autoSwitch: true,
+            switchOn: { usageLimit: false },
+        });
     });
 
     it('exports account encryption migrate schemas', () => {
@@ -182,5 +198,11 @@ describe('protocol package root exports', () => {
         expect(typeof (protocol as any).normalizeOpenCodeSessionTodosToWorkStateItems).toBe('function');
         expect(typeof (protocol as any).normalizeClaudeTaskEventToWorkStateItem).toBe('function');
         expect(typeof (protocol as any).SessionWorkStateGetResponseV1Schema?.safeParse).toBe('function');
+    });
+
+    it('exports connected-service settings schemas without the undeployed Codex-specific setting', () => {
+        expect(typeof (protocol as any).ConnectedServicesDefaultAuthByAgentIdV1Schema?.safeParse).toBe('function');
+        expect(typeof (protocol as any).ConnectedServicesProviderStateSharingSettingsV1Schema?.safeParse).toBe('function');
+        expect((protocol as Record<string, unknown>).ConnectedServicesCodexHomeSharingSettingsV1Schema).toBeUndefined();
     });
 });

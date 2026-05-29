@@ -63,6 +63,7 @@ describe('sessionAuthoring field artifacts', () => {
           },
         },
       },
+      connectedServicesUpdatedAt: 125,
       terminal: {
         mode: 'tmux',
         tmux: {

@@ -59,9 +59,16 @@ export const FeatureGatesSchema = z.object({
     .object({
       enabled: z.boolean(),
       quotas: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
+      accountGroups: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
+      accountFallback: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
     })
     .optional()
-    .default({ enabled: false, quotas: DEFAULT_GATE_DISABLED }),
+    .default({
+      enabled: false,
+      quotas: DEFAULT_GATE_DISABLED,
+      accountGroups: DEFAULT_GATE_DISABLED,
+      accountFallback: DEFAULT_GATE_DISABLED,
+    }),
   channelBridges: z
     .object({
       enabled: z.boolean(),
@@ -93,6 +100,7 @@ export const FeatureGatesSchema = z.object({
     .object({
       enabled: z.boolean(),
       folders: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
+      usageLimitRecovery: FeatureGateSchema.optional().default(DEFAULT_GATE_DISABLED),
       handoff: z
         .object({
           enabled: z.boolean(),
@@ -101,7 +109,12 @@ export const FeatureGatesSchema = z.object({
         .default({ enabled: false }),
     })
     .optional()
-    .default({ enabled: false, folders: DEFAULT_GATE_DISABLED, handoff: { enabled: false } }),
+    .default({
+      enabled: false,
+      folders: DEFAULT_GATE_DISABLED,
+      usageLimitRecovery: DEFAULT_GATE_DISABLED,
+      handoff: { enabled: false },
+    }),
   machines: z
     .object({
       enabled: z.boolean(),

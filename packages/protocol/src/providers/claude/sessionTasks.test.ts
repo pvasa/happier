@@ -61,7 +61,7 @@ describe('Claude task and todo wire schemas', () => {
         });
 
         expect(item).toMatchObject({
-            id: 'task:tool_use:toolu_create_1',
+            id: 'task:derived:claude.task:tool_use%3Atoolu_create_1',
             kind: 'task',
             origin: 'vendor',
             status: 'pending',
@@ -85,7 +85,7 @@ describe('Claude task and todo wire schemas', () => {
         });
 
         expect(item).toMatchObject({
-            id: 'task:task_123',
+            id: 'task:derived:claude.task:task_123',
             kind: 'task',
             origin: 'vendor',
             status: 'active',

@@ -14,6 +14,7 @@ const DirectSessionsCodexHomeSourceSchema = z
     homePath: z.string().min(1).optional(),
     connectedServiceId: z.string().min(1).optional(),
     connectedServiceProfileId: z.string().min(1).optional(),
+    connectedServiceGroupId: z.string().min(1).optional(),
   })
   .passthrough()
   .superRefine((value, ctx) => {
@@ -28,6 +29,9 @@ const DirectSessionsCodexHomeSourceSchema = z
     }
     if (value.connectedServiceProfileId) {
       ctx.addIssue({ code: 'custom', message: 'connectedServiceProfileId is not allowed when home=user', path: ['connectedServiceProfileId'] });
+    }
+    if (value.connectedServiceGroupId) {
+      ctx.addIssue({ code: 'custom', message: 'connectedServiceGroupId is not allowed when home=user', path: ['connectedServiceGroupId'] });
     }
   });
 
@@ -54,6 +58,9 @@ export const DirectSessionsSourceSchema = z.discriminatedUnion('kind', [
 ]);
 export type DirectSessionsSource = z.infer<typeof DirectSessionsSourceSchema>;
 
+export const DirectSessionsSearchModeSchema = z.enum(['fast', 'full']);
+export type DirectSessionsSearchMode = z.infer<typeof DirectSessionsSearchModeSchema>;
+
 export const DirectSessionsCandidatesListRequestSchema = z
   .object({
     machineId: z.string().min(1),
@@ -62,6 +69,7 @@ export const DirectSessionsCandidatesListRequestSchema = z
     cursor: z.string().min(1).optional(),
     limit: z.number().int().min(1).max(500).optional(),
     searchTerm: z.string().min(1).max(2000).optional(),
+    searchMode: DirectSessionsSearchModeSchema.optional(),
   })
   .passthrough();
 export type DirectSessionsCandidatesListRequest = z.infer<typeof DirectSessionsCandidatesListRequestSchema>;
@@ -72,6 +80,7 @@ export const DirectSessionsCandidatesListResponseSchema = z.union([
       ok: z.literal(true),
       candidates: z.array(z.lazy(() => DirectSessionCandidateV1Schema)),
       nextCursor: z.string().min(1).nullish(),
+      searchIncomplete: z.boolean().optional(),
     })
     .passthrough(),
   z

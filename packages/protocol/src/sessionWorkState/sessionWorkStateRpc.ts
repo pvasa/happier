@@ -46,6 +46,66 @@ export type SessionInitialGoalRequestV1 = z.infer<typeof SessionInitialGoalReque
 export const SessionGoalClearRequestV1Schema = z.object({}).passthrough();
 export type SessionGoalClearRequestV1 = z.infer<typeof SessionGoalClearRequestV1Schema>;
 
+export const SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema = z.object({}).passthrough();
+export type SessionConnectedServiceAuthInvalidateTransportsRequestV1 =
+  z.infer<typeof SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema>;
+
+const SessionIdRequestFieldSchema = z.string().trim().min(1);
+const IssueFingerprintFieldSchema = z.string().trim().min(1);
+
+export const SessionUsageLimitWaitResumeEnableRequestV1Schema = z
+  .object({
+    sessionId: SessionIdRequestFieldSchema,
+    issueFingerprint: IssueFingerprintFieldSchema.optional(),
+    remember: z.boolean().optional(),
+    rememberPreference: z.boolean().optional(),
+  })
+  .passthrough();
+export type SessionUsageLimitWaitResumeEnableRequestV1 = z.infer<typeof SessionUsageLimitWaitResumeEnableRequestV1Schema>;
+
+export const SessionUsageLimitWaitResumeCancelRequestV1Schema = z
+  .object({
+    sessionId: SessionIdRequestFieldSchema,
+    issueFingerprint: IssueFingerprintFieldSchema.nullable().optional(),
+  })
+  .passthrough();
+export type SessionUsageLimitWaitResumeCancelRequestV1 = z.infer<typeof SessionUsageLimitWaitResumeCancelRequestV1Schema>;
+
+export const SessionUsageLimitCheckNowRequestV1Schema = z
+  .object({
+    sessionId: SessionIdRequestFieldSchema,
+    provider: z.string().trim().min(1).optional(),
+    operation: z.enum(['check_now', 'switch_account_now']).optional(),
+  })
+  .passthrough();
+export type SessionUsageLimitCheckNowRequestV1 = z.infer<typeof SessionUsageLimitCheckNowRequestV1Schema>;
+
+export const SessionUsageLimitOperationResponseV1Schema = z.union([
+  z.object({ ok: z.literal(true) }).passthrough(),
+  z.object({
+    ok: z.literal(false),
+    error: z.string().trim().min(1),
+    errorCode: z.string().trim().min(1).optional(),
+  }).passthrough(),
+]);
+export type SessionUsageLimitOperationResponseV1 = z.infer<typeof SessionUsageLimitOperationResponseV1Schema>;
+
+export const SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema =
+  SessionUsageLimitOperationResponseV1Schema;
+export type SessionConnectedServiceAuthInvalidateTransportsResponseV1 =
+  z.infer<typeof SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema>;
+
+export const SessionUsageLimitWaitResumeEnableResponseV1Schema = SessionUsageLimitOperationResponseV1Schema;
+export type SessionUsageLimitWaitResumeEnableResponseV1 =
+  z.infer<typeof SessionUsageLimitWaitResumeEnableResponseV1Schema>;
+
+export const SessionUsageLimitWaitResumeCancelResponseV1Schema = SessionUsageLimitOperationResponseV1Schema;
+export type SessionUsageLimitWaitResumeCancelResponseV1 =
+  z.infer<typeof SessionUsageLimitWaitResumeCancelResponseV1Schema>;
+
+export const SessionUsageLimitCheckNowResponseV1Schema = SessionUsageLimitOperationResponseV1Schema;
+export type SessionUsageLimitCheckNowResponseV1 = z.infer<typeof SessionUsageLimitCheckNowResponseV1Schema>;
+
 export const DaemonSessionGoalGetRequestV1Schema = z
   .object({
     sessionId: z.string().trim().min(1),
@@ -91,6 +151,13 @@ export const SessionVendorPluginCatalogListRequestV1Schema = z
   .passthrough();
 export type SessionVendorPluginCatalogListRequestV1 = z.infer<typeof SessionVendorPluginCatalogListRequestV1Schema>;
 
+export const DaemonSessionVendorPluginCatalogListRequestV1Schema = SessionVendorPluginCatalogListRequestV1Schema
+  .extend({
+    sessionId: z.string().trim().min(1),
+  })
+  .passthrough();
+export type DaemonSessionVendorPluginCatalogListRequestV1 = z.infer<typeof DaemonSessionVendorPluginCatalogListRequestV1Schema>;
+
 export const SessionVendorPluginCatalogListResponseV1Schema = z
   .object({
     vendorPlugins: z.array(SessionVendorPluginSummaryV1Schema).default([]),
@@ -120,6 +187,9 @@ export type SessionSkillCatalogItemV1 = z.infer<typeof SessionSkillCatalogItemV1
 
 export const SessionSkillCatalogListRequestV1Schema = SessionVendorPluginCatalogListRequestV1Schema;
 export type SessionSkillCatalogListRequestV1 = z.infer<typeof SessionSkillCatalogListRequestV1Schema>;
+
+export const DaemonSessionSkillCatalogListRequestV1Schema = DaemonSessionVendorPluginCatalogListRequestV1Schema;
+export type DaemonSessionSkillCatalogListRequestV1 = z.infer<typeof DaemonSessionSkillCatalogListRequestV1Schema>;
 
 export const SessionSkillCatalogListResponseV1Schema = z
   .object({

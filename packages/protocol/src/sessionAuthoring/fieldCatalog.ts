@@ -307,6 +307,20 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     },
     default: null,
   },
+  connectedServicesUpdatedAt: {
+    schema: z.number().int().nullable(),
+    description: 'Timestamp for the last connected-services binding change authored into the session configuration.',
+    storageClass: 'derived',
+    contexts: [...ALL_AUTHORING_CONTEXTS],
+    defaultSurface: 'hidden',
+    defaultEditabilityByContext: {
+      newSession: 'editable',
+      liveSession: 'editable',
+      automationNewSession: 'editable',
+      automationExistingSession: 'editable',
+    },
+    default: null,
+  },
   terminal: {
     schema: SessionAuthoringTerminalV1Schema.nullable(),
     description: 'Terminal/runtime attach preferences authored for the session.',

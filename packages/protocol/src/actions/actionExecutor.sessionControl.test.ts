@@ -423,6 +423,47 @@ describe('createActionExecutor (session control)', () => {
     expect(sessionSkillCatalogList).toHaveBeenCalledWith({ sessionId: 's1', cwd: '/repo', serverId: 'server-a' });
   });
 
+  it('executes usage-limit recovery actions through protocol deps', async () => {
+    const sessionUsageLimitWaitResumeEnable = vi.fn(async () => ({ ok: true }));
+    const sessionUsageLimitWaitResumeCancel = vi.fn(async () => ({ ok: true }));
+    const sessionUsageLimitCheckNow = vi.fn(async () => ({ ok: true }));
+    const executor = createExecutor({
+      sessionUsageLimitWaitResumeEnable,
+      sessionUsageLimitWaitResumeCancel,
+      sessionUsageLimitCheckNow,
+      resolveServerIdForSessionId: (sessionId) => sessionId === 's1' ? 'server-a' : null,
+    });
+
+    await executor.execute(
+      'session.usageLimit.waitResume.enable' as any,
+      { sessionId: 's1', issueFingerprint: 'usage-limit:s1:reset', remember: true },
+      { surface: 'cli' },
+    );
+    await executor.execute(
+      'session.usageLimit.waitResume.cancel' as any,
+      { sessionId: 's1', issueFingerprint: null },
+      { surface: 'cli' },
+    );
+    await executor.execute('session.usageLimit.checkNow' as any, { sessionId: 's1', provider: ' codex ' }, { surface: 'cli' });
+
+    expect(sessionUsageLimitWaitResumeEnable).toHaveBeenCalledWith({
+      sessionId: 's1',
+      issueFingerprint: 'usage-limit:s1:reset',
+      remember: true,
+      serverId: 'server-a',
+    });
+    expect(sessionUsageLimitWaitResumeCancel).toHaveBeenCalledWith({
+      sessionId: 's1',
+      issueFingerprint: null,
+      serverId: 'server-a',
+    });
+    expect(sessionUsageLimitCheckNow).toHaveBeenCalledWith({
+      sessionId: 's1',
+      provider: 'codex',
+      serverId: 'server-a',
+    });
+  });
+
   it('executes session.spawn_new via deps.sessionSpawnNew (including backendTargetKey/title)', async () => {
     const sessionSpawnNew = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({ sessionSpawnNew });

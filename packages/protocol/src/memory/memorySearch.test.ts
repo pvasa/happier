@@ -23,6 +23,19 @@ describe('memory_search_result.v1 schema', () => {
     expect((parsed as any).hits).toHaveLength(1);
   });
 
+  it('parses an empty success result for a valid searchable index with no hits', () => {
+    const parsed = MemorySearchResultV1Schema.parse({
+      v: 1,
+      ok: true,
+      hits: [],
+    });
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.hits).toEqual([]);
+    }
+  });
+
   it('parses a failure result with stable error codes', () => {
     expect(MemorySearchErrorCodeSchema.parse('memory_disabled')).toBe('memory_disabled');
     const parsed = MemorySearchResultV1Schema.parse({
@@ -48,4 +61,3 @@ describe('MemorySearchQueryV1Schema', () => {
     expect(parsed.query).toBe('openclaw');
   });
 });
-

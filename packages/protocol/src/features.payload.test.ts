@@ -39,6 +39,8 @@ describe('FeaturesResponseSchema', () => {
     expect('existingSessionTarget' in (parsed.features.automations as any)).toBe(false);
     expect(parsed.features.connectedServices.enabled).toBe(false);
     expect(parsed.features.connectedServices.quotas.enabled).toBe(false);
+    expect((parsed as any).features.connectedServices.accountGroups.enabled).toBe(false);
+    expect((parsed as any).features.connectedServices.accountFallback.enabled).toBe(false);
     expect(parsed.features.updates.ota.enabled).toBe(false);
     expect(parsed.features.attachments.uploads.enabled).toBe(false);
     expect(parsed.features.session.media.generated.enabled).toBe(false);
@@ -52,6 +54,7 @@ describe('FeaturesResponseSchema', () => {
     expect((parsed as any).features.machines.transfer.directPeer.enabled).toBe(false);
     expect((parsed as any).features.machines.transfer.serverRouted.enabled).toBe(false);
     expect((parsed as any).features.sessions.folders?.enabled).toBe(false);
+    expect((parsed as any).features.sessions.usageLimitRecovery?.enabled).toBe(false);
     expect(parsed.features.auth.recovery.providerReset.enabled).toBe(false);
     expect((parsed as any).features.auth.mtls.enabled).toBe(false);
     // Backward compatibility: older servers predate this gate but still support `POST /v1/auth`.

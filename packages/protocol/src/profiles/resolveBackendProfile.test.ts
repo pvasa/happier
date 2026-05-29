@@ -48,6 +48,33 @@ describe('profiles (protocol)', () => {
     expect(result.profile.isBuiltIn).toBe(true);
   });
 
+  it('defaults profiles to enabled unless explicitly disabled', () => {
+    const enabledByDefault = AIBackendProfileSchema.parse({
+      id: 'work',
+      name: 'Work',
+      environmentVariables: [],
+      envVarRequirements: [],
+      isBuiltIn: false,
+      createdAt: 0,
+      updatedAt: 0,
+      version: '1.0.0',
+    });
+    const disabledByDefault = AIBackendProfileSchema.parse({
+      id: 'long-tail',
+      name: 'Long Tail',
+      defaultEnabled: false,
+      environmentVariables: [],
+      envVarRequirements: [],
+      isBuiltIn: true,
+      createdAt: 0,
+      updatedAt: 0,
+      version: '1.0.0',
+    });
+
+    expect(enabledByDefault.defaultEnabled).toBe(true);
+    expect(disabledByDefault.defaultEnabled).toBe(false);
+  });
+
   it('resolves custom profiles by id', () => {
     const customProfiles = [
       {
