@@ -267,7 +267,11 @@ export async function claudeLocalLauncher(
         pendingQueueWatcher = startLocalPendingQueueRemoteSwitchWatcher({
             peekPendingCount: () => session.client.peekPendingMessageQueueV2Count(),
             pollIntervalMs: configuration.pendingQueueIdleWakePollIntervalMs,
+            reconcilePendingQueueState: async () => {
+                await session.client.reconcilePendingQueueState?.({ force: false });
+            },
             requestRemoteSwitch: () => remoteSwitchController.requestRemoteSwitch('server_pending_queue'),
+            waitForPendingQueueUpdate: (signal) => session.client.waitForMetadataUpdate(signal),
         });
 
         // Handle session start

@@ -20,6 +20,9 @@ import { resolveWindowsCommandInvocation, type CommandInvocation } from '@happie
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
 import { HAPPIER_BASE_SYSTEM_PROMPT_V1 } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
+import { isolateClaudeRuntimeAuthEnv } from './spawn/isolateClaudeRuntimeAuthEnv';
+import { logClaudeRuntimeAuthEnvDiagnostic } from './spawn/logClaudeRuntimeAuthEnvDiagnostic';
+import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 
 /**
  * Error thrown when the Claude process exits with a non-zero exit code.
@@ -37,6 +40,9 @@ export class ExitCodeError extends Error {
 
 // Get Claude CLI path from project root
 export const claudeCliPath = resolveCliRuntimeAssetPath('scripts', 'claude_local_launcher.cjs');
+
+const CLAUDE_LOCAL_FETCH_IDLE_CLEAR_DELAY_MS = 500;
+const CLAUDE_LOCAL_UNKNOWN_FETCH_ID = '__happier_unknown_claude_fetch__';
 
 export async function claudeLocal(opts: {
     abort: AbortSignal,
@@ -193,7 +199,6 @@ export async function claudeLocal(opts: {
 
     // Thinking state
     let thinking = false;
-    let stopThinkingTimeout: NodeJS.Timeout | null = null;
     const updateThinking = (newThinking: boolean) => {
         if (thinking !== newThinking) {
             thinking = newThinking;
@@ -202,6 +207,29 @@ export async function claudeLocal(opts: {
                 opts.onThinkingChange(thinking);
             }
         }
+    };
+    let stopThinkingTimeout: ReturnType<typeof setTimeout> | null = null;
+    const activeFetchIds = new Set<string>();
+    const clearStopThinkingTimeout = () => {
+        if (!stopThinkingTimeout) return;
+        clearTimeout(stopThinkingTimeout);
+        stopThinkingTimeout = null;
+    };
+    const readFetchId = (message: { id?: unknown }): string => {
+        const id = message.id;
+        if (typeof id === 'string' && id.length > 0) return id;
+        if (typeof id === 'number' && Number.isFinite(id)) return String(id);
+        return CLAUDE_LOCAL_UNKNOWN_FETCH_ID;
+    };
+    const scheduleThinkingClearIfIdle = () => {
+        if (activeFetchIds.size > 0 || !thinking || stopThinkingTimeout) return;
+        stopThinkingTimeout = setTimeout(() => {
+            stopThinkingTimeout = null;
+            if (activeFetchIds.size === 0) {
+                updateThinking(false);
+            }
+        }, CLAUDE_LOCAL_FETCH_IDLE_CLEAR_DELAY_MS);
+        stopThinkingTimeout.unref?.();
     };
 
     // Spawn the process
@@ -359,9 +387,17 @@ export async function claudeLocal(opts: {
                 ...resolveClaudeConfigDirEnvOverlay(process.env),
                 ...(opts.envOverlay ?? {}),
             })
+            isolateClaudeRuntimeAuthEnv(env);
             // Internal daemon→CLI marker used for strict env filtering in Agent SDK remote mode.
             // Never forward it into the Claude Code subprocess environment.
-            delete env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
+            delete env[HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR];
+            logClaudeRuntimeAuthEnvDiagnostic({
+                logPrefix: 'ClaudeLocal',
+                sessionId: opts.sessionId,
+                startFrom,
+                runnerEnv: process.env,
+                childEnv: env,
+            });
 
             if (shouldUseNodeLauncher) {
                 if (!claudeCliPath || (!existsSync(claudeCliPath) && !isEmbeddedBunBundlePath(claudeCliPath))) {
@@ -482,43 +518,20 @@ export async function claudeLocal(opts: {
                     crlfDelay: Infinity
                 });
 
-                // Track active fetches for thinking state
-                const activeFetches = new Map<number, { hostname: string, path: string, startTime: number }>();
-
                 rl.on('line', (line) => {
                     try {
                         const message = JSON.parse(line);
 
                         switch (message.type) {
                             case 'fetch-start':
-                                activeFetches.set(message.id, {
-                                    hostname: message.hostname,
-                                    path: message.path,
-                                    startTime: message.timestamp
-                                });
-
-                                // Clear any pending stop timeout
-                                if (stopThinkingTimeout) {
-                                    clearTimeout(stopThinkingTimeout);
-                                    stopThinkingTimeout = null;
-                                }
-
-                                // Start thinking
+                                clearStopThinkingTimeout();
+                                activeFetchIds.add(readFetchId(message));
                                 updateThinking(true);
                                 break;
 
                             case 'fetch-end':
-                                activeFetches.delete(message.id);
-
-                                // Stop thinking when no active fetches
-                                if (activeFetches.size === 0 && thinking && !stopThinkingTimeout) {
-                                    stopThinkingTimeout = setTimeout(() => {
-                                        if (activeFetches.size === 0) {
-                                            updateThinking(false);
-                                        }
-                                        stopThinkingTimeout = null;
-                                    }, 500); // Small delay to avoid flickering
-                                }
+                                activeFetchIds.delete(readFetchId(message));
+                                scheduleThinkingClearIfIdle();
                                 break;
 
                             default:
@@ -536,9 +549,8 @@ export async function claudeLocal(opts: {
 
                 // Cleanup on child exit
                 child.on('exit', () => {
-                    if (stopThinkingTimeout) {
-                        clearTimeout(stopThinkingTimeout);
-                    }
+                    clearStopThinkingTimeout();
+                    activeFetchIds.clear();
                     updateThinking(false);
                 });
             }
@@ -573,10 +585,8 @@ export async function claudeLocal(opts: {
         });
     } finally {
         process.stdin.resume();
-        if (stopThinkingTimeout) {
-            clearTimeout(stopThinkingTimeout);
-            stopThinkingTimeout = null;
-        }
+        clearStopThinkingTimeout();
+        activeFetchIds.clear();
         updateThinking(false);
     }
 

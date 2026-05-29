@@ -42,4 +42,29 @@ describe('exchangeClaudeSubscriptionAuthorizationCodeForTokens', () => {
       state: 'state',
     });
   });
+
+  it('redacts token exchange failure response bodies while preserving status and provider code', async () => {
+    const fetcher: typeof fetch = async () => new Response(JSON.stringify({
+      error: 'invalid_grant',
+      error_description: 'refresh token claude-secret-refresh was rejected',
+      access_token: 'claude-secret-access',
+      refresh_token: 'claude-secret-refresh',
+    }), { status: 400, statusText: 'Bad Request', headers: { 'Content-Type': 'application/json' } });
+
+    let caught: unknown = null;
+    try {
+      await exchangeClaudeSubscriptionAuthorizationCodeForTokens({
+        code: 'code',
+        verifier: 'verifier',
+        redirectUri: 'http://localhost:54545/oauth2callback',
+        state: 'state',
+        fetcher,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(String(caught)).toContain('Token exchange failed (400): invalid_grant');
+    expect(String(caught)).not.toMatch(/claude-secret-refresh|claude-secret-access|error_description/);
+  });
 });

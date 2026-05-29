@@ -32,6 +32,9 @@ import { stripNestedSessionDetectionEnv } from '@/utils/processEnv/stripNestedSe
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process'
 import { resolveExistingManagedJavaScriptRuntimeCommand } from '@happier-dev/cli-common/providers'
 import { killProcessTree } from '@/agent/acp/killProcessTree'
+import { isolateClaudeRuntimeAuthEnv } from '@/backends/claude/spawn/isolateClaudeRuntimeAuthEnv'
+import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic'
+import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker'
 
 /**
  * Query class manages Claude Code process interaction
@@ -389,9 +392,17 @@ export function query(config: {
     // Use clean env for global claude to avoid local node_modules/.bin taking precedence
     const baseEnv = isCommandOnly ? getCleanEnv() : process.env
     const spawnEnv: NodeJS.ProcessEnv = stripNestedSessionDetectionEnv({ ...baseEnv, ...envOverlay })
+    isolateClaudeRuntimeAuthEnv(spawnEnv)
     // Internal daemon→CLI marker used for strict env filtering in Agent SDK remote mode.
     // Never forward it into the Claude Code subprocess environment.
-    delete spawnEnv.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
+    delete spawnEnv[HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR];
+    logClaudeRuntimeAuthEnvDiagnostic({
+        logPrefix: 'claudeSdkQuery',
+        sessionId: null,
+        startFrom: resume ?? null,
+        runnerEnv: process.env,
+        childEnv: spawnEnv,
+    });
     logDebug(`Spawning Claude Code process: ${spawnCommand} ${spawnArgs.join(' ')} (using ${isCommandOnly ? 'clean' : 'normal'} env)`)
 
     const invocation = resolveWindowsCommandInvocation({

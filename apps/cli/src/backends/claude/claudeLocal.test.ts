@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { basename, dirname, join } from 'node:path';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { PassThrough } from 'node:stream';
 import { claudeLocal } from './claudeLocal';
 
 async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
@@ -128,6 +129,134 @@ describe('claudeLocal --continue handling', () => {
 
         // Should notify about the session
         expect(onSessionFound).toHaveBeenCalledWith('123e4567-e89b-12d3-a456-426614174000');
+    });
+
+    it('clears thinking after the final Claude fetch ends while the process stays open', async () => {
+        vi.useFakeTimers();
+        mockResolveClaudeCliPath.mockReturnValue('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js');
+        mockIsClaudeCliJavaScriptFile.mockReturnValue(true);
+
+        const fd3 = new PassThrough();
+        const exitHandlers: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+        const child = {
+            pid: 4242,
+            killed: false,
+            stdio: [null, null, null, fd3],
+            on: vi.fn((event: string, callback: (code: number | null, signal: NodeJS.Signals | null) => void) => {
+                if (event === 'exit') {
+                    exitHandlers.push(callback);
+                }
+            }),
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            kill: vi.fn(),
+            stdout: { on: vi.fn() },
+            stderr: { on: vi.fn() },
+            stdin: {
+                on: vi.fn(),
+                end: vi.fn()
+            }
+        };
+        mockSpawn.mockReturnValue(child);
+
+        const thinkingEvents: boolean[] = [];
+        try {
+            const runPromise = claudeLocal({
+                abort: new AbortController().signal,
+                sessionId: null,
+                path: '/tmp',
+                onSessionFound,
+                onThinkingChange: (thinking) => thinkingEvents.push(thinking),
+                claudeArgs: [],
+            });
+
+            await Promise.resolve();
+            fd3.write(JSON.stringify({
+                type: 'fetch-start',
+                id: 1,
+                hostname: 'api.anthropic.com',
+                path: '/v1/messages',
+                timestamp: Date.now(),
+            }) + '\n');
+            fd3.write(JSON.stringify({
+                type: 'fetch-end',
+                id: 1,
+                timestamp: Date.now(),
+            }) + '\n');
+            await vi.advanceTimersByTimeAsync(750);
+
+            expect(thinkingEvents).toEqual([true, false]);
+
+            for (const handler of exitHandlers) {
+                handler(0, null);
+            }
+            await runPromise;
+            expect(thinkingEvents).toEqual([true, false]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps thinking active until all overlapping Claude fetches end', async () => {
+        vi.useFakeTimers();
+        mockResolveClaudeCliPath.mockReturnValue('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js');
+        mockIsClaudeCliJavaScriptFile.mockReturnValue(true);
+
+        const fd3 = new PassThrough();
+        const exitHandlers: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+        const child = {
+            pid: 4242,
+            killed: false,
+            stdio: [null, null, null, fd3],
+            on: vi.fn((event: string, callback: (code: number | null, signal: NodeJS.Signals | null) => void) => {
+                if (event === 'exit') {
+                    exitHandlers.push(callback);
+                }
+            }),
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            kill: vi.fn(),
+            stdout: { on: vi.fn() },
+            stderr: { on: vi.fn() },
+            stdin: {
+                on: vi.fn(),
+                end: vi.fn()
+            }
+        };
+        mockSpawn.mockReturnValue(child);
+
+        const thinkingEvents: boolean[] = [];
+        try {
+            const runPromise = claudeLocal({
+                abort: new AbortController().signal,
+                sessionId: null,
+                path: '/tmp',
+                onSessionFound,
+                onThinkingChange: (thinking) => thinkingEvents.push(thinking),
+                claudeArgs: [],
+            });
+
+            await Promise.resolve();
+            fd3.write(JSON.stringify({ type: 'fetch-start', id: 1, timestamp: Date.now() }) + '\n');
+            fd3.write(JSON.stringify({ type: 'fetch-start', id: 2, timestamp: Date.now() }) + '\n');
+            fd3.write(JSON.stringify({ type: 'fetch-end', id: 1, timestamp: Date.now() }) + '\n');
+            await vi.advanceTimersByTimeAsync(750);
+
+            expect(thinkingEvents).toEqual([true]);
+
+            fd3.write(JSON.stringify({ type: 'fetch-end', id: 2, timestamp: Date.now() }) + '\n');
+            await vi.advanceTimersByTimeAsync(750);
+
+            expect(thinkingEvents).toEqual([true, false]);
+
+            for (const handler of exitHandlers) {
+                handler(0, null);
+            }
+            await runPromise;
+            expect(thinkingEvents).toEqual([true, false]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('inserts a "--" delimiter before positional prompts when --mcp-config is present (variadic flag)', async () => {
@@ -981,6 +1110,45 @@ describe('claudeLocal launcher selection', () => {
         } finally {
             if (typeof prev === 'string') process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON = prev;
             else delete process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
+        }
+    });
+
+    it('does not forward Claude OAuth refresh material into the spawned Claude process environment', async () => {
+        const originals = {
+            refreshToken: process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN,
+            scopes: process.env.CLAUDE_CODE_OAUTH_SCOPES,
+        };
+        process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = 'refresh-secret';
+        process.env.CLAUDE_CODE_OAUTH_SCOPES = 'user:inference';
+
+        try {
+            await claudeLocal({
+                abort: new AbortController().signal,
+                sessionId: null,
+                path: '/tmp',
+                onSessionFound,
+                claudeArgs: [],
+                envOverlay: {
+                    CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'overlay-refresh-secret',
+                    CLAUDE_CODE_OAUTH_SCOPES: 'overlay-scope',
+                },
+            } as any);
+
+            expect(mockSpawn).toHaveBeenCalled();
+            const spawnOpts = mockSpawn.mock.calls[0][2];
+            expect(spawnOpts?.env?.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+            expect(spawnOpts?.env?.CLAUDE_CODE_OAUTH_SCOPES).toBeUndefined();
+        } finally {
+            if (typeof originals.refreshToken === 'string') {
+                process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = originals.refreshToken;
+            } else {
+                delete process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN;
+            }
+            if (typeof originals.scopes === 'string') {
+                process.env.CLAUDE_CODE_OAUTH_SCOPES = originals.scopes;
+            } else {
+                delete process.env.CLAUDE_CODE_OAUTH_SCOPES;
+            }
         }
     });
 

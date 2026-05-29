@@ -63,17 +63,20 @@ describe('claudeRemoteAgentSdk post-result streaming', () => {
             }
             return await secondMessagePromise;
         });
+        const thinkingEvents: boolean[] = [];
+        const onReady = vi.fn();
 
-            const runnerPromise = claudeRemoteAgentSdk({
-                sessionId: null,
-                transcriptPath: null,
-                path: '/tmp',
-                claudeArgs: [],
-                claudeExecutablePath: '/tmp/claude',
-                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
-                isAborted: () => false,
-                nextMessage,
-            onReady: () => {},
+        const runnerPromise = claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady,
+            onThinkingChange: (thinking: boolean) => thinkingEvents.push(thinking),
             onSessionFound: () => {},
             onMessage: () => {},
             createQuery,
@@ -92,6 +95,8 @@ describe('claudeRemoteAgentSdk post-result streaming', () => {
 
             // Expect it to keep consuming the stream even though the next user message isn't available yet.
             expect(responseNextCalls).toBeGreaterThanOrEqual(2);
+            expect(onReady).toHaveBeenCalledTimes(1);
+            expect(thinkingEvents).toEqual([true, false, true]);
         } finally {
             resolveSecond(null);
             await runnerPromise;

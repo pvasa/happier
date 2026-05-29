@@ -405,4 +405,46 @@ describe('claude sdk query executable resolution', () => {
     const spawnOpts = spawnMock.mock.calls[0]?.[2] as Record<string, any> | undefined;
     expect(spawnOpts?.env?.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON).toBeUndefined();
   });
+
+  it('does not forward Claude OAuth refresh material into the spawned Claude process environment', async () => {
+    envScope.patch({
+      CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'refresh-secret',
+      CLAUDE_CODE_OAUTH_SCOPES: 'user:inference',
+    });
+
+    const spawnMock = vi.fn((..._args: any[]) => {
+      throw new Error('spawn invoked');
+    });
+
+    vi.doMock('node:child_process', async () => {
+      const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      return { ...actual, spawn: spawnMock };
+    });
+
+    vi.doMock('node:fs', async () => {
+      const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+      return { ...actual, existsSync: () => true };
+    });
+
+    const { query } = (await import('./query')) as typeof import('./query');
+
+    expect(() =>
+      query({
+        prompt: 'hi',
+        options: {
+          cwd: '/tmp',
+          pathToClaudeCodeExecutable: '/tmp/fake-claude.cjs',
+          env: {
+            CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'overlay-refresh-secret',
+            CLAUDE_CODE_OAUTH_SCOPES: 'overlay-scope',
+          },
+        },
+      }),
+    ).toThrow(/spawn invoked/);
+
+    expect(spawnMock).toHaveBeenCalled();
+    const spawnOpts = spawnMock.mock.calls[0]?.[2] as Record<string, any> | undefined;
+    expect(spawnOpts?.env?.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+    expect(spawnOpts?.env?.CLAUDE_CODE_OAUTH_SCOPES).toBeUndefined();
+  });
 });

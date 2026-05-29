@@ -468,9 +468,19 @@ describe('claudeLocalLauncher', () => {
     let scannerOptions: SessionScannerOptions | null = null;
     let abortObserved = false;
     let pendingCount = 0;
+    const wakePendingQueueUpdateRef: {
+      current: ((value: boolean) => void) | null;
+    } = { current: null };
     const localStarted = createDeferred<void>();
 
     client.peekPendingMessageQueueV2Count = vi.fn(async () => pendingCount);
+    client.shouldAttemptPendingMaterialization = vi.fn(() => pendingCount > 0);
+    client.waitForMetadataUpdate = vi.fn(async (signal?: AbortSignal) => {
+      return await new Promise<boolean>((resolve) => {
+        wakePendingQueueUpdateRef.current = resolve;
+        signal?.addEventListener('abort', () => resolve(false), { once: true });
+      });
+    });
 
     mockCreateSessionScanner.mockImplementation(async (opts: SessionScannerOptions) => {
       scannerOptions = opts;
@@ -496,10 +506,15 @@ describe('claudeLocalLauncher', () => {
     } as any);
 
     pendingCount = 1;
+    const wakePendingQueueUpdate = wakePendingQueueUpdateRef.current ?? (() => {
+      throw new Error('Expected pending queue wait to be registered');
+    });
+    wakePendingQueueUpdate(true);
     await vi.advanceTimersByTimeAsync(0);
     await Promise.resolve();
 
-    expect(client.peekPendingMessageQueueV2Count).toHaveBeenCalled();
+    expect(client.waitForMetadataUpdate).toHaveBeenCalled();
+    expect(client.peekPendingMessageQueueV2Count).not.toHaveBeenCalled();
     expect(abortObserved).toBe(false);
 
     scannerOptions!.onMessage({

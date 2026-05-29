@@ -31,6 +31,7 @@ export async function resolveClaudeSessionModelsState(params: Readonly<{
         id: model.id,
         name: model.name,
         ...(description ? { description } : {}),
+        ...(typeof model.contextWindowTokens === 'number' ? { contextWindowTokens: model.contextWindowTokens } : {}),
         ...(Array.isArray(model.modelOptions) && model.modelOptions.length > 0
           ? { modelOptions: model.modelOptions }
           : {}),

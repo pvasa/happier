@@ -252,7 +252,7 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
     }
   }
 
-  async waitForResponseComplete(timeoutMs?: number): Promise<void> {
+  async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {
     if (this.disposed) throw new Error('Backend disposed');
     const completion = this.pendingTurnCompletion;
     if (!completion) {
@@ -260,7 +260,12 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
       return;
     }
 
-    const ms = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs >= 1 ? Math.floor(timeoutMs) : 120_000;
+    if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 1) {
+      await completion;
+      return;
+    }
+
+    const ms = Math.floor(timeoutMs);
     await Promise.race([
       completion,
       new Promise<void>((_resolve, reject) => {

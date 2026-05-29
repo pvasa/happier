@@ -16,6 +16,7 @@ import type { RawJSONLines } from '@/backends/claude/types'
 import type { PermissionMode } from '@/api/types'
 import { normalizeClaudeToolUseNamesInSdkMessage } from './normalizeClaudeToolUseNames'
 import { INTERNAL_CLAUDE_EVENT_TYPES } from './internalClaudeEventTypes'
+import { buildClaudeSdkResultUsageTelemetry } from './sdkResultUsageTelemetry'
 
 /**
  * Context for converting SDK messages to log format
@@ -45,12 +46,35 @@ function getGitBranch(cwd: string): string | undefined {
     }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : null
+}
+
+function readAssistantContextUsedTokens(message: SDKAssistantMessage['message']): number | null {
+    const usage = asRecord(asRecord(message)?.usage)
+    if (!usage) return null
+
+    const inputTokens = readNonNegativeInteger(usage.input_tokens)
+    const cacheCreationInputTokens = readNonNegativeInteger(usage.cache_creation_input_tokens)
+    const cacheReadInputTokens = readNonNegativeInteger(usage.cache_read_input_tokens)
+    if (inputTokens === null && cacheCreationInputTokens === null && cacheReadInputTokens === null) {
+        return null
+    }
+
+    return (inputTokens ?? 0) + (cacheCreationInputTokens ?? 0) + (cacheReadInputTokens ?? 0)
+}
+
 /**
  * SDK to Log converter class
  * Maintains state for parent-child relationships between messages
  */
 export class SDKToLogConverter {
     private lastMainUuid: string | null = null
+    private latestMainAssistantContextUsedTokens: number | null = null
     private context: ConversionContext
     private responses?: Map<string, { approved: boolean, mode?: PermissionMode, reason?: string }>
     private sidechainLastUUID = new Map<string, string>();
@@ -80,6 +104,7 @@ export class SDKToLogConverter {
      */
     resetParentChain(): void {
         this.lastMainUuid = null
+        this.latestMainAssistantContextUsedTokens = null
         this.context.parentUuid = null
         this.sidechainLastUUID.clear()
     }
@@ -120,6 +145,7 @@ export class SDKToLogConverter {
         }
 
         let logMessage: RawJSONLines | null = null
+        let shouldUpdateLastMainUuid = true
 
         switch (sdkMessage.type) {
             case 'user': {
@@ -168,6 +194,10 @@ export class SDKToLogConverter {
 
             case 'assistant': {
                 const assistantMsg = normalizeClaudeToolUseNamesInSdkMessage(sdkMessage) as SDKAssistantMessage
+                const contextUsedTokens = !isSidechain ? readAssistantContextUsedTokens(assistantMsg.message) : null
+                if (contextUsedTokens !== null) {
+                    this.latestMainAssistantContextUsedTokens = contextUsedTokens
+                }
                 logMessage = {
                     ...baseFields,
                     type: 'assistant',
@@ -208,9 +238,22 @@ export class SDKToLogConverter {
             }
 
             case 'result': {
-                // Result messages are not converted to log messages
-                // They're SDK-specific messages that indicate session completion
-                // Not part of the actual conversation log
+                const resultUsageTelemetry = buildClaudeSdkResultUsageTelemetry(sdkMessage as SDKResultMessage, {
+                    contextUsedTokens: this.latestMainAssistantContextUsedTokens ?? 0,
+                })
+                if (resultUsageTelemetry) {
+                    logMessage = {
+                        ...baseFields,
+                        type: 'assistant',
+                        message: {
+                            role: 'assistant',
+                            model: resultUsageTelemetry.modelId,
+                            content: [],
+                            usage: resultUsageTelemetry.usage,
+                        },
+                    }
+                    shouldUpdateLastMainUuid = false
+                }
                 break
             }
 
@@ -253,7 +296,7 @@ export class SDKToLogConverter {
         }
 
         // Update last UUID for parent tracking
-        if (logMessage && logMessage.type !== 'summary' && !isSidechain) {
+        if (logMessage && shouldUpdateLastMainUuid && logMessage.type !== 'summary' && !isSidechain) {
             this.lastMainUuid = uuid
         }
 

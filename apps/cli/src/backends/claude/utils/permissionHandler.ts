@@ -69,6 +69,7 @@ export class PermissionHandler {
     private exitedPlanModeLocalIds = new Map<string, number>();
     private exitedPlanModeFallbackUntilMs: number = 0;
     private metadataWatcherAbort: AbortController | null = null;
+    private permissionModeUpdatedAt = 0;
 
     constructor(session: Session) {
         this.session = session;
@@ -477,9 +478,29 @@ export class PermissionHandler {
         this.onPermissionRequestCallback = callback;
     }
 
-    handleModeChange(mode: PermissionMode) {
+    handleModeChange(mode: PermissionMode, updatedAt?: number) {
+        const hasUpdatedAt = typeof updatedAt === 'number' && Number.isFinite(updatedAt);
+        if (hasUpdatedAt && updatedAt < this.permissionModeUpdatedAt) {
+            return;
+        }
+        if (!hasUpdatedAt && mode === 'default' && this.permissionMode !== 'default' && this.permissionModeUpdatedAt > 0) {
+            return;
+        }
         this.permissionMode = mode;
+        if (hasUpdatedAt) {
+            this.permissionModeUpdatedAt = updatedAt;
+        } else if (mode !== 'default' && this.permissionModeUpdatedAt === 0) {
+            this.permissionModeUpdatedAt = Date.now();
+        }
         this.tryAutoApprovePendingRequestsForPermissionMode(mode);
+    }
+
+    private resolveEffectivePermissionModeForToolCall(mode: EnhancedMode): PermissionMode {
+        const requestedMode = mode?.permissionMode ?? this.permissionMode;
+        if (requestedMode === 'default' && this.permissionMode !== 'default' && this.permissionModeUpdatedAt > 0) {
+            return this.permissionMode;
+        }
+        return requestedMode;
     }
 
     private tryAutoApprovePendingRequestsForPermissionMode(mode: PermissionMode): void {
@@ -613,7 +634,7 @@ export class PermissionHandler {
                 ? null
                 : mode?.agentModeId;
         const effectiveMode = resolveClaudeSdkPermissionModeFromEnhancedMode({
-            permissionMode: mode?.permissionMode ?? this.permissionMode,
+            permissionMode: this.resolveEffectivePermissionModeForToolCall(mode),
             agentModeId,
         });
 

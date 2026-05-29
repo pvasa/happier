@@ -5,11 +5,19 @@ import type { DirectSessionCandidateV1, DirectSessionsSource } from '@happier-de
 
 import { deriveDirectSessionActivityFromTimestamp } from '@/api/directSessions/activity/deriveDirectSessionActivityFromTimestamp';
 import { mapWithConcurrency } from '@/api/directSessions/discovery/mapWithConcurrency';
+import { logger } from '@/utils/logger';
 
 import { readClaudeSessionTitle } from './readClaudeSessionTitle';
 import { resolveClaudeConfigDirForDirectSessions } from './resolveClaudeConfigDir';
 
 type IndexCursorV1 = Readonly<{ v: 1; kind: 'index'; offset: number }>;
+
+type DiscoveredClaudeSession = Readonly<{
+  remoteSessionId: string;
+  projectId: string;
+  fullPath: string;
+  updatedAtMs: number;
+}>;
 
 function encodeIndexCursor(offset: number): string {
   const cursor: IndexCursorV1 = { v: 1, kind: 'index', offset: Math.max(0, Math.trunc(offset)) };
@@ -29,10 +37,60 @@ function decodeIndexCursor(raw: string | undefined): number {
   }
 }
 
+function parsePositiveIntEnv(params: Readonly<{
+  env: NodeJS.ProcessEnv;
+  key: string;
+  defaultValue: number;
+  min: number;
+  max: number;
+}>): number {
+  const raw = Number.parseInt(String(params.env[params.key] ?? ''), 10);
+  const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : params.defaultValue;
+  return Math.max(params.min, Math.min(params.max, configured));
+}
+
 function resolveClaudeSessionDiscoveryConcurrency(env: NodeJS.ProcessEnv): number {
-  const raw = Number.parseInt(String(env.HAPPIER_DIRECT_SESSIONS_CLAUDE_DISCOVERY_CONCURRENCY ?? ''), 10);
-  const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 64;
-  return Math.max(1, Math.min(512, configured));
+  return parsePositiveIntEnv({
+    env,
+    key: 'HAPPIER_DIRECT_SESSIONS_CLAUDE_DISCOVERY_CONCURRENCY',
+    defaultValue: 64,
+    min: 1,
+    max: 512,
+  });
+}
+
+function resolveClaudeSearchTitleCandidateLimit(env: NodeJS.ProcessEnv): number {
+  return parsePositiveIntEnv({
+    env,
+    key: 'HAPPIER_DIRECT_SESSIONS_CLAUDE_SEARCH_TITLE_CANDIDATE_LIMIT',
+    defaultValue: 2000,
+    min: 1,
+    max: 50_000,
+  });
+}
+
+function canSearchClaudeFilename(searchTerm: string): boolean {
+  return searchTerm.length > 0 && !searchTerm.includes('/') && !searchTerm.includes('\\') && !searchTerm.endsWith('.jsonl');
+}
+
+async function buildClaudeCandidate(params: Readonly<{
+  session: DiscoveredClaudeSession;
+  env: NodeJS.ProcessEnv;
+}>): Promise<DirectSessionCandidateV1> {
+  let title: string | null = null;
+  try {
+    title = await readClaudeSessionTitle(params.session.fullPath);
+  } catch {
+    title = null;
+  }
+
+  return {
+    remoteSessionId: params.session.remoteSessionId,
+    ...(title ? { title } : {}),
+    updatedAtMs: params.session.updatedAtMs,
+    activity: deriveDirectSessionActivityFromTimestamp({ updatedAtMs: params.session.updatedAtMs, env: params.env }),
+    details: { projectId: params.session.projectId },
+  };
 }
 
 export async function listClaudeSessionCandidates(params: Readonly<{
@@ -41,19 +99,19 @@ export async function listClaudeSessionCandidates(params: Readonly<{
   cursor?: string;
   limit: number;
   searchTerm?: string;
-}>): Promise<Readonly<{ candidates: DirectSessionCandidateV1[]; nextCursor: string | null }>> {
+  searchMode?: 'fast' | 'full';
+}>): Promise<Readonly<{ candidates: DirectSessionCandidateV1[]; nextCursor: string | null; searchIncomplete?: boolean }>> {
   const env = params.env ?? process.env;
+  const startedAtMs = Date.now();
+  const startMemory = process.memoryUsage();
   const configDir = resolveClaudeConfigDirForDirectSessions({ source: params.source, env });
   const projectsDir = join(configDir, 'projects');
   const discoveryConcurrency = resolveClaudeSessionDiscoveryConcurrency(env);
+  const limit = Math.max(1, Math.trunc(params.limit));
+  const offset = decodeIndexCursor(params.cursor);
 
-  const searchTerm = typeof params.searchTerm === 'string' ? params.searchTerm.trim().toLowerCase() : '';
-  type DiscoveredSession = {
-    remoteSessionId: string;
-    projectId: string;
-    fullPath: string;
-    updatedAtMs: number;
-  };
+  const rawSearchTerm = typeof params.searchTerm === 'string' ? params.searchTerm.trim() : '';
+  const searchTerm = rawSearchTerm.toLowerCase();
 
   let projectEntries: any[];
   try {
@@ -62,8 +120,46 @@ export async function listClaudeSessionCandidates(params: Readonly<{
     projectEntries = [];
   }
 
+  const exactSessionMatches = searchTerm && canSearchClaudeFilename(rawSearchTerm)
+    ? (await mapWithConcurrency(projectEntries, discoveryConcurrency, async (projectEntry): Promise<DiscoveredClaudeSession | null> => {
+      if (!projectEntry.isDirectory()) return null;
+      if (projectEntry.isSymbolicLink()) return null;
+      const projectId = typeof projectEntry.name === 'string' ? projectEntry.name : String(projectEntry.name);
+      const fullPath = join(projectsDir, projectId, `${rawSearchTerm}.jsonl`);
+      try {
+        const s = await stat(fullPath);
+        if (!s.isFile()) return null;
+        return {
+          remoteSessionId: rawSearchTerm,
+          projectId,
+          fullPath,
+          updatedAtMs: Math.trunc(s.mtimeMs),
+        } satisfies DiscoveredClaudeSession;
+      } catch {
+        return null;
+      }
+    })).filter((session): session is DiscoveredClaudeSession => session !== null)
+    : [];
+
+  if (exactSessionMatches.length > 0) {
+    const sortedExactMatches = exactSessionMatches
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs || String(a.projectId).localeCompare(String(b.projectId)));
+    const pageSessions = sortedExactMatches.slice(offset, offset + limit);
+    const candidates = await mapWithConcurrency(pageSessions, discoveryConcurrency, (session) => buildClaudeCandidate({ session, env }));
+    const nextOffset = offset + candidates.length;
+    const nextCursor = nextOffset < sortedExactMatches.length ? encodeIndexCursor(nextOffset) : null;
+    logger.debug('[directSessions.claude.candidates] exact id list finished', {
+      elapsedMs: Date.now() - startedAtMs,
+      searchTermLength: rawSearchTerm.length,
+      returnedCandidates: candidates.length,
+      heapDeltaBytes: process.memoryUsage().heapUsed - startMemory.heapUsed,
+      rssBytes: process.memoryUsage().rss,
+    });
+    return { candidates, nextCursor };
+  }
+
   const discoveredSessions = (
-    await mapWithConcurrency(projectEntries, discoveryConcurrency, async (projectEntry): Promise<DiscoveredSession[]> => {
+    await mapWithConcurrency(projectEntries, discoveryConcurrency, async (projectEntry): Promise<DiscoveredClaudeSession[]> => {
       if (!projectEntry.isDirectory()) return [];
       if (projectEntry.isSymbolicLink()) return [];
 
@@ -77,7 +173,7 @@ export async function listClaudeSessionCandidates(params: Readonly<{
         return [];
       }
 
-      const sessions = await mapWithConcurrency(sessionEntries, discoveryConcurrency, async (entry): Promise<DiscoveredSession | null> => {
+      const sessions = await mapWithConcurrency(sessionEntries, discoveryConcurrency, async (entry): Promise<DiscoveredClaudeSession | null> => {
         if (!entry.isFile()) return null;
         if (entry.isSymbolicLink()) return null;
         const name = typeof entry.name === 'string' ? entry.name : String(entry.name);
@@ -85,11 +181,6 @@ export async function listClaudeSessionCandidates(params: Readonly<{
         const remoteSessionId = name.slice(0, -'.jsonl'.length);
         if (!remoteSessionId) return null;
         if (remoteSessionId.includes('/') || remoteSessionId.includes('\\')) return null;
-
-        if (searchTerm) {
-          const haystack = `${remoteSessionId} ${projectId}`.toLowerCase();
-          if (!haystack.includes(searchTerm)) return null;
-        }
 
         const full = join(projectPath, name);
         try {
@@ -99,40 +190,71 @@ export async function listClaudeSessionCandidates(params: Readonly<{
             projectId,
             fullPath: full,
             updatedAtMs: Math.trunc(s.mtimeMs),
-          } satisfies DiscoveredSession;
+          } satisfies DiscoveredClaudeSession;
         } catch {
           return null;
         }
       });
 
-      return sessions.filter((session): session is DiscoveredSession => session !== null);
+      return sessions.filter((session): session is DiscoveredClaudeSession => session !== null);
     })
   ).flat();
 
-  const limit = Math.max(1, Math.trunc(params.limit));
-  const offset = decodeIndexCursor(params.cursor);
   const sortedSessions = discoveredSessions
     .sort((a, b) => b.updatedAtMs - a.updatedAtMs || String(a.remoteSessionId).localeCompare(String(b.remoteSessionId)));
-  const pageSessions = sortedSessions.slice(offset, offset + limit);
-  const page = await Promise.all(
-    pageSessions.map(async (session): Promise<DirectSessionCandidateV1> => {
-      let title: string | null = null;
-      try {
-        title = await readClaudeSessionTitle(session.fullPath);
-      } catch {
-        title = null;
+
+  let searchIncomplete = false;
+  let searchedTotalCount: number | null = null;
+  const searchedPage = searchTerm
+    ? await (async (): Promise<DirectSessionCandidateV1[]> => {
+      if (params.searchMode === 'fast') {
+        searchIncomplete = true;
+        const metadataMatches = sortedSessions.filter((session) => {
+          const haystack = `${session.remoteSessionId} ${session.projectId}`.toLowerCase();
+          return haystack.includes(searchTerm);
+        });
+        searchedTotalCount = metadataMatches.length;
+        return mapWithConcurrency(
+          metadataMatches.slice(offset, offset + limit),
+          discoveryConcurrency,
+          (session) => buildClaudeCandidate({ session, env }),
+        );
       }
 
-      return {
-        remoteSessionId: session.remoteSessionId,
-        ...(title ? { title } : {}),
-        updatedAtMs: session.updatedAtMs,
-        activity: deriveDirectSessionActivityFromTimestamp({ updatedAtMs: session.updatedAtMs, env }),
-        details: { projectId: session.projectId },
-      };
-    }),
-  );
+      const titleSearchLimit = resolveClaudeSearchTitleCandidateLimit(env);
+      const sessionsToSearch = sortedSessions.slice(0, titleSearchLimit);
+      searchIncomplete = sessionsToSearch.length < sortedSessions.length;
+      const filtered = (await mapWithConcurrency(sessionsToSearch, discoveryConcurrency, async (session): Promise<DirectSessionCandidateV1 | null> => {
+        const candidate = await buildClaudeCandidate({ session, env });
+        const haystack = `${candidate.remoteSessionId} ${session.projectId}${candidate.title ? ` ${candidate.title}` : ''}`.toLowerCase();
+        return haystack.includes(searchTerm) ? candidate : null;
+      })).filter((candidate): candidate is DirectSessionCandidateV1 => candidate !== null);
+      searchedTotalCount = filtered.length;
+      return filtered.slice(offset, offset + limit);
+    })()
+    : null;
+
+  const page = searchedPage
+    ?? await mapWithConcurrency(sortedSessions.slice(offset, offset + limit), discoveryConcurrency, (session) => buildClaudeCandidate({ session, env }));
+  const filteredCount = searchedTotalCount ?? sortedSessions.length;
   const nextOffset = offset + page.length;
-  const nextCursor = nextOffset < sortedSessions.length ? encodeIndexCursor(nextOffset) : null;
-  return { candidates: page, nextCursor };
+  const nextCursor = nextOffset < filteredCount ? encodeIndexCursor(nextOffset) : null;
+
+  logger.debug('[directSessions.claude.candidates] list finished', {
+    elapsedMs: Date.now() - startedAtMs,
+    searchTermLength: rawSearchTerm.length,
+    searchMode: params.searchMode ?? 'default',
+    discoveredSessions: sortedSessions.length,
+    returnedCandidates: page.length,
+    hasNextCursor: Boolean(nextCursor),
+    searchIncomplete,
+    heapDeltaBytes: process.memoryUsage().heapUsed - startMemory.heapUsed,
+    rssBytes: process.memoryUsage().rss,
+  });
+
+  return {
+    candidates: page,
+    nextCursor,
+    ...(searchIncomplete ? { searchIncomplete: true } : {}),
+  };
 }

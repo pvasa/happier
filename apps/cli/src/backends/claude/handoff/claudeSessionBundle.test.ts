@@ -176,7 +176,6 @@ describe('claude session handoff bundle', () => {
       resume: 'claude_session_1',
       environmentVariables: {
         CLAUDE_CONFIG_DIR: join(root, '.claude-target'),
-        HAPPIER_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS: '60000',
       },
       transcriptStorage: 'direct',
       approvedNewDirectoryCreation: true,
@@ -274,7 +273,6 @@ describe('claude session handoff bundle', () => {
         resume: 'claude_session_happier_override',
         environmentVariables: {
           CLAUDE_CONFIG_DIR: configDir,
-          HAPPIER_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS: '60000',
         },
         transcriptStorage: 'direct',
         approvedNewDirectoryCreation: true,
@@ -310,7 +308,6 @@ describe('claude session handoff bundle', () => {
       });
       expect(result.resume.environmentVariables).toEqual({
         CLAUDE_CONFIG_DIR: join(root, '.claude'),
-        HAPPIER_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS: '60000',
       });
 
       const projectId = resolveClaudeProjectId(targetPath);

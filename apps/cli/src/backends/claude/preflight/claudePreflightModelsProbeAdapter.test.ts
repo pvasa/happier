@@ -76,7 +76,25 @@ describe('claudePreflightModelsProbeAdapter', () => {
 
     expect(Array.isArray(raw)).toBe(true);
 
-    // Opus 4.7 supports effort, including `xhigh` and `max`.
+    // Opus 4.8 supports effort, including `xhigh` and `max`, and defaults to `high`.
+    expect(raw).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'claude-opus-4-8',
+        modelOptions: [expect.objectContaining({
+          id: 'reasoning_effort',
+          currentValue: 'high',
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'low' }),
+            expect.objectContaining({ value: 'medium' }),
+            expect.objectContaining({ value: 'high' }),
+            expect.objectContaining({ value: 'xhigh' }),
+            expect.objectContaining({ value: 'max' }),
+          ]),
+        })],
+      }),
+    ]));
+
+    // Opus 4.7 remains available and keeps its `xhigh` default.
     expect(raw).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'claude-opus-4-7',

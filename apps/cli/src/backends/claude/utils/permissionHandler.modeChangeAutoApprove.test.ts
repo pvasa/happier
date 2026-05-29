@@ -80,4 +80,23 @@ describe('Claude PermissionHandler - mode change auto-approve', () => {
     expect(client.agentState.requests['toolu_mode_change_2']).toBeUndefined();
     expect(client.agentState.completedRequests['toolu_mode_change_2']).toBeTruthy();
   });
+
+  it('does not let a stale per-turn default mode beat a fresher yolo handler mode', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('mode-change-stale-default');
+    const { PermissionHandler } = await import('./permissionHandler');
+    const handler = new PermissionHandler(session);
+
+    handler.handleModeChange('yolo');
+
+    await expect(
+      withTimeout(handler.handleToolCall(
+        'Bash',
+        { command: 'mkdir -p /tmp/happier-yolo-test && echo created' },
+        { permissionMode: 'default' } as EnhancedMode,
+        { signal: new AbortController().signal, toolUseId: 'toolu_mode_change_3' },
+      ), 1_000),
+    ).resolves.toMatchObject({ behavior: 'allow' });
+
+    expect(client.agentState.requests['toolu_mode_change_3']).toBeUndefined();
+  });
 });

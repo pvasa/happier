@@ -40,6 +40,108 @@ describe('Claude work state normalization', () => {
     expect(snapshot.items[0].summary).toBe('Writing test');
   });
 
+  it('uses a Claude-owned TodoWrite source family without removing other provider todos', async () => {
+    const mod = await import('./claudeWorkState');
+    const { mergeSessionWorkStateMetadataV1 } = await import('@/session/workState/sessionWorkStateMetadata');
+
+    const snapshot = mod.buildClaudeTodoWriteWorkState({
+      backendId: 'claude',
+      updatedAt: 300,
+      input: {
+        todos: [
+          { content: 'Claude todo', status: 'pending' },
+        ],
+      },
+    }) as any;
+
+    const next = mergeSessionWorkStateMetadataV1({
+      metadata: {
+        sessionWorkStateV1: {
+          v: 1,
+          backendId: 'claude',
+          updatedAt: 200,
+          items: [
+            { id: 'todo:opencode:keep', kind: 'todo', origin: 'vendor', backendId: 'opencode', status: 'active', title: 'OpenCode todo', updatedAt: 200 },
+            { id: 'todo:derived:claude.todo:stale', kind: 'todo', origin: 'vendor', backendId: 'claude', status: 'pending', title: 'Stale Claude todo', updatedAt: 200 },
+          ],
+        },
+      },
+      nextOwned: snapshot,
+      ownedSourceFamilies: snapshot.ownedSourceFamilies,
+    });
+
+    expect(next.sessionWorkStateV1.items.map((item: any) => item.id)).toEqual([
+      'todo:opencode:keep',
+      snapshot.items[0].id,
+    ]);
+  });
+
+  it('uses a Claude-owned Task-tool source family without removing future provider tasks', async () => {
+    const mod = await import('./claudeWorkState');
+    const { mergeSessionWorkStateMetadataV1 } = await import('@/session/workState/sessionWorkStateMetadata');
+    const tracker = mod.createClaudeTaskToolWorkStateTracker({
+      backendId: 'claude',
+      agentId: 'claude',
+    });
+
+    const snapshot = tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_create_1',
+          name: 'TaskCreate',
+          input: { subject: 'Claude task' },
+        }],
+      },
+    }, 400) as any;
+
+    const next = mergeSessionWorkStateMetadataV1({
+      metadata: {
+        sessionWorkStateV1: {
+          v: 1,
+          backendId: 'claude',
+          updatedAt: 200,
+          items: [
+            { id: 'task:future-provider:keep', kind: 'task', origin: 'vendor', backendId: 'future-provider', status: 'active', title: 'Future task', updatedAt: 200 },
+            { id: 'task:derived:claude.task:stale', kind: 'task', origin: 'vendor', backendId: 'claude', status: 'pending', title: 'Stale Claude task', updatedAt: 200 },
+          ],
+        },
+      },
+      nextOwned: snapshot,
+      ownedSourceFamilies: snapshot.ownedSourceFamilies,
+    });
+
+    expect(next.sessionWorkStateV1.items.map((item: any) => item.id)).toEqual([
+      'task:future-provider:keep',
+      snapshot.items[0].id,
+    ]);
+  });
+
+  it('bounds TodoWrite snapshots and marks omitted items as truncated', async () => {
+    const mod = await import('./claudeWorkState');
+
+    const snapshot = mod.buildClaudeTodoWriteWorkState({
+      backendId: 'claude',
+      updatedAt: 300,
+      maxItems: 2,
+      input: {
+        todos: [
+          { content: 'First', status: 'pending' },
+          { content: 'Second', status: 'in_progress' },
+          { content: 'Third', status: 'pending' },
+        ],
+      },
+    });
+
+    expect(snapshot.items.map((item: any) => item.title)).toEqual(['First', 'Second']);
+    expect(snapshot.primaryItemId).toBe(snapshot.items[1].id);
+    expect(snapshot.truncated).toEqual({
+      reason: 'item_limit',
+      omittedCount: 1,
+    });
+  });
+
   it('tracks Claude TaskCreate results and TaskUpdate tool uses as task-list state', async () => {
     const mod = await import('./claudeWorkState').catch(() => null);
     expect(mod?.createClaudeTaskToolWorkStateTracker).toEqual(expect.any(Function));
@@ -66,7 +168,7 @@ describe('Claude work state normalization', () => {
 
     expect(createSnapshot?.items).toEqual([
       expect.objectContaining({
-        id: 'task:tool_use:toolu_create_1',
+        id: 'task:derived:claude.task:tool_use%3Atoolu_create_1',
         kind: 'task',
         status: 'pending',
         title: 'Patch task projection',
@@ -93,7 +195,7 @@ describe('Claude work state normalization', () => {
 
     expect(resultSnapshot?.items).toEqual([
       expect.objectContaining({
-        id: 'task:task_real_1',
+        id: 'task:derived:claude.task:task_real_1',
         kind: 'task',
         status: 'pending',
         title: 'Patch task projection',
@@ -119,11 +221,54 @@ describe('Claude work state normalization', () => {
 
     expect(updateSnapshot?.items).toEqual([
       expect.objectContaining({
-        id: 'task:task_real_1',
+        id: 'task:derived:claude.task:task_real_1',
         status: 'active',
         title: 'Run tests',
       }),
     ]);
+  });
+
+  it('bounds tracked TaskList snapshots and marks omitted items as truncated', async () => {
+    const mod = await import('./claudeWorkState');
+    const tracker = mod.createClaudeTaskToolWorkStateTracker({
+      backendId: 'claude',
+      agentId: 'claude',
+      maxItems: 1,
+    });
+
+    tracker.applyMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_list_1',
+          name: 'TaskList',
+          input: {},
+        }],
+      },
+    }, 501);
+
+    const snapshot = tracker.applyMessage({
+      type: 'user',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_list_1',
+          tool_use_result: {
+            tasks: [
+              { id: 'task_a', subject: 'Author tests', status: 'pending' },
+              { id: 'task_b', subject: 'Ship parser', status: 'pending' },
+            ],
+          },
+        }],
+      },
+    }, 502);
+
+    expect(snapshot?.items.map((item: any) => item.title)).toEqual(['Author tests']);
+    expect(snapshot?.truncated).toEqual({
+      reason: 'item_limit',
+      omittedCount: 1,
+    });
   });
 
   it('replaces task-list state from TaskList tool results', async () => {

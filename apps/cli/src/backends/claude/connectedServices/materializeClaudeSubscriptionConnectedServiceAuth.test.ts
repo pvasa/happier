@@ -43,6 +43,8 @@ describe('materializeClaudeSubscriptionConnectedServiceAuth', () => {
     const res = materializeClaudeSubscriptionConnectedServiceAuth({ record });
     expect(res.env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'access' });
     expect(res.env).not.toHaveProperty('CLAUDE_CODE_SETUP_TOKEN');
+    expect(res.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_REFRESH_TOKEN');
+    expect(res.env).not.toHaveProperty('CLAUDE_CODE_OAUTH_SCOPES');
     expect(res.env).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 });

@@ -6,8 +6,6 @@ import type { ClaudeSessionBundle } from '../../../session/handoff/types';
 import { getProjectPath, resolveClaudeProjectId } from '../utils/path';
 import { resolveConfiguredClaudeConfigDir } from '../utils/resolveConfiguredClaudeConfigDir';
 
-const CLAUDE_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS = '60000';
-
 function resolveClaudeTranscriptPath(projectDir: string, remoteSessionId: string): string {
   if (!remoteSessionId || remoteSessionId.includes('/') || remoteSessionId.includes('\\')) {
     throw new Error(`Invalid remoteSessionId for Claude handoff: ${remoteSessionId}`);
@@ -43,7 +41,6 @@ export async function importClaudeSessionBundle(params: Readonly<{
       resume: params.bundle.remoteSessionId,
       environmentVariables: {
         CLAUDE_CONFIG_DIR: resolvedClaudeConfigDir,
-        HAPPIER_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS: CLAUDE_STARTUP_TRANSCRIPT_CATCH_UP_LOOKBACK_MS,
       },
       transcriptStorage: params.sessionStorageMode === 'persisted' ? 'persisted' : 'direct',
       approvedNewDirectoryCreation: true,

@@ -1544,7 +1544,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
         ]));
     });
 
-    it('treats compact-session init as a turn boundary so queued prompts keep flowing without waiting for stop', async () => {
+    it('allows standalone /compact session init to finish so queued prompts keep flowing without waiting for stop', async () => {
         const onReady = vi.fn();
         const onSessionFound = vi.fn();
 
@@ -1629,8 +1629,8 @@ describe('claudeRemoteAgentSdk stream events', () => {
         const createQuery = vi.fn((_params: any) => {
             return {
                 async *[Symbol.asyncIterator]() {
-                    // Compaction forks the session; we treat this init as a turn boundary so we can
-                    // immediately send the next queued prompt.
+                    // Standalone /compact can finish without a normal result, then the next queued
+                    // prompt may emit stream_event output before an assembled assistant message.
                     yield {
                         type: 'system',
                         subtype: 'init',
@@ -1704,10 +1704,12 @@ describe('claudeRemoteAgentSdk stream events', () => {
         }
     });
 
-    it('treats compact_boundary as a turn boundary so queued prompts keep flowing without waiting for a result message', async () => {
+    it('keeps AskUserQuestion work active after provider auto compact_boundary', async () => {
         const onReady = vi.fn();
         const onSessionFound = vi.fn();
         const onCompletionEvent = vi.fn();
+        const onThinkingChange = vi.fn();
+        const onMessage = vi.fn();
 
         let releaseStream!: () => void;
         const streamClosed = new Promise<void>((resolve) => {
@@ -1721,6 +1723,123 @@ describe('claudeRemoteAgentSdk stream events', () => {
                         type: 'system',
                         subtype: 'compact_boundary',
                         session_id: 'sess_compacted_boundary_2',
+                        compact_metadata: {
+                            trigger: 'auto',
+                            pre_tokens: 175_000,
+                        },
+                    } as any;
+                    yield {
+                        type: 'assistant',
+                        parent_tool_use_id: null,
+                        session_id: 'sess_compacted_boundary_2',
+                        uuid: 'assistant_after_compact_question',
+                        message: {
+                            id: 'msg_after_compact_question',
+                            type: 'message',
+                            role: 'assistant',
+                            model: 'fake-claude',
+                            content: [{
+                                type: 'tool_use',
+                                id: 'toolu_question_after_compact',
+                                name: 'AskUserQuestion',
+                                input: { questions: [{ question: 'Continue?', options: [] }] },
+                            }],
+                            stop_reason: null,
+                            stop_sequence: null,
+                            usage: { input_tokens: 1, output_tokens: 1 },
+                        },
+                    } as any;
+                    await streamClosed;
+                },
+                close: vi.fn(() => {
+                    releaseStream();
+                }),
+                setPermissionMode: vi.fn(),
+                setModel: vi.fn(),
+                setMaxThinkingTokens: vi.fn(),
+                supportedCommands: vi.fn(async () => []),
+                supportedModels: vi.fn(async () => []),
+            } as any;
+        });
+
+        const nextMessage = vi.fn(async () => ({
+            message: 'long-running prompt that auto-compacts',
+            mode: makeMode({ claudeRemoteAgentSdkEnabled: true }),
+        }));
+
+        const runnerPromise = claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady,
+            onSessionFound,
+            onMessage,
+            onCompletionEvent,
+            onThinkingChange,
+            createQuery,
+        } as any);
+
+        try {
+            await vi.waitFor(() => {
+                expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
+                    type: 'context-compaction',
+                    phase: 'completed',
+                }));
+            });
+            expect(onSessionFound).toHaveBeenCalledWith('sess_compacted_boundary_2', expect.anything());
+            expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'context-compaction',
+                phase: 'completed',
+                provider: 'claude',
+                source: 'provider-event',
+                trigger: 'auto',
+                providerSessionId: 'sess_compacted_boundary_2',
+                tokenCountBefore: 175_000,
+                tokenCountSource: 'claude-compact-metadata.pre_tokens',
+                lifecycleId: expect.any(String),
+            }));
+            expect(onReady).not.toHaveBeenCalled();
+            expect(nextMessage).toHaveBeenCalledTimes(1);
+            expect(onThinkingChange.mock.calls.map((call) => call[0])).toEqual([true]);
+            expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'assistant',
+                message: expect.objectContaining({
+                    content: expect.arrayContaining([
+                        expect.objectContaining({
+                            type: 'tool_use',
+                            name: 'AskUserQuestion',
+                        }),
+                    ]),
+                }),
+            }));
+        } finally {
+            releaseStream();
+            await runnerPromise.catch(() => {});
+        }
+    });
+
+    it('allows standalone /compact compact_boundary to finish before pumping queued prompts', async () => {
+        const onReady = vi.fn();
+        const onSessionFound = vi.fn();
+        const onCompletionEvent = vi.fn();
+        const onThinkingChange = vi.fn();
+
+        let releaseStream!: () => void;
+        const streamClosed = new Promise<void>((resolve) => {
+            releaseStream = resolve;
+        });
+
+        const createQuery = vi.fn((_params: any) => {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        type: 'system',
+                        subtype: 'compact_boundary',
+                        session_id: 'sess_manual_compacted_boundary_2',
                         compact_metadata: {
                             trigger: 'manual',
                             pre_tokens: 175_000,
@@ -1767,17 +1886,18 @@ describe('claudeRemoteAgentSdk stream events', () => {
             onSessionFound,
             onMessage: () => {},
             onCompletionEvent,
+            onThinkingChange,
             createQuery,
         } as any);
 
         try {
             await vi.waitFor(() => {
-            expect(onReady).toHaveBeenCalledTimes(1);
+                expect(onReady).toHaveBeenCalledTimes(1);
             });
             await vi.waitFor(() => {
                 expect(nextMessage).toHaveBeenCalledTimes(2);
             });
-            expect(onSessionFound).toHaveBeenCalledWith('sess_compacted_boundary_2', expect.anything());
+            expect(onSessionFound).toHaveBeenCalledWith('sess_manual_compacted_boundary_2', expect.anything());
             expect(onCompletionEvent).toHaveBeenCalledWith(expect.objectContaining({
                 type: 'context-compaction',
                 phase: 'started',
@@ -1792,17 +1912,12 @@ describe('claudeRemoteAgentSdk stream events', () => {
                 provider: 'claude',
                 source: 'provider-event',
                 trigger: 'manual',
-                providerSessionId: 'sess_compacted_boundary_2',
+                providerSessionId: 'sess_manual_compacted_boundary_2',
                 tokenCountBefore: 175_000,
                 tokenCountSource: 'claude-compact-metadata.pre_tokens',
                 lifecycleId: expect.any(String),
             }));
-            const compactionEvents = onCompletionEvent.mock.calls.map((call) => call[0]);
-            const started = compactionEvents.find((event: any) => event?.type === 'context-compaction' && event.phase === 'started');
-            const completed = compactionEvents.find((event: any) => event?.type === 'context-compaction' && event.phase === 'completed');
-            expect(completed?.lifecycleId).toBe(started?.lifecycleId);
-            expect(compactionEvents).not.toContain('Compaction started');
-            expect(compactionEvents).not.toContain('Compaction completed');
+            expect(onThinkingChange.mock.calls.map((call) => call[0]).slice(0, 2)).toEqual([true, false]);
         } finally {
             releaseStream();
             await runnerPromise.catch(() => {});

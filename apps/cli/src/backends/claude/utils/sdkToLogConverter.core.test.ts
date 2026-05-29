@@ -200,7 +200,7 @@ describe('SDKToLogConverter core conversion', () => {
   });
 
   describe('Result messages', () => {
-    it('does not convert result messages', () => {
+    it('converts successful result usage into assistant usage telemetry with the runtime context window', () => {
       const sdkMessage: SDKResultMessage = {
         type: 'result',
         subtype: 'success',
@@ -209,7 +209,149 @@ describe('SDKToLogConverter core conversion', () => {
         usage: {
           input_tokens: 100,
           output_tokens: 200,
+          cache_read_input_tokens: 50,
         },
+        modelUsage: {
+          'claude-opus-4-7': {
+            inputTokens: 100,
+            outputTokens: 200,
+            cacheReadInputTokens: 50,
+            contextWindow: 1_000_000,
+          },
+        },
+        total_cost_usd: 0.05,
+        duration_ms: 3000,
+        duration_api_ms: 2500,
+        is_error: false,
+        session_id: 'result-session',
+      };
+
+      const logMessage = converter.convert(sdkMessage);
+
+      expect(logMessage).toMatchObject({
+        type: 'assistant',
+        sessionId: conversionContext.sessionId,
+        message: {
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 200,
+            cache_read_input_tokens: 50,
+            context_window_tokens: 1_000_000,
+          },
+        },
+      });
+    });
+
+    it('uses latest assistant input as result context usage instead of cumulative result usage', () => {
+      const assistantWithActiveContext: SDKAssistantMessage & {
+        message: SDKAssistantMessage['message'] & {
+          model: string;
+          usage: {
+            input_tokens: number;
+            cache_creation_input_tokens: number;
+            cache_read_input_tokens: number;
+            output_tokens: number;
+          };
+        };
+      } = {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [{ type: 'text', text: 'Working' }],
+          usage: {
+            input_tokens: 1,
+            cache_creation_input_tokens: 111,
+            cache_read_input_tokens: 938_731,
+            output_tokens: 4_765,
+          },
+        },
+      };
+      converter.convert(assistantWithActiveContext);
+
+      const logMessage = converter.convert({
+        type: 'result',
+        subtype: 'success',
+        num_turns: 20,
+        usage: {
+          input_tokens: 4_000_000,
+          output_tokens: 25_000,
+          cache_creation_input_tokens: 769_000,
+          cache_read_input_tokens: 39_231_000,
+        },
+        modelUsage: {
+          'claude-opus-4-7': {
+            contextWindow: 1_000_000,
+          },
+        },
+        total_cost_usd: 100,
+        duration_ms: 1000,
+        duration_api_ms: 900,
+        is_error: false,
+        session_id: 'result-session',
+      });
+
+      expect(logMessage).toMatchObject({
+        type: 'assistant',
+        message: {
+          usage: {
+            context_used_tokens: 938_843,
+            context_window_tokens: 1_000_000,
+          },
+        },
+      });
+    });
+
+    it('does not use result usage telemetry as the next conversation parent', () => {
+      converter.convert({
+        type: 'assistant',
+        uuid: 'assistant-before-result',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Done' }],
+        },
+      } as SDKAssistantMessage);
+
+      converter.convert({
+        type: 'result',
+        subtype: 'success',
+        num_turns: 1,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+        },
+        modelUsage: {
+          'claude-opus-4-7': {
+            contextWindow: 1_000_000,
+          },
+        },
+        total_cost_usd: 0.01,
+        duration_ms: 100,
+        duration_api_ms: 90,
+        is_error: false,
+        session_id: 'result-session',
+      });
+
+      const nextUserMessage = converter.convert({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: 'Next prompt',
+        },
+      } as SDKUserMessage);
+
+      expect(nextUserMessage?.parentUuid).toBe('assistant-before-result');
+    });
+
+    it('does not convert result messages without usage telemetry', () => {
+      const sdkMessage: SDKResultMessage = {
+        type: 'result',
+        subtype: 'success',
+        result: 'Task completed',
+        num_turns: 5,
         total_cost_usd: 0.05,
         duration_ms: 3000,
         duration_api_ms: 2500,

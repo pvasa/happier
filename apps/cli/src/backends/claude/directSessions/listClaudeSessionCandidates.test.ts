@@ -62,4 +62,39 @@ describe('listClaudeSessionCandidates', () => {
     expect(second.candidates[0]?.activity).toBe('idle');
     expect(second.nextCursor).toBeNull();
   });
+
+  it('matches search terms against surfaced session titles', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-claude-direct-title-search-'));
+    const configDir = join(root, '.claude');
+    const project = join(configDir, 'projects', 'proj-unrelated');
+    await mkdir(project, { recursive: true });
+
+    const matchingFile = join(project, 'sess-a.jsonl');
+    const otherFile = join(project, 'sess-b.jsonl');
+
+    await writeFile(
+      matchingFile,
+      jsonlLine({ type: 'user', uuid: 'u1', message: { content: [{ type: 'text', text: 'Investigate daemon-backed browse search' }] } }),
+      'utf8',
+    );
+    await writeFile(
+      otherFile,
+      jsonlLine({ type: 'user', uuid: 'u2', message: { content: [{ type: 'text', text: 'Unrelated planning note' }] } }),
+      'utf8',
+    );
+
+    await utimes(matchingFile, new Date('2026-01-03T00:00:00.000Z'), new Date('2026-01-03T00:00:00.000Z'));
+    await utimes(otherFile, new Date('2026-01-04T00:00:00.000Z'), new Date('2026-01-04T00:00:00.000Z'));
+
+    const result = await listClaudeSessionCandidates({
+      source: { kind: 'claudeConfig', configDir, projectId: null },
+      env: {} as NodeJS.ProcessEnv,
+      searchTerm: 'daemon-backed',
+      limit: 10,
+    });
+
+    expect(result.candidates.map((candidate) => candidate.remoteSessionId)).toEqual(['sess-a']);
+    expect(result.candidates[0]?.title).toBe('Investigate daemon-backed browse search');
+    expect(result.nextCursor).toBeNull();
+  });
 });

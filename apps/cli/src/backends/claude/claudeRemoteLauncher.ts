@@ -18,8 +18,8 @@ import { OutgoingMessageQueue } from "./utils/OutgoingMessageQueue";
 import { getToolName } from "./utils/getToolName";
 import { syncClaudePermissionModeFromMetadata } from "./utils/syncPermissionModeFromMetadata";
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
-import { waitForMessagesOrPending } from '@/agent/runtime/waitForMessagesOrPending';
-import type { MessageBatch } from '@/agent/runtime/waitForMessagesOrPending';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import type { MessageBatch } from '@/agent/runtime/sessionInput/types';
 import { resolveClaudeRemoteQueuedPromptWithReplaySeed } from '@/backends/claude/remote/resolveClaudeRemoteQueuedPromptWithReplaySeed';
 import { cleanupStdinAfterInk } from '@/ui/ink/cleanupStdinAfterInk';
 import { restoreStdinBestEffort } from '@/ui/ink/restoreStdinBestEffort';
@@ -44,14 +44,13 @@ import {
     type RemoteModeStaticControl,
 } from '@/ui/remoteControl/remoteModeControl';
 import { dirname, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { configuration } from '@/configuration';
 import { getProjectPath } from './utils/path';
 import { resolveClaudeConfigDirOverride } from './utils/resolveClaudeConfigDirOverride';
 import { tryReadTextFileTail } from '@/agent/runtime/readTextFileTail';
 import { readClaudeSessionJsonlMessages } from './utils/readClaudeSessionJsonlMessages';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from './utils/normalizeClaudeToolUseNames';
-import type { AccountSettings } from '@happier-dev/protocol';
+import type { AccountSettings, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import { buildTurnChangeSetDiffInput } from '@/agent/tools/diff/buildTurnChangeSetDiffInput';
 import { ClaudeTurnChangeTracker } from './utils/ClaudeTurnChangeTracker';
 import { isClaudeExplicitDiffToolInput } from './utils/isClaudeExplicitDiffToolInput';
@@ -66,6 +65,10 @@ import {
 import { createClaudeRemoteStreamedTranscriptSession } from './remote/createClaudeRemoteStreamedTranscriptSession';
 import type { ClaudeCompletionEvent } from './contextCompactionEvents';
 import { mergeSessionWorkStateMetadataV1, type SessionWorkStateV1 } from '@/session/workState/sessionWorkStateMetadata';
+import type { NormalizedProviderUsageLimitDetailsV1 } from './connectedServices/mapClaudeRateLimitEventToUsageDetails';
+import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
+import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 
 function mergeSessionWorkStateIntoMetadata(
     metadata: Metadata,
@@ -88,6 +91,73 @@ type LaunchErrorInfo = {
     code?: string;
     stack?: string;
 };
+
+async function surfaceClaudeRateLimitRuntimeIssue(
+    session: Session,
+    details: NormalizedProviderUsageLimitDetailsV1,
+): Promise<void> {
+    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
+        details,
+        selection:
+            findConnectedServiceChildSelection(process.env, 'claude-subscription')
+            ?? findConnectedServiceChildSelection(process.env, 'anthropic')
+            ?? undefined,
+    });
+    if (!classification) return;
+    const connectedServiceId = classification.serviceId === 'anthropic' ? 'anthropic' : 'claude-subscription';
+    const issue: SessionRuntimeIssueV1 = {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: Date.now(),
+        provider: 'claude',
+        sanitizedPreview: 'Usage limit reached',
+        usageLimit: {
+            ...details,
+            connectedService: {
+                serviceId: connectedServiceId,
+                profileId: classification.profileId,
+                groupId: classification.groupId,
+            },
+        },
+    };
+    await session.client.sessionTurnLifecycle?.failTurn({
+        provider: 'claude',
+        issue,
+    });
+    await reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: session.client.sessionId,
+        switchesThisTurn: 0,
+        classification,
+        logPrefix: '[remote]',
+    });
+}
+
+async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
+    session: Session,
+    error: unknown,
+): Promise<void> {
+    const selection =
+        findConnectedServiceChildSelection(process.env, 'claude-subscription')
+        ?? findConnectedServiceChildSelection(process.env, 'anthropic')
+        ?? null;
+    if (!selection) return;
+
+    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
+        error,
+        selection,
+    });
+    if (!classification) return;
+
+    await reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: session.client.sessionId,
+        switchesThisTurn: 0,
+        classification,
+        logPrefix: '[remote]',
+    });
+}
 
 function getLaunchErrorInfo(e: unknown): LaunchErrorInfo {
     let asString = '[unprintable error]';
@@ -134,6 +204,13 @@ function isAbortError(e: unknown): boolean {
     if (typeof err.code === 'string' && err.code === 'ABORT_ERR') return true;
 
     return false;
+}
+
+function isClaudeExecutionErrorAfterUserAbort(e: unknown): boolean {
+    const info = getLaunchErrorInfo(e);
+    const values = [info.name, info.message, info.code, info.asString]
+        .filter((value): value is string => typeof value === 'string');
+    return values.some((value) => value.includes('error_during_execution'));
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -409,19 +486,19 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 	        if (turnInterrupt) {
 	            try {
 	                await turnInterrupt();
-	            } catch (error) {
+            } catch (error) {
                 logger.debug('[remote]: turn interrupt failed; falling back to process abort', { error });
                 session.noteUserAbortRequested();
-                session.client.sendAgentMessage('claude', { type: 'turn_aborted', id: randomUUID() });
+                session.abortCurrentTaskTurn();
                 await abort();
                 return;
             }
-            session.client.sendAgentMessage('claude', { type: 'turn_aborted', id: randomUUID() });
+            session.abortCurrentTaskTurn();
             session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
             return;
         }
 	        session.noteUserAbortRequested();
-	        session.client.sendAgentMessage('claude', { type: 'turn_aborted', id: randomUUID() });
+	        session.abortCurrentTaskTurn();
 	        await abort();
 	    }
 
@@ -569,6 +646,14 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             logger.debug('[remote]: failed seeding team inbox from transcript path (non-fatal)', { error });
         }
     };
+
+    async function recordClaudeRemotePromptTurnStarted(): Promise<void> {
+        try {
+            await session.client.sessionTurnLifecycle?.beginTurn({ provider: 'claude' });
+        } catch (error) {
+            logger.debug('[remote]: Failed to record Claude remote turn start (non-fatal)', error);
+        }
+    }
 
     function onMessage(message: SDKMessage) {
         if (message.type === 'system') {
@@ -938,6 +1023,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
 	            let mode: EnhancedMode | null = null;
 	            let didReplaySeedBootstrap = false;
                 let readyTurnContext: ReadyNotificationTurnContext | undefined;
+                const materializeNextPendingMessageSafely =
+                    typeof session.client.materializeNextPendingMessageSafely === 'function'
+                        ? session.client.materializeNextPendingMessageSafely.bind(session.client)
+                        : null;
                 const beginReadyNotificationTurn = () => {
                     if (typeof session.client.beginTurnAssistantTextSnapshot !== 'function') return;
                     const startSeqExclusive = typeof session.client.getLastObservedMessageSeq === 'function'
@@ -947,24 +1036,44 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     readyTurnContext = { turnToken, startSeqExclusive };
                 };
 	            try {
-                const waitForNextBatch = async (): Promise<MessageBatch<EnhancedMode, string> | null> => {
-                    return await waitForMessagesOrPending({
-                        messageQueue: session.queue,
-                        abortSignal: controller.signal,
+                const inputConsumer = createSessionProviderInputConsumer<EnhancedMode, string>({
+                    messageQueue: session.queue,
+                    session: {
+                        ...(materializeNextPendingMessageSafely
+                            ? {
+                                materializeNextPendingMessageSafely: async (materializeOpts) => {
+                                    if (session.queue.size() > 0) return { type: 'no_pending' as const };
+                                    return await materializeNextPendingMessageSafely(materializeOpts);
+                                },
+                            }
+                            : {}),
                         popPendingMessage: async () => {
                             // Only materialize pending items when there are no committed transcript messages
                             // queued locally; committed messages must be processed first.
                             if (session.queue.size() > 0) return false;
-                            return await session.client.popPendingMessage();
+                            if (!materializeNextPendingMessageSafely) {
+                                return await session.client.popPendingMessage();
+                            }
+                            return (await materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).type === 'materialized';
+                        },
+                        shouldAttemptPendingMaterialization: () =>
+                            session.queue.size() <= 0
+                            && (session.client.shouldAttemptPendingMaterialization?.() ?? true),
+                        reconcilePendingQueueState: async (opts) => {
+                            await session.client.reconcilePendingQueueState?.(opts);
                         },
                         waitForMetadataUpdate: (signal) => session.client.waitForMetadataUpdate(signal),
-                        onMetadataUpdate: () => {
-                            const updated = syncClaudePermissionModeFromMetadata({ session, permissionHandler });
-                            if (updated) {
-                                logger.debug(`[remote]: Permission mode updated from metadata to: ${updated}`);
-                            }
-                        },
-                    });
+                    },
+                    onMetadataUpdate: () => {
+                        const updated = syncClaudePermissionModeFromMetadata({ session, permissionHandler });
+                        if (updated) {
+                            logger.debug(`[remote]: Permission mode updated from metadata to: ${updated}`);
+                        }
+                    },
+                });
+
+                const waitForNextBatch = async (): Promise<MessageBatch<EnhancedMode, string> | null> => {
+                    return await inputConsumer.waitForNextInput({ abortSignal: controller.signal });
                 };
 
                 if (waitForMessageBeforeNextLaunch) {
@@ -1033,6 +1142,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                                 mode = p.mode;
                                 permissionHandler.handleModeChange(p.mode.permissionMode);
                                 beginReadyNotificationTurn();
+                                await recordClaudeRemotePromptTurnStarted();
                                 return { message: p.message, mode: p.mode };
                             }
 
@@ -1058,6 +1168,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                                 didBootstrap: didReplaySeedBootstrap,
                             });
                             didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
+                            await recordClaudeRemotePromptTurnStarted();
 
                             return {
                                 message: typeof replaySeedResolution.message === 'string' ? replaySeedResolution.message : '',
@@ -1118,6 +1229,12 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             'work_state',
                         );
                     },
+                    onRateLimitEvent: async (details: NormalizedProviderUsageLimitDetailsV1) => {
+                        await surfaceClaudeRateLimitRuntimeIssue(session, details);
+                    },
+                    onRuntimeAuthFailureEvent: async (error: unknown) => {
+                        await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error);
+                    },
                         onCompletionEvent: (event: ClaudeCompletionEvent) => {
                         logger.debug('[remote]: Completion event', event);
                         sendClaudeCompletionEvent({ session, event });
@@ -1148,14 +1265,19 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 }
             } catch (e) {
                 const abortError = isAbortError(e);
+                const executionErrorAfterUserAbort =
+                    didUserAbortThisLaunch
+                    && !exitReason
+                    && isClaudeExecutionErrorAfterUserAbort(e);
                 logger.debug('[remote]: launch error', {
                     ...getLaunchErrorInfo(e),
                     abortError,
+                    executionErrorAfterUserAbort,
                 });
 
                 if (exitReason) {
                     // Exit already requested (switch/exit).
-                } else if (abortError) {
+                } else if (abortError || executionErrorAfterUserAbort) {
                     if (controller.signal.aborted) {
                         session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
                     }

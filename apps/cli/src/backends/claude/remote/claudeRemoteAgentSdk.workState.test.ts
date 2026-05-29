@@ -19,7 +19,234 @@ function createQueryFromMessages(messages: readonly unknown[]) {
   } as any));
 }
 
+async function runAgentSdkMessagesForRateLimitTest(params: Readonly<{
+  messages: readonly unknown[];
+  onMessage: (message: unknown) => void;
+  onRateLimitEvent: (details: unknown) => void;
+  onRuntimeAuthFailureEvent?: (error: unknown) => void;
+}>): Promise<void> {
+  const createQuery = createQueryFromMessages(params.messages);
+  let didSendFirst = false;
+
+  await claudeRemoteAgentSdk({
+    sessionId: null,
+    transcriptPath: null,
+    path: '/tmp',
+    claudeArgs: [],
+    claudeExecutablePath: '/tmp/claude',
+    canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+    isAborted: () => false,
+    nextMessage: async () => {
+      if (didSendFirst) return null;
+      didSendFirst = true;
+      return { message: 'hello', mode: makeMode({ permissionMode: 'default' }) };
+    },
+    onReady: () => {},
+    onSessionFound: () => {},
+    onMessage: params.onMessage,
+    onRateLimitEvent: params.onRateLimitEvent,
+    onRuntimeAuthFailureEvent: params.onRuntimeAuthFailureEvent,
+    createQuery,
+  });
+}
+
 describe('claudeRemoteAgentSdk work-state projection', () => {
+  it('consumes rate_limit_event before transcript conversion drops it', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onMessage = vi.fn();
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [
+        {
+          type: 'rate_limit_event',
+          uuid: 'rate-limit-1',
+          session_id: 'claude-session-1',
+          rate_limit_info: {
+            status: 'rejected',
+            resetsAt: 1_768_100_000_000,
+            rateLimitType: 'five_hour',
+            utilization: 100,
+          },
+        },
+        { type: 'result' },
+      ],
+      onMessage,
+      onRateLimitEvent,
+    });
+
+    expect(onRateLimitEvent).toHaveBeenCalledWith({
+      v: 1,
+      resetAtMs: 1_768_100_000_000,
+      retryAfterMs: null,
+      quotaScope: 'account',
+      recoverability: 'wait',
+      providerLimitId: 'five_hour',
+      planType: null,
+      utilization: 100,
+      overage: null,
+      action: null,
+      connectedService: null,
+    });
+    expect(onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'rate_limit_event' }));
+  });
+
+  it('does not surface allowed rate_limit_event telemetry as a runtime limit', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onMessage = vi.fn();
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [
+        {
+          type: 'rate_limit_event',
+          uuid: 'rate-limit-allowed',
+          session_id: 'claude-session-allowed',
+          rate_limit_info: {
+            status: 'allowed',
+            resetsAt: 1_779_097_200,
+            rateLimitType: 'five_hour',
+            overageStatus: 'rejected',
+            overageDisabledReason: 'org_level_disabled',
+            isUsingOverage: false,
+          },
+        },
+        { type: 'result' },
+      ],
+      onMessage,
+      onRateLimitEvent,
+    });
+
+    expect(onRateLimitEvent).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'rate_limit_event' }));
+  });
+
+  it('surfaces synthetic API-error rate-limit assistant records before transcript conversion', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onMessage = vi.fn();
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [
+        {
+          type: 'assistant',
+          uuid: 'api-error-assistant-1',
+          isApiErrorMessage: true,
+          error: {
+            type: 'rate_limit_error',
+            code: 'rate_limit',
+            message: 'Claude API rate limit exceeded',
+            api_error_status: 429,
+            reset_at: '2026-05-17T12:00:00.000Z',
+          },
+        },
+        { type: 'result' },
+      ],
+      onMessage,
+      onRateLimitEvent,
+    });
+
+    expect(onRateLimitEvent).toHaveBeenCalledWith(expect.objectContaining({
+      resetAtMs: Date.parse('2026-05-17T12:00:00.000Z'),
+      retryAfterMs: null,
+      quotaScope: 'account',
+      recoverability: 'wait',
+      providerLimitId: 'rate_limit',
+    }));
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'assistant',
+      isApiErrorMessage: true,
+    }));
+  });
+
+  it('routes synthetic Claude auth API errors to runtime auth recovery without usage-limit mapping', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onRuntimeAuthFailureEvent = vi.fn();
+    const onMessage = vi.fn();
+    const authError = {
+      type: 'assistant',
+      uuid: 'api-error-auth-1',
+      isApiErrorMessage: true,
+      api_error_status: 401,
+      error: {
+        type: 'authentication_error',
+        message: 'Invalid authentication credentials',
+      },
+      response: {
+        headers: {
+          'retry-after': '30',
+          'anthropic-ratelimit-requests-reset': '2030-01-01T00:00:00.000Z',
+        },
+      },
+    };
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [authError, { type: 'result' }],
+      onMessage,
+      onRateLimitEvent,
+      onRuntimeAuthFailureEvent,
+    });
+
+    expect(onRateLimitEvent).not.toHaveBeenCalled();
+    expect(onRuntimeAuthFailureEvent).toHaveBeenCalledWith(authError);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'assistant',
+      isApiErrorMessage: true,
+    }));
+  });
+
+  it('stops processing provider messages after a connected auth failure', async () => {
+    const onRateLimitEvent = vi.fn();
+    const onRuntimeAuthFailureEvent = vi.fn();
+    const onMessage = vi.fn();
+    const authError = {
+      type: 'assistant',
+      uuid: 'api-error-auth-1',
+      isApiErrorMessage: true,
+      api_error_status: 401,
+      error: {
+        type: 'authentication_error',
+        message: 'Invalid authentication credentials',
+      },
+    };
+    const laterQuotaError = {
+      type: 'rate_limit_event',
+      uuid: 'rate-limit-after-auth',
+      session_id: 'claude-session-1',
+      rate_limit_info: {
+        status: 'rejected',
+        resetsAt: 1_768_100_000_000,
+        rateLimitType: 'weekly',
+        utilization: 100,
+      },
+    };
+
+    await runAgentSdkMessagesForRateLimitTest({
+      messages: [authError, laterQuotaError, { type: 'result' }],
+      onMessage,
+      onRateLimitEvent,
+      onRuntimeAuthFailureEvent,
+    });
+
+    expect(onRuntimeAuthFailureEvent).toHaveBeenCalledWith(authError);
+    expect(onRateLimitEvent).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'assistant',
+      isApiErrorMessage: true,
+    }));
+  });
+
+  it('includes Agent SDK result errors in execution failures', async () => {
+    await expect(runAgentSdkMessagesForRateLimitTest({
+      messages: [
+        {
+          type: 'result',
+          subtype: 'error_during_execution',
+          errors: ['Cannot resume the requested Claude conversation.'],
+        },
+      ],
+      onMessage: vi.fn(),
+      onRateLimitEvent: vi.fn(),
+    })).rejects.toThrow(/Cannot resume the requested Claude conversation/u);
+  });
+
   it('does not publish background task lifecycle system messages as user-facing work-state snapshots', async () => {
     const onWorkStateSnapshot = vi.fn();
     const createQuery = createQueryFromMessages([
@@ -106,7 +333,7 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
 
     expect(onWorkStateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       backendId: 'claude',
-      ownedSourceFamilies: ['todo'],
+      ownedSourceFamilies: ['todo:derived:claude.todo'],
       items: [
         expect.objectContaining({
           kind: 'todo',
@@ -166,7 +393,7 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
 
     expect(onWorkStateSnapshot).toHaveBeenCalledWith(expect.objectContaining({
       backendId: 'claude',
-      ownedSourceFamilies: ['todo'],
+      ownedSourceFamilies: ['todo:derived:claude.todo'],
       items: [],
       primaryItemId: null,
     }));
@@ -249,10 +476,10 @@ describe('claudeRemoteAgentSdk work-state projection', () => {
 
     expect(onWorkStateSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({
       backendId: 'claude',
-      ownedSourceFamilies: ['task'],
+      ownedSourceFamilies: ['task:derived:claude.task'],
       items: [
         expect.objectContaining({
-          id: 'task:task_real_1',
+          id: 'task:derived:claude.task:task_real_1',
           kind: 'task',
           status: 'active',
           title: 'Run tests',

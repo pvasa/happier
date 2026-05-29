@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
+import {
+    HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { claudeRemoteAgentSdk } from './claudeRemoteAgentSdk';
 import { makeMode } from './claudeRemoteAgentSdk.testkit';
 import { resolveClaudeProjectId } from '../utils/path';
@@ -1288,6 +1292,245 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
             else process.env.GITHUB_TOKEN = originalToken;
             if (originalMarker === undefined) delete process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
             else process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON = originalMarker;
+        }
+    });
+
+    it('does not forward Claude OAuth refresh material into the normal subprocess env allowlist', async () => {
+        const originals = {
+            refreshToken: process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN,
+            scopes: process.env.CLAUDE_CODE_OAUTH_SCOPES,
+        };
+        process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = 'refresh-secret';
+        process.env.CLAUDE_CODE_OAUTH_SCOPES = 'user:inference';
+
+        try {
+            let capturedOptions: any = null;
+
+            const createQuery = vi.fn((_params: any) => {
+                capturedOptions = _params.options;
+                return {
+                    async *[Symbol.asyncIterator]() {
+                        yield { type: 'result' } as any;
+                    },
+                    close: vi.fn(),
+                    setPermissionMode: vi.fn(),
+                    setModel: vi.fn(),
+                    setMaxThinkingTokens: vi.fn(),
+                    supportedCommands: vi.fn(async () => []),
+                    supportedModels: vi.fn(async () => []),
+                } as any;
+            });
+
+            let didSendFirst = false;
+            const nextMessage = vi.fn(async () => {
+                if (didSendFirst) return null;
+                didSendFirst = true;
+                return { message: 'hello', mode: makeMode({ permissionMode: 'default' } as any) };
+            });
+
+            await claudeRemoteAgentSdk({
+                sessionId: null,
+                transcriptPath: null,
+                path: '/tmp',
+                claudeArgs: [],
+                claudeExecutablePath: '/tmp/claude',
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+                isAborted: () => false,
+                nextMessage,
+                onReady: () => {},
+                onSessionFound: () => {},
+                onMessage: () => {},
+                createQuery,
+            } as any);
+
+            expect(capturedOptions.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+            expect(capturedOptions.env.CLAUDE_CODE_OAUTH_SCOPES).toBeUndefined();
+        } finally {
+            if (originals.refreshToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN;
+            else process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = originals.refreshToken;
+            if (originals.scopes === undefined) delete process.env.CLAUDE_CODE_OAUTH_SCOPES;
+            else process.env.CLAUDE_CODE_OAUTH_SCOPES = originals.scopes;
+        }
+    });
+
+    it('does not forward Claude OAuth refresh material even when explicitly requested for subprocess env', async () => {
+        const originals = {
+            refreshToken: process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN,
+            scopes: process.env.CLAUDE_CODE_OAUTH_SCOPES,
+            marker: process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON,
+            explicitAllowed: process.env.HAPPIER_CLAUDE_EXPLICIT_ENV_ALLOWED_TEST,
+        };
+        process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = 'refresh-secret';
+        process.env.CLAUDE_CODE_OAUTH_SCOPES = 'user:inference';
+        process.env.HAPPIER_CLAUDE_EXPLICIT_ENV_ALLOWED_TEST = 'allowed-explicit-value';
+        process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON = JSON.stringify([
+            'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+            'CLAUDE_CODE_OAUTH_SCOPES',
+            'HAPPIER_CLAUDE_EXPLICIT_ENV_ALLOWED_TEST',
+        ]);
+
+        try {
+            let capturedOptions: any = null;
+
+            const createQuery = vi.fn((_params: any) => {
+                capturedOptions = _params.options;
+                return {
+                    async *[Symbol.asyncIterator]() {
+                        yield { type: 'result' } as any;
+                    },
+                    close: vi.fn(),
+                    setPermissionMode: vi.fn(),
+                    setModel: vi.fn(),
+                    setMaxThinkingTokens: vi.fn(),
+                    supportedCommands: vi.fn(async () => []),
+                    supportedModels: vi.fn(async () => []),
+                } as any;
+            });
+
+            let didSendFirst = false;
+            const nextMessage = vi.fn(async () => {
+                if (didSendFirst) return null;
+                didSendFirst = true;
+                return { message: 'hello', mode: makeMode({ permissionMode: 'default' } as any) };
+            });
+
+            await claudeRemoteAgentSdk({
+                sessionId: null,
+                transcriptPath: null,
+                path: '/tmp',
+                claudeArgs: [],
+                claudeExecutablePath: '/tmp/claude',
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+                isAborted: () => false,
+                nextMessage,
+                onReady: () => {},
+                onSessionFound: () => {},
+                onMessage: () => {},
+                createQuery,
+            } as any);
+
+            expect(capturedOptions.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+            expect(capturedOptions.env.CLAUDE_CODE_OAUTH_SCOPES).toBeUndefined();
+            expect(capturedOptions.env.HAPPIER_CLAUDE_EXPLICIT_ENV_ALLOWED_TEST).toBe('allowed-explicit-value');
+
+            const output = await capturedOptions.hooks.PreToolUse[0].hooks[0]({
+                hook_event_name: 'PreToolUse',
+                session_id: 'sess_1',
+                transcript_path: '/tmp/sess_1.jsonl',
+                cwd: '/tmp',
+                tool_name: 'Bash',
+                tool_input: { command: 'echo hi' },
+                tool_use_id: 'toolu_123',
+            });
+
+            expect(output.hookSpecificOutput.updatedInput.command).toContain('CLAUDE_CODE_OAUTH_REFRESH_TOKEN');
+            expect(output.hookSpecificOutput.updatedInput.command).toContain('CLAUDE_CODE_OAUTH_SCOPES');
+            expect(output.hookSpecificOutput.updatedInput.command).toContain('echo hi');
+        } finally {
+            if (originals.refreshToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN;
+            else process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = originals.refreshToken;
+            if (originals.scopes === undefined) delete process.env.CLAUDE_CODE_OAUTH_SCOPES;
+            else process.env.CLAUDE_CODE_OAUTH_SCOPES = originals.scopes;
+            if (originals.marker === undefined) delete process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
+            else process.env.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON = originals.marker;
+            if (originals.explicitAllowed === undefined) delete process.env.HAPPIER_CLAUDE_EXPLICIT_ENV_ALLOWED_TEST;
+            else process.env.HAPPIER_CLAUDE_EXPLICIT_ENV_ALLOWED_TEST = originals.explicitAllowed;
+        }
+    });
+
+    it('logs redacted Claude runtime auth diagnostics for the runner and subprocess env', async () => {
+        const originals = {
+            apiKey: process.env.ANTHROPIC_API_KEY,
+            oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+            configDir: process.env.CLAUDE_CONFIG_DIR,
+            selection: process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY],
+        };
+        const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+        process.env.ANTHROPIC_API_KEY = 'sk-ant-secret';
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = 'claude-oauth-secret';
+        process.env.CLAUDE_CONFIG_DIR = '/Users/test/.claude';
+        process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = JSON.stringify([{
+            kind: 'group',
+            serviceId: 'claude-subscription',
+            groupId: 'claude',
+            activeProfileId: 'batiplus',
+            fallbackProfileId: 'leeroy_batiplus',
+            generation: 4,
+        }]);
+
+        try {
+            const createQuery = vi.fn((_params: any) => {
+                return {
+                    async *[Symbol.asyncIterator]() {
+                        yield { type: 'result' } as any;
+                    },
+                    close: vi.fn(),
+                    setPermissionMode: vi.fn(),
+                    setModel: vi.fn(),
+                    setMaxThinkingTokens: vi.fn(),
+                    supportedCommands: vi.fn(async () => []),
+                    supportedModels: vi.fn(async () => []),
+                } as any;
+            });
+
+            let didSendFirst = false;
+            const nextMessage = vi.fn(async () => {
+                if (didSendFirst) return null;
+                didSendFirst = true;
+                return { message: 'hello', mode: makeMode({ permissionMode: 'default' } as any) };
+            });
+
+            await claudeRemoteAgentSdk({
+                sessionId: 'session-1',
+                transcriptPath: null,
+                path: '/tmp',
+                claudeArgs: [],
+                claudeExecutablePath: '/tmp/claude',
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+                isAborted: () => false,
+                nextMessage,
+                onReady: () => {},
+                onSessionFound: () => {},
+                onMessage: () => {},
+                createQuery,
+            } as any);
+
+            const diagnosticCall = debugSpy.mock.calls.find((call) => call[0] === '[claudeRemoteAgentSdk] Claude runtime auth diagnostic');
+            expect(diagnosticCall?.[1]).toMatchObject({
+                sessionId: 'session-1',
+                connectedServiceSelection: {
+                    kind: 'group',
+                    serviceId: 'claude-subscription',
+                    groupId: 'claude',
+                    activeProfileId: 'batiplus',
+                    fallbackProfileId: 'leeroy_batiplus',
+                    generation: 4,
+                },
+                runnerEnv: {
+                    hasAnthropicApiKey: true,
+                    hasClaudeCodeOauthToken: true,
+                    hasClaudeConfigDir: true,
+                    hasHappierConnectedServiceSelections: true,
+                },
+                childEnv: {
+                    hasAnthropicApiKey: false,
+                    hasClaudeCodeOauthToken: true,
+                    hasClaudeConfigDir: true,
+                    hasHappierConnectedServiceSelections: false,
+                },
+            });
+            expect(JSON.stringify(diagnosticCall)).not.toContain('secret');
+            expect(JSON.stringify(diagnosticCall)).not.toContain('/Users/test/.claude');
+        } finally {
+            debugSpy.mockRestore();
+            if (originals.apiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+            else process.env.ANTHROPIC_API_KEY = originals.apiKey;
+            if (originals.oauthToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+            else process.env.CLAUDE_CODE_OAUTH_TOKEN = originals.oauthToken;
+            if (originals.configDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+            else process.env.CLAUDE_CONFIG_DIR = originals.configDir;
+            if (originals.selection === undefined) delete process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY];
+            else process.env[HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY] = originals.selection;
         }
     });
 
@@ -2598,6 +2841,8 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
             }),
         );
         expect(output.hookSpecificOutput.updatedInput.command).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+        expect(output.hookSpecificOutput.updatedInput.command).toContain('CLAUDE_CODE_OAUTH_REFRESH_TOKEN');
+        expect(output.hookSpecificOutput.updatedInput.command).toContain('CLAUDE_CODE_OAUTH_SCOPES');
         expect(output.hookSpecificOutput.updatedInput.command).toContain('ANTHROPIC_AUTH_TOKEN');
         expect(output.hookSpecificOutput.updatedInput.command).toContain('echo hi');
     });

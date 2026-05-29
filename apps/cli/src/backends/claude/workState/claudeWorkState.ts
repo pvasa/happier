@@ -1,4 +1,5 @@
 import {
+  boundSessionWorkStateItemsV1,
   normalizeClaudeTaskToolRecordsToWorkStateItems,
   normalizeClaudeTaskToolUseToWorkStateItem,
   normalizeClaudeTodoWriteTodosToWorkStateItems,
@@ -7,6 +8,10 @@ import {
 } from '@happier-dev/protocol';
 
 type ClaudeWorkStateSnapshot = SessionWorkStateV1 & Readonly<{ ownedSourceFamilies?: readonly string[] }>;
+
+export const CLAUDE_TODO_WRITE_WORK_STATE_OWNED_SOURCE_FAMILIES = ['todo:derived:claude.todo'] as const;
+export const CLAUDE_TASK_TOOL_WORK_STATE_OWNED_SOURCE_FAMILIES = ['task:derived:claude.task'] as const;
+export const CLAUDE_WORK_STATE_ITEM_LIMIT = 100;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -47,13 +52,18 @@ export function buildClaudeTodoWriteWorkState(params: Readonly<{
   agentId?: string;
   updatedAt: number;
   input: unknown;
+  maxItems?: number | null;
 }>): SessionWorkStateV1 {
   const input = readRecord(params.input);
-  const items = normalizeClaudeTodoWriteTodosToWorkStateItems({
+  const normalizedItems = normalizeClaudeTodoWriteTodosToWorkStateItems({
     backendId: params.backendId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     updatedAt: params.updatedAt,
     todos: input?.todos,
+  });
+  const bounded = boundSessionWorkStateItemsV1({
+    items: normalizedItems,
+    maxItems: params.maxItems ?? CLAUDE_WORK_STATE_ITEM_LIMIT,
   });
 
   return {
@@ -61,9 +71,10 @@ export function buildClaudeTodoWriteWorkState(params: Readonly<{
     backendId: params.backendId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     updatedAt: params.updatedAt,
-    ownedSourceFamilies: ['todo'],
-    items,
-    primaryItemId: choosePrimary(items),
+    ownedSourceFamilies: CLAUDE_TODO_WRITE_WORK_STATE_OWNED_SOURCE_FAMILIES,
+    items: bounded.items,
+    primaryItemId: choosePrimary(bounded.items),
+    ...(bounded.truncated ? { truncated: bounded.truncated } : {}),
   } as ClaudeWorkStateSnapshot;
 }
 
@@ -144,6 +155,7 @@ function mergeTaskItem(params: Readonly<{
 export function createClaudeTaskToolWorkStateTracker(params: Readonly<{
   backendId: string;
   agentId?: string;
+  maxItems?: number | null;
 }>): Readonly<{
   applyMessage: (message: unknown, updatedAt: number) => ClaudeWorkStateSnapshot | null;
 }> {
@@ -152,15 +164,19 @@ export function createClaudeTaskToolWorkStateTracker(params: Readonly<{
   const pendingTaskListToolUseIds = new Set<string>();
 
   const buildSnapshot = (updatedAt: number): ClaudeWorkStateSnapshot => {
-    const items = [...itemsByVendorRef.values()];
+    const bounded = boundSessionWorkStateItemsV1({
+      items: [...itemsByVendorRef.values()],
+      maxItems: params.maxItems ?? CLAUDE_WORK_STATE_ITEM_LIMIT,
+    });
     return {
       v: 1,
       backendId: params.backendId,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       updatedAt,
-      ownedSourceFamilies: ['task'],
-      items,
-      primaryItemId: choosePrimary(items),
+      ownedSourceFamilies: CLAUDE_TASK_TOOL_WORK_STATE_OWNED_SOURCE_FAMILIES,
+      items: bounded.items,
+      primaryItemId: choosePrimary(bounded.items),
+      ...(bounded.truncated ? { truncated: bounded.truncated } : {}),
     };
   };
 

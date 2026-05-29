@@ -403,6 +403,14 @@ export class Session {
         this.client.sendAgentMessage('claude', { type: 'task_complete', id });
     }
 
+    abortCurrentTaskTurn = () => {
+        const id = this.currentTaskId ?? randomUUID();
+        this.currentTaskId = null;
+        this.thinking = false;
+        this.client.keepAlive(false, this.mode);
+        this.client.sendAgentMessage('claude', { type: 'turn_aborted', id });
+    }
+
     onModeChange = (mode: 'local' | 'remote') => {
         this.mode = mode;
         this.client.keepAlive(this.thinking, mode);

@@ -76,6 +76,39 @@ describe('listClaudeSessionCandidates lazy title reads', () => {
     expect(result.candidates[0]?.title).toBe('Fast Claude title');
   });
 
+  it('matches an exact session id without reading non-matching session titles', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-claude-direct-id-search-'));
+    const configDir = join(root, '.claude');
+    const projectDir = join(configDir, 'projects', 'proj-a');
+    await mkdir(projectDir, { recursive: true });
+
+    const matchingFile = join(projectDir, 'sess-target.jsonl');
+    const nonMatchingFile = join(projectDir, 'sess-other.jsonl');
+    await writeFile(matchingFile, jsonlLine({ type: 'summary', leafUuid: 'leaf-target', summary: 'Target Claude title' }), 'utf8');
+    await writeFile(nonMatchingFile, jsonlLine({ type: 'summary', leafUuid: 'leaf-other', summary: 'Other Claude title' }), 'utf8');
+    await utimes(matchingFile, new Date('2026-03-06T12:00:00.000Z'), new Date('2026-03-06T12:00:00.000Z'));
+    await utimes(nonMatchingFile, new Date('2026-03-07T12:00:00.000Z'), new Date('2026-03-07T12:00:00.000Z'));
+
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let nonMatchingOpenCount = 0;
+    openMock.mockImplementation(async (filePath, flags) => {
+      if (String(filePath).endsWith('sess-other.jsonl')) {
+        nonMatchingOpenCount += 1;
+      }
+      return actual.open(filePath, flags);
+    });
+
+    const result = await listClaudeSessionCandidates({
+      source: { kind: 'claudeConfig', configDir, projectId: null },
+      env: {} as NodeJS.ProcessEnv,
+      limit: 10,
+      searchTerm: 'sess-target',
+    });
+
+    expect(result.candidates.map((candidate) => candidate.remoteSessionId)).toEqual(['sess-target']);
+    expect(nonMatchingOpenCount).toBe(0);
+  });
+
   it('starts session metadata stats concurrently instead of serializing every file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-claude-direct-list-concurrent-'));
     const configDir = join(root, '.claude');

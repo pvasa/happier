@@ -12,9 +12,9 @@ import {
 } from '@/backends/directSessions/providerOps';
 
 export const claudeDirectSessionProviderOps: DirectSessionProviderOps = {
-  listCandidates: async ({ source, cursor, limit, searchTerm }) => {
-    const res = await listClaudeSessionCandidates({ source, cursor, limit, searchTerm });
-    return { candidates: res.candidates, nextCursor: res.nextCursor ?? null };
+  listCandidates: async ({ source, cursor, limit, searchTerm, searchMode }) => {
+    const res = await listClaudeSessionCandidates({ source, cursor, limit, searchTerm, searchMode });
+    return { candidates: res.candidates, nextCursor: res.nextCursor ?? null, ...(res.searchIncomplete ? { searchIncomplete: true } : {}) };
   },
   getActivity: async ({ source, remoteSessionId }) => {
     const res = await getClaudeDirectSessionActivity({ source, remoteSessionId });

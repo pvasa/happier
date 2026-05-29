@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHANGE_TITLE_INSTRUCTION } from '@/agent/runtime/changeTitleInstruction';
 
 function createFakeClaudeEntrypointSource(): string {
@@ -224,6 +224,7 @@ describe('ClaudeSdkAgentBackend', () => {
   const originalDebug = process.env.DEBUG;
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalClaudePath === undefined) {
       delete process.env.HAPPIER_CLAUDE_PATH;
     } else {
@@ -742,7 +743,7 @@ describe('ClaudeSdkAgentBackend', () => {
     );
   });
 
-  it('treats a compaction session init as a turn boundary so queued prompts can continue without stopping the thread', async () => {
+  it('allows standalone /compact session init to finish so queued prompts can continue without stopping the thread', async () => {
     delete process.env.DEBUG;
 
     await withFakeClaudeBackend(
@@ -813,6 +814,44 @@ describe('ClaudeSdkAgentBackend', () => {
         ]);
 
         expect(settled.startsWith('rejected:')).toBe(false);
+      },
+    );
+  });
+
+  it('waitForResponseComplete without an explicit timeout does not default to a 120 second cap', async () => {
+    delete process.env.DEBUG;
+
+    await withFakeClaudeBackend(
+      {
+        dirPrefix: 'happier-claude-sdk-no-default-timeout-',
+        permissionPolicy: 'no_tools',
+        hangTurn: true,
+      },
+      async ({ backend }) => {
+        const { sessionId } = await backend.startSession();
+        await backend.sendPrompt(sessionId, 'this will hang');
+        expect(typeof (backend as any).waitForResponseComplete).toBe('function');
+
+        vi.useFakeTimers();
+        let outcome = 'pending';
+        const completion = (backend as any).waitForResponseComplete().then(
+          () => {
+            outcome = 'resolved';
+          },
+          (error: unknown) => {
+            outcome = `rejected:${error instanceof Error ? error.message : String(error)}`;
+          },
+        );
+
+        await vi.advanceTimersByTimeAsync(120_001);
+        await Promise.resolve();
+
+        expect(outcome).toBe('pending');
+        vi.useRealTimers();
+
+        await backend.dispose();
+        await completion;
+        expect(outcome).toBe('rejected:Agent disposed');
       },
     );
   });

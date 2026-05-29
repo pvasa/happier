@@ -142,6 +142,117 @@ describe('claudeRemoteAgentSdk subagent turn completion', () => {
         expect(onSubagentFlush).not.toHaveBeenCalled();
     });
 
+    it('keeps the parent turn active when a result arrives while a background task is still running', async () => {
+        const releaseBackgroundTask = createHoldOpen();
+        const releaseClosed = createHoldOpen();
+        const releaseQueuedPromptWait = createHoldOpen();
+        const onReady = vi.fn();
+        const onSubagentFlush = vi.fn();
+        const thinkingEvents: boolean[] = [];
+        let nextMessageCalls = 0;
+        const nextMessage = vi.fn(async () => {
+            nextMessageCalls += 1;
+            if (nextMessageCalls === 1) {
+                return { message: 'hello', mode: makeMode({ permissionMode: 'default' }) };
+            }
+            await releaseQueuedPromptWait.promise;
+            return null;
+        });
+
+        const createQuery = vi.fn((_params: unknown) => ({
+            async *[Symbol.asyncIterator]() {
+                yield { type: 'system', subtype: 'task_started', task_id: 'task_1' } as any;
+                yield {
+                    type: 'user',
+                    message: {
+                        role: 'user',
+                        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Background task started' }],
+                    },
+                    tool_use_result: {
+                        assistantAutoBackgrounded: true,
+                        backgroundTaskId: 'task_1',
+                        interrupted: false,
+                        stderr: '',
+                        stdout: '',
+                    },
+                } as any;
+                yield { type: 'result' } as any;
+                await releaseBackgroundTask.promise;
+                yield { type: 'system', subtype: 'task_notification', task_id: 'task_1', status: 'completed' } as any;
+                await releaseClosed.promise;
+            },
+            close: vi.fn(() => {
+                releaseBackgroundTask.release();
+                releaseClosed.release();
+            }),
+            setPermissionMode: vi.fn(),
+            setModel: vi.fn(),
+            setMaxThinkingTokens: vi.fn(),
+            supportedCommands: vi.fn(async () => []),
+            supportedModels: vi.fn(async () => []),
+        } as any));
+
+        const runnerPromise = claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage,
+            onReady,
+            onSubagentFlush,
+            onThinkingChange: (thinking: boolean) => thinkingEvents.push(thinking),
+            onSessionFound: () => {},
+            onMessage: () => {},
+            createQuery,
+        } as any);
+
+        try {
+            await vi.waitFor(() => {
+                expect(onReady).toHaveBeenCalledTimes(1);
+            });
+            expect(thinkingEvents).toEqual([true]);
+
+            releaseBackgroundTask.release();
+
+            await vi.waitFor(() => {
+                expect(thinkingEvents).toEqual([true, false]);
+            });
+            expect(onSubagentFlush).toHaveBeenCalledTimes(1);
+        } finally {
+            releaseBackgroundTask.release();
+            releaseClosed.release();
+            releaseQueuedPromptWait.release();
+            await runnerPromise.catch(() => {});
+        }
+    });
+
+    it('rejects Agent SDK error result subtypes instead of completing the turn normally', async () => {
+        const onReady = vi.fn();
+
+        await expect(claudeRemoteAgentSdk({
+            sessionId: null,
+            transcriptPath: null,
+            path: '/tmp',
+            claudeArgs: [],
+            claudeExecutablePath: '/tmp/claude',
+            canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+            isAborted: () => false,
+            nextMessage: createNextMessage(),
+            onReady,
+            onSubagentFlush: () => {},
+            onSessionFound: () => {},
+            onMessage: () => {},
+            createQuery: createQueryFromEvents([
+                { type: 'result', subtype: 'error_max_turns', result: 'maximum turns reached' },
+            ]),
+        } as any)).rejects.toThrow(/error_max_turns/);
+
+        expect(onReady).not.toHaveBeenCalled();
+    });
+
     it('keeps the latest active subagent interrupt target when an earlier subagent completes', async () => {
         const holdOpen = createHoldOpen();
         const stopTask = vi.fn(async () => {});

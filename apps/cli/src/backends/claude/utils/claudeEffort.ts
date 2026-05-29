@@ -18,7 +18,10 @@ function resolveClaudeEffortLevelsForKnownAliasOrModel(modelIdRaw: unknown): rea
     const direct = agentProviders.claude.resolveClaudeEffortLevelsForModelId(modelId) as readonly ClaudeEffortLevel[];
     if (direct.length > 0) return direct;
 
-    if (modelId === 'opus' || modelId.includes('opus-4-7')) {
+    if (modelId === 'opus' || modelId.includes('opus-4-8')) {
+        return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-opus-4-8') as readonly ClaudeEffortLevel[];
+    }
+    if (modelId.includes('opus-4-7')) {
         return agentProviders.claude.resolveClaudeEffortLevelsForModelId('claude-opus-4-7') as readonly ClaudeEffortLevel[];
     }
     if (modelId.includes('opus-4-6')) {
@@ -40,7 +43,10 @@ function resolveClaudeDefaultEffortForKnownAliasOrModel(modelIdRaw: unknown): Cl
     const direct = agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId(modelId) as ClaudeEffortLevel | null;
     if (direct) return direct;
 
-    if (modelId === 'opus' || modelId.includes('opus-4-7')) {
+    if (modelId === 'opus' || modelId.includes('opus-4-8')) {
+        return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-opus-4-8') as ClaudeEffortLevel | null;
+    }
+    if (modelId.includes('opus-4-7')) {
         return agentProviders.claude.resolveClaudeDefaultEffortLevelForModelId('claude-opus-4-7') as ClaudeEffortLevel | null;
     }
     if (modelId.includes('opus-4-6')) {

@@ -12,6 +12,7 @@ import { resolveClaudeRemoteSessionStartPlan } from "./remote/sessionStartPlan";
 import { resolveClaudeConfigDirOverride } from "./utils/resolveClaudeConfigDirOverride";
 import { resolveClaudeConfigDirEnvOverlay } from "./utils/resolveClaudeConfigDirEnvOverlay";
 import { resolveClaudeCodeExperimentalEnvOverlay } from "./spawn/resolveClaudeCodeExperimentalEnvOverlay";
+import { logClaudeRuntimeAuthEnvDiagnostic } from "./spawn/logClaudeRuntimeAuthEnvDiagnostic";
 import { ensureClaudeJsRuntimeExecutable } from "./utils/ensureClaudeJsRuntimeExecutable";
 import { resolveClaudeCliPath } from "./utils/resolveClaudeCliPath";
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
@@ -214,6 +215,13 @@ export async function claudeRemote(opts: {
     if (!launcherEnv.HAPPIER_CLAUDE_PATH && !launcherEnv.HAPPY_CLAUDE_PATH) {
         launcherEnv.HAPPIER_CLAUDE_PATH = resolvedClaudeCliPath;
     }
+    logClaudeRuntimeAuthEnvDiagnostic({
+        logPrefix: 'claudeRemote',
+        sessionId: opts.sessionId,
+        startFrom,
+        runnerEnv: process.env,
+        childEnv: launcherEnv,
+    });
 
     const sdkOptions: QueryOptions = {
         cwd: opts.path,

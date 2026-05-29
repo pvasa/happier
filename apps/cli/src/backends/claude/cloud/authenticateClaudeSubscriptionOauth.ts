@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type { CloudConnectAuthenticateOptions } from '@/cloud/connectTypes';
 import { generatePkceCodes } from '@/cloud/pkce';
 import { parseOauthRedirectPaste } from '@/cloud/parseOauthRedirectPaste';
+import { buildSafeOauthProviderFailureMessage } from '@/cloud/safeOauthProviderError';
 import { promptInput } from '@/terminal/prompts/promptInput';
 import { openBrowser } from '@/ui/openBrowser';
 import { delay } from '@/utils/time';
@@ -69,8 +70,13 @@ export async function exchangeClaudeSubscriptionAuthorizationCodeForTokens(param
   });
 
   if (!response.ok) {
-    const error = await response.text().catch(() => '');
-    throw new Error(`Token exchange failed (${response.status}): ${error}`.trim());
+    const body = await response.text().catch(() => '');
+    throw new Error(buildSafeOauthProviderFailureMessage({
+      operation: 'Token exchange',
+      status: response.status,
+      statusText: response.statusText,
+      body,
+    }));
   }
 
   return (await response.json()) as ClaudeSubscriptionOauthTokens;

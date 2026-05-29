@@ -1,4 +1,5 @@
 import { query as agentSdkQuery, AbortError as AgentSdkAbortError, type Query as AgentSdkQueryType } from '@anthropic-ai/claude-agent-sdk';
+import { redactBugReportSensitiveText, trimBugReportTextToMaxBytes } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
 import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
@@ -17,6 +18,8 @@ import { resolveClaudeRemoteSessionStartPlan } from '@/backends/claude/remote/se
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
 import { resolveClaudeConfigDirEnvOverlay } from '@/backends/claude/utils/resolveClaudeConfigDirEnvOverlay';
 import { resolveClaudeCodeExperimentalEnvOverlay } from '@/backends/claude/spawn/resolveClaudeCodeExperimentalEnvOverlay';
+import { isolateClaudeRuntimeAuthEnv } from '@/backends/claude/spawn/isolateClaudeRuntimeAuthEnv';
+import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic';
 import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
 import { normalizeClaudeToolUseNamesInSdkMessage } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { tryMergeUserMcpConfigArgsIntoHappierMcp } from '@/backends/claude/utils/mcpConfigMerge';
@@ -35,7 +38,12 @@ import { readTailTextFile } from '@/utils/fs/readTailTextFile';
 import { buildClaudeAgentSdkHooks } from './agentSdk/buildClaudeAgentSdkHooks';
 import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTranscriptAfterInterrupt';
 import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAgentSdkSlashCommands';
-import { parseExplicitSpawnEnvKeysFromProcessEnv } from './agentSdk/explicitSpawnEnvKeysMarker';
+import {
+    HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR,
+    parseExplicitSpawnEnvKeysFromProcessEnv,
+} from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
+import { mapClaudeRateLimitEventToUsageDetails, type NormalizedProviderUsageLimitDetailsV1 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
+import { classifyClaudeConnectedServiceRuntimeAuthFailure } from '../connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
 import {
     buildClaudeTodoWriteWorkState,
     createClaudeTaskToolWorkStateTracker,
@@ -136,6 +144,8 @@ export async function claudeRemoteAgentSdk(opts: {
     onCheckpointCaptured?: (checkpointId: string) => void;
     onCapabilities?: (caps: { slashCommands?: string[]; slashCommandDetails?: Array<{ command: string; description?: string }>; models?: unknown[] }) => void;
     onWorkStateSnapshot?: (snapshot: SessionWorkStateV1) => void | Promise<void>;
+    onRateLimitEvent?: (details: NormalizedProviderUsageLimitDetailsV1) => void | Promise<void>;
+    onRuntimeAuthFailureEvent?: (error: unknown) => void | Promise<void>;
 
     // Test seam
     createQuery?: AgentSdkQueryFactory;
@@ -627,19 +637,24 @@ export async function claudeRemoteAgentSdk(opts: {
         ];
 
             const out: Record<string, string> = Object.create(null);
+            const denyExact = new Set<string>([
+                'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+                'CLAUDE_CODE_OAUTH_SCOPES',
+            ]);
             for (const [key, value] of Object.entries(process.env)) {
                 if (!isValidEnvVarKey(key)) continue;
+                if (denyExact.has(key)) continue;
                 if (typeof value !== 'string') continue;
                 if (explicitSpawnEnvKeys.has(key) || allowExact.has(key) || allowPrefixes.some((p) => key.startsWith(p))) {
                     out[key] = value;
                 }
             }
 
-            delete out.HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON;
-            return {
+            delete out[HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR];
+            return isolateClaudeRuntimeAuthEnv({
                 ...out,
                 ...resolveClaudeConfigDirEnvOverlay(process.env),
-            };
+            });
         };
 
         const mappedPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode(mode);
@@ -669,6 +684,14 @@ export async function claudeRemoteAgentSdk(opts: {
             if (verboseEnabled) out.verbose = null;
             return Object.keys(out).length > 0 ? out : undefined;
         })();
+        const claudeSubprocessEnv = isolateClaudeRuntimeAuthEnv({ ...xdgIsolationEnv, ...buildClaudeSubprocessEnv(), ...experimentalEnvOverlay });
+        logClaudeRuntimeAuthEnvDiagnostic({
+            logPrefix: 'claudeRemoteAgentSdk',
+            sessionId: opts.sessionId ?? null,
+            startFrom,
+            runnerEnv: process.env,
+            childEnv: claudeSubprocessEnv,
+        });
         const queryOptions: Record<string, unknown> = {
             abortController,
             cwd: opts.path,
@@ -696,7 +719,7 @@ export async function claudeRemoteAgentSdk(opts: {
             strictMcpConfig: mode.claudeRemoteStrictMcpServerConfig === true || argOverrides.strictMcpConfig,
             canUseTool,
             ...(opts.happierMcpServers ? { mcpServers: opts.happierMcpServers } : {}),
-            env: { ...xdgIsolationEnv, ...buildClaudeSubprocessEnv(), ...experimentalEnvOverlay },
+            env: claudeSubprocessEnv,
             executable: runtimeExecutable,
             pathToClaudeCodeExecutable: opts.claudeExecutablePath ?? getDefaultClaudeCodePathForAgentSdk(),
             enableFileCheckpointing: enableFileCheckpointing || undefined,
@@ -984,6 +1007,9 @@ export async function claudeRemoteAgentSdk(opts: {
         const checkpointIdSet = new Set<string>();
         let didFinalizeTurn = false;
         let awaitingNextTurnStart = false;
+        let didReleaseTurnForResult = false;
+        let pendingResultReleaseForActiveProviderTasks = false;
+        const activeProviderTaskIds = new Set<string>();
 
         function recordCheckpointId(id: string) {
             if (checkpointIdSet.has(id)) return;
@@ -1012,6 +1038,95 @@ export async function claudeRemoteAgentSdk(opts: {
             if (!msg || typeof msg !== 'object') return null;
             if (msg.type !== 'result') return null;
             return typeof msg.result === 'string' && msg.result.trim().length > 0 ? msg.result : null;
+        };
+
+        const collectAgentSdkResultErrorText = (value: unknown, output: string[]): void => {
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (trimmed) output.push(trimmed);
+                return;
+            }
+            if (value instanceof Error) {
+                collectAgentSdkResultErrorText(value.message, output);
+                return;
+            }
+            if (Array.isArray(value)) {
+                for (const item of value) collectAgentSdkResultErrorText(item, output);
+                return;
+            }
+            if (!value || typeof value !== 'object') return;
+            const record = value as Record<string, unknown>;
+            for (const key of ['message', 'error', 'detail', 'details', 'description', 'code', 'type']) {
+                collectAgentSdkResultErrorText(record[key], output);
+            }
+        };
+
+        const formatAgentSdkResultFailureText = (subtype: string, parts: readonly string[]): string => {
+            const detail = trimBugReportTextToMaxBytes(
+                redactBugReportSensitiveText(parts.join('; ')),
+                1_024,
+            ).trim();
+            return detail ? `${subtype}: ${detail}` : subtype;
+        };
+
+        const readAgentSdkResultFailure = (message: unknown): string | null => {
+            const msg: any = message;
+            if (!msg || typeof msg !== 'object' || msg.type !== 'result') return null;
+            const subtype = typeof msg.subtype === 'string' ? msg.subtype : '';
+            if (subtype !== 'error_max_turns' && subtype !== 'error_during_execution') return null;
+            const errorParts: string[] = [];
+            collectAgentSdkResultErrorText(msg.errors, errorParts);
+            const resultText = extractResultText(message);
+            if (resultText) errorParts.push(resultText);
+            return formatAgentSdkResultFailureText(subtype, errorParts);
+        };
+
+        const readTaskId = (value: unknown): string | null => {
+            if (!value || typeof value !== 'object') return null;
+            const taskId = (value as any).task_id ?? (value as any).taskId;
+            return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId : null;
+        };
+
+        const readBackgroundTaskId = (value: unknown): string | null => {
+            if (!value || typeof value !== 'object') return null;
+            const taskResult = (value as any).tool_use_result ?? (value as any).toolUseResult;
+            if (!taskResult || typeof taskResult !== 'object') return null;
+            if ((taskResult as any).assistantAutoBackgrounded !== true) return null;
+            const taskId = (taskResult as any).backgroundTaskId ?? (taskResult as any).background_task_id;
+            return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId : null;
+        };
+
+        const hasActiveProviderTasks = (): boolean => activeProviderTaskIds.size > 0;
+
+        const isProviderContinuationMessageAfterResult = (message: unknown, inboundType: string): boolean => {
+            if (!didReleaseTurnForResult || pendingResultReleaseForActiveProviderTasks) return false;
+            if (!message || typeof message !== 'object') return false;
+            if (inboundType === 'assistant' || inboundType === 'user' || inboundType === 'stream_event') return true;
+            if (inboundType !== 'system') return false;
+            const subtype = (message as any).subtype;
+            return (
+                subtype === 'compact_boundary'
+                || subtype === 'compact_result'
+                || subtype === 'compact_metadata'
+                || subtype === 'task_started'
+                || subtype === 'task_progress'
+                || subtype === 'task_notification'
+            );
+        };
+
+        const markProviderContinuationAfterResult = () => {
+            didReleaseTurnForResult = false;
+            lastTurnFlushSummary = null;
+            didPublishAssistantTextThisTurn = false;
+            sidechainsWithPublishedAssistantTextThisTurn.clear();
+            resetTurnDiagnostics();
+            updateThinking(true);
+        };
+
+        const maybeCompleteDeferredResultRelease = async () => {
+            if (!pendingResultReleaseForActiveProviderTasks || hasActiveProviderTasks()) return;
+            pendingResultReleaseForActiveProviderTasks = false;
+            updateThinking(false);
         };
 
         const markAssistantTextPublished = (text: string | null | undefined, sidechainId: string | null) => {
@@ -1340,6 +1455,7 @@ export async function claudeRemoteAgentSdk(opts: {
 
                         didPublishAssistantTextThisTurn = false;
                         sidechainsWithPublishedAssistantTextThisTurn.clear();
+                        didReleaseTurnForResult = false;
                         messages.push({
                             type: 'user',
                             session_id: '',
@@ -1381,6 +1497,29 @@ export async function claudeRemoteAgentSdk(opts: {
             if (params?.completionEvent) {
                 opts.onCompletionEvent?.(params.completionEvent);
             }
+            await opts.onReady();
+            scheduleNextMessagePump();
+        };
+
+        const releaseCurrentTurnForResult = async () => {
+            if (didFinalizeTurn || didReleaseTurnForResult) return;
+            didReleaseTurnForResult = true;
+            if (!hasActiveProviderTasks()) {
+                activeTaskId = null;
+                updateThinking(false);
+            } else {
+                pendingResultReleaseForActiveProviderTasks = true;
+            }
+            lastTurnFlushSummary = await flushStreamedTranscriptWriter('turn-end');
+            turnDiagnostics.didDurablyFlushAssistantTextThisTurn = lastTurnFlushSummary?.assistantRoot.didDurablyFlush === true;
+            logger.debug('[claudeRemoteAgentSdk] Turn result summary', {
+                ...turnDiagnostics,
+                didPublishAssistantTextThisTurn,
+                resultObserved: true,
+                activeProviderTaskCount: activeProviderTaskIds.size,
+                deferredCompletionForActiveProviderTasks: pendingResultReleaseForActiveProviderTasks,
+            });
+            resetTurnDiagnostics();
             await opts.onReady();
             scheduleNextMessagePump();
         };
@@ -1440,6 +1579,9 @@ export async function claudeRemoteAgentSdk(opts: {
                 return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : 'unknown';
             })();
             shapeLogger.log(`inbound:${inboundType}`, message);
+            if (isProviderContinuationMessageAfterResult(message, inboundType)) {
+                markProviderContinuationAfterResult();
+            }
             if (inboundType === 'stream_event') {
                 turnDiagnostics.streamEventCount += 1;
             } else if (inboundType === 'assistant') {
@@ -1454,11 +1596,26 @@ export async function claudeRemoteAgentSdk(opts: {
                 turnDiagnostics.unknownMessageCount += 1;
             }
 
+            const runtimeAuthFailure = classifyClaudeConnectedServiceRuntimeAuthFailure({ error: message });
+            if (runtimeAuthFailure) {
+                await opts.onRuntimeAuthFailureEvent?.(message);
+                emitMessage(message as SDKMessage);
+                return;
+            } else {
+                const rateLimitDetails = mapClaudeRateLimitEventToUsageDetails(message);
+                if (rateLimitDetails) {
+                    await opts.onRateLimitEvent?.(rateLimitDetails);
+                }
+            }
+            if (inboundType === 'rate_limit_event') {
+                continue;
+            }
+
             if (message && typeof message === 'object' && (message as any).type === 'stream_event') {
                 const clearFinalizeGuardForNextTurnStart = () => {
                     // Claude can emit the next turn's assistant output exclusively via stream_event
                     // messages (no assembled assistant/user message). If we finalized the previous
-                    // turn (e.g. on a compaction init boundary), we still need to clear the
+                    // turn (e.g. after a standalone /compact command), we still need to clear the
                     // "result finalize" guard so the next `result` message can finalize and allow
                     // queued prompts to continue flowing.
                     if (awaitingNextTurnStart && didFinalizeTurn) {
@@ -1740,23 +1897,31 @@ export async function claudeRemoteAgentSdk(opts: {
                     const subtype = (system as any).subtype;
 
                     if (subtype === 'task_started') {
-                        const taskId = (system as any).task_id;
+                        const taskId = readTaskId(system);
                         if (typeof taskId === 'string' && taskId.trim().length > 0) {
                             activeTaskId = taskId;
+                            activeProviderTaskIds.add(taskId);
                         }
                     } else if (subtype === 'task_progress') {
-                        const taskId = (system as any).task_id;
+                        const taskId = readTaskId(system);
                         if (!activeTaskId && typeof taskId === 'string' && taskId.trim().length > 0) {
                             activeTaskId = taskId;
                         }
+                        if (typeof taskId === 'string' && taskId.trim().length > 0) {
+                            activeProviderTaskIds.add(taskId);
+                        }
                     } else if (subtype === 'task_notification') {
-                        const taskId = (system as any).task_id;
+                        const taskId = readTaskId(system);
                         const status = (system as any).status;
                         if (typeof taskId === 'string' && taskId === activeTaskId) {
                             activeTaskId = null;
                         }
                         if (status === 'stopped' || status === 'failed' || status === 'completed') {
+                            if (typeof taskId === 'string') {
+                                activeProviderTaskIds.delete(taskId);
+                            }
                             await finalizeSubagentTurn();
+                            await maybeCompleteDeferredResultRelease();
                         }
                     }
 
@@ -1779,6 +1944,7 @@ export async function claudeRemoteAgentSdk(opts: {
                         }
 
                         if (subtype === 'compact_boundary') {
+                            const wasStandaloneCompactCommand = isCompactCommand;
                             const completionEvent = buildClaudeCompactionCompletedEvent({
                                 lifecycleId: activeCompactionLifecycleId ?? nextCompactionLifecycleId(system.session_id),
                                 source: 'provider-event',
@@ -1787,7 +1953,11 @@ export async function claudeRemoteAgentSdk(opts: {
                             });
                             activeCompactionLifecycleId = null;
                             isCompactCommand = false;
-                            await finalizeCurrentTurn({ completionEvent });
+                            if (wasStandaloneCompactCommand) {
+                                await finalizeCurrentTurn({ completionEvent });
+                            } else {
+                                opts.onCompletionEvent?.(completionEvent);
+                            }
                         } else if (isCompactCommand) {
                             emitCompactionCompleted();
                             isCompactCommand = false;
@@ -1798,6 +1968,13 @@ export async function claudeRemoteAgentSdk(opts: {
 
             if (message && message.type === 'user') {
                 const msg = message as any;
+                const backgroundTaskId = readBackgroundTaskId(msg);
+                if (backgroundTaskId) {
+                    activeProviderTaskIds.add(backgroundTaskId);
+                    if (!activeTaskId) {
+                        activeTaskId = backgroundTaskId;
+                    }
+                }
                 if (
                     enableFileCheckpointing &&
                     isUserTextMessage(msg) &&
@@ -1820,6 +1997,11 @@ export async function claudeRemoteAgentSdk(opts: {
             }
 
             if (message && message.type === 'result') {
+                const failure = readAgentSdkResultFailure(message);
+                if (failure) {
+                    throw new Error(failure);
+                }
+
                 const resultText = extractResultText(message);
                 if (!streamedTranscriptWriter && !didPublishAssistantTextThisTurn && resultText) {
                     const { key, sessionId, parentToolUseId } = buildBufferedStreamEventAssistantMessageKey(message);
@@ -1844,7 +2026,7 @@ export async function claudeRemoteAgentSdk(opts: {
                         });
                         activeCompactionLifecycleId = null;
                     } else {
-                        await finalizeCurrentTurn();
+                        await releaseCurrentTurnForResult();
                     }
                 }
 
