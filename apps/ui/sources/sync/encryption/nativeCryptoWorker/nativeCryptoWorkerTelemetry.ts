@@ -55,6 +55,14 @@ export type NativeCryptoWorkerAppStateActiveFields = Readonly<{
     staleScopeDropsOnResume: number;
 }>;
 
+export type NativeCryptoWorkerResultDecodeFields = Readonly<{
+    operation: NativeCryptoWorkerOperation;
+    items: number;
+    stringItems: number;
+    objectItems: number;
+    nullItems: number;
+}>;
+
 function encodeOperation(operation: NativeCryptoWorkerOperation): number {
     switch (operation) {
         case NATIVE_CRYPTO_WORKER_OPERATION.decryptDataKeyEnvelopeV1:
@@ -175,5 +183,19 @@ export function recordNativeCryptoWorkerAppStateActive(
         queuedDuringQuiesceCount: fields.queuedDuringQuiesceCount,
         capabilityRevalidatedMs: fields.capabilityRevalidatedMs,
         staleScopeDropsOnResume: fields.staleScopeDropsOnResume,
+    });
+}
+
+export function recordNativeCryptoWorkerResultDecode(
+    telemetry: SyncPerformanceTelemetry,
+    durationMs: number,
+    fields: NativeCryptoWorkerResultDecodeFields,
+): void {
+    telemetry.recordDuration('sync.crypto.worker.resultDecode', durationMs, {
+        operation: encodeOperation(fields.operation),
+        items: fields.items,
+        stringItems: fields.stringItems,
+        objectItems: fields.objectItems,
+        nullItems: fields.nullItems,
     });
 }

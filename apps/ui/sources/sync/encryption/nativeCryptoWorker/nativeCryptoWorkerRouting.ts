@@ -108,6 +108,17 @@ function getNativeWorkerFailureReason(error: unknown) {
     return NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON.unknown;
 }
 
+function doesCapabilityExplicitlySupportOperation(
+    capability: NativeCryptoWorkerCapability,
+    operation: NativeCryptoWorkerOperation,
+): boolean {
+    const supportedOperations = capability.supportedOperations;
+    if (!supportedOperations || supportedOperations.length === 0) {
+        return true;
+    }
+    return supportedOperations.includes(operation);
+}
+
 export function normalizeNativeCryptoWorkerRouting(input: NativeCryptoWorkerRoutingInput = {}): NativeCryptoWorkerRouting {
     return {
         mode: normalizeMode(input.mode),
@@ -248,6 +259,12 @@ export async function runNativeCryptoWorkerBatch<T>(
     if (!capability.available) {
         if (routing.mode === 'require') {
             throw new NativeCryptoWorkerUnavailableError(capability.failureReason);
+        }
+        return runReference(options.referenceRun);
+    }
+    if (!doesCapabilityExplicitlySupportOperation(capability, options.operation)) {
+        if (routing.mode === 'require') {
+            throw new NativeCryptoWorkerUnavailableError(NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON.missing);
         }
         return runReference(options.referenceRun);
     }
