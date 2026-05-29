@@ -13,6 +13,36 @@ async function loadWorkflow(name) {
   return { raw, parsed: parse(raw) };
 }
 
+function listNeeds(needs) {
+  if (Array.isArray(needs)) return needs;
+  if (typeof needs === 'string') return [needs];
+  return [];
+}
+
+function jobNeedsTransitively(jobs, jobName, requiredJobName, seen = new Set()) {
+  if (jobName === requiredJobName) return true;
+  if (seen.has(jobName)) return false;
+  seen.add(jobName);
+
+  const needs = listNeeds(jobs?.[jobName]?.needs);
+  return needs.some((neededJobName) =>
+    neededJobName === requiredJobName ||
+    jobNeedsTransitively(jobs, neededJobName, requiredJobName, seen)
+  );
+}
+
+function assertInheritedSecretsRequireTrustedRefGuard(file, parsed) {
+  const jobs = parsed?.jobs ?? {};
+
+  for (const [jobName, job] of Object.entries(jobs)) {
+    if (job?.secrets !== 'inherit') continue;
+    assert.ok(
+      jobNeedsTransitively(jobs, jobName, 'trusted_ref_guard'),
+      `${file} job '${jobName}' uses secrets: inherit and should require 'trusted_ref_guard' directly or transitively`
+    );
+  }
+}
+
 test('release workflows scope shared signing/publishing secrets to release-shared environment', async () => {
   const checks = [
     ['release-npm.yml', 'release', 'release-shared'],
@@ -50,6 +80,7 @@ test('manual tests dispatch forwards provider secrets only to the reusable tests
   assert.ok(testsJob, 'tests-dispatch.yml should define the reusable tests job');
   assert.equal(testsJob?.uses, './.github/workflows/tests.yml');
   assert.equal(testsJob?.secrets, 'inherit', 'manual dispatch must pass provider secrets into tests.yml');
+  assertInheritedSecretsRequireTrustedRefGuard('tests-dispatch.yml', parsed);
   assert.equal(testsJob?.with?.run_providers, "${{ needs.resolve.outputs.run_providers == 'true' }}");
 });
 
@@ -191,12 +222,6 @@ test('secret-bearing workflows require release-admin actor guard before privileg
     ['tests.yml', 'providers'],
   ];
 
-  const needsInclude = (needs, name) => {
-    if (Array.isArray(needs)) return needs.includes(name);
-    if (typeof needs === 'string') return needs === name;
-    return false;
-  };
-
   for (const [file, jobName] of expectedWiring) {
     const { parsed } = await loadWorkflow(file);
     const guard = parsed?.jobs?.[guardJob];
@@ -239,7 +264,7 @@ test('secret-bearing workflows require release-admin actor guard before privileg
     const job = parsed?.jobs?.[jobName];
     assert.ok(job, `${file} should define job '${jobName}'`);
     assert.ok(
-      needsInclude(job?.needs, guardJob),
+      listNeeds(job?.needs).includes(guardJob),
       `${file} job '${jobName}' should require '${guardJob}'`
     );
     assert.equal(
