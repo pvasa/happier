@@ -1,0 +1,57 @@
+import type { McpServerConfig } from '@/agent';
+import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
+import { createCatalogProviderAcpRuntime } from '@/agent/acp/runtime/createCatalogProviderAcpRuntime';
+import type { ApiSessionClient } from '@/api/session/sessionClient';
+import type { PermissionMode } from '@/api/types';
+import type { CursorBackendOptions } from '@/backends/cursor/acp/backend';
+import {
+  buildCursorSessionModelsFromConfigOptions,
+  resolveCursorSessionConfigOptionUpdate,
+  resolveCursorSessionModelConfigUpdate,
+} from '@/backends/cursor/acp/cursorModelConfig';
+import { maybeUpdateCursorSessionIdMetadata } from '@/backends/cursor/utils/cursorSessionIdMetadata';
+import type { MessageBuffer } from '@/ui/ink/messageBuffer';
+
+export function createCursorAcpRuntime(params: {
+  directory: string;
+  machineId: string;
+  session: ApiSessionClient;
+  messageBuffer: MessageBuffer;
+  mcpServers: Record<string, McpServerConfig>;
+  permissionHandler: AcpPermissionHandler;
+  onThinkingChange: (thinking: boolean) => void;
+  memoryRecallGuidanceEnabled?: boolean;
+  getPermissionMode?: () => PermissionMode | null | undefined;
+  env?: NodeJS.ProcessEnv;
+  startupOverrides?: Parameters<typeof createCatalogProviderAcpRuntime>[0]['startupOverrides'];
+}) {
+  const lastPublishedCursorSessionId = { value: null as string | null };
+
+  return createCatalogProviderAcpRuntime<CursorBackendOptions>({
+    provider: 'cursor',
+    loggerLabel: 'CursorACP',
+    directory: params.directory,
+    session: params.session,
+    messageBuffer: params.messageBuffer,
+    mcpServers: params.mcpServers,
+    permissionHandler: params.permissionHandler,
+    backendOptions: params.env ? { env: params.env } : undefined,
+    onThinkingChange: params.onThinkingChange,
+    memoryRecallGuidance: {
+      enabled: params.memoryRecallGuidanceEnabled === true,
+      machineId: params.machineId,
+    },
+    startupOverrides: params.startupOverrides,
+    getPermissionMode: params.getPermissionMode,
+    resolveSessionModelConfigUpdate: resolveCursorSessionModelConfigUpdate,
+    deriveSessionModelsFromConfigOptions: buildCursorSessionModelsFromConfigOptions,
+    resolveSessionConfigOptionUpdate: resolveCursorSessionConfigOptionUpdate,
+    onSessionIdChange: (nextSessionId) => {
+      maybeUpdateCursorSessionIdMetadata({
+        getCursorSessionId: () => nextSessionId,
+        updateHappySessionMetadata: (updater) => params.session.updateMetadata(updater),
+        lastPublished: lastPublishedCursorSessionId,
+      });
+    },
+  });
+}
