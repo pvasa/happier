@@ -5,7 +5,7 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { PermissionMode } from '@/api/types';
 import type { MessageBuffer } from '@/ui/ink/messageBuffer';
 
-import { maybeUpdatePiSessionIdMetadata } from '@/backends/pi/utils/piSessionIdMetadata';
+import { publishPiSessionIdMetadata } from '@/backends/pi/utils/piSessionIdMetadata';
 
 export function createPiAcpRuntime(params: {
   directory: string;
@@ -36,9 +36,11 @@ export function createPiAcpRuntime(params: {
     getPermissionMode: params.getPermissionMode,
     inFlightSteer: { enabled: true },
     onSessionIdChange: (nextSessionId) => {
-      maybeUpdatePiSessionIdMetadata({
+      publishPiSessionIdMetadata({
+        session: params.session,
         getPiSessionId: () => nextSessionId,
-        updateHappySessionMetadata: (updater) => params.session.updateMetadata(updater),
+        cwd: params.directory,
+        processEnv: process.env,
         lastPublished: lastPublishedPiSessionId,
       });
     },

@@ -109,9 +109,12 @@ describe('mapPiRpcEventToAgentMessages', () => {
     expect(output).toEqual([{ type: 'model-output', fullText: 'final' }]);
   });
 
-  it('maps turn lifecycle events to status messages', () => {
-    expect(mapPiRpcEventToAgentMessages({ type: 'turn_start' })).toEqual([{ type: 'status', status: 'running' }]);
-    expect(mapPiRpcEventToAgentMessages({ type: 'turn_end' })).toEqual([{ type: 'status', status: 'idle' }]);
+  it('maps agent lifecycle events to status messages and keeps terminal boundaries informational', () => {
+    expect(mapPiRpcEventToAgentMessages({ type: 'agent_start' })).toEqual([{ type: 'status', status: 'running' }]);
+    expect(mapPiRpcEventToAgentMessages({ type: 'agent_end' })).toEqual([]);
+    expect(mapPiRpcEventToAgentMessages({ type: 'agent_end', willRetry: true })).toEqual([]);
+    expect(mapPiRpcEventToAgentMessages({ type: 'turn_start' })).toEqual([]);
+    expect(mapPiRpcEventToAgentMessages({ type: 'turn_end' })).toEqual([]);
   });
 
   it('maps compaction lifecycle events to structured provider events', () => {
@@ -169,6 +172,29 @@ describe('mapPiRpcEventToAgentMessages', () => {
           lifecycleId: 'pi:context-compaction',
           trigger: 'manual',
           source: 'provider-event',
+        },
+      },
+    ]);
+  });
+
+  it('maps failed compaction without labeling raw provider errors as sanitized', () => {
+    expect(mapPiRpcEventToAgentMessages({
+      type: 'compaction_end',
+      aborted: true,
+      errorCode: 'context_limit',
+      errorMessage: 'provider specific failure with details',
+    })).toEqual([
+      {
+        type: 'event',
+        name: 'context_compaction',
+        payload: {
+          type: 'context-compaction',
+          phase: 'failed',
+          provider: 'pi',
+          lifecycleId: 'pi:context-compaction',
+          trigger: 'unknown',
+          source: 'provider-event',
+          errorCode: 'context_limit',
         },
       },
     ]);

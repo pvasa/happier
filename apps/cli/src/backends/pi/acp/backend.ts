@@ -7,6 +7,7 @@ import { providers } from '@happier-dev/agents';
 export interface PiBackendOptions extends AgentFactoryOptions {
   mcpServers?: Record<string, McpServerConfig>;
   permissionMode?: PermissionMode;
+  happierSessionId?: string | null;
 }
 
 export function buildPiToolsForPermissionMode(permissionMode?: PermissionMode): string[] {
@@ -47,6 +48,7 @@ export function createPiBackend(options: PiBackendOptions): AgentBackend {
     cwd: options.cwd,
     command: launch.command,
     args: [...launch.args, ...buildPiRpcArgs({ permissionMode: options.permissionMode, thinkingLevel })],
+    happierSessionId: options.happierSessionId ?? null,
     env: {
       ...env,
       NODE_ENV: 'production',

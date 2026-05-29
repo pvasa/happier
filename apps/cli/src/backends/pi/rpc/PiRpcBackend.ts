@@ -1,8 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
-import readline from 'node:readline';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import spawn from 'cross-spawn';
 
@@ -14,8 +13,22 @@ import type {
   StartSessionResult,
 } from '@/agent/core';
 import { logger } from '@/ui/logger';
+import {
+  HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY,
+  readConnectedServiceChildSelectionsFromEnv,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import type { ConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/types';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol';
 
+import { createPiConnectedServiceRuntimeAuthAdapter } from '../connectedServices/createPiConnectedServiceRuntimeAuthAdapter';
+import {
+  doesPiSessionFileNameMatchSessionId,
+  formatPiSessionDirectoryForCwd,
+  isBarePiSessionId,
+  resolvePiSessionIdFromResumeReference,
+} from '../utils/piSessionFiles';
+import { attachPiRpcJsonlLineReader, type PiRpcJsonlLineReader } from './attachPiRpcJsonlLineReader';
 import { mapPiRpcEventToAgentMessages } from './eventMapping';
 import type {
   PiRpcCommand,
@@ -38,7 +51,29 @@ type PendingTurn = {
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
-  timeout: NodeJS.Timeout;
+  timeout: NodeJS.Timeout | null;
+  timeoutMs: number;
+  agentEndSettleTimeout: NodeJS.Timeout | null;
+  compactionResumeTimeout: NodeJS.Timeout | null;
+  compactionInProgress: boolean;
+  /** True after Pi emitted `agent_end` but before Happier has proven the provider is idle. */
+  agentEndObserved: boolean;
+  /** Bumped on every Pi event so an in-flight liveness probe can detect stale state. */
+  activityEpoch: number;
+  /** Consecutive liveness probes where Pi claimed to be busy but emitted no events. */
+  consecutiveSilentProbes: number;
+  /** True while a `get_state` liveness probe is awaiting a response. */
+  livenessProbeInFlight: boolean;
+  /** True when an inactivity timer fired while another liveness probe was already in-flight. */
+  livenessProbeRerunRequested: boolean;
+  /** True after a recoverable assistant error until Pi proves the turn resumed or ended normally. */
+  recoverableAssistantErrorObserved: boolean;
+  /** Last observed `compaction_end`, used to classify a post-compaction pause vs. a stall. */
+  lastCompactionEnd: { payload: Record<string, unknown>; willRetry: boolean; errorMessage: string | null } | null;
+  /** Last assistant `message_end` stop reason observed before a post-turn compaction. */
+  lastAssistantStopReason: string | null;
+  /** Number of hidden continuation prompts sent after threshold/manual compaction pauses. */
+  compactionAutoContinueAttempts: number;
 };
 
 type Deferred<T> = {
@@ -82,12 +117,95 @@ function asNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function findContextCompactionPayload(messages: readonly AgentMessage[]): Record<string, unknown> | null {
+  for (const message of messages) {
+    if (message.type !== 'event' || message.name !== 'context_compaction') continue;
+    const payload = asRecord(message.payload);
+    if (payload?.type === 'context-compaction') return payload;
+  }
+  return null;
+}
+
 function asError(value: unknown): Error {
   if (value instanceof Error) return value;
   return new Error(String(value));
 }
 
+class PiRpcCommandResponseTimeoutError extends Error {
+  readonly commandType: PiRpcCommandWithoutId['type'];
+
+  constructor(commandType: PiRpcCommandWithoutId['type']) {
+    super(`Timed out waiting for Pi RPC response (${commandType})`);
+    this.name = 'PiRpcCommandResponseTimeoutError';
+    this.commandType = commandType;
+  }
+}
+
+function isPromptResponseTimeoutError(error: Error): boolean {
+  if (error instanceof PiRpcCommandResponseTimeoutError) {
+    return error.commandType === 'prompt';
+  }
+  return error.message.toLowerCase() === 'timed out waiting for pi rpc response (prompt)';
+}
+
 type PiThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+const DEFAULT_PI_RPC_TURN_STALL_TIMEOUT_MS = 180_000;
+const DEFAULT_PI_RPC_COMPACTION_RESUME_GRACE_MS = 30_000;
+const DEFAULT_PI_RPC_AGENT_END_SETTLE_MS = 250;
+const DEFAULT_PI_RPC_AGENT_END_BUSY_GRACE_MS = 30_000;
+
+const PI_RPC_TURN_STALL_TIMEOUT_ENV = 'HAPPIER_PI_RPC_TURN_STALL_TIMEOUT_MS';
+const PI_RPC_COMPACTION_RESUME_GRACE_ENV = 'HAPPIER_PI_RPC_COMPACTION_RESUME_GRACE_MS';
+const PI_RPC_AGENT_END_SETTLE_ENV = 'HAPPIER_PI_RPC_AGENT_END_SETTLE_MS';
+const PI_RPC_AGENT_END_BUSY_GRACE_ENV = 'HAPPIER_PI_RPC_AGENT_END_BUSY_GRACE_MS';
+
+const DEFAULT_PI_RPC_LIVENESS_PROBE_TIMEOUT_MS = 10_000;
+const DEFAULT_PI_RPC_MAX_SILENT_PROBES = 4;
+const DEFAULT_PI_RPC_PROMPT_COLLISION_IDLE_WAIT_MS = 30_000;
+const DEFAULT_PI_RPC_PROMPT_COLLISION_IDLE_POLL_MS = 250;
+const DEFAULT_PI_RPC_COMPACTION_AUTO_CONTINUE_MAX = 3;
+const DEFAULT_PI_RPC_COMPACTION_AUTO_CONTINUE_PROMPT =
+  'Continue from the compacted context and finish the original user request. Do not ask the user to resend anything.';
+
+/** How many trailing stderr lines to retain for the non-zero process-exit context (O2). */
+const PI_RPC_STDERR_TAIL_MAX_LINES = 10;
+
+const PI_RPC_LIVENESS_PROBE_TIMEOUT_ENV = 'HAPPIER_PI_RPC_LIVENESS_PROBE_TIMEOUT_MS';
+const PI_RPC_MAX_SILENT_PROBES_ENV = 'HAPPIER_PI_RPC_MAX_SILENT_PROBES';
+const PI_RPC_PROMPT_COLLISION_IDLE_WAIT_ENV = 'HAPPIER_PI_RPC_PROMPT_COLLISION_IDLE_WAIT_MS';
+const PI_RPC_PROMPT_COLLISION_IDLE_POLL_ENV = 'HAPPIER_PI_RPC_PROMPT_COLLISION_IDLE_POLL_MS';
+const PI_RPC_COMPACTION_AUTO_CONTINUE_MAX_ENV = 'HAPPIER_PI_RPC_COMPACTION_AUTO_CONTINUE_MAX';
+const PI_RPC_COMPACTION_AUTO_CONTINUE_PROMPT_ENV = 'HAPPIER_PI_RPC_COMPACTION_AUTO_CONTINUE_PROMPT';
+
+function readPositiveIntegerEnv(env: Record<string, string>, key: string, fallback: number): number {
+  const raw = env[key];
+  if (typeof raw !== 'string') return fallback;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readNonNegativeIntegerEnv(env: Record<string, string>, key: string, fallback: number): number {
+  const raw = env[key];
+  if (typeof raw !== 'string') return fallback;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+async function pathIsFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, ms);
+    timeout.unref?.();
+  });
+}
 
 function normalizePiThinkingEffort(raw: unknown): PiThinkingEffort | null {
   const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
@@ -101,6 +219,7 @@ export type PiRpcSpawnOptions = {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  happierSessionId?: string | null;
 };
 
 export class PiRpcBackend implements AgentBackend {
@@ -109,11 +228,12 @@ export class PiRpcBackend implements AgentBackend {
     command: string;
     args: string[];
     env: Record<string, string>;
+    happierSessionId: string | null;
   }>;
 
   private process: ChildProcessWithoutNullStreams | null = null;
-  private stdoutLineReader: readline.Interface | null = null;
-  private stderrLineReader: readline.Interface | null = null;
+  private stdoutLineReader: PiRpcJsonlLineReader | null = null;
+  private stderrLineReader: PiRpcJsonlLineReader | null = null;
   private readonly messageHandlers = new Set<AgentMessageHandler>();
   private readonly pendingRequests = new Map<string, PendingRpcRequest>();
   private readonly openPromptRequestIds = new Set<string>();
@@ -129,7 +249,12 @@ export class PiRpcBackend implements AgentBackend {
   private sessionModelState: { currentModelId: string; availableModels: Array<{ id: string; name: string; description?: string; modelOptions?: unknown[] }> } | null =
     null;
   private lastPublishedUsageKey: string | null = null;
+  private readonly connectedServiceRuntimeAuthAdapter = createPiConnectedServiceRuntimeAuthAdapter();
   private disposed = false;
+  private anonymousCompactionSequence = 0;
+  private activeCompactionLifecycleId: string | null = null;
+  /** Bounded tail of recent raw stderr lines, retained only to enrich a non-zero process-exit (O2). */
+  private readonly recentStderrLines: string[] = [];
 
   constructor(options: PiRpcSpawnOptions) {
     this.options = {
@@ -137,6 +262,7 @@ export class PiRpcBackend implements AgentBackend {
       command: options.command,
       args: [...options.args],
       env: { ...(options.env ?? {}) },
+      happierSessionId: asNonEmptyString(options.happierSessionId) ?? null,
     };
   }
 
@@ -184,13 +310,29 @@ export class PiRpcBackend implements AgentBackend {
     return { sessionId: nextSessionId };
   }
 
-  private async resolveSessionFileForSessionId(expectedSessionId: string): Promise<string | null> {
+  private async resolveSessionFileForSessionId(
+    expectedSessionId: string,
+    preferredAbsolutePath: string | null = null,
+  ): Promise<string | null> {
     const candidateDirs = new Set<string>();
+    const fromSessionEnv = asNonEmptyString(this.options.env.PI_CODING_AGENT_SESSION_DIR);
+    if (fromSessionEnv) {
+      candidateDirs.add(join(fromSessionEnv, '--workdir--'));
+      candidateDirs.add(fromSessionEnv);
+    }
+
     const fromEnv = asNonEmptyString(this.options.env.PI_CODING_AGENT_DIR);
+    const encodedCwd = formatPiSessionDirectoryForCwd(this.options.cwd);
     if (fromEnv) {
       candidateDirs.add(fromEnv);
+      candidateDirs.add(join(fromEnv, 'sessions', encodedCwd));
       candidateDirs.add(join(fromEnv, 'sessions'));
+      const materializedRoot = dirname(fromEnv);
+      candidateDirs.add(join(materializedRoot, 'pi-sessions', '--workdir--'));
+      candidateDirs.add(join(materializedRoot, 'pi-sessions'));
     }
+
+    if (preferredAbsolutePath) candidateDirs.add(dirname(preferredAbsolutePath));
     if (this.sessionFile) candidateDirs.add(dirname(this.sessionFile));
 
     const matches: Array<{ path: string; mtimeMs: number }> = [];
@@ -217,8 +359,7 @@ export class PiRpcBackend implements AgentBackend {
           }
           if (!entry.isFile()) continue;
           const name = entry.name;
-          if (!name.includes(expectedSessionId)) continue;
-          if (!name.endsWith('.jsonl')) continue;
+          if (!doesPiSessionFileNameMatchSessionId(name, expectedSessionId)) continue;
           const path = join(next.dir, name);
           try {
             const s = await stat(path);
@@ -241,9 +382,18 @@ export class PiRpcBackend implements AgentBackend {
       throw new Error('Pi backend is disposed');
     }
 
-    const expectedSessionId = String(sessionId ?? '').trim();
-    if (!expectedSessionId) {
+    const requestedResumeReference = String(sessionId ?? '').trim();
+    if (!requestedResumeReference) {
       throw new Error('Pi loadSession requires a session id');
+    }
+    const requestedAbsoluteSessionFile = isAbsolute(requestedResumeReference) ? requestedResumeReference : null;
+    if (!requestedAbsoluteSessionFile && !isBarePiSessionId(requestedResumeReference)) {
+      throw new Error('Pi loadSession requires a bare Pi session id or absolute session file path');
+    }
+
+    const expectedSessionId = resolvePiSessionIdFromResumeReference(requestedResumeReference);
+    if (!expectedSessionId) {
+      throw new Error('Pi loadSession requires a bare Pi session id or absolute session file path');
     }
 
     // If we're already attached to a session, validate that it matches.
@@ -258,17 +408,19 @@ export class PiRpcBackend implements AgentBackend {
       throw new Error('Cannot load Pi session while a turn is in-flight');
     }
 
-    // `--session <path>` is Pi's deterministic resume primitive.
+    // `--session <path-or-id>` is Pi's deterministic resume primitive.
     // We intentionally avoid `--continue` here because it resumes "most recent", which can be the wrong
     // session when multiple sessions exist in PI_CODING_AGENT_DIR.
     this.emitMessage({ type: 'status', status: 'starting' });
     try {
       await this.stopRpcProcessForRestart();
-      const sessionFile = await this.resolveSessionFileForSessionId(expectedSessionId);
-      if (!sessionFile) {
-        throw new Error(`Unable to resolve Pi session file for session id '${expectedSessionId}'`);
-      }
-      this.spawnRpcProcess({ args: [...this.options.args, '--session', sessionFile] });
+      const preferredSessionFile = requestedAbsoluteSessionFile && await pathIsFile(requestedAbsoluteSessionFile)
+        ? requestedAbsoluteSessionFile
+        : null;
+      const sessionFile = preferredSessionFile
+        ?? await this.resolveSessionFileForSessionId(expectedSessionId, requestedAbsoluteSessionFile);
+      const sessionArg = sessionFile ?? expectedSessionId;
+      this.spawnRpcProcess({ args: [...this.options.args, '--session', sessionArg] });
 
       const state = await this.getState();
       const resumedSessionId = asNonEmptyString(state.sessionId);
@@ -332,32 +484,54 @@ export class PiRpcBackend implements AgentBackend {
       settleBarrier();
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const turn = this.createPendingTurn(240_000);
+        let turn: Promise<void> | null = null;
         try {
+          if (this.pendingTurn) {
+            if (attempt === 0) {
+              const existingPendingTurn = this.pendingTurn;
+              await this.waitForPromptCollisionToBecomeIdle();
+              if (this.pendingTurn === existingPendingTurn) {
+                await Promise.race([
+                  existingPendingTurn.promise.catch(() => undefined),
+                  delay(this.getAgentEndSettleMs() + this.getPromptCollisionIdlePollMs()),
+                ]);
+              }
+              continue;
+            }
+            throw new Error('Pi is already processing another prompt');
+          }
+          turn = this.createPendingTurn(this.getPendingTurnStallTimeoutMs());
           await this.sendCommand({ type: 'prompt', message });
           await turn;
           return;
         } catch (error) {
           const promptError = asError(error);
           const normalizedError = promptError.message.toLowerCase();
-          const canFallbackToSteer =
+          const isPromptCollisionError =
             normalizedError.includes('already processing') || normalizedError.includes('streamingbehavior');
 
-          if (canFallbackToSteer) {
-            try {
-              await this.sendCommand({ type: 'steer', message });
-              await turn;
-              return;
-            } catch (steerError) {
-              const resolvedSteerError = asError(steerError);
-              this.rejectPendingTurn(resolvedSteerError);
+          if (isPromptCollisionError && attempt === 0) {
+            if (turn) {
+              this.rejectPendingTurn(promptError);
               await turn.catch(() => undefined);
-              throw resolvedSteerError;
             }
+            await this.waitForPromptCollisionToBecomeIdle();
+            continue;
           }
 
-          this.rejectPendingTurn(promptError);
-          await turn.catch(() => undefined);
+          if (turn && isPromptResponseTimeoutError(promptError)) {
+            // The prompt write succeeded, but Pi did not acknowledge the prompt before entering a
+            // long provider phase (for example threshold compaction). At this point the turn stream
+            // is the source of truth: keep the pending turn alive so later compaction/tool/agent_end
+            // events can complete it instead of surfacing a false transport timeout to the user.
+            await turn;
+            return;
+          }
+
+          if (turn) {
+            this.rejectPendingTurn(promptError);
+            await turn.catch(() => undefined);
+          }
 
           const canRecoverFromProcessExit =
             attempt === 0 &&
@@ -390,6 +564,9 @@ export class PiRpcBackend implements AgentBackend {
     if (maybeRestart) await maybeRestart;
     const message = prompt.trim();
     if (!message) return;
+    if (!this.process) {
+      throw new Error('Pi process is not running');
+    }
     await this.sendCommand({ type: 'steer', message });
   }
 
@@ -438,8 +615,9 @@ export class PiRpcBackend implements AgentBackend {
   async cancel(sessionId: SessionId): Promise<void> {
     this.assertSession(sessionId);
     await this.sendCommand({ type: 'abort' });
-    this.resolvePendingTurn();
-    this.emitMessage({ type: 'status', status: 'idle' });
+    if (!this.resolvePendingTurn()) {
+      this.emitMessage({ type: 'status', status: 'idle' });
+    }
   }
 
   async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {
@@ -551,10 +729,8 @@ export class PiRpcBackend implements AgentBackend {
     }
 
     this.process = child as ChildProcessWithoutNullStreams;
-    this.stdoutLineReader = readline.createInterface({ input: child.stdout });
-    this.stdoutLineReader.on('line', (line) => this.handleStdoutLine(line));
-    this.stderrLineReader = readline.createInterface({ input: child.stderr });
-    this.stderrLineReader.on('line', (line) => this.handleStderrLine(line));
+    this.stdoutLineReader = attachPiRpcJsonlLineReader(child.stdout, (line) => this.handleStdoutLine(line));
+    this.stderrLineReader = attachPiRpcJsonlLineReader(child.stderr, (line) => this.handleStderrLine(line));
 
     const handleIoError = (error: unknown) => {
       const resolved = asError(error);
@@ -586,7 +762,9 @@ export class PiRpcBackend implements AgentBackend {
 
     child.on('exit', (code, signal) => {
       if (!this.disposed) {
-        const detail = `Pi process exited (code=${code ?? 'null'}, signal=${signal ?? 'null'})`;
+        const detail = code === 0
+          ? `Pi process exited (code=0, signal=${signal ?? 'null'})`
+          : this.buildProcessExitContextDetail(code, signal);
         this.emitMessage({
           type: 'status',
           status: code === 0 ? 'stopped' : 'error',
@@ -594,7 +772,13 @@ export class PiRpcBackend implements AgentBackend {
         });
       }
       this.rejectAllPending(new Error('Pi process exited'));
-      this.rejectPendingTurn(new Error('Pi process exited'));
+      if (code === 0 && this.pendingTurn?.agentEndSettleTimeout) {
+        this.resolvePendingTurn();
+      } else if (code === 0 && this.pendingTurn?.compactionResumeTimeout) {
+        this.resolvePendingTurnAsCompactionPaused(this.pendingTurn);
+      } else {
+        this.rejectPendingTurn(new Error('Pi process exited'));
+      }
       this.process = null;
     });
   }
@@ -603,6 +787,31 @@ export class PiRpcBackend implements AgentBackend {
     const agentDir = asNonEmptyString(this.options.env.PI_CODING_AGENT_DIR);
     if (!agentDir) return null;
     return join(agentDir, 'auth.json');
+  }
+
+  /**
+   * O2: build a structured, debuggable detail for a non-zero Pi process exit. Instead of a bare
+   * "Pi process exited", surface the load-bearing context an operator needs to diagnose a failed
+   * resume — exit code/signal, the vendor resume id, the cwd, the materialized agent dir +
+   * connected-service materialization root, and a redacted tail of stderr. Pairs with the K1 §2
+   * fail-closed gate: the gate prevents most missing-file crashes up front; this explains the rest.
+   */
+  private buildProcessExitContextDetail(code: number | null, signal: NodeJS.Signals | null): string {
+    const fields: string[] = [
+      `code=${code ?? 'null'}`,
+      `signal=${signal ?? 'null'}`,
+      `cwd=${this.options.cwd}`,
+      `vendorResumeId=${this.sessionId ?? 'null'}`,
+    ];
+    const agentDir = asNonEmptyString(this.options.env.PI_CODING_AGENT_DIR);
+    if (agentDir) fields.push(`agentDir=${agentDir}`);
+    const materializationRoot = asNonEmptyString(
+      this.options.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY],
+    );
+    if (materializationRoot) fields.push(`materializationRoot=${materializationRoot}`);
+    const stderrTail = this.recentStderrLines.slice(-PI_RPC_STDERR_TAIL_MAX_LINES).join(' | ');
+    if (stderrTail) fields.push(`stderrTail=${redactBugReportSensitiveText(stderrTail)}`);
+    return `Pi process exited (${fields.join(', ')})`;
   }
 
   private async captureAuthJsonSnapshot(): Promise<void> {
@@ -690,10 +899,8 @@ export class PiRpcBackend implements AgentBackend {
 
     await this.stopRpcProcessForRestart();
     const sessionFile = this.sessionFile ?? (await this.resolveSessionFileForSessionId(expectedSessionId));
-    if (!sessionFile) {
-      throw new Error(`Pi process is not running (unable to resolve session file for session id '${expectedSessionId}')`);
-    }
-    this.spawnRpcProcess({ args: [...this.options.args, '--session', sessionFile] });
+    const sessionArg = sessionFile ?? expectedSessionId;
+    this.spawnRpcProcess({ args: [...this.options.args, '--session', sessionArg] });
 
     const state = await this.getState();
     const nextSessionId = asNonEmptyString(state.sessionId);
@@ -803,18 +1010,125 @@ export class PiRpcBackend implements AgentBackend {
     pending.resolve(response);
   }
 
+  private readPiAssistantErrorMessage(event: Record<string, unknown>): string | null {
+    if (event.type !== 'message_end') return null;
+    const message = asRecord(event.message);
+    if (!message || message.role !== 'assistant') return null;
+    const stopReason = asNonEmptyString(message.stopReason ?? message.stop_reason);
+    const errorMessage = asNonEmptyString(message.errorMessage ?? message.error_message ?? event.errorMessage ?? event.error_message);
+    if (stopReason !== 'error' && !errorMessage) return null;
+    return errorMessage ?? 'Pi assistant message failed';
+  }
+
+  private classifyPiAssistantRuntimeAuthFailure(event: Record<string, unknown>) {
+    const message = asRecord(event.message);
+    return this.classifyPiRuntimeAuthFailure({
+      provider: asNonEmptyString(event.provider) ?? asNonEmptyString(message?.provider) ?? this.currentModelProvider,
+      event,
+      message,
+    });
+  }
+
+  private classifyPiRuntimeAuthFailure(error: unknown) {
+    return this.connectedServiceRuntimeAuthAdapter.classifyRuntimeAuthFailure({
+      target: { agentId: 'pi', targetId: this.sessionId },
+      error,
+      selection: readConnectedServiceChildSelectionsFromEnv(this.options.env),
+    });
+  }
+
+  private createPiAssistantFailureError(
+    detail: string,
+    classification: ConnectedServiceRuntimeFailureClassification | null,
+  ): Error {
+    const error = new Error(detail);
+    if (!classification) return error;
+    return Object.assign(error, { runtimeAuthClassification: classification });
+  }
+
+  private async reportPiRuntimeAuthFailureToDaemon(
+    classification: ConnectedServiceRuntimeFailureClassification,
+  ): Promise<void> {
+    if (!this.options.happierSessionId) return;
+    await reportConnectedServiceRuntimeAuthFailureToDaemon({
+      sessionId: this.options.happierSessionId,
+      switchesThisTurn: 0,
+      classification,
+      logPrefix: '[pi]',
+    });
+  }
+
+  private handlePiAssistantFailureEvent(event: Record<string, unknown>): void {
+    const detail = this.readPiAssistantErrorMessage(event);
+    if (!detail) return;
+    const classification = this.classifyPiAssistantRuntimeAuthFailure(event);
+    // Pi's overflow recovery *begins* with an assistant `message_end{stopReason:'error'}` and then
+    // self-heals via compaction + auto-retry. Terminating the turn here re-creates the original
+    // stuck-after-compaction bug: premature completion clears `turnInFlight`, and the next queued
+    // prompt collides with a still-busy Pi. Only a connected-service auth failure is genuinely
+    // terminal at this point (Pi cannot compact its way out of an invalid credential); everything
+    // else is owned by the turn lifecycle (`agent_end`/willRetry, the compaction-resume grace, and
+    // the `get_state` liveness probe). The recoverable error carries no surfaceable assistant text,
+    // so suppressing the status here does not hide anything from the transcript.
+    if (!classification) return;
+    this.emitMessage({ type: 'status', status: 'error', detail });
+    void this.reportPiRuntimeAuthFailureToDaemon(classification);
+    this.rejectPendingTurn(this.createPiAssistantFailureError(detail, classification));
+  }
+
+  private readCompactionLifecycleId(event: Record<string, unknown>): string | null {
+    return (
+      asNonEmptyString(event.compactionId) ??
+      asNonEmptyString(event.compaction_id) ??
+      asNonEmptyString(event.id) ??
+      asNonEmptyString(event.turnId) ??
+      asNonEmptyString(event.turn_id)
+    );
+  }
+
+  private normalizeCompactionLifecycleEvent(event: Record<string, unknown>): Record<string, unknown> {
+    if (event.type !== 'compaction_start' && event.type !== 'compaction_end') return event;
+
+    const explicitLifecycleId = this.readCompactionLifecycleId(event);
+    if (event.type === 'compaction_start') {
+      const lifecycleId = explicitLifecycleId ?? `pi:context-compaction:${++this.anonymousCompactionSequence}`;
+      this.activeCompactionLifecycleId = lifecycleId;
+      return explicitLifecycleId ? event : { ...event, compactionId: lifecycleId };
+    }
+
+    const lifecycleId = explicitLifecycleId ?? this.activeCompactionLifecycleId ?? `pi:context-compaction:${++this.anonymousCompactionSequence}`;
+    this.activeCompactionLifecycleId = null;
+    return explicitLifecycleId ? event : { ...event, compactionId: lifecycleId };
+  }
+
   private handleEvent(event: Record<string, unknown>): void {
-    for (const msg of mapPiRpcEventToAgentMessages(event)) {
+    const normalizedEvent = this.normalizeCompactionLifecycleEvent(event);
+    this.notePendingTurnActivity(normalizedEvent);
+
+    for (const msg of mapPiRpcEventToAgentMessages(normalizedEvent)) {
       this.emitMessage(msg);
     }
 
-    if (event.type === 'turn_end' || event.type === 'agent_end') {
-      this.resolvePendingTurn();
-      void this.publishUsageStatsBestEffort();
+    this.handlePiAssistantFailureEvent(normalizedEvent);
+
+    if (normalizedEvent.type === 'agent_end') {
+      if (this.pendingTurn) {
+        if (normalizedEvent.willRetry === true || this.pendingTurn.recoverableAssistantErrorObserved) {
+          this.pendingTurn.agentEndObserved = false;
+          this.cancelPendingTurnAgentEndSettle(this.pendingTurn);
+          this.armPendingTurnInactivityTimer(this.pendingTurn);
+        } else {
+          this.pendingTurn.agentEndObserved = true;
+          this.schedulePendingTurnCompletion();
+        }
+      } else {
+        this.emitMessage({ type: 'status', status: 'idle' });
+        void this.publishUsageStatsBestEffort();
+      }
     }
 
-    if (event.type === 'message_update') {
-      const assistant = asRecord(event.assistantMessageEvent);
+    if (normalizedEvent.type === 'message_update') {
+      const assistant = asRecord(normalizedEvent.assistantMessageEvent);
       const assistantType = asNonEmptyString(assistant?.type);
       if (assistantType === 'thinking_start') {
         this.emitMessage({ type: 'event', name: 'thinking_update', payload: { thinking: true } });
@@ -874,6 +1188,10 @@ export class PiRpcBackend implements AgentBackend {
   private handleStderrLine(line: string): void {
     const trimmed = line.trim();
     if (!trimmed) return;
+    this.recentStderrLines.push(trimmed);
+    if (this.recentStderrLines.length > PI_RPC_STDERR_TAIL_MAX_LINES) {
+      this.recentStderrLines.splice(0, this.recentStderrLines.length - PI_RPC_STDERR_TAIL_MAX_LINES);
+    }
     this.emitMessage({ type: 'terminal-output', data: trimmed });
 
     const normalized = trimmed.toLowerCase();
@@ -918,8 +1236,12 @@ export class PiRpcBackend implements AgentBackend {
     const response = await new Promise<PiRpcResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(id);
-        this.openPromptRequestIds.delete(id);
-        reject(new Error(`Timed out waiting for Pi RPC response (${command.type})`));
+        if (command.type === 'prompt') {
+          this.openPromptRequestIds.add(id);
+        } else {
+          this.openPromptRequestIds.delete(id);
+        }
+        reject(new PiRpcCommandResponseTimeoutError(command.type));
       }, timeoutMs);
       timeout.unref?.();
 
@@ -937,7 +1259,9 @@ export class PiRpcBackend implements AgentBackend {
   }
 
   private createPendingTurn(timeoutMs: number): Promise<void> {
-    this.rejectPendingTurn(new Error('replaced by newer turn'));
+    if (this.pendingTurn) {
+      return Promise.reject(new Error('Pi pending turn already exists'));
+    }
     let resolveTurn: (() => void) | null = null;
     let rejectTurn: ((error: Error) => void) | null = null;
 
@@ -946,40 +1270,568 @@ export class PiRpcBackend implements AgentBackend {
       rejectTurn = reject;
     });
 
-    const timeout = setTimeout(() => {
-      if (this.pendingTurn?.timeout === timeout) {
-        this.pendingTurn = null;
-      }
-      this.openPromptRequestIds.clear();
-      rejectTurn?.(new Error('Timed out waiting for Pi turn completion'));
-    }, timeoutMs);
-    timeout.unref?.();
-
     if (!resolveTurn || !rejectTurn) {
-      clearTimeout(timeout);
       throw new Error('Failed to initialize Pi pending turn');
     }
 
-    this.pendingTurn = { promise, resolve: resolveTurn, reject: rejectTurn, timeout };
+    const pending: PendingTurn = {
+      promise,
+      resolve: resolveTurn,
+      reject: rejectTurn,
+      timeout: null,
+      timeoutMs,
+      agentEndSettleTimeout: null,
+      compactionResumeTimeout: null,
+      compactionInProgress: false,
+      agentEndObserved: false,
+      activityEpoch: 0,
+      consecutiveSilentProbes: 0,
+      livenessProbeInFlight: false,
+      livenessProbeRerunRequested: false,
+      recoverableAssistantErrorObserved: false,
+      lastCompactionEnd: null,
+      lastAssistantStopReason: null,
+      compactionAutoContinueAttempts: 0,
+    };
+    this.pendingTurn = pending;
+    this.armPendingTurnInactivityTimer(pending);
     return promise;
   }
 
-  private resolvePendingTurn(): void {
-    if (!this.pendingTurn) return;
+  private resolvePendingTurn(): boolean {
+    if (!this.pendingTurn) return false;
     const pending = this.pendingTurn;
     this.pendingTurn = null;
-    clearTimeout(pending.timeout);
+    this.clearPendingTurnTimers(pending);
     this.openPromptRequestIds.clear();
+    this.emitMessage({ type: 'status', status: 'idle' });
     pending.resolve();
+    return true;
   }
 
   private rejectPendingTurn(error: Error): void {
     if (!this.pendingTurn) return;
     const pending = this.pendingTurn;
     this.pendingTurn = null;
-    clearTimeout(pending.timeout);
+    this.clearPendingTurnTimers(pending);
     this.openPromptRequestIds.clear();
     pending.reject(error);
+  }
+
+  private rejectPendingTurnAsStalled(pending: PendingTurn): void {
+    if (this.pendingTurn !== pending) return;
+    const error = new Error('Timed out waiting for Pi turn completion');
+    this.pendingTurn = null;
+    this.clearPendingTurnTimers(pending);
+    this.openPromptRequestIds.clear();
+    this.emitMessage({ type: 'status', status: 'error', detail: error.message });
+    pending.reject(error);
+  }
+
+  /**
+   * Pi exhausted overflow recovery: `compaction_end` with `willRetry:false` AND a non-empty
+   * `errorMessage` (Pi's "recovery failed after one compact-and-retry attempt"). This is terminal —
+   * continuing/pausing cannot help because the context is still too large — so it must surface as a
+   * failure rather than the friendly post-compaction pause. A threshold/manual pause carries no
+   * `errorMessage` and is unaffected.
+   */
+  private readTerminalCompactionFailure(pending: PendingTurn): string | null {
+    const end = pending.lastCompactionEnd;
+    if (!end || end.willRetry || !end.errorMessage) return null;
+    return end.errorMessage;
+  }
+
+  private rejectPendingTurnAsCompactionFailed(pending: PendingTurn, detail: string): void {
+    if (this.pendingTurn !== pending) return;
+    const classification = this.classifyPiRuntimeAuthFailure({
+      provider: this.currentModelProvider,
+      event: pending.lastCompactionEnd?.payload ?? null,
+      message: detail,
+    });
+    this.pendingTurn = null;
+    this.clearPendingTurnTimers(pending);
+    this.openPromptRequestIds.clear();
+    this.emitMessage({ type: 'status', status: 'error', detail });
+    if (classification) {
+      void this.reportPiRuntimeAuthFailureToDaemon(classification);
+    }
+    pending.reject(this.createPiAssistantFailureError(detail, classification));
+  }
+
+  private getPendingTurnStallTimeoutMs(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_TURN_STALL_TIMEOUT_ENV,
+      DEFAULT_PI_RPC_TURN_STALL_TIMEOUT_MS,
+    );
+  }
+
+  private getPromptCollisionIdleWaitMs(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_PROMPT_COLLISION_IDLE_WAIT_ENV,
+      DEFAULT_PI_RPC_PROMPT_COLLISION_IDLE_WAIT_MS,
+    );
+  }
+
+  private getPromptCollisionIdlePollMs(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_PROMPT_COLLISION_IDLE_POLL_ENV,
+      DEFAULT_PI_RPC_PROMPT_COLLISION_IDLE_POLL_MS,
+    );
+  }
+
+  private async waitForPromptCollisionToBecomeIdle(): Promise<void> {
+    const quiesceBudgetMs = this.getPromptCollisionIdleWaitMs();
+    const pollMs = this.getPromptCollisionIdlePollMs();
+    const probeTimeoutMs = Math.min(this.getLivenessProbeTimeoutMs(), quiesceBudgetMs);
+    // Wait for the in-flight work to finish, then let the caller send a clean prompt. While a turn is
+    // still pending we wait indefinitely: that turn's own event-aware liveness probe (with its
+    // silent-probe ceiling) is the single authority on whether Pi is genuinely stuck, so a long-but-live
+    // turn is never failed and a hung one is settled there — we never fail/drop the user's prompt just
+    // because Pi is busy, and we never send Pi `abort` here. Once no turn is pending, the prior turn has
+    // settled; we then only confirm Pi has quiesced, and we bound that confirmation so a hung/unreachable
+    // Pi (or one still reporting `isStreaming` after its turn was force-stalled) surfaces a clear error
+    // instead of blocking the caller forever.
+    let unreachableSince: number | null = null;
+    let quiesceSince: number | null = null;
+    for (;;) {
+      let state: PiRpcStateData | null = null;
+      try {
+        state = await this.getState(probeTimeoutMs);
+        unreachableSince = null;
+      } catch {
+        unreachableSince ??= Date.now();
+        if (Date.now() - unreachableSince >= quiesceBudgetMs) {
+          throw new Error('Pi became unreachable while waiting for the previous prompt to finish');
+        }
+      }
+      if (this.pendingTurn) {
+        quiesceSince = null;
+      } else {
+        if (state && state.isStreaming !== true && state.isCompacting !== true) return;
+        quiesceSince ??= Date.now();
+        if (Date.now() - quiesceSince >= quiesceBudgetMs) {
+          throw new Error('Pi did not return to idle after the previous prompt settled');
+        }
+      }
+      await delay(pollMs);
+    }
+  }
+
+  private getCompactionResumeGraceMs(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_COMPACTION_RESUME_GRACE_ENV,
+      DEFAULT_PI_RPC_COMPACTION_RESUME_GRACE_MS,
+    );
+  }
+
+  private getAgentEndSettleMs(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_AGENT_END_SETTLE_ENV,
+      DEFAULT_PI_RPC_AGENT_END_SETTLE_MS,
+    );
+  }
+
+  private getAgentEndBusyGraceMs(pending: PendingTurn): number {
+    return Math.min(
+      readPositiveIntegerEnv(
+        this.options.env,
+        PI_RPC_AGENT_END_BUSY_GRACE_ENV,
+        DEFAULT_PI_RPC_AGENT_END_BUSY_GRACE_MS,
+      ),
+      pending.timeoutMs,
+    );
+  }
+
+  private clearPendingTurnTimers(pending: PendingTurn): void {
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+      pending.timeout = null;
+    }
+    if (pending.agentEndSettleTimeout) {
+      clearTimeout(pending.agentEndSettleTimeout);
+      pending.agentEndSettleTimeout = null;
+    }
+    if (pending.compactionResumeTimeout) {
+      clearTimeout(pending.compactionResumeTimeout);
+      pending.compactionResumeTimeout = null;
+    }
+  }
+
+  private clearPendingTurnInactivityTimer(pending: PendingTurn): void {
+    if (!pending.timeout) return;
+    clearTimeout(pending.timeout);
+    pending.timeout = null;
+  }
+
+  private armPendingTurnInactivityTimer(pending: PendingTurn): void {
+    if (this.pendingTurn !== pending) return;
+    this.clearPendingTurnInactivityTimer(pending);
+
+    // The timer runs uniformly, including during compaction. When it fires we do not blindly
+    // fail the turn; we ask Pi whether it is still working (see `probeLivenessAndDecide`).
+    const timeout = setTimeout(() => {
+      void this.probeLivenessAndDecide(pending);
+    }, pending.timeoutMs);
+    timeout.unref?.();
+    pending.timeout = timeout;
+  }
+
+  private cancelPendingTurnAgentEndSettle(pending: PendingTurn): void {
+    if (!pending.agentEndSettleTimeout) return;
+    clearTimeout(pending.agentEndSettleTimeout);
+    pending.agentEndSettleTimeout = null;
+  }
+
+  private cancelPendingTurnCompactionResume(pending: PendingTurn): void {
+    if (!pending.compactionResumeTimeout) return;
+    clearTimeout(pending.compactionResumeTimeout);
+    pending.compactionResumeTimeout = null;
+  }
+
+  private notePendingTurnActivity(event: Record<string, unknown>): void {
+    const pending = this.pendingTurn;
+    if (!pending) return;
+
+    // Any Pi event is proof of life: bump the epoch (so an in-flight probe discards its result)
+    // and reset the silent-probe counter.
+    pending.activityEpoch += 1;
+    pending.consecutiveSilentProbes = 0;
+
+    const type = asNonEmptyString(event.type);
+    if (type === 'message_end') {
+      const message = asRecord(event.message);
+      if (message?.role === 'assistant') {
+        const stopReason = asNonEmptyString(message.stopReason ?? message.stop_reason);
+        pending.lastAssistantStopReason = stopReason;
+        const errorMessage = asNonEmptyString(message.errorMessage ?? message.error_message ?? event.errorMessage ?? event.error_message);
+        pending.recoverableAssistantErrorObserved = stopReason === 'error' || Boolean(errorMessage);
+      }
+    }
+
+    if (type === 'compaction_start') {
+      pending.compactionInProgress = true;
+      pending.agentEndObserved = false;
+      pending.lastCompactionEnd = null;
+      this.cancelPendingTurnAgentEndSettle(pending);
+      this.cancelPendingTurnCompactionResume(pending);
+      // Do NOT suppress the inactivity timer during compaction: the liveness probe distinguishes
+      // a healthy in-progress compaction (isCompacting) from a hung one.
+      this.armPendingTurnInactivityTimer(pending);
+      return;
+    }
+
+    if (type === 'agent_start') {
+      pending.compactionInProgress = false;
+      pending.agentEndObserved = false;
+      pending.recoverableAssistantErrorObserved = false;
+      pending.lastCompactionEnd = null;
+      pending.lastAssistantStopReason = null;
+      this.cancelPendingTurnAgentEndSettle(pending);
+      this.cancelPendingTurnCompactionResume(pending);
+      this.armPendingTurnInactivityTimer(pending);
+      return;
+    }
+
+    if (type === 'compaction_end') {
+      pending.compactionInProgress = false;
+      pending.agentEndObserved = false;
+      pending.lastCompactionEnd = {
+        payload: findContextCompactionPayload(mapPiRpcEventToAgentMessages(event)) ?? {
+          type: 'context-compaction',
+          phase: 'completed',
+          provider: 'pi',
+          lifecycleId: 'pi:context-compaction',
+          trigger: 'unknown',
+          source: 'provider-event',
+        },
+        willRetry: event.willRetry === true,
+        errorMessage: asNonEmptyString(event.errorMessage ?? event.error_message) ?? null,
+      };
+      this.cancelPendingTurnAgentEndSettle(pending);
+      this.armPendingTurnInactivityTimer(pending);
+      this.scheduleCompactionResumeGrace(pending);
+      return;
+    }
+
+    if (type !== 'agent_end') {
+      this.cancelPendingTurnAgentEndSettle(pending);
+    }
+
+    if (pending.agentEndObserved) {
+      this.schedulePendingTurnCompletion();
+      return;
+    }
+
+    this.armPendingTurnInactivityTimer(pending);
+  }
+
+  private getLivenessProbeTimeoutMs(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_LIVENESS_PROBE_TIMEOUT_ENV,
+      DEFAULT_PI_RPC_LIVENESS_PROBE_TIMEOUT_MS,
+    );
+  }
+
+  private getMaxSilentProbes(): number {
+    return readPositiveIntegerEnv(
+      this.options.env,
+      PI_RPC_MAX_SILENT_PROBES_ENV,
+      DEFAULT_PI_RPC_MAX_SILENT_PROBES,
+    );
+  }
+
+  private getCompactionAutoContinueMax(): number {
+    return readNonNegativeIntegerEnv(
+      this.options.env,
+      PI_RPC_COMPACTION_AUTO_CONTINUE_MAX_ENV,
+      DEFAULT_PI_RPC_COMPACTION_AUTO_CONTINUE_MAX,
+    );
+  }
+
+  private getCompactionAutoContinuePrompt(): string {
+    const configured = this.options.env[PI_RPC_COMPACTION_AUTO_CONTINUE_PROMPT_ENV];
+    if (typeof configured === 'string') {
+      const trimmed = configured.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+    return DEFAULT_PI_RPC_COMPACTION_AUTO_CONTINUE_PROMPT;
+  }
+
+  /**
+   * Inactivity-timer callback. Instead of blindly failing the turn, ask Pi whether it is still
+   * working (`get_state` → `isStreaming || isCompacting`). Active PI liveness is treated as proof
+   * of life; only missing liveness or explicit idle-without-terminal can fail the turn here.
+   */
+  private async probeLivenessAndDecide(pending: PendingTurn): Promise<void> {
+    if (this.pendingTurn !== pending) return;
+    // Single-flight: never run two overlapping probes for the same turn.
+    if (pending.livenessProbeInFlight) {
+      pending.livenessProbeRerunRequested = true;
+      return;
+    }
+    pending.livenessProbeInFlight = true;
+    pending.livenessProbeRerunRequested = false;
+    const epoch = pending.activityEpoch;
+
+    let state: PiRpcStateData | null = null;
+    try {
+      state = await this.getState(this.getLivenessProbeTimeoutMs());
+    } catch {
+      state = null;
+    } finally {
+      pending.livenessProbeInFlight = false;
+    }
+
+    // Stale-proof: discard the result if the turn was replaced, or a Pi event arrived while the
+    // probe was in flight. If the replacement timer already fired during this probe, re-arm here
+    // so the turn cannot be orphaned without a timer.
+    if (this.pendingTurn !== pending) return;
+    if (pending.activityEpoch !== epoch) {
+      if (pending.livenessProbeRerunRequested || pending.timeout === null) {
+        pending.livenessProbeRerunRequested = false;
+        this.armPendingTurnInactivityTimer(pending);
+      }
+      return;
+    }
+
+    if (!state) {
+      // Pi can transiently stop answering `get_state` while still emitting turn activity shortly
+      // afterward. Treat probe timeouts like other silent liveness probes and only fail after the
+      // bounded ceiling.
+      pending.consecutiveSilentProbes += 1;
+      if (pending.consecutiveSilentProbes >= this.getMaxSilentProbes()) {
+        this.rejectPendingTurnAsStalled(pending);
+        return;
+      }
+      this.armPendingTurnInactivityTimer(pending);
+      return;
+    }
+
+    if (state.isStreaming === true || state.isCompacting === true || pending.compactionInProgress) {
+      // Provider-reported work is proof of life. Long silent reasoning/compaction windows are valid
+      // for PI, so the silent-probe ceiling only applies when liveness is absent.
+      pending.consecutiveSilentProbes = 0;
+      this.armPendingTurnInactivityTimer(pending);
+      return;
+    }
+
+    if (pending.lastCompactionEnd) {
+      void this.continuePendingTurnAfterCompactionPause(pending);
+      return;
+    }
+
+    if (pending.agentEndObserved) {
+      this.resolvePendingTurn();
+      void this.publishUsageStatsBestEffort();
+      return;
+    }
+
+    // Pi reports it is neither streaming nor compacting, yet never emitted a terminal event.
+    this.rejectPendingTurnAsStalled(pending);
+  }
+
+  private schedulePendingTurnCompletion(): void {
+    const pending = this.pendingTurn;
+    if (!pending) return;
+    this.cancelPendingTurnAgentEndSettle(pending);
+    this.clearPendingTurnInactivityTimer(pending);
+
+    const timeout = setTimeout(() => {
+      void this.settlePendingTurnAfterAgentEnd(pending);
+    }, this.getAgentEndSettleMs());
+    timeout.unref?.();
+    pending.agentEndSettleTimeout = timeout;
+  }
+
+  private async settlePendingTurnAfterAgentEnd(pending: PendingTurn): Promise<void> {
+    if (this.pendingTurn !== pending) return;
+    pending.agentEndSettleTimeout = null;
+    if (pending.compactionInProgress) {
+      this.armPendingTurnInactivityTimer(pending);
+      return;
+    }
+
+    let state: PiRpcStateData | null = null;
+    try {
+      state = await this.getState(this.getLivenessProbeTimeoutMs());
+    } catch {
+      state = null;
+    }
+
+    if (this.pendingTurn !== pending) return;
+    if (state && (state.isStreaming === true || state.isCompacting === true)) {
+      this.schedulePendingTurnCompletionBusyGrace(pending);
+      return;
+    }
+
+    this.resolvePendingTurn();
+    void this.publishUsageStatsBestEffort();
+  }
+
+  private schedulePendingTurnCompletionBusyGrace(pending: PendingTurn): void {
+    if (this.pendingTurn !== pending) return;
+    this.cancelPendingTurnAgentEndSettle(pending);
+    this.clearPendingTurnInactivityTimer(pending);
+    const timeout = setTimeout(() => {
+      if (this.pendingTurn !== pending || pending.compactionInProgress) return;
+      void this.settlePendingTurnAfterAgentEnd(pending);
+    }, this.getAgentEndBusyGraceMs(pending));
+    timeout.unref?.();
+    pending.agentEndSettleTimeout = timeout;
+  }
+
+  private scheduleCompactionResumeGrace(pending: PendingTurn): void {
+    if (this.pendingTurn !== pending) return;
+    this.cancelPendingTurnCompactionResume(pending);
+
+    const timeout = setTimeout(() => {
+      if (this.pendingTurn !== pending) return;
+      void this.continuePendingTurnAfterCompactionPause(pending);
+    }, this.getCompactionResumeGraceMs());
+    timeout.unref?.();
+    pending.compactionResumeTimeout = timeout;
+  }
+
+  private async continuePendingTurnAfterCompactionPause(pending: PendingTurn): Promise<void> {
+    if (this.pendingTurn !== pending) return;
+    const terminalCompactionFailure = this.readTerminalCompactionFailure(pending);
+    if (terminalCompactionFailure) {
+      this.rejectPendingTurnAsCompactionFailed(pending, terminalCompactionFailure);
+      return;
+    }
+    if (pending.lastCompactionEnd?.willRetry === true) {
+      // An overflow compaction promised an automatic retry that never arrived: this is a
+      // stall, not a clean pause. Surface it as a failed turn.
+      this.rejectPendingTurnAsStalled(pending);
+      return;
+    }
+    if (this.isPostFinalAssistantCompaction(pending)) {
+      this.resolvePendingTurnAfterPostFinalCompaction(pending);
+      return;
+    }
+
+    const maxAttempts = this.getCompactionAutoContinueMax();
+    if (pending.compactionAutoContinueAttempts >= maxAttempts) {
+      this.resolvePendingTurnAsCompactionPaused(pending);
+      return;
+    }
+
+    pending.compactionAutoContinueAttempts += 1;
+    this.cancelPendingTurnCompactionResume(pending);
+    this.armPendingTurnInactivityTimer(pending);
+
+    try {
+      await this.sendCommand(
+        {
+          type: 'prompt',
+          message: this.getCompactionAutoContinuePrompt(),
+          streamingBehavior: 'followUp',
+        },
+        this.getLivenessProbeTimeoutMs(),
+      );
+      if (this.pendingTurn === pending) {
+        this.armPendingTurnInactivityTimer(pending);
+      }
+    } catch (error) {
+      if (this.pendingTurn !== pending) return;
+      const message = asError(error).message.toLowerCase();
+      if (message.includes('already processing') || message.includes('streamingbehavior')) {
+        this.armPendingTurnInactivityTimer(pending);
+        return;
+      }
+      this.rejectPendingTurnAsStalled(pending);
+    }
+  }
+
+  private isPostFinalAssistantCompaction(pending: PendingTurn): boolean {
+    return pending.lastCompactionEnd?.willRetry === false && pending.lastAssistantStopReason === 'stop';
+  }
+
+  private resolvePendingTurnAfterPostFinalCompaction(pending: PendingTurn): void {
+    if (this.pendingTurn !== pending) return;
+    this.cancelPendingTurnCompactionResume(pending);
+    this.resolvePendingTurn();
+    void this.publishUsageStatsBestEffort();
+  }
+
+  private resolvePendingTurnAsCompactionPaused(pending: PendingTurn): void {
+    if (this.pendingTurn !== pending) return;
+    const terminalCompactionFailure = this.readTerminalCompactionFailure(pending);
+    if (terminalCompactionFailure) {
+      this.rejectPendingTurnAsCompactionFailed(pending, terminalCompactionFailure);
+      return;
+    }
+    if (pending.lastCompactionEnd?.willRetry === true) {
+      // An overflow compaction promised an automatic retry that never arrived: this is a
+      // stall, not a clean pause. Surface it as a failed turn.
+      this.rejectPendingTurnAsStalled(pending);
+      return;
+    }
+    if (this.isPostFinalAssistantCompaction(pending)) {
+      this.resolvePendingTurnAfterPostFinalCompaction(pending);
+      return;
+    }
+
+    // A threshold/manual compaction completed and Pi paused without auto-resuming.
+    this.emitMessage({
+      type: 'event',
+      name: 'context_compaction',
+      payload: {
+        ...(pending.lastCompactionEnd?.payload ?? {}),
+        type: 'context-compaction',
+        phase: 'completed',
+        continuation: 'paused',
+        pauseReason: 'provider-idle-after-compaction',
+      },
+    });
+    this.resolvePendingTurn();
+    void this.publishUsageStatsBestEffort();
   }
 
   private rejectAllPending(error: Error): void {
@@ -990,8 +1842,8 @@ export class PiRpcBackend implements AgentBackend {
     }
   }
 
-  private async getState(): Promise<PiRpcStateData> {
-    const response = await this.sendCommand({ type: 'get_state' }, 30_000);
+  private async getState(timeoutMs = 30_000): Promise<PiRpcStateData> {
+    const response = await this.sendCommand({ type: 'get_state' }, timeoutMs);
     return (asRecord(response.data) ?? {}) as PiRpcStateData;
   }
 
@@ -1017,7 +1869,7 @@ export class PiRpcBackend implements AgentBackend {
     if (currentModelProvider) {
       this.currentModelProvider = currentModelProvider;
     }
-    const thinkingLevelFromState = normalizePiThinkingEffort((state as any).thinkingLevel) ?? 'medium';
+    const thinkingLevelFromState = normalizePiThinkingEffort(state.thinkingLevel) ?? 'medium';
 
     let normalized: Array<{ id: string; name: string; description: string; modelOptions?: unknown[] }> =
       (this.sessionModelState?.availableModels ?? []).map((m) => ({
@@ -1039,7 +1891,7 @@ export class PiRpcBackend implements AgentBackend {
           const name = asNonEmptyString(model?.name) ?? `${provider}/${id}`;
           this.modelProviderById.set(id, provider);
           this.modelProviderById.set(`${provider}/${id}`, provider);
-          const supportsThinking = (model as any).reasoning === true;
+          const supportsThinking = model?.reasoning === true;
           const modelOptions: unknown[] | undefined = supportsThinking
             ? [{
                 id: 'reasoning_effort',
@@ -1090,11 +1942,11 @@ export class PiRpcBackend implements AgentBackend {
           if (!name) return null;
           const description = asNonEmptyString(item?.description) ?? undefined;
           return {
-            command: name.startsWith('/') ? name : `/${name}`,
+            name: name.startsWith('/') ? name : `/${name}`,
             ...(description ? { description } : {}),
           };
         })
-        .filter((entry): entry is { command: string; description?: string } => entry !== null);
+        .filter((entry): entry is { name: string; description?: string } => entry !== null);
 
       this.emitMessage({
         type: 'event',

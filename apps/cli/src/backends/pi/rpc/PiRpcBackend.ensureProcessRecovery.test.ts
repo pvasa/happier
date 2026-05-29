@@ -58,6 +58,7 @@ rl.on('line', (line) => {
       promptCount += 1;
       out({ id: command.id, type: 'response', command: 'prompt', success: true });
       out({ type: 'turn_end' });
+      out({ type: 'agent_end' });
       if (promptCount === 1) {
         const mode = process.env.CRASH_MODE || 'timeout';
         if (mode === 'immediate') {

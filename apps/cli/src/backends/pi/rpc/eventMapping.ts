@@ -99,11 +99,11 @@ export function mapPiRpcEventToAgentMessages(event: unknown): AgentMessage[] {
   const type = asNonEmptyString(record.type);
   if (!type) return [];
 
-  if (type === 'agent_start' || type === 'turn_start') {
+  if (type === 'agent_start') {
     return [{ type: 'status', status: 'running' }];
   }
-  if (type === 'agent_end' || type === 'turn_end') {
-    return [{ type: 'status', status: 'idle' }];
+  if (type === 'agent_end') {
+    return [];
   }
 
   if (type === 'compaction_start') {
@@ -126,13 +126,14 @@ export function mapPiRpcEventToAgentMessages(event: unknown): AgentMessage[] {
     const result = asRecord(record.result);
     const tokensBefore = result ? readFiniteNumber(result.tokensBefore) : null;
     const tokensAfter = result ? readFiniteNumber(result.tokensAfter) : null;
-    const sanitizedErrorPreview = asNonEmptyString(record.errorMessage);
+    const rawErrorMessage = asNonEmptyString(record.errorMessage);
+    const sanitizedErrorPreview = asNonEmptyString(record.sanitizedErrorPreview);
     const errorCode = asNonEmptyString(record.errorCode);
     const aborted = isBoolean(record.aborted) ? record.aborted : false;
     const retryAttempt = readRetryAttempt(record, result);
     const lifecycleId = readPiCompactionLifecycleId(record);
     const cancelled = readPiCompactionCancelled(record, result);
-    const failed = !cancelled && Boolean(aborted || sanitizedErrorPreview);
+    const failed = !cancelled && Boolean(aborted || errorCode || rawErrorMessage || sanitizedErrorPreview);
     return [{
       type: 'event',
       name: 'context_compaction',

@@ -65,6 +65,20 @@ describe('pi backend argv', () => {
     expect(args).not.toContain('--thinking');
   });
 
+  it('passes the Happier session id into the Pi RPC backend options', () => {
+    process.env.PATH = '';
+    process.env.HAPPIER_PI_PATH = createFakeBin('pi');
+
+    const backend = createPiBackend({
+      cwd: '/tmp',
+      env: {},
+      permissionMode: 'default',
+      happierSessionId: 'happy-session-1',
+    }) as unknown as { options?: { happierSessionId?: string | null } };
+
+    expect(backend.options?.happierSessionId).toBe('happy-session-1');
+  });
+
   it('resolves the CLI from options.env PATH when process PATH is empty', () => {
     process.env.PATH = '';
     delete process.env.HAPPIER_PI_PATH;

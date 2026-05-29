@@ -39,14 +39,18 @@ export async function materializePiConnectedServiceAuth(params: Readonly<{
     if (params.claudeSubscription.kind !== 'token') {
       throw new Error('Claude subscription OAuth credentials are not supported by Pi. Reconnect using a Claude setup-token.');
     }
-    env.ANTHROPIC_OAUTH_TOKEN = params.claudeSubscription.token.token;
-  }
-
-  if (params.anthropic) {
+    auth.anthropic = {
+      type: 'api_key',
+      key: params.claudeSubscription.token.token,
+    };
+  } else if (params.anthropic) {
     if (params.anthropic.kind !== 'token') {
       throw new Error('Anthropic OAuth credentials are not supported. Reconnect using an Anthropic API key.');
     }
-    env.ANTHROPIC_API_KEY = params.anthropic.token.token;
+    auth.anthropic = {
+      type: 'api_key',
+      key: params.anthropic.token.token,
+    };
   }
 
   await writeJsonAtomic(join(agentDir, 'auth.json'), auth);

@@ -54,9 +54,9 @@ rl.on('line', (line) => {
       out({ id: command.id, type: 'response', command: 'get_commands', success: true, data: { commands: [] } });
       break;
     case 'compact':
-      out({ type: 'event', event: { type: 'compaction_start', reason: 'manual', compactionId: 'compact_1' } });
+      out({ type: 'compaction_start', reason: 'manual', compactionId: 'compact_1' });
       out({ id: command.id, type: 'response', command: 'compact', success: true, data: { ok: true } });
-      out({ type: 'event', event: { type: 'compaction_end', reason: 'manual', compactionId: 'compact_1' } });
+      out({ type: 'compaction_end', reason: 'manual', compactionId: 'compact_1' });
       break;
     default:
       out({ id: command.id, type: 'response', command: command.type, success: true });
