@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { installServerSettingsHooksCommonModuleMocks } from './serverSettingsHooksTestHelpers';
 
 
@@ -13,22 +14,34 @@ vi.mock('@/sync/domains/server/serverConfig', () => ({
     validateServerUrl: () => ({ valid: true, error: null }),
 }));
 
-const upsertServerProfileMock = vi.fn((..._args: unknown[]) => ({
+function createServerProfile(overrides: Partial<ServerProfile> = {}): ServerProfile {
+    return {
+        id: 'p0',
+        serverUrl: 'http://example.test',
+        name: 'Example',
+        createdAt: 0,
+        updatedAt: 0,
+        lastUsedAt: 0,
+        ...overrides,
+    };
+}
+
+const upsertServerProfileMock = vi.fn((..._args: unknown[]): ServerProfile => createServerProfile({
     id: 'p0',
     serverUrl: 'http://example.test',
     name: 'Example',
-    createdAt: 0,
-    updatedAt: 0,
-    lastUsedAt: 0,
 }));
 const removeServerProfileMock = vi.fn((..._args: unknown[]) => undefined);
+const getServerProfileByIdMock = vi.fn((..._args: unknown[]): ServerProfile | null => null);
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 }),
     upsertServerProfile: (...args: unknown[]) => upsertServerProfileMock(...args),
     removeServerProfile: (...args: unknown[]) => removeServerProfileMock(...args),
+    getServerProfileById: (...args: unknown[]) => getServerProfileByIdMock(...args),
+    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => profile.serverIdentityId ?? profile.id,
 }));
 
-const getServerFeaturesSnapshotMock = vi.fn(async (..._args: unknown[]) => ({
+const getServerFeaturesSnapshotMock = vi.fn(async (..._args: unknown[]): Promise<unknown> => ({
     status: 'ready',
     features: {
         features: {},
@@ -43,6 +56,7 @@ describe('useServerAutoAddFromRoute (canonical URL adoption)', () => {
     beforeEach(() => {
         upsertServerProfileMock.mockReset();
         removeServerProfileMock.mockReset();
+        getServerProfileByIdMock.mockReset();
         getServerFeaturesSnapshotMock.mockReset();
     });
 
@@ -111,5 +125,60 @@ describe('useServerAutoAddFromRoute (canonical URL adoption)', () => {
         expect(removeServerProfileMock).not.toHaveBeenCalled();
         expect(onSwitchServerById).toHaveBeenCalledWith('p1', expect.anything());
         expect(onAfterSuccess).toHaveBeenCalled();
+    });
+
+    it('switches to the server identity learned while validating the added route server', async () => {
+        upsertServerProfileMock.mockReturnValueOnce({
+            id: 'p1',
+            serverIdentityId: null,
+            serverUrl: 'http://127.0.0.1:3005',
+            name: 'Local',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+        });
+        getServerFeaturesSnapshotMock.mockResolvedValueOnce({
+            status: 'ready',
+            features: {
+                features: {},
+                capabilities: {
+                    server: {},
+                    serverIdentity: {
+                        serverIdentityId: 'srv_identity_route',
+                    },
+                },
+            },
+        });
+        getServerProfileByIdMock.mockReturnValueOnce({
+            id: 'p1',
+            serverIdentityId: 'srv_identity_route',
+            serverUrl: 'http://127.0.0.1:3005',
+            name: 'Local',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+        });
+
+        const onSwitchServerById = vi.fn(async () => {});
+        const onAfterSuccess = vi.fn();
+
+        const { useServerAutoAddFromRoute } = await import('./useServerAutoAddFromRoute');
+
+        function Probe() {
+            useServerAutoAddFromRoute({
+                enabled: true,
+                url: 'http://127.0.0.1:3005',
+                validateServerReachable: async () => true,
+                setError: vi.fn(),
+                onSwitchServerById,
+                onAfterSuccess,
+                source: 'url',
+            });
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        expect(onSwitchServerById).toHaveBeenCalledWith('srv_identity_route', expect.anything());
     });
 });

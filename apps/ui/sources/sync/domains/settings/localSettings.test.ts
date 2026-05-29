@@ -4,6 +4,10 @@ import { THEME_PROFILE_MAX_OVERRIDES_PER_MODE } from '@/theme/profiles/themeProf
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 
 describe('localSettingsParse', () => {
+    it('defaults the mobile brand hero dismissal timestamp to null', () => {
+        expect(localSettingsParse(null).brandHeroSeenAt).toBeNull();
+    });
+
     it('includes multi-pane and pane tab defaults', () => {
         const parsed = localSettingsParse(null);
         expect(parsed.uiMultiPanePanelsEnabled).toBe(true);
@@ -38,6 +42,18 @@ describe('localSettingsParse', () => {
         expect(localSettingsParse(null)).toEqual(localSettingsDefaults);
         expect(localSettingsParse(undefined)).toEqual(localSettingsDefaults);
         expect(localSettingsParse('nope')).toEqual(localSettingsDefaults);
+    });
+
+    it('applies the mobile brand hero dismissal timestamp through local settings', () => {
+        const applied = applyLocalSettings(localSettingsDefaults, {
+            brandHeroSeenAt: 1_789_000_000_000,
+        });
+
+        expect(applied.brandHeroSeenAt).toBe(1_789_000_000_000);
+    });
+
+    it('falls back to null for malformed mobile brand hero dismissal timestamps', () => {
+        expect(localSettingsParse({ brandHeroSeenAt: 'yesterday' }).brandHeroSeenAt).toBeNull();
     });
 
     it('defaults theme profiles to an empty local-only state', () => {
@@ -208,6 +224,12 @@ describe('localSettingsParse', () => {
     it('accepts direct sessions list tab selection', () => {
         const parsed = localSettingsParse({ sessionsListStorageTab: 'direct' });
         expect(parsed.sessionsListStorageTab).toBe('direct');
+    });
+
+    it('stores the local session list folder sort mode selection', () => {
+        expect(localSettingsParse(null).sessionListFolderSortModeV1).toBe('foldersFirst');
+        expect(localSettingsParse({ sessionListFolderSortModeV1: 'mixed' }).sessionListFolderSortModeV1).toBe('mixed');
+        expect(localSettingsParse({ sessionListFolderSortModeV1: 'invalid' }).sessionListFolderSortModeV1).toBe('foldersFirst');
     });
 
     it('accepts the middle ui item density selection', () => {

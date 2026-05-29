@@ -149,6 +149,27 @@ describe('theme preference transition', () => {
         expect(mutation).toHaveBeenCalledOnce();
     });
 
+    it('does not repeat the native mutation when the transition fails after applying it', async () => {
+        const mutation = vi.fn();
+        const run = vi.fn(async (update: () => void) => {
+            update();
+            throw new Error('native transition failed after mutation');
+        });
+
+        await runThemePreferenceChange({
+            currentPreference: 'light',
+            nextPreference: 'dark',
+            platform: 'ios',
+            reduceMotion: false,
+            systemTheme: 'light',
+            nativeController: { run },
+            mutation,
+        });
+
+        expect(run).toHaveBeenCalledOnce();
+        expect(mutation).toHaveBeenCalledOnce();
+    });
+
     it('falls back to an immediate mutation when reduced motion is enabled', async () => {
         const mutation = vi.fn();
         const run = vi.fn();

@@ -91,6 +91,14 @@ vi.mock('expo-clipboard', () => ({
 vi.mock('@/constants/Typography', () => ({
     Typography: {
         default: () => ({}),
+        mono: () => ({}),
+        tabular: () => ({}),
+        eyebrow: () => ({}),
+        rowTitle: () => ({}),
+        rowMeta: () => ({}),
+        pillLabel: () => ({}),
+        keyHint: () => ({}),
+        timestamp: () => ({}),
     },
 }));
 

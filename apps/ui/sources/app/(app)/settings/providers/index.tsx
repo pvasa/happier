@@ -1,7 +1,7 @@
 import React from 'react';
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -10,14 +10,12 @@ import { ProviderSetupFlow } from '@/components/settings/providers/setup/Provide
 import { AGENT_IDS, getAgentCore } from '@/agents/catalog/catalog';
 import { useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { useUnistyles } from 'react-native-unistyles';
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 
 const PROVIDER_SETTINGS_AGENT_IDS = AGENT_IDS.filter((agentId) => agentId !== 'customAcp');
 
 export default React.memo(function ProviderSettingsIndexScreen() {
     const router = useRouter();
-    const { theme } = useUnistyles();
     const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
 
     return (
@@ -37,7 +35,7 @@ export default React.memo(function ProviderSettingsIndexScreen() {
                             key={agentId}
                             title={t(core.displayNameKey)}
                             subtitle={`${state} • ${channel}`}
-                            icon={<Ionicons name={core.ui.agentPickerIconName as any} size={29} color={theme.colors.text.secondary} />}
+                            icon={<AgentIcon agentId={agentId} size={29} />}
                             onPress={() => router.push(`/settings/providers/${agentId}` as any)}
                         />
                     );

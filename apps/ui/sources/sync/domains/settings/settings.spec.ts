@@ -129,7 +129,7 @@ describe('settings', () => {
             const settings = settingsParse({});
             expect((settings as any).codingPromptBehaviorV1).toEqual({
                 v: 1,
-                sessionTitleUpdates: 'agent',
+                sessionTitleUpdates: 'ongoing',
                 responseOptions: 'agent',
             });
         });
@@ -455,6 +455,33 @@ describe('settings', () => {
             } as any).sessionListDensity).toBe('detailed');
         });
 
+        it('migrates missing session identity display to avatar for non-narrow session lists', () => {
+            expect(settingsParse({
+                compactSessionView: true,
+                compactSessionViewMinimal: false,
+            } as any).sessionListIdentityDisplay).toBe('avatar');
+
+            expect(settingsParse({
+                compactSessionView: false,
+            } as any).sessionListIdentityDisplay).toBe('avatar');
+
+            expect(settingsParse({
+                sessionListDensity: 'cozy',
+            } as any).sessionListIdentityDisplay).toBe('avatar');
+        });
+
+        it('preserves narrow and explicit session identity display during identity migration', () => {
+            expect(settingsParse({
+                compactSessionView: true,
+                compactSessionViewMinimal: true,
+            } as any).sessionListIdentityDisplay).toBe('agentLogo');
+
+            expect(settingsParse({
+                sessionListDensity: 'detailed',
+                sessionListIdentityDisplay: 'agentLogo',
+            } as any).sessionListIdentityDisplay).toBe('agentLogo');
+        });
+
         it('migrates featureToggles inbox.friends to social.friends (hard cutover)', () => {
             const parsed = settingsParse({
                 experiments: true,
@@ -545,6 +572,7 @@ describe('settings', () => {
                         disabledSurfaces: [],
                         disabledPlacements: [],
                         approvalRequiredSurfaces: [],
+                        toolExposureModes: {},
                     },
                 },
             });
@@ -568,6 +596,7 @@ describe('settings', () => {
                         disabledSurfaces: ['cli'],
                         disabledPlacements: [],
                         approvalRequiredSurfaces: [],
+                        toolExposureModes: {},
                     },
                 },
             });
@@ -580,6 +609,9 @@ describe('settings', () => {
             expect((parsed as any).filesDiffPresentationStyle).toBe('unified');
             expect((parsed as any).filesDiffFileListVirtualizationMinFiles).toBeGreaterThan(0);
             expect((parsed as any).filesDiffInlineVirtualizationLineThreshold).toBeGreaterThan(0);
+            expect((parsed as any).filesDiffReviewCommentsInlineVirtualizationLineThreshold).toBeGreaterThan(0);
+            expect((parsed as any).filesDiffReviewCommentsInlineVirtualizationLineThreshold)
+                .toBeLessThanOrEqual((parsed as any).filesDiffInlineVirtualizationLineThreshold);
             expect((parsed as any).filesChangedFilesRowDensity).toBe('comfortable');
             expect((parsed as any).filesDiffFoldingEnabled).toBe(true);
             expect((parsed as any).filesDiffFoldingContextThreshold).toBeGreaterThan(0);
@@ -760,6 +792,20 @@ describe('settings', () => {
             expect((parsed as any).sessionListInactiveGroupingV1).toBe('project');
         });
 
+        it('defaults the session list section mode to activity grouping', () => {
+            const parsed = settingsParse({});
+
+            expect((parsed as any).sessionListSectionModeV1).toBe('activity');
+        });
+
+        it('parses the unified session list section mode', () => {
+            const parsed = settingsParse({
+                sessionListSectionModeV1: 'single',
+            } as any);
+
+            expect((parsed as any).sessionListSectionModeV1).toBe('single');
+        });
+
         it('parses the session list active color mode setting', () => {
             const parsed = settingsParse({
                 sessionListActiveColorModeV1: 'attentionOnly',
@@ -774,6 +820,12 @@ describe('settings', () => {
             expect((parsed as any).sessionListAttentionPromotionModeV1).toBe('off');
         });
 
+        it('defaults session list working placement to disabled', () => {
+            const parsed = settingsParse({});
+
+            expect((parsed as any).sessionListWorkingPlacementModeV1).toBe('off');
+        });
+
         it('parses session list attention placement when set to the global section', () => {
             const parsed = settingsParse({
                 sessionListAttentionPromotionModeV1: 'global',
@@ -782,12 +834,28 @@ describe('settings', () => {
             expect((parsed as any).sessionListAttentionPromotionModeV1).toBe('global');
         });
 
+        it('parses session list working placement when set to the global section', () => {
+            const parsed = settingsParse({
+                sessionListWorkingPlacementModeV1: 'global',
+            } as any);
+
+            expect((parsed as any).sessionListWorkingPlacementModeV1).toBe('global');
+        });
+
         it('parses session list attention placement when set to current groups', () => {
             const parsed = settingsParse({
                 sessionListAttentionPromotionModeV1: 'withinGroups',
             } as any);
 
             expect((parsed as any).sessionListAttentionPromotionModeV1).toBe('withinGroups');
+        });
+
+        it('parses session list working placement when set to current groups', () => {
+            const parsed = settingsParse({
+                sessionListWorkingPlacementModeV1: 'withinGroups',
+            } as any);
+
+            expect((parsed as any).sessionListWorkingPlacementModeV1).toBe('withinGroups');
         });
 
         it('parses new-session persistence defaults', () => {
@@ -805,6 +873,35 @@ describe('settings', () => {
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: 'direct',
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'claude' })]: 'persisted',
             });
+        });
+
+        it('parses favorite backend targets and the last new-session picker view', () => {
+            const parsed = settingsParse({
+                favoriteBackendTargetKeysV1: [
+                    'agent:codex',
+                    'agent:claude',
+                    'agent:codex',
+                    '',
+                    42,
+                ],
+                lastNewSessionAgentPickerViewV1: {
+                    kind: 'backend',
+                    backendTargetKey: 'agent:codex',
+                },
+            } as any);
+
+            expect((parsed as any).favoriteBackendTargetKeysV1).toEqual([
+                'agent:codex',
+                'agent:claude',
+            ]);
+            expect((parsed as any).lastNewSessionAgentPickerViewV1).toEqual({
+                kind: 'backend',
+                backendTargetKey: 'agent:codex',
+            });
+
+            expect(settingsParse({
+                lastNewSessionAgentPickerViewV1: { kind: 'favoriteModels' },
+            } as any).lastNewSessionAgentPickerViewV1).toEqual({ kind: 'favoriteModels' });
         });
 
         it('parses remembered new-session engine selections', () => {
@@ -929,11 +1026,19 @@ describe('settings', () => {
             expect((parsed as any).transcriptGroupingMode).toBe('turns');
             expect((parsed as any).transcriptGroupToolCalls).toBe(true);
             expect((parsed as any).transcriptTurnToolCallsGroupStrategy).toBe('consecutive_tools');
-            expect((parsed as any).transcriptToolCallsCollapsedPreviewCount).toBe(5);
+            expect((parsed as any).transcriptToolCallsCollapsedPreviewCount).toBe(3);
             expect((parsed as any).transcriptToolCallsGroupShowBackground).toBe(true);
+            expect((parsed as any).transcriptMessageTimestampDisplayMode).toBe('hover_web_hidden_mobile');
+            expect((parsed as any).transcriptMessageTimestampsEnabled).toBeUndefined();
             expect((parsed as any).transcriptTurnGroupToolCalls).toBeUndefined();
             expect((parsed as any).transcriptTurnToolCallsCollapsedPreviewCount).toBeUndefined();
             expect((parsed as any).transcriptTurnToolCallsGroupShowBackground).toBeUndefined();
+        });
+
+        it('migrates the legacy transcript timestamp toggle to the display mode setting', () => {
+            expect((settingsParse({ transcriptMessageTimestampsEnabled: true }) as any).transcriptMessageTimestampDisplayMode).toBe('always');
+            expect((settingsParse({ transcriptMessageTimestampsEnabled: false }) as any).transcriptMessageTimestampDisplayMode).toBe('hover_web_hidden_mobile');
+            expect((settingsParse({ transcriptMessageTimestampDisplayMode: 'never', transcriptMessageTimestampsEnabled: true }) as any).transcriptMessageTimestampDisplayMode).toBe('never');
         });
 
         it('defaults thinking to inline (summary)', () => {
@@ -999,6 +1104,7 @@ describe('settings', () => {
             expect((parsed as any).transcriptScrollAutoFollowWhenPinned).toBe(true);
             expect((parsed as any).transcriptScrollJumpToBottomEnabled).toBe(true);
             expect((parsed as any).transcriptScrollJumpToBottomMinNewCount).toBe(1);
+            expect((parsed as any).transcriptScrollJumpToBottomRevealViewportRatio).toBe(0.75);
             expect((parsed as any).transcriptScrollJumpToBottomAnimateScroll).toBe(true);
         });
 
@@ -1101,6 +1207,7 @@ describe('settings', () => {
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'kimi' })]: true,
                 [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'kilo' })]: true,
             });
+            expect((settingsDefaults as any).profileEnabledById).toEqual({});
             expect((settingsDefaults as any).backendCliSourcePreferenceById).toEqual({});
             expect(settingsDefaults.codexBackendMode).toBe('appServer');
             expect(settingsDefaults.sessionReplayMaxSeedChars).toBe(120_000);
@@ -1122,6 +1229,19 @@ describe('settings', () => {
             expect((settingsDefaults as any).connectedServicesProfileLabelByKey).toEqual({});
             expect((settingsDefaults as any).connectedServicesQuotaPinnedMeterIdsByKey).toEqual({});
             expect((settingsDefaults as any).connectedServicesQuotaSummaryStrategyByKey).toEqual({});
+            expect(settingsDefaults.connectedServicesDefaultAuthByAgentIdV1).toEqual({
+                v: 1,
+                bindingsByAgentId: {},
+            });
+            expect(settingsDefaults.connectedServicesProviderStateSharingSettingsV1).toEqual({
+                v: 1,
+                defaults: {
+                    configMode: 'linked',
+                    stateMode: 'shared',
+                },
+                byAgentId: {},
+                acknowledgedRisksByAgentId: {},
+            });
             expect((settingsDefaults as any).pinnedSessionKeysV1).toEqual([]);
             expect((settingsDefaults as any).sessionListGroupOrderV1).toEqual({});
             expect((settingsDefaults as any).notificationsSettingsV1).toEqual({
@@ -1132,6 +1252,9 @@ describe('settings', () => {
                 foregroundBehavior: 'full',
                 permissionRequest: true,
                 userActionRequest: true,
+                connectedServiceAccountSwitch: true,
+                connectedServiceQuotaBlocked: true,
+                connectedServiceQuotaRecovered: true,
             });
             expect((settingsDefaults as any).notificationChannelsV1).toEqual([
                 {
@@ -1143,6 +1266,9 @@ describe('settings', () => {
                         ready: true,
                         permissionRequest: true,
                         userActionRequest: true,
+                        connectedServiceAccountSwitch: true,
+                        connectedServiceQuotaBlocked: true,
+                        connectedServiceQuotaRecovered: true,
                     },
                     readyIncludeMessageText: true,
                 },

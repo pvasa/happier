@@ -3,7 +3,12 @@ import * as React from 'react';
 import { t } from '@/text';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { validateServerUrl } from '@/sync/domains/server/serverConfig';
-import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import {
+    getServerProfileById,
+    removeServerProfile,
+    resolveServerProfileScopeId,
+    upsertServerProfile,
+} from '@/sync/domains/server/serverProfiles';
 import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
 import { canSafelyAutoAdoptCanonicalServerUrl } from '@/sync/domains/server/url/serverUrlClassification';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -64,6 +69,7 @@ export function useServerAutoAddFromRoute(params: Readonly<{
             try {
                 const featuresSnapshot = await getServerFeaturesSnapshot({ serverId: created.id, force: true, timeoutMs: 1000 });
                 if (featuresSnapshot.status === 'ready') {
+                    profile = getServerProfileById(profile.id) ?? profile;
                     const advertisedRaw = featuresSnapshot.features.capabilities?.server?.canonicalServerUrl;
                     const advertised = typeof advertisedRaw === 'string' ? normalizeUrl(advertisedRaw) : '';
                     if (advertised && advertised !== created.serverUrl && canSafelyAutoAdoptCanonicalServerUrl({ currentUrl: created.serverUrl, advertisedUrl: advertised })) {
@@ -86,7 +92,8 @@ export function useServerAutoAddFromRoute(params: Readonly<{
                 // best-effort
             }
 
-            await params.onSwitchServerById(profile.id, { normalizeRoute: false });
+            profile = getServerProfileById(profile.id) ?? profile;
+            await params.onSwitchServerById(resolveServerProfileScopeId(profile), { normalizeRoute: false });
             params.onAfterSuccess();
         })(), {
             tag: 'useServerAutoAddFromRoute.autoAdd',

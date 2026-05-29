@@ -2,6 +2,7 @@ import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AcpCatalogSettingsV1 } from '@happier-dev/protocol';
+import { createUseSettingMock } from '@/dev/testkit';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { installAcpCatalogSettingsCommonModuleMocks } from './acpCatalogSettingsTestHelpers';
 
@@ -45,18 +46,21 @@ installAcpCatalogSettingsCommonModuleMocks({
             },
         }).module;
     },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: (key: string) => {
-                    if (key === 'acpCatalogSettingsV1') {
-                        return [shared.settingsState.value, shared.setAcpSettingsSpy];
-                    }
-                    if (key === 'secrets') return [[], vi.fn()];
-                    return [null, vi.fn()];
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            useSetting: createUseSettingMock({
+                values: {
+                    acpCatalogSettingsV1: shared.settingsState.value,
+                    secrets: [],
                 },
+            }),
+            useSettingMutable: (key: string) => {
+                if (key === 'acpCatalogSettingsV1') {
+                    return [shared.settingsState.value, shared.setAcpSettingsSpy];
+                }
+                if (key === 'secrets') return [[], vi.fn()];
+                return [null, vi.fn()];
             },
         });
     },
@@ -81,6 +85,18 @@ vi.mock('@/components/ui/lists/ItemGroup', () => ({
 
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement('Item', props, props.subtitle ?? null, props.rightElement ?? null),
+}));
+
+vi.mock('@happier-dev/agents', () => ({
+    getBuiltInAcpConfig: (agentId: string) => (
+        agentId === 'kiro'
+            ? { launcher: { command: 'kiro-cli', args: ['--acp'] } }
+            : null
+    ),
+}));
+
+vi.mock('@/agents/catalog/catalog', () => ({
+    getAgentCore: (agentId: string) => ({ displayNameKey: `agents.${agentId}` }),
 }));
 
 describe('AcpCatalogSettingsScreen', () => {

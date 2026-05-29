@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Platform, View } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { type ActionId, listActionSpecs } from '@happier-dev/protocol';
@@ -18,12 +18,16 @@ import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
 import { ActionSettingsTargetModeControl } from './ActionSettingsTargetModeControl';
+import { ActionSettingsToolExposureControl } from './ActionSettingsToolExposureControl';
 import {
     applyActionSettingsTargetControlState,
     resolveActionSettingsTargetControlState,
+    resolveActionSettingsToolExposureState,
     setActionEnabled,
+    setActionSettingsToolExposureMode,
     type ActionSettingsApprovalControlValue,
     type ActionSettingsBooleanControlValue,
+    type ActionSettingsToolExposureControlValue,
     type ActionSettingsTargetCategory,
 } from './actionSettingsTargets';
 import {
@@ -162,6 +166,24 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
         entry?.targets.filter((target) => targetMatchesSearch(target, searchQuery)) ?? []
     ), [entry?.targets, searchQuery]);
     const targetSections = React.useMemo(() => groupTargetsByCategory(filteredTargets), [filteredTargets]);
+    const toolExposureTargets = React.useMemo(() => (
+        filteredTargets
+            .map((target) => {
+                const available = target.state !== 'unavailable';
+                const exposureState = entry
+                    ? resolveActionSettingsToolExposureState({
+                        settings,
+                        actionId: entry.actionId,
+                        targetId: target.id,
+                        available,
+                    })
+                    : { kind: 'hidden' as const };
+                return exposureState.kind === 'visible'
+                    ? { target, available, exposureState }
+                    : null;
+            })
+            .filter((target): target is NonNullable<typeof target> => target !== null)
+    ), [entry, filteredTargets, settings]);
 
     const commitSettings = React.useCallback((next: unknown) => {
         setRawSettings(normalizeActionsSettings(next));
@@ -184,6 +206,18 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
             settings,
             actionId: props.actionId,
             enabled,
+        }));
+    }, [commitSettings, props.actionId, settings]);
+
+    const handleToolExposureChange = React.useCallback((
+        target: ActionSettingsTargetEntry,
+        value: ActionSettingsToolExposureControlValue,
+    ) => {
+        commitSettings(setActionSettingsToolExposureMode({
+            settings,
+            actionId: props.actionId,
+            targetId: target.id,
+            value,
         }));
     }, [commitSettings, props.actionId, settings]);
 
@@ -289,6 +323,27 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                         })}
                     </ItemGroup>
                 ))}
+
+                {toolExposureTargets.length > 0 ? (
+                    <ItemGroup
+                        title={t('settingsActions.toolExposure.title')}
+                        footer={t('settingsActions.toolExposure.footer')}
+                    >
+                        {toolExposureTargets.map(({ target, available, exposureState }) => {
+                            const exposureTestIDPrefix = `settings-actions:action:${entry.actionId}:target:${target.id}:tool-exposure`;
+                            return (
+                                <ActionSettingsToolExposureControl
+                                    key={target.id}
+                                    testIDPrefix={exposureTestIDPrefix}
+                                    surfaceTitle={t(target.titleKey)}
+                                    state={exposureState}
+                                    disabled={!entry.enabled || !available}
+                                    onChange={(value) => handleToolExposureChange(target, value)}
+                                />
+                            );
+                        })}
+                    </ItemGroup>
+                ) : null}
             </ItemList>
         </View>
     );
@@ -297,32 +352,22 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
 export const ActionSettingsDetailView = React.memo(function ActionSettingsDetailView() {
     const params = useLocalSearchParams<{ actionId?: string | string[] }>();
     const actionId = decodeActionIdParam(params.actionId);
-    const actionTitle = actionId
-        ? listActionSpecs().find((spec) => spec.id === actionId)?.title
-        : null;
+    const invalidActionTitle = t('settingsActions.invalidActionTitle');
 
     if (!actionId) {
         return (
-            <>
-                <Stack.Screen options={{ headerTitle: t('settingsActions.invalidActionTitle') }} />
-                <ItemList>
-                    <ItemGroup>
-                        <Item
-                            title={t('settingsActions.invalidActionTitle')}
-                            subtitle={t('settingsActions.invalidActionSubtitle')}
-                            mode="info"
-                            showChevron={false}
-                        />
-                    </ItemGroup>
-                </ItemList>
-            </>
+            <ItemList>
+                <ItemGroup>
+                    <Item
+                        title={invalidActionTitle}
+                        subtitle={t('settingsActions.invalidActionSubtitle')}
+                        mode="info"
+                        showChevron={false}
+                    />
+                </ItemGroup>
+            </ItemList>
         );
     }
 
-    return (
-        <>
-            <Stack.Screen options={{ headerTitle: actionTitle ?? t('common.actions') }} />
-            <ActionSettingsDetailContent actionId={actionId} />
-        </>
-    );
+    return <ActionSettingsDetailContent actionId={actionId} />;
 });

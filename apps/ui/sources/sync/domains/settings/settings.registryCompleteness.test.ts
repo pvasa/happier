@@ -65,6 +65,38 @@ describe('settings registry completeness', () => {
         expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('lastEngineSelectionsByScopeV1', {});
     });
 
+    it('owns provider usage gauge and usage-limit prompt preferences as account-synced settings', async () => {
+        const { ACCOUNT_SETTING_ARTIFACTS } = await import('./settings');
+
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.sessionProviderUsageGaugeMode.storageScope).toBe('account');
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('sessionProviderUsageGaugeMode', 'auto');
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.sessionProviderUsageGaugeWindowMode.storageScope).toBe('account');
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('sessionProviderUsageGaugeWindowMode', 'most_constrained');
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults.usageLimitRecoverySettingsV1).toMatchObject({
+            promptMode: 'standard',
+            resumePromptMode: 'standard',
+        });
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.usageLimitRecoverySettingsV1.schema.parse({
+            v: 1,
+            mode: 'auto_wait',
+            promptMode: 'standard',
+            resumePromptMode: 'off',
+        }).resumePromptMode).toBe('off');
+    });
+
+    it('owns session list ordering mode as an account-synced enum setting', async () => {
+        const { ACCOUNT_SETTING_ARTIFACTS, settingsParse } = await import('./settings');
+        const { LOCAL_SETTING_ARTIFACTS } = await import('./registry/local/localSettingDefinitions');
+
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.sessionListOrderingModeV1.storageScope).toBe('account');
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('sessionListOrderingModeV1', 'custom');
+        expect(LOCAL_SETTING_ARTIFACTS.definitions).not.toHaveProperty('sessionListOrderingModeV1');
+        expect(LOCAL_SETTING_ARTIFACTS.defaults).not.toHaveProperty('sessionListOrderingModeV1');
+        expect(settingsParse({ sessionListOrderingModeV1: 'created' }).sessionListOrderingModeV1).toBe('created');
+        expect(settingsParse({ sessionListOrderingModeV1: 'updated' }).sessionListOrderingModeV1).toBe('updated');
+        expect(settingsParse({ sessionListOrderingModeV1: 'invalid' }).sessionListOrderingModeV1).toBe('custom');
+    });
+
     it('owns keyboard shortcut preferences as account-synced settings instead of local-only settings', async () => {
         const { ACCOUNT_SETTING_ARTIFACTS } = await import('./settings');
         const { LOCAL_SETTING_ARTIFACTS } = await import('./registry/local/localSettingDefinitions');

@@ -3,7 +3,8 @@ import { View } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { CodeEditor } from '@/components/ui/code/editor/CodeEditor';
+import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 import { SETTINGS_TEXT_INPUT_METRICS } from '@/components/ui/forms/settingsTextInputMetrics';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -63,6 +64,9 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
     const [path, setPath] = React.useState(props.path ?? '');
     const [content, setContent] = React.useState('');
     const [saving, setSaving] = React.useState(false);
+    // Flushed before reading `content` on save so the latest rich/raw edit (which
+    // may still be debounced inside the active editor surface) is captured.
+    const editorRef = React.useRef<CodeEditorHandle | null>(null);
 
     React.useEffect(() => {
         setPath(props.path ?? '');
@@ -79,10 +83,14 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
         if (!artifactState || !canSave) return;
         try {
             setSaving(true);
+            // Flush any debounced edit out of the active editor surface, then read
+            // the freshest content from its handle (state may not have caught up).
+            await editorRef.current?.flushPendingChange();
+            const latestContent = editorRef.current?.getValue() ?? content;
             await updateSkillPromptBundleWithEntry({
                 artifactId: props.artifactId,
                 path: path.trim(),
-                content,
+                content: latestContent,
             });
             safeRouterBack({ router, navigation, fallbackHref: `/settings/prompts/skills/${props.artifactId}` });
         } catch {
@@ -114,15 +122,14 @@ export const SkillBundleSupportingFileEditorScreen = React.memo(function SkillBu
                 <ItemGroup title={t('promptLibrary.supportingFileContent')}>
                     <View style={{ padding: 12 }}>
                         <View style={styles.editorContainer}>
-                            <CodeEditor
+                            <MarkdownCodeEditorField
                                 resetKey={`${props.artifactId}:${props.path ?? 'new'}`}
                                 testID="skillSupportingFile.editor"
                                 value={content}
-                                language="markdown"
+                                filePath={path}
                                 onChange={setContent}
                                 readOnly={false}
-                                wrapLines={true}
-                                showLineNumbers={false}
+                                editorRef={editorRef}
                             />
                         </View>
                     </View>

@@ -148,4 +148,32 @@ describe('useServerSettingsServerProfileActions (remove server)', () => {
         });
         expect(onSwitchServerById).toHaveBeenCalledWith('server-correct');
     });
+
+    it('switches identity-backed profiles by canonical scope id', async () => {
+        const onSwitchServerById = vi.fn(async () => {});
+        const setRevision = vi.fn();
+        const profile = {
+            id: 'localhost-18829',
+            serverIdentityId: 'srv_identity_a',
+            name: 'Local Dev',
+            serverUrl: 'https://local.example.test',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+        };
+
+        const { useServerSettingsServerProfileActions } = await import('./useServerSettingsServerProfileActions');
+        const actions = await renderHook(() =>
+            useServerSettingsServerProfileActions({
+                authStatusByServerId: { srv_identity_a: 'signedIn' },
+                onSwitchServerById,
+                onAfterSignedOutSwitch: vi.fn(),
+                setRevision: setRevision as any,
+            }),
+        );
+
+        await actions.onSwitchServer(profile);
+
+        expect(onSwitchServerById).toHaveBeenCalledWith('srv_identity_a');
+    });
 });

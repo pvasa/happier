@@ -13,6 +13,10 @@ import {
     ThemeProfilesLocalStateSchema,
 } from '@/theme/profiles/themeProfilePersistence';
 import { SessionListFocusedFolderV1Schema } from '@/sync/domains/session/folders';
+import {
+    SESSION_LIST_FOLDER_SORT_MODE_DEFAULT_V1,
+    SESSION_LIST_FOLDER_SORT_MODES_V1,
+} from '@/sync/domains/session/listing/sessionListFolderSortMode';
 
 function bucketNormalizedPaneSize(
     value: number,
@@ -112,6 +116,25 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
         default: null,
         description: 'Focused session folder navigation state for the local session list',
         storageScope: 'local',
+    },
+    brandHeroSeenAt: {
+        schema: z.number().nullable().catch(null),
+        default: null,
+        description: 'Timestamp in ms since epoch when the user first dismissed the mobile brand hero',
+        storageScope: 'local',
+    },
+    hasCompletedAuthOnce: {
+        schema: z.boolean().catch(false),
+        default: false,
+        description: 'Flips true the first time the user reaches an authenticated state on this device. Never cleared on logout, so the welcome screen can greet returning users with a warmer copy variant ("Good to have you back").',
+        storageScope: 'local',
+    },
+    sessionListFolderSortModeV1: {
+        schema: z.enum(SESSION_LIST_FOLDER_SORT_MODES_V1).catch(SESSION_LIST_FOLDER_SORT_MODE_DEFAULT_V1),
+        default: SESSION_LIST_FOLDER_SORT_MODE_DEFAULT_V1,
+        description: 'Session list folder sort mode',
+        storageScope: 'local',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
     },
     themePreference: {
         schema: z.enum(['light', 'dark', 'adaptive']),
@@ -459,7 +482,7 @@ export const LOCAL_SETTING_DEFINITIONS = defineSettingDefinitions({
     sessionLastMobileSurfaceBySessionId: {
         schema: z.record(z.string(), z.enum(['chat', 'browse', 'git', 'tabs', 'terminal'])).default({}),
         default: {},
-        description: 'Last active mobile session surface by session id',
+        description: 'Last active mobile session surface by server-scoped session key, with legacy bare session ids accepted for compatibility',
         storageScope: 'local',
         analytics: {
             trackCurrentState: true,

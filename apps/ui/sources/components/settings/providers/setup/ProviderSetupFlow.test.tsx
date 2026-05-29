@@ -44,6 +44,10 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
+}));
+
 vi.mock('@/utils/platform/tauri', () => ({
     isTauriDesktop: () => tauriDesktopState.value,
 }));
@@ -192,7 +196,7 @@ describe('ProviderSetupFlow', () => {
         expect(capabilitiesState.invoke).toHaveBeenCalledTimes(2);
     });
 
-    it('shows a desktop-only notice on browser web instead of provider setup controls', async () => {
+    it('keeps provider install setup controls available on browser web', async () => {
         tauriDesktopState.value = false;
 
         const { ProviderSetupFlow } = await import('./ProviderSetupFlow');
@@ -200,9 +204,26 @@ describe('ProviderSetupFlow', () => {
             providerIds: ['codex', 'claude'],
         }));
 
-        expect(screen.findByTestId('settings.providers.setup.desktopOnlyNotice')).toBeTruthy();
-        expect(screen.findByTestId('provider-setup-start-card')).toBeNull();
-        expect(screen.findByTestId('provider-setup-queue-card')).toBeNull();
-        expect(screen.findByTestId('provider-setup-option-codex')).toBeNull();
+        expect(screen.findByTestId('settings.providers.setup.desktopOnlyNotice')).toBeNull();
+        expect(screen.findByTestId('provider-setup-start-card')).toBeTruthy();
+        expect(screen.findByTestId('provider-setup-option-codex')).toBeTruthy();
+
+        await screen.pressByTestIdAsync('provider-setup-start-card');
+
+        expect(screen.findByTestId('provider-setup-active-codex')).toBeTruthy();
+        expect(screen.findByType('ProviderAuthenticationCard').props.showActions).toBe(false);
+        expect(screen.findAllByType('ProviderAuthenticationTerminalPane')).toHaveLength(0);
+    });
+
+    it('renders provider setup rows through AgentIcon', async () => {
+        const { ProviderSetupFlow } = await import('./ProviderSetupFlow');
+        const screen = await renderScreen(React.createElement(ProviderSetupFlow, {
+            providerIds: ['cursor'],
+        }));
+
+        const option = screen.findByTestId('provider-setup-option-cursor');
+        const icon = option?.props.icon as React.ReactElement<Record<string, unknown>>;
+        expect(typeof icon.type === 'function' ? icon.type.name : icon.type).toBe('AgentIcon');
+        expect(icon.props.agentId).toBe('cursor');
     });
 });

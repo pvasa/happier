@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
+    DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
     DEFAULT_NOTIFICATIONS_SETTINGS_V1,
 } from '@happier-dev/protocol';
 
@@ -27,11 +28,7 @@ describe('notificationChannels helpers', () => {
                 enabled: true,
                 url: 'https://hooks.example.test/notify',
                 signingSecret: null,
-                topics: {
-                    ready: true,
-                    permissionRequest: true,
-                    userActionRequest: true,
-                },
+                topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                 readyIncludeMessageText: false,
             },
         ]);
@@ -45,11 +42,7 @@ describe('notificationChannels helpers', () => {
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: true,
                 },
                 {
@@ -59,11 +52,7 @@ describe('notificationChannels helpers', () => {
                     enabled: true,
                     url: 'https://hooks.example.test/notify',
                     signingSecret: null,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: false,
                 },
             ],
@@ -71,8 +60,8 @@ describe('notificationChannels helpers', () => {
             patch: {
                 enabled: false,
                 topics: {
+                    ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     ready: false,
-                    permissionRequest: true,
                     userActionRequest: false,
                 },
             },
@@ -84,11 +73,7 @@ describe('notificationChannels helpers', () => {
                 id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                 kind: 'expo_push',
                 enabled: true,
-                topics: {
-                    ready: true,
-                    permissionRequest: true,
-                    userActionRequest: true,
-                },
+                topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                 readyIncludeMessageText: true,
             },
             {
@@ -99,8 +84,8 @@ describe('notificationChannels helpers', () => {
                 url: 'https://hooks.example.test/notify',
                 signingSecret: null,
                 topics: {
+                    ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     ready: false,
-                    permissionRequest: true,
                     userActionRequest: false,
                 },
                 readyIncludeMessageText: false,
@@ -118,11 +103,7 @@ describe('notificationChannels helpers', () => {
                     enabled: true,
                     url: 'https://hooks.example.test/notify',
                     signingSecret: null,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: false,
                 },
             ],
@@ -147,9 +128,8 @@ describe('notificationChannels helpers', () => {
                     url: 'https://hooks.example.test/notify',
                     signingSecret: null,
                     topics: {
-                        ready: true,
+                        ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                         permissionRequest: false,
-                        userActionRequest: true,
                     },
                     readyIncludeMessageText: false,
                 },
@@ -158,13 +138,8 @@ describe('notificationChannels helpers', () => {
 
         expect(delta).toEqual({
             notificationsSettingsV1: {
-                v: 1,
-                pushEnabled: true,
-                ready: true,
+                ...DEFAULT_NOTIFICATIONS_SETTINGS_V1,
                 readyIncludeMessageText: false,
-                permissionRequest: true,
-                userActionRequest: true,
-                foregroundBehavior: 'full',
             },
             notificationChannelsV1: [
                 {
@@ -172,11 +147,7 @@ describe('notificationChannels helpers', () => {
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                     readyIncludeMessageText: false,
                 },
                 {
@@ -187,9 +158,8 @@ describe('notificationChannels helpers', () => {
                     url: 'https://hooks.example.test/notify',
                     signingSecret: null,
                     topics: {
-                        ready: true,
+                        ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
                         permissionRequest: false,
-                        userActionRequest: true,
                     },
                     readyIncludeMessageText: false,
                 },

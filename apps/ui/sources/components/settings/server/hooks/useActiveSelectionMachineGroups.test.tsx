@@ -8,10 +8,6 @@ import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/sync/domains/server/selection/serverSelectionResolution', () => ({
-    getEffectiveServerSelectionFromRawSettings: () => ({ serverIds: ['server-a'] }),
-}));
-
 type ProbeProps = Readonly<{
     allMachines: any[];
     onValue: (value: ReturnType<typeof useActiveSelectionMachineGroups>) => void;
@@ -66,5 +62,48 @@ describe('useActiveSelectionMachineGroups', () => {
         expect(latest.visibleMachineGroups[0].machines).toEqual([]);
         expect(latest.hasAnyVisibleMachines).toBe(false);
     });
-});
 
+    it('uses identity-backed profile ids for selected machine groups', async () => {
+        const captured: any[] = [];
+        function IdentityProbe() {
+            const value = useActiveSelectionMachineGroups({
+                activeServerSnapshot: {
+                    serverId: 'srv_identity_active',
+                    serverUrl: 'https://a.example.test',
+                    generation: 1,
+                } as any,
+                allMachines: [],
+                serverProfiles: [{
+                    id: 'localhost-18829',
+                    serverIdentityId: 'srv_identity_active',
+                    name: 'Server A',
+                    serverUrl: 'https://a.example.test',
+                    lastUsedAt: 1,
+                }] as any,
+                machineListByServerId: {
+                    srv_identity_active: [{ id: 'm-identity', revokedAt: null }] as any,
+                },
+                machineListStatusByServerId: {},
+                settings: {
+                    serverSelectionGroups: null,
+                    serverSelectionActiveTargetKind: null,
+                    serverSelectionActiveTargetId: null,
+                },
+            });
+
+            React.useEffect(() => {
+                captured.push(value);
+            }, [value]);
+
+            return null;
+        }
+
+        await renderScreen(<IdentityProbe />);
+
+        const latest = captured.at(-1);
+        expect(latest.visibleMachineGroups).toHaveLength(1);
+        expect(latest.visibleMachineGroups[0].serverId).toBe('srv_identity_active');
+        expect(latest.visibleMachineGroups[0].serverName).toBe('Server A');
+        expect(latest.visibleMachineGroups[0].machines.map((machine: any) => machine.id)).toEqual(['m-identity']);
+    });
+});

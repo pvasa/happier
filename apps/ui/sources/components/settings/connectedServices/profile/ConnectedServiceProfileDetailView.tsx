@@ -16,11 +16,15 @@ import { useProfile, useSettings } from '@/sync/store/hooks';
 import { useApplySettings } from '@/sync/store/settingsWriters';
 import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
 import { connectedServiceProfileKey, resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
-import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol';
+import { buildConnectedServiceCredentialRecord, ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 import { ConnectedServiceQuotaCard } from '../ConnectedServiceQuotaCard';
 import { resolveConnectedServiceDisplayName } from '../model/resolveConnectedServiceDisplayName';
+import { promptConnectedServiceTokenValue } from '../promptConnectedServiceTokenValue';
+import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { storeConnectedServiceCredentialWithIdentityConfirmation } from '../storeConnectedServiceCredentialWithIdentityConfirmation';
+import { runConnectedServiceCredentialStoredEffects } from '../runConnectedServiceCredentialStoredEffects';
 
 function asStringParam(value: unknown): string {
   if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : '';
@@ -69,6 +73,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
   }
 
   const serviceLabel = resolveConnectedServiceDisplayName(serviceId, t);
+  const entry = getConnectedServiceRegistryEntry(serviceId);
   const svc = profile.connectedServicesV2.find((s) => s.serviceId === serviceId) ?? null;
   const profileRecord = (svc?.profiles ?? []).find((p) => p.profileId === profileId) ?? null;
 
@@ -86,7 +91,14 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     );
   }
 
-  const status = profileRecord?.status === 'connected' ? 'connected' : 'needs_reauth';
+  const status = profileRecord?.status === 'connected'
+    ? 'connected'
+    : profileRecord?.status === 'refreshing'
+      ? 'refreshing'
+      : profileRecord?.status === 'refresh_failed_retryable'
+        ? 'refresh_failed_retryable'
+        : 'needs_reauth';
+  const kind = profileRecord?.kind === 'token' ? 'token' : profileRecord?.kind === 'oauth' ? 'oauth' : null;
   const providerEmail = typeof profileRecord?.providerEmail === 'string' ? profileRecord.providerEmail : '';
   const providerAccountId = typeof profileRecord?.providerAccountId === 'string' ? profileRecord.providerAccountId : '';
 
@@ -124,6 +136,35 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     if (isDefault) delete nextMap[serviceId];
     else nextMap[serviceId] = profileId;
     applySettings({ connectedServicesDefaultProfileByServiceId: nextMap });
+  };
+
+  const handleReplaceToken = async () => {
+    if (kind !== 'token') return;
+    const tokenValue = await promptConnectedServiceTokenValue(entry?.tokenKind ?? null);
+    if (!tokenValue) return;
+    const credentials = ensureCredentials();
+    const now = Date.now();
+    const record = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId,
+      profileId,
+      kind: 'token',
+      token: {
+        token: tokenValue,
+        providerAccountId: null,
+        providerEmail: null,
+      },
+    });
+    const stored = await storeConnectedServiceCredentialWithIdentityConfirmation(credentials, {
+      serviceId,
+      profileId,
+      record,
+    }, { onStored: runConnectedServiceCredentialStoredEffects });
+    if (!stored) return;
+    await Modal.alert(
+      t('connectedServices.oauthPaste.alerts.connectedTitle'),
+      t('connectedServices.oauthPaste.alerts.connectedBody', { serviceId: serviceLabel, profileId }),
+    );
   };
 
   const handleEditLabel = async () => {
@@ -175,7 +216,13 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
         />
         <Item
           title={t('connectedServices.profile.status')}
-          subtitle={status === 'connected' ? t('connectedServices.detail.profiles.connected') : t('connectedServices.detail.profiles.needsReauth')}
+          subtitle={status === 'connected'
+            ? t('connectedServices.detail.profiles.connected')
+            : status === 'refreshing'
+              ? t('connectedServices.detail.profiles.refreshing')
+              : status === 'refresh_failed_retryable'
+                ? t('connectedServices.detail.profiles.refreshFailedRetryable')
+                : t('connectedServices.detail.profiles.needsReauth')}
           showChevron={false}
         />
         {providerEmail ? (
@@ -217,6 +264,14 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
           icon={<Ionicons name="pencil-outline" size={22} color={theme.colors.accent.blue} />}
           onPress={() => void handleEditLabel()}
         />
+        {kind === 'token' ? (
+          <Item
+            title={t('connectedServices.detail.actions.replaceToken')}
+            subtitle={t('connectedServices.profile.replaceTokenSubtitle')}
+            icon={<Ionicons name="key-outline" size={22} color={theme.colors.accent.blue} />}
+            onPress={() => void handleReplaceToken()}
+          />
+        ) : null}
         {status === 'connected' ? (
           <Item
             title={t('modals.disconnect')}
@@ -224,14 +279,15 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
             icon={<Ionicons name="trash-outline" size={22} color={theme.colors.state.danger.foreground} />}
             onPress={() => void handleDisconnect()}
           />
-        ) : (
+        ) : kind !== 'token' && status === 'needs_reauth' ? (
           <Item
+            testID="connected-services-profile-action:reconnect"
             title={t('connectedServices.detail.actions.reconnect')}
             subtitle={t('connectedServices.profile.reconnectSubtitle')}
             icon={<Ionicons name="refresh-outline" size={22} color={theme.colors.accent.blue} />}
             onPress={() => router.push({ pathname: '/settings/connected-services/oauth', params: { serviceId, profileId } })}
           />
-        )}
+        ) : null}
       </ItemGroup>
     </ItemList>
   );

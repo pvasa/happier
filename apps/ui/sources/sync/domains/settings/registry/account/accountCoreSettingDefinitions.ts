@@ -6,7 +6,14 @@ import {
 import { z } from 'zod';
 import { AvatarStyleIdSchema, DEFAULT_AVATAR_STYLE_ID } from './avatarStyleSetting';
 import { SessionFolderViewModeV1Schema } from '@/sync/domains/session/folders';
-import { SESSION_LIST_ATTENTION_PROMOTION_MODE_VALUES } from '@/sync/domains/session/listing/attentionPromotion/sessionListAttentionPromotionTypes';
+import {
+    SESSION_LIST_ATTENTION_PROMOTION_MODE_VALUES,
+    SESSION_LIST_WORKING_PLACEMENT_MODE_VALUES,
+} from '@/sync/domains/session/listing/attentionPromotion/sessionListAttentionPromotionTypes';
+import {
+    SESSION_LIST_ORDERING_MODE_DEFAULT_V1,
+    SESSION_LIST_ORDERING_MODES_V1,
+} from '@/sync/domains/session/listing/sessionListOrderingRules';
 
 export const SessionListDensitySchema = z.preprocess((raw) => {
     if (raw === 'compact') return 'cozy';
@@ -16,6 +23,12 @@ export const SessionListIdentityDisplaySchema = z.enum(['avatar', 'agentLogo', '
 
 export const SessionMessageSendModeSchema = z.enum(['agent_queue', 'interrupt', 'server_pending']);
 export const SessionBusySteerSendPolicySchema = z.enum(['steer_immediately', 'server_pending']);
+export const UsageLimitRecoverySettingsV1Schema = z.object({
+    v: z.literal(1).default(1),
+    mode: z.enum(['ask', 'auto_wait']).default('ask'),
+    promptMode: z.literal('standard').default('standard'),
+    resumePromptMode: z.enum(['standard', 'off']).default('standard'),
+});
 
 export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
     analyticsOptOut: {
@@ -178,6 +191,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
+    sessionListOrderingModeV1: {
+        schema: z.enum(SESSION_LIST_ORDERING_MODES_V1),
+        default: SESSION_LIST_ORDERING_MODE_DEFAULT_V1,
+        description: 'Session list ordering mode',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
     workspacePathDisplayModeV1: {
         schema: z.enum(['name', 'path']),
         default: 'name',
@@ -248,6 +268,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
+    sessionListSectionModeV1: {
+        schema: z.enum(['activity', 'single']),
+        default: 'activity',
+        description: 'Whether the session list separates active and inactive sessions or shows one combined section',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
     sessionListActiveColorModeV1: {
         schema: z.enum(['activityAndAttention', 'attentionOnly', 'allActive']),
         default: 'activityAndAttention',
@@ -259,6 +286,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         schema: z.enum(SESSION_LIST_ATTENTION_PROMOTION_MODE_VALUES),
         default: 'off',
         description: 'Where sessions waiting for the user or ready to review appear in the session list',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    sessionListWorkingPlacementModeV1: {
+        schema: z.enum(SESSION_LIST_WORKING_PLACEMENT_MODE_VALUES),
+        default: 'off',
+        description: 'Where currently working sessions appear in the session list',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
@@ -275,6 +309,34 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         description: 'When an agent is busy and supports in-flight steer, whether messages steer immediately or are queued via the pending queue',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    sessionProviderUsageGaugeMode: {
+        schema: z.enum(['auto', 'hidden']),
+        default: 'auto',
+        description: 'Whether to show the provider usage gauge in the session composer when reliable quota evidence is available',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    sessionProviderUsageGaugeWindowMode: {
+        schema: z.enum(['most_constrained', 'daily', 'weekly', 'primary', 'secondary', 'session']),
+        default: 'most_constrained',
+        description: 'Which provider usage quota window the session composer gauge should prefer',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    usageLimitRecoverySettingsV1: {
+        schema: UsageLimitRecoverySettingsV1Schema,
+        default: { v: 1, mode: 'ask', promptMode: 'standard', resumePromptMode: 'standard' },
+        description: 'Global usage-limit wait/resume preference',
+        storageScope: 'account',
+        analytics: {
+            trackCurrentState: true,
+            trackChanges: true,
+            valueKind: 'enum',
+            privacy: 'safe',
+            identityScope: 'person',
+            serializeCurrent: (value: { mode?: unknown } | undefined) => value?.mode === 'auto_wait' ? 'auto_wait' : 'ask',
+        },
     },
 });
 

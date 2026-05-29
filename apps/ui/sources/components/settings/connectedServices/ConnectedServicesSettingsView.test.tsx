@@ -1,8 +1,12 @@
 import * as React from 'react';
 import { ReactTestRenderer } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
-import { installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
+import {
+    connectedServicesModuleState,
+    installConnectedServicesCommonModuleMocks,
+    resetConnectedServicesCommonModuleMockState,
+} from './connectedServicesTestHelpers';
 
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -28,23 +32,26 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
+const useFeatureEnabledSpy = vi.fn<(featureId: string) => boolean>(() => false);
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => false,
+    useFeatureEnabled: (featureId: string) => useFeatureEnabledSpy(featureId),
 }));
 
+const useProfileSpy = vi.fn(() => ({
+    connectedServicesV2: [
+        {
+            serviceId: 'openai-codex',
+            profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }],
+        },
+    ],
+}));
 vi.mock('@/sync/store/hooks', () => ({
-    useProfile: () => ({
-        connectedServicesV2: [
-            {
-                serviceId: 'openai-codex',
-                profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }],
-            },
-        ],
-    }),
+    useProfile: () => useProfileSpy(),
     useSettings: () => ({
         connectedServicesDefaultProfileByServiceId: {},
         connectedServicesProfileLabelByKey: {},
     }),
+    useSettingMutable: () => [undefined, vi.fn()] as const,
     useLocalSetting: () => 1,
 }));
 
@@ -70,6 +77,21 @@ vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaBadges', () =>
 }));
 
 describe('ConnectedServicesSettingsView', () => {
+    beforeEach(() => {
+        resetConnectedServicesCommonModuleMockState();
+        useFeatureEnabledSpy.mockReset();
+        useFeatureEnabledSpy.mockReturnValue(false);
+        useProfileSpy.mockReset();
+        useProfileSpy.mockReturnValue({
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }],
+                },
+            ],
+        });
+    });
+
     it('does not expose connected services when the feature is disabled', async () => {
         const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
 
@@ -78,5 +100,59 @@ describe('ConnectedServicesSettingsView', () => {
 
         const items = tree.findAllByType('Item' as any);
         expect(items.length).toBe(0);
+    });
+
+    it('opens the service detail flow for default-auth connect recovery actions', async () => {
+        useFeatureEnabledSpy.mockReturnValue(true);
+        useProfileSpy.mockReturnValue({
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [],
+                },
+            ],
+        });
+
+        const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
+        const { tree } = await renderScreen(React.createElement(ConnectedServicesSettingsView));
+
+        const dropdown = tree.root.findAll((node) =>
+            node.props?.itemTrigger?.itemProps?.testID === 'settings-connected-services-default-auth-codex'
+        )[0];
+        expect(dropdown).toBeTruthy();
+        dropdown!.props.onSelect('connected-service:openai-codex:connect');
+
+        expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith({
+            pathname: '/settings/connected-services/[serviceId]',
+            params: { serviceId: 'openai-codex' },
+        });
+    });
+
+    it('opens the profile recovery flow for default-auth reauth selections', async () => {
+        useFeatureEnabledSpy.mockImplementation((featureId: string) =>
+            featureId === 'connectedServices' || featureId === 'connectedServices.accountGroups'
+        );
+        useProfileSpy.mockReturnValue({
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [{ profileId: 'work', status: 'needs_reauth', kind: 'oauth' }],
+                },
+            ],
+        });
+
+        const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');
+        const { tree } = await renderScreen(React.createElement(ConnectedServicesSettingsView));
+
+        const dropdown = tree.root.findAll((node) =>
+            node.props?.itemTrigger?.itemProps?.testID === 'settings-connected-services-default-auth-codex'
+        )[0];
+        expect(dropdown).toBeTruthy();
+        dropdown!.props.onSelect('connected-service:openai-codex:reauth:work');
+
+        expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith({
+            pathname: '/settings/connected-services/profile',
+            params: { serviceId: 'openai-codex', profileId: 'work' },
+        });
     });
 });

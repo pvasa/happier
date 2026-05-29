@@ -21,7 +21,7 @@ describe('Session settings (prompt personalization)', () => {
     it('renders prompt personalization controls on the root session settings screen', async () => {
         sessionSettingsEntryState.settingsState.codingPromptBehaviorV1 = {
             v: 1,
-            sessionTitleUpdates: 'agent',
+            sessionTitleUpdates: 'ongoing',
             responseOptions: 'agent',
         };
 
@@ -34,10 +34,17 @@ describe('Session settings (prompt personalization)', () => {
         expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle')).toBeTruthy();
         expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsTitle')).toBeTruthy();
 
-        screen.pressRowByTitle('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle');
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const titleDropdown = dropdowns.find((node: any) =>
+            node.props?.itemTrigger?.title === 'settingsSession.promptPersonalization.askAgentToRenameSessionsTitle');
+        expect(titleDropdown).toBeTruthy();
+        expect(titleDropdown?.props?.selectedId).toBe('ongoing');
+        expect(titleDropdown?.props?.items?.map((item: any) => item.id)).toEqual(['disabled', 'initial', 'ongoing']);
+
+        titleDropdown!.props.onSelect('initial');
         expect(sessionSettingsEntryState.settingsState.codingPromptBehaviorV1).toEqual({
             v: 1,
-            sessionTitleUpdates: 'disabled',
+            sessionTitleUpdates: 'initial',
             responseOptions: 'agent',
         });
     });

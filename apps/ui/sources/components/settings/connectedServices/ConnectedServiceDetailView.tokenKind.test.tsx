@@ -16,6 +16,14 @@ const storeCredentialSpy = vi.fn(async () => {});
 const applySettingsSpy = vi.fn(async () => {});
 const openExternalUrlSpy = vi.fn(async (_url: string) => true);
 const activeServiceState = { serviceId: 'claude-subscription' as 'claude-subscription' | 'github' };
+const connectedProfilesState = {
+    profiles: [] as Array<{
+        profileId: string;
+        status: 'connected' | 'needs_reauth' | 'refresh_failed_retryable';
+        kind?: 'oauth' | 'token' | null;
+        providerEmail?: string | null;
+    }>,
+};
 installConnectedServicesCommonModuleMocks({
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -63,7 +71,7 @@ vi.mock('@/sync/store/hooks', async () => {
       connectedServicesV2: [
         {
           serviceId: activeServiceState.serviceId,
-          profiles: [],
+          profiles: connectedProfilesState.profiles,
         },
       ],
     }),
@@ -105,6 +113,7 @@ describe('ConnectedServiceDetailView token kind copy', () => {
     connectedServicesModuleState.routerBackSpy.mockReset();
     connectedServicesModuleState.routerPushSpy.mockReset();
     storeCredentialSpy.mockReset();
+    connectedProfilesState.profiles = [];
     promptSpy.mockResolvedValueOnce('work');
     promptSpy.mockResolvedValueOnce('setup-token-1');
 
@@ -121,6 +130,47 @@ describe('ConnectedServiceDetailView token kind copy', () => {
     expect(storeCredentialSpy).toHaveBeenCalledTimes(1);
     expect(alertSpy).toHaveBeenCalled();
     expect(connectedServicesModuleState.routerBackSpy).not.toHaveBeenCalled();
+  });
+
+  it('replaces a token profile in place when reconnect is required', async () => {
+    activeServiceState.serviceId = 'claude-subscription';
+    connectedServicesModuleState.searchParams = { serviceId: 'claude-subscription' };
+    connectedProfilesState.profiles = [{
+      profileId: 'work',
+      status: 'needs_reauth',
+      kind: 'token',
+      providerEmail: null,
+    }];
+    promptSpy.mockReset();
+    alertSpy.mockReset();
+    storeCredentialSpy.mockReset();
+    promptSpy.mockResolvedValueOnce('replacement-token');
+
+    const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
+
+    const { tree } = await renderScreen(<ConnectedServiceDetailView />);
+    const rowActions = tree.root.findByType('ItemRowActions' as any);
+    const replaceTokenAction = rowActions.props.actions.find((action: any) => action.id === 'replace-token');
+
+    expect(replaceTokenAction?.title).toBe('connectedServices.detail.actions.replaceToken');
+
+    await act(async () => {
+      await replaceTokenAction.onPress();
+    });
+
+    expect(storeCredentialSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        serviceId: 'claude-subscription',
+        profileId: 'work',
+        record: expect.objectContaining({
+          serviceId: 'claude-subscription',
+          profileId: 'work',
+          kind: 'token',
+        }),
+      }),
+    );
+    expect(applySettingsSpy).not.toHaveBeenCalled();
   });
 
   it('uses setup-token copy for claude-subscription', async () => {

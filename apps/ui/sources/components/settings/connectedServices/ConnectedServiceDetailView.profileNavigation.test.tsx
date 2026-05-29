@@ -1,7 +1,6 @@
 import React from 'react';
-import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit';
 import {
     connectedServicesModuleState,
     installConnectedServicesCommonModuleMocks,
@@ -76,18 +75,12 @@ vi.mock('@/components/ui/lists/ItemRowActions', () => {
 });
 
 describe('ConnectedServiceDetailView profile navigation', () => {
-  it('opens profile detail when a profile row is pressed', async () => {
+  it('opens profile detail when the profile navigation control is pressed', async () => {
     const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
 
-    let tree!: renderer.ReactTestRenderer;
-    tree = (await renderScreen(<ConnectedServiceDetailView />)).tree;
+    const screen = await renderScreen(<ConnectedServiceDetailView />);
 
-    const candidates = tree.findAll((n) => n.props?.title === 'work' && typeof n.props?.onPress === 'function');
-    expect(candidates).toHaveLength(1);
-    const profileItem = candidates[0]!;
-    await act(async () => {
-        await pressTestInstanceAsync(profileItem);
-    });
+    await screen.pressByTestIdAsync('connected-services-profile:work:open');
 
     expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -39,7 +39,26 @@ type SettingsLike = Readonly<{
     secrets?: unknown;
     secretBindingsByProfileId?: unknown;
     profiles?: unknown;
+    favoriteDirectories?: unknown;
+    favoriteMachines?: unknown;
+    favoriteProfiles?: unknown;
+    mcpServersSettingsV1?: unknown;
+    promptStacksV1?: unknown;
+    promptFoldersV1?: unknown;
+    promptInvocationsV1?: unknown;
+    promptRegistrySourcesV1?: unknown;
+    contextSelectionsV1?: unknown;
 }>;
+
+function safeArrayCount(value: unknown): number | null {
+    return Array.isArray(value) ? value.length : null;
+}
+
+function safeObjectKeyCount(value: unknown): number | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.keys(value as Record<string, unknown>).length
+        : null;
+}
 
 export function summarizeSettingsDelta(delta: Partial<SettingsLike>): Record<string, unknown> {
     const keys = safeKeys(delta).sort();
@@ -86,6 +105,15 @@ export function summarizeSettings(settings: Partial<SettingsLike>, extra?: { ver
                 : null,
         },
         profilesCount: Array.isArray((settings as any)?.profiles) ? (settings as any).profiles.length : null,
+        favoriteDirectoriesCount: safeArrayCount((settings as any)?.favoriteDirectories),
+        favoriteMachinesCount: safeArrayCount((settings as any)?.favoriteMachines),
+        favoriteProfilesCount: safeArrayCount((settings as any)?.favoriteProfiles),
+        mcpServersCount: safeArrayCount((settings as any)?.mcpServersSettingsV1?.servers),
+        promptStacksCodingCount: safeArrayCount((settings as any)?.promptStacksV1?.surfaces?.coding),
+        promptFoldersCount: safeArrayCount((settings as any)?.promptFoldersV1?.folders),
+        promptInvocationsCount: safeArrayCount((settings as any)?.promptInvocationsV1?.entries),
+        promptRegistrySourcesCount: safeArrayCount((settings as any)?.promptRegistrySourcesV1?.sources),
+        contextSelectionsCount: safeObjectKeyCount((settings as any)?.contextSelectionsV1?.selectionsByKey),
     };
 }
 

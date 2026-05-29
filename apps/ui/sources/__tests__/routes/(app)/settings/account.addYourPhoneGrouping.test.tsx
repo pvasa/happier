@@ -79,6 +79,14 @@ vi.mock('@/sync/sync', () => ({
     sync: { anonID: 'anon', serverID: 'server' },
 }));
 
+vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
+    fetchAccountEncryptionMode: vi.fn(async () => ({ mode: 'e2ee', updatedAt: 0 })),
+}));
+
+vi.mock('@/sync/api/account/apiAccountEncryptionMigrate', () => ({
+    migrateAccountEncryptionMode: vi.fn(async () => ({ mode: 'e2ee', updatedAt: 0 })),
+}));
+
 vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
 }));

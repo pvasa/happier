@@ -27,8 +27,9 @@ const shared = vi.hoisted(() => ({
     routerPush: vi.fn(),
     routerBack: vi.fn(),
     clipboardSetStringAsync: vi.fn(),
-    fileSystemReadAsStringAsync: vi.fn(),
-    fileSystemWriteAsStringAsync: vi.fn(),
+    fileSystemFiles: new Map<string, string>(),
+    fileSystemFileText: vi.fn(),
+    fileSystemFileWrite: vi.fn(),
     sharingShareAsync: vi.fn(),
     nativePickFiles: vi.fn(),
     updateTheme: vi.fn(),
@@ -71,11 +72,44 @@ vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 vi.mock('expo-status-bar', () => ({ setStatusBarStyle: shared.setStatusBarStyle }));
 vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: shared.setSystemBackgroundColorAsync }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: shared.clipboardSetStringAsync }));
+vi.mock('expo-file-system', () => {
+    class MockFile {
+        uri: string;
+
+        constructor(...parts: Array<string | { uri: string }>) {
+            this.uri = parts.map((part) => (typeof part === 'string' ? part : part.uri)).join('');
+        }
+
+        async text() {
+            shared.fileSystemFileText(this.uri);
+            const value = shared.fileSystemFiles.get(this.uri);
+            if (typeof value !== 'string') throw new Error(`missing file: ${this.uri}`);
+            return value;
+        }
+
+        write(payload: string) {
+            shared.fileSystemFileWrite(this.uri, payload);
+            shared.fileSystemFiles.set(this.uri, payload);
+        }
+    }
+
+    return {
+        File: MockFile,
+        Paths: {
+            cache: { uri: 'file:///cache/' },
+            document: { uri: 'file:///documents/' },
+        },
+    };
+});
 vi.mock('expo-file-system/legacy', () => ({
     EncodingType: { UTF8: 'utf8' },
     cacheDirectory: 'file:///cache/',
-    readAsStringAsync: shared.fileSystemReadAsStringAsync,
-    writeAsStringAsync: shared.fileSystemWriteAsStringAsync,
+    readAsStringAsync: vi.fn(async () => {
+        throw new Error('legacy file-system read should not be used');
+    }),
+    writeAsStringAsync: vi.fn(async () => {
+        throw new Error('legacy file-system write should not be used');
+    }),
 }));
 vi.mock('expo-sharing', () => ({ shareAsync: shared.sharingShareAsync }));
 vi.mock('@/utils/files/nativePickFiles', () => ({ nativePickFiles: shared.nativePickFiles }));
@@ -197,8 +231,9 @@ afterEach(() => {
     shared.routerPush.mockClear();
     shared.routerBack.mockClear();
     shared.clipboardSetStringAsync.mockReset();
-    shared.fileSystemReadAsStringAsync.mockReset();
-    shared.fileSystemWriteAsStringAsync.mockReset();
+    shared.fileSystemFiles.clear();
+    shared.fileSystemFileText.mockReset();
+    shared.fileSystemFileWrite.mockReset();
     shared.sharingShareAsync.mockReset();
     shared.nativePickFiles.mockReset();
     shared.nativePickFiles.mockResolvedValue([]);
@@ -351,6 +386,7 @@ describe('Theme profile editor', () => {
         expect(screen.findByTestId('settings-theme-profile-editor')).not.toBeNull();
         expect(screen.findByTestId('settings-theme-color-token-dark-background.canvas')).not.toBeNull();
         expect(screen.findRowByTitle('Canvas background')?.props.subtitle).toBe('App, root, screen, and settings-list backdrop color.');
+        expect(screen.findRowByTitle('settingsAppearance.themeProfiles.groups.composer')).not.toBeNull();
         expect(screen.findByTestId('settings-theme-editor-mode:dark')).toBeNull();
         expect(screen.findRowByTitle('settingsAppearance.themeProfiles.editorMode')).toBeNull();
     });
@@ -631,6 +667,19 @@ describe('Theme profile import and export screens', () => {
         expect(getThemeProfiles().profiles[0]?.overrides.light['background.canvas']).toBe('#123456');
     });
 
+    it('imports a native theme JSON file with the File API', async () => {
+        const json = exportThemeProfileToJson(baseProfile('shared', { light: { 'background.canvas': '#123456' }, dark: {} }));
+        shared.fileSystemFiles.set('file:///cache/theme.json', json);
+        shared.nativePickFiles.mockResolvedValueOnce([{ kind: 'native', uri: 'file:///cache/theme.json', name: 'theme.json' }]);
+        const screen = await renderImportScreen();
+
+        await screen.pressByTestIdAsync('settings-theme-profile-import-file');
+        await screen.pressByTestIdAsync('settings-theme-profile-import-submit');
+
+        expect(shared.fileSystemFileText).toHaveBeenCalledWith('file:///cache/theme.json');
+        expect(getThemeProfiles().profiles[0]?.overrides.light['background.canvas']).toBe('#123456');
+    });
+
     it('shows the supported import formats hint on the import screen', async () => {
         const screen = await renderImportScreen();
 
@@ -688,10 +737,9 @@ describe('Theme profile import and export screens', () => {
 
         await screen.pressByTestIdAsync('settings-theme-profile-export-download');
 
-        expect(shared.fileSystemWriteAsStringAsync).toHaveBeenCalledWith(
+        expect(shared.fileSystemFileWrite).toHaveBeenCalledWith(
             expect.stringContaining('happier-theme-profile-ocean.json'),
             expect.stringContaining('happier.themeProfile'),
-            expect.any(Object),
         );
         expect(shared.sharingShareAsync).toHaveBeenCalled();
     });

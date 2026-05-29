@@ -3,11 +3,12 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CliAuthStatusData } from '@/sync/api/capabilities/capabilitiesProtocol';
 import type { ActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
 import type { ProviderSettingsPlugin } from '@/agents/providers/shared/providerSettingsPlugin';
 import { createPassThroughModule } from '@/dev/testkit/mocks/components';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { createStorageModuleMock, createStoreHooksModuleMock } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { createExpoVectorIconsMock } from '@/dev/testkit/mocks/icons';
@@ -23,6 +24,7 @@ import { installSessionSettingsEntryModuleMocks } from '../sessionSettingsEntryT
 let mockProviderId: string | null = 'codex';
 let shouldThrowOnAppPaneScope = false;
 const routerPushSpy = vi.fn();
+const modalShowSpy = vi.fn();
 const mockProviderSettingsPlugin = vi.hoisted(
     () => vi.fn<(providerId: string) => ProviderSettingsPlugin | null>(() => null),
 );
@@ -34,7 +36,7 @@ const machineCapabilitiesInvokeMock = vi.fn(async () => ({
 const applySettingsMock = vi.fn();
 const tauriDesktopState = vi.hoisted(() => ({ value: true }));
 const cliDetectionState = {
-    available: { codex: false },
+    available: { codex: false } as Record<string, boolean | null>,
     login: { codex: null } as Record<string, boolean | null>,
     authStatus: { codex: null } as Record<string, CliAuthStatusData | null>,
     resolvedPath: { codex: null } as Record<string, string | null>,
@@ -65,6 +67,37 @@ const paneApi = {
 };
 const useCLIDetectionMock = vi.fn();
 const useCapabilityInstallabilityMock = vi.fn();
+function createConnectedServiceProfile(
+    profileId = 'work',
+): Profile['connectedServicesV2'][number]['profiles'][number] {
+    return {
+        profileId,
+        status: 'connected',
+        kind: 'oauth',
+        providerEmail: null,
+        providerAccountId: null,
+        expiresAt: null,
+        lastUsedAt: null,
+        health: null,
+    };
+}
+
+function createCodexConnectedService(
+    overrides: Partial<Profile['connectedServicesV2'][number]> = {},
+): Profile['connectedServicesV2'][number] {
+    return {
+        serviceId: 'openai-codex',
+        profiles: [createConnectedServiceProfile()],
+        groups: [],
+        ...overrides,
+    };
+}
+
+let profileState: Profile = {
+    ...profileDefaults,
+    id: 'profile-1',
+    connectedServicesV2: [createCodexConnectedService()],
+};
 let machinesState = [
     { id: 'm1', metadata: { displayName: 'Machine One', host: 'm1', homeDir: '/Users/m1' } },
     { id: 'm2', metadata: { displayName: 'Machine Two', host: 'm2', homeDir: '/Users/m2' } },
@@ -122,6 +155,16 @@ installSessionSettingsEntryModuleMocks({
         };
     },
     textModule: () => createTextModuleMock({ translate: (key) => key }),
+    modalModule: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({
+            spies: {
+                show: (...args: any[]) => modalShowSpy(...args),
+            },
+        }).module;
+    },
+    featureEnabled: (featureId) =>
+        featureId === 'connectedServices' || featureId === 'connectedServices.accountGroups',
     storageModule: (importOriginal) =>
         createStorageModuleMock({
             importOriginal,
@@ -169,6 +212,13 @@ installSessionSettingsEntryModuleMocks({
                 useMachine: () => null,
             },
         }),
+    storeHooksModule: (importOriginal) =>
+        createStoreHooksModuleMock({
+            importOriginal,
+            overrides: {
+                useProfile: () => profileState,
+            },
+        }),
 });
 
 vi.mock('@expo/vector-icons', () => createExpoVectorIconsMock());
@@ -194,6 +244,7 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
                 : props.trigger;
         const itemTriggerNode = props.itemTrigger
             ? React.createElement('Item', {
+                ...(props.itemTrigger.itemProps ?? {}),
                 title: props.itemTrigger.title,
                 subtitle: props.itemTrigger.subtitle,
                 icon: props.itemTrigger.icon,
@@ -286,6 +337,9 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
                     installBanner: { installKind: 'installer', installCommand: null, guideUrl: null },
                 },
                 uiConnectedService: { serviceId: null, label: 'cloud', connectRoute: null },
+                connectedServices: {
+                    supportedServiceIds: ['anthropic'],
+                },
                 localControl: { supported: false },
                 ui: { agentPickerIconName: 'code-slash' },
             };
@@ -314,7 +368,7 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
                 acpModelConfigOptionId: null,
             },
             cli: {
-                detectKey: agentId,
+                detectKey: agentId === 'cursor' ? 'cursor-agent' : agentId,
                 installBanner: { installKind: 'installer', installCommand: null, guideUrl: null },
             },
             uiConnectedService: {
@@ -322,13 +376,16 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
                 label: agentId === 'customAcp' ? 'Custom ACP' : 'cloud',
                 connectRoute: null,
             },
+            connectedServices: {
+                supportedServiceIds: ['openai-codex'],
+            },
             localControl: { supported: false },
             ui: { agentPickerIconName: agentId === 'customAcp' ? 'git-network-outline' : 'code-slash' },
         };
     };
     return {
         ...actual,
-        isAgentId: (v: any) => v === 'codex' || v === 'customAcp' || v === 'opencode' || v === 'claude',
+        isAgentId: (v: any) => v === 'codex' || v === 'customAcp' || v === 'opencode' || v === 'claude' || v === 'cursor',
         getAgentCore: (agentId: string) => createMockAgentCore(agentId),
     };
 });
@@ -440,6 +497,11 @@ describe('ProviderSettingsScreen', () => {
         cliDetectionState.isDetecting = false;
         cliDetectionState.timestamp = 1;
         cliDetectionState.refresh = vi.fn();
+        profileState = {
+            ...profileDefaults,
+            id: 'profile-1',
+            connectedServicesV2: [createCodexConnectedService()],
+        };
         paneApi.scopeState = null;
         paneApi.openRight.mockReset();
         paneApi.closeRight.mockReset();
@@ -491,6 +553,7 @@ describe('ProviderSettingsScreen', () => {
         useCapabilityInstallabilityMock.mockReset();
         useCapabilityInstallabilityMock.mockReturnValue({ kind: 'installable' });
         routerPushSpy.mockReset();
+        modalShowSpy.mockReset();
         mockProviderSettingsPlugin.mockReset();
         mockProviderSettingsPlugin.mockReturnValue(null);
     });
@@ -506,12 +569,31 @@ describe('ProviderSettingsScreen', () => {
         expect(installer.props.installability).toMatchObject({ kind: 'installable' });
     });
 
-    it('hides the desktop-only provider install and auth actions on web while keeping status rows', async () => {
+    it('uses provider capability ids for installability when the CLI detect key differs', async () => {
+        mockProviderId = 'cursor';
+        cliDetectionState.available = { cursor: true };
+        cliDetectionState.login = { cursor: null };
+        cliDetectionState.authStatus = { cursor: null };
+        cliDetectionState.resolvedPath = { cursor: null };
+        cliDetectionState.resolutionSource = { cursor: 'system' };
+
+        const screen = await renderProviderSettingsScreen();
+        const installer = screen.findByType('ProviderCliInstallItem' as any);
+        expect(installer.props.capabilityId).toBe('cli.cursor');
+        expect(useCLIDetectionMock).toHaveBeenLastCalledWith('m1', expect.objectContaining({
+            agentIds: ['cursor'],
+        }));
+        expect(useCapabilityInstallabilityMock).toHaveBeenLastCalledWith(expect.objectContaining({
+            capabilityId: 'cli.cursor',
+        }));
+    });
+
+    it('keeps provider CLI install available on web while hiding desktop-only auth actions', async () => {
         tauriDesktopState.value = false;
 
         const screen = await renderProviderSettingsScreen();
 
-        expect(screen.findAllByType('ProviderCliInstallItem' as any)).toHaveLength(0);
+        expect(screen.findAllByType('ProviderCliInstallItem' as any)).toHaveLength(1);
         expect(screen.findAllByType('ProviderAuthenticationTerminalPane' as any)).toHaveLength(0);
         expect(screen.findByTestId('settings-provider-auth-status')).toBeTruthy();
         expect(screen.findByTestId('settings-provider-auth-check-now')).toBeNull();
@@ -627,6 +709,31 @@ describe('ProviderSettingsScreen', () => {
         const items = screen.findAllByType('Item' as any);
         const permissionItem = items.find((item: any) => item?.props?.title === 'settingsSession.permissions.defaultPermissionModeTitle');
         expect(permissionItem).toBeTruthy();
+    });
+
+    it('shows the shared connected-services default auth row for providers that support connected services', async () => {
+        const screen = await renderProviderSettingsScreen();
+        const menu = screen.findAllByType('DropdownMenu' as any)
+            .find((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings-connected-services-default-auth-codex');
+        expect(menu).toBeTruthy();
+    });
+
+    it('routes the provider default-auth chooser settings action to the selected connected service settings screen', async () => {
+        profileState = {
+            ...profileDefaults,
+            id: 'profile-1',
+            connectedServicesV2: [createCodexConnectedService({ profiles: [] })],
+        };
+        const screen = await renderProviderSettingsScreen();
+        const menu = screen.findAllByType('DropdownMenu' as any)
+            .find((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings-connected-services-default-auth-codex');
+        expect(menu).toBeTruthy();
+
+        menu?.props?.onSelect?.('connected-service:openai-codex:connect');
+        expect(routerPushSpy).toHaveBeenCalledWith({
+            pathname: '/settings/connected-services/[serviceId]',
+            params: { serviceId: 'openai-codex' },
+        });
     });
 
     it('shows the provider default model as a friendly model name instead of a raw model id', async () => {

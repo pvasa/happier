@@ -52,7 +52,10 @@ installSettingsViewCommonModuleMocks({
 });
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
+    Typography: {
+        default: () => ({}),
+        eyebrow: () => ({}),
+    },
 }));
 
 vi.mock('expo-clipboard', () => ({

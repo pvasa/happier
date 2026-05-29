@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -20,8 +19,8 @@ import {
     type NotificationsSettingsV1,
 } from '@happier-dev/protocol';
 import { deletePushToken, fetchPushTokens, type PushToken } from '@/sync/api/session/apiPush';
-import { registerPushTokenIfAvailable } from '@/sync/engine/account/syncAccount';
 import { loadLastRegisteredExpoPushToken } from '@/sync/domains/state/pushTokenRegistration';
+import { loadExpoNotifications } from '@/utils/platform/loadExpoNotifications';
 
 type PushPermissionStatus = 'unsupported' | 'granted' | 'denied' | 'undetermined';
 type PushPermissionInfo = Readonly<{
@@ -29,7 +28,6 @@ type PushPermissionInfo = Readonly<{
     granted: boolean;
     canAskAgain: boolean;
 }>;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -45,25 +43,29 @@ function formatPushTimestamp(timestamp: number): string {
 }
 
 function resolveExpoProjectId(): string | null {
-    const constants = Constants as unknown;
-    if (!isRecord(constants)) return null;
+    try {
+        const constants = Constants as unknown;
+        if (!isRecord(constants)) return null;
 
-    const expoConfig = isRecord(constants.expoConfig) ? constants.expoConfig : null;
-    const extra = expoConfig && isRecord(expoConfig.extra) ? expoConfig.extra : null;
-    const easExtra = extra && isRecord(extra.eas) ? extra.eas : null;
-    const projectIdFromExpoConfig = easExtra?.projectId;
+        const expoConfig = isRecord(constants.expoConfig) ? constants.expoConfig : null;
+        const extra = expoConfig && isRecord(expoConfig.extra) ? expoConfig.extra : null;
+        const easExtra = extra && isRecord(extra.eas) ? extra.eas : null;
+        const projectIdFromExpoConfig = easExtra?.projectId;
 
-    const easConfig = isRecord(constants.easConfig) ? constants.easConfig : null;
-    const projectIdFromEasConfig = easConfig?.projectId;
+        const easConfig = isRecord(constants.easConfig) ? constants.easConfig : null;
+        const projectIdFromEasConfig = easConfig?.projectId;
 
-    const candidate =
-        typeof projectIdFromExpoConfig === 'string'
-            ? projectIdFromExpoConfig
-            : typeof projectIdFromEasConfig === 'string'
-                ? projectIdFromEasConfig
-                : null;
-    const trimmed = candidate?.trim() ?? '';
-    return trimmed ? trimmed : null;
+        const candidate =
+            typeof projectIdFromExpoConfig === 'string'
+                ? projectIdFromExpoConfig
+                : typeof projectIdFromEasConfig === 'string'
+                    ? projectIdFromEasConfig
+                    : null;
+        const trimmed = candidate?.trim() ?? '';
+        return trimmed ? trimmed : null;
+    } catch {
+        return null;
+    }
 }
 
 async function getPushPermissionInfo(): Promise<PushPermissionInfo> {
@@ -72,6 +74,7 @@ async function getPushPermissionInfo(): Promise<PushPermissionInfo> {
     }
 
     try {
+        const Notifications = await loadExpoNotifications();
         const result = await Notifications.getPermissionsAsync();
         const status: PushPermissionStatus =
             result.status === 'granted' || result.status === 'denied' || result.status === 'undetermined'
@@ -92,6 +95,7 @@ async function getCurrentExpoPushToken(): Promise<string | null> {
 
     const projectId = resolveExpoProjectId();
     try {
+        const Notifications = await loadExpoNotifications();
         const res = projectId
             ? await Notifications.getExpoPushTokenAsync({ projectId })
             : await Notifications.getExpoPushTokenAsync();
@@ -158,10 +162,8 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
             setLoading(true);
         }
         try {
-            const [nextPermission, nextToken] = await Promise.all([
-                getPushPermissionInfo(),
-                getCurrentExpoPushToken(),
-            ]);
+            const nextPermission = await getPushPermissionInfo();
+            const nextToken = await getCurrentExpoPushToken();
             if (!isMountedRef.current) return;
             setPermission(nextPermission);
             setCurrentToken(nextToken);
@@ -199,6 +201,7 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
         }
         if (nextPermission.canAskAgain) {
             try {
+                const Notifications = await loadExpoNotifications();
                 await Notifications.requestPermissionsAsync();
             } catch {
                 // ignore
@@ -219,6 +222,7 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
             return;
         }
         try {
+            const { registerPushTokenIfAvailable } = await import('@/sync/engine/account/syncAccount');
             await registerPushTokenIfAvailable({
                 credentials: auth.credentials,
                 log: { log: () => {} },

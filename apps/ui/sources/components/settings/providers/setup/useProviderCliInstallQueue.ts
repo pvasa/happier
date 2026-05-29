@@ -24,8 +24,8 @@ export type ProviderCliInstallQueueState = Readonly<{
     statusByProviderId: Readonly<Partial<Record<AgentId, ProviderCliInstallResult>>>;
 }>;
 
-function buildProviderCapabilityId(detectKey: string): Extract<CapabilityId, `cli.${string}`> {
-    return `cli.${detectKey}`;
+function buildProviderCapabilityId(providerId: AgentId): Extract<CapabilityId, `cli.${string}`> {
+    return `cli.${providerId}`;
 }
 
 function resolveInstalledCandidate(installed: boolean | null | undefined): boolean {
@@ -120,7 +120,7 @@ export function useProviderCliInstallQueue(params: Readonly<{
             let result: { ok: true; response: CapabilitiesInvokeResponse } | { ok: false; reason: 'not-supported' | 'error' };
             try {
                 const invokeRequest = {
-                    id: buildProviderCapabilityId(detectKey),
+                    id: buildProviderCapabilityId(providerId),
                     method: 'install' as const,
                     params: {
                         skipIfInstalled: true,

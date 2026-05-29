@@ -27,27 +27,24 @@ function installMemorySettingsEntryMocks() {
             });
         },
         featureEnabled: (featureId) => featureEnabledState[featureId] === true,
-        storageModule: async (importOriginal) => {
-            const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-            return createStorageModuleMock({
-                importOriginal,
-                overrides: {
-                    // Boundary fixture: only the machine fields exercised by this screen matter here.
-                    useAllMachines: (() => ([
-                        {
-                            id: 'm1',
-                            seq: 0,
-                            createdAt: 0,
-                            updatedAt: 0,
-                            active: true,
-                            activeAt: 0,
-                            metadata: { displayName: 'Machine 1' },
-                            metadataVersion: 0,
-                            daemonState: null,
-                            daemonStateVersion: 0,
-                        },
-                    ])) as any,
-                },
+        storageModule: async () => {
+            const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+            return createStorageModuleStub({
+                // Boundary fixture: only the machine fields exercised by this screen matter here.
+                useAllMachines: (() => ([
+                    {
+                        id: 'm1',
+                        seq: 0,
+                        createdAt: 0,
+                        updatedAt: 0,
+                        active: true,
+                        activeAt: 0,
+                        metadata: { displayName: 'Machine 1' },
+                        metadataVersion: 0,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                    },
+                ])) as any,
             });
         },
     });

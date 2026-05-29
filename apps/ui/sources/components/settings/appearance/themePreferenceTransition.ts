@@ -102,9 +102,15 @@ export async function runThemePreferenceChange(input: ThemePreferenceChangeInput
         return;
     }
 
+    let didMutate = false;
     try {
-        await controller.run(input.mutation);
+        await controller.run(() => {
+            didMutate = true;
+            input.mutation();
+        });
     } catch {
-        input.mutation();
+        if (!didMutate) {
+            input.mutation();
+        }
     }
 }

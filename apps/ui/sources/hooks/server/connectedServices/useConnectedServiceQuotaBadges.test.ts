@@ -13,6 +13,7 @@ import { renderHookAndCollectValues } from '../serverFeatureHookHarness.testHelp
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const stableCredentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } as const;
+let currentCredentials: Readonly<{ token: string; secret: string }> = stableCredentials;
 
 const useSettingsSpy = vi.fn(() => ({
   connectedServicesQuotaPinnedMeterIdsByKey: {},
@@ -36,7 +37,7 @@ const { fetchAccountEncryptionModeSpy, getConnectedServiceQuotaSnapshotPlainSpy,
 }));
 
 vi.mock('@/auth/context/AuthContext', () => ({
-  useAuth: () => ({ credentials: stableCredentials }),
+  useAuth: () => ({ credentials: currentCredentials }),
 }));
 
 vi.mock('@/sync/store/hooks', () => ({
@@ -59,6 +60,10 @@ vi.mock('@/sync/api/account/apiConnectedServicesQuotasV2', () => ({
 vi.mock('@/sync/api/account/apiConnectedServicesQuotasV3', () => ({
   getConnectedServiceQuotaSnapshotPlain: getConnectedServiceQuotaSnapshotPlainSpy,
 }));
+
+beforeEach(() => {
+  currentCredentials = stableCredentials;
+});
 
 describe('useConnectedServiceQuotaBadges', () => {
   beforeEach(() => {
@@ -118,7 +123,7 @@ describe('useConnectedServiceQuotaBadges', () => {
     ]));
 
     const last = seen.at(-1) ?? {};
-    expect(last['anthropic/work']?.map((b) => b.text)).toContain('Weekly 18%');
+    expect(last['anthropic/work']?.map((b) => b.text)).toContain('18%');
   });
 
   it('supports plaintext quotas in plaintext accounts', async () => {
@@ -163,7 +168,65 @@ describe('useConnectedServiceQuotaBadges', () => {
     ]));
 
     const last = seen.at(-1) ?? {};
-    expect(last['anthropic/work']?.map((b) => b.text)).toContain('Weekly 18%');
+    expect(last['anthropic/work']?.map((b) => b.text)).toContain('18%');
+  });
+
+  it('requests visible profiles and shows a default quota summary without pinned meters', async () => {
+    useFeatureEnabledSpy.mockReturnValue(true);
+    fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'plain', updatedAt: 0 });
+
+    const snapshot = ConnectedServiceQuotaSnapshotV1Schema.parse({
+      v: 1,
+      serviceId: 'anthropic',
+      profileId: 'work',
+      fetchedAt: 1,
+      staleAfterMs: 60_000,
+      planLabel: 'Pro',
+      accountLabel: null,
+      meters: [
+        {
+          meterId: 'daily',
+          label: 'Daily',
+          used: 50,
+          limit: 100,
+          unit: 'count',
+          utilizationPct: null,
+          resetsAt: null,
+          status: 'ok',
+          confidence: 'exact',
+          details: { limitCategory: 'quota' },
+        },
+        {
+          meterId: 'weekly',
+          label: 'Weekly',
+          used: 92,
+          limit: 100,
+          unit: 'count',
+          utilizationPct: null,
+          resetsAt: null,
+          status: 'ok',
+          confidence: 'exact',
+          details: { limitCategory: 'quota' },
+        },
+      ],
+    });
+
+    useSettingsSpy.mockReturnValue({
+      connectedServicesQuotaPinnedMeterIdsByKey: {},
+      connectedServicesQuotaSummaryStrategyByKey: {},
+      connectedServicesProfileLabelByKey: {},
+      connectedServicesDefaultProfileByServiceId: {},
+    });
+    getConnectedServiceQuotaSnapshotPlainSpy.mockResolvedValue(snapshot);
+
+    const { useConnectedServiceQuotaBadges } = await import('./useConnectedServiceQuotaBadges');
+    const seen = await renderHookAndCollectValues(() => useConnectedServiceQuotaBadges([
+      { serviceId: 'anthropic', profileId: 'work' },
+    ]));
+
+    const last = seen.at(-1) ?? {};
+    expect(getConnectedServiceQuotaSnapshotPlainSpy).toHaveBeenCalledTimes(1);
+    expect(last['anthropic/work']).toEqual([{ meterId: 'weekly', text: '8%' }]);
   });
 
   it('retries a pinned key after an initial miss', async () => {
@@ -241,7 +304,7 @@ describe('useConnectedServiceQuotaBadges', () => {
 
       expect(getConnectedServiceQuotaSnapshotSealedSpy).toHaveBeenCalledTimes(2);
       const last = seen.at(-1) ?? {};
-      expect(last['anthropic/work']?.map((b) => b.text)).toContain('Weekly 18%');
+      expect(last['anthropic/work']?.map((b) => b.text)).toContain('18%');
       await hook.unmount();
       await flushHookEffects({ cycles: 1, turns: 1 });
     } finally {

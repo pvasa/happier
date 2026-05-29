@@ -3,7 +3,10 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
+    DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
+    DEFAULT_NOTIFICATIONS_SETTINGS_V1,
     type NotificationChannelV1,
+    type NotificationChannelTopicsV1,
     type NotificationsSettingsV1,
 } from '@happier-dev/protocol';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
@@ -21,31 +24,34 @@ const routerPushMock = vi.fn();
 const isTauriDesktopState = vi.hoisted(() => ({ value: false }));
 const tauriIsPermissionGrantedMock = vi.hoisted(() => vi.fn(async () => true));
 const tauriRequestPermissionMock = vi.hoisted(() => vi.fn(async () => 'granted'));
+const useFeatureEnabledSpy = vi.hoisted(() => vi.fn((_featureId: string) => true));
+
+function createNotificationTopics(overrides: Partial<NotificationChannelTopicsV1> = {}): NotificationChannelTopicsV1 {
+    return {
+        ...DEFAULT_NOTIFICATION_CHANNEL_TOPICS_V1,
+        ...overrides,
+    };
+}
+
+function createNotificationsSettings(overrides: Partial<NotificationsSettingsV1> = {}): NotificationsSettingsV1 {
+    return {
+        ...DEFAULT_NOTIFICATIONS_SETTINGS_V1,
+        ...overrides,
+    };
+}
 
 const settingsState: {
     notificationsSettingsV1: NotificationsSettingsV1;
     notificationChannelsV1: NotificationChannelV1[];
 } = {
-    notificationsSettingsV1: {
-        v: 1,
-        pushEnabled: true,
-        ready: true,
-        readyIncludeMessageText: true,
-        permissionRequest: true,
-        userActionRequest: true,
-        foregroundBehavior: 'full',
-    },
+    notificationsSettingsV1: createNotificationsSettings(),
     notificationChannelsV1: [
         {
             v: 1,
             id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
             kind: 'expo_push',
             enabled: true,
-            topics: {
-                ready: true,
-                permissionRequest: true,
-                userActionRequest: true,
-            },
+            topics: createNotificationTopics(),
             readyIncludeMessageText: true,
         },
     ],
@@ -141,6 +147,10 @@ vi.mock('@/sync/store/settingsWriters', () => ({
     useApplyLocalSettings: () => applyLocalSettingsMock,
 }));
 
+vi.mock('@/hooks/server/useFeatureEnabled', () => ({
+    useFeatureEnabled: (featureId: string) => useFeatureEnabledSpy(featureId),
+}));
+
 vi.mock('@/utils/platform/tauri', () => ({
     isTauriDesktop: () => isTauriDesktopState.value,
 }));
@@ -182,28 +192,18 @@ describe('NotificationsSettingsView', () => {
         tauriRequestPermissionMock.mockReset();
         tauriIsPermissionGrantedMock.mockResolvedValue(true);
         tauriRequestPermissionMock.mockResolvedValue('granted');
+        useFeatureEnabledSpy.mockReset();
+        useFeatureEnabledSpy.mockReturnValue(true);
         isTauriDesktopState.value = false;
 
-        settingsState.notificationsSettingsV1 = {
-            v: 1,
-            pushEnabled: true,
-            ready: true,
-            readyIncludeMessageText: true,
-            permissionRequest: true,
-            userActionRequest: true,
-            foregroundBehavior: 'full',
-        };
+        settingsState.notificationsSettingsV1 = createNotificationsSettings();
         settingsState.notificationChannelsV1 = [
             {
                 v: 1,
                 id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                 kind: 'expo_push',
                 enabled: true,
-                topics: {
-                    ready: true,
-                    permissionRequest: true,
-                    userActionRequest: true,
-                },
+                topics: createNotificationTopics(),
                 readyIncludeMessageText: true,
             },
         ];
@@ -227,6 +227,7 @@ describe('NotificationsSettingsView', () => {
             'settingsNotifications.local.title',
             'settingsNotifications.push.title',
             'settingsNotifications.webhooks.title',
+            'settingsNotifications.connectedServices.title',
             'settingsNotifications.types.title',
             'settingsNotifications.foregroundBehavior.title',
         ].map((title) => screen.findGroup(title)?.props.title);
@@ -236,6 +237,7 @@ describe('NotificationsSettingsView', () => {
             'settingsNotifications.local.title',
             'settingsNotifications.push.title',
             'settingsNotifications.webhooks.title',
+            'settingsNotifications.connectedServices.title',
             'settingsNotifications.types.title',
             'settingsNotifications.foregroundBehavior.title',
         ]);
@@ -251,6 +253,51 @@ describe('NotificationsSettingsView', () => {
         expect(screen.findRow('settings-notifications-local-enabled')).toBeTruthy();
         expect(screen.findRow('settings-notifications-push-enabled')).toBeTruthy();
         expect(screen.findRow('settings-notifications-add-webhook')).toBeTruthy();
+    });
+
+    it('renders connected-service quota and account-switch notification controls when quota fallback features are enabled', async () => {
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+
+        expect(screen.findGroup('settingsNotifications.connectedServices.title')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-connected-service-account-switch')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-connected-service-quota-blocked')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-connected-service-quota-recovered')).toBeTruthy();
+    });
+
+    it('shows quota notification controls when quotas are enabled without account fallback', async () => {
+        useFeatureEnabledSpy.mockImplementation((featureId: string) => featureId === 'connectedServices.quotas');
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+
+        expect(screen.findRow('settings-notifications-connected-service-account-switch')).toBeNull();
+        expect(screen.findRow('settings-notifications-connected-service-quota-blocked')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-connected-service-quota-recovered')).toBeTruthy();
+    });
+
+    it('shows account-switch notification controls when fallback is enabled without quotas', async () => {
+        useFeatureEnabledSpy.mockImplementation((featureId: string) => featureId === 'connectedServices.accountFallback');
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+
+        expect(screen.findRow('settings-notifications-connected-service-account-switch')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-connected-service-quota-blocked')).toBeNull();
+        expect(screen.findRow('settings-notifications-connected-service-quota-recovered')).toBeNull();
+    });
+
+    it('hides connected-service notification controls when quota and fallback features are disabled', async () => {
+        useFeatureEnabledSpy.mockReturnValue(false);
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+
+        expect(screen.findGroup('settingsNotifications.connectedServices.title')).toBeNull();
+        expect(screen.findRow('settings-notifications-connected-service-account-switch')).toBeNull();
+        expect(screen.findRow('settings-notifications-connected-service-quota-blocked')).toBeNull();
+        expect(screen.findRow('settings-notifications-connected-service-quota-recovered')).toBeNull();
     });
 
     it('hides desktop notification diagnostics outside the Tauri app', async () => {
@@ -340,26 +387,47 @@ describe('NotificationsSettingsView', () => {
         });
 
         expect(applySettingsMock).toHaveBeenCalledWith({
-            notificationsSettingsV1: {
-                v: 1,
+            notificationsSettingsV1: createNotificationsSettings({
                 pushEnabled: false,
-                ready: true,
-                readyIncludeMessageText: true,
-                permissionRequest: true,
-                userActionRequest: true,
-                foregroundBehavior: 'full',
-            },
+            }),
             notificationChannelsV1: [
                 {
                     v: 1,
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: false,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
+                    readyIncludeMessageText: true,
+                },
+            ],
+        });
+    });
+
+    it('disables quota recovered push notifications when quota blocked notifications are disabled', async () => {
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+        const quotaBlockedItem = requireRow(screen, 'settings-notifications-connected-service-quota-blocked');
+
+        await act(async () => {
+            quotaBlockedItem.props.rightElement.props.onValueChange(false);
+        });
+
+        expect(applySettingsMock).toHaveBeenCalledWith({
+            notificationsSettingsV1: createNotificationsSettings({
+                connectedServiceQuotaBlocked: false,
+                connectedServiceQuotaRecovered: false,
+            }),
+            notificationChannelsV1: [
+                {
+                    v: 1,
+                    id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
+                    kind: 'expo_push',
+                    enabled: true,
+                    topics: createNotificationTopics({
+                        connectedServiceQuotaBlocked: false,
+                        connectedServiceQuotaRecovered: false,
+                    }),
                     readyIncludeMessageText: true,
                 },
             ],
@@ -377,26 +445,16 @@ describe('NotificationsSettingsView', () => {
         });
 
         expect(applySettingsMock).toHaveBeenCalledWith({
-            notificationsSettingsV1: {
-                v: 1,
-                pushEnabled: true,
-                ready: true,
+            notificationsSettingsV1: createNotificationsSettings({
                 readyIncludeMessageText: false,
-                permissionRequest: true,
-                userActionRequest: true,
-                foregroundBehavior: 'full',
-            },
+            }),
             notificationChannelsV1: [
                 {
                     v: 1,
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
                 },
             ],
@@ -422,11 +480,7 @@ describe('NotificationsSettingsView', () => {
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
                 },
                 {
@@ -436,11 +490,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     url: 'https://hooks.example.test/notify',
                     signingSecret: null,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
                 },
             ],
@@ -457,11 +507,7 @@ describe('NotificationsSettingsView', () => {
                 enabled: true,
                 url: 'https://hooks.example.test/notify',
                 signingSecret: null,
-                topics: {
-                    ready: true,
-                    permissionRequest: true,
-                    userActionRequest: true,
-                },
+                topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
             },
         ];
@@ -487,11 +533,7 @@ describe('NotificationsSettingsView', () => {
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
                 },
             ],
@@ -508,11 +550,7 @@ describe('NotificationsSettingsView', () => {
                 enabled: true,
                 url: 'https://hooks.example.test/notify',
                 signingSecret: null,
-                topics: {
-                    ready: true,
-                    permissionRequest: true,
-                    userActionRequest: true,
-                },
+                topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
             },
         ];
@@ -534,11 +572,7 @@ describe('NotificationsSettingsView', () => {
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
                 },
                 {
@@ -551,15 +585,82 @@ describe('NotificationsSettingsView', () => {
                         _isSecretValue: true,
                         value: 'shared-webhook-secret',
                     },
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
                 },
             ],
         });
+    });
+
+    it('writes connected-service webhook topics through the selected webhook channel settings', async () => {
+        settingsState.notificationChannelsV1 = [
+            ...settingsState.notificationChannelsV1,
+            {
+                v: 1,
+                id: 'webhook-primary',
+                kind: 'webhook',
+                enabled: true,
+                url: 'https://hooks.example.test/notify',
+                signingSecret: null,
+                topics: createNotificationTopics(),
+                readyIncludeMessageText: false,
+            },
+            {
+                v: 1,
+                id: 'webhook-secondary',
+                kind: 'webhook',
+                enabled: true,
+                url: 'https://hooks.example.test/secondary',
+                signingSecret: null,
+                topics: createNotificationTopics(),
+                readyIncludeMessageText: false,
+            },
+        ];
+
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+        const topicItem = requireRow(
+            screen,
+            'settings-notifications-webhook-topic:webhook-secondary:connectedServiceQuotaBlocked',
+        );
+
+        await act(async () => {
+            topicItem.props.rightElement.props.onValueChange(false);
+        });
+
+        const written = applySettingsMock.mock.calls.at(-1)?.[0] as { notificationChannelsV1?: NotificationChannelV1[] };
+        const webhook = written.notificationChannelsV1?.find((channel) => channel.id === 'webhook-primary');
+        const secondaryWebhook = written.notificationChannelsV1?.find((channel) => channel.id === 'webhook-secondary');
+        expect(webhook?.topics.connectedServiceQuotaBlocked).toBe(true);
+        expect(secondaryWebhook?.topics.connectedServiceQuotaBlocked).toBe(false);
+        expect(secondaryWebhook?.topics.connectedServiceAccountSwitch).toBe(true);
+        expect(secondaryWebhook?.topics.connectedServiceQuotaRecovered).toBe(false);
+    });
+
+    it('gates connected-service webhook topics by their owning feature', async () => {
+        useFeatureEnabledSpy.mockImplementation((featureId: string) => featureId === 'connectedServices.quotas');
+        settingsState.notificationChannelsV1 = [
+            ...settingsState.notificationChannelsV1,
+            {
+                v: 1,
+                id: 'webhook-primary',
+                kind: 'webhook',
+                enabled: true,
+                url: 'https://hooks.example.test/notify',
+                signingSecret: null,
+                topics: createNotificationTopics(),
+                readyIncludeMessageText: false,
+            },
+        ];
+
+        const { NotificationsSettingsView } = await import('./NotificationsSettingsView');
+
+        const screen = await renderSettingsView(<NotificationsSettingsView />);
+
+        expect(screen.findRow('settings-notifications-webhook-topic:webhook-primary:connectedServiceAccountSwitch')).toBeNull();
+        expect(screen.findRow('settings-notifications-webhook-topic:webhook-primary:connectedServiceQuotaBlocked')).toBeTruthy();
+        expect(screen.findRow('settings-notifications-webhook-topic:webhook-primary:connectedServiceQuotaRecovered')).toBeTruthy();
     });
 
     it('clears a configured webhook signing secret from the settings screen', async () => {
@@ -575,11 +676,7 @@ describe('NotificationsSettingsView', () => {
                     _isSecretValue: true,
                     encryptedValue: { t: 'enc-v1', c: 'abc123' },
                 },
-                topics: {
-                    ready: true,
-                    permissionRequest: true,
-                    userActionRequest: true,
-                },
+                topics: createNotificationTopics(),
                 readyIncludeMessageText: false,
             },
         ];
@@ -604,11 +701,7 @@ describe('NotificationsSettingsView', () => {
                     id: BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID,
                     kind: 'expo_push',
                     enabled: true,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: true,
                 },
                 {
@@ -618,11 +711,7 @@ describe('NotificationsSettingsView', () => {
                     enabled: true,
                     url: 'https://hooks.example.test/notify',
                     signingSecret: null,
-                    topics: {
-                        ready: true,
-                        permissionRequest: true,
-                        userActionRequest: true,
-                    },
+                    topics: createNotificationTopics(),
                     readyIncludeMessageText: false,
                 },
             ],

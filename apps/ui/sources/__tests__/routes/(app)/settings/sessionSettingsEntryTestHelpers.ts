@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 type SettingsEntryModuleFactory = () => unknown | Promise<unknown>;
 type MockImportOriginal = <T = unknown>() => Promise<T>;
 type StorageModuleFactory = (importOriginal: MockImportOriginal) => unknown | Promise<unknown>;
+type StoreHooksModuleFactory = (importOriginal: MockImportOriginal) => unknown | Promise<unknown>;
 type FeatureEnabledResolver = (featureId: string) => boolean;
 
 type InstallSessionSettingsEntryModuleMocksOptions = Readonly<{
@@ -14,6 +15,7 @@ type InstallSessionSettingsEntryModuleMocksOptions = Readonly<{
     modalModule?: SettingsEntryModuleFactory;
     useDeviceType?: 'desktop' | 'tablet';
     storageModule?: StorageModuleFactory;
+    storeHooksModule?: StoreHooksModuleFactory;
     featureEnabled?: FeatureEnabledResolver;
 }>;
 
@@ -30,6 +32,7 @@ const sessionSettingsEntryState = vi.hoisted(() => ({
         textModule: undefined as SettingsEntryModuleFactory | undefined,
         modalModule: undefined as SettingsEntryModuleFactory | undefined,
         storageModule: undefined as StorageModuleFactory | undefined,
+        storeHooksModule: undefined as StoreHooksModuleFactory | undefined,
         featureEnabled: undefined as FeatureEnabledResolver | undefined,
         useDeviceType: 'desktop' as 'desktop' | 'tablet',
     },
@@ -48,6 +51,7 @@ export function resetSessionSettingsEntryState() {
         textModule: undefined,
         modalModule: undefined,
         storageModule: undefined,
+        storeHooksModule: undefined,
         featureEnabled: undefined,
         useDeviceType: 'desktop',
     };
@@ -63,6 +67,7 @@ export function installSessionSettingsEntryModuleMocks(
         textModule: options.textModule,
         modalModule: options.modalModule,
         storageModule: options.storageModule,
+        storeHooksModule: options.storeHooksModule,
         featureEnabled: options.featureEnabled,
         useDeviceType: options.useDeviceType ?? 'desktop',
     };
@@ -156,6 +161,8 @@ export function installSessionSettingsEntryModuleMocks(
     vi.mock('@/constants/Typography', () => ({
         Typography: {
             default: () => ({}),
+            pillLabel: () => ({}),
+            keyHint: () => ({}),
         },
     }));
 
@@ -205,16 +212,22 @@ export function installSessionSettingsEntryModuleMocks(
         });
     });
 
+    vi.mock('@/sync/store/hooks', async (importOriginal) => {
+        if (sessionSettingsEntryState.options.storeHooksModule) {
+            return await sessionSettingsEntryState.options.storeHooksModule(importOriginal as MockImportOriginal);
+        }
+
+        return await importOriginal();
+    });
+
     vi.mock('@/utils/platform/responsive', () => ({
         useDeviceType: () => sessionSettingsEntryState.options.useDeviceType,
     }));
 
-    if (sessionSettingsEntryState.options.featureEnabled) {
-        vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-            useFeatureEnabled: (featureId: string) =>
-                sessionSettingsEntryState.options.featureEnabled?.(featureId) ?? false,
-        }));
-    }
+    vi.mock('@/hooks/server/useFeatureEnabled', () => ({
+        useFeatureEnabled: (featureId: string) =>
+            sessionSettingsEntryState.options.featureEnabled?.(featureId) ?? false,
+    }));
 }
 
 export { sessionSettingsEntryState };

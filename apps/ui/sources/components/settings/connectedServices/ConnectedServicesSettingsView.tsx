@@ -9,24 +9,37 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
-import { useProfile } from '@/sync/store/hooks';
-import { useSettings } from '@/sync/store/hooks';
+import { useProfile, useSettingMutable, useSettings } from '@/sync/store/hooks';
 import { Modal } from '@/modal';
 import { CONNECTED_SERVICES_REGISTRY, getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import type { ConnectedServiceId } from '@happier-dev/protocol';
+import { AGENT_IDS, getAgentCore } from '@/agents/catalog/catalog';
+import {
+    ConnectedServicesProviderStateSharingSettingsV1Schema,
+    type ConnectedServiceId,
+} from '@happier-dev/protocol';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { ConnectedServiceQuotaBadgesView } from '@/components/settings/connectedServices/ConnectedServiceQuotaBadgesView';
 import { useConnectedServiceQuotaBadges } from '@/hooks/server/connectedServices/useConnectedServiceQuotaBadges';
 import { connectedServiceProfileKey, resolveConnectedServiceDefaultProfileId } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
 import { resolveConnectedServiceDisplayName } from './model/resolveConnectedServiceDisplayName';
+import { ConnectedServicesDefaultAuthRow } from './ConnectedServicesDefaultAuthRow';
+import { ConnectedServicesProviderStateSharingDefaultsGroup } from './ConnectedServicesProviderStateSharingSettings';
 
 export const ConnectedServicesSettingsView = React.memo(function ConnectedServicesSettingsView() {
   const { theme } = useUnistyles();
   const profile = useProfile();
   const settings = useSettings();
+  const [providerStateSharingSettings, setProviderStateSharingSettings] =
+    useSettingMutable('connectedServicesProviderStateSharingSettingsV1');
+  const [defaultAuthSettings, setDefaultAuthSettings] =
+    useSettingMutable('connectedServicesDefaultAuthByAgentIdV1');
   const router = useRouter();
   const connectedServicesEnabled = useFeatureEnabled('connectedServices');
-
+  const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
+  const normalizedProviderStateSharingSettings = React.useMemo(
+    () => ConnectedServicesProviderStateSharingSettingsV1Schema.parse(providerStateSharingSettings),
+    [providerStateSharingSettings],
+  );
   const services = profile.connectedServicesV2;
   const serviceIdsFromProfile = services.map((svc) => svc.serviceId);
   const allServiceIds = Array.from(new Set<ConnectedServiceId>([
@@ -123,6 +136,45 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
           );
         })}
       </ItemGroup>
+      <ItemGroup
+        title={t('connectedServices.defaultAuth.title')}
+        footer={t('connectedServices.defaultAuth.footer')}
+      >
+        {AGENT_IDS.map((agentId) => {
+          const agentCore = getAgentCore(agentId);
+          if ((agentCore.connectedServices?.supportedServiceIds ?? []).length === 0) return null;
+          return (
+            <ConnectedServicesDefaultAuthRow
+              key={agentId}
+              agentId={agentId}
+              agentTitle={t(agentCore.displayNameKey)}
+              agentCore={agentCore}
+              connectedServicesEnabled={connectedServicesEnabled}
+              accountGroupsEnabled={accountGroupsEnabled}
+              accountProfileConnectedServicesV2={services}
+              settings={{
+                connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey,
+                connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+                connectedServicesDefaultAuthByAgentIdV1: defaultAuthSettings,
+              }}
+              setDefaultAuthSettings={setDefaultAuthSettings}
+              onOpenConnectedServiceSettings={(serviceId) => router.push({
+                pathname: '/settings/connected-services/[serviceId]',
+                params: { serviceId },
+              })}
+              onReconnectConnectedServiceProfile={(serviceId, profileId) => router.push({
+                pathname: '/settings/connected-services/profile',
+                params: { serviceId, profileId },
+              })}
+            />
+          );
+        })}
+      </ItemGroup>
+      <ConnectedServicesProviderStateSharingDefaultsGroup
+        settings={normalizedProviderStateSharingSettings}
+        setSettings={setProviderStateSharingSettings}
+        onOpenBackendOverrides={() => router.push('/settings/connected-services/provider-state-sharing')}
+      />
     </ItemList>
   );
 });

@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { installServerSettingsHooksCommonModuleMocks } from './serverSettingsHooksTestHelpers';
 
 
@@ -50,16 +51,26 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
     switchConnectionToActiveServer: vi.fn(async () => {}),
 }));
 
-const upsertServerProfileMock = vi.fn((..._args: unknown[]) => ({
+function createServerProfile(overrides: Partial<ServerProfile> = {}): ServerProfile {
+    return {
+        id: 'p0',
+        serverUrl: 'http://example.test',
+        name: 'Example',
+        createdAt: 0,
+        updatedAt: 0,
+        lastUsedAt: 0,
+        ...overrides,
+    };
+}
+
+const upsertServerProfileMock = vi.fn((..._args: unknown[]): ServerProfile => createServerProfile({
     id: 'p0',
     serverUrl: 'http://example.test',
     name: 'Example',
-    createdAt: 0,
-    updatedAt: 0,
-    lastUsedAt: 0,
 }));
 const removeServerProfileMock = vi.fn((..._args: unknown[]) => undefined);
 const setActiveServerIdMock = vi.fn((..._args: unknown[]) => undefined);
+const getServerProfileByIdMock = vi.fn((..._args: unknown[]): ServerProfile | null => null);
 const activeServerSnapshot = { serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 };
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getActiveServerSnapshot: () => activeServerSnapshot,
@@ -71,6 +82,8 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
     setActiveServerId: (...args: unknown[]) => setActiveServerIdMock(...args),
     upsertServerProfile: (...args: unknown[]) => upsertServerProfileMock(...args),
     removeServerProfile: (...args: unknown[]) => removeServerProfileMock(...args),
+    getServerProfileById: (...args: unknown[]) => getServerProfileByIdMock(...args),
+    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => profile.serverIdentityId ?? profile.id,
 }));
 
 vi.mock('@/sync/domains/server/serverConfig', () => ({
@@ -119,7 +132,7 @@ vi.mock('@/utils/system/runtimeFetch', () => ({
     runtimeFetch: (...args: unknown[]) => runtimeFetchMock(...args),
 }));
 
-const getServerFeaturesSnapshotMock = vi.fn(async (..._args: unknown[]) => ({
+const getServerFeaturesSnapshotMock = vi.fn(async (..._args: unknown[]): Promise<unknown> => ({
     status: 'ready',
     features: {
         features: {},
@@ -136,10 +149,31 @@ vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
 }));
 
 describe('useServerSettingsScreenController (canonical URL adoption)', () => {
+    beforeEach(() => {
+        modalConfirmMock.mockReset();
+        modalConfirmMock.mockResolvedValue(true);
+        upsertServerProfileMock.mockReset();
+        removeServerProfileMock.mockReset();
+        setActiveServerIdMock.mockReset();
+        getServerProfileByIdMock.mockReset();
+        getServerFeaturesSnapshotMock.mockReset();
+    });
+
     it('offers to adopt canonicalServerUrl from /v1/features and migrates the stored profile', async () => {
         upsertServerProfileMock
             .mockReturnValueOnce({ id: 'p1', serverUrl: 'http://127.0.0.1:3005', name: 'Local', createdAt: 0, updatedAt: 0, lastUsedAt: 0 })
             .mockReturnValueOnce({ id: 'p2', serverUrl: 'https://canonical.example.test', name: 'Local', createdAt: 0, updatedAt: 0, lastUsedAt: 0 });
+        getServerFeaturesSnapshotMock.mockResolvedValueOnce({
+            status: 'ready',
+            features: {
+                features: {},
+                capabilities: {
+                    server: {
+                        canonicalServerUrl: 'https://canonical.example.test',
+                    },
+                },
+            },
+        });
 
         const { useServerSettingsScreenController } = await import('./useServerSettingsScreenController');
 
@@ -167,5 +201,59 @@ describe('useServerSettingsScreenController (canonical URL adoption)', () => {
         );
         expect(removeServerProfileMock).toHaveBeenCalledWith('p1');
         expect(setActiveServerIdMock).toHaveBeenCalledWith('p2', expect.anything());
+    });
+
+    it('switches to the server identity learned while validating a manually added server', async () => {
+        upsertServerProfileMock.mockReturnValueOnce({
+            id: 'p1',
+            serverIdentityId: null,
+            serverUrl: 'http://127.0.0.1:3005',
+            name: 'Local',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+        });
+        getServerFeaturesSnapshotMock.mockResolvedValueOnce({
+            status: 'ready',
+            features: {
+                features: {},
+                capabilities: {
+                    server: {},
+                    serverIdentity: {
+                        serverIdentityId: 'srv_identity_manual',
+                    },
+                },
+            },
+        });
+        getServerProfileByIdMock.mockReturnValueOnce({
+            id: 'p1',
+            serverIdentityId: 'srv_identity_manual',
+            serverUrl: 'http://127.0.0.1:3005',
+            name: 'Local',
+            createdAt: 0,
+            updatedAt: 0,
+            lastUsedAt: 0,
+        });
+
+        const { useServerSettingsScreenController } = await import('./useServerSettingsScreenController');
+
+        let value: any = null;
+        function Probe() {
+            value = useServerSettingsScreenController();
+            return null;
+        }
+
+        await renderScreen(React.createElement(Probe));
+
+        await act(async () => {
+            value.onChangeUrl('http://127.0.0.1:3005');
+            value.onChangeName('Local');
+        });
+
+        await act(async () => {
+            await value.onAddServer();
+        });
+
+        expect(setActiveServerIdMock).toHaveBeenCalledWith('srv_identity_manual', expect.anything());
     });
 });

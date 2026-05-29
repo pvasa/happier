@@ -18,6 +18,101 @@ afterEach(() => {
 });
 
 describe('Session settings (Permissions entry)', () => {
+    it('renders explicit hub entries for detailed session behavior areas', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        expect(screen.findRowByTitle('settingsSession.composer.title')).toBeTruthy();
+        expect(screen.findRowByTitle('settingsSession.providerLimits.title')).toBeTruthy();
+        expect(screen.findRowByTitle('settingsSession.resume.title')).toBeTruthy();
+        expect(screen.findRowByTitle('settingsSession.runtime.title')).toBeTruthy();
+
+        screen.pressRowByTitle('settingsSession.composer.title');
+        screen.pressRowByTitle('settingsSession.providerLimits.title');
+        screen.pressRowByTitle('settingsSession.resume.title');
+        screen.pressRowByTitle('settingsSession.runtime.title');
+
+        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/settings/session/composer');
+        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/settings/session/provider-limits');
+        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/settings/session/resume');
+        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/settings/session/runtime');
+    });
+
+    it('shows the detailed behavior hub before legacy session controls', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        const groupTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
+
+        expect(groupTitles.indexOf('settingsSession.detailedBehavior.title')).toBeLessThan(
+            groupTitles.indexOf('settingsSession.rootGroups.launchDefaults.title'),
+        );
+        expect(groupTitles.indexOf('settingsSession.detailedBehavior.title')).toBeLessThan(
+            groupTitles.indexOf('settingsSession.rootGroups.listOrganization.title'),
+        );
+    });
+
+    it('regroups root settings by user intent instead of one large session list section', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        const groupTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
+
+        expect(groupTitles).toEqual([
+            'settingsSession.detailedBehavior.title',
+            'settingsSession.rootGroups.launchDefaults.title',
+            'settingsSession.rootGroups.listOrganization.title',
+            'settingsSession.rootGroups.rowDetails.title',
+            'settingsSession.rootGroups.activitySignals.title',
+            'settingsSession.rootGroups.mobileLayout.title',
+            'settingsSession.rootGroups.agentPersonalization.title',
+        ]);
+        expect(groupTitles).not.toContain('settingsSession.sessionCreation.title');
+        expect(groupTitles).not.toContain('settingsSession.sessionList.title');
+    });
+
+    it('places session list controls into focused root groups', async () => {
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        const groupTitleForRow = (title: string) => {
+            const row = screen.findRowByTitle(title);
+            let current = row?.parent;
+            while (current) {
+                if ((current.type as unknown) === 'ItemGroup') return current.props?.title;
+                current = current.parent;
+            }
+            return null;
+        };
+
+        expect(groupTitleForRow('settingsSession.sessionCreation.wizardModeTitle')).toBe('settingsSession.rootGroups.launchDefaults.title');
+        expect(groupTitleForRow('settingsAppearance.sessionListDensity.title')).toBe('settingsSession.rootGroups.listOrganization.title');
+        expect(groupTitleForRow('settingsSession.sessionList.identityDisplayTitle')).toBe('settingsSession.rootGroups.rowDetails.title');
+        expect(groupTitleForRow('settingsSession.sessionList.workingIndicatorTitle')).toBe('settingsSession.rootGroups.activitySignals.title');
+        expect(groupTitleForRow('settingsSession.mobileWorkspaceExperience.title')).toBe('settingsSession.rootGroups.mobileLayout.title');
+        expect(groupTitleForRow('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle')).toBe('settingsSession.rootGroups.agentPersonalization.title');
+    });
+
+    it('does not render detailed composer, provider-limit, resume, or runtime controls on the root session settings screen', async () => {
+        sessionSettingsEntryState.options.featureEnabled = (featureId) =>
+            featureId === 'sessions.usageLimitRecovery' || featureId === 'connectedServices.quotas';
+        const mod = await import('@/app/(app)/settings/session');
+        const SessionSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
+
+        expect(screen.findRowByTitle('settingsFeatures.enterToSend')).toBeNull();
+        expect(screen.findRowByTitle('settingsSession.messageSending.queueInAgentTitle')).toBeNull();
+        expect(screen.findRowByTitle('settingsSession.usageLimitRecovery.modeTitle')).toBeNull();
+        expect(screen.findRowByTitle('settingsSession.providerUsageGauge.visibilityTitle')).toBeNull();
+        expect(screen.findRowByTitle('settingsSession.replayResume.enabledTitle')).toBeNull();
+        expect(screen.findRowByTitle('profiles.tmux.spawnSessionsTitle')).toBeNull();
+        expect(screen.findRowByTitle('settingsSession.terminalConnect.legacySecretExportTitle')).toBeNull();
+    });
+
     it('does not render a permissions entry or inline permission controls on the root session settings screen', async () => {
         const mod = await import('@/app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
@@ -73,7 +168,7 @@ describe('Session settings (Permissions entry)', () => {
             current = current.parent;
         }
 
-        expect(groupTitle).toBe('settingsSession.sessionCreation.title');
+        expect(groupTitle).toBe('settingsSession.rootGroups.launchDefaults.title');
 
         screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle');
         expect(sessionSettingsEntryState.settingsState.rememberLastProjectSessionSelections).toBe(false);
@@ -89,6 +184,94 @@ describe('Session settings (Permissions entry)', () => {
 
         screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastEngineSelectionsTitle');
         expect(sessionSettingsEntryState.settingsState.rememberLastEngineSelectionsV1).toBe(false);
+    });
+
+    it('renders one global usage-limit recovery setting with no provider overrides on the provider limits page', async () => {
+        sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+        sessionSettingsEntryState.options.featureEnabled = (featureId) => featureId === 'sessions.usageLimitRecovery';
+        const mod = await import('@/app/(app)/settings/session/provider-limits');
+        const ProviderLimitsSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(ProviderLimitsSettingsScreen));
+
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        type DropdownItem = { id: string };
+        const dropdown = dropdowns.find((node) =>
+            node.props.itemTrigger?.itemProps?.testID === 'settings-session-usageLimitRecovery-trigger'
+        );
+
+        expect(dropdown).toBeTruthy();
+        expect(dropdown?.props.selectedId).toBe('ask');
+        expect(dropdown?.props.items?.map((item: DropdownItem) => item.id)).toEqual(['ask', 'auto_wait']);
+
+        dropdown?.props.onSelect('auto_wait');
+
+        expect(sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1).toEqual({
+            v: 1,
+            mode: 'auto_wait',
+            promptMode: 'standard',
+            resumePromptMode: 'standard',
+        });
+        const resumePromptDropdown = dropdowns.find((node) =>
+            node.props.itemTrigger?.itemProps?.testID === 'settings-session-usageLimitRecovery-resumePrompt-trigger'
+        );
+        expect(resumePromptDropdown).toBeTruthy();
+        expect(resumePromptDropdown?.props.selectedId).toBe('standard');
+        expect(resumePromptDropdown?.props.items?.map((item: DropdownItem) => item.id)).toEqual(['standard', 'off']);
+
+        resumePromptDropdown?.props.onSelect('off');
+
+        expect(sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1).toEqual({
+            v: 1,
+            mode: 'auto_wait',
+            promptMode: 'standard',
+            resumePromptMode: 'off',
+        });
+        expect(screen.findRowByTitle('settingsSession.usageLimitRecovery.providerOverridesTitle')).toBeNull();
+    });
+
+    it('hides usage-limit recovery settings when the server feature is disabled on the provider limits page', async () => {
+        sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+        sessionSettingsEntryState.options.featureEnabled = (featureId) => featureId !== 'sessions.usageLimitRecovery';
+        const mod = await import('@/app/(app)/settings/session/provider-limits');
+        const ProviderLimitsSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(ProviderLimitsSettingsScreen));
+
+        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        expect(dropdowns.some((node) =>
+            node.props.itemTrigger?.itemProps?.testID === 'settings-session-usageLimitRecovery-trigger',
+        )).toBe(false);
+    });
+
+    it('renders provider usage gauge settings and updates gauge visibility and preferred window on the provider limits page', async () => {
+        sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeMode = 'auto';
+        sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeWindowMode = 'most_constrained';
+        sessionSettingsEntryState.options.featureEnabled = (featureId) => featureId === 'connectedServices.quotas';
+        const mod = await import('@/app/(app)/settings/session/provider-limits');
+        const ProviderLimitsSettingsScreen = mod.default;
+        const screen = await renderSettingsView(React.createElement(ProviderLimitsSettingsScreen));
+
+        const toggleRow = screen.findRowByTitle('settingsSession.providerUsageGauge.visibilityTitle');
+        const dropdown = screen.findAllByType('DropdownMenu' as any).find((node) =>
+            node.props.itemTrigger?.itemProps?.testID === 'settings-session-providerUsageGauge-window-trigger'
+        );
+
+        expect(toggleRow).toBeTruthy();
+        expect(dropdown).toBeTruthy();
+        expect(dropdown?.props.selectedId).toBe('most_constrained');
+        expect(dropdown?.props.items?.map((item: any) => item.id)).toEqual([
+            'most_constrained',
+            'daily',
+            'weekly',
+            'session',
+            'primary',
+            'secondary',
+        ]);
+
+        screen.pressRowByTitle('settingsSession.providerUsageGauge.visibilityTitle');
+        dropdown?.props.onSelect('weekly');
+
+        expect(sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeMode).toBe('hidden');
+        expect(sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeWindowMode).toBe('weekly');
     });
 
     it('renders animated working status text as a session list setting', async () => {
@@ -109,19 +292,19 @@ describe('Session settings (Permissions entry)', () => {
             current = current.parent;
         }
 
-        expect(groupTitle).toBe('settingsSession.sessionList.title');
+        expect(groupTitle).toBe('settingsSession.rootGroups.activitySignals.title');
 
         screen.pressRowByTitle('settingsSession.sessionList.workingStatusAnimatedTextTitle');
         expect(sessionSettingsEntryState.settingsState.sessionListWorkingStatusAnimatedTextEnabled).toBe(false);
     });
 
-    it('renders narrow working indicator style as a session list setting', async () => {
+    it('renders working indicator style as a session list setting', async () => {
         const mod = await import('@/app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
         const dropdown = screen.findAllByType('DropdownMenu' as any).find((node) =>
-            node.props.itemTrigger?.title === 'settingsSession.sessionList.narrowWorkingIndicatorTitle'
+            node.props.itemTrigger?.itemProps?.testID === 'settings-session-workingIndicator-trigger'
         );
         expect(dropdown).toBeTruthy();
         expect(dropdown?.props.selectedId).toBe('spinner');

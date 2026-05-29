@@ -9,7 +9,7 @@ import { useServerRetentionPolicies } from '@/hooks/server/useServerRetentionPol
 import { t } from '@/text';
 import { formatSavedServerRetentionSummary } from '@/sync/domains/server/retention/formatServerRetentionPolicy';
 import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
-import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { resolveServerProfileScopeId, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { ServerSelectionGroup } from '@/sync/domains/server/selection/serverSelectionTypes';
 import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
@@ -83,14 +83,15 @@ export function SavedServersSection(props: SavedServersSectionProps) {
                 );
             })}
             {props.servers.map((profile) => {
-                const targetKey = `server:${profile.id}`;
+                const scopeId = resolveServerProfileScopeId(profile);
+                const targetKey = `server:${scopeId}`;
                 const isActive = props.activeTargetKey
                     ? props.activeTargetKey === targetKey
-                    : profile.id === props.activeServerId;
+                    : scopeId === props.activeServerId || profile.id === props.activeServerId;
                 const isDeviceDefault = typeof props.deviceDefaultServerId === 'string'
                     && props.deviceDefaultServerId.trim().length > 0
-                    && profile.id === props.deviceDefaultServerId;
-                const authStatus = props.authStatusByServerId[profile.id] ?? 'unknown';
+                    && (profile.id === props.deviceDefaultServerId || scopeId === props.deviceDefaultServerId);
+                const authStatus = props.authStatusByServerId[scopeId] ?? props.authStatusByServerId[profile.id] ?? 'unknown';
                 const statusLabel =
                     authStatus === 'signedIn'
                         ? t('server.signedIn')

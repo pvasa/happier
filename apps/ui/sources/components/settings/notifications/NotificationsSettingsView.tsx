@@ -10,6 +10,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Modal } from '@/modal';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 import { useLocalSettings, useSettings } from '@/sync/domains/state/storage';
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
@@ -47,6 +48,11 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     const localSettings = useLocalSettings();
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const connectedServiceQuotaNotificationsEnabled = useFeatureEnabled('connectedServices.quotas');
+    const connectedServiceFallbackNotificationsEnabled = useFeatureEnabled('connectedServices.accountFallback');
+    const showConnectedServiceAccountSwitchNotifications = connectedServiceFallbackNotificationsEnabled;
+    const showConnectedServiceQuotaNotifications = connectedServiceQuotaNotificationsEnabled;
+    const showConnectedServiceNotificationTopics = showConnectedServiceAccountSwitchNotifications || showConnectedServiceQuotaNotifications;
     const isDesktopNotificationsSupported = React.useMemo(() => isTauriDesktop(), []);
     const desktopNotificationPermission = useTauriNotificationPermissionDiagnostics(isDesktopNotificationsSupported);
 
@@ -89,9 +95,41 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
         applyRemoteNotificationSettings(nextNotifications, webhookChannels);
     }, [applyRemoteNotificationSettings, notifications, webhookChannels]);
 
+    const setNotificationTopic = React.useCallback((
+        topic: 'connectedServiceAccountSwitch' | 'connectedServiceQuotaBlocked' | 'connectedServiceQuotaRecovered',
+        value: boolean,
+    ) => {
+        setNotifications({
+            [topic]: value,
+            ...(topic === 'connectedServiceQuotaBlocked' && !value
+                ? { connectedServiceQuotaRecovered: false }
+                : {}),
+        });
+    }, [setNotifications]);
+
     const setWebhookChannels = React.useCallback((nextChannels: ReadonlyArray<NotificationChannelV1>) => {
         applyRemoteNotificationSettings(notifications, nextChannels);
     }, [applyRemoteNotificationSettings, notifications]);
+
+    const setWebhookTopic = React.useCallback((
+        channel: WebhookNotificationChannelV1,
+        topic: 'connectedServiceAccountSwitch' | 'connectedServiceQuotaBlocked' | 'connectedServiceQuotaRecovered',
+        value: boolean,
+    ) => {
+        setWebhookChannels(updateNotificationChannelById({
+            channels: webhookChannels,
+            channelId: channel.id,
+            patch: {
+                topics: {
+                    ...channel.topics,
+                    [topic]: value,
+                    ...(topic === 'connectedServiceQuotaBlocked' && !value
+                        ? { connectedServiceQuotaRecovered: false }
+                        : {}),
+                },
+            },
+        }));
+    }, [setWebhookChannels, webhookChannels]);
 
     const setLocalSetting = React.useCallback((delta: Record<string, boolean | ForegroundBehavior>) => {
         applyLocalSettings(delta);
@@ -619,10 +657,118 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                                 )}
                                 showChevron={false}
                             />
+                            {showConnectedServiceNotificationTopics ? (
+                                <>
+                                    {showConnectedServiceAccountSwitchNotifications ? (
+                                        <Item
+                                            testID={`settings-notifications-webhook-topic:${channel.id}:connectedServiceAccountSwitch`}
+                                            title={t('settingsNotifications.connectedServices.accountSwitch.title')}
+                                            subtitle={t('settingsNotifications.connectedServices.accountSwitch.subtitle')}
+                                            icon={<Ionicons name="swap-horizontal-outline" size={29} color={theme.colors.text.secondary} />}
+                                            rightElement={(
+                                                <Switch
+                                                    value={channel.topics.connectedServiceAccountSwitch !== false}
+                                                    disabled={channel.enabled === false}
+                                                    onValueChange={(value) => setWebhookTopic(channel, 'connectedServiceAccountSwitch', Boolean(value))}
+                                                />
+                                            )}
+                                            showChevron={false}
+                                        />
+                                    ) : null}
+                                    {showConnectedServiceQuotaNotifications ? (
+                                        <>
+                                            <Item
+                                                testID={`settings-notifications-webhook-topic:${channel.id}:connectedServiceQuotaBlocked`}
+                                                title={t('settingsNotifications.connectedServices.quotaBlocked.title')}
+                                                subtitle={t('settingsNotifications.connectedServices.quotaBlocked.subtitle')}
+                                                icon={<Ionicons name="timer-outline" size={29} color={theme.colors.text.secondary} />}
+                                                rightElement={(
+                                                    <Switch
+                                                        value={channel.topics.connectedServiceQuotaBlocked !== false}
+                                                        disabled={channel.enabled === false}
+                                                        onValueChange={(value) => setWebhookTopic(channel, 'connectedServiceQuotaBlocked', Boolean(value))}
+                                                    />
+                                                )}
+                                                showChevron={false}
+                                            />
+                                            <Item
+                                                testID={`settings-notifications-webhook-topic:${channel.id}:connectedServiceQuotaRecovered`}
+                                                title={t('settingsNotifications.connectedServices.quotaRecovered.title')}
+                                                subtitle={t('settingsNotifications.connectedServices.quotaRecovered.subtitle')}
+                                                icon={<Ionicons name="checkmark-circle-outline" size={29} color={theme.colors.text.secondary} />}
+                                                rightElement={(
+                                                    <Switch
+                                                        value={channel.topics.connectedServiceQuotaBlocked !== false && channel.topics.connectedServiceQuotaRecovered !== false}
+                                                        disabled={channel.enabled === false || channel.topics.connectedServiceQuotaBlocked === false}
+                                                        onValueChange={(value) => setWebhookTopic(channel, 'connectedServiceQuotaRecovered', Boolean(value))}
+                                                    />
+                                                )}
+                                                showChevron={false}
+                                            />
+                                        </>
+                                    ) : null}
+                                </>
+                            ) : null}
                         </React.Fragment>
                     ))
                 )}
             </ItemGroup>
+
+            {showConnectedServiceNotificationTopics ? (
+                <ItemGroup
+                    title={t('settingsNotifications.connectedServices.title')}
+                    footer={t('settingsNotifications.connectedServices.footer')}
+                >
+                    {showConnectedServiceAccountSwitchNotifications ? (
+                        <Item
+                            testID="settings-notifications-connected-service-account-switch"
+                            title={t('settingsNotifications.connectedServices.accountSwitch.title')}
+                            subtitle={t('settingsNotifications.connectedServices.accountSwitch.subtitle')}
+                            icon={<Ionicons name="swap-horizontal-outline" size={29} color={theme.colors.text.secondary} />}
+                            rightElement={(
+                                <Switch
+                                    value={notifications.connectedServiceAccountSwitch !== false}
+                                    disabled={!pushEnabled}
+                                    onValueChange={(value) => setNotificationTopic('connectedServiceAccountSwitch', Boolean(value))}
+                                />
+                            )}
+                            showChevron={false}
+                        />
+                    ) : null}
+                    {showConnectedServiceQuotaNotifications ? (
+                        <>
+                            <Item
+                                testID="settings-notifications-connected-service-quota-blocked"
+                                title={t('settingsNotifications.connectedServices.quotaBlocked.title')}
+                                subtitle={t('settingsNotifications.connectedServices.quotaBlocked.subtitle')}
+                                icon={<Ionicons name="timer-outline" size={29} color={theme.colors.text.secondary} />}
+                                rightElement={(
+                                    <Switch
+                                        value={notifications.connectedServiceQuotaBlocked !== false}
+                                        disabled={!pushEnabled}
+                                        onValueChange={(value) => setNotificationTopic('connectedServiceQuotaBlocked', Boolean(value))}
+                                    />
+                                )}
+                                showChevron={false}
+                            />
+                            <Item
+                                testID="settings-notifications-connected-service-quota-recovered"
+                                title={t('settingsNotifications.connectedServices.quotaRecovered.title')}
+                                subtitle={t('settingsNotifications.connectedServices.quotaRecovered.subtitle')}
+                                icon={<Ionicons name="checkmark-circle-outline" size={29} color={theme.colors.text.secondary} />}
+                                rightElement={(
+                                    <Switch
+                                        value={notifications.connectedServiceQuotaBlocked !== false && notifications.connectedServiceQuotaRecovered !== false}
+                                        disabled={!pushEnabled || notifications.connectedServiceQuotaBlocked === false}
+                                        onValueChange={(value) => setNotificationTopic('connectedServiceQuotaRecovered', Boolean(value))}
+                                    />
+                                )}
+                                showChevron={false}
+                            />
+                        </>
+                    ) : null}
+                </ItemGroup>
+            ) : null}
 
             <ItemGroup
                 title={t('settingsNotifications.types.title')}

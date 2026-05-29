@@ -1,7 +1,7 @@
 import React from 'react';
 import { Platform, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Redirect, useLocalSearchParams } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useUnistyles, StyleSheet } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -22,7 +22,12 @@ import { getProviderSettingsPlugin } from '@/agents/providers/registry/providerS
 import { getProviderLocalAuthPlugin } from '@/agents/providers/registry/providerLocalAuthRegistry';
 import type { ProviderSettingFieldDef, TranslatableText } from '@/agents/providers/shared/providerSettingsPlugin';
 import { t } from '@/text';
-import { buildBackendTargetKey } from '@happier-dev/protocol';
+import {
+    buildBackendTargetKey,
+    ConnectedServicesProviderStateSharingSettingsV1Schema,
+    type ConnectedServicesDefaultAuthByAgentIdV1,
+    type ConnectedServicesProviderStateSharingSettingsV1,
+} from '@happier-dev/protocol';
 import { getAgentSessionModeDescriptor, getAgentStaticModels, getProviderCliRuntimeSpec, isAgentAuthProbeSafeForBackgroundChecks } from '@happier-dev/agents';
 import {
     buildCatalogModelList,
@@ -32,6 +37,7 @@ import {
 import { useCLIDetection } from '@/hooks/auth/useCLIDetection';
 import { useCapabilityInstallability } from '@/hooks/machine/useCapabilityInstallability';
 import { ProviderCliInstallItem } from '@/components/settings/providers/ProviderCliInstallItem';
+import { buildAgentCliCapabilityId } from '@/capabilities/agentCliCapabilityId';
 import { getPermissionModeLabelForAgentType, getPermissionModeOptionsForAgentType } from '@/sync/domains/permissions/permissionModeOptions';
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { ProviderAuthenticationCard } from '@/components/settings/providers/authentication/ProviderAuthenticationCard';
@@ -41,10 +47,17 @@ import { useProviderAuthenticationState } from '@/components/settings/providers/
 import { resolveEffectiveConfiguredRuntimeControlSurface } from '@/sync/domains/session/control/effectiveRuntimeControlSurface';
 import { buildProviderSettingsFieldPatch, readProviderSettingsFieldValue } from '@/components/settings/providers/providerSettingsFieldBinding';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useProfile } from '@/sync/store/hooks';
 import { ContextBar } from '@/components/contextBar/ContextBar';
 import { useContextBarSelection } from '@/components/contextBar/useContextBarSelection';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { isTauriDesktop } from '@/utils/platform/tauri';
+import { ConnectedServicesDefaultAuthRow } from '@/components/settings/connectedServices/ConnectedServicesDefaultAuthRow';
+import {
+    ConnectedServicesProviderStateSharingBackendGroups,
+    resolveProviderStateSharingAgentIds,
+} from '@/components/settings/connectedServices/ConnectedServicesProviderStateSharingSettings';
 
 function resolveProviderSettingsText(input: TranslatableText | undefined): string | undefined {
     if (input === undefined) return undefined;
@@ -230,6 +243,10 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
     const supportsDesktopControls = isTauriDesktop();
     const { providerId, core, plugin, authPlugin } = props;
     const settings = useSettings();
+    const profile = useProfile();
+    const router = useRouter();
+    const connectedServicesEnabled = useFeatureEnabled('connectedServices');
+    const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
     const paneScopeId = React.useMemo(
         () => `settings:provider:${providerId}`,
         [providerId],
@@ -269,6 +286,26 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
             },
         });
     };
+    const setDefaultAuthSettings = React.useCallback((next: ConnectedServicesDefaultAuthByAgentIdV1) => {
+        applySettings({
+            connectedServicesDefaultAuthByAgentIdV1: next,
+        } as Partial<typeof settings>);
+    }, [applySettings]);
+    const normalizedProviderStateSharingSettings = React.useMemo(
+        () => ConnectedServicesProviderStateSharingSettingsV1Schema.parse(settings.connectedServicesProviderStateSharingSettingsV1),
+        [settings.connectedServicesProviderStateSharingSettingsV1],
+    );
+    const setProviderStateSharingSettings = React.useCallback((next: ConnectedServicesProviderStateSharingSettingsV1) => {
+        applySettings({
+            connectedServicesProviderStateSharingSettingsV1: next,
+        } as Partial<typeof settings>);
+    }, [applySettings]);
+    const supportsConnectedServicesDefaultAuth =
+        connectedServicesEnabled
+        && (core.connectedServices?.supportedServiceIds ?? []).length > 0;
+    const supportsProviderStateSharingSettings =
+        connectedServicesEnabled
+        && resolveProviderStateSharingAgentIds([providerId]).length > 0;
 
     const backendCliSourcePreferenceById = settings.backendCliSourcePreferenceById;
     const providerCliSourcePreference =
@@ -310,6 +347,7 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
         none: t('settingsProviders.runtimeSwitchNone'),
         metadataGating: t('settingsProviders.runtimeSwitchMetadataGating'),
         acpSetSessionMode: t('settingsProviders.runtimeSwitchAcpSetSessionMode'),
+        acpConfigOption: t('settingsProviders.runtimeSwitchSessionModeApi'),
         providerNative: t('settingsProviders.runtimeSwitchProviderNative'),
     }[runtimeSwitchKind];
     const catalogModelList = buildCatalogModelList({
@@ -407,10 +445,11 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
     });
     const providerCliAvailable = cliAvailability.available[providerId];
     const providerCliManagedInstalled = cliAvailability.resolutionSource[providerId] === 'managed';
+    const providerCliCapabilityId = buildAgentCliCapabilityId(providerId);
     const cliInstallability = useCapabilityInstallability({
         machineId: primaryMachine?.id ?? null,
         serverId: capabilityServerId,
-        capabilityId: `cli.${core.cli.detectKey}` as any,
+        capabilityId: providerCliCapabilityId,
         timeoutMs: 5000,
     });
     const ExtraSectionsComponent = plugin && 'ExtraSectionsComponent' in plugin
@@ -587,6 +626,44 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                         }}
                     />
                 </ItemGroup>
+
+                {supportsConnectedServicesDefaultAuth ? (
+                    <ItemGroup
+                        title={t('connectedServices.defaultAuth.agentDetailTitle')}
+                        footer={t('connectedServices.defaultAuth.agentDetailFooter')}
+                    >
+                        <ConnectedServicesDefaultAuthRow
+                            agentId={providerId}
+                            agentTitle={t(core.displayNameKey)}
+                            agentCore={core}
+                            connectedServicesEnabled={connectedServicesEnabled}
+                            accountGroupsEnabled={accountGroupsEnabled}
+                            accountProfileConnectedServicesV2={profile?.connectedServicesV2 ?? []}
+                            settings={{
+                                connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey ?? {},
+                                connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId ?? {},
+                                connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
+                            }}
+                            setDefaultAuthSettings={setDefaultAuthSettings}
+                            onOpenConnectedServiceSettings={(serviceId) => router.push({
+                                pathname: '/settings/connected-services/[serviceId]',
+                                params: { serviceId },
+                            })}
+                            onReconnectConnectedServiceProfile={(serviceId, profileId) => router.push({
+                                pathname: '/settings/connected-services/profile',
+                                params: { serviceId, profileId },
+                            })}
+                        />
+                    </ItemGroup>
+                ) : null}
+
+                {supportsProviderStateSharingSettings ? (
+                    <ConnectedServicesProviderStateSharingBackendGroups
+                        settings={normalizedProviderStateSharingSettings}
+                        setSettings={setProviderStateSharingSettings}
+                        agentIds={[providerId]}
+                    />
+                ) : null}
 
                     <ProviderAuthenticationCard
                         providerId={providerId}
@@ -875,17 +952,15 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                         icon={<Ionicons name="information-circle-outline" size={29} color={theme.colors.text.secondary} />}
                         mode="info"
                     />
-                    {supportsDesktopControls ? (
-                        <ProviderCliInstallItem
-                            machineId={primaryMachine?.id ?? null}
-                            serverId={capabilityServerId}
-                            capabilityId={`cli.${core.cli.detectKey}` as any}
-                            providerTitle={t(core.displayNameKey)}
-                            installed={providerCliAvailable}
-                            managedInstalled={providerCliManagedInstalled}
-                            installability={cliInstallability}
-                        />
-                    ) : null}
+                    <ProviderCliInstallItem
+                        machineId={primaryMachine?.id ?? null}
+                        serverId={capabilityServerId}
+                        capabilityId={providerCliCapabilityId}
+                        providerTitle={t(core.displayNameKey)}
+                        installed={providerCliAvailable}
+                        managedInstalled={providerCliManagedInstalled}
+                        installability={cliInstallability}
+                    />
                     {supportsDesktopControls && providerCliRuntimeSpec.managedInstall ? (
                         <DropdownMenu
                             open={openMenu === 'cliSourcePreference'}

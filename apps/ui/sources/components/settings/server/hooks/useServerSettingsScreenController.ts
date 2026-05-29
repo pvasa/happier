@@ -8,7 +8,9 @@ import {
     getActiveServerId,
     getDeviceDefaultServerId,
     getResetToDefaultServerId,
+    getServerProfileById,
     listServerProfiles,
+    resolveServerProfileScopeId,
     type ServerProfile,
     removeServerProfile,
     upsertServerProfile,
@@ -22,6 +24,10 @@ import {
     writeServerSelectionActiveTargetToServer,
 } from '@/sync/domains/server/selection/serverSelectionActiveTarget';
 import { resolveActiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
+import {
+    listServerProfileScopeIds,
+    normalizeServerSelectionSettingsForProfileScopeIds,
+} from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import type { ServerSelectionGroup } from '@/sync/domains/server/selection/serverSelectionTypes';
 import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
 import { isInsecureRemoteHttpServerUrl } from '@/sync/domains/server/url/serverUrlClassification';
@@ -215,9 +221,16 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         }
     }, [revision]);
 
-    const validServerIds = React.useMemo(() => new Set(servers.map((profile) => profile.id)), [servers]);
+    const validServerIds = React.useMemo(() => new Set(listServerProfileScopeIds(servers)), [servers]);
 
-    const storedGroupProfiles = React.useMemo(() => normalizeStoredServerSelectionGroups(serverSelectionGroups), [serverSelectionGroups]);
+    const storedGroupProfiles = React.useMemo(() => {
+        const scopedSettings = normalizeServerSelectionSettingsForProfileScopeIds({
+            serverSelectionGroups,
+            serverSelectionActiveTargetKind,
+            serverSelectionActiveTargetId,
+        }, servers);
+        return normalizeStoredServerSelectionGroups(scopedSettings.serverSelectionGroups);
+    }, [serverSelectionActiveTargetId, serverSelectionActiveTargetKind, serverSelectionGroups, servers]);
     const normalizedGroupProfiles = React.useMemo(() => filterServerSelectionGroupsToAvailableServers(storedGroupProfiles, validServerIds), [storedGroupProfiles, validServerIds]);
 
     const activeServerIdValue = React.useMemo(() => {
@@ -236,15 +249,18 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         }
     }, [revision]);
 
-    const resolvedActiveSelection = React.useMemo(() => resolveActiveServerSelectionFromRawSettings({
-        activeServerId: activeServerIdValue,
-        availableServerIds: servers.map((server) => server.id),
-        settings: {
+    const resolvedActiveSelection = React.useMemo(() => {
+        const settings = normalizeServerSelectionSettingsForProfileScopeIds({
             serverSelectionGroups,
             serverSelectionActiveTargetKind,
             serverSelectionActiveTargetId,
-        },
-    }), [
+        }, servers);
+        return resolveActiveServerSelectionFromRawSettings({
+            activeServerId: activeServerIdValue,
+            availableServerIds: listServerProfileScopeIds(servers),
+            settings,
+        });
+    }, [
         activeServerIdValue,
         serverSelectionActiveTargetId,
         serverSelectionActiveTargetKind,
@@ -365,6 +381,7 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         try {
             const featuresSnapshot = await getServerFeaturesSnapshot({ serverId: created.id, force: true, timeoutMs: 1000 });
             if (featuresSnapshot.status === 'ready') {
+                profile = getServerProfileById(profile.id) ?? profile;
                 const advertisedRaw = featuresSnapshot.features.capabilities?.server?.canonicalServerUrl;
                 const advertised = typeof advertisedRaw === 'string' ? normalizeUrl(advertisedRaw) : '';
                 if (advertised && advertised !== created.serverUrl) {
@@ -394,6 +411,7 @@ export function useServerSettingsScreenController(): ServerSettingsController {
             // best-effort
         }
 
+        profile = getServerProfileById(profile.id) ?? profile;
         let targetAuthStatus: 'signedIn' | 'signedOut' | 'unknown' = 'unknown';
         try {
             const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
@@ -408,7 +426,7 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         }
 
         retargetPendingTerminalConnectToServerUrl(profile.serverUrl);
-        await switchServerById(profile.id, { normalizeRoute: targetAuthStatus === 'signedOut' ? false : route.source !== 'notification' });
+        await switchServerById(resolveServerProfileScopeId(profile), { normalizeRoute: targetAuthStatus === 'signedOut' ? false : route.source !== 'notification' });
         setRevision((r) => r + 1);
 
         if (targetAuthStatus === 'signedOut') {

@@ -1,5 +1,4 @@
 import React from 'react';
-import MaskedView from '@react-native-masked-view/masked-view';
 import { Image, Platform, View } from 'react-native';
 import Animated, {
     Easing,
@@ -42,10 +41,8 @@ export function ThemePreferenceTransitionHost(props: Readonly<{ children: React.
     const [surfaceHeight, setSurfaceHeight] = React.useState(0);
     const revealProgress = useSharedValue(0);
 
-    const maskStyle = useAnimatedStyle(() => ({
-        flex: 1,
-        backgroundColor: 'black',
-        transform: [{ translateY: revealProgress.value * surfaceHeight }],
+    const overlayClipStyle = useAnimatedStyle(() => ({
+        height: Math.max(0, surfaceHeight * (1 - revealProgress.value)),
     }));
 
     const captureSurface = React.useCallback(async () => {
@@ -106,24 +103,20 @@ export function ThemePreferenceTransitionHost(props: Readonly<{ children: React.
         >
             {props.children}
             {overlayUri ? (
-                <View
+                <Animated.View
                     pointerEvents="none"
-                    style={{
-                        ...StyleSheetAbsoluteFillObject,
-                        zIndex: 10000,
-                    }}
+                    style={[
+                        StyleSheetAbsoluteFillObject,
+                        styles.overlayClip,
+                        overlayClipStyle,
+                    ]}
                 >
-                    <MaskedView
-                        style={{ flex: 1 }}
-                        maskElement={<Animated.View style={maskStyle} />}
-                    >
-                        <Image
-                            source={{ uri: overlayUri }}
-                            style={{ width: '100%', height: '100%' }}
-                            resizeMode="stretch"
-                        />
-                    </MaskedView>
-                </View>
+                    <Image
+                        source={{ uri: overlayUri }}
+                        style={StyleSheetAbsoluteFillObject}
+                        resizeMode="stretch"
+                    />
+                </Animated.View>
             ) : null}
         </View>
     );
@@ -135,4 +128,11 @@ const StyleSheetAbsoluteFillObject = {
     right: 0,
     bottom: 0,
     left: 0,
+};
+
+const styles = {
+    overlayClip: {
+        overflow: 'hidden' as const,
+        zIndex: 10000,
+    },
 };

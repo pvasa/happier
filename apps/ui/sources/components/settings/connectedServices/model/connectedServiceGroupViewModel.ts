@@ -1,0 +1,309 @@
+import type { ItemAction } from '@/components/ui/lists/itemActions';
+import { resolveConnectedServiceProfileLabel } from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import { t } from '@/text';
+import {
+    ConnectedServiceAuthGroupPolicyV1Schema,
+    type ConnectedServiceAuthGroupPolicyV1,
+    type ConnectedServiceAuthGroupV1,
+    type ConnectedServiceId,
+} from '@happier-dev/protocol';
+
+export type ConnectedServiceGroupMemberViewModel = Readonly<{
+    profileId: string;
+    enabled: boolean;
+    priority: number;
+    cooldownUntilMs: number | null;
+    exhaustedUntilMs: number | null;
+    lastFailureKind: string | null;
+}>;
+
+export type ConnectedServiceGroupViewModel = Readonly<{
+    groupId: string;
+    label: string;
+    activeProfileId: string;
+    policy: ConnectedServiceAuthGroupPolicyV1;
+    status: 'ready' | 'exhausted' | 'needs_members';
+    cooldownUntilMs: number | null;
+    generation: number;
+    members: ReadonlyArray<ConnectedServiceGroupMemberViewModel>;
+}>;
+
+export type ConnectedServiceGroupProfileLike = Readonly<{
+    profileId?: string;
+    providerEmail?: string | null;
+}>;
+
+export const CONNECTED_SERVICE_GROUP_DEFAULT_POLICY: ConnectedServiceAuthGroupPolicyV1 = ConnectedServiceAuthGroupPolicyV1Schema.parse({});
+
+const connectedServiceAuthGroupPolicyKeys = [
+    'v',
+    'strategy',
+    'autoSwitch',
+    'switchOn',
+    'cooldownMs',
+    'honorProviderResetsAt',
+    'autoRestorePrimaryWhenReset',
+    'maxSwitchesPerTurn',
+    'maxSwitchesPerSessionHour',
+    'softSwitchRemainingPercent',
+    'probeIfSnapshotOlderThanMs',
+    'preTurnProbeMode',
+    'preTurnProbeOrder',
+    'recoveryMode',
+    'recoveryPromptMode',
+    'resumePromptMode',
+    'effectiveMeterStrategy',
+    'memberRuntimeStatePersistence',
+] as const satisfies ReadonlyArray<keyof ConnectedServiceAuthGroupPolicyV1>;
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+export function readConnectedServiceGroupString(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function readNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readBoolean(value: unknown, fallback: boolean): boolean {
+    return typeof value === 'boolean' ? value : fallback;
+}
+
+export function normalizeConnectedServiceGroupPolicy(
+    value: unknown,
+    fallbackRaw?: Readonly<Record<string, unknown>>,
+): ConnectedServiceAuthGroupPolicyV1 {
+    const raw = readRecord(value) ?? fallbackRaw ?? {};
+    const direct = ConnectedServiceAuthGroupPolicyV1Schema.safeParse(raw);
+    if (direct.success) return direct.data;
+
+    const policyInput: Record<string, unknown> = {};
+    for (const key of connectedServiceAuthGroupPolicyKeys) {
+        if (Object.prototype.hasOwnProperty.call(raw, key)) {
+            policyInput[key] = raw[key];
+        }
+    }
+
+    const sanitized = ConnectedServiceAuthGroupPolicyV1Schema.safeParse(policyInput);
+    if (sanitized.success) return sanitized.data;
+
+    const rawStrategy = readConnectedServiceGroupString(raw.strategy);
+    return {
+        ...CONNECTED_SERVICE_GROUP_DEFAULT_POLICY,
+        strategy: rawStrategy === 'least_limited' || rawStrategy === 'manual' ? rawStrategy : 'priority',
+        autoSwitch: readBoolean(raw.autoSwitch, CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.autoSwitch),
+    };
+}
+
+export function normalizeConnectedServiceGroupMember(value: unknown): ConnectedServiceGroupMemberViewModel | null {
+    const raw = readRecord(value);
+    if (!raw) return null;
+    const profileId = readConnectedServiceGroupString(raw.profileId);
+    if (!profileId) return null;
+    const state = readRecord(raw.state) ?? {};
+    return {
+        profileId,
+        enabled: raw.enabled !== false,
+        priority: readNumber(raw.priority) ?? 100,
+        cooldownUntilMs: readNumber(state.cooldownUntilMs),
+        exhaustedUntilMs: readNumber(state.exhaustedUntilMs),
+        lastFailureKind: readConnectedServiceGroupString(state.lastFailureKind) || null,
+    };
+}
+
+function readMembers(value: unknown): ConnectedServiceGroupMemberViewModel[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((member): ConnectedServiceGroupMemberViewModel[] => {
+        const normalized = normalizeConnectedServiceGroupMember(member);
+        return normalized ? [normalized] : [];
+    });
+}
+
+export function createConnectedServiceGroupViewModel(value: unknown): ConnectedServiceGroupViewModel | null {
+    const raw = readRecord(value);
+    if (!raw) return null;
+    const groupId = readConnectedServiceGroupString(raw.groupId);
+    if (!groupId) return null;
+
+    const state = readRecord(raw.state) ?? {};
+    const members = readMembers(raw.members);
+    const enabledCount = members.filter((member) => member.enabled).length;
+    const rawStatus = readConnectedServiceGroupString(state.status) || readConnectedServiceGroupString(raw.status);
+    const status = enabledCount <= 0
+        ? 'needs_members'
+        : rawStatus === 'exhausted'
+            ? 'exhausted'
+            : 'ready';
+
+    return {
+        groupId,
+        label: readConnectedServiceGroupString(raw.displayName) || readConnectedServiceGroupString(raw.label) || groupId,
+        activeProfileId: readConnectedServiceGroupString(raw.activeProfileId),
+        policy: normalizeConnectedServiceGroupPolicy(raw.policy, raw),
+        status,
+        cooldownUntilMs: readNumber(state.cooldownUntilMs) ?? readNumber(raw.cooldownUntilMs),
+        generation: readNumber(raw.generation) ?? 0,
+        members,
+    };
+}
+
+export function parseConnectedServiceGroupViewModels(groups: unknown): ConnectedServiceGroupViewModel[] {
+    if (!Array.isArray(groups)) return [];
+    return groups.flatMap((group): ConnectedServiceGroupViewModel[] => {
+        const normalized = createConnectedServiceGroupViewModel(group);
+        return normalized ? [normalized] : [];
+    });
+}
+
+export function formatConnectedServiceGroupSubtitle(group: ConnectedServiceGroupViewModel): string {
+    const enabledCount = group.members.filter((member) => member.enabled).length;
+    const totalCount = group.members.length;
+    const prioritySummary = [...group.members]
+        .sort((a, b) => a.priority - b.priority)
+        .map((member) => `${member.profileId}:${member.priority}`)
+        .join(', ');
+
+    const parts = [
+        group.activeProfileId
+            ? t('connectedServices.detail.groups.activeMember', { profileId: group.activeProfileId })
+            : null,
+        t('connectedServices.detail.groups.enabledMembers', { enabled: enabledCount, total: totalCount }),
+        group.policy.autoSwitch
+            ? t('connectedServices.detail.groups.autoFallbackEnabled')
+            : t('connectedServices.detail.groups.autoFallbackDisabled'),
+        group.policy.strategy === 'manual'
+            ? t('connectedServices.detail.groups.strategyManual')
+            : group.policy.strategy === 'least_limited'
+                ? t('connectedServices.detail.groups.strategyLeastLimited')
+                : t('connectedServices.detail.groups.strategyPriority'),
+        prioritySummary
+            ? t('connectedServices.detail.groups.priority', { priority: prioritySummary })
+            : null,
+        group.status === 'exhausted'
+            ? t('connectedServices.detail.groups.statusExhausted')
+            : group.status === 'needs_members'
+                ? t('connectedServices.detail.groups.statusNeedsMembers')
+                : t('connectedServices.detail.groups.statusReady'),
+        group.cooldownUntilMs !== null
+            ? t('connectedServices.detail.groups.cooldown', {
+                time: new Date(group.cooldownUntilMs).toLocaleString(),
+            })
+            : null,
+    ];
+    return parts.filter(Boolean).join(' • ');
+}
+
+export function formatConnectedServiceGroupMemberSubtitle(
+    member: ConnectedServiceGroupMemberViewModel,
+    activeProfileId: string | null | undefined,
+): string {
+    const parts = [
+        member.profileId === activeProfileId ? t('connectedServices.detail.groups.memberActive') : null,
+        member.enabled ? t('connectedServices.detail.groups.memberEnabled') : t('connectedServices.detail.groups.memberDisabled'),
+        t('connectedServices.detail.groups.memberPriority', { priority: member.priority }),
+        member.exhaustedUntilMs !== null
+            ? t('connectedServices.detail.groups.memberExhaustedUntil', {
+                time: new Date(member.exhaustedUntilMs).toLocaleString(),
+            })
+            : null,
+        member.cooldownUntilMs !== null
+            ? t('connectedServices.detail.groups.cooldown', {
+                time: new Date(member.cooldownUntilMs).toLocaleString(),
+            })
+            : null,
+        member.lastFailureKind
+            ? t('connectedServices.detail.groups.memberLastFailure', { reason: member.lastFailureKind })
+            : null,
+    ];
+    return parts.filter(Boolean).join(' • ');
+}
+
+export function resolveConnectedServiceGroupProfileTitle(params: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    labelsByKey: Readonly<Record<string, string | undefined>>;
+}>): string {
+    return resolveConnectedServiceProfileLabel({
+        labelsByKey: params.labelsByKey,
+        serviceId: params.serviceId,
+        profileId: params.profileId,
+    }) ?? params.profileId;
+}
+
+export function resolveConnectedServiceGroupMissingEligibleWarning(group: ConnectedServiceGroupViewModel): string | null {
+    const enabledMembers = group.members.filter((member) => member.enabled);
+    if (enabledMembers.length === 0) return t('connectedServices.detail.groups.warningNoEnabledMembers');
+    if (!group.policy.autoSwitch) return null;
+    if (enabledMembers.length === 1) return t('connectedServices.detail.groups.warningNoFallbackMember');
+    return null;
+}
+
+export function resolveConnectedServiceGroupSoftSwitchRemainingPercent(group: ConnectedServiceAuthGroupV1): number {
+    const value = group.policy.softSwitchRemainingPercent;
+    return typeof value === 'number' && Number.isFinite(value)
+        ? value
+        : CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.softSwitchRemainingPercent;
+}
+
+export function resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs(group: ConnectedServiceAuthGroupV1): number {
+    const value = group.policy.probeIfSnapshotOlderThanMs;
+    return typeof value === 'number' && Number.isFinite(value)
+        ? value
+        : CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.probeIfSnapshotOlderThanMs;
+}
+
+export function buildConnectedServiceGroupMemberActions(params: Readonly<{
+    groupId: string;
+    activeProfileId: string | null | undefined;
+    member: ConnectedServiceGroupMemberViewModel;
+    accountFallbackEnabled: boolean;
+    onSetActiveMember: (profileId: string) => void;
+    onSetMemberEnabled: (member: ConnectedServiceGroupMemberViewModel, enabled: boolean) => void;
+    onEditMemberPriority: (member: ConnectedServiceGroupMemberViewModel) => void;
+    onRemoveMember: (member: ConnectedServiceGroupMemberViewModel) => void;
+}>): ItemAction[] {
+    const { groupId, member } = params;
+    const isActive = member.profileId === params.activeProfileId;
+    return [
+        {
+            id: `connected-services-group:${groupId}:member:${member.profileId}:action:set-active`,
+            title: isActive
+                ? t('connectedServices.detail.groupActions.activeMember')
+                : t('connectedServices.detail.groupActions.makeActive'),
+            subtitle: !isActive && !params.accountFallbackEnabled
+                ? t('connectedServices.detail.groupActions.accountFallbackDisabled')
+                : undefined,
+            icon: isActive ? 'radio-button-on-outline' : 'radio-button-off-outline',
+            disabled: isActive || !params.accountFallbackEnabled,
+            onPress: () => params.onSetActiveMember(member.profileId),
+        },
+        {
+            id: member.enabled
+                ? `connected-services-group:${groupId}:member:${member.profileId}:action:disable`
+                : `connected-services-group:${groupId}:member:${member.profileId}:action:enable`,
+            title: member.enabled
+                ? t('connectedServices.detail.groupActions.disableMember')
+                : t('connectedServices.detail.groupActions.enableMember'),
+            icon: member.enabled ? 'pause-circle-outline' : 'play-circle-outline',
+            onPress: () => params.onSetMemberEnabled(member, !member.enabled),
+        },
+        {
+            id: `connected-services-group:${groupId}:member:${member.profileId}:action:priority`,
+            title: t('connectedServices.detail.groupActions.editPriority'),
+            icon: 'reorder-three-outline',
+            onPress: () => params.onEditMemberPriority(member),
+        },
+        {
+            id: `connected-services-group:${groupId}:member:${member.profileId}:action:remove`,
+            title: t('connectedServices.detail.groupActions.removeMember'),
+            icon: 'remove-circle-outline',
+            destructive: true,
+            onPress: () => params.onRemoveMember(member),
+        },
+    ];
+}

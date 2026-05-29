@@ -6,8 +6,8 @@ import { useUnistyles } from 'react-native-unistyles';
 import { isTauriDesktop } from '@/utils/platform/tauri';
 
 import { AGENT_IDS, getAgentCore, type AgentId } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getProviderLocalAuthPlugin } from '@/agents/providers/registry/providerLocalAuthRegistry';
-import { DesktopOnlySetupNotice } from '@/components/settings/machines/DesktopOnlySetupNotice';
 import { usePrimaryMachineFromActiveSelection } from '@/components/settings/server/hooks/usePrimaryMachineFromActiveSelection';
 import { ActionCard } from '@/components/ui/cards/ActionCard';
 import { Item } from '@/components/ui/lists/Item';
@@ -61,17 +61,7 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
     machineId?: string | null;
     serverId?: string | null;
 }>) {
-    if (!isTauriDesktop()) {
-        return (
-            <DesktopOnlySetupNotice
-                testID="settings.providers.setup.desktopOnlyNotice"
-                groupTitle={t('settingsProviders.installSetupTitle')}
-                title={t('setupOnboarding.webDesktopOnlyTitle')}
-                subtitle={t('setupOnboarding.webDesktopOnlyBody')}
-            />
-        );
-    }
-
+    const supportsDesktopControls = isTauriDesktop();
     const { theme } = useUnistyles();
     const defaultMachineId = usePrimaryMachineFromActiveSelection();
     const providerIds = React.useMemo(
@@ -165,7 +155,7 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
                             selected={selected}
                             showChevron={false}
                             disabled={installQueue.state.hasStarted ? (installQueue.state.isRunning || !canRetryInstall) : Boolean(queueState)}
-                            icon={<Ionicons name={core.ui.agentPickerIconName as any} size={24} color={theme.colors.text.secondary} />}
+                            icon={<AgentIcon agentId={providerId} size={24} color={theme.colors.text.secondary} />}
                             rightElement={
                                 installQueue.state.hasStarted
                                     ? installStatus === 'installing'
@@ -230,7 +220,7 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
                             testID={`provider-setup-active-${activeProviderId}`}
                             title={t(activeCore.displayNameKey)}
                             subtitle={t('settingsProviders.setup.activeDescription')}
-                            icon={<Ionicons name={activeCore.ui.agentPickerIconName as any} size={24} color={theme.colors.accent.blue} />}
+                            icon={<AgentIcon agentId={activeProviderId} size={24} color={theme.colors.accent.blue} />}
                             showChevron={false}
                             mode="info"
                         />
@@ -238,6 +228,7 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
                     <ProviderAuthenticationCard
                         providerId={activeProviderId}
                         state={authState}
+                        showActions={supportsDesktopControls}
                         onCheckNow={() => {
                             cliAvailability.refresh({
                                 bypassCache: true,
@@ -245,10 +236,11 @@ export const ProviderSetupFlow = React.memo(function ProviderSetupFlow(props: Re
                             });
                         }}
                         onLaunchLogin={() => {
+                            if (!supportsDesktopControls) return;
                             setTerminalProviderId(activeProviderId);
                         }}
                     />
-                    {terminalProviderId === activeProviderId && authState.loginLaunch ? (
+                    {supportsDesktopControls && terminalProviderId === activeProviderId && authState.loginLaunch ? (
                         <View style={{ minHeight: 320 }}>
                             <ProviderAuthenticationTerminalPane
                                 providerId={activeProviderId}

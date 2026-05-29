@@ -51,8 +51,8 @@ vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 960 },
 }));
 
-vi.mock('@/components/ui/code/editor/CodeEditor', () => ({
-    CodeEditor: ({ onChange, ...props }: any) => React.createElement('CodeEditor', {
+vi.mock('@/components/ui/markdown/editor/MarkdownCodeEditorField', () => ({
+    MarkdownCodeEditorField: ({ onChange, ...props }: any) => React.createElement('MarkdownCodeEditorField', {
         ...props,
         onChangeText: onChange,
     }),

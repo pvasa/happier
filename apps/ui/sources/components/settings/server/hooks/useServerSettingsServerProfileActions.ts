@@ -3,7 +3,12 @@ import * as React from 'react';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { removeServerProfile, renameServerProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import {
+    removeServerProfile,
+    renameServerProfile,
+    resolveServerProfileScopeId,
+    type ServerProfile,
+} from '@/sync/domains/server/serverProfiles';
 import { promptSignedOutServerSwitchConfirmation } from '@/components/settings/server/modals/ServerSwitchAuthPrompt';
 import { retargetPendingTerminalConnectToServerUrl } from '@/components/settings/server/hooks/retargetPendingTerminalConnectToServerUrl';
 
@@ -17,7 +22,8 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
     setRevision: React.Dispatch<React.SetStateAction<number>>;
 }>) {
     const onSwitchServer = React.useCallback(async (profile: ServerProfile) => {
-        let authStatus = params.authStatusByServerId[profile.id] ?? 'unknown';
+        const scopeId = resolveServerProfileScopeId(profile);
+        let authStatus = params.authStatusByServerId[scopeId] ?? params.authStatusByServerId[profile.id] ?? 'unknown';
         if (authStatus === 'unknown') {
             try {
                 const creds = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId: profile.id });
@@ -33,7 +39,7 @@ export function useServerSettingsServerProfileActions(params: Readonly<{
 
         retargetPendingTerminalConnectToServerUrl(profile.serverUrl);
 
-        await params.onSwitchServerById(profile.id);
+        await params.onSwitchServerById(scopeId);
         if (authStatus === 'signedOut') {
             params.onAfterSignedOutSwitch();
         }

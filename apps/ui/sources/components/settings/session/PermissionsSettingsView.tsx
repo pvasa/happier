@@ -22,6 +22,7 @@ import { getPermissionApplyTimingSubtitleKey } from '@/components/settings/sessi
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { supportsDirectTranscriptStorageForNewSession } from '@/components/sessions/new/modules/newSessionTranscriptStorage';
 import { readAccountTranscriptStorageDefaults, type SessionTranscriptStorageMode } from '@/sync/domains/session/transcriptStorageDefaults';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 
 type PermissionApplyTiming = 'immediate' | 'next_prompt';
 type PermissionPromptSurfaceMenuOption = 'composer' | 'transcript';
@@ -240,7 +241,7 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
                             popoverBoundaryRef={popoverBoundaryRef}
                             itemTrigger={{
                                 title: t(core.displayNameKey),
-                                icon: <Ionicons name={core.ui.agentPickerIconName as any} size={29} color={theme.colors.text.secondary} />,
+                                icon: <AgentIcon agentId={agentId} size={29} color={theme.colors.text.secondary} />,
                                 itemProps: { showDivider },
                             }}
                             items={getPermissionModeOptionsForAgentType(agentId as any).map((opt) => ({
@@ -319,7 +320,7 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
                                 popoverBoundaryRef={popoverBoundaryRef}
                                 itemTrigger={{
                                     title: t(core.displayNameKey),
-                                    icon: <Ionicons name={core.ui.agentPickerIconName as any} size={29} color={theme.colors.text.secondary} />,
+                                    icon: <AgentIcon agentId={agentId} size={29} color={theme.colors.text.secondary} />,
                                     subtitle: override
                                         ? (transcriptStorageOptions.find((opt) => opt.key === override)?.title ?? t('sessionsList.storagePersistedTab'))
                                         : t('settingsSession.defaultStorage.globalSubtitle', {
