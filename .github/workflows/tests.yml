@@ -1745,12 +1745,14 @@ jobs:
           need_claude=0
           need_codex=0
           need_opencode=0
+          need_cursor=0
 
           case "$PRESET" in
-            all) need_claude=1; need_codex=1; need_opencode=1 ;;
+            all) need_claude=1; need_codex=1; need_opencode=1; need_cursor=1 ;;
             claude) need_claude=1 ;;
             codex) need_codex=1 ;;
             opencode) need_opencode=1 ;;
+            cursor) need_cursor=1 ;;
             *) echo "Unknown providers_preset: $PRESET" >&2; exit 2 ;;
           esac
 
@@ -1796,23 +1798,34 @@ jobs:
             opencode --version
           fi
 
+          if [ "$need_cursor" = "1" ]; then
+            if ! command -v cursor-agent >/dev/null 2>&1; then
+              echo "Cursor provider CI requires a preinstalled cursor-agent from the runner image or a pinned setup step" >&2
+              exit 1
+            fi
+            cursor-agent --version
+          fi
+
       - name: Validate provider auth env
         env:
           PRESET: ${{ inputs.providers_preset }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
 
           need_openai=0
           need_anthropic=0
+          need_cursor=0
 
           case "$PRESET" in
-            all) need_openai=1; need_anthropic=1 ;;
+            all) need_openai=1; need_anthropic=1; need_cursor=1 ;;
             codex) need_openai=1 ;;
             opencode) need_openai=1 ;;
             claude) need_anthropic=1 ;;
+            cursor) need_cursor=1 ;;
             *) echo "Unknown providers_preset: $PRESET" >&2; exit 2 ;;
           esac
 
@@ -1826,12 +1839,18 @@ jobs:
             exit 1
           fi
 
+          if [ "$need_cursor" = "1" ] && [ -z "${CURSOR_API_KEY:-}" ]; then
+            echo "Missing provider secrets: set CURSOR_API_KEY to run preset=$PRESET" >&2
+            exit 1
+          fi
+
       - name: Run provider contract suite
         env:
           CI: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           HAPPIER_E2E_PROVIDER_MODEL: ${{ fromJSON(inputs.providers_models).default }}
           HAPPY_E2E_PROVIDER_MODEL: ${{ fromJSON(inputs.providers_models).default }}
           HAPPIER_E2E_PROVIDER_MODELS: ${{ fromJSON(inputs.providers_models).overrides }}

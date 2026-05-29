@@ -43,6 +43,31 @@ test('provider-secret jobs are isolated to providers-ci environment', async () =
   assert.equal(providersJob?.secrets, 'inherit', 'providers-contracts should pass secrets only to providers lane');
 });
 
+test('manual tests dispatch forwards provider secrets only to the reusable tests workflow', async () => {
+  const { parsed } = await loadWorkflow('tests-dispatch.yml');
+  const testsJob = parsed?.jobs?.tests;
+
+  assert.ok(testsJob, 'tests-dispatch.yml should define the reusable tests job');
+  assert.equal(testsJob?.uses, './.github/workflows/tests.yml');
+  assert.equal(testsJob?.secrets, 'inherit', 'manual dispatch must pass provider secrets into tests.yml');
+  assert.equal(testsJob?.with?.run_providers, "${{ needs.resolve.outputs.run_providers == 'true' }}");
+});
+
+test('provider workflow does not install Cursor through an unpinned remote shell pipeline', async () => {
+  const { raw } = await loadWorkflow('tests.yml');
+
+  assert.doesNotMatch(
+    raw,
+    /cursor\.com\/install[\s\S]*\|\s*bash/,
+    'tests.yml must not run the mutable Cursor curl-to-bash installer before provider tests',
+  );
+  assert.match(
+    raw,
+    /Cursor provider CI requires a preinstalled cursor-agent/,
+    'tests.yml should fail closed unless Cursor is preinstalled by the runner image or a pinned setup step',
+  );
+});
+
 test('stress workflows do not inherit secrets into reusable tests workflow', async () => {
   const { parsed } = await loadWorkflow('stress-tests.yml');
   assert.equal(parsed?.jobs?.['stress-scheduled']?.secrets, undefined, 'stress-scheduled should not inherit secrets');
@@ -75,6 +100,7 @@ test('manual secret-bearing workflows enforce trusted refs', async () => {
     'promote-branch.yml',
     'build-tauri.yml',
     'providers-contracts.yml',
+    'tests-dispatch.yml',
     'deploy.yml',
   ];
 
@@ -160,6 +186,7 @@ test('secret-bearing workflows require release-admin actor guard before privileg
     ['build-tauri.yml', 'resolve_source'],
     ['publish-github-release.yml', 'publish'],
     ['providers-contracts.yml', 'trusted_ref_guard'],
+    ['tests-dispatch.yml', 'trusted_ref_guard'],
     ['deploy.yml', 'deploy'],
     ['tests.yml', 'providers'],
   ];

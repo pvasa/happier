@@ -84,7 +84,11 @@ notes/
 .project/qa/locks/
 .project/qa/score-history/
 .happier/local/
+.argent/
+.vscode/mcp.json
 /output
+/apps/ui/.agent-device/
+/onboarding-remote-*.png
 
 # Claude Code cache
 .claude/cache/
@@ -112,14 +116,26 @@ _.env.pipeline.production.local
 
 # Local QA screenshots
 /authoring-qa-*.png
+/authenticated-*-connected-services.png
+/claude-session-*-error.png
+/codex-usage-limit-*.png
+/connected-services-*.png
+/full-audit-*.log
+/full-audit-*.png
 /lane-*-console-warnings.txt
 /markdown-reveal-qa-*.png
+/happier-session-qa.png
+/opencode-auth-picker-*.png
 /permission-refinement-*.png
 /pets-stack-welcome.png
+/runtime-status-session-before-reload.png
 /transcript-anchor-qa-*
+/ui-postfix-review-snapshot.md
 /.codex-tmp
 /apps/stack/output
 
 /cli/.dist*
 /packages/cli-common/.dist*
 /.playwright-mcp
+/.clawpatch
+/apply_fix.py

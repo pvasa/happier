@@ -36,6 +36,7 @@ on:
           - claude
           - codex
           - opencode
+          - cursor
       providers_tier:
         description: "Providers — Tier (when providers enabled)"
         required: true
@@ -44,6 +45,9 @@ on:
         options:
           - smoke
           - extended
+
+permissions:
+  contents: read
 
 jobs:
   resolve:
@@ -212,10 +216,44 @@ jobs:
             echo "run_self_host_daemon=${run_self_host_daemon}"
           } >> "$GITHUB_OUTPUT"
 
+  release_actor_guard:
+    name: Release actor guard
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Authorize release actor
+        uses: ./.github/actions/release-actor-guard
+        with:
+          team_slug: release-admins
+          app_id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private_key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
+  trusted_ref_guard:
+    needs: [release_actor_guard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce trusted refs for manual dispatch
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]; then
+            exit 0
+          fi
+          case "${GITHUB_REF_NAME}" in
+            dev|preview|main) ;;
+            *)
+              echo "Refusing workflow_dispatch from untrusted ref '${GITHUB_REF_NAME}'. Use dev, preview, or main." >&2
+              exit 1
+              ;;
+          esac
+
   tests:
     name: Tests (reusable)
-    needs: [resolve]
+    needs: [resolve, trusted_ref_guard]
     uses: ./.github/workflows/tests.yml
+    secrets: inherit
     with:
       run_ui_e2e: ${{ needs.resolve.outputs.run_ui_e2e == 'true' }}
       run_wsrepl_lima: ${{ needs.resolve.outputs.run_wsrepl_lima == 'true' }}

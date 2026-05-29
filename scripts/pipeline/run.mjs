@@ -2829,9 +2829,6 @@ function runJsonScript({ repoRoot, env, scriptRel, args }) {
       console.log(`[pipeline] ui-mobile release: environment=${environmentArg} action=${action} platform=${platform}`);
 
       if (action === 'ota') {
-        if (runtimeVersion && platform === 'all') {
-          fail('--runtime-version requires --platform ios or --platform android for OTA releases.');
-        }
         const otaPlatforms = platform === 'all' ? ['android', 'ios'] : [platform];
         for (const otaPlatform of otaPlatforms) {
           runExpoOtaUpdate({

@@ -14,6 +14,7 @@ import {
   resolveYarnCommand,
 } from './lib/binary-release.mjs';
 import { createUiWebReleaseArtifacts } from './lib/ui-web-bundle.mjs';
+import { applyExpoWebModalEnv } from '../expo/expoWebModalEnv.mjs';
 
 async function main() {
   const repoRoot = resolveRepoRoot();
@@ -36,10 +37,10 @@ async function main() {
     // Ensure all `@happier-dev/*` workspace deps used by the UI have been built before `expo export`.
     execOrThrow(process.execPath, ['apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs'], {
       cwd: repoRoot,
-      env: {
+      env: applyExpoWebModalEnv({
         ...process.env,
         CI: process.env.CI ?? '1',
-      },
+      }),
     });
 
     const yarn = resolveYarnCommand({});
@@ -48,10 +49,10 @@ async function main() {
       [...yarn.args, '--cwd', 'apps/ui', '-s', 'expo', 'export', '--platform', 'web', '--output-dir', 'dist'],
       {
         cwd: repoRoot,
-        env: {
+        env: applyExpoWebModalEnv({
           ...process.env,
           CI: process.env.CI ?? '1',
-        },
+        }),
       },
     );
   }

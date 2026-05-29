@@ -5,10 +5,12 @@ import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { maybeUploadSentryExpoSourceMaps } from './sentry-upload-sourcemaps.mjs';
 import { withEasGitCaseSensitiveEnv } from './eas-git-case-sensitive-env.mjs';
+import { applyExpoWebModalEnv } from './expoWebModalEnv.mjs';
 import { applyExpoNodeHeapEnv } from '../../expo/expoNodeHeapEnv.mjs';
 import { normalizeInteractiveOverride, resolveExpoInteractivity } from './resolve-expo-interactivity.mjs';
 import { resolveEasBuildProfileEnv } from './resolve-eas-build-profile-env.mjs';
 import { createCanonicalFingerprintFromExpoFingerprint } from './canonical-fingerprint.mjs';
+import { parseEasJsonCommandOutput } from './parse-eas-json-command-output.mjs';
 import {
   MOBILE_RELEASE_PROFILES,
   MOBILE_RELEASE_ENVIRONMENT_CHOICES,
@@ -173,7 +175,7 @@ function generateCanonicalOtaFingerprintHash({ opts, uiDir, easCliVersion, platf
     { cwd: uiDir, env, stdio: 'pipe' },
   ).trim();
   if (!fpJson) return '';
-  const parsed = JSON.parse(fpJson);
+  const parsed = parseEasJsonCommandOutput(fpJson, `eas fingerprint:generate (${platform})`);
   const canonical = createCanonicalFingerprintFromExpoFingerprint(parsed);
   const rawHash = String(parsed?.hash ?? parsed?.fingerprintHash ?? '').trim();
   if (canonical.hash && rawHash && canonical.hash !== rawHash) {
@@ -276,9 +278,6 @@ function main() {
   const nodeEnvironment = resolveMobileBuildNodeEnvironment(normalizedEnvironment);
   const otaFingerprintEnv = resolveOtaFingerprintEnv(uiDir, normalizedEnvironment);
   const explicitRuntimeVersion = String(values['runtime-version'] ?? '').trim();
-  if (explicitRuntimeVersion && platform === 'all') {
-    fail('--runtime-version requires --platform ios or --platform android so the override targets one runtime.');
-  }
 
   /** @type {Record<string, string>} */
   const injectedEnv = { ...otaFingerprintEnv };
@@ -294,13 +293,13 @@ function main() {
   }
 
   const easCommandEnv = withEasGitCaseSensitiveEnv(
-    applyExpoNodeHeapEnv({
+    applyExpoNodeHeapEnv(applyExpoWebModalEnv({
       ...process.env,
       APP_ENV: process.env.APP_ENV ?? appEnvironment,
       NODE_ENV: process.env.NODE_ENV ?? nodeEnvironment,
       EXPO_UPDATES_CHANNEL: process.env.EXPO_UPDATES_CHANNEL ?? updateLane,
       ...injectedEnv,
-    }, {
+    }), {
       envKey: 'HAPPIER_PIPELINE_EXPO_MAX_OLD_SPACE_SIZE_MB',
     }),
   );

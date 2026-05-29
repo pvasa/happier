@@ -81,6 +81,11 @@ test('apps/ui/eas.json defines internaldev profiles for OTA-native debug dev-cli
     'false',
     'EAS builds should install devDependencies so workspace postinstall dist builds can resolve TypeScript',
   );
+  assert.equal(
+    build?.base?.env?.EXPO_UNSTABLE_WEB_MODAL,
+    '1',
+    'EAS native and OTA builds should keep Expo Router web modal support enabled when bundling UI code',
+  );
 
   const internaldev = build?.internaldev ?? null;
   assert.equal(typeof internaldev, 'object');
@@ -119,6 +124,28 @@ test('apps/ui/eas.json defines internaldev profiles for OTA-native debug dev-cli
   assert.equal(internaldevStore?.env?.EXPO_APP_BUNDLE_ID, 'dev.happier.app.dev.internal');
   assert.equal(internaldevStore?.env?.EXPO_ANDROID_PACKAGE, 'dev.happier.app.internaldev');
   assert.equal(internaldevStore?.env?.EXPO_APP_SCHEME, 'happier-internaldev');
+});
+
+test('apps/ui direct release scripts enable Expo Router web modal support for EAS builds', () => {
+  for (const relPath of ['apps/ui/release-dev.sh', 'apps/ui/release-production.sh']) {
+    const raw = fs.readFileSync(path.join(repoRoot, relPath), 'utf8');
+    assert.match(
+      raw,
+      /^export EXPO_UNSTABLE_WEB_MODAL=1$/m,
+      `${relPath} should export Expo Router web modal support before invoking EAS`,
+    );
+  }
+});
+
+test('UI mobile release workflows enable Expo Router web modal support', () => {
+  for (const workflowName of ['build-ui-mobile-local.yml', 'publish-ui-mobile-dev.yml', 'promote-ui.yml']) {
+    const raw = fs.readFileSync(path.join(repoRoot, '.github', 'workflows', workflowName), 'utf8');
+    assert.match(
+      raw,
+      /EXPO_UNSTABLE_WEB_MODAL:\s*"1"/,
+      `${workflowName} should set Expo Router web modal support for UI build paths`,
+    );
+  }
 });
 
 test('UI GitHub workflows keep their install scope aligned with apps/ui eas.json', () => {

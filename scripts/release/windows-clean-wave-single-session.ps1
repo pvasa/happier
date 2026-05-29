@@ -314,6 +314,30 @@ function Resolve-InstallerRowTimeoutSeconds {
     return $parsed
 }
 
+function Stop-InstallerHolderProcess {
+    param(
+        [Parameter(Mandatory = $true)][int] $ProcessId,
+        [string] $ProcessName = ""
+    )
+
+    try {
+        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+        return [ordered]@{ stopped = $true; strategy = "stop-process"; error = $null }
+    } catch {
+        $stopError = $_.Exception.Message
+        $taskkillResult = Invoke-External -FilePath "taskkill.exe" -Arguments @("/PID", ([string]$ProcessId), "/T", "/F") -TimeoutSeconds 20
+        if ($taskkillResult.rc -eq 0) {
+            return [ordered]@{ stopped = $true; strategy = "taskkill"; error = $null }
+        }
+        $taskkillError = (@($taskkillResult.stderr) + @($taskkillResult.stdout)) -join " | "
+        return [ordered]@{
+            stopped = $false
+            strategy = "failed"
+            error = ("Stop-Process failed for {0}:{1}: {2}; taskkill rc={3}: {4}" -f $ProcessId, $ProcessName, $stopError, $taskkillResult.rc, $taskkillError)
+        }
+    }
+}
+
 function Invoke-InstallerHolderPreflightCleanup {
     param(
         [Parameter(Mandatory = $true)][string] $RowId,
@@ -343,11 +367,11 @@ function Invoke-InstallerHolderPreflightCleanup {
             continue
         }
 
-        try {
-            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+        $stopResult = Stop-InstallerHolderProcess -ProcessId $proc.ProcessId -ProcessName $proc.Name
+        if ($stopResult.stopped) {
             $killed.Add("{0}:{1}" -f $proc.ProcessId, $proc.Name)
-        } catch {
-            Write-Host ("[{0}] preflight-stop-failed pid={1} reason={2}" -f $RowId, $proc.ProcessId, $_.Exception.Message)
+        } else {
+            Write-Host ("[{0}] preflight-stop-failed pid={1} reason={2}" -f $RowId, $proc.ProcessId, $stopResult.error)
         }
     }
 
@@ -708,11 +732,11 @@ Add-Stage -StageId "S00-PREFLIGHT" -Description "Preflight cleanup stale holders
     }
     $killed = @()
     foreach ($proc in $stale) {
-        try {
-            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+        $stopResult = Stop-InstallerHolderProcess -ProcessId $proc.ProcessId -ProcessName $proc.Name
+        if ($stopResult.stopped) {
             $killed += [ordered]@{ pid = $proc.ProcessId; name = $proc.Name; cmd = $proc.CommandLine }
-        } catch {
-            $notes += ("Failed to stop PID {0}: {1}" -f $proc.ProcessId, $_.Exception.Message)
+        } else {
+            $notes += ("Failed to stop PID {0}: {1}" -f $proc.ProcessId, $stopResult.error)
         }
     }
 

@@ -148,3 +148,38 @@ test('create-auth-credentials writes access.key for repo root and server-scoped 
     await server.close();
   }
 });
+
+test('create-auth-credentials does not seed unrelated ambient active-server-id scopes', async () => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), 'happier-auth-creds-compat-'));
+  const server = await startAuthServer({ token: 'test-token-compat' });
+  const previousActiveServerId = process.env.HAPPIER_ACTIVE_SERVER_ID;
+  process.env.HAPPIER_ACTIVE_SERVER_ID = 'stack_repo-remote-dev-d72117acdb__id_default';
+
+  try {
+    const res = await runScript(
+      [
+        '--server-url',
+        server.url,
+        '--home-dir',
+        homeDir,
+        '--active-server-id',
+        '127.0.0.1-52753',
+        '--secret-base64',
+        Buffer.alloc(32, 9).toString('base64'),
+      ],
+    );
+
+    assert.equal(res.code, 0, `expected exit 0, got ${res.code} stderr=${res.stderr}`);
+
+    const explicitScopedPath = path.join(homeDir, 'servers', '127.0.0.1-52753', 'access.key');
+    const explicitScopedCreds = JSON.parse(await readFile(explicitScopedPath, 'utf8'));
+    assert.equal(explicitScopedCreds.token, 'test-token-compat');
+
+    const ambientScopedPath = path.join(homeDir, 'servers', 'stack_repo-remote-dev-d72117acdb__id_default', 'access.key');
+    await assert.rejects(readFile(ambientScopedPath, 'utf8'), /ENOENT/);
+  } finally {
+    if (previousActiveServerId === undefined) delete process.env.HAPPIER_ACTIVE_SERVER_ID;
+    else process.env.HAPPIER_ACTIVE_SERVER_ID = previousActiveServerId;
+    await server.close();
+  }
+});
