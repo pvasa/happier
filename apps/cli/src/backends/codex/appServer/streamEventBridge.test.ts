@@ -48,6 +48,7 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 method: 'rawResponseItem/completed',
                 params: {
                     item: {
+                        id: 'raw_msg_1',
                         type: 'message',
                         role: 'assistant',
                         content: [
@@ -56,7 +57,7 @@ describe('createCodexAppServerStreamEventBridge', () => {
                     },
                 },
             }),
-        ).toEqual([{ type: 'assistant-raw-final', text: 'Raw assistant final' }]);
+        ).toEqual([{ type: 'assistant-raw-final', itemId: 'raw_msg_1', text: 'Raw assistant final' }]);
 
         expect(
             bridge.onNotification({
@@ -371,6 +372,11 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 type: 'tool-result',
                 toolKind: 'command',
                 callId: 'cmd_1',
+                name: 'CodexBash',
+                input: {
+                    command: 'ls -la',
+                    cwd: '/repo',
+                },
                 output: {
                     stdout: 'done',
                     exitCode: 0,
@@ -447,6 +453,11 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 type: 'tool-result',
                 toolKind: 'command',
                 callId: 'cmd_failed',
+                name: 'CodexBash',
+                input: {
+                    command: 'mkdir -p /tmp/demo',
+                    cwd: '/repo',
+                },
                 output: {
                     stderr: 'Rejected("rejected by user")',
                     exitCode: 1,
@@ -538,6 +549,8 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 type: 'tool-result',
                 toolKind: 'mcp',
                 callId: 'tool_1',
+                name: 'mcp__playwright__browser_navigate',
+                input: { url: 'https://example.com' },
                 output: { status: 'ok' },
             },
         ]);
@@ -558,6 +571,8 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 type: 'tool-result',
                 toolKind: 'mcp',
                 callId: 'tool_title',
+                name: 'mcp__happier__change_title',
+                input: { title: 'Normalized title' },
                 output: { title: 'Normalized title' },
             },
         ]);
@@ -565,6 +580,20 @@ describe('createCodexAppServerStreamEventBridge', () => {
 
     it('maps file-change items and approval requests', () => {
         const bridge = createCodexAppServerStreamEventBridge();
+        const changes = [
+            {
+                path: '/tmp/probe/existing.txt',
+                kind: { type: 'update', move_path: null },
+                diff: [
+                    '@@ -1,3 +1,4 @@',
+                    ' Alpha',
+                    '-Beta',
+                    '+Beta-updated',
+                    ' Gamma',
+                    '+Delta',
+                ].join('\n'),
+            },
+        ];
 
         expect(
             bridge.onNotification({
@@ -574,9 +603,7 @@ describe('createCodexAppServerStreamEventBridge', () => {
                         id: 'patch_1',
                         type: 'fileChange',
                         auto_approved: true,
-                        changes: {
-                            'src/file.ts': { hunks: 2 },
-                        },
+                        changes,
                     },
                 },
             }),
@@ -588,9 +615,7 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 name: 'CodexPatch',
                 input: {
                     auto_approved: true,
-                    changes: {
-                        'src/file.ts': { hunks: 2 },
-                    },
+                    changes,
                 },
             },
         ]);
@@ -611,9 +636,7 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 toolName: 'CodexPatch',
                 input: {
                     auto_approved: true,
-                    changes: {
-                        'src/file.ts': { hunks: 2 },
-                    },
+                    changes,
                 },
                 approval: {
                     reason: 'Review file edits',
@@ -638,6 +661,11 @@ describe('createCodexAppServerStreamEventBridge', () => {
                 type: 'tool-result',
                 toolKind: 'file-change',
                 callId: 'patch_1',
+                name: 'CodexPatch',
+                input: {
+                    auto_approved: true,
+                    changes,
+                },
                 output: {
                     stdout: 'patched',
                     success: true,

@@ -32,11 +32,62 @@ type FakeSession = {
   getLastObservedMessageSeq: ReturnType<typeof vi.fn>;
   getLastObservedUserMessageSeq: ReturnType<typeof vi.fn>;
   markObservedUserMessage: ReturnType<typeof vi.fn>;
+  beginTurnAssistantTextSnapshot: ReturnType<typeof vi.fn>;
 };
 
-const waitForMessagesOrPendingSpy = vi.fn<(...args: any[]) => Promise<any>>();
-vi.mock('@/agent/runtime/waitForMessagesOrPending', () => ({
-  waitForMessagesOrPending: (...args: any[]) => waitForMessagesOrPendingSpy(...args),
+let sessionInputConsumerWaitForNextInputImpl: ((opts: any) => Promise<any>) | null = null;
+
+const createSessionProviderInputConsumerSpy = vi.fn((opts: any) => ({
+  waitForNextInput: async (waitOpts: any) => {
+    if (!sessionInputConsumerWaitForNextInputImpl) return null;
+    return await sessionInputConsumerWaitForNextInputImpl({
+      ...opts,
+      ...waitOpts,
+      popPendingMessage: opts.session?.popPendingMessage,
+      materializeNextPendingMessageSafely: opts.session?.materializeNextPendingMessageSafely,
+      shouldAttemptPendingMaterialization: opts.session?.shouldAttemptPendingMaterialization,
+      reconcilePendingQueueState: opts.session?.reconcilePendingQueueState,
+      waitForMetadataUpdate: opts.session?.waitForMetadataUpdate,
+    });
+  },
+  drainPending: vi.fn(async () => ({ materialized: 0, stoppedReason: 'no_pending' })),
+}));
+vi.mock('@/agent/runtime/sessionInput/SessionProviderInputConsumer', () => ({
+  createSessionProviderInputConsumer: (opts: any) => createSessionProviderInputConsumerSpy(opts),
+  createSessionProviderPendingDrainAdapter: () => ({
+    drainPending: vi.fn(async () => ({ materialized: 0, stoppedReason: 'no_pending' })),
+  }),
+}));
+
+const resolveCodexMcpServerSpawnSpy = vi.fn<() => Promise<{ mode: string; command: string }>>(async () => ({
+  mode: 'remote',
+  command: '/tmp/fake-codex-mcp',
+}));
+vi.mock('./mcp/resolveCodexMcpServerSpawn', () => ({
+  resolveCodexMcpServerSpawn: () => resolveCodexMcpServerSpawnSpy(),
+}));
+
+let createCodexMcpClientImpl: (() => unknown) | null = null;
+const CodexMcpClientSpy = vi.fn(function CodexMcpClient(this: unknown) {
+  void this;
+  if (createCodexMcpClientImpl) return createCodexMcpClientImpl();
+  return {
+    connect: vi.fn(async () => undefined),
+    startSession: vi.fn(async () => ({})),
+    continueSession: vi.fn(async () => ({})),
+    disconnect: vi.fn(async () => undefined),
+    forceCloseSession: vi.fn(async () => undefined),
+    clearSession: vi.fn(),
+    onMessage: vi.fn(),
+    setRequestUserInputBridge: vi.fn(),
+    setSessionMediaPersister: vi.fn(),
+    setPermissionHandler: vi.fn(),
+    setHandler: vi.fn(),
+    getSessionId: vi.fn(() => null),
+  };
+});
+vi.mock('./codexMcpClient', () => ({
+  CodexMcpClient: CodexMcpClientSpy,
 }));
 
 vi.mock('@/agent/runtime/initializeBackendApiContext', () => ({
@@ -194,6 +245,7 @@ function createFakeSession(initialMetadata: Record<string, unknown>): {
       lastObservedUserMessageSeq += 1;
       lastObservedMessageSeq = Math.max(lastObservedMessageSeq, lastObservedUserMessageSeq);
     }),
+    beginTurnAssistantTextSnapshot: vi.fn(() => 'turn-token'),
   };
 
   return {
@@ -210,12 +262,17 @@ describe('runCodex app-server startup plan mode', () => {
     envScope.restore();
     envScope = createCodexAppServerTestEnvScope();
     initializeBackendRunSessionImpl = null;
-    waitForMessagesOrPendingSpy.mockReset();
+    sessionInputConsumerWaitForNextInputImpl = null;
+    createSessionProviderInputConsumerSpy.mockClear();
+    resolveCodexMcpServerSpawnSpy.mockClear();
+    CodexMcpClientSpy.mockClear();
+    createCodexMcpClientImpl = null;
   });
 
   afterEach(async () => {
     envScope.restore();
     envScope = createCodexAppServerTestEnvScope();
+    createCodexMcpClientImpl = null;
     await Promise.all([...tempRoots].map(async (root) => {
       await removeTempDir(root);
     }));
@@ -308,7 +365,7 @@ describe('runCodex app-server startup plan mode', () => {
     });
 
     let waitCallCount = 0;
-    waitForMessagesOrPendingSpy.mockImplementation(async () => {
+    sessionInputConsumerWaitForNextInputImpl = async () => {
       waitCallCount += 1;
       if (waitCallCount === 1) {
         return {
@@ -322,7 +379,7 @@ describe('runCodex app-server startup plan mode', () => {
         };
       }
       return null;
-    });
+    };
 
     const { runCodex } = await import('./runCodex');
     const outcome = await runCodex({
@@ -381,6 +438,80 @@ describe('runCodex app-server startup plan mode', () => {
         },
       }),
     });
+  });
+
+  it('emits thinking before starting a legacy MCP turn', async () => {
+    const root = await createTempDir('happier-codex-mcp-thinking-');
+    tempRoots.add(root);
+    await mkdir(root, { recursive: true });
+
+    const { session } = createFakeSession({
+      path: root,
+      host: 'localhost',
+      flavor: 'codex',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+    });
+
+    let keepAliveCallsAtStart: unknown[][] = [];
+    createCodexMcpClientImpl = () => ({
+      connect: vi.fn(async () => undefined),
+      startSession: vi.fn(async () => {
+        keepAliveCallsAtStart = [...session.keepAlive.mock.calls];
+        return {};
+      }),
+      continueSession: vi.fn(async () => ({})),
+      disconnect: vi.fn(async () => undefined),
+      forceCloseSession: vi.fn(async () => undefined),
+      clearSession: vi.fn(),
+      onMessage: vi.fn(),
+      setRequestUserInputBridge: vi.fn(),
+      setSessionMediaPersister: vi.fn(),
+      setPermissionHandler: vi.fn(),
+      setHandler: vi.fn(),
+      getSessionId: vi.fn(() => null),
+    });
+
+    initializeBackendRunSessionImpl = async (_opts: any) => ({
+      session,
+      reconnectionHandle: null,
+      reportedSessionId: 'sess_mcp',
+      attachedToExistingSession: false,
+    });
+
+    let waitCallCount = 0;
+    sessionInputConsumerWaitForNextInputImpl = async () => {
+      waitCallCount += 1;
+      if (waitCallCount === 1) {
+        return {
+          message: 'implement this',
+          mode: {
+            permissionMode: 'default',
+            permissionModeUpdatedAt: 1,
+          },
+          isolate: false,
+          hash: 'hash-mcp-1',
+        };
+      }
+      return null;
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'terminal',
+      startingMode: 'remote',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+      codexBackendMode: 'mcp',
+      directory: root,
+    }).then(() => ({ ok: true as const })).catch((error: unknown) => ({ ok: false as const, error }));
+
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+
+    expect(keepAliveCallsAtStart.at(-1)).toEqual([true, 'remote']);
   });
 
   it('seeds fresh app-server thread/start with selected model and Fast overrides before the first turn', async () => {
@@ -467,7 +598,7 @@ describe('runCodex app-server startup plan mode', () => {
     });
 
     let waitCallCount = 0;
-    waitForMessagesOrPendingSpy.mockImplementation(async () => {
+    sessionInputConsumerWaitForNextInputImpl = async () => {
       waitCallCount += 1;
       if (waitCallCount === 1) {
         return {
@@ -481,7 +612,7 @@ describe('runCodex app-server startup plan mode', () => {
         };
       }
       return null;
-    });
+    };
 
     const { runCodex } = await import('./runCodex');
     const { resolveEffectiveCodingPromptText } = await import('@/agent/prompting/coding/resolveEffectiveCodingPrompt');

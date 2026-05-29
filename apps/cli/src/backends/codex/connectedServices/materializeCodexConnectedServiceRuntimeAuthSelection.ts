@@ -1,0 +1,73 @@
+import { SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+
+import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/connectedServices/sessionAuthSwitch/runtimeAuthSelectionMaterializerTypes';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
+
+import { withCodexAppServerControlClient } from '../appServer/control/withCodexAppServerControlClient';
+
+export const materializeCodexConnectedServiceRuntimeAuthSelection: ConnectedServiceRuntimeAuthSelectionMaterializer = async (params) => {
+  if (params.input.serviceId !== 'openai-codex') return params.baseSelection;
+
+  const cwd = typeof params.input.tracked.spawnOptions?.directory === 'string'
+    ? params.input.tracked.spawnOptions.directory.trim()
+    : '';
+  if (!cwd) return params.baseSelection;
+
+  const transport = await resolveSessionTransportContext({
+    credentials: params.credentials,
+    idOrPrefix: params.input.sessionId,
+  });
+  if (!transport.ok) return params.baseSelection;
+
+  const metadata = params.input.tracked.happySessionMetadataFromLocalWebhook ?? null;
+  const controlClientSupported = await withCodexAppServerControlClient({
+    cwd,
+    metadata,
+    accountSettings: params.accountSettings ?? null,
+    processEnv: params.processEnv,
+    run: async () => undefined,
+  });
+  if (!controlClientSupported.ok) return params.baseSelection;
+
+  return {
+    ...params.baseSelection,
+    client: {
+      request: async (method: string, request: unknown) => {
+        const result = await withCodexAppServerControlClient({
+          cwd,
+          metadata,
+          accountSettings: params.accountSettings ?? null,
+          processEnv: params.processEnv,
+          run: async (client) => await client.request(method, request),
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        return result.value;
+      },
+    },
+    invalidateTransports: async () => {
+      const rawResponse = await callSessionRpc({
+        token: params.credentials.token,
+        sessionId: transport.sessionId,
+        ctx: transport.ctx,
+        mode: transport.mode,
+        method: `${transport.sessionId}:${SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS}`,
+        request: {},
+      });
+      const parsedResponse = SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema.safeParse(rawResponse);
+      if (!parsedResponse.success) {
+        throw new Error('invalid_connected_service_auth_invalidate_transports_response');
+      }
+      if (parsedResponse.data.ok !== true) {
+        throw new Error(
+          typeof parsedResponse.data.errorCode === 'string'
+            ? parsedResponse.data.errorCode
+            : parsedResponse.data.error,
+        );
+      }
+    },
+  };
+};

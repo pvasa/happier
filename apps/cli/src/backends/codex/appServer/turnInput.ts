@@ -1,3 +1,5 @@
+import { sanitizeSessionUserMessageSendMeta } from '@happier-dev/protocol';
+
 type MetadataRecord = Record<string, unknown>;
 
 export type CodexAppServerTurnInputItem =
@@ -23,6 +25,24 @@ function readString(value: unknown): string | null {
 
 function readStructuredEnvelope(metadata: MetadataRecord | null): MetadataRecord | null {
     return asRecord(metadata?.happierStructuredInputV1);
+}
+
+function normalizeAttachmentPath(value: unknown): string | null {
+    const path = readString(value);
+    return path ? path.replace(/[\\]+/g, '/') : null;
+}
+
+function collectTrustedLocalImagePaths(
+    metadata: MetadataRecord | null,
+    explicitPaths: ReadonlySet<string> | undefined,
+): ReadonlySet<string> | undefined {
+    const trusted = new Set<string>();
+    for (const path of explicitPaths ?? []) {
+        const normalized = normalizeAttachmentPath(path);
+        if (normalized) trusted.add(normalized);
+    }
+
+    return trusted.size > 0 ? trusted : undefined;
 }
 
 function readVendorPluginMentions(metadata: MetadataRecord | null): MetadataRecord[] {
@@ -61,8 +81,15 @@ function readAttachmentInputs(metadata: MetadataRecord | null): CodexAppServerTu
 export function buildCodexAppServerTurnInput(params: Readonly<{
     text: string;
     metadata?: unknown;
+    trustedLocalImagePaths?: ReadonlySet<string>;
 }>): CodexAppServerTurnInputItem[] {
-    const metadata = asRecord(params.metadata);
+    const metadataRecord = asRecord(params.metadata);
+    const trustedLocalImagePaths = collectTrustedLocalImagePaths(metadataRecord, params.trustedLocalImagePaths);
+    const metadata = metadataRecord
+        ? sanitizeSessionUserMessageSendMeta(metadataRecord, {
+            allowedLocalImagePaths: trustedLocalImagePaths,
+        })
+        : null;
     const input: CodexAppServerTurnInputItem[] = [{ type: 'text', text: params.text }];
 
     for (const mention of readVendorPluginMentions(metadata)) {

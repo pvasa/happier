@@ -18,6 +18,7 @@ vi.mock('@/backends/codex/appServer/runtime', () => ({
 
 describe('createCodexAppServerExecutionRunBackend', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     vi.resetModules();
   });
@@ -69,6 +70,296 @@ describe('createCodexAppServerExecutionRunBackend', () => {
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 
+  it('reports app-server active turn state through the execution-run liveness probe', async () => {
+    let activeProviderTurn = true;
+    let turnInFlight = false;
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt: async () => undefined,
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => activeProviderTurn,
+      isTurnInFlight: () => turnInFlight,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await expect(backend.probeTurnLiveness()).resolves.toEqual({
+      active: true,
+      activeProviderTurn: true,
+      promptInFlight: false,
+      source: 'codex-app-server-runtime',
+      turnInFlight: false,
+    });
+
+    activeProviderTurn = false;
+    turnInFlight = true;
+
+    await expect(backend.probeTurnLiveness()).resolves.toEqual({
+      active: false,
+      activeProviderTurn: false,
+      promptInFlight: false,
+      source: 'codex-app-server-runtime',
+      turnInFlight: true,
+    });
+  });
+
+  it('keeps local prompt state out of active liveness when the runtime is inactive', async () => {
+    let finishTurn!: () => void;
+    const turnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt: vi.fn(() => turnPromise),
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => false,
+      isTurnInFlight: () => false,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('thread_1', 'hello');
+
+    await expect(backend.probeTurnLiveness()).resolves.toEqual({
+      active: false,
+      activeProviderTurn: false,
+      promptInFlight: true,
+      source: 'codex-app-server-runtime',
+      turnInFlight: false,
+    });
+
+    finishTurn();
+    await backend.waitForResponseComplete?.();
+  });
+
+  it('ACKs sendPrompt after scheduling the app-server turn and leaves completion to waitForResponseComplete', async () => {
+    let finishTurn!: () => void;
+    const turnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const sendPrompt = vi.fn(() => turnPromise);
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt,
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => false,
+      isTurnInFlight: () => false,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await backend.startSession();
+    const sendAck = backend.sendPrompt('thread_1', 'hello').then(() => 'ack' as const);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(Promise.race([sendAck, Promise.resolve('pending' as const)])).resolves.toBe('ack');
+    expect(sendPrompt).toHaveBeenCalledWith('hello');
+
+    let waitSettled = false;
+    const wait = backend.waitForResponseComplete?.().then(() => {
+      waitSettled = true;
+    });
+    await Promise.resolve();
+    expect(waitSettled).toBe(false);
+
+    finishTurn();
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it('rejects waitForResponseComplete when the app-server turn exceeds the requested timeout', async () => {
+    vi.useFakeTimers();
+    let finishTurn!: () => void;
+    const turnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt: vi.fn(() => turnPromise),
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => false,
+      isTurnInFlight: () => false,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await backend.startSession();
+    const send = backend.sendPrompt('thread_1', 'hello');
+    await send;
+    await Promise.resolve();
+    const wait = backend.waitForResponseComplete?.(250);
+    if (!wait) throw new Error('Expected waitForResponseComplete to be defined');
+    const waitExpectation = expect(wait).rejects.toMatchObject({
+      executionRunErrorCode: 'provider_inactivity_timeout',
+      livenessProbe: {
+        active: false,
+        activeProviderTurn: false,
+        promptInFlight: true,
+        source: 'codex-app-server-runtime',
+        turnInFlight: false,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    await waitExpectation;
+
+    finishTurn();
+    await vi.runAllTimersAsync();
+    await Promise.allSettled([send, wait]);
+  });
+
+  it('preserves a settled app-server rejection until waitForResponseComplete consumes it', async () => {
+    const sendPrompt = vi.fn(async () => {
+      throw new Error('runtime rejected before wait');
+    });
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt,
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => false,
+      isTurnInFlight: () => false,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('thread_1', 'hello');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(backend.waitForResponseComplete?.()).rejects.toThrow(/runtime rejected before wait/);
+  });
+
+  it('keeps startSession with an initial prompt pending until the prompt completes', async () => {
+    let finishTurn!: () => void;
+    const turnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt: vi.fn(() => turnPromise),
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => true,
+      isTurnInFlight: () => true,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    const start = backend.startSession('hello').then(() => 'started' as const);
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(Promise.race([start, Promise.resolve('pending' as const)])).resolves.toBe('pending');
+
+    finishTurn();
+    await expect(start).resolves.toBe('started');
+  });
+
+  it('keeps waiting past waitForResponseComplete timeout while the app-server runtime is still active', async () => {
+    vi.useFakeTimers();
+    let finishTurn!: () => void;
+    const turnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    createCodexAppServerRuntimeMock.mockReturnValueOnce({
+      startOrLoad: async () => undefined,
+      getSessionId: () => 'thread_1',
+      sendPrompt: vi.fn(() => turnPromise),
+      startReview: async () => undefined,
+      compactContext: async () => undefined,
+      cancel: async () => undefined,
+      reset: async () => undefined,
+      hasActiveProviderTurn: () => true,
+      isTurnInFlight: () => true,
+    });
+
+    const { createCodexAppServerExecutionRunBackend } = await import('./createCodexAppServerExecutionRunBackend');
+    const backend = createCodexAppServerExecutionRunBackend({
+      cwd: '/tmp/happier-worktree',
+      env: {},
+      permissionMode: 'read-only' as any,
+      permissionHandler: null,
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('thread_1', 'hello');
+    const wait = backend.waitForResponseComplete?.(250);
+    if (!wait) throw new Error('Expected waitForResponseComplete to be defined');
+
+    let waitSettled = false;
+    wait.then(() => {
+      waitSettled = true;
+    }, () => {
+      waitSettled = true;
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.resolve();
+    expect(waitSettled).toBe(false);
+
+    finishTurn();
+    await expect(wait).resolves.toBeUndefined();
+  });
+
   it('starts native Codex review for the first review prompt', async () => {
     const sendPrompt = vi.fn(async () => undefined);
     const startReview = vi.fn(async () => undefined);
@@ -100,6 +391,7 @@ describe('createCodexAppServerExecutionRunBackend', () => {
 
     await backend.startSession();
     await backend.sendPrompt('thread_1', 'prompt fallback text');
+    await backend.waitForResponseComplete?.();
 
     expect(startReview).toHaveBeenCalledWith({
       target: { type: 'uncommittedChanges' },
@@ -142,6 +434,7 @@ describe('createCodexAppServerExecutionRunBackend', () => {
 
     await backend.startSession();
     await backend.sendPrompt('thread_1', 'follow-up prompt');
+    await backend.waitForResponseComplete?.();
 
     expect(startReview).not.toHaveBeenCalled();
     expect(sendPrompt).toHaveBeenCalledWith('follow-up prompt');
@@ -182,6 +475,7 @@ describe('createCodexAppServerExecutionRunBackend', () => {
 
     await backend.startSession();
     await backend.sendPrompt('thread_1', 'prompt fallback text');
+    await backend.waitForResponseComplete?.();
 
     expect(startReview).toHaveBeenCalledTimes(1);
     expect(sendPrompt).toHaveBeenCalledWith('prompt fallback text');
@@ -217,7 +511,8 @@ describe('createCodexAppServerExecutionRunBackend', () => {
     });
 
     await backend.startSession();
-    await expect(backend.sendPrompt('thread_1', 'prompt fallback text')).rejects.toThrow(/Invalid review input/);
+    await backend.sendPrompt('thread_1', 'prompt fallback text');
+    await expect(backend.waitForResponseComplete?.()).rejects.toThrow(/Invalid review input/);
 
     expect(startReview).not.toHaveBeenCalled();
     expect(sendPrompt).not.toHaveBeenCalled();

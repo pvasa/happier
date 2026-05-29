@@ -27,6 +27,7 @@ function resolveCodexRuntimeSourceAffinity(params: Readonly<{
   home: 'user' | 'connectedService';
   connectedServiceId?: string;
   connectedServiceProfileId?: string;
+  connectedServiceGroupId?: string;
   homePath?: string;
 }> {
   const source = resolveCodexDirectSource(params);
@@ -40,6 +41,10 @@ function resolveCodexRuntimeSourceAffinity(params: Readonly<{
       connectedServiceProfileId:
         'connectedServiceProfileId' in source && typeof source.connectedServiceProfileId === 'string'
           ? source.connectedServiceProfileId
+          : undefined,
+      connectedServiceGroupId:
+        'connectedServiceGroupId' in source && typeof source.connectedServiceGroupId === 'string'
+          ? source.connectedServiceGroupId
           : undefined,
       homePath:
         'homePath' in source && typeof source.homePath === 'string'

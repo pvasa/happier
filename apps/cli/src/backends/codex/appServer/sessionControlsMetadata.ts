@@ -122,6 +122,8 @@ function normalizeReasoningEffortLabel(value: string): string {
         case 'high':
             return 'High';
         case 'xhigh':
+            return 'XHigh';
+        case 'max':
             return 'Max';
         default:
             return value;

@@ -23,27 +23,28 @@ export const codexAppServerProviderNativeForkHandler: ProviderNativeForkHandler 
 
   return {
     vendorSessionId,
-      spawn: {
-        resume: vendorSessionId,
-        codexBackendMode: 'appServer',
-        ...(runtimeIdentity?.homePath ? { environmentVariables: { CODEX_HOME: runtimeIdentity.homePath } } : {}),
-      },
-      metadata: {
-        codexSessionId: vendorSessionId,
-        codexBackendMode: 'appServer',
-        ...(runtimeIdentity
-          ? {
-              agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
-                backendMode: 'appServer',
-                vendorSessionId,
-                home: runtimeIdentity.home,
-                connectedServiceId: runtimeIdentity.connectedServiceId,
-                connectedServiceProfileId: runtimeIdentity.connectedServiceProfileId,
-                homePath: runtimeIdentity.homePath,
-              }),
-            }
-          : {}),
-      },
+    spawn: {
+      resume: vendorSessionId,
+      codexBackendMode: 'appServer',
+      ...(runtimeIdentity?.homePath ? { environmentVariables: { CODEX_HOME: runtimeIdentity.homePath } } : {}),
+    },
+    metadata: {
+      codexSessionId: vendorSessionId,
+      codexBackendMode: 'appServer',
+      ...(runtimeIdentity
+        ? {
+            agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptor({
+              backendMode: 'appServer',
+              vendorSessionId,
+              home: runtimeIdentity.home,
+              connectedServiceId: runtimeIdentity.connectedServiceId,
+              connectedServiceProfileId: runtimeIdentity.connectedServiceProfileId,
+              connectedServiceGroupId: runtimeIdentity.connectedServiceGroupId,
+              homePath: runtimeIdentity.homePath,
+            }),
+          }
+        : {}),
+    },
     providerHint: {
       providerId: params.agentId,
       backendMode: 'appServer',

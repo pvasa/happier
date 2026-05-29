@@ -1,10 +1,42 @@
 import type { Metadata } from '@/api/types';
-import {
-    buildSessionRollbackRangesV1,
-    readSessionRollbackRangesV1FromMetadata,
-    type SessionRollbackRangeV1,
-    type SessionRollbackTarget,
+import type {
+    SessionRollbackRangeV1,
+    SessionRollbackTarget,
 } from '@happier-dev/protocol';
+
+type SessionRollbackRangesV1 = {
+    v: 1;
+    updatedAt: number;
+    ranges: SessionRollbackRangeV1[];
+};
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function readSessionRollbackRangesV1FromMetadata(metadata: unknown): SessionRollbackRangesV1 | null {
+    const raw = readRecord(metadata)?.sessionRollbackRangesV1;
+    const record = readRecord(raw);
+    if (!record || !Array.isArray(record.ranges)) return null;
+    return {
+        v: 1,
+        updatedAt: typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
+            ? Math.trunc(record.updatedAt)
+            : 0,
+        ranges: record.ranges.filter((range): range is SessionRollbackRangeV1 => readRecord(range) !== null),
+    };
+}
+
+function buildSessionRollbackRangesV1(params: Readonly<{
+    updatedAt: number;
+    ranges: readonly SessionRollbackRangeV1[];
+}>): SessionRollbackRangesV1 {
+    return {
+        v: 1,
+        updatedAt: params.updatedAt,
+        ranges: [...params.ranges],
+    };
+}
 
 type RollbackMetadataSession = Readonly<{
     updateMetadata: (updater: (metadata: Metadata) => Metadata) => Promise<void> | void;

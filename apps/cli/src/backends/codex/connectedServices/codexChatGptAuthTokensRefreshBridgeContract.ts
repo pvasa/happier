@@ -1,0 +1,42 @@
+import {
+  ConnectedServiceAuthGroupIdSchema,
+  ConnectedServiceProfileIdSchema,
+} from '@happier-dev/protocol';
+import { z } from 'zod';
+
+export const CODEX_CHATGPT_AUTH_TOKENS_REFRESH_PATH =
+  '/connected-service-auth/openai-codex/chatgpt-auth-tokens/refresh';
+
+export const CodexChatGptAuthTokensRefreshSelectionSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('profile'),
+    serviceId: z.literal('openai-codex'),
+    profileId: ConnectedServiceProfileIdSchema,
+  }),
+  z.object({
+    kind: z.literal('group'),
+    serviceId: z.literal('openai-codex'),
+    groupId: ConnectedServiceAuthGroupIdSchema,
+    activeProfileId: ConnectedServiceProfileIdSchema,
+    fallbackProfileId: ConnectedServiceProfileIdSchema,
+    generation: z.number().int().nonnegative(),
+  }),
+]);
+
+export type CodexChatGptAuthTokensRefreshSelection =
+  z.infer<typeof CodexChatGptAuthTokensRefreshSelectionSchema>;
+
+export const CodexChatGptAuthTokensRefreshResponseSchema = z.object({
+  accessToken: z.string().min(1),
+  chatgptAccountId: z.string().nullable(),
+  chatgptPlanType: z.string().nullable(),
+});
+
+export type CodexChatGptAuthTokensRefreshResponse =
+  z.infer<typeof CodexChatGptAuthTokensRefreshResponseSchema>;
+
+export function resolveCodexChatGptAuthTokensRefreshProfileId(
+  selection: CodexChatGptAuthTokensRefreshSelection,
+): string {
+  return selection.kind === 'group' ? selection.activeProfileId : selection.profileId;
+}

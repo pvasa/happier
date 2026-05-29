@@ -44,10 +44,13 @@ describe('Codex ACP runtime permission mode wiring', () => {
     createCalls.length = 0;
     let permissionMode: 'default' | 'yolo' = 'default';
 
-    const session: Pick<ApiSessionClient, 'sendAgentMessage' | 'updateMetadata' | 'keepAlive'> = {
+    const session: Pick<ApiSessionClient, 'sendAgentMessage' | 'updateMetadata' | 'keepAlive' | 'materializeNextPendingMessageSafely'> = {
       sendAgentMessage(_provider, _body, _opts) {},
       async updateMetadata(_handler) {},
       keepAlive(_thinking, _mode) {},
+      async materializeNextPendingMessageSafely() {
+        return { type: 'no_pending' };
+      },
     };
     const messageBuffer: Pick<MessageBuffer, 'addMessage' | 'removeLastMessage' | 'updateLastMessage'> = {
       addMessage(_content, _type) {},

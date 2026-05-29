@@ -379,6 +379,7 @@ describe('publishCodexAppServerSessionControlsMetadata', () => {
                                     { reasoningEffort: 'medium', description: 'Balances speed and reasoning depth for everyday tasks' },
                                     { reasoningEffort: 'high', description: 'Greater reasoning depth for complex problems' },
                                     { reasoningEffort: 'xhigh', description: 'Extra high reasoning depth for complex problems' },
+                                    { reasoningEffort: 'max', description: 'Maximum reasoning depth for hardest problems' },
                                 ],
                                 defaultReasoningEffort: 'medium',
                             },
@@ -444,7 +445,8 @@ describe('publishCodexAppServerSessionControlsMetadata', () => {
                                     { value: 'low', name: 'Low' },
                                     { value: 'medium', name: 'Medium' },
                                     { value: 'high', name: 'High' },
-                                    { value: 'xhigh', name: 'Max' },
+                                    { value: 'xhigh', name: 'XHigh' },
+                                    { value: 'max', name: 'Max' },
                                 ],
                             },
                             {

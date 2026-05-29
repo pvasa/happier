@@ -2,6 +2,11 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import {
+    HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+    HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 
 const CODEX_APP_SERVER_TEST_ENV_KEYS = [
     'HAPPIER_CODEX_APP_SERVER_BIN',
@@ -12,6 +17,9 @@ const CODEX_APP_SERVER_TEST_ENV_KEYS = [
     'CODEX_HOME',
     'OPENAI_API_KEY',
     'CODEX_API_KEY',
+    HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+    HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+    HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR,
 ] as const;
 
 export function createCodexAppServerTestEnvScope() {
@@ -26,6 +34,9 @@ export function createCodexAppServerProcessEnv(
         ...process.env,
         HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
         HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '2000',
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: undefined,
+        [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: undefined,
+        [HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR]: undefined,
         ...overrides,
     };
 }

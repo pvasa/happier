@@ -5,31 +5,44 @@ import { listCodexAppServerSkills, listCodexVendorPlugins } from './pluginAndSki
 describe('pluginAndSkillCatalog', () => {
     it('lists vendor plugins with cwds and normalizes mentionable plugin entries', async () => {
         const client = {
-            request: vi.fn(async () => [
-                {
-                    id: 'gmail@openai-curated',
-                    name: 'gmail',
-                    displayName: 'Gmail',
-                    description: 'Read mail',
-                    source: { marketplace: 'openai-curated' },
-                    installed: true,
-                    enabled: true,
-                },
-                {
-                    id: 'gmail@openai-curated-duplicate',
-                    name: 'gmail',
-                    marketplaceName: 'openai-curated',
-                    installed: true,
-                    enabled: true,
-                },
-                {
-                    id: 'disabled',
-                    name: 'disabled',
-                    marketplaceName: 'openai-curated',
-                    installed: true,
-                    enabled: false,
-                },
-            ]),
+            request: vi.fn(async () => ({
+                marketplaces: [
+                    {
+                        name: 'openai-curated',
+                        plugins: [
+                            {
+                                id: 'gmail@openai-curated',
+                                name: 'gmail',
+                                interface: { displayName: 'Gmail', shortDescription: 'Read mail' },
+                                source: { type: 'remote' },
+                                installed: true,
+                                enabled: true,
+                            },
+                            {
+                                id: 'gmail@openai-curated-duplicate',
+                                name: 'gmail',
+                                source: { type: 'remote' },
+                                installed: true,
+                                enabled: true,
+                            },
+                            {
+                                id: 'disabled',
+                                name: 'disabled',
+                                source: { type: 'remote' },
+                                installed: true,
+                                enabled: false,
+                            },
+                            {
+                                id: 'plugin://calendar@openai-curated',
+                                name: 'calendar',
+                                source: { type: 'remote' },
+                                installed: true,
+                                enabled: true,
+                            },
+                        ],
+                    },
+                ],
+            })),
         };
 
         await expect(listCodexVendorPlugins({ client, cwd: '/repo' })).resolves.toEqual({
@@ -48,6 +61,12 @@ describe('pluginAndSkillCatalog', () => {
                     name: 'disabled',
                     mentionable: false,
                 }),
+                expect.objectContaining({
+                    id: 'plugin://calendar@openai-curated',
+                    name: 'calendar',
+                    vendorPluginRef: 'plugin://calendar@openai-curated',
+                    mentionable: true,
+                }),
             ],
         });
         expect(client.request).toHaveBeenCalledWith('plugin/list', { cwds: ['/repo'] });
@@ -55,7 +74,7 @@ describe('pluginAndSkillCatalog', () => {
 
     it('does not send non-upstream forceReload to plugin/list', async () => {
         const client = {
-            request: vi.fn(async (_method: string, _params?: unknown) => [] as unknown[]),
+            request: vi.fn(async (_method: string, _params?: unknown) => ({ marketplaces: [] })),
         };
 
         await listCodexVendorPlugins({ client, cwd: '/repo' });
@@ -65,10 +84,32 @@ describe('pluginAndSkillCatalog', () => {
 
     it('lists skills with cwds and dedupes by normalized name preferring enabled entries', async () => {
         const client = {
-            request: vi.fn(async () => [
-                { name: 'Review', path: '/disabled/SKILL.md', enabled: false },
-                { name: 'review', path: '/enabled/SKILL.md', enabled: true, description: 'Review code' },
-            ]),
+            request: vi.fn(async () => ({
+                data: [
+                    {
+                        cwd: '/repo',
+                        skills: [
+                            {
+                                name: 'Review',
+                                description: 'Disabled review',
+                                shortDescription: 'Disabled',
+                                path: '/disabled/SKILL.md',
+                                scope: 'repo',
+                                enabled: false,
+                            },
+                            {
+                                name: 'review',
+                                description: 'Review code thoroughly',
+                                interface: { displayName: 'Code Review', shortDescription: 'Review code' },
+                                path: '/enabled/SKILL.md',
+                                scope: 'repo',
+                                enabled: true,
+                            },
+                        ],
+                        errors: [],
+                    },
+                ],
+            })),
         };
 
         await expect(listCodexAppServerSkills({ client, cwd: '/repo' })).resolves.toEqual({
@@ -76,7 +117,7 @@ describe('pluginAndSkillCatalog', () => {
             skills: [
                 {
                     name: 'review',
-                    displayName: 'review',
+                    displayName: 'Code Review',
                     description: 'Review code',
                     path: '/enabled/SKILL.md',
                     enabled: true,

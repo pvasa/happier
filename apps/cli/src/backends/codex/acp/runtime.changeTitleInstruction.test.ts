@@ -45,10 +45,13 @@ describe('Codex ACP runtime (change title instruction)', () => {
   it('does not append internal change title instruction to user prompts', async () => {
     captured.prompts.length = 0;
 
-    const session: Pick<ApiSessionClient, 'sendAgentMessage' | 'updateMetadata' | 'keepAlive'> = {
+    const session: Pick<ApiSessionClient, 'sendAgentMessage' | 'updateMetadata' | 'keepAlive' | 'materializeNextPendingMessageSafely'> = {
       sendAgentMessage(_provider, _body, _opts) {},
       async updateMetadata(_handler) {},
       keepAlive(_thinking, _mode) {},
+      async materializeNextPendingMessageSafely() {
+        return { type: 'no_pending' };
+      },
     };
 
     const messageBuffer: Pick<MessageBuffer, 'addMessage' | 'removeLastMessage' | 'updateLastMessage'> = {
@@ -80,4 +83,3 @@ describe('Codex ACP runtime (change title instruction)', () => {
     expect(captured.prompts).toEqual(['Hello']);
   });
 });
-

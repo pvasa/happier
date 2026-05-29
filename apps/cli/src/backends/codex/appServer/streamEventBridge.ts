@@ -28,7 +28,7 @@ type ToolContext = Readonly<{
 export type CodexAppServerStreamUpdate =
     | Readonly<{ type: 'assistant-text-delta'; itemId: string; text: string }>
     | Readonly<{ type: 'assistant-text-final'; itemId: string; text: string }>
-    | Readonly<{ type: 'assistant-raw-final'; text: string }>
+    | Readonly<{ type: 'assistant-raw-final'; itemId: string | null; text: string }>
     | Readonly<{ type: 'session-media'; itemId: string; media: SessionMediaSource[] }>
     | Readonly<{ type: 'reasoning-delta'; itemId: string; text: string }>
     | Readonly<{ type: 'reasoning-final'; itemId: string; text: string }>
@@ -37,7 +37,7 @@ export type CodexAppServerStreamUpdate =
     | Readonly<{ type: 'context-compaction'; phase: 'started' | 'completed'; itemId: string }>
     | Readonly<{ type: 'turn-diff-updated'; turnId: string | null; unifiedDiff: string }>
     | Readonly<{ type: 'tool-call'; toolKind: ToolKind; callId: string; name: string; input: unknown }>
-    | Readonly<{ type: 'tool-result'; toolKind: ToolKind; callId: string; output: unknown }>
+    | Readonly<{ type: 'tool-result'; toolKind: ToolKind; callId: string; name?: string; input?: unknown; output: unknown }>
     | Readonly<{
         type: 'approval-request';
         requestKind: 'command-execution' | 'file-change';
@@ -271,7 +271,7 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
                 const role = readString(item.role);
                 if (itemType !== 'message' || role !== 'assistant') return [];
                 const text = readText(item, ['text', 'message']) ?? readCodexMessageContentText(item.content);
-                return text ? [{ type: 'assistant-raw-final', text }] : [];
+                return text ? [{ type: 'assistant-raw-final', itemId: readItemId(item), text }] : [];
             }
 
             if (notification.method !== 'item/completed') return [];
@@ -313,6 +313,8 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
                     type: 'tool-result',
                     toolKind: rememberedToolContext.toolKind,
                     callId: itemId,
+                    name: rememberedToolContext.name,
+                    input: rememberedToolContext.input,
                     output: readToolResultOutput(item, itemType),
                 }];
             }
@@ -328,6 +330,8 @@ export function createCodexAppServerStreamEventBridge(): Readonly<{
                     type: 'tool-result',
                     toolKind: synthesizedToolContext.toolKind,
                     callId: itemId,
+                    name: synthesizedToolContext.name,
+                    input: synthesizedToolContext.input,
                     output: readToolResultOutput(item, itemType, synthesizedToolContext.input),
                 },
             ];

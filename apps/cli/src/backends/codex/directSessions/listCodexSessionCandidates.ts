@@ -1,5 +1,7 @@
 import type { DirectSessionCandidateV1, DirectSessionsSource } from '@happier-dev/protocol';
 
+import { logger } from '@/utils/logger';
+
 import { createCodexAppServerClient } from '../appServer/client/createCodexAppServerClient';
 import { listCodexDirectSessionCandidatesViaExistingAppServerClient } from '../appServer/session/listCodexDirectSessionCandidatesViaAppServer';
 import { listCodexDirectSessionCandidatesViaRollouts } from './listCodexDirectSessionCandidatesViaRollouts';
@@ -47,7 +49,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
   activeServerDir: string;
   env: NodeJS.ProcessEnv;
   searchTerm?: string;
-}>): Promise<DirectSessionCandidateV1[]> {
+}>): Promise<Readonly<{ candidates: DirectSessionCandidateV1[]; incomplete: boolean }>> {
   const budgetMs = resolveCodexDirectListAppServerBudgetMs(params.env);
   const homeEntries = await resolveCodexHomeEntriesForDirectSessionsSource({
     source: params.source,
@@ -56,6 +58,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
   });
 
   const listed: DirectSessionCandidateV1[] = [];
+  let incomplete = false;
   const searchTerm = typeof params.searchTerm === 'string' ? params.searchTerm.trim().toLowerCase() : '';
   for (const homeEntry of homeEntries) {
     const processEnv = {
@@ -63,21 +66,54 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
       ...params.env,
       CODEX_HOME: homeEntry.codexHome,
     } as NodeJS.ProcessEnv;
-    const client = await createCodexAppServerClient({ processEnv }).catch(() => null);
-    if (!client) continue;
-    const result = await Promise.race<DirectSessionCandidateV1[] | null>([
-      listCodexDirectSessionCandidatesViaExistingAppServerClient({ client, processEnv })
-        .then((value) => value)
-        .catch(() => null)
-        .finally(async () => {
+    const startedAtMs = Date.now();
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let client: Awaited<ReturnType<typeof createCodexAppServerClient>> | null = null;
+
+    const listPromise = (async (): Promise<DirectSessionCandidateV1[] | null> => {
+      try {
+        client = await createCodexAppServerClient({ processEnv });
+        if (timedOut) {
           await client.dispose().catch(() => undefined);
-        }),
-      new Promise<null>((resolve) => setTimeout(async () => {
-        await client.dispose().catch(() => undefined);
-        resolve(null);
-      }, budgetMs)),
-    ]);
-    if (!result) continue;
+          return null;
+        }
+        return await listCodexDirectSessionCandidatesViaExistingAppServerClient({ client, processEnv });
+      } catch {
+        return null;
+      } finally {
+        if (client) {
+          await client.dispose().catch(() => undefined);
+        }
+      }
+    })();
+
+    const result = await Promise.race<DirectSessionCandidateV1[] | null>([
+      listPromise,
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          void client?.dispose().catch(() => undefined);
+          resolve(null);
+        }, budgetMs);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
+
+    logger.debug('[directSessions.codex.appServerCandidates] list finished', {
+      homeKind: homeEntry.source.kind,
+      elapsedMs: Date.now() - startedAtMs,
+      budgetMs,
+      timedOut,
+      returnedCandidates: result?.length ?? 0,
+      searchTermLength: searchTerm.length,
+    });
+
+    if (!result) {
+      incomplete = true;
+      continue;
+    }
     listed.push(...result.map((candidate) => ({
       ...candidate,
       details: {
@@ -94,7 +130,7 @@ async function listCodexSessionCandidatesViaAppServerWithBudget(params: Readonly
     }));
   }
 
-  return listed;
+  return { candidates: listed, incomplete };
 }
 
 export async function listCodexSessionCandidates(params: Readonly<{
@@ -104,9 +140,12 @@ export async function listCodexSessionCandidates(params: Readonly<{
   cursor?: string;
   limit: number;
   searchTerm?: string;
-}>): Promise<Readonly<{ candidates: DirectSessionCandidateV1[]; nextCursor: string | null }>> {
+  searchMode?: 'fast' | 'full';
+}>): Promise<Readonly<{ candidates: DirectSessionCandidateV1[]; nextCursor: string | null; searchIncomplete?: boolean }>> {
   const env = params.env ?? process.env;
 
+  const startedAtMs = Date.now();
+  const startMemory = process.memoryUsage();
   const offset = decodeIndexCursor(params.cursor);
   const searchTerm = typeof params.searchTerm === 'string' ? params.searchTerm.trim().toLowerCase() : '';
   const limit = Math.max(1, Math.trunc(params.limit));
@@ -117,12 +156,32 @@ export async function listCodexSessionCandidates(params: Readonly<{
     offset,
     limit,
     searchTerm,
+    searchMode: params.searchMode,
   });
-  const appServerCandidates = await listCodexSessionCandidatesViaAppServerWithBudget({
-    source: params.source,
-    activeServerDir: params.activeServerDir,
-    env,
-    searchTerm,
+  const exactRolloutMatch = Boolean(searchTerm)
+    && rolloutListing.candidates.some((candidate) => candidate.remoteSessionId.toLowerCase() === searchTerm)
+    && !rolloutListing.searchIncomplete;
+  const appServerListing = params.searchMode === 'fast' || exactRolloutMatch
+    ? { candidates: [] as DirectSessionCandidateV1[], incomplete: Boolean(searchTerm) && !exactRolloutMatch }
+    : await listCodexSessionCandidatesViaAppServerWithBudget({
+      source: params.source,
+      activeServerDir: params.activeServerDir,
+      env,
+      searchTerm,
+    });
+  const appServerCandidates = appServerListing.candidates;
+  const searchIncomplete = Boolean(rolloutListing.searchIncomplete || appServerListing.incomplete);
+
+  logger.debug('[directSessions.codex.candidates] list finished', {
+    elapsedMs: Date.now() - startedAtMs,
+    searchTermLength: searchTerm.length,
+    searchMode: params.searchMode ?? 'default',
+    rolloutCandidates: rolloutListing.candidates.length,
+    rolloutTotalCount: rolloutListing.totalCount,
+    appServerCandidates: appServerCandidates.length,
+    searchIncomplete,
+    heapDeltaBytes: process.memoryUsage().heapUsed - startMemory.heapUsed,
+    rssBytes: process.memoryUsage().rss,
   });
 
   if (appServerCandidates.length === 0) {
@@ -131,6 +190,7 @@ export async function listCodexSessionCandidates(params: Readonly<{
     return {
       candidates: rolloutListing.candidates,
       nextCursor,
+      ...(searchIncomplete ? { searchIncomplete: true } : {}),
     };
   }
 
@@ -142,6 +202,7 @@ export async function listCodexSessionCandidates(params: Readonly<{
       offset: 0,
       limit: offset + limit,
       searchTerm,
+      searchMode: params.searchMode,
     })
     : rolloutListing;
 
@@ -164,5 +225,9 @@ export async function listCodexSessionCandidates(params: Readonly<{
   const nextOffset = offset + candidates.length;
   const nextCursor = nextOffset < totalCount ? encodeIndexCursor(nextOffset) : null;
 
-  return { candidates, nextCursor };
+  return {
+    candidates,
+    nextCursor,
+    ...(searchIncomplete ? { searchIncomplete: true } : {}),
+  };
 }

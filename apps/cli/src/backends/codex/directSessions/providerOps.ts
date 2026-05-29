@@ -15,9 +15,9 @@ import { readAfterCodexTranscript } from './readAfterCodexTranscript';
 import { resolveCodexHomeEntriesForDirectSessionsSource } from './resolveCodexHomeEntriesForDirectSessionsSource';
 
 export const codexDirectSessionProviderOps: DirectSessionProviderOps = {
-  listCandidates: async ({ source, cursor, limit, searchTerm }) => {
-    const res = await listCodexSessionCandidates({ source, activeServerDir: configuration.activeServerDir, cursor, limit, searchTerm });
-    return { candidates: res.candidates, nextCursor: res.nextCursor ?? null };
+  listCandidates: async ({ source, cursor, limit, searchTerm, searchMode }) => {
+    const res = await listCodexSessionCandidates({ source, activeServerDir: configuration.activeServerDir, cursor, limit, searchTerm, searchMode });
+    return { candidates: res.candidates, nextCursor: res.nextCursor ?? null, ...(res.searchIncomplete ? { searchIncomplete: true } : {}) };
   },
   getActivity: async ({ source, remoteSessionId }) => {
     const res = await getCodexDirectSessionActivity({ source, activeServerDir: configuration.activeServerDir, remoteSessionId });

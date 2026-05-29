@@ -5,6 +5,11 @@ import { describe, expect, it } from 'vitest';
 
 import { waitForCondition } from '@/testkit/async/waitFor';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import {
+    HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+    HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 
 import { createCodexAppServerClient } from './createCodexAppServerClient';
 import {
@@ -436,7 +441,7 @@ describe('createCodexAppServerClient', () => {
         });
     });
 
-    it('strips inherited Codex thread attach env from the app-server child process', async () => {
+    it('strips inherited runtime-only env from the app-server child process', async () => {
         await withTempDir('happier-codex-app-server-client-sanitize-env-', async (root) => {
             const fakeAppServer = await writeFakeCodexAppServerScript({
                 dir: root,
@@ -450,7 +455,7 @@ describe('createCodexAppServerClient', () => {
                     '  }',
                     '  if (msg.method === "initialized") continue;',
                     '  if (msg.method === "state/read") {',
-                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { CODEX_THREAD_ID: process.env.CODEX_THREAD_ID ?? null, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? null } }) + "\\n");',
+                    `    process.stdout.write(JSON.stringify({ id: msg.id, result: { CODEX_THREAD_ID: process.env.CODEX_THREAD_ID ?? null, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? null, ${HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY}: process.env.${HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY} ?? null, ${HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY}: process.env.${HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY} ?? null, ${HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR}: process.env.${HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR} ?? null } }) + "\\n");`,
                     '    continue;',
                     '  }',
                     '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
@@ -462,6 +467,12 @@ describe('createCodexAppServerClient', () => {
                 processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
                     CODEX_THREAD_ID: 'poisoned-parent-thread',
                     CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'poisoned-originator',
+                    [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: '[{"kind":"profile","serviceId":"openai-codex","profileId":"bot"}]',
+                    [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: '["CODEX_HOME"]',
+                    [HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR]: JSON.stringify([
+                        HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+                        HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+                    ]),
                 }),
             });
 
@@ -469,6 +480,9 @@ describe('createCodexAppServerClient', () => {
                 await expect(client.request('state/read')).resolves.toEqual({
                     CODEX_THREAD_ID: null,
                     CODEX_INTERNAL_ORIGINATOR_OVERRIDE: null,
+                    [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: null,
+                    [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: null,
+                    [HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR]: null,
                 });
             } finally {
                 await client.dispose();

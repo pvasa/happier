@@ -21,6 +21,13 @@ export function createCodexAppServerRpcError(params: Readonly<{
     return error;
 }
 
+export function isCodexAppServerNoActiveTurnToSteerError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const method = (error as Partial<CodexAppServerRpcError>).method;
+    if (typeof method === 'string' && method !== 'turn/steer') return false;
+    return /\bno\s+active\s+turn\s+to\s+steer\b/i.test(error.message);
+}
+
 function readCode(error: unknown): number | null {
     if (!error || typeof error !== 'object') return null;
     const code = (error as { code?: unknown }).code;
@@ -29,6 +36,22 @@ function readCode(error: unknown): number | null {
 
 function readMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error ?? '');
+}
+
+function readDataText(error: unknown): string {
+    if (!error || typeof error !== 'object') return '';
+    const data = (error as { data?: unknown }).data;
+    if (data === undefined) return '';
+    if (typeof data === 'string') return data;
+    try {
+        return JSON.stringify(data);
+    } catch {
+        return '';
+    }
+}
+
+function includesFieldName(value: string, fieldName: string): boolean {
+    return value.toLowerCase().includes(fieldName.toLowerCase());
 }
 
 export function isCodexAppServerMethodNotFoundError(error: unknown): boolean {
@@ -41,12 +64,24 @@ export function isCodexAppServerInvalidParamsError(error: unknown): boolean {
     return /invalid\s+params/i.test(readMessage(error));
 }
 
+export function isCodexAppServerInvalidParamsForFieldError(error: unknown, fieldName: string): boolean {
+    if (!isCodexAppServerInvalidParamsError(error)) return false;
+    return includesFieldName(readMessage(error), fieldName) || includesFieldName(readDataText(error), fieldName);
+}
+
 export function isCodexAppServerInvalidRequestForMethodError(error: unknown, method: string): boolean {
     if (readCode(error) !== -32600) return false;
     if (!error || typeof error !== 'object') return false;
     const errorMethod = (error as { method?: unknown }).method;
     if (errorMethod === method) return true;
     return readMessage(error).includes(method);
+}
+
+export function isCodexAppServerInvalidRequestMapExpectedStringError(error: unknown): boolean {
+    if (readCode(error) !== -32600) return false;
+    const message = readMessage(error);
+    return /invalid\s+request/i.test(message)
+        && /invalid\s+type:\s*map,\s*expected\s+a\s*string/i.test(message);
 }
 
 export function isCodexAppServerExperimentalApiUnavailableError(error: unknown): boolean {

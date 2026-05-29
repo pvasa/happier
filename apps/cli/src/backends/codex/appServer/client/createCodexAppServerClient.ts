@@ -8,9 +8,16 @@ import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process
 import { resolveCodexCliInvocation } from '../../utils/resolveCodexCliInvocation';
 import { appendCodexCliConfigOverridesArgs } from '../../utils/appendCodexCliConfigOverridesArgs';
 import { resolveConfiguredCodexConfigTomlPath } from '../../utils/resolveConfiguredCodexHome';
+import { createCodexAppServerJsonLineReader } from './codexAppServerJsonLineReader';
 import { readCodexAppServerRequestTimeoutMs } from './codexAppServerRpcTimeout';
+import { sanitizeCodexAppServerRpcLogValue } from './codexAppServerRpcLogSanitizer';
 import { safeJsonStringify } from '@/utils/safeJson';
 import { createCodexAppServerRpcError } from '../appServerCompatibility';
+import {
+    HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
+    HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 
 type JsonRpcMessage = Readonly<{
     id?: number | string | null;
@@ -35,7 +42,6 @@ export type DisposableCodexAppServerClient = CodexAppServerClient & Readonly<{
 }>;
 
 type MessageQueueState = {
-    buffer: string;
     fatalError: Error | null;
 };
 
@@ -75,7 +81,12 @@ function createRpcLogger(env: NodeJS.ProcessEnv): {
 
     let chain = Promise.resolve();
     const append = (entry: RpcLogEntry): void => {
-        const payload = `${safeJsonStringify(entry)}\n`;
+        const loggedEntry: RpcLogEntry = {
+            ...entry,
+            params: sanitizeCodexAppServerRpcLogValue(entry.params),
+            result: sanitizeCodexAppServerRpcLogValue(entry.result),
+        };
+        const payload = `${safeJsonStringify(loggedEntry)}\n`;
         chain = chain
             .then(() => appendFile(path, payload, { encoding: 'utf8' }))
             .catch(() => undefined);
@@ -113,6 +124,9 @@ function sanitizeCodexAppServerEnv(processEnv: NodeJS.ProcessEnv): NodeJS.Proces
         ...processEnv,
         CODEX_THREAD_ID: undefined,
         CODEX_INTERNAL_ORIGINATOR_OVERRIDE: undefined,
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: undefined,
+        [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: undefined,
+        [HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR]: undefined,
     };
 }
 
@@ -196,7 +210,6 @@ export async function createCodexAppServerClient(params: Readonly<{
     }
 
     const state: MessageQueueState = {
-        buffer: '',
         fatalError: null,
     };
     let stderrBuffer = '';
@@ -347,22 +360,19 @@ export async function createCodexAppServerClient(params: Readonly<{
         pending.resolve(message.result);
     };
 
+    const jsonLineReader = createCodexAppServerJsonLineReader((rawLine) => {
+        if (state.fatalError) return;
+        try {
+            handleIncomingMessage(JSON.parse(rawLine) as JsonRpcMessage);
+        } catch (error) {
+            failWith(new Error(`Invalid Codex app-server JSON output: ${error instanceof Error ? error.message : String(error)}`));
+        }
+    });
+
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
-        state.buffer += chunk;
-        while (true) {
-            const newlineIndex = state.buffer.indexOf('\n');
-            if (newlineIndex === -1) break;
-            const rawLine = state.buffer.slice(0, newlineIndex).trim();
-            state.buffer = state.buffer.slice(newlineIndex + 1);
-            if (!rawLine) continue;
-            try {
-                handleIncomingMessage(JSON.parse(rawLine) as JsonRpcMessage);
-            } catch (error) {
-                failWith(new Error(`Invalid Codex app-server JSON output: ${error instanceof Error ? error.message : String(error)}`));
-                return;
-            }
-        }
+        if (state.fatalError) return;
+        jsonLineReader.push(chunk);
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {

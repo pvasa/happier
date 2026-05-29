@@ -1,3 +1,5 @@
+import { buildSafeOauthProviderFailureMessage } from '@/cloud/safeOauthProviderError';
+
 import type { CodexAuthTokens } from './authenticate';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -56,8 +58,13 @@ async function exchangeDeviceApprovalForTokens(params: Readonly<{
   });
 
   if (!response.ok) {
-    const error = await response.text().catch(() => '');
-    throw new Error(`Token exchange failed: ${response.status} ${error}`.trim());
+    const body = await response.text().catch(() => '');
+    throw new Error(buildSafeOauthProviderFailureMessage({
+      operation: 'Token exchange',
+      status: response.status,
+      statusText: response.statusText,
+      body,
+    }));
   }
 
   const data = (await response.json()) as any;

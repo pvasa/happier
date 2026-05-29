@@ -4,6 +4,7 @@ import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId, StartS
 import type { PermissionMode } from '@/api/types';
 import type { ExecutionRunBackendStartContext } from '@/agent/executionRuns/registry/executionRunBackendTypes';
 import { createCodexAppServerRuntime } from '@/backends/codex/appServer/runtime';
+import { createExecutionRunTimeoutError } from '@/agent/executionRuns/runtime/executionRunErrors';
 import type {
   CodexAppServerReviewStartRequest,
   CodexAppServerReviewStartResult,
@@ -28,6 +29,67 @@ function isCodexToolMessage(body: unknown): body is Readonly<{
   return type === 'tool-call' || type === 'tool-call-result';
 }
 
+export type CodexAppServerExecutionRunTurnLiveness = Readonly<{
+  active: boolean;
+  activeProviderTurn: boolean;
+  promptInFlight: boolean;
+  source: 'codex-app-server-runtime';
+  turnInFlight: boolean;
+}>;
+
+export type CodexAppServerExecutionRunBackend = AgentBackend & Readonly<{
+  probeTurnLiveness: () => Promise<CodexAppServerExecutionRunTurnLiveness>;
+}>;
+
+type PromptTurnState = {
+  promise: Promise<void>;
+  settled: boolean;
+};
+
+function isPositiveFiniteTimeoutMs(timeoutMs: number | null | undefined): timeoutMs is number {
+  return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0;
+}
+
+async function waitForCodexAppServerPrompt(
+  promptTurn: PromptTurnState,
+  timeoutMs: number | null | undefined,
+  readLiveness: () => CodexAppServerExecutionRunTurnLiveness,
+): Promise<void> {
+  if (!isPositiveFiniteTimeoutMs(timeoutMs)) {
+    await promptTurn.promise;
+    return;
+  }
+
+  while (true) {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const outcome = await Promise.race([
+        promptTurn.promise.then(() => ({ type: 'resolved' as const })),
+        new Promise<{ type: 'timeout' }>((resolve) => {
+          timeout = setTimeout(() => {
+            resolve({ type: 'timeout' });
+          }, timeoutMs);
+          timeout.unref?.();
+        }),
+      ]);
+      if (outcome.type === 'resolved') return;
+    } finally {
+      if (timeout !== null) {
+        clearTimeout(timeout);
+      }
+    }
+
+    const livenessProbe = readLiveness();
+    if (!livenessProbe.active) {
+      throw createExecutionRunTimeoutError({
+        timeoutMs,
+        errorCode: 'provider_inactivity_timeout',
+        livenessProbe,
+      });
+    }
+  }
+}
+
 export function createCodexAppServerExecutionRunBackend(args: Readonly<{
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -40,11 +102,11 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
       answers?: Record<string, string>;
     }>;
   }> | null;
-}>): AgentBackend {
+}>): CodexAppServerExecutionRunBackend {
   const handlers = new Set<AgentMessageHandler>();
   let sessionId: SessionId | null = null;
   let lastObservedMessageSeq = 0;
-  let inFlightPrompt: Promise<void> | null = null;
+  let promptTurn: PromptTurnState | null = null;
   let nativeReviewStartAttempted = false;
   const assistantTextByLocalId = new Map<string, string>();
   const toolNameByCallId = new Map<string, string>();
@@ -211,6 +273,35 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
       : runtime.sendPrompt(prompt);
   };
 
+  const createPromptTurn = (promise: Promise<void>): PromptTurnState => {
+    const turn: PromptTurnState = {
+      promise,
+      settled: false,
+    };
+    promise.then(
+      () => {
+        turn.settled = true;
+      },
+      () => {
+        turn.settled = true;
+      },
+    );
+    return turn;
+  };
+
+  const readTurnLiveness = (): CodexAppServerExecutionRunTurnLiveness => {
+    const activeProviderTurn = runtime.hasActiveProviderTurn();
+    const turnInFlight = runtime.isTurnInFlight();
+    const promptInFlight = promptTurn !== null && !promptTurn.settled;
+    return {
+      active: activeProviderTurn,
+      activeProviderTurn,
+      promptInFlight,
+      source: 'codex-app-server-runtime',
+      turnInFlight,
+    };
+  };
+
   return {
     async startSession(initialPrompt?: string): Promise<StartSessionResult> {
       assistantTextByLocalId.clear();
@@ -218,6 +309,7 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
       const startedSessionId = await ensureStarted();
       if (typeof initialPrompt === 'string' && initialPrompt.trim()) {
         await this.sendPrompt(startedSessionId, initialPrompt);
+        await this.waitForResponseComplete?.();
       }
       return { sessionId: startedSessionId };
     },
@@ -236,12 +328,20 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
         if (reviewStartResult === 'started') return;
         await sendRuntimePrompt(prompt);
       })();
-      inFlightPrompt = promptWork;
+      promptTurn = createPromptTurn(promptWork);
+      void promptWork.catch(() => undefined);
+    },
+    async probeTurnLiveness(): Promise<CodexAppServerExecutionRunTurnLiveness> {
+      return readTurnLiveness();
+    },
+    async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {
+      const activePromptTurn = promptTurn;
+      if (!activePromptTurn) return;
       try {
-        await promptWork;
+        await waitForCodexAppServerPrompt(activePromptTurn, timeoutMs, readTurnLiveness);
       } finally {
-        if (inFlightPrompt === promptWork) {
-          inFlightPrompt = null;
+        if (promptTurn === activePromptTurn) {
+          promptTurn = null;
         }
       }
     },
@@ -254,13 +354,10 @@ export function createCodexAppServerExecutionRunBackend(args: Readonly<{
     offMessage(handler: AgentMessageHandler): void {
       handlers.delete(handler);
     },
-    async waitForResponseComplete(): Promise<void> {
-      await inFlightPrompt;
-    },
     async dispose(): Promise<void> {
       await runtime.reset();
       sessionId = null;
-      inFlightPrompt = null;
+      promptTurn = null;
       nativeReviewStartAttempted = false;
       assistantTextByLocalId.clear();
     },

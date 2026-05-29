@@ -34,6 +34,11 @@ function asArray(value: unknown): unknown[] {
     return Array.isArray(data) ? data : [];
 }
 
+function readArrayProperty(record: MetadataRecord | null, key: string): unknown[] {
+    const value = record?.[key];
+    return Array.isArray(value) ? value : [];
+}
+
 function readString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
@@ -55,16 +60,25 @@ function normalizePlugin(record: MetadataRecord): CodexVendorPluginCatalogEntry 
     const name = readString(record.name);
     if (!name) return null;
     const marketplaceName = readMarketplaceName(record);
+    const id = readString(record.id);
     const vendorPluginRef = readString(record.vendorPluginRef ?? record.mentionPath)
+        ?? (id?.startsWith('plugin://') ? id : null)
         ?? (marketplaceName ? `plugin://${name}@${marketplaceName}` : readString(record.path));
     if (!vendorPluginRef) return null;
     const installed = readBoolean(record.installed, false);
     const enabled = readBoolean(record.enabled, false);
+    const pluginInterface = asRecord(record.interface);
+    const description = readString(
+        record.description
+            ?? record.shortDescription
+            ?? pluginInterface?.shortDescription
+            ?? pluginInterface?.longDescription,
+    );
     return {
-        id: readString(record.id) ?? vendorPluginRef,
+        id: id ?? vendorPluginRef,
         name,
-        displayName: readString(record.displayName ?? record.title) ?? name,
-        ...(readString(record.description ?? record.shortDescription) ? { description: readString(record.description ?? record.shortDescription)! } : {}),
+        displayName: readString(record.displayName ?? record.title ?? pluginInterface?.displayName) ?? name,
+        ...(description ? { description } : {}),
         vendorPluginRef,
         installed,
         enabled,
@@ -76,14 +90,60 @@ function normalizeSkill(record: MetadataRecord): CodexSkillCatalogEntry | null {
     const name = readString(record.name);
     const path = readString(record.path ?? record.location);
     if (!name || !path) return null;
+    const skillInterface = asRecord(record.interface);
+    const description = readString(
+        skillInterface?.shortDescription
+            ?? record.shortDescription
+            ?? record.description,
+    );
     return {
         name,
-        displayName: readString(record.displayName ?? record.title) ?? name,
-        ...(readString(record.description ?? record.shortDescription) ? { description: readString(record.description ?? record.shortDescription)! } : {}),
+        displayName: readString(record.displayName ?? record.title ?? skillInterface?.displayName) ?? name,
+        ...(description ? { description } : {}),
         path,
         enabled: readBoolean(record.enabled, true),
         origin: 'codex_native',
     };
+}
+
+function readPluginCatalogEntries(response: unknown): MetadataRecord[] {
+    const responseRecord = asRecord(response);
+    const marketplaces = readArrayProperty(responseRecord, 'marketplaces');
+    if (marketplaces.length === 0) {
+        return asArray(response).map((entry) => asRecord(entry)).filter((entry): entry is MetadataRecord => entry !== null);
+    }
+
+    const entries: MetadataRecord[] = [];
+    for (const marketplaceValue of marketplaces) {
+        const marketplace = asRecord(marketplaceValue);
+        if (!marketplace) continue;
+        const marketplaceName = readString(marketplace.name);
+        for (const pluginValue of readArrayProperty(marketplace, 'plugins')) {
+            const plugin = asRecord(pluginValue);
+            if (!plugin) continue;
+            entries.push(marketplaceName ? { ...plugin, marketplaceName } : plugin);
+        }
+    }
+    return entries;
+}
+
+function readSkillCatalogEntries(response: unknown): MetadataRecord[] {
+    const responseRecord = asRecord(response);
+    const data = readArrayProperty(responseRecord, 'data');
+    if (data.length === 0) {
+        return asArray(response).map((entry) => asRecord(entry)).filter((entry): entry is MetadataRecord => entry !== null);
+    }
+
+    const entries: MetadataRecord[] = [];
+    for (const listEntryValue of data) {
+        const listEntry = asRecord(listEntryValue);
+        if (!listEntry) continue;
+        for (const skillValue of readArrayProperty(listEntry, 'skills')) {
+            const skill = asRecord(skillValue);
+            if (skill) entries.push(skill);
+        }
+    }
+    return entries;
 }
 
 export async function listCodexVendorPlugins(params: Readonly<{
@@ -97,8 +157,8 @@ export async function listCodexVendorPlugins(params: Readonly<{
     try {
         const response = await params.client.request('plugin/list', { cwds: [params.cwd] });
         const byVendorPluginRef = new Map<string, CodexVendorPluginCatalogEntry>();
-        for (const entry of asArray(response)) {
-            const plugin = normalizePlugin(asRecord(entry) ?? {});
+        for (const entry of readPluginCatalogEntries(response)) {
+            const plugin = normalizePlugin(entry);
             if (!plugin || byVendorPluginRef.has(plugin.vendorPluginRef)) continue;
             byVendorPluginRef.set(plugin.vendorPluginRef, plugin);
         }
@@ -126,8 +186,8 @@ export async function listCodexAppServerSkills(params: Readonly<{
     try {
         const response = await params.client.request('skills/list', { cwds: [params.cwd] });
         const byName = new Map<string, CodexSkillCatalogEntry>();
-        for (const entry of asArray(response)) {
-            const skill = normalizeSkill(asRecord(entry) ?? {});
+        for (const entry of readSkillCatalogEntries(response)) {
+            const skill = normalizeSkill(entry);
             if (!skill) continue;
             const key = skill.name.toLowerCase();
             const existing = byName.get(key);

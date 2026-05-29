@@ -92,4 +92,51 @@ describe('authenticateCodexDevice', () => {
     expect(pollCalls).toBe(2);
     expect(sleepSpy).toHaveBeenCalled();
   });
+
+  it('redacts token exchange failure response bodies', async () => {
+    const fetchMock = vi.fn(async (url: any) => {
+      const u = String(url);
+      if (u.includes('/api/accounts/deviceauth/usercode')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ device_auth_id: 'dev-1', user_code: 'ABCD-EFGH', interval: '1' }),
+        } as any;
+      }
+      if (u.includes('/api/accounts/deviceauth/token')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ authorization_code: 'auth-code-1', code_verifier: 'verifier-1' }),
+        } as any;
+      }
+      if (u.includes('/oauth/token')) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          text: async () => JSON.stringify({
+            error: 'invalid_grant',
+            error_description: 'refresh token codex-device-secret-refresh was rejected',
+            access_token: 'codex-device-secret-access',
+            refresh_token: 'codex-device-secret-refresh',
+          }),
+        } as any;
+      }
+      throw new Error(`unexpected url: ${u}`);
+    });
+
+    let caught: unknown = null;
+    try {
+      await authenticateCodexDevice({
+        fetcher: fetchMock as any,
+        now: 1700000000000,
+        sleep: async () => {},
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toMatch(/Token exchange failed \(400\): invalid_grant/);
+    expect(String(caught)).not.toMatch(/codex-device-secret-refresh|codex-device-secret-access|error_description/);
+  });
 });

@@ -581,6 +581,49 @@ describe('listCodexSessionCandidates', () => {
     ]);
   });
 
+  it('uses an exact connected-service group homePath', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-list-group-home-'));
+    const activeServerDir = join(root, 'servers', 'cloud');
+    const exactHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'svc_1', '__groups', 'main', 'codex', 'codex-home');
+    await mkdir(join(exactHome, 'sessions'), { recursive: true });
+
+    const exactSessionId = '99999999-9999-9999-9999-999999999999';
+    const rollout = join(exactHome, 'sessions', `rollout-2026-01-10T00-00-00-${exactSessionId}.jsonl`);
+    await writeFile(
+      rollout,
+      sessionMetaLine({ id: exactSessionId, timestamp: '2026-01-10T00:00:00.000Z', cwd: '/repo/group-home' })
+        + responseItemLine({ type: 'message', role: 'user', content: [{ type: 'text', text: 'Group home title' }] }),
+      'utf8',
+    );
+
+    const result = await listCodexSessionCandidates({
+      source: {
+        kind: 'codexHome',
+        home: 'connectedService',
+        connectedServiceId: 'svc_1',
+        homePath: exactHome,
+      },
+      env: {} as NodeJS.ProcessEnv,
+      activeServerDir,
+      limit: 10,
+    });
+
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        remoteSessionId: exactSessionId,
+        details: expect.objectContaining({
+          cwd: '/repo/group-home',
+          source: expect.objectContaining({
+            kind: 'codexHome',
+            home: 'connectedService',
+            connectedServiceId: 'svc_1',
+            connectedServiceGroupId: 'main',
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it('keeps page-2 listing stable when rollout-backed and app-server-only candidates are merged', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-direct-list-merged-page-2-'));
     const codexHome = join(root, 'codex-home');

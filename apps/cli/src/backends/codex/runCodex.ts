@@ -7,6 +7,14 @@ import { logger } from '@/ui/logger';
 import { resolveHasTTY } from '@/ui/tty/resolveHasTTY';
 import { Credentials } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/startDaemon';
+import {
+    refreshDaemonOpenAiCodexChatGptAuthTokensForBridge,
+    type OpenAiCodexDaemonRefreshSelection,
+} from '@/daemon/controlClient';
+import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { reportCodexRateLimitSnapshotToDaemon } from './connectedServices/reportCodexRateLimitSnapshotToDaemon';
+import { resolveCodexConnectedServiceBindingFromSessionMetadata } from './connectedServices/resolveCodexRuntimeAuthClassificationContext';
 import os from 'node:os';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { hashObject } from '@/utils/deterministicJson';
@@ -21,7 +29,11 @@ import { delay } from "@/utils/time";
 import { stopCaffeinate } from '@/integrations/caffeinate';
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
 import { registerRunnerTerminationHandlers } from '@/agent/runtime/runnerTerminationHandlers';
-import { waitForMessagesOrPending } from '@/agent/runtime/waitForMessagesOrPending';
+import {
+    createSessionProviderInputConsumer,
+    createSessionProviderPendingDrainAdapter,
+    type SessionProviderInputConsumerSession,
+} from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createCurrentSessionTranscriptPort } from '@/api/session/createCurrentSessionTranscriptPort';
@@ -42,6 +54,8 @@ import { normalizePermissionModeToIntent, resolvePermissionModeUpdatedAtFromMess
 import { publishCodexSessionIdMetadata } from './utils/codexSessionIdMetadata';
 import { createCodexAcpRuntime } from './acp/runtime';
 import { createCodexAppServerRuntime } from './appServer/runtime';
+import { isCodexAppServerNoActiveTurnToSteerError } from './appServer/appServerCompatibility';
+import { rememberCodexUsageLimitRecoveryPreference } from './appServer/rememberCodexUsageLimitRecoveryPreference';
 import { resolveConfiguredCodexHome } from './utils/resolveConfiguredCodexHome';
 import { buildCodexAppServerConfigOverrides } from './appServer/buildCodexAppServerConfigOverrides';
 import { reconcileCodexAppServerOverridesBeforeTurn } from './appServer/reconcileCodexAppServerOverridesBeforeTurn';
@@ -128,6 +142,120 @@ import {
 	import { resolveCodexRequestedDirectory } from './utils/resolveCodexRequestedDirectory';
 import { readDaemonInitialGoalFromEnv } from '@/agent/runtime/sessionInitialGoal';
 
+function readRuntimeAuthClassification(error: unknown): unknown | null {
+    if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
+    const record = error as Record<string, unknown>;
+    return record.runtimeAuthClassification ?? null;
+}
+
+function readRuntimeAuthClassificationLogField(
+    classification: Record<string, unknown>,
+    field: string,
+): string | null {
+    const value = classification[field];
+    return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function summarizeRuntimeAuthClassificationForLog(classification: unknown): Readonly<Record<string, string | null>> {
+    if (!classification || typeof classification !== 'object' || Array.isArray(classification)) return {};
+    const record = classification as Record<string, unknown>;
+    return {
+        kind: readRuntimeAuthClassificationLogField(record, 'kind'),
+        serviceId: readRuntimeAuthClassificationLogField(record, 'serviceId'),
+        profileId: readRuntimeAuthClassificationLogField(record, 'profileId'),
+        groupId: readRuntimeAuthClassificationLogField(record, 'groupId'),
+    };
+}
+
+function readChatGptPlanType(value: unknown): string | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const raw = (value as Record<string, unknown>).chatgptPlanType;
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+type OpenAiCodexDaemonRefreshSelectionResolution = Readonly<{
+    selection: OpenAiCodexDaemonRefreshSelection;
+    recoveryGroupId: string | null;
+}>;
+
+function resolveOpenAiCodexDaemonRefreshSelection(
+    env: Pick<NodeJS.ProcessEnv, string>,
+    session?: Readonly<{ getMetadataSnapshot?: () => unknown }> | null,
+): OpenAiCodexDaemonRefreshSelectionResolution | null {
+    const selection = findConnectedServiceChildSelection(env, 'openai-codex');
+    if (!selection || selection.serviceId !== 'openai-codex') {
+        if (!session) return null;
+        const metadataBinding = resolveCodexConnectedServiceBindingFromSessionMetadata(session);
+        if (!metadataBinding || metadataBinding.source !== 'connected') return null;
+        if (metadataBinding.selection === 'group') {
+            return metadataBinding.profileId
+                ? {
+                    selection: {
+                        kind: 'profile',
+                        serviceId: 'openai-codex',
+                        profileId: metadataBinding.profileId,
+                    },
+                    recoveryGroupId: metadataBinding.groupId,
+                }
+                : null;
+        }
+        return {
+            selection: {
+                kind: 'profile',
+                serviceId: 'openai-codex',
+                profileId: metadataBinding.profileId,
+            },
+            recoveryGroupId: null,
+        };
+    }
+    if (selection.kind === 'profile') {
+        return {
+            selection: {
+                kind: 'profile',
+                serviceId: 'openai-codex',
+                profileId: selection.profileId,
+            },
+            recoveryGroupId: null,
+        };
+    }
+    return {
+        selection: {
+            kind: 'group',
+            serviceId: 'openai-codex',
+            groupId: selection.groupId,
+            activeProfileId: selection.activeProfileId,
+            fallbackProfileId: selection.fallbackProfileId,
+            generation: selection.generation,
+        },
+        recoveryGroupId: selection.groupId,
+    };
+}
+
+function createOpenAiCodexBridgeRefreshFailureClassification(
+    resolution: OpenAiCodexDaemonRefreshSelectionResolution,
+): Readonly<Record<string, unknown>> {
+    const { selection } = resolution;
+    return {
+        kind: 'refresh_failed',
+        serviceId: 'openai-codex',
+        profileId: selection.kind === 'group' ? selection.activeProfileId : selection.profileId,
+        groupId: selection.kind === 'group' ? selection.groupId : resolution.recoveryGroupId,
+        resetsAtMs: null,
+        retryAfterMs: null,
+        planType: null,
+        rateLimits: null,
+        source: 'provider_runtime_marker',
+    };
+}
+
+function attachRuntimeAuthClassificationToError(
+    error: unknown,
+    classification: Readonly<Record<string, unknown>>,
+): Error {
+    const nextError = error instanceof Error ? error : new Error('connected_service_chatgpt_refresh_unavailable');
+    return Object.assign(nextError, { runtimeAuthClassification: classification });
+}
+
 /**
  * Main entry point for the codex command with ink UI
  */
@@ -164,12 +292,14 @@ export async function runCodex(opts: {
         localId?: string | null;
         model?: string;
         promptMetadata?: unknown;
+        suppressUserEcho?: boolean;
     }
 
     type CodexRemoteRuntime = Readonly<{
         getSessionId: () => string | null;
         supportsInFlightSteer: () => boolean;
         isTurnInFlight: () => boolean;
+        hasActiveProviderTurn?: () => boolean;
         canSteerPrompt?: () => boolean;
         beginTurn: () => void;
         cancel: () => Promise<void>;
@@ -183,8 +313,8 @@ export async function runCodex(opts: {
         setSessionMode: (mode: string) => Promise<void>;
         setSessionModel: (model: string) => Promise<void>;
         setSessionConfigOption: (key: string, value: string | number | boolean | null) => Promise<void>;
-        steerPrompt: (prompt: string, options?: { metadata?: unknown }) => Promise<void>;
-        sendPrompt: (prompt: string, options?: { metadata?: unknown }) => Promise<void>;
+        steerPrompt: (prompt: string, options?: { metadata?: unknown; localId?: string | null }) => Promise<void>;
+        sendPrompt: (prompt: string, options?: { metadata?: unknown; localId?: string | null }) => Promise<void>;
         compactContext: (command: string) => Promise<void>;
         refreshGoal?: () => Promise<unknown>;
         setGoal?: (
@@ -197,7 +327,6 @@ export async function runCodex(opts: {
         flushTurn: () => Promise<void>;
         rollbackConversation: (request: import('@happier-dev/protocol').SessionRollbackRpcParams) => Promise<import('@happier-dev/protocol').SessionRollbackRpcResult>;
     }>;
-
     //
     // Define session
     //
@@ -550,6 +679,28 @@ export async function runCodex(opts: {
         workspaceDirFromMetadata = typeof metadata.path === 'string' && metadata.path.trim().length > 0 ? metadata.path : null;
     }
 
+    const createCodexInputConsumerSession = (): SessionProviderInputConsumerSession => {
+        const materializeNextPendingMessageSafely: NonNullable<SessionProviderInputConsumerSession['materializeNextPendingMessageSafely']> =
+            async (materializeOpts) => {
+                const materialize = session.materializeNextPendingMessageSafely;
+                if (typeof materialize !== 'function') {
+                    return { type: 'no_pending' };
+                }
+                return await materialize.call(session, materializeOpts);
+            };
+
+        return {
+            materializeNextPendingMessageSafely,
+            popPendingMessage: async () => {
+                const result = await materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
+                return result.type === 'materialized';
+            },
+            shouldAttemptPendingMaterialization: () => session.shouldAttemptPendingMaterialization?.() ?? true,
+            reconcilePendingQueueState: (opts) => session.reconcilePendingQueueState?.(opts),
+            waitForMetadataUpdate: (signal) => session.waitForMetadataUpdate(signal),
+        };
+    };
+
     if (timing.enabled) {
         logger.debug(
             timing.formatSummaryLine({
@@ -651,12 +802,15 @@ export async function runCodex(opts: {
         })) {
             // This message will not go through the main prompt loop queue; display it immediately.
             messageBuffer.addMessage(text, 'user');
-            void runtime.steerPrompt(text, { metadata: message.meta }).catch(() => {
+            void runtime.steerPrompt(text, { metadata: message.meta, localId: message.localId ?? null }).catch((error) => {
                 pushMessageToQueueWithSpecialCommands({
                     queue: messageQueue,
                     message: text,
                     text,
-                    mode: enhancedMode,
+                    mode: {
+                        ...enhancedMode,
+                        suppressUserEcho: true,
+                    },
                 });
             });
             return;
@@ -1186,13 +1340,59 @@ export async function runCodex(opts: {
             permissionHandler,
             getPermissionMode: () => runtimePermissionModeRef.current,
             pendingQueue: {
-                popPendingMessage: () => session.popPendingMessage(),
+                ...createSessionProviderPendingDrainAdapter(createCodexInputConsumerSession()),
                 drainAfterStartOrLoad: true,
             },
             onInFlightSteerAvailabilityChange: () => {
                 const runtime = codexAppServerRuntime;
                 if (!runtime) return;
                 publishInFlightSteerCapability({ session, runtime });
+            },
+            onRateLimitSnapshot: async (rawSnapshot) => {
+                await reportCodexRateLimitSnapshotToDaemon({
+                    env: codexAppServerProcessEnv,
+                    sessionId: session.sessionId,
+                    rawSnapshot,
+                });
+            },
+            onUsageLimitGroupRecovery: async ({ classification }) => {
+                const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
+                    sessionId: session.sessionId,
+                    switchesThisTurn: 0,
+                    classification,
+                    logPrefix: '[Codex]',
+                });
+                if (recoveryReport.statusMessage) {
+                    messageBuffer.addMessage(recoveryReport.statusMessage, 'status');
+                    session.sendSessionEvent({ type: 'message', message: recoveryReport.statusMessage });
+                }
+                return recoveryReport.report;
+            },
+            onChatGptAuthTokensRefresh: async (requestParams) => {
+                const refreshSelection = resolveOpenAiCodexDaemonRefreshSelection(codexAppServerProcessEnv, session);
+                if (!refreshSelection) {
+                    throw new Error('connected_service_chatgpt_refresh_selection_unavailable');
+                }
+                try {
+                    return await refreshDaemonOpenAiCodexChatGptAuthTokensForBridge({
+                        sessionId: session.sessionId,
+                        selection: refreshSelection.selection,
+                        chatgptPlanType: readChatGptPlanType(requestParams),
+                    });
+                } catch (error) {
+                    const classification = createOpenAiCodexBridgeRefreshFailureClassification(refreshSelection);
+                    const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
+                        sessionId: session.sessionId,
+                        switchesThisTurn: 0,
+                        classification,
+                        logPrefix: '[Codex]',
+                    });
+                    if (recoveryReport.statusMessage) {
+                        messageBuffer.addMessage(recoveryReport.statusMessage, 'status');
+                        session.sendSessionEvent({ type: 'message', message: recoveryReport.statusMessage });
+                    }
+                    throw attachRuntimeAuthClassificationToError(error, classification);
+                }
             },
             ...(codexAppServerProcessEnv.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
                 ? {}
@@ -1206,6 +1406,15 @@ export async function runCodex(opts: {
                         }),
                     }),
                 }),
+            ...(opts.credentials
+                ? {
+                    rememberUsageLimitRecoveryPreference: async () => {
+                        await rememberCodexUsageLimitRecoveryPreference({
+                            credentials: opts.credentials as Credentials,
+                        });
+                    },
+                }
+                : {}),
         });
         session.setSessionRuntimeControls?.(codexAppServerRuntime);
         try {
@@ -1250,7 +1459,7 @@ export async function runCodex(opts: {
     let first = true;
 
 	    try {
-	        let wasCreated = false;
+		        let wasCreated = false;
 	            let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = null;
 
 	        const codexRemoteRuntimeForSync = getCodexRemoteRuntime();
@@ -1350,6 +1559,13 @@ export async function runCodex(opts: {
 	            configOptionSync?.syncFromMetadata();
 	            modelSync?.syncFromMetadata();
 	        };
+        const inputConsumer = createSessionProviderInputConsumer<EnhancedMode, string>({
+            messageQueue,
+            session: createCodexInputConsumerSession(),
+            onMetadataUpdate: () => {
+                syncOverridesFromMetadata();
+            },
+        });
 	        
 	        // Attach flows (and next_prompt apply timing) can result in a stable metadata snapshot
 	        // that never changes during this process lifetime. Ensure we adopt the latest persisted
@@ -1532,15 +1748,7 @@ export async function runCodex(opts: {
                 if (!message) {
                     // Capture the current signal to distinguish idle-abort from queue close
                     const waitSignal = abortController.signal;
-                        const batch = await waitForMessagesOrPending({
-                            messageQueue,
-                            abortSignal: waitSignal,
-                            popPendingMessage: () => session.popPendingMessage(),
-	                            waitForMetadataUpdate: (signal) => session.waitForMetadataUpdate(signal),
-	                            onMetadataUpdate: () => {
-	                                syncOverridesFromMetadata();
-	                            },
-	                        });
+                        const batch = await inputConsumer.waitForNextInput({ abortSignal: waitSignal });
                     if (!batch) {
                         // If wait was aborted (e.g., remote abort with no active inference), ignore and continue
                         if (waitSignal.aborted && !shouldExit) {
@@ -1552,7 +1760,7 @@ export async function runCodex(opts: {
                 }
                 message = batch;
                 if (shouldLogAcpDebug) {
-                    logger.debug('[codex] waitForMessagesOrPending returned batch');
+                    logger.debug('[codex] input consumer returned batch');
                 }
             }
 
@@ -1561,8 +1769,9 @@ export async function runCodex(opts: {
                 break;
             }
 
-                // Display user messages in the UI
-                messageBuffer.addMessage(message.message, 'user');
+                if (!message.mode.suppressUserEcho) {
+                    messageBuffer.addMessage(message.message, 'user');
+                }
                 applyPermissionModeToCodexPermissionHandler({
                     permissionHandler,
                     permissionMode: message.mode.permissionMode,
@@ -1595,7 +1804,8 @@ export async function runCodex(opts: {
                 continue;
             }
 
-            let readyTurnContext: ReadyNotificationTurnContext | undefined;
+	            let readyTurnContext: ReadyNotificationTurnContext | undefined;
+                let forceFlushRemoteRuntimeAfterStaleSteer = false;
             try {
                 const localId =
                     typeof message.mode.localId === 'string' && message.mode.localId
@@ -1624,17 +1834,30 @@ export async function runCodex(opts: {
                     if (!codexRuntime) {
                         throw new Error('Codex remote runtime was not initialized');
                     }
-                    if (wasCreated && useCodexAppServer && codexRuntime.isTurnInFlight() && specialCommand.type === null) {
+                    const canUseInFlightSteerForQueuedMessage =
+                        codexRuntime.canSteerPrompt ? codexRuntime.canSteerPrompt() : codexRuntime.isTurnInFlight();
+                    if (wasCreated && useCodexAppServer && specialCommand.type === null && canUseInFlightSteerForQueuedMessage) {
                         if (shouldLogAcpDebug) {
                             logger.debug('[CodexAppServer] steerPrompt begin for queued message while turn is in flight');
                         }
                         const providerPromptText = await resolveProviderPromptText();
-                        await codexRuntime.steerPrompt(providerPromptText, { metadata: message.mode.promptMetadata });
-                        if (shouldLogAcpDebug) {
-                            logger.debug('[CodexAppServer] steerPrompt complete for queued message while turn is in flight');
-                        }
-                        continue;
-                    }
+	                        try {
+	                            await codexRuntime.steerPrompt(providerPromptText, {
+	                                metadata: message.mode.promptMetadata,
+	                                localId,
+	                            });
+	                            if (shouldLogAcpDebug) {
+	                                logger.debug('[CodexAppServer] steerPrompt complete for queued message while turn is in flight');
+	                            }
+	                            continue;
+	                        } catch (error) {
+	                            if (!isCodexAppServerNoActiveTurnToSteerError(error)) {
+	                                throw error;
+	                            }
+	                            logger.debug('[CodexAppServer] Native turn already inactive during queued steer; retrying as a fresh turn');
+	                            forceFlushRemoteRuntimeAfterStaleSteer = true;
+	                        }
+	                    }
                     codexRuntime.beginTurn();
                     if (shouldLogAcpDebug) {
                         logger.debug('[CodexACP] beginTurn');
@@ -1823,7 +2046,10 @@ export async function runCodex(opts: {
                             startedFreshSession: startedFreshSessionForTurn,
                             systemPromptText,
                         }),
-                        { metadata: message.mode.promptMetadata },
+                        {
+                            metadata: message.mode.promptMetadata,
+                            localId,
+                        },
                     );
                     if (shouldLogAcpDebug) {
                         logger.debug('[CodexACP] sendPrompt complete');
@@ -1865,6 +2091,8 @@ export async function runCodex(opts: {
                         cwd: directory,
                     });
 
+                    thinking = true;
+                    session.keepAlive(thinking, 'remote');
                     const startResponse = await mcpClient.startSession(
                         startConfig,
                         { signal: abortController.signal }
@@ -1881,6 +2109,8 @@ export async function runCodex(opts: {
                     wasCreated = true;
                     first = false;
                 } else {
+                    thinking = true;
+                    session.keepAlive(thinking, 'remote');
                     const response = await mcpClient.continueSession(
                         providerPromptText,
                         { signal: abortController.signal }
@@ -1897,7 +2127,6 @@ export async function runCodex(opts: {
                 }
                 }
             } catch (error) {
-                logger.warn('Error in codex session:', error);
                 const isAbortError = error instanceof Error && error.name === 'AbortError';
                 const isResumeError = error instanceof Error && error.name === 'CodexAcpResumeError';
 
@@ -1912,10 +2141,33 @@ export async function runCodex(opts: {
                     // Do not clear session state here; the next user message should continue on the
                     // existing session if possible.
                 } else {
-                    const details = formatErrorForUi(error);
-                    const messageText = `Codex process error: ${details}`;
-                    messageBuffer.addMessage(messageText, 'status');
-                    session.sendSessionEvent({ type: 'message', message: messageText });
+                    const runtimeAuthClassification = readRuntimeAuthClassification(error);
+                    let runtimeAuthRecoveryStatusEmitted = false;
+                    if (runtimeAuthClassification) {
+                        logger.warn(
+                            '[Codex] Runtime auth failure reported to daemon',
+                            summarizeRuntimeAuthClassificationForLog(runtimeAuthClassification),
+                        );
+                        const recoveryReport = await reportConnectedServiceRuntimeAuthFailureToDaemon({
+                            sessionId: session.sessionId,
+                            switchesThisTurn: 0,
+                            classification: runtimeAuthClassification,
+                            logPrefix: '[Codex]',
+                        });
+                        if (recoveryReport.statusMessage) {
+                            messageBuffer.addMessage(recoveryReport.statusMessage, 'status');
+                            session.sendSessionEvent({ type: 'message', message: recoveryReport.statusMessage });
+                            runtimeAuthRecoveryStatusEmitted = true;
+                        }
+                    } else {
+                        logger.warn('Error in codex session:', error);
+                    }
+                    if (!runtimeAuthRecoveryStatusEmitted) {
+                        const details = formatErrorForUi(error);
+                        const messageText = `Codex process error: ${details}`;
+                        messageBuffer.addMessage(messageText, 'status');
+                        session.sendSessionEvent({ type: 'message', message: messageText });
+                    }
                     // For unexpected errors, keep the ACP session id (best-effort) so a subsequent start can attempt resume.
                     if (useCodexAcp || useCodexAppServer) {
                         const currentRemoteSessionId = getCodexRemoteRuntime()?.getSessionId();
@@ -1928,7 +2180,13 @@ export async function runCodex(opts: {
                 }
             } finally {
                 const remoteRuntime = useCodexAcp || useCodexAppServer ? getCodexRemoteRuntime() : null;
-                const preserveActiveAppServerTurn = useCodexAppServer && remoteRuntime?.isTurnInFlight() === true;
+                const hasActiveAppServerProviderTurn = remoteRuntime
+                    ? (remoteRuntime.hasActiveProviderTurn?.() ?? remoteRuntime.isTurnInFlight())
+                    : false;
+                const preserveActiveAppServerTurn =
+                    useCodexAppServer
+                    && !forceFlushRemoteRuntimeAfterStaleSteer
+                    && hasActiveAppServerProviderTurn;
                 if (useCodexAcp || useCodexAppServer) {
                     if (!preserveActiveAppServerTurn) {
                         await remoteRuntime?.flushTurn();
@@ -1948,8 +2206,14 @@ export async function runCodex(opts: {
                     diffProcessor.reset();
                     thinking = false;
                     session.keepAlive(thinking, 'remote');
-                    const popped = !shouldExit ? await session.popPendingMessage() : false;
-                    if (!popped) {
+                    const drainResult = !shouldExit
+                        ? await inputConsumer.drainPending({
+                            reason: 'codex-finalizer',
+                            logPrefix: '[codex]',
+                            shouldContinue: () => !shouldExit,
+                        })
+                        : { materialized: 0 };
+                    if (drainResult.materialized <= 0) {
                         emitReadyIfIdle({
                             pending,
                             queueSize: () => messageQueue.size(),

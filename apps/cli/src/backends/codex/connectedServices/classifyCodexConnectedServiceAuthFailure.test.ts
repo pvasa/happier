@@ -1,0 +1,348 @@
+import { describe, expect, it } from 'vitest';
+
+import { classifyCodexConnectedServiceAuthFailure } from './classifyCodexConnectedServiceAuthFailure';
+
+describe('classifyCodexConnectedServiceAuthFailure', () => {
+  it('recognizes structured usage-limit failures and extracts provider metadata', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'Usage limit reached',
+          codexErrorInfo: 'UsageLimitExceeded',
+          resets_at: '2026-05-17T15:30:00.000Z',
+          plan_type: 'plus',
+          rate_limits: { primary: { used_percent: 100 } },
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'usage_limit',
+      limitCategory: 'quota',
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+      resetsAtMs: Date.parse('2026-05-17T15:30:00.000Z'),
+      planType: 'plus',
+      rateLimits: { primary: { used_percent: 100 } },
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('preserves structured retry-after usage-limit timing when no reset time is present', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'Usage limit reached',
+          codexErrorInfo: 'UsageLimitExceeded',
+          retry_after_ms: 120_000,
+          plan_type: 'plus',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'usage_limit',
+      resetsAtMs: null,
+      retryAfterMs: 120_000,
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('falls back to stable retry wording for structured usage-limit errors without reset metadata', () => {
+    const now = new Date(2026, 4, 27, 7, 20, 0, 0).getTime();
+    const resetAt = new Date(2026, 4, 30, 22, 23, 0, 0).getTime();
+
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 30th, 2026 10:23 PM.",
+          codexErrorInfo: 'UsageLimitExceeded',
+          plan_type: 'plus',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'leeroy',
+      groupId: 'happier',
+      nowMs: now,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'usage_limit',
+      resetsAtMs: resetAt,
+      retryAfterMs: null,
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes structured Codex usage-limit code variants', () => {
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: 'request failed',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    })).toMatchObject({
+      kind: 'usage_limit',
+      source: 'structured_provider_error',
+    });
+
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          code: 'usage_limit_reached',
+          message: 'request failed',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    })).toMatchObject({
+      kind: 'usage_limit',
+      source: 'structured_provider_error',
+    });
+
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          code: 'UsageLimitReached',
+          message: 'request failed',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    })).toMatchObject({
+      kind: 'usage_limit',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes the observed Codex usage-limit message only on provider error paths', () => {
+    const message = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:27 PM.";
+
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: new Error(message),
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+    })).toMatchObject({
+      kind: 'usage_limit',
+      limitCategory: 'quota',
+      source: 'stable_provider_message',
+    });
+
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: false,
+      error: new Error(message),
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+    })).toBeNull();
+  });
+
+  it('extracts local reset times from stable Codex usage-limit retry wording', () => {
+    const now = new Date(2026, 4, 17, 16, 0, 0, 0).getTime();
+    const resetAt = new Date(2026, 4, 17, 17, 27, 0, 0).getTime();
+
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: new Error("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:27 PM."),
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+      nowMs: now,
+    })).toMatchObject({
+      kind: 'usage_limit',
+      resetsAtMs: resetAt,
+      source: 'stable_provider_message',
+    });
+  });
+
+  it('extracts full local reset dates from stable Codex usage-limit retry wording', () => {
+    const now = new Date(2026, 4, 17, 16, 0, 0, 0).getTime();
+    const resetAt = new Date(2026, 4, 27, 15, 55, 0, 0).getTime();
+
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: new Error("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 27th, 2026 3:55 PM."),
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: null,
+      nowMs: now,
+    })).toMatchObject({
+      kind: 'usage_limit',
+      resetsAtMs: resetAt,
+      source: 'stable_provider_message',
+    });
+  });
+
+  it('does not treat Codex temporary server throttles as connected-service usage exhaustion', () => {
+    expect(classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: new Error('API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited'),
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    })).toBeNull();
+  });
+
+  it('recognizes account-changed auth failures', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        turn: {
+          error: {
+            message: 'Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.',
+            codex_error_info: 'Unauthorized',
+          },
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      groupId: 'pool',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'account_changed',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes compact token invalidation as an auth-expired failure', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'unexpected status 401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.',
+          code: 'token_invalidated',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'codex1',
+      groupId: 'happier',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'auth_expired',
+      limitCategory: 'auth',
+      serviceId: 'openai-codex',
+      profileId: 'codex1',
+      groupId: 'happier',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes revoked compact oauth tokens as an auth-expired failure', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'unexpected status 401 Unauthorized: Encountered invalidated oauth token for user, failing request',
+          code: 'token_revoked',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'codex1',
+      groupId: 'happier',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'auth_expired',
+      limitCategory: 'auth',
+      serviceId: 'openai-codex',
+      profileId: 'codex1',
+      groupId: 'happier',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes reused refresh tokens as refresh failures', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        turn: {
+          error: {
+            message: 'Failed to refresh token: 401 Unauthorized: Your refresh token has already been used to generate a new access token.',
+            code: 'refresh_token_reused',
+          },
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'codex1',
+      groupId: 'happier',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'refresh_failed',
+      limitCategory: 'auth',
+      serviceId: 'openai-codex',
+      profileId: 'codex1',
+      groupId: 'happier',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes alternate reused refresh token wording as refresh failures', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'Failed to refresh token: 401 Unauthorized: Your refresh token was already used to generate a new access token.',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'bot',
+      groupId: 'happier',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'refresh_failed',
+      limitCategory: 'auth',
+      serviceId: 'openai-codex',
+      profileId: 'bot',
+      groupId: 'happier',
+      source: 'structured_provider_error',
+    });
+  });
+
+  it('recognizes revoked refresh token wording observed from Codex app-server refresh failures', () => {
+    const result = classifyCodexConnectedServiceAuthFailure({
+      providerErrorPath: true,
+      error: {
+        error: {
+          message: 'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+        },
+      },
+      serviceId: 'openai-codex',
+      profileId: 'batiplus',
+      groupId: 'happier',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'refresh_failed',
+      limitCategory: 'auth',
+      serviceId: 'openai-codex',
+      profileId: 'batiplus',
+      groupId: 'happier',
+      source: 'structured_provider_error',
+    });
+  });
+});

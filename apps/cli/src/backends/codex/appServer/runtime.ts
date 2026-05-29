@@ -7,21 +7,29 @@ import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedSt
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
 import { configuration } from '@/configuration';
 import {
-    resolveSessionRollbackPlan,
-    type CompletedConversationTurn,
     type SessionRollbackRpcParams,
     type SessionRollbackRpcResult,
     SESSION_MEDIA_MESSAGE_META_KIND_V1,
+    ReviewStartInputSchema,
     type SessionMediaItemV1,
     type SessionInitialGoalRequestV1,
+    SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
+    type SessionRuntimeIssueV1,
+    type SessionRuntimeUsageLimitDetailsV1,
+    type SessionUsageLimitRecoveryAuthSelectionV1,
 } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { isChangeTitleToolNameAlias } from '@happier-dev/protocol/tools/v2';
+import { isChangeTitleToolNameAlias, normalizePatchInputRecord } from '@happier-dev/protocol/tools/v2';
 import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollector';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
 import { logger } from '@/ui/logger';
 import { delay } from '@/utils/time';
-import { drainPendingQueueMessages } from '@/agent/runtime/drainPendingQueueMessages';
+import type { DrainPendingOptions, DrainPendingResult } from '@/agent/runtime/sessionInput/types';
+import {
+    recordSessionTurnCompleted,
+    recordSessionTurnInProgress,
+    surfacePrimarySessionRuntimeIssue,
+} from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { publishCodexSessionIdMetadata } from '../utils/codexSessionIdMetadata';
 import { resolveApprovalChoiceLabel } from '../runtime/codexRequestUserInputBridge';
 import {
@@ -31,6 +39,7 @@ import {
 } from '../runtime/codexRequestUserInputQuestions';
 import { canonicalizeCodexMcpToolName } from '../utils/canonicalizeCodexMcpToolName';
 import { readCodexEnvironmentAuthState } from '../cli/auth/readCodexEnvironmentAuthState';
+import { resolveTrustedSessionAttachmentLocalImagePaths } from '@/session/attachments/resolveTrustedSessionAttachmentLocalImagePaths';
 
 import {
     createCodexAppServerClient,
@@ -52,12 +61,14 @@ import {
     captureCompletedTurnSeqRange,
     publishRollbackRangeMetadata,
     publishLatestTurnRollbackRangeMetadata,
-    type CompletedTurnSeqRange,
 } from './rollbackMetadata';
 import {
     isCodexAppServerInvalidRequestForMethodError,
+    isCodexAppServerInvalidRequestMapExpectedStringError,
+    isCodexAppServerInvalidParamsForFieldError,
     isCodexAppServerInvalidParamsError,
     isCodexAppServerMethodNotFoundError,
+    isCodexAppServerNoActiveTurnToSteerError,
 } from './appServerCompatibility';
 import {
     buildCodexAppServerLegacyPermissionParams,
@@ -73,8 +84,28 @@ import {
     mergeCodexGoalIntoSessionWorkStateMetadata,
     removeCodexGoalFromSessionWorkStateMetadata,
 } from './workState';
+import {
+    isCodexRateLimitSnapshotExhausted,
+    readCodexRateLimitPlanType,
+    readEarliestCodexRateLimitResetAtMs,
+} from './rateLimitSnapshot';
 import { buildCodexNativeReviewFindingsV2Payload } from '@/agent/reviews/normalize/codex/buildCodexNativeReviewFindingsV2Payload';
 import { resolveCodexAppServerNativeReviewRequest } from './reviews/resolveCodexAppServerNativeReviewRequest';
+import { createCodexAppServerSessionTurnTracker } from './turns/codexAppServerSessionTurnTracker';
+import {
+    classifyCodexConnectedServiceAuthFailure,
+    type CodexConnectedServiceRuntimeFailureClassification,
+} from '../connectedServices/classifyCodexConnectedServiceAuthFailure';
+import type { CodexChatGptTokensRefreshBridgeResponse } from '../connectedServices/refreshCodexChatGptTokensForBridge';
+import {
+    resolveConnectedServiceRuntimeAuthContextFromEnv,
+} from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import {
+    resolveCodexRuntimeAuthClassificationContext,
+} from '../connectedServices/resolveCodexRuntimeAuthClassificationContext';
+import { UsageLimitRecoveryScheduler } from '@/daemon/connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
+import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
 
 type CodexAppServerStartOrLoadOptions = Readonly<{
     resumeId?: string | null;
@@ -101,10 +132,18 @@ type UnsupportedSessionRuntimeMethodResult = Readonly<{
     error: string;
 }>;
 
+const CODEX_REVIEW_COMMAND = '/codex.review';
+
 type GoalControlNotFoundResult = Readonly<{
     ok: false;
     errorCode: 'goal_not_found';
     error: string;
+}>;
+
+type InvalidGoalStatusResult = Readonly<{
+    ok: false;
+    errorCode: 'invalid_goal_status';
+    error: 'invalid_goal_status';
 }>;
 
 function unsupportedSessionRuntimeMethod(method: string): UnsupportedSessionRuntimeMethodResult {
@@ -112,6 +151,32 @@ function unsupportedSessionRuntimeMethod(method: string): UnsupportedSessionRunt
         ok: false,
         errorCode: 'unsupported_session_runtime_method',
         error: `unsupported_session_runtime_method:${method}`,
+    };
+}
+
+function invalidGoalStatus(): InvalidGoalStatusResult {
+    return { ok: false, errorCode: 'invalid_goal_status', error: 'invalid_goal_status' };
+}
+
+function normalizeNativeGoalSetStatus(status: string | undefined): 'active' | 'paused' | 'complete' | undefined | null {
+    if (status === undefined) return undefined;
+    const trimmed = status.trim();
+    if (!trimmed) return undefined;
+    if (trimmed === 'active' || trimmed === 'paused' || trimmed === 'complete') return trimmed;
+    return null;
+}
+
+function parseCodexReviewCommand(text: string): Record<string, unknown> | null {
+    const trimmed = text.trim();
+    if (trimmed !== CODEX_REVIEW_COMMAND && !trimmed.startsWith(`${CODEX_REVIEW_COMMAND} `)) {
+        return null;
+    }
+    return {
+        engineIds: ['codex'],
+        instructions: trimmed.slice(CODEX_REVIEW_COMMAND.length).trim(),
+        runLocation: 'current_session',
+        changeType: 'uncommitted',
+        base: { kind: 'none' },
     };
 }
 
@@ -149,13 +214,38 @@ type StreamUpdateContext = Readonly<{
 type PendingRawAssistantFinal = Readonly<{
     text: string;
     sidechainId: string | null;
+    streamScopeId: string;
+    itemId: string | null;
 }>;
+
+const CODEX_TRANSCRIPT_INITIAL_CHECKPOINT_DELAY_MS = 0;
 
 type CodexAppServerPermissionSupport = 'unknown' | 'supported' | 'legacy';
 
 type CodexAppServerPromptOptions = Readonly<{
     metadata?: unknown;
+    localId?: string | null;
+    trustedLocalImagePaths?: ReadonlySet<string>;
 }>;
+
+async function buildCodexTurnInputForPrompt(
+    prompt: string,
+    cwd: string,
+    options?: CodexAppServerPromptOptions,
+): Promise<CodexAppServerTurnInputItem[]> {
+    const trustedLocalImagePaths = options?.trustedLocalImagePaths
+        ?? (options?.metadata
+            ? await resolveTrustedSessionAttachmentLocalImagePaths({
+                cwd,
+                metadata: options.metadata,
+            })
+            : undefined);
+    return buildCodexAppServerTurnInput({
+        text: prompt,
+        metadata: options?.metadata,
+        trustedLocalImagePaths,
+    });
+}
 
 export type CodexAppServerReviewTarget =
     | Readonly<{ type: 'uncommittedChanges' }>
@@ -185,11 +275,100 @@ function readLastObservedMessageSeq(session: RuntimeSession): number {
     return Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : 0;
 }
 
-function readLastObservedUserMessageSeq(session: RuntimeSession): number {
-    const raw = typeof (session as RuntimeSession & { getLastObservedUserMessageSeq?: () => number }).getLastObservedUserMessageSeq === 'function'
-        ? (session as RuntimeSession & { getLastObservedUserMessageSeq: () => number }).getLastObservedUserMessageSeq()
-        : readLastObservedMessageSeq(session);
-    return Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : 0;
+function readUsageLimitRecoveryIntentFromMetadata(session: RuntimeSession): unknown {
+    const metadata = typeof session.getMetadataSnapshot === 'function' ? session.getMetadataSnapshot() : null;
+    if (!metadata || typeof metadata !== 'object') return null;
+    return (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY] ?? null;
+}
+
+async function writeUsageLimitRecoveryIntentToMetadata(
+    session: RuntimeSession,
+    intent: unknown,
+): Promise<void> {
+    await session.updateMetadata((metadata) => ({
+        ...metadata,
+        [SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]: intent,
+    }));
+}
+
+function readFiniteNumber(value: unknown): number | null {
+    const numeric = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function readSwitchAttemptResult(value: unknown): Record<string, unknown> | null {
+    const envelope = readRecord(value);
+    const outer = readRecord(envelope?.result);
+    if (outer?.status !== 'switch_attempted') return null;
+    return readRecord(outer.result);
+}
+
+function readSwitchAttemptStatus(value: unknown): string | null {
+    return trimStringValue(readSwitchAttemptResult(value)?.status);
+}
+
+function buildUsageLimitIssueFingerprint(issue: SessionRuntimeIssueV1): string {
+    return [
+        'usage-limit',
+        issue.provider ?? 'codex',
+        issue.providerTurnId ?? 'unknown-turn',
+        String(issue.occurredAt),
+        issue.usageLimit?.resetAtMs === null || issue.usageLimit?.resetAtMs === undefined
+            ? 'no-reset'
+            : String(issue.usageLimit.resetAtMs),
+    ].join(':');
+}
+
+function deriveCodexUsageLimitRecoveryTiming(issue: SessionRuntimeIssueV1): ReturnType<typeof deriveUsageLimitRecoveryTiming> {
+    return deriveUsageLimitRecoveryTiming({
+        occurredAtMs: issue.occurredAt,
+        resetAtMs: issue.usageLimit?.resetAtMs,
+        retryAfterMs: issue.usageLimit?.retryAfterMs,
+    });
+}
+
+function resolveUsageLimitRecoveryAuthSelection(input: Readonly<{
+    runtimeEnv: Pick<NodeJS.ProcessEnv, string>;
+    usageLimit: SessionRuntimeUsageLimitDetailsV1;
+}>): SessionUsageLimitRecoveryAuthSelectionV1 {
+    const runtimeContext = resolveConnectedServiceRuntimeAuthContextFromEnv(input.runtimeEnv, 'openai-codex');
+    if (runtimeContext.groupId && runtimeContext.profileId) {
+        return {
+            kind: 'group',
+            serviceId: runtimeContext.serviceId,
+            groupId: runtimeContext.groupId,
+            profileId: runtimeContext.profileId,
+        };
+    }
+    if (runtimeContext.profileId) {
+        return {
+            kind: 'profile',
+            serviceId: runtimeContext.serviceId,
+            profileId: runtimeContext.profileId,
+        };
+    }
+
+    const connectedService = input.usageLimit.connectedService;
+    if (connectedService?.groupId && connectedService.profileId) {
+        return {
+            kind: 'group',
+            serviceId: connectedService.serviceId,
+            groupId: connectedService.groupId,
+            profileId: connectedService.profileId,
+        };
+    }
+    if (connectedService?.profileId) {
+        return {
+            kind: 'profile',
+            serviceId: connectedService.serviceId,
+            profileId: connectedService.profileId,
+        };
+    }
+    return { kind: 'native', serviceId: 'openai-codex' };
+}
+
+function shouldAutoArmUsageLimitRecovery(): boolean {
+    return getActiveAccountSettingsSnapshot()?.settings?.usageLimitRecoverySettingsV1?.mode === 'auto_wait';
 }
 
 function readThreadId(value: unknown): string | null {
@@ -212,6 +391,24 @@ function readTurnId(value: unknown): string | null {
         if (typeof candidate === 'string' && candidate.trim().length > 0) {
             return candidate.trim();
         }
+    }
+    return null;
+}
+
+function readProviderEventTurnId(value: unknown): string | null {
+    const record = readRecord(value);
+    if (!record) return null;
+    const turn = readRecord(record.turn);
+    const candidates = [
+        record.turnId,
+        record.turn_id,
+        turn?.turnId,
+        turn?.turn_id,
+        turn?.id,
+    ];
+    for (const candidate of candidates) {
+        const turnId = trimStringValue(candidate);
+        if (turnId) return turnId;
     }
     return null;
 }
@@ -283,6 +480,21 @@ const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_MESSAGE =
     'Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.';
 const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_RECOVERY_STATUS_MESSAGE =
     'Codex detected that the signed-in account changed and refused to continue in the current process. Restarting the Codex process and resuming this session...';
+const CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS = [
+    'codex ran out of room',
+    'context window',
+] as const;
+const CODEX_CONTEXT_WINDOW_RECOVERY_MODE_ENV_KEY = 'HAPPIER_CODEX_CONTEXT_WINDOW_RECOVERY_MODE';
+const CODEX_CONTEXT_WINDOW_CONTINUATION_PROMPT_ENV_KEY = 'HAPPIER_CODEX_CONTEXT_WINDOW_CONTINUATION_PROMPT';
+const CODEX_CONTEXT_WINDOW_RECOVERY_CONTINUATION_PROMPT =
+    'Please continue the interrupted work from the compacted Codex context. Do not restart or repeat completed work.';
+
+type CodexAppServerContextWindowRecoveryMode = 'activity_aware' | 'continue' | 'retry_original' | 'off';
+
+type CodexAppServerContextWindowRecoveryConfig = Readonly<{
+    mode: CodexAppServerContextWindowRecoveryMode;
+    continuationPrompt: string;
+}>;
 
 type CodexAppServerErrorPayload = Readonly<{
     message: string | null;
@@ -292,11 +504,19 @@ type CodexAppServerErrorPayload = Readonly<{
 
 class CodexAppServerTurnFailure extends Error {
     readonly isAuthAccountChanged: boolean;
+    readonly isContextWindowExhausted: boolean;
+    readonly runtimeAuthClassification: CodexConnectedServiceRuntimeFailureClassification | null;
 
-    constructor(message: string, options: Readonly<{ isAuthAccountChanged: boolean }>) {
+    constructor(message: string, options: Readonly<{
+        isAuthAccountChanged: boolean;
+        isContextWindowExhausted: boolean;
+        runtimeAuthClassification: CodexConnectedServiceRuntimeFailureClassification | null;
+    }>) {
         super(message);
         this.name = 'CodexAppServerTurnFailure';
         this.isAuthAccountChanged = options.isAuthAccountChanged;
+        this.isContextWindowExhausted = options.isContextWindowExhausted;
+        this.runtimeAuthClassification = options.runtimeAuthClassification;
     }
 }
 
@@ -374,11 +594,114 @@ function isCodexAppServerAuthAccountChangedError(error: unknown): boolean {
     return error.message.includes(CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_MESSAGE);
 }
 
-function createCodexAppServerTurnFailure(value: unknown): Error {
+function normalizeCodexErrorInfo(value: string | null): string | null {
+    return value ? value.replace(/[_\-\s]/g, '').toLowerCase() : null;
+}
+
+function textMatchesCodexContextWindowExhaustedMessage(value: string | null): boolean {
+    const normalized = value?.toLowerCase() ?? '';
+    return CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS.every((marker) => normalized.includes(marker));
+}
+
+function isCodexAppServerContextWindowExhaustedPayload(payload: CodexAppServerErrorPayload): boolean {
+    return normalizeCodexErrorInfo(payload.codexErrorInfo) === 'contextwindowexceeded'
+        || [payload.message, payload.additionalDetails].some(textMatchesCodexContextWindowExhaustedMessage);
+}
+
+function isCodexAppServerContextWindowExhaustedError(error: unknown): boolean {
+    if (error instanceof CodexAppServerTurnFailure) {
+        return error.isContextWindowExhausted;
+    }
+    if (!(error instanceof Error)) return false;
+    return textMatchesCodexContextWindowExhaustedMessage(error.message);
+}
+
+function shouldDeferCodexAppServerTurnFailureToPromptLoop(error: unknown): boolean {
+    return isCodexAppServerAuthAccountChangedError(error) || isCodexAppServerContextWindowExhaustedError(error);
+}
+
+function normalizeCodexContextWindowRecoveryMode(value: unknown): CodexAppServerContextWindowRecoveryMode | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().replace(/[\s-]+/g, '_').toLowerCase();
+    if (normalized === 'activity_aware' || normalized === 'auto' || normalized === 'standard') return 'activity_aware';
+    if (normalized === 'continue' || normalized === 'auto_continue') return 'continue';
+    if (normalized === 'retry_original' || normalized === 'retry') return 'retry_original';
+    if (normalized === 'off' || normalized === 'disabled' || normalized === 'disable') return 'off';
+    return null;
+}
+
+function normalizeCodexContinuationPrompt(value: unknown): string | null {
+    return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function resolveCodexContextWindowRecoveryConfig(input: Readonly<{
+    configured?: Readonly<{
+        mode?: CodexAppServerContextWindowRecoveryMode | null;
+        continuationPrompt?: string | null;
+    }> | null;
+    runtimeEnv: Pick<NodeJS.ProcessEnv, string>;
+}>): CodexAppServerContextWindowRecoveryConfig {
+    return {
+        mode: normalizeCodexContextWindowRecoveryMode(input.configured?.mode)
+            ?? normalizeCodexContextWindowRecoveryMode(input.runtimeEnv[CODEX_CONTEXT_WINDOW_RECOVERY_MODE_ENV_KEY])
+            ?? 'activity_aware',
+        continuationPrompt: normalizeCodexContinuationPrompt(input.configured?.continuationPrompt)
+            ?? normalizeCodexContinuationPrompt(input.runtimeEnv[CODEX_CONTEXT_WINDOW_CONTINUATION_PROMPT_ENV_KEY])
+            ?? CODEX_CONTEXT_WINDOW_RECOVERY_CONTINUATION_PROMPT,
+    };
+}
+
+function resolveCodexContextWindowRecoveryAction(input: Readonly<{
+    mode: CodexAppServerContextWindowRecoveryMode;
+    failedTurnHadMeaningfulActivity: boolean;
+}>): 'continue' | 'retry_original' | 'disabled' {
+    if (input.mode === 'off') return 'disabled';
+    if (input.mode === 'continue') return 'continue';
+    if (input.mode === 'retry_original') return 'retry_original';
+    return input.failedTurnHadMeaningfulActivity ? 'continue' : 'retry_original';
+}
+
+function isMeaningfulCodexContextWindowRecoveryActivity(update: CodexAppServerStreamUpdate): boolean {
+    switch (update.type) {
+        case 'context-compaction':
+            return false;
+        case 'assistant-text-delta':
+        case 'assistant-text-final':
+        case 'assistant-raw-final':
+        case 'reasoning-delta':
+        case 'reasoning-final':
+            return update.text.trim().length > 0;
+        case 'review-mode-started':
+        case 'review-mode-completed':
+            return true;
+        case 'turn-diff-updated':
+            return update.unifiedDiff.trim().length > 0;
+        default:
+            return true;
+    }
+}
+
+function createCodexAppServerTurnFailure(
+    value: unknown,
+    runtimeEnv: Pick<NodeJS.ProcessEnv, string>,
+    session: RuntimeSession,
+): Error {
     const payload = readCodexAppServerErrorPayload(value);
+    const authContext = resolveCodexRuntimeAuthClassificationContext({ runtimeEnv, session });
+    const runtimeAuthClassification = classifyCodexConnectedServiceAuthFailure({
+        providerErrorPath: true,
+        error: value,
+        serviceId: 'openai-codex',
+        profileId: authContext.profileId,
+        groupId: authContext.groupId,
+    });
     return new CodexAppServerTurnFailure(
         payload ? formatCodexAppServerErrorPayloadMessage(payload) ?? 'Codex app-server turn failed' : 'Codex app-server turn failed',
-        { isAuthAccountChanged: payload ? isCodexAppServerAuthAccountChangedPayload(payload) : false },
+        {
+            isAuthAccountChanged: payload ? isCodexAppServerAuthAccountChangedPayload(payload) : false,
+            isContextWindowExhausted: payload ? isCodexAppServerContextWindowExhaustedPayload(payload) : false,
+            runtimeAuthClassification,
+        },
     );
 }
 
@@ -474,6 +797,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
     activeServerDir?: string | null;
     processEnv?: NodeJS.ProcessEnv;
     configOverrides?: ReadonlyArray<string>;
+    contextWindowRecovery?: Readonly<{
+        mode?: CodexAppServerContextWindowRecoveryMode | null;
+        continuationPrompt?: string | null;
+    }> | null;
     session: RuntimeSession;
     transcriptSession?: StreamedTranscriptWriterSession;
     onThinkingChange: (thinking: boolean) => void;
@@ -481,19 +808,28 @@ export function createCodexAppServerRuntime(params: Readonly<{
     getPermissionMode?: (() => PermissionMode) | null;
     permissionMode?: PermissionMode;
     pendingQueue?: Readonly<{
-        popPendingMessage: () => Promise<boolean>;
+        drainPending: (opts?: DrainPendingOptions) => Promise<DrainPendingResult>;
+        shouldDrainPendingMessages?: () => boolean;
         maxPopPerWake?: number;
         drainAfterStartOrLoad?: boolean;
     }>;
     onInFlightSteerAvailabilityChange?: (available: boolean) => void;
+    onRateLimitSnapshot?: (snapshot: unknown) => void | Promise<void>;
+    onUsageLimitGroupRecovery?: (input: Readonly<{
+        sessionId: string;
+        classification: CodexConnectedServiceRuntimeFailureClassification;
+    }>) => Promise<unknown> | unknown;
+    onChatGptAuthTokensRefresh?: (params: unknown) => Promise<CodexChatGptTokensRefreshBridgeResponse>;
     sessionMedia?: Readonly<{
         persist: (message: RuntimeSessionMediaMessage) => Promise<RuntimeSessionMediaPersistResult> | RuntimeSessionMediaPersistResult;
     }>;
+    rememberUsageLimitRecoveryPreference?: (() => Promise<void>) | null;
 }>): Readonly<{
     getSessionId: () => string | null;
     supportsInFlightSteer: () => boolean;
     canSteerPrompt: () => boolean;
     isTurnInFlight: () => boolean;
+    hasActiveProviderTurn: () => boolean;
     beginTurn: () => void;
     cancel: () => Promise<void>;
     reset: () => Promise<void>;
@@ -505,22 +841,46 @@ export function createCodexAppServerRuntime(params: Readonly<{
     compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     startReview: (_request: CodexAppServerReviewStartRequest) => Promise<void | UnsupportedSessionRuntimeMethodResult>;
-    startInlineReview: (_input: unknown) => Promise<Readonly<{ ok: true; reviewTurnId: string | null }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: 'invalid_parameters'; error: string }>>;
+    startInlineReview: (_input: unknown) => Promise<Readonly<{ ok: true; reviewTurnId: string | null }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: 'invalid_parameters' | 'inline_review_not_supported'; error: string }>>;
+    handleUserMessage: (_request: Readonly<{
+        text: string;
+        localId?: string;
+        meta: Record<string, unknown>;
+    }>) => Promise<Readonly<{ handled: false }> | Readonly<{ handled: true; result: unknown }>>;
+    invalidateConnectedServiceAuthTransports: () => Promise<Readonly<{ ok: true }> | UnsupportedSessionRuntimeMethodResult>;
     flushTurn: () => Promise<void>;
-    setGoal: (_objective: string | undefined, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult | GoalControlNotFoundResult>;
+    setGoal: (_objective: string | undefined, _options?: Readonly<{ status?: string; tokenBudget?: number | null }>) => Promise<void | UnsupportedSessionRuntimeMethodResult | GoalControlNotFoundResult | InvalidGoalStatusResult>;
     clearGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
     refreshGoal: () => Promise<void | UnsupportedSessionRuntimeMethodResult>;
-    listVendorPlugins: () => ReturnType<typeof listCodexVendorPlugins>;
-    listSkills: () => ReturnType<typeof listCodexAppServerSkills>;
+    enableUsageLimitWaitResume: (_request: Readonly<{
+        sessionId: string;
+        issueFingerprint?: string;
+        rememberPreference?: boolean;
+    }>) => Promise<Readonly<{ ok: true; recovery: unknown }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: string; error: string }>>;
+    cancelUsageLimitWaitResume: (_request: Readonly<{
+        sessionId: string;
+        issueFingerprint?: string | null;
+    }>) => Promise<Readonly<{ ok: true; recovery: unknown }>>;
+    checkUsageLimitRecoveryNow: (_request: Readonly<{
+        sessionId: string;
+        provider?: string;
+    }>) => Promise<Readonly<{ ok: true; status: string }> | UnsupportedSessionRuntimeMethodResult>;
+    listVendorPlugins: (_options?: Readonly<{ cwd?: string }>) => ReturnType<typeof listCodexVendorPlugins>;
+    listSkills: (_options?: Readonly<{ cwd?: string }>) => ReturnType<typeof listCodexAppServerSkills>;
     rollbackConversation: (request: SessionRollbackRpcParams) => Promise<SessionRollbackRpcResult>;
 }> {
     const runtimeEnv = params.processEnv ?? process.env;
+    const contextWindowRecoveryConfig = resolveCodexContextWindowRecoveryConfig({
+        configured: params.contextWindowRecovery,
+        runtimeEnv,
+    });
     const lastPublishedThreadId: { value: string | null } = { value: null };
     let threadId: string | null = null;
     let turnInFlight = false;
     let thinking = false;
     let pendingTurn: PendingTurn | null = null;
     let latestPendingTurnId: string | null = null;
+    const deferredRecoverableFailureTurnIds = new Set<string>();
     let clientPromise: Promise<DisposableCodexAppServerClient> | null = null;
     let currentModeId: string | null = null;
     let currentModelId: string | null = null;
@@ -529,32 +889,130 @@ export function createCodexAppServerRuntime(params: Readonly<{
     let hasServiceTierOverride = false;
     let pendingTurnStartSeqInclusive: number | null = null;
     let permissionSupport: CodexAppServerPermissionSupport = 'unknown';
-    const completedTurnSeqRanges: CompletedTurnSeqRange[] = [];
+    const turnBoundaryTracker = createCodexAppServerSessionTurnTracker({
+        session: params.session,
+        getProviderThreadId: () => threadId,
+        onMetadataWriteError: (error) => {
+            logger.debug('[codex-app-server] Failed to publish session turn update (non-fatal)', error);
+        },
+    });
     let pendingTurnFinalizationTimer: ReturnType<typeof setTimeout> | null = null;
     let scheduledPendingTurnFlushReason: 'turn-end' | 'abort' | null = null;
     let activeTurnSteerContext: CodexAppServerSteerContext | null = null;
     let activeTurnAcceptsSteer = false;
     let lastPublishedInFlightSteerAvailability: boolean | null = null;
+    let activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
     const streamEventBridge = createCodexAppServerStreamEventBridge();
     const turnChangeCollector = new TurnChangeSetCollector({
         provider: 'codex',
         snapshotUnifiedDiff: true,
     });
+    const beginTurnChangeTracking = async (): Promise<void> => {
+        turnChangeCollector.beginTurn();
+    };
     const itemTranscriptBridge = createKeyedStreamedTranscriptBridge<{
         streamKey: string;
         sidechainId: string | null;
     }>({
         provider: 'codex',
         createSessionForStream: () => params.transcriptSession ?? params.session,
+        initialCheckpointDelayMs: CODEX_TRANSCRIPT_INITIAL_CHECKPOINT_DELAY_MS,
     });
     const assistantTextByItemId = new Map<string, string>();
     const reasoningTextByItemId = new Map<string, string>();
     const latestAssistantItemIdByStreamScope = new Map<string, string>();
-    const normalizedAssistantFinalSeenByStreamScope = new Set<string>();
+    const normalizedAssistantFinalItemKeys = new Set<string>();
     const nativeReviewCompletionTextByStreamScope = new Map<string, string>();
-    const rawAssistantFinalByStreamScope = new Map<string, PendingRawAssistantFinal>();
+    const rawAssistantFinalByItemKey = new Map<string, PendingRawAssistantFinal>();
     const persistedMediaDedupeKeys = new Set<string>();
     let activeInlineReview = false;
+    let latestUsageLimitIssue: SessionRuntimeIssueV1 | null = null;
+    const usageLimitRecoveryScheduler = new UsageLimitRecoveryScheduler({
+        nowMs: () => Date.now(),
+        store: {
+            read: () => readUsageLimitRecoveryIntentFromMetadata(params.session),
+            write: async (_sessionId, intent) => {
+                await writeUsageLimitRecoveryIntentToMetadata(params.session, intent).catch((error) => {
+                    logger.debug('[codex-app-server] Failed to persist usage-limit recovery intent (non-fatal)', error);
+                });
+            },
+        },
+        recover: async (intent) => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                return { status: 'exhausted' as const, lastProbeError: 'codex_app_server_thread_not_started' };
+            }
+            const client = await ensureClient();
+            try {
+                const rawSnapshot = await client.request('account/rateLimits/read');
+                await params.onRateLimitSnapshot?.(rawSnapshot);
+                if (isCodexRateLimitSnapshotExhausted(rawSnapshot)) {
+                    const nextCheckAtMs = readEarliestCodexRateLimitResetAtMs(rawSnapshot) ?? intent.nextCheckAtMs ?? intent.resetAtMs ?? Date.now();
+                    if (intent.selectedAuth.kind === 'group' && typeof params.onUsageLimitGroupRecovery === 'function') {
+                        try {
+                            const recoveryRequest = await params.onUsageLimitGroupRecovery({
+                                sessionId: params.session.sessionId,
+                                classification: {
+                                    kind: 'usage_limit',
+                                    serviceId: 'openai-codex',
+                                    groupId: intent.selectedAuth.groupId,
+                                    profileId: intent.selectedAuth.profileId,
+                                    resetsAtMs: nextCheckAtMs,
+                                    retryAfterMs: null,
+                                    planType: readCodexRateLimitPlanType(rawSnapshot),
+                                    rateLimits: rawSnapshot,
+                                    source: 'provider_runtime_marker',
+                                },
+                            });
+                            const switchAttemptResult = readSwitchAttemptResult(recoveryRequest);
+                            const switchAttemptStatus = trimStringValue(switchAttemptResult?.status);
+                            if (switchAttemptStatus === 'generation_apply_failed') {
+                                return {
+                                    status: 'exhausted' as const,
+                                    lastProbeError: `connected_service_generation_apply_failed:${trimStringValue(switchAttemptResult?.errorCode) || 'unknown'}`,
+                                };
+                            }
+                            if (switchAttemptStatus === 'switched') {
+                                return {
+                                    status: 'wait' as const,
+                                    nextCheckAtMs: Date.now(),
+                                };
+                            }
+                        } catch (error) {
+                            logger.debug('[codex-app-server] Failed to request connected-service group recovery during usage-limit wait/resume', error);
+                            return {
+                                status: 'wait' as const,
+                                nextCheckAtMs,
+                                lastProbeError: 'connected_service_group_recovery_request_failed',
+                            };
+                        }
+                    }
+                    return {
+                        status: 'wait' as const,
+                        nextCheckAtMs,
+                    };
+                }
+                return { status: 'ready' as const };
+            } catch (error) {
+                logger.debug('[codex-app-server] Usage-limit recovery probe failed', error);
+                return {
+                    status: 'exhausted' as const,
+                    lastProbeError: 'codex_app_server_rate_limit_probe_unavailable',
+                };
+            }
+        },
+        resume: async () => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                throw new Error('codex_app_server_thread_not_started');
+            }
+            const client = await ensureClient();
+            const resumedThread = await resumeThread(client, activeThreadId, {
+                preserveRequestedThreadId: true,
+            });
+            await applyStartOrLoadResponse(client, resumedThread.nextThreadId, resumedThread.response);
+        },
+    });
     const captureCurrentSteerContext = (): CodexAppServerSteerContext => ({
         modeId: currentModeId,
         modelId: currentModelId,
@@ -623,13 +1081,40 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const shouldRetryWithoutPermissionProfile = (error: unknown, requestParams: Record<string, unknown>): boolean => {
         return Object.prototype.hasOwnProperty.call(requestParams, 'permissions')
-            && (isCodexAppServerInvalidParamsError(error) || isCodexAppServerMethodNotFoundError(error));
+            && (isCodexAppServerMethodNotFoundError(error)
+                || isCodexAppServerInvalidParamsForFieldError(error, 'permissions')
+                || isCodexAppServerInvalidRequestMapExpectedStringError(error));
     };
 
     const setThinking = (nextThinking: boolean): void => {
         if (thinking === nextThinking) return;
         thinking = nextThinking;
         params.onThinkingChange(nextThinking);
+    };
+    const recordInProgressBestEffort = (providerTurnId?: string | null): void => {
+        if (params.session.sessionTurnLifecycle) return;
+        void recordSessionTurnInProgress({
+            provider: 'codex',
+            providerTurnId,
+            session: params.session,
+        }).catch((error) => {
+            logger.debug('[codex-app-server] Failed to record session turn in-progress (non-fatal)', error);
+        });
+    };
+
+    const recordCompletedBestEffort = async (providerTurnId?: string | null): Promise<void> => {
+        if (params.session.sessionTurnLifecycle) return;
+        await recordSessionTurnCompleted({
+            provider: 'codex',
+            providerTurnId,
+            session: params.session,
+        }).catch((error) => {
+            logger.debug('[codex-app-server] Failed to record session turn completion (non-fatal)', error);
+        });
+        await usageLimitRecoveryScheduler.cancel({ sessionId: params.session.sessionId }).catch((error) => {
+            logger.debug('[codex-app-server] Failed to cancel stale usage-limit recovery intent after completion (non-fatal)', error);
+        });
+        latestUsageLimitIssue = null;
     };
 
     // `turn/steer` and `turn/interrupt` require a turn id, but we may not have observed it yet
@@ -775,41 +1260,78 @@ export function createCodexAppServerRuntime(params: Readonly<{
         override(text);
     };
 
-    const commitRawAssistantFinal = (streamScopeId: string, pending: PendingRawAssistantFinal): void => {
-        const itemId = latestAssistantItemIdByStreamScope.get(streamScopeId) ?? 'raw-response-item';
+    const buildItemStateKey = (scopeId: string, itemId: string): string => `${scopeId}:${itemId}`;
+    const buildRawFallbackStateKey = (scopeId: string): string => `${scopeId}:raw-response-item`;
+    const buildItemStreamKey = (scopeId: string, kind: 'assistant' | 'reasoning', itemId: string): string =>
+        `${scopeId}:${kind}:${itemId}`;
+    const buildAssistantItemStreamKey = (scopeId: string, itemId: string): string =>
+        buildItemStreamKey(scopeId, 'assistant', itemId);
+    const hasNormalizedAssistantFinalInScope = (streamScopeId: string): boolean => {
+        const keyPrefix = `${streamScopeId}:`;
+        for (const itemKey of normalizedAssistantFinalItemKeys) {
+            if (itemKey.startsWith(keyPrefix)) return true;
+        }
+        return false;
+    };
+    const deletePendingRawAssistantFinalForNormalizedItem = (streamScopeId: string, itemId: string): void => {
+        rawAssistantFinalByItemKey.delete(buildItemStateKey(streamScopeId, itemId));
+        rawAssistantFinalByItemKey.delete(buildRawFallbackStateKey(streamScopeId));
+    };
+
+    const commitRawAssistantFinal = (pending: PendingRawAssistantFinal): void => {
+        const itemId = pending.itemId
+            ?? latestAssistantItemIdByStreamScope.get(pending.streamScopeId)
+            ?? 'raw-response-item';
         appendStreamFinal(
-            buildItemStateKey(streamScopeId, itemId),
+            buildItemStateKey(pending.streamScopeId, itemId),
             pending.text,
             assistantTextByItemId,
             (deltaText) => {
                 itemTranscriptBridge.appendAssistantDelta({
                     deltaText,
-                    streamKey: buildItemStreamKey(streamScopeId, 'assistant', itemId),
+                    streamKey: buildAssistantItemStreamKey(pending.streamScopeId, itemId),
                     sidechainId: pending.sidechainId,
                 });
             },
             (finalText) => {
                 itemTranscriptBridge.overrideAssistantText({
                     text: finalText,
-                    streamKey: buildItemStreamKey(streamScopeId, 'assistant', itemId),
+                    streamKey: buildAssistantItemStreamKey(pending.streamScopeId, itemId),
                     sidechainId: pending.sidechainId,
                 });
             },
         );
     };
 
-    const commitPendingRawAssistantFinals = (): void => {
-        for (const [streamScopeId, pendingRaw] of rawAssistantFinalByStreamScope.entries()) {
-            if (!normalizedAssistantFinalSeenByStreamScope.has(streamScopeId)) {
-                commitRawAssistantFinal(streamScopeId, pendingRaw);
+    const commitPendingRawAssistantFinals = (options?: Readonly<{
+        includeFallbackRawFinals?: boolean;
+        sidechainId?: string | null;
+    }>): void => {
+        const includeFallbackRawFinals = options?.includeFallbackRawFinals !== false;
+        for (const [itemKey, pendingRaw] of rawAssistantFinalByItemKey.entries()) {
+            if (options && Object.prototype.hasOwnProperty.call(options, 'sidechainId') && pendingRaw.sidechainId !== options.sidechainId) {
+                continue;
             }
-            rawAssistantFinalByStreamScope.delete(streamScopeId);
+            if (pendingRaw.itemId) {
+                if (!normalizedAssistantFinalItemKeys.has(itemKey)) {
+                    commitRawAssistantFinal(pendingRaw);
+                }
+                rawAssistantFinalByItemKey.delete(itemKey);
+            } else if (includeFallbackRawFinals && !hasNormalizedAssistantFinalInScope(pendingRaw.streamScopeId)) {
+                commitRawAssistantFinal(pendingRaw);
+                rawAssistantFinalByItemKey.delete(itemKey);
+            }
         }
     };
 
-    const buildItemStateKey = (scopeId: string, itemId: string): string => `${scopeId}:${itemId}`;
-    const buildItemStreamKey = (scopeId: string, kind: 'assistant' | 'reasoning', itemId: string): string =>
-        `${scopeId}:${kind}:${itemId}`;
+    const flushItemTranscriptBoundary = async (sidechainId: string | null): Promise<void> => {
+        commitPendingRawAssistantFinals({ includeFallbackRawFinals: false, sidechainId });
+        await itemTranscriptBridge.flushStreamsMatching({
+            reason: 'tool-call-boundary',
+            matches: (stream) => stream.sidechainId === sidechainId,
+        });
+    };
+
     const buildSessionMediaMeta = (media: readonly SessionMediaItemV1[]): Record<string, unknown> => ({
         happier: {
             kind: SESSION_MEDIA_MESSAGE_META_KIND_V1,
@@ -832,7 +1354,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const ensureSyntheticSubagentThread = async (threadId: string): Promise<string> => {
         if (syntheticSubagentThreadIds.has(threadId)) return threadId;
-        await itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+        await flushItemTranscriptBoundary(null);
         syntheticSubagentTracker.ensureStarted({ threadId });
         syntheticSubagentThreadIds.add(threadId);
         return threadId;
@@ -840,8 +1362,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const finalizeSyntheticSubagentThread = async (threadId: string, status: 'completed' | 'interrupted'): Promise<void> => {
         await ensureSyntheticSubagentThread(threadId);
-        await itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+        await flushItemTranscriptBoundary(threadId);
         syntheticSubagentTracker.finalize({ threadId, status });
+    };
+
+    const markActiveTurnMeaningfulContextWindowRecoveryActivity = (): void => {
+        if (!pendingTurn) return;
+        activeTurnHasMeaningfulContextWindowRecoveryActivity = true;
     };
 
     const commitInlineReviewFindings = async (
@@ -880,12 +1407,16 @@ export function createCodexAppServerRuntime(params: Readonly<{
     };
 
     const applyStreamUpdate = async (update: CodexAppServerStreamUpdate, context: StreamUpdateContext): Promise<void> => {
+        if (isMeaningfulCodexContextWindowRecoveryActivity(update)) {
+            markActiveTurnMeaningfulContextWindowRecoveryActivity();
+        }
+
         if (update.type === 'assistant-text-delta') {
             latestAssistantItemIdByStreamScope.set(context.streamScopeId, update.itemId);
             appendStreamDelta(buildItemStateKey(context.streamScopeId, update.itemId), update.text, assistantTextByItemId, (deltaText) => {
                 itemTranscriptBridge.appendAssistantDelta({
                     deltaText,
-                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    streamKey: buildAssistantItemStreamKey(context.streamScopeId, update.itemId),
                     sidechainId: context.sidechainId,
                 });
             });
@@ -893,25 +1424,30 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
 
         if (update.type === 'assistant-text-final') {
+            const itemKey = buildItemStateKey(context.streamScopeId, update.itemId);
             const nativeReviewText = nativeReviewCompletionTextByStreamScope.get(context.streamScopeId);
             if (nativeReviewText && nativeReviewText.trim() === update.text.trim()) {
-                normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
-                rawAssistantFinalByStreamScope.delete(context.streamScopeId);
+                normalizedAssistantFinalItemKeys.add(itemKey);
+                deletePendingRawAssistantFinalForNormalizedItem(context.streamScopeId, update.itemId);
                 return;
             }
+            if (nativeReviewText) {
+                await flushItemTranscriptBoundary(context.sidechainId);
+                nativeReviewCompletionTextByStreamScope.delete(context.streamScopeId);
+            }
             latestAssistantItemIdByStreamScope.set(context.streamScopeId, update.itemId);
-            normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
-            rawAssistantFinalByStreamScope.delete(context.streamScopeId);
-            appendStreamFinal(buildItemStateKey(context.streamScopeId, update.itemId), update.text, assistantTextByItemId, (deltaText) => {
+            normalizedAssistantFinalItemKeys.add(itemKey);
+            deletePendingRawAssistantFinalForNormalizedItem(context.streamScopeId, update.itemId);
+            appendStreamFinal(itemKey, update.text, assistantTextByItemId, (deltaText) => {
                 itemTranscriptBridge.appendAssistantDelta({
                     deltaText,
-                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    streamKey: buildAssistantItemStreamKey(context.streamScopeId, update.itemId),
                     sidechainId: context.sidechainId,
                 });
             }, (finalText) => {
                 itemTranscriptBridge.overrideAssistantText({
                     text: finalText,
-                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    streamKey: buildAssistantItemStreamKey(context.streamScopeId, update.itemId),
                     sidechainId: context.sidechainId,
                 });
             });
@@ -919,12 +1455,19 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
 
         if (update.type === 'assistant-raw-final') {
-            if (normalizedAssistantFinalSeenByStreamScope.has(context.streamScopeId)) {
+            const itemKey = update.itemId
+                ? buildItemStateKey(context.streamScopeId, update.itemId)
+                : buildRawFallbackStateKey(context.streamScopeId);
+            if (update.itemId) {
+                if (normalizedAssistantFinalItemKeys.has(itemKey)) return;
+            } else if (hasNormalizedAssistantFinalInScope(context.streamScopeId)) {
                 return;
             }
-            rawAssistantFinalByStreamScope.set(context.streamScopeId, {
+            rawAssistantFinalByItemKey.set(itemKey, {
                 text: update.text,
                 sidechainId: context.sidechainId,
+                streamScopeId: context.streamScopeId,
+                itemId: update.itemId,
             });
             return;
         }
@@ -939,23 +1482,24 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
         if (update.type === 'review-mode-completed') {
             latestAssistantItemIdByStreamScope.set(context.streamScopeId, update.itemId);
-            normalizedAssistantFinalSeenByStreamScope.add(context.streamScopeId);
-            rawAssistantFinalByStreamScope.delete(context.streamScopeId);
+            const itemKey = buildItemStateKey(context.streamScopeId, update.itemId);
+            normalizedAssistantFinalItemKeys.add(itemKey);
+            deletePendingRawAssistantFinalForNormalizedItem(context.streamScopeId, update.itemId);
             nativeReviewCompletionTextByStreamScope.set(context.streamScopeId, update.review);
             if (activeInlineReview && !context.sidechainId) {
                 await commitInlineReviewFindings(update);
                 return;
             }
-            appendStreamFinal(buildItemStateKey(context.streamScopeId, update.itemId), update.review, assistantTextByItemId, (deltaText) => {
+            appendStreamFinal(itemKey, update.review, assistantTextByItemId, (deltaText) => {
                 itemTranscriptBridge.appendAssistantDelta({
                     deltaText,
-                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    streamKey: buildAssistantItemStreamKey(context.streamScopeId, update.itemId),
                     sidechainId: context.sidechainId,
                 });
             }, (finalText) => {
                 itemTranscriptBridge.overrideAssistantText({
                     text: finalText,
-                    streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', update.itemId),
+                    streamKey: buildAssistantItemStreamKey(context.streamScopeId, update.itemId),
                     sidechainId: context.sidechainId,
                 });
             });
@@ -975,7 +1519,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             const mediaMeta = buildSessionMediaMeta(persisted);
             const assistantItemId = latestAssistantItemIdByStreamScope.get(context.streamScopeId) ?? update.itemId;
             const didAttach = itemTranscriptBridge.mergeAssistantMeta({
-                streamKey: buildItemStreamKey(context.streamScopeId, 'assistant', assistantItemId),
+                streamKey: buildAssistantItemStreamKey(context.streamScopeId, assistantItemId),
                 sidechainId: context.sidechainId,
                 meta: mediaMeta,
             });
@@ -1049,7 +1593,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         }
 
         if (update.type === 'tool-call') {
-            await itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+            await flushItemTranscriptBoundary(context.sidechainId);
             if (update.toolKind === 'mcp' && isChangeTitleToolNameAlias(update.name)) {
                 const title = readHappierTitleToolTitle(update.input);
                 if (title) {
@@ -1058,7 +1602,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             if (update.toolKind === 'file-change') {
                 const input = update.input && typeof update.input === 'object' && !Array.isArray(update.input)
-                    ? update.input as Record<string, unknown>
+                    ? normalizePatchInputRecord(update.input as Record<string, unknown>)
                     : null;
                 const changes = input?.changes;
                 if (changes && typeof changes === 'object' && !Array.isArray(changes)) {
@@ -1095,7 +1639,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             pendingHappierTitleToolNamesByCallId.delete(update.callId);
             if (context.sidechainId) {
                 params.session.sendAgentMessage('codex', {
-                    type: 'tool-result',
+                    type: 'tool-call-result',
                     callId: update.callId,
                     output: update.output,
                     id: randomUUID(),
@@ -1127,9 +1671,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         assistantTextByItemId.clear();
         reasoningTextByItemId.clear();
         latestAssistantItemIdByStreamScope.clear();
-        normalizedAssistantFinalSeenByStreamScope.clear();
+        normalizedAssistantFinalItemKeys.clear();
         nativeReviewCompletionTextByStreamScope.clear();
-        rawAssistantFinalByStreamScope.clear();
+        rawAssistantFinalByItemKey.clear();
         pendingHappierTitleToolNamesByCallId.clear();
         await itemTranscriptBridge.flushAll({
             reason,
@@ -1334,11 +1878,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
         requestParams: unknown,
         message?: Readonly<{ id?: unknown }> | null,
     ): Promise<unknown> => {
+        await ensureActiveTurnForProviderRequest(requestParams);
         const invocation = readMcpElicitationInvocation(requestParams, message);
         if (!invocation) {
             return mapMcpElicitationResponse({ decision: 'denied' });
         }
 
+        markActiveTurnMeaningfulContextWindowRecoveryActivity();
         const result = params.permissionHandler
             ? await params.permissionHandler.handleToolCall(invocation.toolCallId, invocation.toolName, invocation.input)
             : { decision: 'denied' as const };
@@ -1348,7 +1894,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const handleServerRequest = async (method: string, requestParams: unknown): Promise<unknown> => {
         const updates = streamEventBridge.onServerRequest({ method, params: requestParams });
+        if (updates.length > 0) {
+            await ensureActiveTurnForProviderRequest(requestParams);
+        }
         for (const update of updates) {
+            if (isMeaningfulCodexContextWindowRecoveryActivity(update)) {
+                markActiveTurnMeaningfulContextWindowRecoveryActivity();
+            }
+
             if (update.type === 'approval-request') {
                 const result = params.permissionHandler
                     ? await params.permissionHandler.handleToolCall(update.callId, update.toolName, update.input)
@@ -1421,7 +1974,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
     const finishPendingTurn = async (options?: Readonly<{
         error?: Error;
-        flushReason?: 'turn-end' | 'abort';
+        flushReason?: 'turn-end' | 'abort' | 'failure';
         insideBridgeWork?: boolean;
     }>): Promise<void> => {
         if (pendingTurnFinalizationTimer) {
@@ -1435,24 +1988,24 @@ export function createCodexAppServerRuntime(params: Readonly<{
         pendingTurnStartSeqInclusive = null;
         turnInFlight = false;
         clearActiveTurnSteerability();
-        setThinking(false);
         if (options?.flushReason) {
+            const streamFlushReason = options.flushReason === 'failure' ? 'abort' : options.flushReason;
             if (options.insideBridgeWork === true) {
                 if (options.flushReason === 'turn-end') {
                     commitPendingRawAssistantFinals();
                 }
-                await flushStreamState(options.flushReason);
+                await flushStreamState(streamFlushReason);
             } else {
                 await runBridgeWork(async () => {
                     if (options.flushReason === 'turn-end') {
                         commitPendingRawAssistantFinals();
                     }
-                    await flushStreamState(options.flushReason!);
+                    await flushStreamState(streamFlushReason);
                 });
             }
         }
         if (options?.flushReason === 'turn-end' && activeTurn) {
-            const turnChangeSet = turnChangeCollector.flushTurn({
+            const turnChangeSetParams = {
                 sessionId: params.session.sessionId ?? activeTurn.threadId,
                 turnId: activeTurn.turnId ?? latestPendingTurnId ?? `codex-app-server-turn-${Date.now()}`,
                 seqRange: {
@@ -1460,7 +2013,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     endSeqInclusive: readLastObservedMessageSeq(params.session),
                 },
                 status: 'completed',
-            });
+            } as const;
+            const turnChangeSet = turnChangeCollector.flushTurn(turnChangeSetParams);
             if (turnChangeSet) {
                 emitCanonicalTurnDiffTool({
                     turnChangeSet,
@@ -1490,18 +2044,24 @@ export function createCodexAppServerRuntime(params: Readonly<{
         } else {
             turnChangeCollector.beginTurn();
         }
-        latestPendingTurnId = null;
-        if (options?.flushReason === 'turn-end' && completedTurnStartSeqInclusive !== null) {
-            const completedTurnUserMessageSeq = readLastObservedUserMessageSeq(params.session);
-            const completedTurnSeqRange = captureCompletedTurnSeqRange({
-                userMessageSeq: completedTurnUserMessageSeq > 0 ? completedTurnUserMessageSeq : completedTurnStartSeqInclusive,
-                startSeqInclusive: completedTurnStartSeqInclusive,
+        if (options?.flushReason === 'turn-end') {
+            await turnBoundaryTracker.completeActiveTurn({
                 endSeqInclusive: readLastObservedMessageSeq(params.session),
             });
-            if (completedTurnSeqRange) {
-                completedTurnSeqRanges.push(completedTurnSeqRange);
-            }
+        } else if (options?.flushReason === 'abort') {
+            await turnBoundaryTracker.interruptActiveTurn({
+                endSeqInclusive: readLastObservedMessageSeq(params.session),
+            });
+        } else if (options?.flushReason === 'failure') {
+            await turnBoundaryTracker.failActiveTurn({
+                endSeqInclusive: readLastObservedMessageSeq(params.session),
+            });
         }
+        if (options?.flushReason === 'turn-end' && activeTurn) {
+            await recordCompletedBestEffort(activeTurn.turnId ?? latestPendingTurnId);
+        }
+        latestPendingTurnId = null;
+        setThinking(false);
         if (!activeTurn) return;
         if (options?.error) {
             activeTurn.reject(options.error);
@@ -1536,40 +2096,93 @@ export function createCodexAppServerRuntime(params: Readonly<{
         pendingTurnFinalizationTimer.unref?.();
     };
 
-    const abortPendingTurnWithFailure = async (failure: Error): Promise<void> => {
+    const surfaceCodexAppServerTurnFailure = async (
+        failure: Error,
+        providerTurnId: string | null,
+    ): Promise<Awaited<ReturnType<typeof surfacePrimarySessionRuntimeIssue>> | null> => {
         params.session.sendCodexMessage({
             type: 'message',
             message: formatCodexAppServerErrorForUi(failure),
+        });
+        const issue = await surfacePrimarySessionRuntimeIssue({
+            provider: 'codex',
+            providerTurnId,
+            cause: 'status_error',
+            error: failure,
+            session: params.session,
+        }).catch((error) => {
+            logger.debug('[codex-app-server] Failed to surface primary runtime issue (non-fatal)', error);
+            return null;
         });
         params.session.sendCodexMessage({
             type: 'turn_aborted',
             id: randomUUID(),
         });
-        await finishPendingTurn({
-            error: failure,
-            flushReason: 'abort',
-            insideBridgeWork: true,
-        });
+        return issue;
     };
 
-    const adoptNativeStartedTurn = (notificationParams: unknown): PendingTurn | null => {
+    const updateUsageLimitRecoveryFromSurfacedIssue = async (
+        issue: Awaited<ReturnType<typeof surfacePrimarySessionRuntimeIssue>> | null,
+    ): Promise<void> => {
+        latestUsageLimitIssue = issue?.source === 'usage_limit' && issue.usageLimit ? issue : null;
+        const latestUsageLimit = latestUsageLimitIssue?.usageLimit;
+        if (latestUsageLimitIssue && latestUsageLimit && shouldAutoArmUsageLimitRecovery()) {
+            const timing = deriveCodexUsageLimitRecoveryTiming(latestUsageLimitIssue);
+            await usageLimitRecoveryScheduler.enable({
+                sessionId: params.session.sessionId,
+                issueFingerprint: buildUsageLimitIssueFingerprint(latestUsageLimitIssue),
+                resetAtMs: timing.resetAtMs,
+                nextCheckAtMs: timing.nextCheckAtMs,
+                selectedAuth: resolveUsageLimitRecoveryAuthSelection({
+                    runtimeEnv,
+                    usageLimit: latestUsageLimit,
+                }),
+            }).catch((error) => {
+                logger.debug('[codex-app-server] Failed to auto-arm usage-limit recovery intent (non-fatal)', error);
+            });
+        }
+        if (!latestUsageLimitIssue) {
+            await usageLimitRecoveryScheduler.cancel({ sessionId: params.session.sessionId }).catch((error) => {
+                logger.debug('[codex-app-server] Failed to cancel stale usage-limit recovery intent after non-usage issue (non-fatal)', error);
+            });
+        }
+    };
+
+    const abortPendingTurnWithFailure = async (failure: Error): Promise<void> => {
+        const providerTurnId = pendingTurn?.turnId ?? latestPendingTurnId;
+        const issue = await surfaceCodexAppServerTurnFailure(failure, providerTurnId);
+        await finishPendingTurn({
+            error: failure,
+            flushReason: 'failure',
+            insideBridgeWork: true,
+        });
+        await updateUsageLimitRecoveryFromSurfacedIssue(issue);
+    };
+
+    const adoptNativeTurnFromProviderActivity = async (
+        activityParams: unknown,
+        options?: Readonly<{ turnId?: string | null }>,
+    ): Promise<PendingTurn | null> => {
         if (pendingTurn) return pendingTurn;
 
-        const notificationThreadId = readThreadId(notificationParams);
-        if (threadId && notificationThreadId && notificationThreadId !== threadId) {
+        const activityThreadId = readThreadId(activityParams);
+        if (threadId && activityThreadId && activityThreadId !== threadId) {
             return null;
         }
-        const activeThreadId = threadId ?? notificationThreadId;
+        const activeThreadId = threadId ?? activityThreadId;
         if (!activeThreadId) return null;
 
-        if (!threadId && notificationThreadId) {
-            threadId = notificationThreadId;
+        if (!threadId && activityThreadId) {
+            threadId = activityThreadId;
             publishThreadId();
         }
 
         pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
-        turnChangeCollector.beginTurn();
-        const startedTurnId = readTurnId(notificationParams);
+        activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
+        const changeTrackingReady = beginTurnChangeTracking();
+        const startedTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, 'turnId')
+            ? options?.turnId ?? null
+            : readTurnId(activityParams);
         const adoptedTurn = createPendingTurn(activeThreadId);
         pendingTurn = startedTurnId ? { ...adoptedTurn, turnId: startedTurnId } : adoptedTurn;
         latestPendingTurnId = startedTurnId ?? null;
@@ -1577,7 +2190,39 @@ export function createCodexAppServerRuntime(params: Readonly<{
         turnInFlight = true;
         markActiveTurnSteerable();
         setThinking(true);
+        recordInProgressBestEffort(pendingTurn.turnId);
+        await changeTrackingReady;
+        await turnBoundaryTracker.beginTurn({
+            turnId: startedTurnId,
+            startUserMessageLocalId: null,
+            startSeqInclusive: pendingTurnStartSeqInclusive,
+        });
         return pendingTurn;
+    };
+
+    const bindActiveNativeTurnIdFromProviderActivity = async (
+        activeTurn: PendingTurn,
+        activityParams: unknown,
+        options?: Readonly<{ turnId?: string | null }>,
+    ): Promise<void> => {
+        const startedTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, 'turnId')
+            ? options?.turnId ?? null
+            : readTurnId(activityParams);
+        if (!startedTurnId || activeTurn.turnId === startedTurnId) return;
+        pendingTurn = { ...activeTurn, turnId: startedTurnId };
+        latestPendingTurnId = startedTurnId;
+        await turnBoundaryTracker.updateActiveTurnId(startedTurnId);
+        recordInProgressBestEffort(startedTurnId);
+    };
+
+    const ensureActiveTurnForProviderRequest = async (requestParams: unknown): Promise<void> => {
+        const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(requestParams, {
+            turnId: readProviderEventTurnId(requestParams),
+        });
+        if (!activeTurn || !notificationMatchesPendingTurn(requestParams)) return;
+        await bindActiveNativeTurnIdFromProviderActivity(activeTurn, requestParams, {
+            turnId: readProviderEventTurnId(requestParams),
+        });
     };
 
     const notificationMatchesPendingTurn = (notificationParams: unknown): boolean => {
@@ -1587,13 +2232,30 @@ export function createCodexAppServerRuntime(params: Readonly<{
         if (notificationThreadId && notificationThreadId !== activeTurn.threadId) {
             return false;
         }
-        const notificationTurnId = readTurnId(notificationParams);
+        const notificationTurnId = readProviderEventTurnId(notificationParams);
         return !notificationTurnId || !activeTurn.turnId || notificationTurnId === activeTurn.turnId;
     };
 
-    const resolveStreamUpdateContext = (notificationParams: unknown): StreamUpdateContext | null => {
-        const activeTurn = pendingTurn;
+    const resolveStreamUpdateContext = async (
+        method: string,
+        notificationParams: unknown,
+        updates: readonly CodexAppServerStreamUpdate[],
+    ): Promise<StreamUpdateContext | null> => {
+        if (updates.length === 0) return null;
+        const hadPendingTurn = Boolean(pendingTurn);
+        const notificationTurnId = readProviderEventTurnId(notificationParams);
+        if (!hadPendingTurn && !notificationTurnId) return null;
+        const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(notificationParams, {
+            turnId: notificationTurnId,
+        });
         if (!activeTurn) return null;
+        if (!hadPendingTurn) {
+            logger.debug('[codex-app-server] Adopted native turn from stream notification', {
+                method,
+                threadId: activeTurn.threadId,
+                turnId: activeTurn.turnId,
+            });
+        }
         const notificationThreadId = readThreadId(notificationParams);
         if (notificationThreadId && notificationThreadId !== activeTurn.threadId) {
             return {
@@ -1601,7 +2263,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 streamScopeId: notificationThreadId,
             };
         }
-        const notificationTurnId = readTurnId(notificationParams);
         if (notificationTurnId && activeTurn.turnId && notificationTurnId !== activeTurn.turnId) {
             return null;
         }
@@ -1617,14 +2278,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
     ): void => {
         client.registerNotificationHandler(method, (notificationParams) => {
             return runBridgeWork(async () => {
-                const context = resolveStreamUpdateContext(notificationParams);
+                const updates = streamEventBridge.onNotification({ method, params: notificationParams });
+                const context = await resolveStreamUpdateContext(method, notificationParams, updates);
                 if (!context) return;
                 if (context.sidechainId) {
                     await ensureSyntheticSubagentThread(context.sidechainId);
                 } else if (!notificationMatchesPendingTurn(notificationParams)) {
                     return;
                 }
-                for (const update of streamEventBridge.onNotification({ method, params: notificationParams })) {
+                for (const update of updates) {
                     await applyStreamUpdate(update, context);
                 }
             });
@@ -1641,15 +2303,16 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 .then((client) => {
                     client.registerNotificationHandler('turn/started', (notificationParams) => {
                         void runBridgeWork(async () => {
-                            const activeTurn = pendingTurn ?? adoptNativeStartedTurn(notificationParams);
+                            const notificationTurnId = readProviderEventTurnId(notificationParams);
+                            const activeTurn = pendingTurn ?? await adoptNativeTurnFromProviderActivity(notificationParams, {
+                                turnId: notificationTurnId,
+                            });
                             if (!activeTurn || !notificationMatchesPendingTurn(notificationParams)) {
                                 return;
                             }
-                            const startedTurnId = readTurnId(notificationParams);
-                            if (startedTurnId && activeTurn.turnId !== startedTurnId) {
-                                pendingTurn = { ...activeTurn, turnId: startedTurnId };
-                                latestPendingTurnId = startedTurnId;
-                            }
+                            await bindActiveNativeTurnIdFromProviderActivity(activeTurn, notificationParams, {
+                                turnId: notificationTurnId,
+                            });
                             const nextThreadId = readThreadId(notificationParams);
                             if (nextThreadId && nextThreadId !== threadId) {
                                 threadId = nextThreadId;
@@ -1686,6 +2349,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             });
                         });
                     });
+                    client.registerNotificationHandler('account/rateLimits/updated', (notificationParams) => {
+                        void runBridgeWork(async () => {
+                            await params.onRateLimitSnapshot?.(notificationParams);
+                        });
+                    });
                     client.registerNotificationHandler('thread/goal/updated', (notificationParams) => {
                         void runBridgeWork(async () => {
                             const notificationThreadId = readThreadId(notificationParams);
@@ -1710,8 +2378,12 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             if (!notificationMatchesPendingTurn(notificationParams)) return;
                             const notificationRecord = readRecord(notificationParams);
                             if (notificationRecord?.willRetry === true) return;
-                            const failure = createCodexAppServerTurnFailure(notificationParams);
-                            if (isCodexAppServerAuthAccountChangedError(failure)) {
+                            const failure = createCodexAppServerTurnFailure(notificationParams, runtimeEnv, params.session);
+                            if (shouldDeferCodexAppServerTurnFailureToPromptLoop(failure)) {
+                                const failedTurnId = readProviderEventTurnId(notificationParams);
+                                if (failedTurnId) {
+                                    deferredRecoverableFailureTurnIds.add(failedTurnId);
+                                }
                                 await finishPendingTurn({
                                     error: failure,
                                     flushReason: 'abort',
@@ -1744,14 +2416,26 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     client.registerRequestHandler('mcpServer/elicitation/request', (requestParams, message) => {
                         return runBridgeWork(() => handleMcpElicitationRequest(requestParams, message));
                     });
+                    client.registerRequestHandler('account/chatgptAuthTokens/refresh', (requestParams) => {
+                        return runBridgeWork(async () => {
+                            if (typeof params.onChatGptAuthTokensRefresh !== 'function') {
+                                throw new Error('connected_service_chatgpt_refresh_unavailable');
+                            }
+                            return await params.onChatGptAuthTokensRefresh(requestParams);
+                        });
+                    });
                     const registerTerminalHandler = (method: string): void => {
                         client.registerNotificationHandler(method, async (notificationParams) => {
                             await runBridgeWork(async () => {
+                                const terminalTurnId = readProviderEventTurnId(notificationParams);
+                                if (terminalTurnId && deferredRecoverableFailureTurnIds.delete(terminalTurnId)) {
+                                    return;
+                                }
                                 if (notificationMatchesPendingTurn(notificationParams)) {
                                     markActiveTurnNonSteerable();
                                     if (method === 'turn/completed' && readCodexTurnStatus(notificationParams) === 'failed') {
-                                        const failure = createCodexAppServerTurnFailure(notificationParams);
-                                        if (isCodexAppServerAuthAccountChangedError(failure)) {
+                                        const failure = createCodexAppServerTurnFailure(notificationParams, runtimeEnv, params.session);
+                                        if (shouldDeferCodexAppServerTurnFailureToPromptLoop(failure)) {
                                             await finishPendingTurn({
                                                 error: failure,
                                                 flushReason: 'abort',
@@ -1781,7 +2465,6 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     };
                     registerTerminalHandler('turn/completed');
                     registerTerminalHandler('turn/interrupted');
-                    registerTerminalHandler('turn/interrupt');
                     return client;
                 })
                 .catch((error) => {
@@ -1851,6 +2534,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
         nextThreadId: string,
         startOrLoadResponse: unknown,
     ): Promise<void> => {
+        const activeProviderTurn = pendingTurn;
         threadId = nextThreadId;
         currentModelId = readModelId(startOrLoadResponse) ?? currentModelId;
         const serviceTierFromResponse = readServiceTier(startOrLoadResponse);
@@ -1861,7 +2545,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
         } else if (!hasServiceTierOverride) {
             currentServiceTier = null;
         }
-        await finishPendingTurn({ flushReason: 'abort' });
+        if (!activeProviderTurn || activeProviderTurn.threadId !== nextThreadId) {
+            turnBoundaryTracker.initializeFromCurrentMetadata();
+            await finishPendingTurn({ flushReason: 'abort' });
+        }
         publishThreadId();
         await publishActivePermissionProfile(startOrLoadResponse);
         await refreshGoalForThread(client, nextThreadId).catch((error) => {
@@ -1871,6 +2558,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             });
         });
         await publishSessionControls(client);
+        usageLimitRecoveryScheduler.read(params.session.sessionId);
     };
 
     const startOrLoad = async (options: CodexAppServerStartOrLoadOptions = {}): Promise<void> => {
@@ -1934,11 +2622,90 @@ export function createCodexAppServerRuntime(params: Readonly<{
             await publishGoalWorkState(response);
         }
         if (params.pendingQueue?.drainAfterStartOrLoad === true) {
-            await drainPendingQueueMessages({
-                pendingQueue: params.pendingQueue,
+            await params.pendingQueue.drainPending({
+                maxPopPerWake: params.pendingQueue.maxPopPerWake,
+                shouldContinue: params.pendingQueue.shouldDrainPendingMessages,
                 logPrefix: '[CodexAppServer]',
+                reason: 'startOrLoad',
             });
         }
+    };
+
+    const compactActiveThread = async (activeThreadId: string): Promise<void> => {
+        if (pendingTurn) {
+            throw new Error('Codex app-server already has a turn in flight');
+        }
+        const client = await ensureClient();
+        pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
+        activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
+        const changeTrackingReady = beginTurnChangeTracking();
+        const activeTurn = createPendingTurn(activeThreadId);
+        activeTurn.promise.catch(() => undefined);
+        pendingTurn = activeTurn;
+        latestPendingTurnId = null;
+        persistedMediaDedupeKeys.clear();
+        turnInFlight = true;
+        markActiveTurnSteerable();
+        setThinking(true);
+        recordInProgressBestEffort();
+        await changeTrackingReady;
+        try {
+            const response = await client.request('thread/compact/start', {
+                threadId: activeThreadId,
+            });
+            const startedTurnId = readTurnId(response);
+            if (startedTurnId) {
+                pendingTurn = { ...activeTurn, turnId: startedTurnId };
+                latestPendingTurnId = startedTurnId;
+                recordInProgressBestEffort(startedTurnId);
+            }
+            await (pendingTurn ?? activeTurn).promise;
+        } catch (error) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            await finishPendingTurn({ error: failure, flushReason: 'abort' });
+            throw failure;
+        }
+    };
+
+    const recoverFromCodexContextWindowExhaustion = async (
+        activeThreadId: string,
+        originalFailure: Error,
+    ): Promise<void> => {
+        logger.debug('[codex-app-server] Codex context window exhausted; compacting thread before recovery', {
+            threadId: activeThreadId,
+            error: originalFailure.message,
+        });
+        await compactActiveThread(activeThreadId);
+        const client = await ensureClient();
+        const resumedThread = await resumeThread(client, activeThreadId, {
+            preserveRequestedThreadId: true,
+        });
+        await applyStartOrLoadResponse(
+            client,
+            resumedThread.nextThreadId,
+            resumedThread.response,
+        );
+    };
+
+    const surfaceOriginalContextWindowFailure = async (
+        originalFailure: Error,
+        debugMessage: string,
+        debugDetails: unknown,
+    ): Promise<void> => {
+        logger.debug(debugMessage, debugDetails);
+        const issue = await surfaceCodexAppServerTurnFailure(originalFailure, null);
+        await updateUsageLimitRecoveryFromSurfacedIssue(issue);
+    };
+
+    const surfaceOriginalContextWindowFailureAfterRecoveryError = async (
+        originalFailure: Error,
+        recoveryError: unknown,
+    ): Promise<void> => {
+        await surfaceOriginalContextWindowFailure(
+            originalFailure,
+            '[codex-app-server] Codex context-window recovery failed; surfacing original turn failure',
+            recoveryError,
+        );
     };
 
     const recoverFromCodexAuthAccountChange = async (activeThreadId: string): Promise<void> => {
@@ -1961,16 +2728,28 @@ export function createCodexAppServerRuntime(params: Readonly<{
         );
     };
 
-    const beginPendingTurnForThread = (activeThreadId: string): PendingTurn => {
+    const beginPendingTurnForThread = async (
+        activeThreadId: string,
+        options?: Readonly<{ localId?: string | null }>,
+    ): Promise<PendingTurn> => {
         pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
-        turnChangeCollector.beginTurn();
+        activeTurnHasMeaningfulContextWindowRecoveryActivity = false;
+        const changeTrackingReady = beginTurnChangeTracking();
         const activeTurn = createPendingTurn(activeThreadId);
+        activeTurn.promise.catch(() => undefined);
         pendingTurn = activeTurn;
         latestPendingTurnId = null;
         persistedMediaDedupeKeys.clear();
         turnInFlight = true;
         markActiveTurnSteerable();
         setThinking(true);
+        recordInProgressBestEffort();
+        await changeTrackingReady;
+        await turnBoundaryTracker.beginTurn({
+            turnId: null,
+            startUserMessageLocalId: options?.localId ?? null,
+            startSeqInclusive: pendingTurnStartSeqInclusive,
+        });
         return activeTurn;
     };
 
@@ -1978,6 +2757,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
         request: CodexAppServerReviewStartRequest,
     ): Promise<string | UnsupportedSessionRuntimeMethodResult | void> => {
         let recoveredAuthAccountChange = false;
+        let recoveredContextWindowExhaustion = false;
+        let originalContextWindowExhaustionFailure: Error | null = null;
         while (true) {
             const activeThreadId = threadId;
             if (!activeThreadId) {
@@ -1987,7 +2768,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw new Error('Codex app-server already has a turn in flight');
             }
             const client = await ensureClient();
-            const activeTurn = beginPendingTurnForThread(activeThreadId);
+            const activeTurn = await beginPendingTurnForThread(activeThreadId);
             try {
                 const response = await client.request('review/start', {
                     threadId: activeThreadId,
@@ -1998,6 +2779,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 if (startedTurnId) {
                     pendingTurn = { ...activeTurn, turnId: startedTurnId };
                     latestPendingTurnId = startedTurnId;
+                    recordInProgressBestEffort(startedTurnId);
+                    await turnBoundaryTracker.updateActiveTurnId(startedTurnId);
                 }
                 await (pendingTurn ?? activeTurn).promise;
                 return startedTurnId ?? undefined;
@@ -2014,9 +2797,58 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     await recoverFromCodexAuthAccountChange(activeThreadId);
                     continue;
                 }
+                if (isCodexAppServerContextWindowExhaustedError(failure)) {
+                    const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;
+                    originalContextWindowExhaustionFailure = originalFailure;
+                    if (!recoveredContextWindowExhaustion) {
+                        recoveredContextWindowExhaustion = true;
+                        try {
+                            await recoverFromCodexContextWindowExhaustion(activeThreadId, originalFailure);
+                        } catch (recoveryError) {
+                            await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, recoveryError);
+                            throw originalFailure;
+                        }
+                        continue;
+                    }
+                    await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, failure);
+                    throw originalFailure;
+                }
                 throw failure;
             }
         }
+    };
+
+    const startInlineReview = async (
+        input: unknown,
+    ): Promise<Readonly<{ ok: true; reviewTurnId: string | null }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: 'invalid_parameters' | 'inline_review_not_supported'; error: string }>> => {
+        const parsedInlineInput = ReviewStartInputSchema.safeParse(input);
+        if (!parsedInlineInput.success || parsedInlineInput.data.engineIds.length !== 1 || parsedInlineInput.data.engineIds[0] !== 'codex') {
+            return { ok: false, errorCode: 'inline_review_not_supported', error: 'inline_review_not_supported' };
+        }
+
+        const resolved = resolveCodexAppServerNativeReviewRequest({
+            start: {
+                intent: 'review',
+                intentInput: input,
+            },
+        });
+        if (!resolved.ok) {
+            return { ok: false, errorCode: 'invalid_parameters', error: resolved.error ?? resolved.reason };
+        }
+
+        if (!threadId) {
+            await startOrLoad({});
+        }
+
+        activeInlineReview = true;
+        let reviewTurnResult: string | void | UnsupportedSessionRuntimeMethodResult;
+        try {
+            reviewTurnResult = await startReviewTurn(resolved.request);
+        } finally {
+            activeInlineReview = false;
+        }
+        if (reviewTurnResult && typeof reviewTurnResult === 'object') return reviewTurnResult;
+        return { ok: true, reviewTurnId: reviewTurnResult ?? null };
     };
 
     return {
@@ -2027,11 +2859,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
         supportsInFlightSteer: () => true,
         canSteerPrompt,
         isTurnInFlight: () => turnInFlight,
+        hasActiveProviderTurn: () => pendingTurn !== null,
         beginTurn: () => {
-            turnChangeCollector.beginTurn();
-            turnInFlight = true;
-            markActiveTurnSteerable();
-            setThinking(true);
+            void beginTurnChangeTracking();
         },
         cancel: async () => {
             const activeTurn = pendingTurn;
@@ -2143,16 +2973,43 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw new Error('Codex app-server steerPrompt requires an active turn id');
             }
 
+            const structuredInput = await buildCodexTurnInputForPrompt(prompt, params.directory, options);
+            const textOnlyInput: CodexAppServerTurnInputItem[] = [{ type: 'text', text: prompt }];
             const payload = {
                 threadId: activeTurn.threadId,
-                input: buildCodexAppServerTurnInput({ text: prompt, metadata: options?.metadata }),
             };
-            try {
+            const requestSteer = async (
+                input: CodexAppServerTurnInputItem[],
+                turnIdKey: 'expectedTurnId' | 'turnId',
+            ): Promise<void> => {
                 await client.request('turn/steer', {
                     ...payload,
-                    expectedTurnId,
+                    input,
+                    [turnIdKey]: expectedTurnId,
                 });
+            };
+            const requestSteerWithStaleTurnRecovery = async (
+                input: CodexAppServerTurnInputItem[],
+                turnIdKey: 'expectedTurnId' | 'turnId',
+            ): Promise<void> => {
+                try {
+                    await requestSteer(input, turnIdKey);
+                } catch (error) {
+                    if (isCodexAppServerNoActiveTurnToSteerError(error)) {
+                        logger.debug('[codex-app-server] Native turn already inactive during steer; clearing local pending turn state');
+                        await finishPendingTurn({ flushReason: 'abort' });
+                    }
+                    throw error;
+                }
+            };
+            try {
+                await requestSteerWithStaleTurnRecovery(structuredInput, 'expectedTurnId');
             } catch (error) {
+                if (structuredInput.length > 1 && isCodexAppServerInvalidParamsError(error)) {
+                    await requestSteerWithStaleTurnRecovery(textOnlyInput, 'expectedTurnId');
+                    await turnBoundaryTracker.appendSteerMessage({ localId: options?.localId ?? null });
+                    return;
+                }
                 // Backward compatibility: older experimental app-server builds used `turnId` instead
                 // of `expectedTurnId`.
                 const message = error instanceof Error ? error.message : String(error ?? '');
@@ -2163,73 +3020,45 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 if (!looksLikeParamMismatch) {
                     throw error;
                 }
-                await client.request('turn/steer', {
-                    ...payload,
-                    turnId: expectedTurnId,
-                });
+                try {
+                    await requestSteerWithStaleTurnRecovery(structuredInput, 'turnId');
+                } catch (legacyError) {
+                    if (structuredInput.length > 1 && isCodexAppServerInvalidParamsError(legacyError)) {
+                        await requestSteerWithStaleTurnRecovery(textOnlyInput, 'turnId');
+                        await turnBoundaryTracker.appendSteerMessage({ localId: options?.localId ?? null });
+                        return;
+                    }
+                    throw legacyError;
+                }
             }
+            await turnBoundaryTracker.appendSteerMessage({ localId: options?.localId ?? null });
         },
         compactContext: async (_command: string) => {
             const activeThreadId = threadId;
             if (!activeThreadId) {
                 throw new Error('Codex app-server compactContext requires an active thread');
             }
-            if (pendingTurn) {
-                throw new Error('Codex app-server already has a turn in flight');
-            }
-            const client = await ensureClient();
-            pendingTurnStartSeqInclusive = readLastObservedMessageSeq(params.session);
-            turnChangeCollector.beginTurn();
-            const activeTurn = createPendingTurn(activeThreadId);
-            pendingTurn = activeTurn;
-            latestPendingTurnId = null;
-            persistedMediaDedupeKeys.clear();
-            turnInFlight = true;
-            markActiveTurnSteerable();
-            setThinking(true);
-            try {
-                const response = await client.request('thread/compact/start', {
-                    threadId: activeThreadId,
-                });
-                const startedTurnId = readTurnId(response);
-                if (startedTurnId) {
-                    pendingTurn = { ...activeTurn, turnId: startedTurnId };
-                    latestPendingTurnId = startedTurnId;
-                }
-                await (pendingTurn ?? activeTurn).promise;
-            } catch (error) {
-                const failure = error instanceof Error ? error : new Error(String(error));
-                await finishPendingTurn({ error: failure, flushReason: 'abort' });
-                throw failure;
-            }
+            await compactActiveThread(activeThreadId);
         },
         startReview: async (request: CodexAppServerReviewStartRequest) => {
             const result = await startReviewTurn(request);
             return typeof result === 'string' ? undefined : result;
         },
-        startInlineReview: async (input: unknown) => {
-            const resolved = resolveCodexAppServerNativeReviewRequest({
-                start: {
-                    intent: 'review',
-                    intentInput: input,
-                },
-            });
-            if (!resolved.ok) {
-                return { ok: false, errorCode: 'invalid_parameters', error: resolved.error ?? resolved.reason };
-            }
-
-            activeInlineReview = true;
-            let reviewTurnResult: string | void | UnsupportedSessionRuntimeMethodResult;
-            try {
-                reviewTurnResult = await startReviewTurn(resolved.request);
-            } finally {
-                activeInlineReview = false;
-            }
-            if (reviewTurnResult && typeof reviewTurnResult === 'object') return reviewTurnResult;
-            return { ok: true, reviewTurnId: reviewTurnResult ?? null };
+        startInlineReview,
+        handleUserMessage: async (request) => {
+            const reviewInput = parseCodexReviewCommand(request.text);
+            if (!reviewInput) return { handled: false };
+            return {
+                handled: true,
+                result: await startInlineReview(reviewInput),
+            };
         },
         sendPrompt: async (prompt: string, options?: CodexAppServerPromptOptions) => {
             let recoveredAuthAccountChange = false;
+            let recoveredContextWindowExhaustion = false;
+            let originalContextWindowExhaustionFailure: Error | null = null;
+            let promptForAttempt = prompt;
+            let optionsForAttempt: CodexAppServerPromptOptions | undefined = options;
             while (true) {
                 const activeThreadId = threadId;
                 if (!activeThreadId) {
@@ -2239,7 +3068,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     throw new Error('Codex app-server already has a turn in flight');
                 }
                 const client = await ensureClient();
-                const activeTurn = beginPendingTurnForThread(activeThreadId);
+                const activeTurn = await beginPendingTurnForThread(activeThreadId, { localId: optionsForAttempt?.localId ?? null });
                 try {
                     const collaborationMode = currentModeId
                         ? resolveCodexAppServerCollaborationModeSelection({
@@ -2250,7 +3079,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             currentReasoningEffort,
                         })?.payload
                         : null;
-                    const input = buildCodexAppServerTurnInput({ text: prompt, metadata: options?.metadata });
+                    const input = await buildCodexTurnInputForPrompt(promptForAttempt, params.directory, optionsForAttempt);
+                    const textOnlyInput = [{ type: 'text', text: promptForAttempt }] satisfies CodexAppServerTurnInputItem[];
                     const baseTurnStartParams = {
                         threadId: activeThreadId,
                         input,
@@ -2276,11 +3106,22 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 ...baseTurnStartParams,
                                 ...buildCurrentLegacyPermissionParams('turn'),
                             };
-                            response = await client.request('turn/start', turnStartParams);
+                            try {
+                                response = await client.request('turn/start', turnStartParams);
+                            } catch (legacyError) {
+                                if (input.length > 1 && isCodexAppServerInvalidParamsError(legacyError)) {
+                                    response = await client.request('turn/start', {
+                                        ...turnStartParams,
+                                        input: textOnlyInput,
+                                    });
+                                } else {
+                                    throw legacyError;
+                                }
+                            }
                         } else if (input.length > 1 && isCodexAppServerInvalidParamsError(error)) {
                             response = await client.request('turn/start', {
                                 ...turnStartParams,
-                                input: [{ type: 'text', text: prompt }] satisfies CodexAppServerTurnInputItem[],
+                                input: textOnlyInput,
                             });
                         } else {
                             throw error;
@@ -2290,16 +3131,51 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     if (startedTurnId) {
                         pendingTurn = { ...activeTurn, turnId: startedTurnId };
                         latestPendingTurnId = startedTurnId;
+                        recordInProgressBestEffort(startedTurnId);
+                        await turnBoundaryTracker.updateActiveTurnId(startedTurnId);
                     }
                     await (pendingTurn ?? activeTurn).promise;
                     return;
                 } catch (error) {
                     const failure = error instanceof Error ? error : new Error(String(error));
+                    const failedTurnHadMeaningfulActivity = activeTurnHasMeaningfulContextWindowRecoveryActivity;
                     await finishPendingTurn({ error: failure, flushReason: 'abort' });
                     if (!recoveredAuthAccountChange && isCodexAppServerAuthAccountChangedError(failure)) {
                         recoveredAuthAccountChange = true;
                         await recoverFromCodexAuthAccountChange(activeThreadId);
                         continue;
+                    }
+                    if (isCodexAppServerContextWindowExhaustedError(failure)) {
+                        const originalFailure: Error = originalContextWindowExhaustionFailure ?? failure;
+                        originalContextWindowExhaustionFailure = originalFailure;
+                        if (!recoveredContextWindowExhaustion) {
+                            recoveredContextWindowExhaustion = true;
+                            const recoveryAction = resolveCodexContextWindowRecoveryAction({
+                                mode: contextWindowRecoveryConfig.mode,
+                                failedTurnHadMeaningfulActivity,
+                            });
+                            if (recoveryAction === 'disabled') {
+                                await surfaceOriginalContextWindowFailure(
+                                    originalFailure,
+                                    '[codex-app-server] Codex context-window recovery disabled; surfacing original turn failure',
+                                    { mode: contextWindowRecoveryConfig.mode },
+                                );
+                                throw originalFailure;
+                            }
+                            try {
+                                await recoverFromCodexContextWindowExhaustion(activeThreadId, originalFailure);
+                            } catch (recoveryError) {
+                                await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, recoveryError);
+                                throw originalFailure;
+                            }
+                            if (recoveryAction === 'continue') {
+                                promptForAttempt = contextWindowRecoveryConfig.continuationPrompt;
+                                optionsForAttempt = undefined;
+                            }
+                            continue;
+                        }
+                        await surfaceOriginalContextWindowFailureAfterRecoveryError(originalFailure, failure);
+                        throw originalFailure;
                     }
                     throw failure;
                 }
@@ -2307,6 +3183,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
         },
         flushTurn: async () => {
             await finishPendingTurn({ flushReason: 'turn-end' });
+        },
+        invalidateConnectedServiceAuthTransports: async () => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                // A completed/idle app-server session has no thread-local transports to reset.
+                return { ok: true };
+            }
+            await recoverFromCodexAuthAccountChange(activeThreadId);
+            return { ok: true };
         },
         refreshGoal: async () => {
             const activeThreadId = threadId;
@@ -2320,6 +3205,60 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             return undefined;
         },
+        enableUsageLimitWaitResume: async (request) => {
+            const issue = latestUsageLimitIssue;
+            if (!issue?.usageLimit) {
+                return {
+                    ok: false,
+                    errorCode: 'usage_limit_issue_unavailable',
+                    error: 'usage_limit_issue_unavailable',
+                };
+            }
+            if (request.rememberPreference === true) {
+                await params.rememberUsageLimitRecoveryPreference?.();
+            }
+            const timing = deriveCodexUsageLimitRecoveryTiming(issue);
+            const intent = await usageLimitRecoveryScheduler.enable({
+                sessionId: request.sessionId,
+                issueFingerprint: request.issueFingerprint ?? buildUsageLimitIssueFingerprint(issue),
+                resetAtMs: timing.resetAtMs,
+                nextCheckAtMs: timing.nextCheckAtMs,
+                selectedAuth: resolveUsageLimitRecoveryAuthSelection({
+                    runtimeEnv,
+                    usageLimit: issue.usageLimit,
+                }),
+            });
+            return { ok: true, recovery: intent };
+        },
+        cancelUsageLimitWaitResume: async (request) => {
+            const intent = await usageLimitRecoveryScheduler.cancel({ sessionId: request.sessionId });
+            return { ok: true, recovery: intent };
+        },
+        checkUsageLimitRecoveryNow: async (request) => {
+            const activeThreadId = threadId;
+            if (!activeThreadId) {
+                return unsupportedSessionRuntimeMethod(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW);
+            }
+            const currentIntent = usageLimitRecoveryScheduler.read(request.sessionId);
+            if (!currentIntent || currentIntent.status === 'cancelled') {
+                const issue = latestUsageLimitIssue;
+                if (issue?.usageLimit) {
+                    const timing = deriveCodexUsageLimitRecoveryTiming(issue);
+                    await usageLimitRecoveryScheduler.enable({
+                        sessionId: request.sessionId,
+                        issueFingerprint: buildUsageLimitIssueFingerprint(issue),
+                        resetAtMs: timing.resetAtMs,
+                        nextCheckAtMs: timing.nextCheckAtMs,
+                        selectedAuth: resolveUsageLimitRecoveryAuthSelection({
+                            runtimeEnv,
+                            usageLimit: issue.usageLimit,
+                        }),
+                    });
+                }
+            }
+            const result = await usageLimitRecoveryScheduler.checkNow({ sessionId: request.sessionId });
+            return { ok: true, ...result };
+        },
         setGoal: async (
             objective: string | undefined,
             options?: Readonly<{ status?: string; tokenBudget?: number | null }>,
@@ -2329,7 +3268,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw new Error('Codex app-server setGoal requires an active thread');
             }
             const trimmedObjective = trimStringValue(objective);
-            const hasStatus = typeof options?.status === 'string' && options.status.trim().length > 0;
+            const nativeStatus = normalizeNativeGoalSetStatus(options?.status);
+            if (nativeStatus === null) return invalidGoalStatus();
+            const hasStatus = nativeStatus !== undefined;
             const hasTokenBudget = Boolean(options && Object.prototype.hasOwnProperty.call(options, 'tokenBudget'));
             if (!trimmedObjective && !hasStatus && !hasTokenBudget) {
                 throw new Error('Codex app-server setGoal requires a non-empty objective');
@@ -2339,7 +3280,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 threadId: activeThreadId,
                 ...(trimmedObjective ? { objective: trimmedObjective } : {}),
                 ...(!trimmedObjective && fallbackObjective ? { objective: fallbackObjective } : {}),
-                ...(hasStatus ? { status: options?.status } : {}),
+                ...(hasStatus ? { status: nativeStatus } : {}),
                 ...(hasTokenBudget ? { tokenBudget: options?.tokenBudget ?? null } : {}),
             });
             try {
@@ -2390,18 +3331,18 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 throw error;
             }
         },
-        listVendorPlugins: async () => {
+        listVendorPlugins: async (options?: Readonly<{ cwd?: string }>) => {
             const client = await ensureClient();
             return await listCodexVendorPlugins({
                 client,
-                cwd: params.directory,
+                cwd: trimStringValue(options?.cwd) ?? params.directory,
             });
         },
-        listSkills: async () => {
+        listSkills: async (options?: Readonly<{ cwd?: string }>) => {
             const client = await ensureClient();
             return await listCodexAppServerSkills({
                 client,
-                cwd: params.directory,
+                cwd: trimStringValue(options?.cwd) ?? params.directory,
             });
         },
         rollbackConversation: async (request: SessionRollbackRpcParams) => {
@@ -2414,10 +3355,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
 
             const target = request.target;
-            const rollbackPlan = resolveSessionRollbackPlan({
-                target,
-                completedTurns: completedTurnSeqRanges as readonly CompletedConversationTurn[],
-            });
+            const rollbackPlan = turnBoundaryTracker.resolveRollbackPlan(target);
             if (!rollbackPlan) {
                 return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'Rollback target is not available in the active conversation' };
             }
@@ -2434,7 +3372,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
             }
             await finishPendingTurn({ flushReason: 'abort' });
 
-            completedTurnSeqRanges.splice(-rollbackPlan.numTurns, rollbackPlan.numTurns);
+            await turnBoundaryTracker.markRolledBack(rollbackPlan);
             const range = captureCompletedTurnSeqRange({
                 userMessageSeq: rollbackPlan.targetUserMessageSeq,
                 startSeqInclusive: rollbackPlan.range.startSeqInclusive,

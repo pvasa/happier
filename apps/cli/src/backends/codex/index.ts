@@ -4,17 +4,26 @@ import { INSTALLABLE_KEYS } from '@happier-dev/protocol';
 
 import { checklists } from './cli/checklists';
 import { supportsCodexVendorResume } from './resume/vendorResumeSupport';
+import { codexConnectedServiceStateSharingDescriptor } from '@/backends/codex/connectedServices/codexConnectedServiceStateSharingDescriptor';
+import { createCodexConnectedServiceRuntimeAuthAdapter } from '@/backends/codex/connectedServices/createCodexConnectedServiceRuntimeAuthAdapter';
+import { createCodexConnectedServicesMaterializer } from '@/backends/codex/connectedServices/createCodexConnectedServicesMaterializer';
+import { materializeCodexConnectedServiceRuntimeAuthSelection } from '@/backends/codex/connectedServices/materializeCodexConnectedServiceRuntimeAuthSelection';
+import { resolveCodexConnectedServiceSwitchContinuity } from '@/backends/codex/connectedServices/resolveCodexConnectedServiceSwitchContinuity';
 import { codexDaemonSpawnHooks } from '@/backends/codex/daemon/spawnHooks';
 import { readCodexEnvironmentAuthState } from '@/backends/codex/cli/auth/readCodexEnvironmentAuthState';
+import { codexAppServerCatalogControlAdapter } from '@/backends/codex/appServer/catalogControl/codexAppServerCatalogControlAdapter';
+import { codexAppServerGoalControlAdapter } from '@/backends/codex/appServer/goalControl/codexAppServerGoalControlAdapter';
+import { codexAppServerUsageLimitRecoveryControlAdapter } from '@/backends/codex/appServer/usageLimitRecoveryControl/codexAppServerUsageLimitRecoveryControlAdapter';
 import type { AgentCatalogEntry } from '../types';
-import type { SessionGoalControlAdapter } from '@/session/goalControls/sessionGoalControlTypes';
+import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
 
-type CodexGoalControlAdapterModule = Readonly<{
-  codexAppServerGoalControlAdapter?: SessionGoalControlAdapter;
-}>;
-
-const CODEX_APP_SERVER_GOAL_CONTROL_ADAPTER_MODULE =
-  './appServer/goalControl/codexAppServerGoalControlAdapter';
+const codexConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
+  providerId: 'codex',
+  serviceIds: AGENTS_CORE.codex.connectedServices.supportedServiceIds,
+  refreshTokenRuntimeHandling: 'daemon_only',
+  refreshedCredentialApplication: { mode: 'restart_required' },
+  runtimeAuthFailureClassifier: { available: true },
+};
 
 export const agent = {
   id: AGENTS_CORE.codex.id,
@@ -26,11 +35,18 @@ export const agent = {
   getCliAuthSpec: async () => (await import('@/backends/codex/cli/auth/codexCliAuthSpec')).codexCliAuthSpec,
   getCloudConnectTarget: async () => (await import('@/backends/codex/cloud/connect')).codexCloudConnect,
   getDaemonSpawnHooks: async () => codexDaemonSpawnHooks,
+  getConnectedServiceMaterializer: async () => createCodexConnectedServicesMaterializer(),
+  getConnectedServiceStateSharingDescriptor: async () => codexConnectedServiceStateSharingDescriptor,
+  getConnectedServiceRuntimeAuthAdapter: async () => createCodexConnectedServiceRuntimeAuthAdapter(),
+  materializeConnectedServiceRuntimeAuthSelection: materializeCodexConnectedServiceRuntimeAuthSelection,
+  getConnectedServiceCredentialLifecycleDescriptor: async () => codexConnectedServiceCredentialLifecycleDescriptor,
+  resolveConnectedServiceSwitchContinuity: async (params) => await resolveCodexConnectedServiceSwitchContinuity(params),
+  verifyResumeReachable: async (input) =>
+    await (await import('@/backends/codex/connectedServices/verifyResumeReachableCodex')).verifyResumeReachableCodex(input),
   getDirectSessionProviderOps: async () => (await import('@/backends/codex/directSessions/providerOps')).codexDirectSessionProviderOps,
-  getSessionGoalControlAdapter: async () => {
-    const mod = await import(CODEX_APP_SERVER_GOAL_CONTROL_ADAPTER_MODULE) as CodexGoalControlAdapterModule;
-    return mod.codexAppServerGoalControlAdapter ?? null;
-  },
+  getSessionGoalControlAdapter: async () => codexAppServerGoalControlAdapter,
+  getSessionCatalogControlAdapter: async () => codexAppServerCatalogControlAdapter,
+  getSessionUsageLimitRecoveryControlAdapter: async () => codexAppServerUsageLimitRecoveryControlAdapter,
   vendorResumeSupport: AGENTS_CORE.codex.resume.vendorResume,
   getVendorResumeSupport: async () => supportsCodexVendorResume,
   getAcpBackendFactory: async () => {

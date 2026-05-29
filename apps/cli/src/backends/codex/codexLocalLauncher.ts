@@ -361,10 +361,14 @@ export async function codexLocalLauncher<TMode>(opts: {
     pendingQueueWatcher = startLocalPendingQueueRemoteSwitchWatcher({
       peekPendingCount: () => opts.session.peekPendingMessageQueueV2Count(),
       pollIntervalMs: configuration.pendingQueueIdleWakePollIntervalMs,
+      reconcilePendingQueueState: async () => {
+        await opts.session.reconcilePendingQueueState?.({ force: false });
+      },
       requestRemoteSwitch: () => {
         remoteSwitchIntentObserved = true;
         return deferredRemoteSwitch.requestRemoteSwitch('server_pending_queue');
       },
+      waitForPendingQueueUpdate: (signal) => opts.session.waitForMetadataUpdate(signal),
     });
 
     // Allow the UI to request a switch explicitly.

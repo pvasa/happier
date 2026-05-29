@@ -104,6 +104,13 @@ export class CodexRolloutMirror {
         return this.opts.codexHome ?? resolveCodexHomeFromRolloutFilePath(this.opts.filePath);
     }
 
+    private async flushTranscriptBoundary(context: MirrorContext): Promise<void> {
+        await this.itemTranscriptBridge.flushStreamsMatching({
+            reason: 'tool-call-boundary',
+            matches: (stream) => stream.sidechainId === context.sidechainId,
+        });
+    }
+
     private async ensureSubagentMirror(action: Extract<CodexRolloutAction, { type: 'subagent-spawn' }>): Promise<void> {
         if (this.subagentMirrorByThreadId.has(action.threadId)) return;
 
@@ -176,7 +183,7 @@ export class CodexRolloutMirror {
                 continue;
             }
             if (projected.type === 'user-text') {
-                await this.itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+                await this.flushTranscriptBoundary(context);
                 this.opts.session.sendUserTextMessage(projected.text);
                 continue;
             }
@@ -207,7 +214,7 @@ export class CodexRolloutMirror {
                 if (context.sidechainId === null && action.type === 'subagent-spawn') {
                     continue;
                 }
-                await this.itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+                await this.flushTranscriptBoundary(context);
                 if (context.sidechainId) {
                     this.opts.session.sendAgentMessage('codex', {
                         type: 'tool-call',
@@ -237,7 +244,7 @@ export class CodexRolloutMirror {
                     });
                     continue;
                 }
-                await this.itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+                await this.flushTranscriptBoundary(context);
                 if (context.sidechainId) {
                     this.opts.session.sendAgentMessage('codex', {
                         type: 'tool-result',
@@ -260,7 +267,7 @@ export class CodexRolloutMirror {
             }
 
             if (projected.type === 'subagent-spawn') {
-                await this.itemTranscriptBridge.flushAll({ reason: 'tool-call-boundary' });
+                await this.flushTranscriptBoundary(context);
                 await this.ensureSubagentMirror(action as Extract<CodexRolloutAction, { type: 'subagent-spawn' }>);
                 continue;
             }

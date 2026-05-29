@@ -2,6 +2,7 @@ import type { McpServerConfig } from '@/agent';
 import type { AgentBackend } from '@/agent/core';
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import { createAcpRuntime } from '@/agent/acp/runtime/createAcpRuntime';
+import { createSessionProviderPendingDrainAdapter } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { logger } from '@/ui/logger';
@@ -35,6 +36,7 @@ export function createCodexAcpRuntime(params: {
   const lastCodexAcpThreadIdPublished: { value: string | null } = { value: null };
   const drainPendingDuringTurn =
     (process.env.HAPPIER_E2E_ACP_TRACE_MARKERS ?? '').toString().trim() === '1';
+  const materializeNextPendingMessageSafely = params.session.materializeNextPendingMessageSafely.bind(params.session);
 
   const runtime = createAcpRuntime({
     provider: 'codex',
@@ -68,7 +70,14 @@ export function createCodexAcpRuntime(params: {
       // In normal interactive use, "queue for review" semantics should not be defeated.
       drainDuringTurn: drainPendingDuringTurn,
       waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
-      popPendingMessage: () => params.session.popPendingMessage(),
+      inputConsumer: createSessionProviderPendingDrainAdapter({
+        waitForMetadataUpdate: (signal) => params.session.waitForMetadataUpdate(signal),
+        popPendingMessage: async () =>
+          (await materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).type === 'materialized',
+        materializeNextPendingMessageSafely,
+        shouldAttemptPendingMaterialization: () => params.session.shouldAttemptPendingMaterialization?.() ?? true,
+        reconcilePendingQueueState: (opts) => params.session.reconcilePendingQueueState?.(opts),
+      }),
     },
     ...(process.env.HAPPIER_TRANSCRIPT_STORAGE === 'direct'
       ? {}

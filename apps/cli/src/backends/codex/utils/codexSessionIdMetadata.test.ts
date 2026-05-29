@@ -453,6 +453,47 @@ describe('maybeUpdateCodexSessionIdMetadata', () => {
     ]);
   });
 
+  it('publishes connected-service Codex group affinity through the generic runtime descriptor', () => {
+    const lastPublished = { value: null as string | null };
+    const updates: Metadata[] = [];
+
+    maybeUpdateCodexSessionIdMetadata({
+      getCodexThreadId: () => 'thread-group',
+      backendMode: 'appServer',
+      transcriptStorage: 'direct',
+      codexHome: '/Users/test/.happier/servers/cloud/daemon/connected-services/homes/openai-codex/__groups/main/codex/codex-home',
+      activeServerDir: '/Users/test/.happier/servers/cloud',
+      updateHappySessionMetadata: (updater: (metadata: Metadata) => Metadata) => {
+        updates.push(updater(createTestMetadata({ machineId: 'machine-1', path: '/repo' })));
+      },
+      lastPublished,
+    } as any);
+
+    expect(updates[0]?.agentRuntimeDescriptorV1).toMatchObject({
+      providerId: 'codex',
+      provider: {
+        home: 'connectedService',
+        connectedServiceId: 'openai-codex',
+        connectedServiceGroupId: 'main',
+        providerExtra: {
+          runtimeAffinity: {
+            home: 'connectedService',
+            connectedServiceId: 'openai-codex',
+            connectedServiceGroupId: 'main',
+          },
+        },
+      },
+    });
+    expect(updates[0]?.directSessionV1).toMatchObject({
+      source: {
+        kind: 'codexHome',
+        home: 'connectedService',
+        connectedServiceId: 'openai-codex',
+        connectedServiceGroupId: 'main',
+      },
+    });
+  });
+
   it('clears stale direct-session metadata when transcript storage is no longer direct', () => {
     const lastPublished = { value: null as string | null, fingerprint: null as string | null };
     const updates: Metadata[] = [];

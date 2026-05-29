@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
     isCodexAppServerExperimentalApiUnavailableError,
     isCodexAppServerInvalidRequestForMethodError,
+    isCodexAppServerInvalidRequestMapExpectedStringError,
     isCodexAppServerInvalidParamsError,
     isCodexAppServerMethodNotFoundError,
 } from './appServerCompatibility';
@@ -39,5 +40,11 @@ describe('appServerCompatibility', () => {
         expect(isCodexAppServerInvalidRequestForMethodError({ code: -32600, method: 'thread/goal/set' }, 'thread/goal/set')).toBe(true);
         expect(isCodexAppServerInvalidRequestForMethodError(makeError('Invalid request: thread/goal/set', -32600), 'thread/goal/set')).toBe(true);
         expect(isCodexAppServerInvalidRequestForMethodError({ code: -32600, method: 'thread/goal/get' }, 'thread/goal/set')).toBe(false);
+    });
+
+    it('detects legacy app-server map/string permission-profile shape errors narrowly', () => {
+        expect(isCodexAppServerInvalidRequestMapExpectedStringError(makeError('Invalid request: invalid type: map, expected a string', -32600))).toBe(true);
+        expect(isCodexAppServerInvalidRequestMapExpectedStringError(makeError('Invalid request: invalid type: map, expected a string', -32602))).toBe(false);
+        expect(isCodexAppServerInvalidRequestMapExpectedStringError(makeError('Invalid request: invalid type: array, expected a string', -32600))).toBe(false);
     });
 });

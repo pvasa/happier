@@ -10,6 +10,7 @@ import { openBrowser } from '@/ui/openBrowser';
 import { generatePkceCodes } from '@/cloud/pkce';
 import type { CloudConnectAuthenticateOptions } from '@/cloud/connectTypes';
 import { startOauthPkceWithPasteFallback } from '@/cloud/oauthPkceWithPasteFallback';
+import { buildSafeOauthProviderFailureMessage } from '@/cloud/safeOauthProviderError';
 import { promptInput } from '@/terminal/prompts/promptInput';
 
 import { createCodexCloudAuthenticator } from './createCodexCloudAuthenticator';
@@ -72,8 +73,13 @@ async function exchangeCodeForTokens(
     });
 
     if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Token exchange failed: ${error}`);
+        const body = await response.text().catch(() => '');
+        throw new Error(buildSafeOauthProviderFailureMessage({
+            operation: 'Token exchange',
+            status: response.status,
+            statusText: response.statusText,
+            body,
+        }));
     }
 
     const data = (await response.json() as any);

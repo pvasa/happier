@@ -40,21 +40,28 @@ describe('registerHappierMcpBridgeTools', () => {
     expect(names).not.toContain('happier__change_title');
     expect(names).not.toContain('happy__change_title');
     expect(names).not.toContain('review_start');
+    expect(names).not.toContain('subagents_plan_start');
+    expect(names).not.toContain('subagents_delegate_start');
+    expect(names).not.toContain('execution_run_start');
 
-    const start = calls.find((c) => c.name === 'execution_run_start');
-    expect(start).toBeTruthy();
-    const res = await start.handler({
-      intent: 'review',
-      backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      instructions: 'Review.',
+    const actionExecute = calls.find((c) => c.name === 'action_execute');
+    expect(actionExecute).toBeTruthy();
+    const res = await actionExecute.handler({
+      actionId: 'subagents.delegate.start',
+      input: {
+        instructions: 'Delegate.',
+        backendTargetKeys: ['agent:claude'],
+      },
     });
     expect(res.isError).toBe(false);
     expect(forwarded[0]).toEqual({
-      name: 'execution_run_start',
+      name: 'action_execute',
       args: {
-        intent: 'review',
-        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-        instructions: 'Review.',
+        actionId: 'subagents.delegate.start',
+        input: {
+          instructions: 'Delegate.',
+          backendTargetKeys: ['agent:claude'],
+        },
       },
     });
   });

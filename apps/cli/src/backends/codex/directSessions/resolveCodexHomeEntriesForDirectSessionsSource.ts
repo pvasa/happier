@@ -21,6 +21,11 @@ function isSafeConnectedServiceProfileId(raw: unknown): raw is string {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(raw.trim());
 }
 
+function isSafeConnectedServiceGroupId(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(raw.trim());
+}
+
 function normalizeConnectedServiceId(raw: unknown): string | null {
   if (!isSafeConnectedServiceId(raw)) return null;
   return raw.trim();
@@ -31,12 +36,21 @@ function normalizeConnectedServiceProfileId(raw: unknown): string | null {
   return raw.trim();
 }
 
+function normalizeConnectedServiceGroupId(raw: unknown): string | null {
+  if (!isSafeConnectedServiceGroupId(raw)) return null;
+  return raw.trim();
+}
+
 function normalizeHomePath(raw: string): string {
   return resolve(raw.trim());
 }
 
 function buildConnectedServiceCodexHome(activeServerDir: string, connectedServiceId: string, connectedServiceProfileId: string): string {
   return join(activeServerDir, 'daemon', 'connected-services', 'homes', connectedServiceId, connectedServiceProfileId, 'codex', 'codex-home');
+}
+
+function buildConnectedServiceGroupCodexHome(activeServerDir: string, connectedServiceId: string, connectedServiceGroupId: string): string {
+  return join(activeServerDir, 'daemon', 'connected-services', 'homes', connectedServiceId, '__groups', connectedServiceGroupId, 'codex', 'codex-home');
 }
 
 async function resolveVerifiedCodexHomePath(expectedPath: string, exactHomePath: string | null): Promise<string | null> {
@@ -88,6 +102,20 @@ export function inferCodexDirectSessionsSourceFromHome(params: Readonly<{
         };
       }
     }
+    if (relativeParts && relativeParts.length === 5 && relativeParts[1] === '__groups' && relativeParts[3] === 'codex' && relativeParts[4] === 'codex-home') {
+      const [rawConnectedServiceId,, rawConnectedServiceGroupId] = relativeParts;
+      const connectedServiceId = normalizeConnectedServiceId(rawConnectedServiceId);
+      const connectedServiceGroupId = normalizeConnectedServiceGroupId(rawConnectedServiceGroupId);
+      if (connectedServiceId && connectedServiceGroupId) {
+        return {
+          kind: 'codexHome',
+          home: 'connectedService',
+          connectedServiceId,
+          connectedServiceGroupId,
+          homePath: codexHome,
+        };
+      }
+    }
   }
 
   return {
@@ -115,6 +143,7 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
   if (!connectedServiceId) return [];
 
   const connectedServiceProfileId = normalizeConnectedServiceProfileId(params.source.connectedServiceProfileId);
+  const connectedServiceGroupId = normalizeConnectedServiceGroupId(params.source.connectedServiceGroupId);
   const exactHomePath = typeof params.source.homePath === 'string' && params.source.homePath.trim().length > 0
     ? normalizeHomePath(params.source.homePath)
     : null;
@@ -137,16 +166,37 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
     }];
   }
 
+  if (connectedServiceGroupId) {
+    const codexHome = buildConnectedServiceGroupCodexHome(params.activeServerDir, connectedServiceId, connectedServiceGroupId);
+    const verifiedHome = await resolveVerifiedCodexHomePath(codexHome, exactHomePath);
+    if (!verifiedHome) {
+      return [];
+    }
+    return [{
+      codexHome: verifiedHome,
+      source: {
+        kind: 'codexHome',
+        home: 'connectedService',
+        connectedServiceId,
+        connectedServiceGroupId,
+        homePath: verifiedHome,
+      },
+    }];
+  }
+
   if (exactHomePath) {
     const inferred = inferCodexDirectSessionsSourceFromHome({ codexHome: exactHomePath, activeServerDir: params.activeServerDir });
     if (inferred.kind !== 'codexHome' || inferred.home !== 'connectedService') {
       return [];
     }
     const inferredProfileId = normalizeConnectedServiceProfileId(inferred.connectedServiceProfileId);
-    if (inferred.connectedServiceId !== connectedServiceId || !inferredProfileId) {
+    const inferredGroupId = normalizeConnectedServiceGroupId(inferred.connectedServiceGroupId);
+    if (inferred.connectedServiceId !== connectedServiceId || (!inferredProfileId && !inferredGroupId)) {
       return [];
     }
-    const expectedPath = buildConnectedServiceCodexHome(params.activeServerDir, connectedServiceId, inferredProfileId);
+    const expectedPath = inferredProfileId
+      ? buildConnectedServiceCodexHome(params.activeServerDir, connectedServiceId, inferredProfileId)
+      : buildConnectedServiceGroupCodexHome(params.activeServerDir, connectedServiceId, inferredGroupId!);
     const verifiedHome = await resolveVerifiedCodexHomePath(expectedPath, exactHomePath);
     if (!verifiedHome) {
       return [];
@@ -157,7 +207,8 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
         kind: 'codexHome',
         home: 'connectedService',
         connectedServiceId,
-        connectedServiceProfileId: inferredProfileId,
+        ...(inferredProfileId ? { connectedServiceProfileId: inferredProfileId } : {}),
+        ...(inferredGroupId ? { connectedServiceGroupId: inferredGroupId } : {}),
         homePath: verifiedHome,
       },
     }];
@@ -174,6 +225,7 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
 
   for (const entry of profiles) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    if (entry.name === '__groups') continue;
     const profileId = normalizeConnectedServiceProfileId(entry.name);
     if (!profileId) continue;
     const codexHome = buildConnectedServiceCodexHome(params.activeServerDir, connectedServiceId, profileId);
@@ -187,6 +239,38 @@ export async function resolveCodexHomeEntriesForDirectSessionsSource(params: Rea
             home: 'connectedService',
             connectedServiceId,
             connectedServiceProfileId: profileId,
+            homePath: codexHome,
+          },
+        });
+      }
+    } catch {
+      // ignore missing
+    }
+  }
+
+  const groupsBase = join(base, '__groups');
+  let groups: Dirent[];
+  try {
+    groups = await readdir(groupsBase, { withFileTypes: true });
+  } catch {
+    return entries;
+  }
+
+  for (const entry of groups) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const groupId = normalizeConnectedServiceGroupId(entry.name);
+    if (!groupId) continue;
+    const codexHome = buildConnectedServiceGroupCodexHome(params.activeServerDir, connectedServiceId, groupId);
+    try {
+      const s = await stat(codexHome);
+      if (s.isDirectory()) {
+        entries.push({
+          codexHome,
+          source: {
+            kind: 'codexHome',
+            home: 'connectedService',
+            connectedServiceId,
+            connectedServiceGroupId: groupId,
             homePath: codexHome,
           },
         });
