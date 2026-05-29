@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
 
+import { renderHook, standardCleanup } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { storage } from '@/sync/domains/state/storageStore';
 
-import { buildSessionViewShellSessionSignature } from './sessionViewStableSession';
+import { buildSessionViewShellSessionSignature, useSessionViewShellSession, useSessionViewShellSessionSeq } from './sessionViewStableSession';
 
 function createSession(overrides: Partial<Session> = {}): Session {
     return {
@@ -38,6 +41,10 @@ function createSession(overrides: Partial<Session> = {}): Session {
     } as Session;
 }
 
+afterEach(() => {
+    standardCleanup();
+});
+
 describe('buildSessionViewShellSessionSignature', () => {
     it('stays stable for timestamp-only session heartbeats', () => {
         const base = createSession();
@@ -45,6 +52,7 @@ describe('buildSessionViewShellSessionSignature', () => {
             updatedAt: 200,
             activeAt: 200,
             thinkingAt: 200,
+            latestTurnStatusObservedAt: 200,
             latestUsage: {
                 inputTokens: 2,
                 outputTokens: 4,
@@ -192,5 +200,58 @@ describe('buildSessionViewShellSessionSignature', () => {
         });
 
         expect(buildSessionViewShellSessionSignature(renamed)).not.toBe(buildSessionViewShellSessionSignature(base));
+    });
+});
+
+describe('useSessionViewShellSession', () => {
+    it('keeps the shell session reference stable for heartbeat and seq-only updates', async () => {
+        const previousState = storage.getState();
+        try {
+            storage.setState((state) => ({
+                ...state,
+                sessions: {
+                    ...state.sessions,
+                    s1: createSession({
+                        seq: 25,
+                        updatedAt: 100,
+                        activeAt: 100,
+                        thinkingAt: 100,
+                        latestTurnStatusObservedAt: 100,
+                    }),
+                },
+            }));
+
+            const shellHook = await renderHook(() => useSessionViewShellSession('s1'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const seqHook = await renderHook(() => useSessionViewShellSessionSeq('s1'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstShellSession = shellHook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: {
+                        ...state.sessions,
+                        s1: createSession({
+                            seq: 26,
+                            updatedAt: 200,
+                            activeAt: 200,
+                            thinkingAt: 200,
+                            latestTurnStatusObservedAt: 200,
+                        }),
+                    },
+                }));
+            });
+
+            expect(shellHook.getCurrent()).toBe(firstShellSession);
+            expect(seqHook.getCurrent()).toBe(26);
+
+            await shellHook.unmount();
+            await seqHook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
     });
 });

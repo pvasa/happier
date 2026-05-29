@@ -64,6 +64,28 @@ export type ScmTreeBadgeIndex = Readonly<{
 
 const badgeIndexCache = new WeakMap<ScmWorkingSnapshot, ScmTreeBadgeIndex>();
 
+export function buildScmTreeBadgeSignature(snapshot: ScmWorkingSnapshot | null | undefined): string {
+    if (!snapshot) return 'null';
+    const entries = snapshot?.entries ?? [];
+    if (entries.length === 0) return 'empty';
+    return entries
+        .map((entry) => [
+            entry.path,
+            entry.previousPath ?? '',
+            entry.kind,
+            entry.includeStatus,
+            entry.pendingStatus,
+            entry.hasIncludedDelta ? 1 : 0,
+            entry.hasPendingDelta ? 1 : 0,
+            entry.stats.includedAdded,
+            entry.stats.includedRemoved,
+            entry.stats.pendingAdded,
+            entry.stats.pendingRemoved,
+        ].join('\u0001'))
+        .sort()
+        .join('\u0002');
+}
+
 export function createScmTreeBadgeIndex(snapshot: ScmWorkingSnapshot | null | undefined): ScmTreeBadgeIndex {
     if (snapshot) {
         const cached = badgeIndexCache.get(snapshot);

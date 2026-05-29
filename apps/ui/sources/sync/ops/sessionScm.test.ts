@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 const sessionRpcMock = vi.hoisted(() => vi.fn());
 const machineRpcMock = vi.hoisted(() => vi.fn());
@@ -10,9 +12,9 @@ const getStateMock = vi.hoisted(() => vi.fn());
 const resolvePreferredServerIdForSessionIdMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
-  apiSocket: {
+    apiSocket: {
         machineRPC: machineRpcMock,
-  },
+    },
 }));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
@@ -26,11 +28,40 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
 vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
-    storage: {
-        getState: getStateMock,
-    },
+        storage: {
+            getState: getStateMock,
+        },
+    });
 });
-});
+
+type SessionFixture = ReturnType<typeof createSessionFixture>;
+type MachineFixture = ReturnType<typeof createMachineFixture>;
+type SessionProjectResolver = (sessionId: string) => { key?: { machineId?: string; path?: string } } | null;
+
+const baseSessionMetadata = {
+    path: '/Users/tester/project',
+    host: 'tester.local',
+    homeDir: '/Users/tester',
+    machineId: 'machine-1',
+};
+
+function createSessionScmState(params: Readonly<{
+    preferredBackend?: 'git' | 'sapling';
+    session?: SessionFixture | null;
+    machines?: MachineFixture[];
+    getProjectForSession?: SessionProjectResolver;
+}> = {}) {
+    const session = params.session ?? null;
+    const machines = params.machines ?? [];
+    return {
+        settings: {
+            scmGitRepoPreferredBackend: params.preferredBackend ?? 'git',
+        },
+        sessions: session ? { [session.id]: session } : {},
+        machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
+        getProjectForSession: params.getProjectForSession ?? (() => null),
+    };
+}
 
 describe('sessionScm', () => {
     afterEach(() => {
@@ -42,11 +73,7 @@ describe('sessionScm', () => {
     });
 
     it('returns unsupported fallback when status snapshot rpc payload is null', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-        });
+        getStateMock.mockReturnValue(createSessionScmState());
         sessionRpcMock.mockResolvedValue(null);
 
         const { sessionScmStatusSnapshot } = await import('./sessionScm');
@@ -58,21 +85,19 @@ describe('sessionScm', () => {
     });
 
     it('prefers machine RPC when a session has an attached machine', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             snapshot: undefined,
@@ -96,26 +121,25 @@ describe('sessionScm', () => {
     });
 
     it('prefers machine RPC for linked direct sessions without top-level machine metadata', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: false,
-                    metadata: {
-                        path: '/workspace/direct-repo',
-                        directSessionV1: {
-                            v: 1,
-                            providerId: 'codex',
-                            machineId: 'machine-direct',
-                            remoteSessionId: 'remote-1',
-                            source: { kind: 'codexHome', home: 'user' },
-                        },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: false,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '/workspace/direct-repo',
+                    machineId: '',
+                    directSessionV1: {
+                        v: 1,
+                        providerId: 'codex',
+                        machineId: 'machine-direct',
+                        remoteSessionId: 'remote-1',
+                        source: { kind: 'codexHome', home: 'user' },
                     },
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-direct' })],
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             snapshot: undefined,
@@ -139,19 +163,17 @@ describe('sessionScm', () => {
     });
 
     it('uses the active session worktree path for machine RPC even when the project points at the main repo', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '/workspace/repo/.dev/worktree/gentle-meadow',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '/workspace/repo/.dev/worktree/gentle-meadow',
+                    machineId: 'machine-1',
                 },
-            },
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
             getProjectForSession: (sessionId: string) =>
                 sessionId === 'session-1'
                     ? {
@@ -161,7 +183,7 @@ describe('sessionScm', () => {
                         },
                     }
                     : null,
-        });
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             snapshot: undefined,
@@ -185,21 +207,20 @@ describe('sessionScm', () => {
     });
 
     it('applies sapling backend preference when configured (machine RPC)', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'sapling',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            preferredBackend: 'sapling',
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             snapshot: undefined,
@@ -226,21 +247,19 @@ describe('sessionScm', () => {
     });
 
     it('falls back to session RPC when machine RPC reports method not found', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockRejectedValue(
             Object.assign(new Error(RPC_ERROR_MESSAGES.METHOD_NOT_FOUND), {
                 rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
@@ -266,21 +285,19 @@ describe('sessionScm', () => {
     });
 
     it('does not fall back to session RPC for inactive sessions when machine RPC reports method not found', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: false,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: false,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockRejectedValue(
             Object.assign(new Error(RPC_ERROR_MESSAGES.METHOD_NOT_FOUND), {
                 rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
@@ -301,19 +318,17 @@ describe('sessionScm', () => {
     });
 
     it('resolves machine target from project fallback for inactive sessions', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: false,
-                    metadata: {
-                        path: '',
-                        machineId: '',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: false,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '',
+                    machineId: '',
                 },
-            },
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
             getProjectForSession: (sessionId: string) =>
                 sessionId === 'session-1'
                     ? {
@@ -323,7 +338,7 @@ describe('sessionScm', () => {
                         },
                     }
                     : null,
-        });
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             snapshot: undefined,
@@ -345,21 +360,19 @@ describe('sessionScm', () => {
     });
 
     it('fails closed for inactive sessions when machine target is unavailable', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: false,
-                    metadata: {
-                        path: '',
-                        machineId: '',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: false,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '',
+                    machineId: '',
                 },
-            },
+            }),
+            machines: [],
             getProjectForSession: () => null,
-        });
+        }));
         sessionRpcMock.mockResolvedValue({
             success: true,
             snapshot: undefined,
@@ -375,21 +388,19 @@ describe('sessionScm', () => {
     });
 
     it('routes remote management and branch integration through the preferred machine SCM path', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             stdout: '',
@@ -507,21 +518,19 @@ describe('sessionScm', () => {
     });
 
     it('routes repository provisioning operations through machine RPC with the session cwd', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             targets: [],
@@ -602,21 +611,19 @@ describe('sessionScm', () => {
     });
 
     it('routes pull request operations through machine RPC with the session cwd', async () => {
-        getStateMock.mockReturnValue({
-            settings: {
-                scmGitRepoPreferredBackend: 'git',
-            },
-            sessions: {
-                'session-1': {
-                    active: true,
-                    metadata: {
-                        path: '~/repo',
-                        homeDir: '/Users/tester',
-                        machineId: 'machine-1',
-                    },
+        getStateMock.mockReturnValue(createSessionScmState({
+            session: createSessionFixture({
+                id: 'session-1',
+                active: true,
+                metadata: {
+                    ...baseSessionMetadata,
+                    path: '~/repo',
+                    homeDir: '/Users/tester',
+                    machineId: 'machine-1',
                 },
-            },
-        });
+            }),
+            machines: [createMachineFixture({ id: 'machine-1' })],
+        }));
         machineRpcMock.mockResolvedValue({
             success: true,
             pullRequests: [],

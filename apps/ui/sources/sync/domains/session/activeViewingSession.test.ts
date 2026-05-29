@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
     clearActiveViewingSessionId,
+    clearActiveViewingSessionsForServerScopeReset,
     getActiveViewingSessionActivationId,
     getActiveViewingSessionId,
+    isSessionVisible,
+    markSessionHidden,
+    markSessionVisible,
     setActiveViewingSessionId,
 } from './activeViewingSession';
 import {
@@ -16,6 +20,7 @@ import {
 describe('activeViewingSession', () => {
     beforeEach(() => {
         resetSessionManualUnreadHoldsForTests();
+        clearActiveViewingSessionsForServerScopeReset();
         clearActiveViewingSessionId('session-1');
         clearActiveViewingSessionId('session-2');
     });
@@ -56,5 +61,24 @@ describe('activeViewingSession', () => {
             sessionSeq: 7,
             activationId: olderActivationId,
         })).toBe(true);
+    });
+
+    it('tracks visible session surfaces independently from focused viewing activation', () => {
+        markSessionVisible('session-1');
+        markSessionVisible('session-1');
+        markSessionVisible('session-2');
+
+        expect(isSessionVisible('session-1')).toBe(true);
+        expect(isSessionVisible('session-2')).toBe(true);
+        expect(getActiveViewingSessionId()).toBeNull();
+
+        markSessionHidden('session-1');
+
+        expect(isSessionVisible('session-1')).toBe(true);
+
+        markSessionHidden('session-1');
+
+        expect(isSessionVisible('session-1')).toBe(false);
+        expect(isSessionVisible('session-2')).toBe(true);
     });
 });

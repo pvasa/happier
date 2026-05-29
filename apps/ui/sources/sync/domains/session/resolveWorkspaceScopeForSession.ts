@@ -1,6 +1,6 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
-import { resolveMachineTargetForSessionFromState } from '@/sync/ops/sessionMachineTarget';
+import { resolveDisplayMachineTargetForSessionFromState } from '@/sync/ops/sessionMachineTarget';
 import { resolveServerIdForSessionIdFromLocalState } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 import { useShallow } from 'zustand/react/shallow';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -17,7 +17,7 @@ export function resolveWorkspaceScopeForSessionFromState(
     sessionId: string,
     activeServerId: unknown = getActiveServerSnapshot().serverId,
 ): WorkspaceScopeBase | null {
-    const machineTarget = resolveMachineTargetForSessionFromState(state, sessionId);
+    const machineTarget = resolveDisplayMachineTargetForSessionFromState({ state, sessionId });
     if (!machineTarget) return null;
 
     const machineId = String(machineTarget.machineId ?? '').trim();

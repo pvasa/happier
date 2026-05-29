@@ -15,12 +15,13 @@ import type { AutomationTargetType } from '@/sync/domains/automations/automation
 
 type SessionAuthoringDraftBase = Readonly<Omit<
     SessionAuthoringValueV1,
-    'targetType' | 'checkoutCreationDraft' | 'backendTarget' | 'mcpSelection' | 'windowsRemoteSessionLaunchMode' | 'windowsTerminalWindowName' | 'codexBackendMode' | 'sessionConfigOptionOverrides' | 'automation'
+    'targetType' | 'checkoutCreationDraft' | 'backendTarget' | 'mcpSelection' | 'connectedServicesUpdatedAt' | 'windowsRemoteSessionLaunchMode' | 'windowsTerminalWindowName' | 'codexBackendMode' | 'sessionConfigOptionOverrides' | 'automation'
 > & {
     targetType: AutomationTargetType;
     checkoutCreationDraft: SessionAuthoringCheckoutCreationDraftV1 | null;
     backendTarget: BackendTargetRefV1 | null;
     mcpSelection: SessionMcpSelectionV1 | null;
+    connectedServicesUpdatedAt?: SessionAuthoringValueV1['connectedServicesUpdatedAt'];
     windowsRemoteSessionLaunchMode: WindowsRemoteSessionLaunchMode | null;
     windowsTerminalWindowName?: string | null;
     codexBackendMode?: SessionAuthoringCodexBackendMode | CodexBackendMode | null;

@@ -55,7 +55,7 @@ installNewSessionComponentsCommonModuleMocks({
     }),
 });
 
-vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemList']));
+vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemList', 'ItemListStatic']));
 vi.mock('@/components/ui/lists/ItemGroup', () => createPassThroughModule(['ItemGroup']));
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: createCapturingComponent('Item', (props) => {
@@ -104,6 +104,13 @@ vi.mock('@/components/sessions/new/navigation/setNewSessionPickerReturnParams', 
     setNewSessionPickerReturnParams: vi.fn(() => 'dispatch'),
 }));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.filter(Boolean));
+    }
+    return (style as Record<string, unknown> | undefined) ?? {};
+}
+
 describe('NewSessionServerSelectionContent', () => {
     it('checks auth against the selected server profile id, not just its URL', async () => {
         capturedItems.length = 0;
@@ -143,5 +150,21 @@ describe('NewSessionServerSelectionContent', () => {
             { title: 'Server A', selected: false },
             { title: 'Server B', selected: true },
         ]);
+    });
+
+    it('treats maxHeight as a cap instead of a fixed server-popover height', async () => {
+        const { NewSessionServerSelectionContent } = await import('./NewSessionServerSelectionContent');
+
+        const screen = await renderScreen(<NewSessionServerSelectionContent
+                    maxHeight={520}
+                    onClose={() => {}}
+                    selectedServerId="server-b"
+                />);
+
+        const rootView = screen.findAllByType('View' as never)[0];
+        const rootStyle = flattenStyle(rootView?.props.style);
+        expect(rootStyle.maxHeight).toBe(520);
+        expect(rootStyle.height).toBeUndefined();
+        expect(rootStyle.flex).toBeUndefined();
     });
 });

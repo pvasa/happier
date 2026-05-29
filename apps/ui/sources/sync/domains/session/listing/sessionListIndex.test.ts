@@ -144,6 +144,36 @@ describe('buildSessionListIndexFromViewData', () => {
         const second = buildSessionListIndexFromViewData(nextViewData, first);
         expect(second).toBe(first);
     });
+
+    it('does not reuse a session index item when working placement metadata changes', () => {
+        const session = makeRenderable('s1');
+        const viewData: SessionListViewItem[] = [
+            { type: 'header', title: 'Today', headerKind: 'date', groupKey: 'g1' },
+            {
+                type: 'session',
+                session,
+                serverId: 'server-a',
+                section: 'active',
+                groupKey: 'g1',
+                groupKind: 'date',
+                workingPlacementReason: 'working',
+            },
+        ];
+        const first = buildSessionListIndexFromViewData(viewData);
+        expect(first?.[1]).toMatchObject({ type: 'session', workingPlacementReason: 'working' });
+
+        const nextViewData: SessionListViewItem[] = [
+            viewData[0],
+            {
+                ...(viewData[1] as Extract<SessionListViewItem, { type: 'session' }>),
+                workingPlacementReason: undefined,
+            },
+        ];
+
+        const second = buildSessionListIndexFromViewData(nextViewData, first);
+        expect(second?.[1]).toMatchObject({ type: 'session', workingPlacementReason: undefined });
+        expect(second?.[1]).not.toBe(first?.[1]);
+    });
 });
 
 describe('resolveSessionListIndexFolderDragEligibility', () => {

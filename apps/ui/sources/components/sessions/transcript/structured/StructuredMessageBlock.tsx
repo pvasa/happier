@@ -26,10 +26,10 @@ export function renderStructuredMessage(params: {
     });
 }
 
-export function StructuredMessageBlock(props: {
+export const StructuredMessageBlock = React.memo(function StructuredMessageBlock(props: {
     message: Message;
     sessionId: string;
     onJumpToAnchor: StructuredMessageRendererParams['onJumpToAnchor'];
 }): React.ReactElement | null {
     return renderStructuredMessage(props);
-}
+});

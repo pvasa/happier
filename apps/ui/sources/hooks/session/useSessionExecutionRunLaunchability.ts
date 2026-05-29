@@ -4,6 +4,7 @@ import { DEFAULT_AGENT_ID, resolveAgentIdFromFlavor } from '@/agents/catalog/cat
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
+import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useExecutionRunsBackendsForSession } from '@/hooks/server/useExecutionRunsBackendsForSession';
 import { useSessionExecutionRunsSupported } from '@/hooks/server/useSessionExecutionRunsSupported';
@@ -29,6 +30,7 @@ export function useSessionExecutionRunLaunchability(
     const executionRunsSupported = useSessionExecutionRunsSupported(sessionId);
     const executionRunsBackends = useExecutionRunsBackendsForSession(sessionId);
     const { machineReachable } = useSessionMachineReachability(sessionId);
+    const machineTarget = useSessionMachineTarget(sessionId);
     const directSessionRuntime = useDirectSessionRuntime({
         sessionId,
         metadata: session?.metadata,
@@ -39,7 +41,7 @@ export function useSessionExecutionRunLaunchability(
     );
     const { resumeCapabilityOptions } = useResumeCapabilityOptions({
         agentId,
-        machineId: resolveSessionMachineId(session?.metadata),
+        machineId: machineTarget?.machineId ?? resolveSessionMachineId(session?.metadata),
         settings,
         enabled: session?.active === false,
     });

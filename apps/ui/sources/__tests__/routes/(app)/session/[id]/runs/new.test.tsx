@@ -16,7 +16,7 @@ import { installSessionRouteCommonModuleMocks } from '../sessionRouteTestHelpers
 
 let sessionMock: any = { id: 'session-1', metadata: { agent: 'claude', permissionMode: 'default' } };
 let machineCapabilitiesStateMock: any = { status: 'idle' };
-let hydrateReady = true;
+let routeHydrationState: 'available' | 'loading' | 'missing' = 'available';
 let enabledAgentIdsMock: string[] = ['claude', 'codex'];
 let localSearchParamsMock: any = { id: 'session-1', intent: 'review' };
 let sessionExecutionRunsSupportedMock = true;
@@ -42,7 +42,13 @@ let sessionMachineReachabilityMock: any = {
 };
 let resumeCapabilityOptionsMock: any = {};
 let machineTargetMock: { machineId: string; basePath: string | null } | null = null;
-const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => hydrateReady);
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) =>
+    routeHydrationState === 'available'
+        ? { kind: 'available', sessionId, serverId: options?.serverId }
+        : routeHydrationState === 'missing'
+            ? { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' }
+            : { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' },
+);
 const resumeSessionSpy = vi.fn(async () => ({ type: 'success', sessionId: 'session-1' }));
 let activeServerSnapshotMock: any = { serverId: 'server-active', serverUrl: 'http://server-active.test' };
 const useMachineCapabilitiesCacheSpy = vi.fn<(params: any) => { state: any; refresh: any }>();
@@ -242,6 +248,9 @@ vi.mock('@/components/sessions/model/useDirectSessionRuntime', () => ({
 vi.mock('@/components/sessions/model/useSessionMachineReachability', () => ({
     useSessionMachineReachability: () => sessionMachineReachabilityMock,
 }));
+vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
+    SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback', { testID: 'session-invalid-link' }),
+}));
 vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
     useResumeCapabilityOptions: () => ({ resumeCapabilityOptions: resumeCapabilityOptionsMock }),
 }));
@@ -309,6 +318,7 @@ vi.mock('@/sync/ops/sessions', () => ({
 }));
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: () => machineTargetMock,
+    resolveMachineTargetForSessionFromState: () => machineTargetMock,
 }));
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => activeServerSnapshotMock,
@@ -347,7 +357,7 @@ describe('Session New Run Screen', () => {
         enabledAgentIdsMock = ['claude', 'codex'];
         sessionMock = { id: 'session-1', metadata: { agent: 'claude', permissionMode: 'default' } };
         machineCapabilitiesStateMock = { status: 'idle' };
-        hydrateReady = true;
+        routeHydrationState = 'available';
         localSearchParamsMock = { id: 'session-1', intent: 'review' };
         settingsMock = {
             executionRunsGuidanceEnabled: false,
@@ -380,23 +390,42 @@ describe('Session New Run Screen', () => {
     });
 
     it('renders a loading state while session hydration is pending', async () => {
-        hydrateReady = false;
+        routeHydrationState = 'loading';
         localSearchParamsMock = { id: 'session-1', intent: 'review', serverId: 'server-b' };
         const screen = await renderNewRunScreen();
         expect(countProgressIndicators(screen)).toBeGreaterThan(0);
         expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionNewRunScreen.hydrate', { serverId: 'server-b' });
-        hydrateReady = true;
+        routeHydrationState = 'available';
     });
 
     it('does not crash when hydration flips from pending to ready', async () => {
-        hydrateReady = false;
+        routeHydrationState = 'loading';
         localSearchParamsMock = { id: 'session-1', intent: 'review' };
         const screen = await renderNewRunScreen();
 
-        hydrateReady = true;
+        routeHydrationState = 'available';
         await act(async () => {
             screen.tree.update(React.createElement(NewRunScreen));
         });
+    });
+
+    it('renders the unavailable fallback when route hydration resolves missing', async () => {
+        routeHydrationState = 'missing';
+        localSearchParamsMock = { id: 'session-1', intent: 'review', serverId: 'server-b' };
+
+        const screen = await renderNewRunScreen();
+
+        expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
+        expect(screen.findByTestId('execution-run-new-start-button')).toBeNull();
+    });
+
+    it('does not rehydrate the launcher against the default server when the route already hydrated in scope', async () => {
+        localSearchParamsMock = { id: 'session-1', intent: 'review', serverId: 'server-owned' };
+
+        await renderNewRunScreen();
+
+        expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionNewRunScreen.hydrate', { serverId: 'server-owned' });
+        expect(hydrateSpy).not.toHaveBeenCalledWith('session-1', 'SessionExecutionRunLauncherView.hydrate', undefined);
     });
 
     it('shows unavailable state when the session has no live execution-run backends', async () => {

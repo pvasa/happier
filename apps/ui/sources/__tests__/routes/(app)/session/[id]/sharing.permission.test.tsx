@@ -10,9 +10,15 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 const getSessionSharesSpy = vi.fn(async (..._args: any[]) => []);
 const getPublicShareSpy = vi.fn(async (..._args: any[]) => null);
 const getFriendsListSpy = vi.fn(async (..._args: any[]) => []);
-let sessionHydrated = true;
+let routeHydrationState: 'available' | 'loading' | 'missing' = 'available';
 let mockServerId: string | undefined;
-const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) =>
+    routeHydrationState === 'available'
+        ? { kind: 'available', sessionId, serverId: options?.serverId }
+        : routeHydrationState === 'missing'
+            ? { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' }
+            : { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' },
+);
 
 installSessionRouteCommonModuleMocks({
     router: async () => {
@@ -98,23 +104,40 @@ vi.mock('@/components/sessions/sharing', () => ({
     SessionShareDialog: () => null,
 }));
 
+vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
+    SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback', { testID: 'session-invalid-link' }),
+}));
+
 describe('Session Sharing Screen permissions', () => {
     it('waits for session hydration before rendering sharing content', async () => {
-        sessionHydrated = false;
+        routeHydrationState = 'loading';
         mockServerId = 'server-b';
         const Screen = (await import('@/app/(app)/session/[id]/sharing')).default;
 
         const screen = await renderScreen(<Screen />);
 
-        expect(screen.findByType('ActivityIndicator' as any)).toBeDefined();
+        expect(screen.findByProps({ accessibilityRole: 'progressbar' })).toBeDefined();
         expect(getSessionSharesSpy).not.toHaveBeenCalled();
         expect(getPublicShareSpy).not.toHaveBeenCalled();
         expect(getFriendsListSpy).not.toHaveBeenCalled();
         expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionSharingRoute.ensureSessionVisible', { serverId: 'server-b' });
     });
 
+    it('renders the unavailable fallback when route hydration resolves missing', async () => {
+        routeHydrationState = 'missing';
+        mockServerId = 'server-b';
+        const Screen = (await import('@/app/(app)/session/[id]/sharing')).default;
+
+        const screen = await renderScreen(<Screen />);
+
+        expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
+        expect(getSessionSharesSpy).not.toHaveBeenCalled();
+        expect(getPublicShareSpy).not.toHaveBeenCalled();
+        expect(getFriendsListSpy).not.toHaveBeenCalled();
+    });
+
     it('does not attempt to load or manage shares when user is not an admin', async () => {
-        sessionHydrated = true;
+        routeHydrationState = 'available';
         mockServerId = undefined;
         hydrateSpy.mockClear();
         const Screen = (await import('@/app/(app)/session/[id]/sharing')).default;

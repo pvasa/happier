@@ -79,6 +79,10 @@ function buildChildKeySetByGroupKey(source: ReadonlyArray<SessionListViewItem>):
     return map;
 }
 
+function isFolderOrderKey(key: string): boolean {
+    return key.startsWith('folder:');
+}
+
 export function normalizeSessionListGroupOrderV1ForSource(params: Readonly<{
     source: ReadonlyArray<SessionListViewItem>;
     pinnedSessionKeysV1: ReadonlyArray<string>;
@@ -122,6 +126,51 @@ export function normalizeSessionListGroupOrderV1ForSource(params: Readonly<{
 
         const filtered = capped.filter((k) => allowedKeys.has(k));
         const finalKeys = filtered;
+
+        if (finalKeys.length > 0) {
+            out[groupKey] = finalKeys;
+        }
+    }
+
+    return out;
+}
+
+export function normalizeSessionListGroupOrderV1ForStructuralSource(params: Readonly<{
+    source: ReadonlyArray<SessionListViewItem>;
+    pinnedSessionKeysV1: ReadonlyArray<string>;
+    sessionListGroupOrderV1: Readonly<Record<string, ReadonlyArray<string> | undefined>>;
+}>): Record<string, string[]> {
+    const pinnedSet = new Set(
+        (params.pinnedSessionKeysV1 ?? [])
+            .map((k) => normalizeSessionKey(k))
+            .filter((k): k is string => Boolean(k)),
+    );
+    const childKeysByGroupKey = buildChildKeySetByGroupKey(params.source);
+    const out: Record<string, string[]> = {};
+
+    for (const [groupKeyRaw, keysRaw] of Object.entries(params.sessionListGroupOrderV1 ?? {})) {
+        const groupKey = String(groupKeyRaw ?? '').trim();
+        if (!groupKey) continue;
+
+        const normalizedKeys = dedupePreserveOrder(
+            (Array.isArray(keysRaw) ? keysRaw : [])
+                .map((k) => normalizeSessionKey(k))
+                .filter((k): k is string => Boolean(k)),
+        );
+
+        if (groupKey === PINNED_GROUP_KEY_V1) {
+            const filtered = normalizedKeys.filter((k) => pinnedSet.has(k));
+            if (filtered.length > 0) {
+                out[groupKey] = filtered;
+            }
+            continue;
+        }
+
+        const allowedKeys = childKeysByGroupKey.get(groupKey);
+        const finalKeys = normalizedKeys.filter((key) => {
+            if (!isFolderOrderKey(key)) return true;
+            return allowedKeys?.has(key) === true;
+        });
 
         if (finalKeys.length > 0) {
             out[groupKey] = finalKeys;

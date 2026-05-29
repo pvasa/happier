@@ -5,6 +5,7 @@ import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -114,6 +115,7 @@ let syncErrorState: {
     at: number;
     serverId?: string;
 } | null = null;
+let isDataReadyState = false;
 let sessionState: any = {
     id: 's1',
     seq: 1,
@@ -161,17 +163,41 @@ installSessionShellCommonModuleMocks({
                 setParams: vi.fn(),
             },
         }).module,
-    storage: async () => {
-        return {
-            storage: {
-                getState: () => ({
-                    sessions: sessionState ? { s1: sessionState } : {},
-                    settings: {},
-                    sessionListViewDataByServerId: {},
-                }),
-            } as any,
+    storage: async () =>
+        createStorageModuleStub({
+            storage: Object.assign(
+                (
+                    selector?: (value: {
+                        sessions: Record<string, unknown>;
+                        settings: Record<string, unknown>;
+                        sessionListViewDataByServerId: Record<string, unknown>;
+                    }) => unknown,
+                ) => {
+                    const snapshot = {
+                        sessions: sessionState ? { s1: sessionState } : {},
+                        settings: {},
+                        sessionListViewDataByServerId: {},
+                    };
+                    return typeof selector === 'function' ? selector(snapshot) : snapshot;
+                },
+                {
+                    getState: () => ({
+                        sessions: sessionState ? { s1: sessionState } : {},
+                        settings: {},
+                        sessionListViewDataByServerId: {},
+                    }),
+                    getInitialState: () => ({
+                        sessions: sessionState ? { s1: sessionState } : {},
+                        settings: {},
+                        sessionListViewDataByServerId: {},
+                    }),
+                    setState: () => undefined,
+                    subscribe: () => () => undefined,
+                    destroy: () => undefined,
+                },
+            ),
             useSession: () => sessionState,
-            useIsDataReady: () => false,
+            useIsDataReady: () => isDataReadyState,
             useRealtimeStatus: () => 'connected',
             useEndpointConnectivity: () => ({
                 status: endpointConnectivityStatus,
@@ -211,11 +237,11 @@ installSessionShellCommonModuleMocks({
                     : vi.fn<(value: Settings[K]) => void>(),
             ],
             useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
+            useProfile: () => null,
             useAutomations: () => [],
             useAllMachines: () => [],
             useMachine: () => null,
-        };
-    },
+        }),
 });
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -230,7 +256,12 @@ vi.mock('@/auth/context/AuthContext', () => ({
 }));
 
 vi.mock('@/components/sessions/transcript/ChatHeaderView', () => ({
-    ChatHeaderView: (props: any) => React.createElement(React.Fragment, null, props.rightElement ?? null),
+    ChatHeaderView: (props: any) => React.createElement(
+        React.Fragment,
+        null,
+        React.createElement('Text', { testID: 'session-header-title' }, props.title ?? ''),
+        props.rightElement ?? null,
+    ),
 }));
 vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
     AgentContentView: (props: any) => React.createElement('AgentContentView', props, props.input ?? null),
@@ -271,7 +302,7 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsTablet: () => true,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-    useDraft: () => ({ clearDraft: vi.fn() }),
+    useDraft: () => ({ clearDraft: vi.fn(), setDraftValue: vi.fn() }),
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
     getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -305,6 +336,8 @@ vi.mock('@/components/sessions/panes/url/useSessionPaneUrlSync', () => ({
 vi.mock('@/sync/domains/session/activeViewingSession', () => ({
     setActiveViewingSessionId: () => {},
     clearActiveViewingSessionId: () => {},
+    markSessionVisible: () => {},
+    markSessionHidden: () => {},
 }));
 vi.mock('@/sync/sync', () => ({
     sync: {
@@ -317,6 +350,7 @@ vi.mock('@/sync/sync', () => ({
         refreshSessions: async () => {},
         onSessionVisible: () => {},
         onSessionViewportChange: () => {},
+        markSessionLiveTailIntent: () => {},
         sendMessage: async () => {},
         enqueuePendingMessage: async () => {},
         wakeSessionAfterSend: async () => null,
@@ -341,6 +375,7 @@ describe('SessionView (data ready gating)', () => {
         routerPushSpy.mockClear();
         endpointConnectivityStatus = 'online';
         syncErrorState = null;
+        isDataReadyState = false;
         sessionState = {
             id: 's1',
             seq: 1,
@@ -368,6 +403,103 @@ describe('SessionView (data ready gating)', () => {
 
         expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1);
         expect(screen.findAllByTestId('session-header-action-menu-trigger')).toHaveLength(1);
+    });
+
+    it('renders loading instead of deleted copy when route hydration is still pending after global data readiness', async () => {
+        isDataReadyState = true;
+        sessionState = null;
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView
+                    id="s1"
+                    routeHydrationState={{ kind: 'loading', sessionId: 's1', reason: 'store-miss' }}
+                />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.getTextContent()).not.toContain('errors.sessionDeleted');
+        expect(screen.getTextContent()).not.toContain('errors.sessionDeletedDescription');
+    });
+
+    it('does not render cached same-id session content from a different route server while hydration is pending', async () => {
+        isDataReadyState = true;
+        sessionState = {
+            ...sessionState,
+            serverId: 'server-stale',
+        };
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView
+                    id="s1"
+                    routeServerId="server-target"
+                    routeHydrationState={{ kind: 'loading', sessionId: 's1', serverId: 'server-target', reason: 'store-miss' }}
+                />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findAllByTestId('session-route-loading')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-composer-input')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-header-action-menu-trigger')).toHaveLength(0);
+    });
+
+    it('renders retrying route hydration separately from cold loading', async () => {
+        isDataReadyState = true;
+        sessionState = null;
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView
+                    id="s1"
+                    routeHydrationState={{ kind: 'retrying', sessionId: 's1', cause: 'server_unavailable' }}
+                />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findAllByTestId('session-route-loading')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-route-retrying')).toHaveLength(1);
+        expect(screen.getTextContent()).toContain('newSession.notConnectedToServer');
+        expect(screen.getTextContent()).not.toContain('errors.sessionDeleted');
+    });
+
+    it('renders terminal missing copy only after route hydration resolves missing', async () => {
+        isDataReadyState = true;
+        sessionState = null;
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView
+                    id="s1"
+                    routeHydrationState={{ kind: 'missing', sessionId: 's1', cause: 'not_found' }}
+                />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.getTextContent()).toContain('errors.sessionDeleted');
+        expect(screen.getTextContent()).toContain('errors.sessionDeletedDescription');
+    });
+
+    it('keeps the header neutral while route hydration is still pending', async () => {
+        isDataReadyState = true;
+        sessionState = null;
+        const { SessionView } = await sessionViewModulePromise;
+
+        const screen = await renderScreen(
+            <AppPaneProvider>
+                <SessionView
+                    id="s1"
+                    routeHydrationState={{ kind: 'loading', sessionId: 's1', reason: 'store-miss' }}
+                />
+            </AppPaneProvider>,
+        );
+
+        expect(screen.findByTestId('session-header-title')?.props.children).toBe('');
+        expect(screen.getTextContent()).not.toContain('errors.sessionDeleted');
     });
 
     it('can render chat content without the legacy web bottom spacer when cockpit owns bottom chrome', async () => {

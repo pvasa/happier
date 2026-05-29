@@ -11,6 +11,7 @@ import { resolvePaneLayout } from '@/components/ui/panels/paneBreakpoints';
 import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useLocalSetting } from '@/sync/domains/state/storage';
+import * as FlashListCompat from '@/components/ui/lists/flashListCompat/FlashListCompat';
 
 const LINKED_FILE_PREFIX = '@';
 
@@ -53,6 +54,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+const fallbackLinkedFilesMappingHelper: FlashListCompat.FlashListMappingHelper = {
+    getMappingKey: (itemKey: FlashListCompat.FlashListMappingKey) => itemKey,
+};
+
+function useLinkedFilesMappingHelper(): FlashListCompat.FlashListMappingHelper {
+    return typeof FlashListCompat.useMappingHelper === 'function'
+        ? FlashListCompat.useMappingHelper()
+        : fallbackLinkedFilesMappingHelper;
+}
+
 function getBasename(path: string): string {
     const parts = path.split('/');
     const last = parts.at(-1) ?? path;
@@ -66,6 +77,7 @@ export const LinkedWorkspaceFilesRow = React.memo((props: LinkedWorkspaceFilesRo
     const { width: windowWidth } = useWindowDimensions();
     const deviceType = useDeviceType();
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
+    const { getMappingKey } = useLinkedFilesMappingHelper();
 
     const scopeId = React.useMemo(() => `session:${props.sessionId}`, [props.sessionId]);
     const pane = useAppPaneScope(scopeId);
@@ -100,9 +112,9 @@ export const LinkedWorkspaceFilesRow = React.memo((props: LinkedWorkspaceFilesRo
 
     return (
         <View style={styles.row}>
-            {props.paths.map((path) => (
+            {props.paths.map((path, index) => (
                 <Pressable
-                    key={path}
+                    key={getMappingKey(path, index)}
                     testID={`linked-workspace-file:${path}`}
                     onPress={() => openFile(path)}
                     style={({ pressed }) => [styles.chip, pressed ? styles.chipPressed : null]}

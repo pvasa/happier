@@ -2,7 +2,7 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
-import { renderScreen } from '@/dev/testkit';
+import { renderHook, renderScreen } from '@/dev/testkit';
 import { getActiveViewingSessionActivationId } from '@/sync/domains/session/activeViewingSession';
 import {
     beginSessionViewingActivation,
@@ -11,6 +11,7 @@ import {
     shouldSuppressAutomaticMarkViewed,
 } from '@/sync/domains/session/readState/sessionManualUnreadHold';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
+import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 
@@ -31,9 +32,38 @@ const sessionState = vi.hoisted(() => ({
         agentState: {},
     } as any,
 }));
+const transcriptState = vi.hoisted(() => ({
+    ids: [] as string[],
+    messagesById: {} as Record<string, any>,
+    isLoaded: true,
+    latestReadyEventSeq: null as number | null,
+    latestReadyEventAt: null as number | null,
+}));
 const focusCleanupState = vi.hoisted(() => ({ current: null as null | (() => void) }));
 
-vi.mock('react-native-reanimated', () => ({}));
+function getStorageStateForTest() {
+    return {
+        sessions: { s1: sessionState.current },
+        settings: {},
+        localSettings: {},
+        sessionListViewDataByServerId: {},
+    };
+}
+
+vi.mock('react-native-reanimated', () => {
+    const Animated = {
+        View: 'Animated.View',
+        createAnimatedComponent: (component: unknown) => component,
+    };
+    return {
+        __esModule: true,
+        default: Animated,
+        ...Animated,
+        useAnimatedProps: (factory: () => unknown) => factory(),
+        useAnimatedStyle: (factory: () => unknown) => factory(),
+        useSharedValue: (initial: unknown) => ({ value: initial }),
+    };
+});
 vi.mock('expo-linear-gradient', () => ({
     LinearGradient: 'LinearGradient',
 }));
@@ -47,8 +77,20 @@ vi.mock('react-native-safe-area-context', () => ({
 
 vi.mock('@react-navigation/native', () => ({
     useFocusEffect: (effect: () => void | (() => void)) => {
-        const cleanup = effect();
-        focusCleanupState.current = typeof cleanup === 'function' ? cleanup : null;
+        React.useEffect(() => {
+            const cleanup = effect();
+            let active = true;
+            const runCleanup = () => {
+                if (!active) return;
+                active = false;
+                cleanup?.();
+                if (focusCleanupState.current === runCleanup) {
+                    focusCleanupState.current = null;
+                }
+            };
+            focusCleanupState.current = runCleanup;
+            return runCleanup;
+        }, [effect]);
     },
     useIsFocused: () => true,
 }));
@@ -120,7 +162,7 @@ vi.mock('@/hooks/session/files/useWarmRepositoryDirectoryCacheOnSessionOpen', ()
     useWarmRepositoryDirectoryCacheOnSessionOpen: () => {},
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-    useDraft: () => ({ clearDraft: vi.fn() }),
+    useDraft: () => ({ clearDraft: vi.fn(), setDraftValue: vi.fn() }),
 }));
 vi.mock('@/utils/platform/responsive', () => ({
     getDeviceType: () => 'tablet',
@@ -153,6 +195,7 @@ vi.mock('@/sync/sync', () => ({
         publishSessionModelOverrideToMetadata: async () => {},
         refreshSessions: async () => {},
         onSessionVisible: () => {},
+        markSessionLiveTailIntent: () => {},
         sendMessage: async () => {},
         enqueuePendingMessage: async () => {},
         submitMessage: async () => {},
@@ -211,21 +254,48 @@ installSessionShellCommonModuleMocks({
             return (overrides[key] ?? localSettingsDefaults[key]) as LocalSettings[K];
         };
         return createStorageModuleStub({
-            storage: {
-                getState: () => ({
-                    sessions: { s1: sessionState.current },
-                    settings: {},
-                    localSettings: localSettingsDefaults,
-                    sessionListViewDataByServerId: {},
-                }),
-            },
+            storage: Object.assign(
+                (selector?: (state: any) => unknown) => {
+                    const state = {
+                        ...getStorageStateForTest(),
+                        localSettings: localSettingsDefaults,
+                    };
+                    return typeof selector === 'function' ? selector(state) : state;
+                },
+                {
+                    getState: () => ({
+                        ...getStorageStateForTest(),
+                        localSettings: localSettingsDefaults,
+                    }),
+                },
+                // Boundary fixture: this mimics Zustand's callable store plus getState shape.
+            ) as any,
             useSession: () => sessionState.current,
             useAutomations: () => [],
             useIsDataReady: () => true,
             useRealtimeStatus: () => ({ current: { status: 'connected' } as any }),
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
             useSessionSubagentSourceMessages: () => [],
-            useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
+            useSessionTranscriptIds: () => ({ ids: transcriptState.ids, isLoaded: transcriptState.isLoaded }),
+            // Mirror the real useSessionVisibleReadSeq selector: resolve the number through the
+            // genuine readable-seq logic from this test's transcript fixture so read-cursor
+            // assertions exercise real behavior rather than a hand-picked constant.
+            useSessionVisibleReadSeq: (
+                _sessionId: string,
+                params: { sessionSeq: number | null; latestTurnStatus: unknown },
+            ) => {
+                if (!transcriptState.isLoaded) return null;
+                const messages = transcriptState.ids
+                    .map((id) => transcriptState.messagesById[id])
+                    .filter((message): message is Record<string, unknown> => Boolean(message));
+                return resolveSessionReadableSeq({
+                    messages: messages as any,
+                    sessionSeq: params.sessionSeq,
+                    latestReadyEventSeq: transcriptState.latestReadyEventSeq,
+                    latestTurnStatus: params.latestTurnStatus as any,
+                    includeTerminalSessionSeq: true,
+                });
+            },
             useSessionPendingMessages: () => ({ messages: [] }),
             useSessionReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
@@ -290,8 +360,10 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
     formatPathRelativeToHome: () => '/tmp',
     getSessionAvatarId: () => 'avatar',
     getSessionName: () => 'Session',
+    listPendingAgentInputRequests: () => ({ permissionRequests: [], userActionRequests: [] }),
     listPendingPermissionRequests: () => [],
     listPendingUserActionRequests: () => [],
+    shouldReadTranscriptForPendingRequests: () => true,
     shouldShowAbortButtonForSessionState: () => false,
     useSessionStatus: () => 'online',
 }));
@@ -387,6 +459,14 @@ vi.mock('@/sync/domains/session/control/controlSwitchUiTimeout', () => ({
 describe('SessionView read cursor on blur', () => {
     beforeEach(() => {
         sessionState.current.seq = 2;
+        sessionState.current.latestTurnStatus = null;
+        transcriptState.ids = ['m2'];
+        transcriptState.messagesById = {
+            m2: { id: 'm2', kind: 'agent-text', seq: 2, localId: null, createdAt: 2, text: 'visible' },
+        };
+        transcriptState.isLoaded = true;
+        transcriptState.latestReadyEventSeq = null;
+        transcriptState.latestReadyEventAt = null;
         markSessionViewedSpy.mockClear();
         scheduledInteractionCallbacks.length = 0;
         focusCleanupState.current = null;
@@ -423,6 +503,89 @@ describe('SessionView read cursor on blur', () => {
 
         expect(markSessionViewedSpy).toHaveBeenCalledTimes(1);
         expect(markSessionViewedSpy).toHaveBeenCalledWith('s1', { sessionSeq: 2 });
+
+        act(() => {
+            tree?.unmount();
+        });
+    });
+
+    it('marks the current session seq when opening a non-chat cockpit surface', async () => {
+        const { SessionView } = await import('./SessionView');
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        tree = (await renderScreen(<AppPaneProvider>
+                    <SessionView id="s1" contentOverride={React.createElement('ContentOverride')} />
+                </AppPaneProvider>)).tree;
+
+        expect(scheduledInteractionCallbacks.length).toBeGreaterThan(0);
+
+        await act(async () => {
+            while (scheduledInteractionCallbacks.length > 0) {
+                scheduledInteractionCallbacks.shift()?.();
+            }
+        });
+
+        expect(markSessionViewedSpy).toHaveBeenCalledWith('s1', { sessionSeq: 2 });
+
+        act(() => {
+            tree?.unmount();
+        });
+    });
+
+    it('bounds focused seq-change read marks to the seq that became visible', async () => {
+        const { useSessionViewedLifecycle } = await import('./view/useSessionViewedLifecycle');
+        const hook = await renderHook(({ visibleReadSeq }: { visibleReadSeq: number | null }) => {
+            useSessionViewedLifecycle({
+                sessionId: 's1',
+                surfaceFocused: true,
+                visibleReadSeq,
+            });
+        }, {
+            initialProps: { visibleReadSeq: 2 },
+        });
+
+        scheduledInteractionCallbacks.length = 0;
+        markSessionViewedSpy.mockClear();
+
+        vi.useFakeTimers();
+        try {
+            await hook.rerender({ visibleReadSeq: 4 });
+
+            // A later completion/message reaches storage before the delayed mark fires.
+            sessionState.current.seq = 6;
+            transcriptState.latestReadyEventSeq = 6;
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(300);
+            });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        expect(markSessionViewedSpy).toHaveBeenCalledTimes(1);
+        expect(markSessionViewedSpy).toHaveBeenCalledWith('s1', { sessionSeq: 4 });
+
+        await hook.unmount();
+    });
+
+    it('does not mark a raw session seq before transcript hydration is ready', async () => {
+        transcriptState.isLoaded = false;
+        sessionState.current.seq = 10;
+
+        const { SessionView } = await import('./SessionView');
+
+        let tree: renderer.ReactTestRenderer | undefined;
+        tree = (await renderScreen(<AppPaneProvider>
+                    <SessionView id="s1" />
+                </AppPaneProvider>)).tree;
+
+        await act(async () => {
+            while (scheduledInteractionCallbacks.length > 0) {
+                scheduledInteractionCallbacks.shift()?.();
+            }
+        });
+
+        expect(markSessionViewedSpy).not.toHaveBeenCalled();
 
         act(() => {
             tree?.unmount();

@@ -5,14 +5,14 @@ import { Typography } from '@/constants/Typography';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { t } from '@/text';
-import { useRouter } from 'expo-router';
+import { router } from 'expo-router';
 import { Modal } from '@/modal';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
-import { useVisibleSessionListViewData } from '@/hooks/session/useVisibleSessionListViewData';
+import { useVisibleSessionListSessionSummary } from '@/hooks/session/useVisibleSessionListViewData';
 import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveServerSelection';
 import { useMachineListByServerId, useMachineListStatusByServerId, useSetting } from '@/sync/domains/state/storage';
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
@@ -30,10 +30,17 @@ import { Text } from '@/components/ui/text/Text';
 import { buildHappierCliCommandName, buildHappierCliInstallCommand } from './happierCliInstallCommand';
 import { listSessionGettingStartedCliCommands } from './listSessionGettingStartedCliCommands';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
+import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 
 export type SessionGettingStartedGuidanceVariant = 'phone' | 'sidebar' | 'primaryPane' | 'newSessionBlocking';
 
 const SESSION_GETTING_STARTED_GUIDANCE_FEATURE_ID = 'app.ui.sessionGettingStartedGuidance' as const satisfies FeatureId;
+const DEFER_CLI_FOLLOW_UP_VARIANTS = new Set<SessionGettingStartedGuidanceVariant>(['phone', 'newSessionBlocking']);
+
+type DeferredCliFollowUpState = Readonly<{
+    key: string;
+    ready: boolean;
+}>;
 
 export type SessionGettingStartedGuidanceViewModel = Readonly<{
     kind: SessionGettingStartedDecisionKind;
@@ -46,6 +53,11 @@ export type SessionGettingStartedGuidanceViewModel = Readonly<{
     onConnectTerminal?: () => void;
     onEnterUrlManually?: () => void;
     connectIsLoading?: boolean;
+}>;
+
+type SessionGettingStartedGuidanceViewProps = Readonly<{
+    variant: SessionGettingStartedGuidanceVariant;
+    model: SessionGettingStartedGuidanceViewModel;
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -244,6 +256,22 @@ type SessionGettingStartedGuidanceStep = Readonly<{
     copyLabel?: string;
 }>;
 
+function buildDeferredCliFollowUpKey(params: Readonly<{
+    variant: SessionGettingStartedGuidanceVariant;
+    model: SessionGettingStartedGuidanceViewModel;
+    showSetupPrimaryCard: boolean;
+}>): string {
+    return [
+        params.variant,
+        params.model.kind,
+        params.model.serverUrl,
+        params.model.serverName,
+        params.model.targetLabel,
+        params.model.showServerSetup ? 'server-setup' : 'no-server-setup',
+        params.showSetupPrimaryCard ? 'setup-card' : 'manual-only',
+    ].join('\n');
+}
+
 function buildSteps(model: SessionGettingStartedGuidanceViewModel): SessionGettingStartedGuidanceStep[] {
     switch (model.kind) {
         case 'connect_machine': {
@@ -336,27 +364,62 @@ async function copyTextToClipboard(params: Readonly<{ label: string; text: strin
     }
 }
 
-export function SessionGettingStartedGuidanceView(props: Readonly<{
-    variant: SessionGettingStartedGuidanceVariant;
-    model: SessionGettingStartedGuidanceViewModel;
-}>): React.ReactElement {
+function SessionGettingStartedGuidanceViewImpl(props: SessionGettingStartedGuidanceViewProps): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const { model } = props;
 
     const title = titleForKind(model.kind);
     const subtitle = subtitleForKind(model.kind, model.targetLabel);
-    const steps = buildSteps(model);
+    const steps = React.useMemo(() => buildSteps(model), [
+        model.kind,
+        model.serverName,
+        model.serverUrl,
+        model.showServerSetup,
+    ]);
     const showLogo = props.variant === 'primaryPane' || props.variant === 'newSessionBlocking';
     const showSetupPrimaryCard = (model.kind === 'connect_machine' || model.kind === 'start_daemon') && Boolean(model.onOpenSetup);
     const [showManualSteps, setShowManualSteps] = React.useState(!showSetupPrimaryCard);
     const shouldCenterContent = props.variant === 'primaryPane' && model.kind === 'select_session';
+    const shouldDeferCliFollowUp = DEFER_CLI_FOLLOW_UP_VARIANTS.has(props.variant) && !showSetupPrimaryCard;
+    const deferredCliFollowUpKey = buildDeferredCliFollowUpKey({ variant: props.variant, model, showSetupPrimaryCard });
+    const [deferredCliFollowUpState, setDeferredCliFollowUpState] = React.useState<DeferredCliFollowUpState>(() => ({
+        key: deferredCliFollowUpKey,
+        ready: !shouldDeferCliFollowUp,
+    }));
+    const isDeferredCliFollowUpReady = !shouldDeferCliFollowUp
+        || (deferredCliFollowUpState.key === deferredCliFollowUpKey && deferredCliFollowUpState.ready);
 
     React.useEffect(() => {
         setShowManualSteps(!showSetupPrimaryCard);
     }, [model.kind, model.serverUrl, model.targetLabel, showSetupPrimaryCard]);
 
-    const showCliFollowUp = steps.length > 0 && (!showSetupPrimaryCard || showManualSteps);
+    React.useEffect(() => {
+        if (!shouldDeferCliFollowUp) {
+            setDeferredCliFollowUpState((current) => (
+                current.key === deferredCliFollowUpKey && current.ready
+                    ? current
+                    : { key: deferredCliFollowUpKey, ready: true }
+            ));
+            return;
+        }
+
+        setDeferredCliFollowUpState((current) => (
+            current.key === deferredCliFollowUpKey && !current.ready
+                ? current
+                : { key: deferredCliFollowUpKey, ready: false }
+        ));
+
+        return runAfterInteractionsWithFallback(() => {
+            setDeferredCliFollowUpState((current) => (
+                current.key === deferredCliFollowUpKey && current.ready
+                    ? current
+                    : { key: deferredCliFollowUpKey, ready: true }
+            ));
+        });
+    }, [deferredCliFollowUpKey, shouldDeferCliFollowUp]);
+
+    const showCliFollowUp = steps.length > 0 && (!showSetupPrimaryCard || showManualSteps) && isDeferredCliFollowUpReady;
     const showCliFollowUpTitle = showSetupPrimaryCard && showCliFollowUp;
 
     return (
@@ -509,8 +572,38 @@ export function SessionGettingStartedGuidanceView(props: Readonly<{
     );
 }
 
+function areSessionGettingStartedGuidanceViewModelsEqual(
+    previous: SessionGettingStartedGuidanceViewModel,
+    next: SessionGettingStartedGuidanceViewModel,
+): boolean {
+    return previous.kind === next.kind
+        && previous.targetLabel === next.targetLabel
+        && previous.serverUrl === next.serverUrl
+        && previous.serverName === next.serverName
+        && previous.showServerSetup === next.showServerSetup
+        && previous.onOpenSetup === next.onOpenSetup
+        && previous.onStartNewSession === next.onStartNewSession
+        && previous.onConnectTerminal === next.onConnectTerminal
+        && previous.onEnterUrlManually === next.onEnterUrlManually
+        && previous.connectIsLoading === next.connectIsLoading;
+}
+
+function areSessionGettingStartedGuidanceViewPropsEqual(
+    previous: SessionGettingStartedGuidanceViewProps,
+    next: SessionGettingStartedGuidanceViewProps,
+): boolean {
+    return previous.variant === next.variant
+        && areSessionGettingStartedGuidanceViewModelsEqual(previous.model, next.model);
+}
+
+export const SessionGettingStartedGuidanceView = React.memo(
+    SessionGettingStartedGuidanceViewImpl,
+    areSessionGettingStartedGuidanceViewPropsEqual,
+);
+SessionGettingStartedGuidanceView.displayName = 'SessionGettingStartedGuidanceView';
+
 export function useSessionGettingStartedGuidanceBaseModel(): SessionGettingStartedViewModel {
-    const sessions = useVisibleSessionListViewData();
+    const sessionSummary = useVisibleSessionListSessionSummary();
     const selection = useResolvedActiveServerSelection();
     const serverSelectionGroups = useSetting('serverSelectionGroups');
     const machineListByServerId = useMachineListByServerId();
@@ -518,14 +611,15 @@ export function useSessionGettingStartedGuidanceBaseModel(): SessionGettingStart
 
     return React.useMemo(() => {
         return buildSessionGettingStartedViewModel({
-            sessions,
+            sessionsReady: sessionSummary.sessionsReady,
+            sessionCount: sessionSummary.visibleSessionCount,
             selection,
             serverSelectionGroups,
             serverProfiles: listServerProfiles().map((p) => ({ id: p.id, name: p.name, serverUrl: p.serverUrl })),
             machineListByServerId,
             machineListStatusByServerId,
         });
-    }, [machineListByServerId, machineListStatusByServerId, selection, serverSelectionGroups, sessions]);
+    }, [machineListByServerId, machineListStatusByServerId, selection, serverSelectionGroups, sessionSummary]);
 }
 
 export function useShouldBlockNewSessionWithGettingStartedGuidance(): boolean {
@@ -542,18 +636,39 @@ export function useShouldBlockNewSessionWithGettingStartedGuidance(): boolean {
     }, [machineListByServerId, selection.allowedServerIds]);
 }
 
-function SessionGettingStartedGuidanceEnabled(props: Readonly<{ variant: SessionGettingStartedGuidanceVariant }>): React.ReactElement {
-    const router = useRouter();
+function useSessionGettingStartedGuidanceViewModelBase(): SessionGettingStartedGuidanceViewModel {
     const baseModel = useSessionGettingStartedGuidanceBaseModel();
     const canOpenSetup = isTauriDesktop();
     const onOpenSetup = React.useCallback(() => {
         router.push('/setup' as any);
-    }, [router]);
+    }, []);
 
     const onStartNewSession = React.useCallback(() => {
         router.push('/new' as any);
-    }, [router]);
+    }, []);
 
+    return React.useMemo(() => ({
+        kind: baseModel.kind,
+        targetLabel: baseModel.targetLabel,
+        serverUrl: baseModel.serverUrl,
+        serverName: baseModel.serverName,
+        showServerSetup: baseModel.showServerSetup,
+        ...((baseModel.kind === 'connect_machine' || baseModel.kind === 'start_daemon') && canOpenSetup ? { onOpenSetup } : {}),
+        ...(baseModel.kind === 'create_session' || baseModel.kind === 'select_session' ? { onStartNewSession } : {}),
+    }), [
+        baseModel.kind,
+        baseModel.serverName,
+        baseModel.serverUrl,
+        baseModel.showServerSetup,
+        baseModel.targetLabel,
+        canOpenSetup,
+        onOpenSetup,
+        onStartNewSession,
+    ]);
+}
+
+function SessionGettingStartedPhoneGuidanceEnabled(): React.ReactElement {
+    const baseViewModel = useSessionGettingStartedGuidanceViewModelBase();
     const { connectTerminal, connectWithUrl, isLoading } = useConnectTerminal();
 
     const onEnterUrlManually = React.useCallback(async () => {
@@ -571,22 +686,20 @@ function SessionGettingStartedGuidanceEnabled(props: Readonly<{ variant: Session
         }
     }, [connectWithUrl]);
 
-    const viewModel: SessionGettingStartedGuidanceViewModel = {
-        kind: baseModel.kind,
-        targetLabel: baseModel.targetLabel,
-        serverUrl: baseModel.serverUrl,
-        serverName: baseModel.serverName,
-        showServerSetup: baseModel.showServerSetup,
-        ...((baseModel.kind === 'connect_machine' || baseModel.kind === 'start_daemon') && canOpenSetup ? { onOpenSetup } : {}),
-        ...(baseModel.kind === 'create_session' || baseModel.kind === 'select_session' ? { onStartNewSession } : {}),
-        ...(props.variant === 'phone'
-            ? {
-                onConnectTerminal: connectTerminal,
-                onEnterUrlManually,
-                connectIsLoading: isLoading,
-            }
-            : {}),
-    };
+    const viewModel = React.useMemo<SessionGettingStartedGuidanceViewModel>(() => ({
+        ...baseViewModel,
+        onConnectTerminal: connectTerminal,
+        onEnterUrlManually,
+        connectIsLoading: isLoading,
+    }), [baseViewModel, connectTerminal, isLoading, onEnterUrlManually]);
+
+    return <SessionGettingStartedGuidanceView variant="phone" model={viewModel} />;
+}
+
+function SessionGettingStartedGuidanceEnabled(
+    props: Readonly<{ variant: Exclude<SessionGettingStartedGuidanceVariant, 'phone'> }>,
+): React.ReactElement {
+    const viewModel = useSessionGettingStartedGuidanceViewModelBase();
 
     return <SessionGettingStartedGuidanceView variant={props.variant} model={viewModel} />;
 }
@@ -594,6 +707,9 @@ function SessionGettingStartedGuidanceEnabled(props: Readonly<{ variant: Session
 export function SessionGettingStartedGuidance(props: Readonly<{ variant: SessionGettingStartedGuidanceVariant }>): React.ReactElement | null {
     if (getFeatureBuildPolicyDecision(SESSION_GETTING_STARTED_GUIDANCE_FEATURE_ID) === 'deny') {
         return null;
+    }
+    if (props.variant === 'phone') {
+        return <SessionGettingStartedPhoneGuidanceEnabled />;
     }
     return <SessionGettingStartedGuidanceEnabled variant={props.variant} />;
 }

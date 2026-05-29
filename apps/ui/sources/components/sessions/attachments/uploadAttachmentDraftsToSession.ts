@@ -1,6 +1,9 @@
+import { SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND } from '@happier-dev/protocol';
+
 import type { AttachmentsUploadConfig } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
 import { sessionAttachmentsUploadFile } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
 import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import { RpcError } from '@/sync/runtime/rpcErrors';
 import { randomUUID } from '@/platform/randomUUID';
 
 import type { AttachmentDraft } from './attachmentDraftModel';
@@ -33,6 +36,7 @@ function buildStructuredInputForUploadedAttachment(args: Readonly<{
         kind: 'image',
         localPath: args.path,
         path: args.path,
+        provenance: { kind: SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND },
         name: args.name,
         ...(args.mimeType ? { mimeType: args.mimeType } : {}),
         sizeBytes: args.sizeBytes,
@@ -64,6 +68,14 @@ function describeSource(source: AttachmentsUploadFileSource): Readonly<{
         mimeType: source.mimeType ? String(source.mimeType) : undefined,
         sizeBytes: typeof source.sizeBytes === 'number' && Number.isFinite(source.sizeBytes) ? source.sizeBytes : undefined,
     };
+}
+
+function createAttachmentUploadFailureError(input: Readonly<{
+    error: string;
+    errorCode?: string | null;
+}>): Error {
+    const normalizedCode = typeof input.errorCode === 'string' ? input.errorCode.trim() : '';
+    return normalizedCode ? new RpcError(input.error, normalizedCode) : new Error(input.error);
 }
 
 export async function uploadAttachmentDraftsToSession(args: Readonly<{
@@ -118,7 +130,7 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
         });
         if (!uploadRes.success) {
             args.applyDraftPatch(stillPresent.id, { status: 'error', error: uploadRes.error });
-            throw new Error(uploadRes.error);
+            throw createAttachmentUploadFailureError(uploadRes);
         }
 
         args.applyDraftPatch(stillPresent.id, {

@@ -64,6 +64,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
+    readMachineControlTargetForSession: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
     canUseSessionRpc: (sessionId: string) => canUseSessionRpcSpy(sessionId),
     resolveMachinePathFromSessionBase: ({ basePath, requestPath }: { basePath: string; requestPath: string }) =>
         `${basePath}/${requestPath}`,

@@ -30,10 +30,14 @@ describe('SourceControlOperationsHistorySection', () => {
 
     const theme = {
         colors: {
-            text: '#fff',
-            textSecondary: '#aaa',
-            textLink: '#09f',
+            text: {
+                primary: '#fff',
+                secondary: '#aaa',
+                link: '#09f',
+            },
             divider: '#333',
+            border: { default: '#333' },
+            surface: { inset: '#222' },
             surfaceHigh: '#222',
             input: { background: '#111' },
         },
@@ -71,22 +75,29 @@ describe('SourceControlOperationsHistorySection', () => {
         expect(commitRowsAfter).toHaveLength(20);
     });
 
-    it('does not hide commits when no more pages are available', async () => {
+    it('expands local commits without requesting more history when no more pages are available', async () => {
         const { SourceControlOperationsHistorySection } = await import('./SourceControlOperationsHistorySection');
+        const onLoadMoreHistory = vi.fn();
 
         const screen = await renderScreen(<SourceControlOperationsHistorySection
                     theme={theme}
                     historyLoading={false}
                     historyEntries={makeEntries(10)}
                     historyHasMore={false}
-                    onLoadMoreHistory={vi.fn()}
+                    onLoadMoreHistory={onLoadMoreHistory}
                     onOpenCommit={vi.fn()}
                 />);
 
-        const commitRows = getCommitRows(screen, 10);
-        expect(commitRows).toHaveLength(10);
+        expect(getCommitRows(screen, 5)).toHaveLength(5);
 
         const loadMore = screen.findAllByTestId('scm-commit-load-more');
-        expect(loadMore).toHaveLength(0);
+        expect(loadMore).toHaveLength(1);
+
+        await act(async () => {
+            await pressTestInstanceAsync(loadMore[0]);
+        });
+
+        expect(onLoadMoreHistory).not.toHaveBeenCalled();
+        expect(getCommitRows(screen, 10)).toHaveLength(10);
     });
 });

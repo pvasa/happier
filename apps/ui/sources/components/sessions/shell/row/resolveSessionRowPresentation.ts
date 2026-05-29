@@ -77,10 +77,9 @@ export function resolveSessionRowPresentation(input: Readonly<{
     }
 
     if (
-        input.requestedSecondaryLineMode === 'status'
-        && (input.attentionState === 'working'
-            || input.attentionState === 'permission_required'
-            || input.attentionState === 'action_required')
+        input.attentionState === 'working'
+        || input.attentionState === 'permission_required'
+        || input.attentionState === 'action_required'
     ) {
         return { attentionIndicator, titleTone, secondaryLine: 'status' };
     }

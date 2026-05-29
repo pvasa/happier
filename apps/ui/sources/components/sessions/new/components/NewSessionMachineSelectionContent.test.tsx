@@ -45,6 +45,7 @@ vi.mock('@/components/ui/selectionList', () => ({
             ),
         );
     },
+    resolvePopoverSelectionListHeightBehavior: () => 'measuredToMaxHeight',
 }));
 
 function SelectionListOptionAlias(props: Readonly<{
@@ -166,7 +167,7 @@ describe('NewSessionMachineSelectionContent', () => {
         capturedSelectionLists.length = 0;
     });
 
-    it('renders empty machine content through SelectionList with the popover height cap', async () => {
+    it('renders empty machine content through SelectionList with a measured native popover height cap', async () => {
         const { NewSessionMachineSelectionContent } = await import('./NewSessionMachineSelectionContent');
 
         await renderScreen(<NewSessionMachineSelectionContent
@@ -183,6 +184,7 @@ describe('NewSessionMachineSelectionContent', () => {
 
         const props = getLastSelectionList();
         expect(props.maxHeight).toBe(317);
+        expect(props.heightBehavior).toBe('measuredToMaxHeight');
         expect(props.rootStep.emptyStateLabel).toBe('newSession.noMachinesFound');
         expect(props.rootStep.inputPlaceholder).toBeUndefined();
         expect(props.rootStep.sections).toEqual([]);

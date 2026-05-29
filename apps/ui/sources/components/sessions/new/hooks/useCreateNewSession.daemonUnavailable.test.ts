@@ -16,11 +16,41 @@ import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScree
 
 async function setupHarness() {
   const modalAlertSpy = vi.fn((..._args: unknown[]) => {});
-  const machineSpawnNewSessionSpy = vi.fn(async (_options: unknown) => ({
-    type: 'error' as const,
+  type SpawnNewSessionTestResult =
+    | Readonly<{
+        type: 'error';
+        errorCode:
+          | typeof SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE
+          | typeof SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT;
+        errorMessage: string;
+      }>
+    | Readonly<{
+        type: 'success';
+        sessionId: string;
+      }>;
+  type ResolveSpawnSessionTestResult =
+    | Readonly<{ status: 'success'; sessionId: string }>
+    | Readonly<{ status: 'pending' }>
+    | Readonly<{ status: 'not_found' }>
+    | Readonly<{ status: 'unsupported' }>
+    | Readonly<{ status: 'transport_error' }>;
+
+  const machineSpawnNewSessionSpy = vi.fn(async (_options: unknown): Promise<SpawnNewSessionTestResult> => ({
+    type: 'error',
     errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
     errorMessage: 'Daemon RPC is not available',
   }));
+  const machineResolveSpawnSessionByNonceSpy = vi.fn(async (): Promise<ResolveSpawnSessionTestResult> => ({ status: 'not_found' }));
+  const machineResolveSpawnSessionByNonceUntilSettledSpy = vi.fn(async (): Promise<ResolveSpawnSessionTestResult> => ({ status: 'not_found' }));
+  const followUpSpawnedSessionWithServerScopeSpy = vi.fn(async () => {});
+  const storageState = {
+    settings: {},
+    machines: { m1: { id: 'm1' } },
+    sessions: {} as Record<string, { id: string }>,
+    updateSessionPermissionMode: vi.fn(),
+    updateSessionModelMode: vi.fn(),
+    updateSessionDraft: vi.fn(),
+  };
 
   installNewSessionScreenModelCommonModuleMocks({
     text: () =>
@@ -35,13 +65,7 @@ async function setupHarness() {
     storage: async () =>
       createStorageModuleStub({
         storage: {
-          getState: () => ({
-            settings: {},
-            machines: { m1: { id: 'm1' } },
-            updateSessionPermissionMode: vi.fn(),
-            updateSessionModelMode: vi.fn(),
-            updateSessionDraft: vi.fn(),
-          }),
+          getState: () => storageState,
         },
       }),
   });
@@ -55,6 +79,9 @@ async function setupHarness() {
       refreshSessions: vi.fn(async () => {}),
       refreshMachines: vi.fn(async () => {}),
       sendMessage: vi.fn(async () => {}),
+      ensureSessionVisibleForMessageRoute: vi.fn(async (sessionId: string) => {
+        storageState.sessions[sessionId] = { id: sessionId };
+      }),
     },
   }));
   vi.doMock('@/sync/store/settingsWriters', () => ({
@@ -126,6 +153,22 @@ async function setupHarness() {
   vi.doMock('@/sync/runtime/orchestration/connectionManager', () => ({
     switchConnectionToActiveServer: vi.fn(async () => ({ token: 'next-token', secret: 'next-secret' })),
   }));
+  vi.doMock('@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession', () => ({
+    followUpSpawnedSessionWithServerScope: followUpSpawnedSessionWithServerScopeSpy,
+    readRecoverableFollowUpPayload: (error: unknown) => {
+      if (!(error instanceof Error)) return null;
+      const payload = (error as Error & { recoverableFollowUpPayload?: unknown }).recoverableFollowUpPayload;
+      if (
+        typeof payload === 'object'
+        && payload !== null
+        && 'draftText' in payload
+        && typeof (payload as { draftText?: unknown }).draftText === 'string'
+      ) {
+        return payload;
+      }
+      return null;
+    },
+  }));
   vi.doMock('@/sync/domains/settings/terminalSettings', () => ({ resolveTerminalSpawnOptions: vi.fn(() => null) }));
   vi.doMock('@/hooks/server/useMachineCapabilitiesCache', () => ({
     getMachineCapabilitiesSnapshot: vi.fn(() => ({ supported: true, response: { protocolVersion: 1, results: {} } })),
@@ -148,10 +191,22 @@ async function setupHarness() {
   });
   vi.doMock('@/agents/runtime/resumeCapabilities', () => ({ canAgentResume: vi.fn(() => false) }));
   vi.doMock('@/components/sessions/new/modules/formatResumeSupportDetailCode', () => ({ formatResumeSupportDetailCode: vi.fn(() => '') }));
-  vi.doMock('@/sync/ops', () => ({ machineSpawnNewSession: machineSpawnNewSessionSpy }));
+  vi.doMock('@/sync/ops', () => ({
+    machineSpawnNewSession: machineSpawnNewSessionSpy,
+    machineResolveSpawnSessionByNonce: machineResolveSpawnSessionByNonceSpy,
+    machineResolveSpawnSessionByNonceUntilSettled: machineResolveSpawnSessionByNonceUntilSettledSpy,
+  }));
 
   const { useCreateNewSession } = await import('./useCreateNewSession');
-  return { useCreateNewSession, modalAlertSpy, machineSpawnNewSessionSpy };
+  return {
+    useCreateNewSession,
+    modalAlertSpy,
+    machineSpawnNewSessionSpy,
+    machineResolveSpawnSessionByNonceSpy,
+    machineResolveSpawnSessionByNonceUntilSettledSpy,
+    storageState,
+    followUpSpawnedSessionWithServerScopeSpy,
+  };
 }
 
 describe('useCreateNewSession (daemon unavailable UX)', () => {
@@ -224,6 +279,68 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     expect(Array.isArray(args[2])).toBe(true);
     const buttons = args[2] as any[];
     expect(buttons.some((b) => b?.text === 'common.retry' && typeof b?.onPress === 'function')).toBe(true);
+    await hook.unmount();
+  });
+
+  it('does not keep the single-flight guard latched after a local validation failure', async () => {
+    const { useCreateNewSession, machineSpawnNewSessionSpy } = await setupHarness();
+
+    const setIsCreating = vi.fn();
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+
+    const hook = await renderHook(
+      ({ selectedMachineId }: { selectedMachineId: string | null }) =>
+        useCreateNewSession({
+          router: { push: vi.fn(), replace: vi.fn() },
+          selectedMachineId,
+          selectedPath: '/tmp',
+          selectedMachine: selectedMachineId
+            ? { id: selectedMachineId, active: true, activeAt: Date.now(), metadata: { host: 'devbox' } }
+            : null,
+          setIsCreating,
+          setIsResumeSupportChecking: vi.fn(),
+          settings,
+          useProfiles: false,
+          selectedProfileId: null,
+          profileMap: new Map(),
+          recentMachinePaths: [],
+          agentType: 'opencode' as any,
+          permissionMode: 'default' as PermissionMode,
+          modelMode: 'default' as ModelMode,
+          sessionPrompt: '',
+          resumeSessionId: '',
+          agentNewSessionOptions: null,
+          machineEnvPresence,
+          secrets: [],
+          secretBindingsByProfileId: {},
+          selectedSecretIdByProfileIdByEnvVarName: {},
+          sessionOnlySecretValueByProfileIdByEnvVarName: {},
+          selectedMachineCapabilities: {},
+          targetServerId: null,
+          allowedTargetServerIds: undefined,
+        }),
+      { initialProps: { selectedMachineId: null as string | null } },
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession();
+    });
+    expect(machineSpawnNewSessionSpy).not.toHaveBeenCalled();
+
+    await hook.rerender({ selectedMachineId: 'm1' });
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession();
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
     await hook.unmount();
   });
 
@@ -476,6 +593,1028 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
 
     expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
     expect(modalAlertSpy).toHaveBeenCalled();
+  });
+
+  it('resolves an ambiguous spawn by nonce without spawning another session', async () => {
+    const {
+      useCreateNewSession,
+      machineSpawnNewSessionSpy,
+      machineResolveSpawnSessionByNonceUntilSettledSpy,
+      storageState,
+      followUpSpawnedSessionWithServerScopeSpy,
+    } = await setupHarness();
+
+    storageState.sessions['session-created-from-nonce'] = { id: 'session-created-from-nonce' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'error' as const,
+      errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+      errorMessage: 'Session startup timed out',
+    });
+    machineResolveSpawnSessionByNonceUntilSettledSpy.mockResolvedValueOnce({
+      status: 'success' as const,
+      sessionId: 'session-created-from-nonce',
+    });
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router,
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: 'First turn',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession();
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    const spawnOptions = machineSpawnNewSessionSpy.mock.calls[0]?.[0] as { spawnNonce?: string };
+    expect(spawnOptions.spawnNonce).toEqual(expect.stringMatching(/^spawn-/));
+    expect(machineResolveSpawnSessionByNonceUntilSettledSpy).toHaveBeenCalledWith({
+      machineId: 'm1',
+      serverId: 'server-a',
+      spawnNonce: spawnOptions.spawnNonce,
+    });
+    expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-created-from-nonce',
+      initialMessageText: 'First turn',
+    }));
+    expect(router.replace).toHaveBeenCalledWith(
+      '/session/session-created-from-nonce?serverId=server-a',
+      expect.anything(),
+    );
+
+    await hook.unmount();
+  });
+
+  it('waits for pending spawn nonce resolution before sending the first turn', async () => {
+    const {
+      useCreateNewSession,
+      machineSpawnNewSessionSpy,
+      machineResolveSpawnSessionByNonceUntilSettledSpy,
+      storageState,
+      followUpSpawnedSessionWithServerScopeSpy,
+    } = await setupHarness();
+
+    storageState.sessions['session-created-after-pending'] = { id: 'session-created-after-pending' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'error' as const,
+      errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+      errorMessage: 'Session startup timed out',
+    });
+    machineResolveSpawnSessionByNonceUntilSettledSpy.mockResolvedValueOnce({
+      status: 'success' as const,
+      sessionId: 'session-created-after-pending',
+    });
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router,
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: 'First turn after pending',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession();
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    const spawnOptions = machineSpawnNewSessionSpy.mock.calls[0]?.[0] as { spawnNonce?: string };
+    expect(machineResolveSpawnSessionByNonceUntilSettledSpy).toHaveBeenCalledWith({
+      machineId: 'm1',
+      serverId: 'server-a',
+      spawnNonce: spawnOptions.spawnNonce,
+    });
+    expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-created-after-pending',
+      initialMessageText: 'First turn after pending',
+    }));
+    expect(router.replace).toHaveBeenCalledWith(
+      '/session/session-created-after-pending?serverId=server-a',
+      expect.anything(),
+    );
+
+    await hook.unmount();
+  });
+
+  it('keeps an ambiguous timed-out spawn retryable with the same nonce when nonce resolution is still pending', async () => {
+    const {
+      useCreateNewSession,
+      modalAlertSpy,
+      machineSpawnNewSessionSpy,
+      machineResolveSpawnSessionByNonceUntilSettledSpy,
+      storageState,
+      followUpSpawnedSessionWithServerScopeSpy,
+    } = await setupHarness();
+
+    storageState.sessions['session-after-retry'] = { id: 'session-after-retry' };
+    machineSpawnNewSessionSpy
+      .mockResolvedValueOnce({
+        type: 'error' as const,
+        errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+        errorMessage: 'Session startup timed out',
+      })
+      .mockResolvedValueOnce({
+        type: 'success' as const,
+        sessionId: 'session-after-retry',
+      });
+    machineResolveSpawnSessionByNonceUntilSettledSpy.mockResolvedValueOnce({
+      status: 'pending' as const,
+    });
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router,
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: 'Retry same nonce',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession();
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(router.replace).not.toHaveBeenCalled();
+    const firstSpawnOptions = machineSpawnNewSessionSpy.mock.calls[0]?.[0] as { spawnNonce?: string };
+    expect(firstSpawnOptions.spawnNonce).toEqual(expect.stringMatching(/^spawn-/));
+    const retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    });
+    expect(retryAlertCall).toBeTruthy();
+    const retry = ((retryAlertCall?.[2] ?? []) as any[]).find((button) => button?.text === 'common.retry');
+
+    await act(async () => {
+      retry?.onPress?.();
+      await flushHookEffects({ runAllTimers: true });
+    });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(2);
+    const secondSpawnOptions = machineSpawnNewSessionSpy.mock.calls[1]?.[0] as { spawnNonce?: string };
+    expect(secondSpawnOptions.spawnNonce).toBe(firstSpawnOptions.spawnNonce);
+    expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-after-retry',
+      initialMessageText: 'Retry same nonce',
+    }));
+    expect(router.replace).toHaveBeenCalledWith(
+      '/session/session-after-retry?serverId=server-a',
+      expect.anything(),
+    );
+
+    await hook.unmount();
+  });
+
+  it.each([
+    ['not_found' as const],
+    ['unsupported' as const],
+    ['transport_error' as const],
+  ])('keeps an ambiguous timed-out spawn retryable when nonce resolution returns %s', async (resolveStatus) => {
+    const {
+      useCreateNewSession,
+      modalAlertSpy,
+      machineSpawnNewSessionSpy,
+      machineResolveSpawnSessionByNonceUntilSettledSpy,
+      storageState,
+      followUpSpawnedSessionWithServerScopeSpy,
+    } = await setupHarness();
+
+    storageState.sessions[`session-after-${resolveStatus}-retry`] = { id: `session-after-${resolveStatus}-retry` };
+    machineSpawnNewSessionSpy
+      .mockResolvedValueOnce({
+        type: 'error' as const,
+        errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
+        errorMessage: 'Session startup timed out',
+      })
+      .mockResolvedValueOnce({
+        type: 'success' as const,
+        sessionId: `session-after-${resolveStatus}-retry`,
+      });
+    machineResolveSpawnSessionByNonceUntilSettledSpy.mockResolvedValueOnce({
+      status: resolveStatus,
+    });
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router,
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: `Retry after ${resolveStatus}`,
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession();
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(router.replace).not.toHaveBeenCalled();
+    const firstSpawnOptions = machineSpawnNewSessionSpy.mock.calls[0]?.[0] as { spawnNonce?: string };
+    const retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    });
+    expect(retryAlertCall).toBeTruthy();
+    const retry = ((retryAlertCall?.[2] ?? []) as any[]).find((button) => button?.text === 'common.retry');
+
+    await act(async () => {
+      retry?.onPress?.();
+      await flushHookEffects({ runAllTimers: true });
+    });
+
+    const secondSpawnOptions = machineSpawnNewSessionSpy.mock.calls[1]?.[0] as { spawnNonce?: string };
+    expect(secondSpawnOptions.spawnNonce).toBe(firstSpawnOptions.spawnNonce);
+    expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: `session-after-${resolveStatus}-retry`,
+      initialMessageText: `Retry after ${resolveStatus}`,
+    }));
+    expect(router.replace).toHaveBeenCalledWith(
+      `/session/session-after-${resolveStatus}-retry?serverId=server-a`,
+      expect.anything(),
+    );
+
+    await hook.unmount();
+  });
+
+  it('offers Retry for daemon-unavailable post-create follow-up failures without creating another session', async () => {
+    const {
+      useCreateNewSession,
+      modalAlertSpy,
+      machineSpawnNewSessionSpy,
+      storageState,
+      followUpSpawnedSessionWithServerScopeSpy,
+    } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    const retryableFollowUpError = Object.assign(new Error('Machine target not available for session'), {
+      rpcErrorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
+    });
+    const afterCreated = vi.fn()
+      .mockRejectedValueOnce(retryableFollowUpError)
+      .mockResolvedValueOnce(undefined);
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router,
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: 'First turn',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    let createPromise: Promise<void> | void | null = null;
+    await act(async () => {
+      createPromise = hook.getCurrent().handleCreateSession({ afterCreated });
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    let retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    });
+    for (let attempts = 0; attempts < 5 && !retryAlertCall; attempts += 1) {
+      await flushHookEffects({ runAllTimers: true });
+      retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+        const buttons = call[2];
+        return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+      });
+    }
+    expect(retryAlertCall).toBeTruthy();
+    expect(modalAlertSpy.mock.calls.some((call) => call[0] === 'common.error')).toBe(false);
+    const buttons = (retryAlertCall?.[2] ?? []) as any[];
+    const retry = buttons.find((button) => button?.text === 'common.retry');
+    expect(typeof retry?.onPress).toBe('function');
+
+    await act(async () => {
+      retry.onPress();
+    });
+    await createPromise;
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledTimes(1);
+    expect(afterCreated).toHaveBeenCalledTimes(2);
+    expect(afterCreated).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'session-created',
+      effectiveSpawnServerId: 'server-a',
+      launchAttempt: expect.objectContaining({
+        attachmentMessageLocalId: expect.stringMatching(/^attachment-message-/),
+      }),
+    }));
+    expect(router.replace).toHaveBeenCalledTimes(1);
+
+    await hook.unmount();
+  });
+
+  it('drops duplicate create requests while a launch is already in flight', async () => {
+    const { useCreateNewSession, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValue({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    let resolveAfterCreated: () => void = () => {
+      throw new Error('expected afterCreated to be waiting');
+    };
+    const afterCreated = vi.fn(async () => new Promise<void>((resolve) => {
+      resolveAfterCreated = resolve;
+    }));
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router: { push: vi.fn(), replace: vi.fn() },
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: '',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    let firstCreate: Promise<void> | void | null = null;
+    let secondCreate: Promise<void> | void | null = null;
+    await act(async () => {
+      firstCreate = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+      secondCreate = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+    });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    expect(afterCreated).toHaveBeenCalledTimes(1);
+
+    resolveAfterCreated();
+    await firstCreate;
+    await secondCreate;
+
+    await hook.unmount();
+  });
+
+  it('does not navigate or clear drafts when launch scope changes before completion', async () => {
+    const { useCreateNewSession, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    let resolveAfterCreated: () => void = () => {
+      throw new Error('expected afterCreated to be waiting');
+    };
+    const afterCreated = vi.fn(async () => new Promise<void>((resolve) => {
+      resolveAfterCreated = resolve;
+    }));
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+    const setIsCreating = vi.fn();
+
+    const hook = await renderHook(
+      ({ targetServerId }: { targetServerId: string | null }) =>
+        useCreateNewSession({
+          router,
+          selectedMachineId: 'm1',
+          selectedPath: '/tmp',
+          selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+          setIsCreating,
+          setIsResumeSupportChecking: vi.fn(),
+          settings,
+          useProfiles: false,
+          selectedProfileId: null,
+          profileMap: new Map(),
+          recentMachinePaths: [],
+          agentType: 'opencode' as any,
+          permissionMode: 'default' as PermissionMode,
+          modelMode: 'default' as ModelMode,
+          sessionPrompt: '',
+          resumeSessionId: '',
+          agentNewSessionOptions: null,
+          machineEnvPresence,
+          secrets: [],
+          secretBindingsByProfileId: {},
+          selectedSecretIdByProfileIdByEnvVarName: {},
+          sessionOnlySecretValueByProfileIdByEnvVarName: {},
+          selectedMachineCapabilities: {},
+          targetServerId,
+          allowedTargetServerIds: ['server-a', 'server-b'],
+        }),
+      { initialProps: { targetServerId: 'server-a' } },
+    );
+
+    let createPromise: Promise<void> | void | null = null;
+    await act(async () => {
+      createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+    });
+    await hook.rerender({ targetServerId: 'server-b' });
+
+    resolveAfterCreated();
+    await createPromise;
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(setIsCreating).toHaveBeenLastCalledWith(false);
+
+    await hook.unmount();
+  });
+
+  it('does not retry a post-create follow-up after the launch scope changes', async () => {
+    const { useCreateNewSession, modalAlertSpy, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    const retryableFollowUpError = Object.assign(new Error('Machine target not available for session'), {
+      rpcErrorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
+    });
+    const afterCreated = vi.fn()
+      .mockRejectedValueOnce(retryableFollowUpError)
+      .mockResolvedValueOnce(undefined);
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(
+      ({ targetServerId }: { targetServerId: string | null }) =>
+        useCreateNewSession({
+          router,
+          selectedMachineId: 'm1',
+          selectedPath: '/tmp',
+          selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
+          setIsCreating: vi.fn(),
+          setIsResumeSupportChecking: vi.fn(),
+          settings,
+          useProfiles: false,
+          selectedProfileId: null,
+          profileMap: new Map(),
+          recentMachinePaths: [],
+          agentType: 'opencode' as any,
+          permissionMode: 'default' as PermissionMode,
+          modelMode: 'default' as ModelMode,
+          sessionPrompt: '',
+          resumeSessionId: '',
+          agentNewSessionOptions: null,
+          machineEnvPresence,
+          secrets: [],
+          secretBindingsByProfileId: {},
+          selectedSecretIdByProfileIdByEnvVarName: {},
+          sessionOnlySecretValueByProfileIdByEnvVarName: {},
+          selectedMachineCapabilities: {},
+          targetServerId,
+          allowedTargetServerIds: ['server-a', 'server-b'],
+        }),
+      { initialProps: { targetServerId: 'server-a' as string | null } },
+    );
+
+    let createPromise: Promise<void> | void | null = null;
+    await act(async () => {
+      createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    const retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    });
+    const retry = ((retryAlertCall?.[2] ?? []) as any[]).find((button) => button?.text === 'common.retry');
+    expect(typeof retry?.onPress).toBe('function');
+
+    await hook.rerender({ targetServerId: 'server-b' });
+
+    await act(async () => {
+      retry.onPress();
+    });
+    await createPromise;
+
+    expect(afterCreated).toHaveBeenCalledTimes(1);
+    expect(router.replace).not.toHaveBeenCalled();
+
+    await hook.unmount();
+  });
+
+  it('treats profile-mode changes as launch scope changes', async () => {
+    const { useCreateNewSession, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    let resolveAfterCreated: () => void = () => {
+      throw new Error('expected afterCreated to be waiting');
+    };
+    const afterCreated = vi.fn(async () => new Promise<void>((resolve) => {
+      resolveAfterCreated = resolve;
+    }));
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(
+      ({ useProfiles }: { useProfiles: boolean }) =>
+        useCreateNewSession({
+          router,
+          selectedMachineId: 'm1',
+          selectedPath: '/tmp',
+          selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+          setIsCreating: vi.fn(),
+          setIsResumeSupportChecking: vi.fn(),
+          settings,
+          useProfiles,
+          selectedProfileId: null,
+          profileMap: new Map(),
+          recentMachinePaths: [],
+          agentType: 'opencode' as any,
+          permissionMode: 'default' as PermissionMode,
+          modelMode: 'default' as ModelMode,
+          sessionPrompt: '',
+          resumeSessionId: '',
+          agentNewSessionOptions: null,
+          machineEnvPresence,
+          secrets: [],
+          secretBindingsByProfileId: {},
+          selectedSecretIdByProfileIdByEnvVarName: {},
+          sessionOnlySecretValueByProfileIdByEnvVarName: {},
+          selectedMachineCapabilities: {},
+          targetServerId: null,
+          allowedTargetServerIds: undefined,
+        }),
+      { initialProps: { useProfiles: false } },
+    );
+
+    let createPromise: Promise<void> | void | null = null;
+    await act(async () => {
+      createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+    });
+    await hook.rerender({ useProfiles: true });
+
+    resolveAfterCreated();
+    await createPromise;
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(router.replace).not.toHaveBeenCalled();
+
+    await hook.unmount();
+  });
+
+  it('shows the generic follow-up error when retry fails for a non-daemon reason', async () => {
+    const { useCreateNewSession, modalAlertSpy, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    const retryableFollowUpError = Object.assign(new Error('Machine target not available for session'), {
+      rpcErrorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
+    });
+    const afterCreated = vi.fn()
+      .mockRejectedValueOnce(retryableFollowUpError)
+      .mockRejectedValueOnce(new Error('Attachment validation failed'));
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router: { push: vi.fn(), replace: vi.fn() },
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: false, activeAt: Date.now() - 5 * 60_000, metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: '',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    let createPromise: Promise<void> | void | null = null;
+    await act(async () => {
+      createPromise = hook.getCurrent().handleCreateSession({ afterCreated });
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    const retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    });
+    const buttons = (retryAlertCall?.[2] ?? []) as any[];
+    const retry = buttons.find((button) => button?.text === 'common.retry');
+    expect(typeof retry?.onPress).toBe('function');
+
+    await act(async () => {
+      retry.onPress();
+    });
+    await createPromise;
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    expect(afterCreated).toHaveBeenCalledTimes(2);
+    expect(modalAlertSpy.mock.calls).toContainEqual([
+      'common.error',
+      'Attachment validation failed',
+    ]);
+
+    await hook.unmount();
+  });
+
+  it('does not reuse a created session after a fatal post-create follow-up failure', async () => {
+    const { useCreateNewSession, modalAlertSpy, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created-1'] = { id: 'session-created-1' };
+    storageState.sessions['session-created-2'] = { id: 'session-created-2' };
+    machineSpawnNewSessionSpy
+      .mockResolvedValueOnce({
+        type: 'success' as const,
+        sessionId: 'session-created-1',
+      })
+      .mockResolvedValueOnce({
+        type: 'success' as const,
+        sessionId: 'session-created-2',
+      });
+    const fatalFollowUpError = Object.assign(new Error('invalid_parameters'), {
+      errorCode: 'invalid_parameters',
+    });
+    const afterCreated = vi.fn()
+      .mockRejectedValueOnce(fatalFollowUpError)
+      .mockResolvedValueOnce(undefined);
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+    const router = { push: vi.fn(), replace: vi.fn() };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router,
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: '',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(modalAlertSpy.mock.calls).toContainEqual(['common.error', 'invalid_parameters']);
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(2);
+    expect(afterCreated).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'session-created-2',
+      effectiveSpawnServerId: 'server-a',
+    }));
+    expect(router.replace).toHaveBeenCalledWith(
+      '/session/session-created-2?serverId=server-a',
+      expect.anything(),
+    );
+
+    await hook.unmount();
+  });
+
+  it('does not offer post-create retry for fatal method-unavailable follow-up failures', async () => {
+    const { useCreateNewSession, modalAlertSpy, machineSpawnNewSessionSpy, storageState } = await setupHarness();
+
+    storageState.sessions['session-created'] = { id: 'session-created' };
+    machineSpawnNewSessionSpy.mockResolvedValueOnce({
+      type: 'success' as const,
+      sessionId: 'session-created',
+    });
+    const fatalTransferError = Object.assign(new Error('Machine transfer is disabled on the selected server'), {
+      rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE',
+    });
+    const afterCreated = vi.fn().mockRejectedValueOnce(fatalTransferError);
+
+    const settings = { experiments: false } as unknown as Settings;
+    const machineEnvPresence: UseMachineEnvPresenceResult = {
+      isPreviewEnvSupported: false,
+      isLoading: false,
+      meta: {},
+      refreshedAt: null,
+      refresh: () => {},
+    };
+
+    const hook = await renderHook(() =>
+      useCreateNewSession({
+        router: { push: vi.fn(), replace: vi.fn() },
+        selectedMachineId: 'm1',
+        selectedPath: '/tmp',
+        selectedMachine: { id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox' } },
+        setIsCreating: vi.fn(),
+        setIsResumeSupportChecking: vi.fn(),
+        settings,
+        useProfiles: false,
+        selectedProfileId: null,
+        profileMap: new Map(),
+        recentMachinePaths: [],
+        agentType: 'opencode' as any,
+        permissionMode: 'default' as PermissionMode,
+        modelMode: 'default' as ModelMode,
+        sessionPrompt: '',
+        resumeSessionId: '',
+        agentNewSessionOptions: null,
+        machineEnvPresence,
+        secrets: [],
+        secretBindingsByProfileId: {},
+        selectedSecretIdByProfileIdByEnvVarName: {},
+        sessionOnlySecretValueByProfileIdByEnvVarName: {},
+        selectedMachineCapabilities: {},
+        targetServerId: null,
+        allowedTargetServerIds: undefined,
+      }),
+    );
+
+    await act(async () => {
+      await hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
+    });
+    await flushHookEffects({ runAllTimers: true });
+
+    expect(afterCreated).toHaveBeenCalledTimes(1);
+    expect(machineSpawnNewSessionSpy).toHaveBeenCalledTimes(1);
+    expect(modalAlertSpy.mock.calls).toContainEqual([
+      'common.error',
+      'Machine transfer is disabled on the selected server',
+    ]);
+    const retryAlerts = modalAlertSpy.mock.calls.filter((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    });
+    expect(retryAlerts).toHaveLength(0);
+
+    await hook.unmount();
   });
 
   it('falls back to selectedPath when checkout materialization returns an empty sessionPath', async () => {

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { findTestInstanceByTypeContainingText, pressTestInstance, renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { installSessionFilesCommonModuleMocks } from './sessionFilesTestHelpers';
 
 
@@ -29,16 +30,7 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', async () => {
 });
 
 describe('FilesToolbar', () => {
-    const theme = {
-        colors: {
-            divider: '#000',
-            input: { background: '#111', placeholder: '#999' },
-            surface: '#222',
-            surfaceHigh: '#333',
-            text: '#eee',
-            textSecondary: '#aaa',
-        },
-    };
+    const theme = createThemeFixture();
 
     it('renders view toggles and dispatches handlers', async () => {
         const { FilesToolbar } = await import('./FilesToolbar');

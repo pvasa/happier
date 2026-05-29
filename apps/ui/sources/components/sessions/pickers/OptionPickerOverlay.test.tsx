@@ -259,6 +259,40 @@ describe('OptionPickerOverlay', () => {
         expect(screen.findByTestId('model-picker-overlay-custom-input')).toBeTruthy();
     });
 
+    it('shows the selected listed option after async options hydrate a previously custom-looking value', async () => {
+        const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
+
+        const renderOverlay = (options: Array<{ value: string; label: string; description?: string }>) => (
+            <OptionPickerOverlay
+                title="Model"
+                effectiveLabel="gpt-5.5"
+                notes={[]}
+                options={options}
+                selectedValue="openai-codex/gpt-5.5"
+                emptyText="empty"
+                canEnterCustomValue
+                customLabel="Custom model"
+                onSelect={() => {}}
+            />
+        );
+
+        const screen = await renderScreen(renderOverlay([
+            { value: 'default', label: 'Default', description: '' },
+        ]));
+
+        expect(screen.findByTestId('model-picker-overlay-custom-input')).toBeTruthy();
+
+        await act(async () => {
+            screen.tree.update(renderOverlay([
+                { value: 'default', label: 'Default', description: '' },
+                { value: 'openai-codex/gpt-5.5', label: 'gpt-5.5', description: 'OpenAI' },
+            ]));
+        });
+
+        expect(Boolean(screen.findByTestId('model-picker-overlay-custom-input'))).toBe(false);
+        expect(Boolean(screen.findByTestId('model-picker-overlay-option-selected-indicator:openai-codex/gpt-5.5'))).toBe(true);
+    });
+
     it('shows a loading indicator when models are being probed', async () => {
         const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
 
@@ -315,11 +349,14 @@ describe('OptionPickerOverlay', () => {
                     emptyText="empty"
                     canEnterCustomValue={false}
                     onSelect={() => {}}
+                    headerAccessory={<View testID="model-picker-overlay-header-accessory" />}
                     probe={{ phase: 'idle', onRefresh }}
                 />);
 
         const refresh = screen.findByTestId('model-picker-overlay-refresh');
+        const headerAccessory = screen.findByTestId('model-picker-overlay-header-accessory');
         expect(refresh).toBeTruthy();
+        expect(headerAccessory).toBeTruthy();
         expect(typeof refresh?.props.style).toBe('function');
 
         const resolved = refresh?.props.style({ pressed: false }) as unknown;
@@ -329,6 +366,11 @@ describe('OptionPickerOverlay', () => {
         // it can be clipped by overflow-hidden popover surfaces (like agent-input pickers).
         expect(base?.right).toBeUndefined();
         expect(base?.position).not.toBe('absolute');
+
+        // The refresh button and header accessory should stay together in the same
+        // trailing title-row action group so the accessory does not float between
+        // the title text and the refresh affordance.
+        expect(headerAccessory?.parent?.parent).toBe(refresh?.parent);
 
         // The refresh button should still be part of the title row subtree.
         let cursor: any = refresh;
@@ -343,7 +385,6 @@ describe('OptionPickerOverlay', () => {
             if (
                 styleObject
                 && styleObject.flexDirection === 'row'
-                && styleObject.justifyContent === 'space-between'
                 && styleObject.alignItems === 'flex-start'
             ) {
                 titleRow = cursor;
@@ -435,6 +476,45 @@ describe('OptionPickerOverlay', () => {
         });
 
         expect(onSelectOptionControlValue).toHaveBeenCalledWith('speed', 'fast');
+    });
+
+    it('renders boolean fast model controls as segmented choices', async () => {
+        const onSelectOptionControlValue = vi.fn();
+        const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
+
+        const screen = await renderScreen(<OptionPickerOverlay
+                    title="Model"
+                    effectiveLabel="composer"
+                    notes={[]}
+                    options={[{ value: 'composer', label: 'Composer', description: '' }]}
+                    selectedValue="composer"
+                    emptyText="empty"
+                    canEnterCustomValue={false}
+                    selectedOptionControls={[
+                        {
+                            option: {
+                                id: 'fast',
+                                name: 'Fast',
+                                type: 'boolean',
+                                currentValue: 'false',
+                                options: [
+                                    { value: 'false', name: 'Off' },
+                                    { value: 'true', name: 'Fast' },
+                                ],
+                            },
+                            effectiveValue: 'false',
+                            isPending: false,
+                        },
+                    ]}
+                    onSelectOptionControlValue={onSelectOptionControlValue}
+                    onSelect={() => {}}
+                />);
+
+        expect(screen.findByTestId('model-picker-overlay-selected-option-control-switch:fast')).toBeNull();
+
+        await screen.pressByTestIdAsync('model-picker-overlay-selected-option-control-option:fast:true');
+
+        expect(onSelectOptionControlValue).toHaveBeenCalledWith('fast', 'true');
     });
 
     it('renders the favorite toggle only inside the selected option card and routes favorite changes separately from selection', async () => {

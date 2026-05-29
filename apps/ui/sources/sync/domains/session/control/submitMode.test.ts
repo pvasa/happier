@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { chooseSubmitMode } from './submitMode';
 
 describe('chooseSubmitMode', () => {
+    const now = 1_000_000;
+
     it('preserves interrupt mode', () => {
         expect(chooseSubmitMode({
             configuredMode: 'interrupt',
@@ -34,6 +36,8 @@ describe('chooseSubmitMode', () => {
             busySteerSendPolicy: 'steer_immediately',
             session: {
                 thinking: true,
+                thinkingAt: now,
+                active: true,
                 presence: 'online',
                 agentStateVersion: 1,
                 agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
@@ -41,7 +45,46 @@ describe('chooseSubmitMode', () => {
                 pendingCount: 1,
                 metadata: {},
             } as any,
+            nowMs: now,
         })).toBe('agent_queue');
+    });
+
+    it('uses server_pending while thinking when runtime steer availability has not arrived yet', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            session: {
+                thinking: true,
+                thinkingAt: now,
+                active: true,
+                presence: 'online',
+                agentStateVersion: 0,
+                agentState: { controlledByUser: false },
+                pendingVersion: 0,
+                pendingCount: 1,
+                metadata: { flavor: 'pi' },
+            } as any,
+            nowMs: now,
+        })).toBe('server_pending');
+    });
+
+    it('uses server_pending for inactive sessions when pending queue V2 is supported even if stale signals look steerable', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            session: {
+                active: false,
+                presence: 'online',
+                thinking: true,
+                thinkingAt: now,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: now,
+                agentStateVersion: 1,
+                agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
+                pendingVersion: 0,
+                pendingCount: 0,
+                metadata: {},
+            } as any,
+            nowMs: now,
+        })).toBe('server_pending');
     });
 
     it('keeps server_pending while thinking when in-flight steer is supported but unavailable for the active turn', () => {
@@ -50,6 +93,8 @@ describe('chooseSubmitMode', () => {
             busySteerSendPolicy: 'steer_immediately',
             session: {
                 thinking: true,
+                thinkingAt: now,
+                active: true,
                 presence: 'online',
                 agentStateVersion: 1,
                 agentState: {
@@ -64,6 +109,7 @@ describe('chooseSubmitMode', () => {
                 pendingCount: 1,
                 metadata: {},
             } as any,
+            nowMs: now,
         })).toBe('server_pending');
     });
 
@@ -105,10 +151,14 @@ describe('chooseSubmitMode', () => {
             configuredMode: 'agent_queue',
             session: {
                 thinking: true,
+                thinkingAt: now,
+                active: true,
+                presence: 'online',
                 pendingVersion: 0,
                 pendingCount: 0,
                 metadata: {},
             } as any,
+            nowMs: now,
         })).toBe('server_pending');
     });
 
@@ -117,6 +167,8 @@ describe('chooseSubmitMode', () => {
             configuredMode: 'agent_queue',
             session: {
                 thinking: true,
+                thinkingAt: now,
+                active: true,
                 presence: 'online',
                 agentStateVersion: 1,
                 agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
@@ -124,6 +176,7 @@ describe('chooseSubmitMode', () => {
                 pendingCount: 1,
                 metadata: {},
             } as any,
+            nowMs: now,
         })).toBe('agent_queue');
     });
 
@@ -133,6 +186,8 @@ describe('chooseSubmitMode', () => {
             explicitMode: 'server_pending',
             session: {
                 thinking: true,
+                thinkingAt: now,
+                active: true,
                 presence: 'online',
                 agentStateVersion: 1,
                 agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
@@ -140,6 +195,7 @@ describe('chooseSubmitMode', () => {
                 pendingCount: 1,
                 metadata: {},
             } as any,
+            nowMs: now,
         })).toBe('server_pending');
     });
 
@@ -149,6 +205,8 @@ describe('chooseSubmitMode', () => {
             busySteerSendPolicy: 'server_pending',
             session: {
                 thinking: true,
+                thinkingAt: now,
+                active: true,
                 presence: 'online',
                 agentStateVersion: 1,
                 agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
@@ -156,7 +214,28 @@ describe('chooseSubmitMode', () => {
                 pendingCount: 1,
                 metadata: {},
             } as any,
+            nowMs: now,
         } as any)).toBe('server_pending');
+    });
+
+    it('does not treat stale thinking as busy when choosing composer delivery', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            session: {
+                thinking: true,
+                thinkingAt: now - 120_000,
+                active: true,
+                presence: 'online',
+                latestTurnStatus: 'completed',
+                latestTurnStatusObservedAt: now - 1_000,
+                agentStateVersion: 1,
+                agentState: { controlledByUser: false, capabilities: { inFlightSteer: false } },
+                pendingVersion: 0,
+                pendingCount: 0,
+                metadata: {},
+            } as any,
+            nowMs: now,
+        })).toBe('agent_queue');
     });
 
     it('prefers server_pending when the session is offline but queue is supported', () => {
@@ -185,13 +264,35 @@ describe('chooseSubmitMode', () => {
         })).toBe('server_pending');
     });
 
-    it('keeps agent_queue if queue is not supported', () => {
+    it('keeps agent_queue for inactive sessions if queue is not supported', () => {
         expect(chooseSubmitMode({
             configuredMode: 'agent_queue',
             session: {
+                active: false,
+                presence: 'online',
                 thinking: true,
+                thinkingAt: now,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: now,
+                agentStateVersion: 1,
+                agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
                 metadata: {},
             } as any,
+            nowMs: now,
+        })).toBe('agent_queue');
+    });
+
+    it('keeps agent_queue for explicit server_pending on inactive sessions if queue is not supported', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            explicitMode: 'server_pending',
+            session: {
+                active: false,
+                presence: 'online',
+                agentStateVersion: 1,
+                metadata: {},
+            } as any,
+            nowMs: now,
         })).toBe('agent_queue');
     });
 
@@ -205,6 +306,22 @@ describe('chooseSubmitMode', () => {
                 pendingCount: 0,
                 metadata: { version: '0.0.1' },
             } as any,
+        })).toBe('agent_queue');
+    });
+
+    it('keeps agent_queue for explicit server_pending on inactive sessions when the CLI version is too old', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            explicitMode: 'server_pending',
+            session: {
+                active: false,
+                presence: 'online',
+                agentStateVersion: 1,
+                pendingVersion: 0,
+                pendingCount: 0,
+                metadata: { version: '0.0.1' },
+            } as any,
+            nowMs: now,
         })).toBe('agent_queue');
     });
 });

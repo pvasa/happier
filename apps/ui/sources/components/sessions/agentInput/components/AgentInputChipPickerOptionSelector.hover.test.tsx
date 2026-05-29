@@ -24,6 +24,158 @@ function flattenStyleFromCallback(
 }
 
 describe("AgentInputChipPickerOptionSelector (hover)", () => {
+    function flattenStyle(styleProp: unknown): Record<string, unknown> {
+        const resolvedArray = Array.isArray(styleProp) ? styleProp : [styleProp];
+        return Object.assign({}, ...resolvedArray.filter(Boolean));
+    }
+
+    it("shows rail option actions only while hovering and keeps action presses from focusing the row", async () => {
+        const {
+            AgentInputChipPickerOptionSelector,
+            shouldShowAgentInputChipPickerRailAction,
+        } = await import("./AgentInputChipPickerOptionSelector");
+        const onActionPress = vi.fn();
+        const onFocusOption = vi.fn();
+
+        const screen = await renderScreen(
+            <AgentInputChipPickerOptionSelector
+                sections={[
+                    {
+                        id: "sec",
+                        label: "Section",
+                        options: [
+                            {
+                                id: "engine:codex",
+                                label: "Codex",
+                                subtitle: "",
+                                disabled: false,
+                                muted: false,
+                                railAction: {
+                                    testID: "engine-favorite-action",
+                                    accessibilityLabel: "Favorite engine",
+                                    selected: false,
+                                    icon: React.createElement("Icon"),
+                                    onPress: onActionPress,
+                                },
+                            },
+                        ],
+                    },
+                ]}
+                focusedOptionId={null}
+                selectedOptionId={null}
+                onFocusOption={onFocusOption}
+                variant="rail"
+            />,
+        );
+
+        const actionBeforeHover = screen.findByTestId("engine-favorite-action");
+        expect(actionBeforeHover?.props.disabled).toBe(true);
+
+        expect(shouldShowAgentInputChipPickerRailAction({
+            canRender: true,
+            hovered: true,
+            focused: false,
+        })).toBe(true);
+
+        actionBeforeHover?.props.onPress?.({ stopPropagation: vi.fn() });
+
+        expect(onActionPress).toHaveBeenCalledTimes(1);
+        expect(onFocusOption).not.toHaveBeenCalled();
+    });
+
+    it("keeps selected rail option actions hidden until the selected row is hovered", async () => {
+        const {
+            AgentInputChipPickerOptionSelector,
+            shouldShowAgentInputChipPickerRailAction,
+        } = await import("./AgentInputChipPickerOptionSelector");
+
+        const screen = await renderScreen(
+            <AgentInputChipPickerOptionSelector
+                sections={[
+                    {
+                        id: "sec",
+                        label: "Section",
+                        options: [
+                            {
+                                id: "engine:codex",
+                                label: "Codex",
+                                subtitle: "",
+                                disabled: false,
+                                muted: false,
+                                railAction: {
+                                    testID: "engine-favorite-action",
+                                    accessibilityLabel: "Remove favorite engine",
+                                    selected: true,
+                                    icon: React.createElement("Icon"),
+                                    onPress: vi.fn(),
+                                },
+                            },
+                        ],
+                    },
+                ]}
+                focusedOptionId="engine:codex"
+                selectedOptionId="engine:codex"
+                onFocusOption={() => {}}
+                variant="rail"
+            />,
+        );
+
+        const selectedActionBeforeHover = screen.findByTestId("engine-favorite-action");
+        expect(selectedActionBeforeHover?.props.disabled).toBe(true);
+
+        expect(shouldShowAgentInputChipPickerRailAction({
+            canRender: true,
+            hovered: false,
+            focused: true,
+        })).toBe(false);
+        expect(shouldShowAgentInputChipPickerRailAction({
+            canRender: true,
+            hovered: true,
+            focused: true,
+        })).toBe(true);
+    });
+
+    it("keeps rail option actions visually compact", async () => {
+        const { AgentInputChipPickerOptionSelector } = await import("./AgentInputChipPickerOptionSelector");
+
+        const screen = await renderScreen(
+            <AgentInputChipPickerOptionSelector
+                sections={[
+                    {
+                        id: "sec",
+                        label: "Section",
+                        options: [
+                            {
+                                id: "engine:codex",
+                                label: "Codex",
+                                subtitle: "",
+                                disabled: false,
+                                muted: false,
+                                railAction: {
+                                    testID: "engine-favorite-action",
+                                    accessibilityLabel: "Favorite engine",
+                                    selected: false,
+                                    icon: React.createElement("Icon"),
+                                    onPress: vi.fn(),
+                                },
+                            },
+                        ],
+                    },
+                ]}
+                focusedOptionId={null}
+                selectedOptionId={null}
+                onFocusOption={() => {}}
+                variant="rail"
+            />,
+        );
+
+        const action = screen.findByTestId("engine-favorite-action");
+        expect(flattenStyle(action?.props.style)).toMatchObject({
+            width: 20,
+            height: 20,
+        });
+    });
+
     it("applies a hover background on web option rows", async () => {
         const { AgentInputChipPickerOptionSelector } = await import("./AgentInputChipPickerOptionSelector");
 

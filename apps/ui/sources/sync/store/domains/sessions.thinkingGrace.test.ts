@@ -200,4 +200,62 @@ describe('sessions domain: thinking grace', () => {
         expect(get().sessions.s1?.thinkingGraceUntil ?? null).toBeNull();
         expect(get().sessionListRenderables.s1?.thinkingGraceUntil ?? null).toBeNull();
     });
+
+    it('does not keep legacy thinking or start grace after a terminal turn projection', async () => {
+        mockSessionsDomainBoundaries();
+
+        let nowMs = Date.parse('2026-02-05T00:00:00.000Z');
+        vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+        vi.spyOn(globalThis, 'setTimeout');
+
+        const { createReducer } = await import('../../reducer/reducer');
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain, createReducer);
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 0,
+                createdAt: nowMs,
+                updatedAt: nowMs,
+                active: true,
+                activeAt: nowMs,
+                metadata: null,
+                metadataVersion: 0,
+                agentState: null,
+                agentStateVersion: 1,
+                thinking: true,
+                thinkingAt: nowMs,
+                presence: 'online',
+            } as any,
+        ]);
+
+        nowMs += 250;
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 0,
+                createdAt: nowMs - 250,
+                updatedAt: nowMs,
+                active: true,
+                activeAt: nowMs,
+                metadata: null,
+                metadataVersion: 0,
+                agentState: null,
+                agentStateVersion: 1,
+                thinking: true,
+                thinkingAt: nowMs,
+                latestTurnStatus: 'completed',
+                latestTurnStatusObservedAt: nowMs - 10,
+                presence: 'online',
+            } as any,
+        ]);
+
+        expect(get().sessions.s1?.thinking).toBe(false);
+        expect(get().sessions.s1?.thinkingAt).toBe(nowMs - 10);
+        expect(get().sessions.s1?.thinkingGraceUntil ?? null).toBeNull();
+        expect(get().sessionListRenderables.s1?.thinking).toBe(false);
+        expect(get().sessionListRenderables.s1?.thinkingGraceUntil ?? null).toBeNull();
+        expect(globalThis.setTimeout).toHaveBeenCalledTimes(0);
+    });
 });

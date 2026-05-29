@@ -44,6 +44,8 @@ export function useNewSessionAuthoringState(params: Readonly<{
     agentNewSessionOptions: Record<string, unknown> | null;
     settings: Settings;
     effectiveWindowsRemoteSessionLaunchMode: BuildResolvedInputs['windowsRemoteSessionLaunchMode'];
+    targetServerId: BuildPersistedInputs['targetServerId'];
+    windowsRemoteSessionLaunchModeOverride: BuildPersistedInputs['windowsRemoteSessionLaunchModeOverride'];
     acpSessionModeId: string | null;
     sessionConfigOptionOverrides: BuildResolvedInputs['sessionConfigOptionOverrides'];
     automationEditId: string | null;
@@ -149,6 +151,8 @@ export function useNewSessionAuthoringState(params: Readonly<{
         selectedSecretIdByProfileIdByEnvVarName: params.selectedSecretIdByProfileIdByEnvVarName,
         sessionOnlySecretValueEncByProfileIdByEnvVarName: params.getSessionOnlySecretValueEncByProfileIdByEnvVarName(),
         agentNewSessionOptionStateByAgentId: params.agentNewSessionOptionStateByAgentId,
+        targetServerId: params.targetServerId,
+        windowsRemoteSessionLaunchModeOverride: params.windowsRemoteSessionLaunchModeOverride,
         updatedAt: Date.now(),
     }), [
         currentAuthoringDraft,
@@ -158,6 +162,8 @@ export function useNewSessionAuthoringState(params: Readonly<{
         params.selectedMachineId,
         params.selectedSecretId,
         params.selectedSecretIdByProfileIdByEnvVarName,
+        params.targetServerId,
+        params.windowsRemoteSessionLaunchModeOverride,
     ]);
 
     const persistDraftIfEnabled = React.useCallback((draft: PersistedDraft) => {

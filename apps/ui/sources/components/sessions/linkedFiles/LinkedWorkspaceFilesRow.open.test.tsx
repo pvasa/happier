@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppPaneProvider, useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
@@ -8,8 +8,21 @@ import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 (globalThis as any).__DEV__ = false;
 
 const routerPushSpy = vi.fn();
+const flashListCompatMockState = vi.hoisted(() => ({
+    mappingKeyCalls: [] as Array<Readonly<{ index: number; itemKey: string | number | bigint }>>,
+}));
+
 vi.mock('@/utils/platform/responsive', () => ({
   useDeviceType: () => 'tablet',
+}));
+
+vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', () => ({
+    useMappingHelper: () => ({
+        getMappingKey: (itemKey: string | number | bigint, index: number) => {
+            flashListCompatMockState.mappingKeyCalls.push({ itemKey, index });
+            return index;
+        },
+    }),
 }));
 
 vi.hoisted(async () => {
@@ -45,6 +58,25 @@ vi.hoisted(async () => {
 });
 
 describe('LinkedWorkspaceFilesRow', () => {
+    beforeEach(() => {
+        flashListCompatMockState.mappingKeyCalls = [];
+    });
+
+    it('routes linked file chip keys through the FlashList mapping helper', async () => {
+        const { LinkedWorkspaceFilesRow } = await import('./LinkedWorkspaceFilesRow');
+
+        await renderScreen(
+            <AppPaneProvider>
+                <LinkedWorkspaceFilesRow sessionId="s1" paths={['src/api.ts', 'src/ui.ts']} />
+            </AppPaneProvider>,
+        );
+
+        expect(flashListCompatMockState.mappingKeyCalls).toEqual([
+            { itemKey: 'src/api.ts', index: 0 },
+            { itemKey: 'src/ui.ts', index: 1 },
+        ]);
+    });
+
     it('opens details tab when multi-pane is available', async () => {
         const { LinkedWorkspaceFilesRow } = await import('./LinkedWorkspaceFilesRow');
 

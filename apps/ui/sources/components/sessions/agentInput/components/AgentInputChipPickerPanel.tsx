@@ -115,6 +115,14 @@ export function AgentInputChipPickerPanel(
       : showSinglePaneDetailed
         ? styles.detailPaneSingle
         : null;
+  const detailContainerStyle =
+    detailedLayout === "split"
+      ? styles.detailScroll
+      : showSinglePaneDetailed
+        ? styles.detailSinglePane
+        : detailedLayout === "stacked"
+          ? styles.detailStackedWithSelector
+          : null;
   const railWidth = props.railWidth ?? styles.railScroll.width;
   const railMaxWidth = props.railMaxWidth ?? styles.railScroll.maxWidth;
 
@@ -199,13 +207,7 @@ export function AgentInputChipPickerPanel(
             ) : null}
             {focusedOption ? (
               <View
-                style={
-                  detailedLayout === "split"
-                    ? styles.detailScroll
-                    : showSinglePaneDetailed
-                      ? styles.detailSinglePane
-                      : null
-                }
+                style={detailContainerStyle}
               >
                 <View style={[styles.detailPane, detailedLayout === "split" ? styles.detailScrollContent : null]}>
                   {props.detailPaneHeaderAccessory ? (
@@ -283,8 +285,8 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   bodyDetailedStacked: {
     flexDirection: "column",
-    padding: 10,
-    gap: 10,
+    padding: 0,
+    gap: 0,
     minHeight: 0,
   },
   bodyDetailedSingle: {
@@ -308,6 +310,11 @@ const stylesheet = StyleSheet.create((theme) => ({
   detailSinglePane: {
     width: "100%",
     flexShrink: 1,
+  },
+  detailStackedWithSelector: {
+    width: "100%",
+    flexShrink: 1,
+    padding: 10,
   },
   detailScrollContent: {
     paddingHorizontal: 12,

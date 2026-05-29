@@ -1,0 +1,557 @@
+import * as React from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import { AppState, type AppStateStatus } from 'react-native';
+
+import {
+    type AgentInputTextSelection,
+    type AgentInputLocalUiStateV1,
+    clearAgentInputLocalUiState,
+    flushAgentInputLocalUiState,
+    patchAgentInputLocalUiState,
+    readAgentInputLocalUiState,
+    type AgentInputDraftOwner,
+} from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
+import {
+    clearSessionDraftValue,
+    flushSessionDraftValues,
+    readSessionDraftValue,
+    writeSessionDraftValue,
+    type ComposerStructuredInputMention,
+} from '@/sync/domains/input/draftValues/sessionDraftValueStore';
+import {
+    areServerAccountScopesEqual,
+    type ServerAccountScope,
+} from '@/sync/domains/scope/serverAccountScope';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useAgentInputComposerDraftGarbageCollection } from './useAgentInputComposerDraftGarbageCollection';
+
+export type SessionAgentInputComposerPersistence = Readonly<{
+    expanded: boolean;
+    setExpanded: React.Dispatch<React.SetStateAction<boolean>>;
+    clearTransientInputState: () => void;
+    captureTransientInputState: () => AgentInputLocalUiStateV1 | null;
+    restoreTransientInputState: (state: AgentInputLocalUiStateV1 | null) => void;
+    inputPersistence: Readonly<{
+        initialScrollY?: number;
+        initialSelection?: AgentInputTextSelection;
+        restoreToken: string;
+        onScrollYChange: (scrollY: number) => void;
+        onSelectionChangePersist: (selection: AgentInputTextSelection, textLength: number) => void;
+    }>;
+    structuredInputPersistence: Readonly<{
+        mentions: readonly ComposerStructuredInputMention[];
+        onMentionsChange: (mentions: readonly ComposerStructuredInputMention[]) => void;
+    }>;
+}>;
+
+export type UseSessionAgentInputComposerPersistenceParams = Readonly<{
+    sessionId: string | null | undefined;
+    text?: string;
+    textLength?: number;
+    fontScale?: number;
+}>;
+
+const SESSION_AGENT_INPUT_SCROLL_SELECTION_PERSISTENCE_DEBOUNCE_MS = 150;
+const SESSION_AGENT_INPUT_STRUCTURED_MENTION_PERSISTENCE_DEBOUNCE_MS = 250;
+
+function normalizeSessionId(sessionId: string | null | undefined): string | null {
+    if (typeof sessionId !== 'string') return null;
+    const trimmed = sessionId.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function createSessionDraftOwner(sessionId: string | null | undefined): AgentInputDraftOwner | null {
+    const normalizedSessionId = normalizeSessionId(sessionId);
+    return normalizedSessionId ? { kind: 'session', sessionId: normalizedSessionId } : null;
+}
+
+function areOwnersEqual(
+    left: AgentInputDraftOwner | null,
+    right: AgentInputDraftOwner | null,
+): boolean {
+    if (!left || !right) return left === right;
+    if (left.kind !== right.kind) return false;
+    if (left.kind === 'session') {
+        return right.kind === 'session' && left.sessionId === right.sessionId;
+    }
+    return right.kind === 'newSession' && left.flowId === right.flowId;
+}
+
+function areNullableScopesEqual(
+    left: ServerAccountScope | null,
+    right: ServerAccountScope | null,
+): boolean {
+    if (!left || !right) return left === right;
+    return areServerAccountScopesEqual(left, right);
+}
+
+function useStableServerAccountScope(scope: ServerAccountScope | null): ServerAccountScope | null {
+    const stableScopeRef = React.useRef<ServerAccountScope | null>(scope);
+    if (!areNullableScopesEqual(stableScopeRef.current, scope)) {
+        stableScopeRef.current = scope;
+    }
+    return stableScopeRef.current;
+}
+
+function readExpanded(
+    scope: ServerAccountScope | null,
+    owner: AgentInputDraftOwner | null,
+): boolean {
+    if (!owner) return false;
+    return readAgentInputLocalUiState(scope, owner)?.expanded === true;
+}
+
+function readInputState(
+    scope: ServerAccountScope | null,
+    owner: AgentInputDraftOwner | null,
+    options: Readonly<{ textLength?: number; fontScale?: number }>,
+) {
+    if (!owner) return null;
+    return readAgentInputLocalUiState(scope, owner, options);
+}
+
+function tokenSurvives(text: string, mention: ComposerStructuredInputMention): boolean {
+    return text.slice(mention.start, mention.end) === mention.tokenText;
+}
+
+function filterMentionsForText(
+    mentions: readonly ComposerStructuredInputMention[],
+    text: string | undefined,
+): readonly ComposerStructuredInputMention[] {
+    if (typeof text !== 'string') return mentions;
+    return mentions.filter((mention) => tokenSurvives(text, mention));
+}
+
+function areMentionListsEqual(
+    left: readonly ComposerStructuredInputMention[],
+    right: readonly ComposerStructuredInputMention[],
+): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function readStructuredMentions(
+    scope: ServerAccountScope | null,
+    owner: AgentInputDraftOwner | null,
+    text: string | undefined,
+): readonly ComposerStructuredInputMention[] {
+    if (!owner || owner.kind !== 'session') return [];
+    return filterMentionsForText(
+        readSessionDraftValue(scope, owner.sessionId, 'structuredInput.mentions') ?? [],
+        text,
+    );
+}
+
+type ScopedComposerPersistenceState = Readonly<{
+    owner: AgentInputDraftOwner | null;
+    scope: ServerAccountScope | null;
+    text: string | undefined;
+    textLength: number | undefined;
+    fontScale: number | undefined;
+    expanded: boolean;
+    inputState: ReturnType<typeof readInputState>;
+    structuredInputMentions: readonly ComposerStructuredInputMention[];
+}>;
+
+function readScopedComposerPersistenceState(
+    scope: ServerAccountScope | null,
+    owner: AgentInputDraftOwner | null,
+    options: Readonly<{
+        text?: string;
+        textLength?: number;
+        fontScale?: number;
+    }>,
+): ScopedComposerPersistenceState {
+    return {
+        owner,
+        scope,
+        text: options.text,
+        textLength: options.textLength,
+        fontScale: options.fontScale,
+        expanded: readExpanded(scope, owner),
+        inputState: readInputState(scope, owner, {
+            textLength: options.textLength,
+            fontScale: options.fontScale,
+        }),
+        structuredInputMentions: readStructuredMentions(scope, owner, options.text),
+    };
+}
+
+function isScopedComposerPersistenceStateCurrent(
+    state: ScopedComposerPersistenceState,
+    scope: ServerAccountScope | null,
+    owner: AgentInputDraftOwner | null,
+    options: Readonly<{
+        text?: string;
+        textLength?: number;
+        fontScale?: number;
+    }>,
+): boolean {
+    return areOwnersEqual(state.owner, owner)
+        && areNullableScopesEqual(state.scope, scope)
+        && state.text === options.text
+        && state.textLength === options.textLength
+        && state.fontScale === options.fontScale;
+}
+
+function buildRestoreToken(
+    owner: AgentInputDraftOwner | null,
+    state: ReturnType<typeof readInputState>,
+): string {
+    if (!owner || !state) return 'none';
+    const ownerKey = owner.kind === 'session'
+        ? `session:${owner.sessionId}`
+        : `new-session:${owner.flowId}`;
+    return `${ownerKey}:${state.updatedAt}:${state.textLength ?? ''}:${state.fontScale ?? ''}`;
+}
+
+export function useSessionAgentInputComposerPersistence({
+    sessionId,
+    text,
+    textLength,
+    fontScale,
+}: UseSessionAgentInputComposerPersistenceParams): SessionAgentInputComposerPersistence {
+    const scope = useStableServerAccountScope(useActiveServerAccountScope());
+    useAgentInputComposerDraftGarbageCollection(scope);
+    const isFocused = useIsFocused();
+    const owner = React.useMemo(() => createSessionDraftOwner(sessionId), [sessionId]);
+    const inputStateReadOptions = React.useMemo(() => ({ textLength, fontScale }), [fontScale, textLength]);
+    const scopedStateReadOptions = React.useMemo(() => ({ text, textLength, fontScale }), [fontScale, text, textLength]);
+    const previousOwnerRef = React.useRef<Readonly<{
+        owner: AgentInputDraftOwner | null;
+        scope: ServerAccountScope | null;
+    }> | null>(null);
+    const [scopedState, setScopedState] = React.useState(() =>
+        readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions),
+    );
+    const currentScopedState = isScopedComposerPersistenceStateCurrent(scopedState, scope, owner, scopedStateReadOptions)
+        ? scopedState
+        : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+    const expanded = currentScopedState.expanded;
+    const inputState = currentScopedState.inputState;
+    const structuredInputMentions = currentScopedState.structuredInputMentions;
+    const setScopedStateFromStore = React.useCallback((
+        nextScope: ServerAccountScope | null,
+        nextOwner: AgentInputDraftOwner | null,
+        nextOptions: Readonly<{
+            text?: string;
+            textLength?: number;
+            fontScale?: number;
+        }>,
+    ) => {
+        setScopedState(readScopedComposerPersistenceState(nextScope, nextOwner, nextOptions));
+    }, []);
+    const setScopedStateWithStructuredMentions = React.useCallback((
+        mentions: readonly ComposerStructuredInputMention[],
+    ) => {
+        setScopedState((current) => {
+            const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, scopedStateReadOptions)
+                ? current
+                : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+            return {
+                ...base,
+                structuredInputMentions: mentions,
+            };
+        });
+    }, [owner, scope, scopedStateReadOptions]);
+    const setScopedStateWithExpanded = React.useCallback((nextExpanded: boolean) => {
+        setScopedState((current) => {
+            const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, scopedStateReadOptions)
+                ? current
+                : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+            return {
+                ...base,
+                expanded: nextExpanded,
+            };
+        });
+    }, [owner, scope, scopedStateReadOptions]);
+    const setScopedStateWithInputState = React.useCallback(() => {
+        setScopedState((current) => {
+            const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, scopedStateReadOptions)
+                ? current
+                : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+            return {
+                ...base,
+                inputState: readInputState(scope, owner, inputStateReadOptions),
+            };
+        });
+    }, [inputStateReadOptions, owner, scope, scopedStateReadOptions]);
+    const pendingFlushScopeRef = React.useRef<ServerAccountScope | null | undefined>(undefined);
+    const pendingFlushTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingStructuredFlushScopeRef = React.useRef<ServerAccountScope | null | undefined>(undefined);
+    const pendingStructuredFlushTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const flushPendingUiState = React.useCallback((targetScope?: ServerAccountScope | null) => {
+        if (pendingFlushTimeoutRef.current) {
+            clearTimeout(pendingFlushTimeoutRef.current);
+            pendingFlushTimeoutRef.current = null;
+        }
+        const scopeToFlush = typeof targetScope === 'undefined'
+            ? pendingFlushScopeRef.current
+            : targetScope;
+        if (typeof scopeToFlush === 'undefined') return;
+        flushAgentInputLocalUiState(scopeToFlush);
+        if (pendingFlushScopeRef.current === scopeToFlush) {
+            pendingFlushScopeRef.current = undefined;
+        }
+    }, []);
+
+    const flushPendingStructuredInput = React.useCallback((targetScope?: ServerAccountScope | null) => {
+        if (pendingStructuredFlushTimeoutRef.current) {
+            clearTimeout(pendingStructuredFlushTimeoutRef.current);
+            pendingStructuredFlushTimeoutRef.current = null;
+        }
+        const scopeToFlush = typeof targetScope === 'undefined'
+            ? pendingStructuredFlushScopeRef.current
+            : targetScope;
+        if (typeof scopeToFlush === 'undefined') return;
+        flushSessionDraftValues(scopeToFlush);
+        if (pendingStructuredFlushScopeRef.current === scopeToFlush) {
+            pendingStructuredFlushScopeRef.current = undefined;
+        }
+    }, []);
+
+    React.useEffect(() => {
+        const previous = previousOwnerRef.current;
+        if (
+            previous
+            && (!areOwnersEqual(previous.owner, owner) || !areNullableScopesEqual(previous.scope, scope))
+        ) {
+            flushPendingUiState(previous.scope);
+            flushPendingStructuredInput(previous.scope);
+        }
+
+        previousOwnerRef.current = { owner, scope };
+
+        if (!owner) {
+            setScopedStateFromStore(scope, owner, scopedStateReadOptions);
+            return;
+        }
+
+        if (!isFocused) return;
+        setScopedStateFromStore(scope, owner, scopedStateReadOptions);
+        const mentions = readStructuredMentions(scope, owner, text);
+        if (owner.kind === 'session') {
+            const persistedMentions = readSessionDraftValue(scope, owner.sessionId, 'structuredInput.mentions') ?? [];
+            if (!areMentionListsEqual(mentions, persistedMentions)) {
+                if (mentions.length === 0) {
+                    clearSessionDraftValue(scope, owner.sessionId, 'structuredInput.mentions', { flush: false });
+                } else {
+                    writeSessionDraftValue(scope, owner.sessionId, 'structuredInput.mentions', mentions, { flush: false });
+                }
+                flushSessionDraftValues(scope);
+            }
+        }
+    }, [flushPendingStructuredInput, flushPendingUiState, isFocused, owner, scope, scopedStateReadOptions, setScopedStateFromStore, text]);
+
+    React.useEffect(() => {
+        const flushForBackground = () => {
+            flushPendingUiState(scope);
+            flushPendingStructuredInput(scope);
+        };
+
+        const handleAppStateChange = (nextAppState: AppStateStatus) => {
+            if (nextAppState === 'background' || nextAppState === 'inactive') {
+                flushForBackground();
+            }
+        };
+
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
+        return () => {
+            subscription.remove();
+        };
+    }, [flushPendingStructuredInput, flushPendingUiState, scope]);
+
+    React.useEffect(() => {
+        if (typeof document === 'undefined') return undefined;
+
+        const flushForHiddenDocument = () => {
+            flushPendingUiState(scope);
+            flushPendingStructuredInput(scope);
+        };
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                flushForHiddenDocument();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, [flushPendingStructuredInput, flushPendingUiState, scope]);
+
+    React.useEffect(() => {
+        return () => {
+            const previous = previousOwnerRef.current;
+            if (previous) {
+                flushPendingUiState(previous.scope);
+                flushPendingStructuredInput(previous.scope);
+            }
+        };
+    }, [flushPendingStructuredInput, flushPendingUiState]);
+
+    const scheduleUiStateFlush = React.useCallback((targetScope: ServerAccountScope | null) => {
+        pendingFlushScopeRef.current = targetScope;
+        if (pendingFlushTimeoutRef.current) {
+            clearTimeout(pendingFlushTimeoutRef.current);
+        }
+        pendingFlushTimeoutRef.current = setTimeout(() => {
+            flushPendingUiState(targetScope);
+        }, SESSION_AGENT_INPUT_SCROLL_SELECTION_PERSISTENCE_DEBOUNCE_MS);
+    }, [flushPendingUiState]);
+
+    const scheduleStructuredInputFlush = React.useCallback((targetScope: ServerAccountScope | null) => {
+        pendingStructuredFlushScopeRef.current = targetScope;
+        if (pendingStructuredFlushTimeoutRef.current) {
+            clearTimeout(pendingStructuredFlushTimeoutRef.current);
+        }
+        pendingStructuredFlushTimeoutRef.current = setTimeout(() => {
+            flushPendingStructuredInput(targetScope);
+        }, SESSION_AGENT_INPUT_STRUCTURED_MENTION_PERSISTENCE_DEBOUNCE_MS);
+    }, [flushPendingStructuredInput]);
+
+    const setExpanded = React.useCallback<React.Dispatch<React.SetStateAction<boolean>>>((nextValue) => {
+        const currentExpanded = readExpanded(scope, owner);
+        const resolvedValue = typeof nextValue === 'function'
+            ? nextValue(currentExpanded)
+            : nextValue;
+        const nextExpanded = resolvedValue === true;
+        if (owner) {
+            patchAgentInputLocalUiState(scope, owner, { expanded: nextExpanded });
+        }
+        setScopedStateWithExpanded(nextExpanded);
+    }, [owner, scope, setScopedStateWithExpanded]);
+
+    const onScrollYChange = React.useCallback((scrollY: number) => {
+        if (!owner) return;
+        patchAgentInputLocalUiState(scope, owner, {
+            scrollY,
+            textLength,
+            fontScale,
+        }, { flush: false });
+        setScopedStateWithInputState();
+        scheduleUiStateFlush(scope);
+    }, [fontScale, owner, scheduleUiStateFlush, scope, setScopedStateWithInputState, textLength]);
+
+    const onSelectionChangePersist = React.useCallback((selection: AgentInputTextSelection, nextTextLength: number) => {
+        if (!owner) return;
+        patchAgentInputLocalUiState(scope, owner, {
+            selection,
+            textLength: nextTextLength,
+            fontScale,
+        }, { flush: false });
+        setScopedState((current) => {
+            const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, scopedStateReadOptions)
+                ? current
+                : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+            return {
+                ...base,
+                inputState: readInputState(scope, owner, {
+                    textLength: nextTextLength,
+                    fontScale,
+                }),
+            };
+        });
+        scheduleUiStateFlush(scope);
+    }, [fontScale, owner, scheduleUiStateFlush, scope, scopedStateReadOptions]);
+
+    const clearTransientInputState = React.useCallback(() => {
+        if (!owner) return;
+
+        flushPendingUiState(scope);
+        const shouldKeepExpanded = readExpanded(scope, owner);
+        clearAgentInputLocalUiState(scope, owner, { flush: false });
+        if (shouldKeepExpanded) {
+            patchAgentInputLocalUiState(scope, owner, { expanded: true }, { flush: false });
+        }
+        flushAgentInputLocalUiState(scope);
+
+        const activeOwner = previousOwnerRef.current;
+        if (
+            activeOwner
+            && areOwnersEqual(activeOwner.owner, owner)
+            && areNullableScopesEqual(activeOwner.scope, scope)
+        ) {
+            setScopedState((current) => {
+                const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, scopedStateReadOptions)
+                    ? current
+                    : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+                return {
+                    ...base,
+                    expanded: shouldKeepExpanded,
+                    inputState: readInputState(scope, owner, inputStateReadOptions),
+                };
+            });
+        }
+    }, [flushPendingUiState, inputStateReadOptions, owner, scope, scopedStateReadOptions]);
+
+    const captureTransientInputState = React.useCallback(() => {
+        if (!owner) return null;
+        flushPendingUiState(scope);
+        return readInputState(scope, owner, inputStateReadOptions);
+    }, [flushPendingUiState, inputStateReadOptions, owner, scope]);
+
+    const restoreTransientInputState = React.useCallback((state: AgentInputLocalUiStateV1 | null) => {
+        if (!owner || !state) return;
+        patchAgentInputLocalUiState(scope, owner, {
+            ...(typeof state.expanded === 'boolean' ? { expanded: state.expanded } : {}),
+            ...(typeof state.scrollY === 'number' ? { scrollY: state.scrollY } : {}),
+            ...(state.selection ? { selection: state.selection } : {}),
+            ...(typeof state.textLength === 'number' ? { textLength: state.textLength } : {}),
+            ...(typeof state.fontScale === 'number' ? { fontScale: state.fontScale } : {}),
+        });
+        setScopedState((current) => {
+            const base = isScopedComposerPersistenceStateCurrent(current, scope, owner, scopedStateReadOptions)
+                ? current
+                : readScopedComposerPersistenceState(scope, owner, scopedStateReadOptions);
+            return {
+                ...base,
+                expanded: state.expanded === true,
+                inputState: readInputState(scope, owner, inputStateReadOptions),
+            };
+        });
+    }, [inputStateReadOptions, owner, scope, scopedStateReadOptions]);
+
+    const onStructuredMentionsChange = React.useCallback((mentions: readonly ComposerStructuredInputMention[]) => {
+        if (!owner || owner.kind !== 'session') return;
+        const nextMentions = [...mentions];
+        setScopedStateWithStructuredMentions(nextMentions);
+        if (nextMentions.length === 0) {
+            clearSessionDraftValue(scope, owner.sessionId, 'structuredInput.mentions', { flush: false });
+        } else {
+            writeSessionDraftValue(scope, owner.sessionId, 'structuredInput.mentions', nextMentions, { flush: false });
+        }
+        scheduleStructuredInputFlush(scope);
+    }, [owner, scheduleStructuredInputFlush, scope, setScopedStateWithStructuredMentions]);
+
+    const inputPersistence = React.useMemo(() => ({
+        ...(typeof inputState?.scrollY === 'number' ? { initialScrollY: inputState.scrollY } : {}),
+        ...(inputState?.selection ? { initialSelection: inputState.selection } : {}),
+        restoreToken: buildRestoreToken(owner, inputState),
+        onScrollYChange,
+        onSelectionChangePersist,
+    }), [inputState, onScrollYChange, onSelectionChangePersist, owner]);
+
+    const structuredInputPersistence = React.useMemo(() => ({
+        mentions: structuredInputMentions,
+        onMentionsChange: onStructuredMentionsChange,
+    }), [onStructuredMentionsChange, structuredInputMentions]);
+
+    return React.useMemo(() => ({
+        expanded,
+        setExpanded,
+        clearTransientInputState,
+        captureTransientInputState,
+        restoreTransientInputState,
+        inputPersistence,
+        structuredInputPersistence,
+    }), [
+        captureTransientInputState,
+        clearTransientInputState,
+        expanded,
+        inputPersistence,
+        restoreTransientInputState,
+        setExpanded,
+        structuredInputPersistence,
+    ]);
+}

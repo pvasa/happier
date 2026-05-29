@@ -2,7 +2,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { findGestureByKind, renderScreen, standardCleanup } from '@/dev/testkit';
+import { findGestureByKind, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { clearTempData, peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
@@ -22,6 +22,7 @@ const readMachineTargetForSessionMock = vi.hoisted(() => vi.fn());
 const resolveWorkspaceFaviconMock = vi.hoisted(() => vi.fn());
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const navigateToSessionSpy = vi.hoisted(() => vi.fn());
+const fetchMoreSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const keyboardShortcutHandlersRef = vi.hoisted(() => ({
     current: null as Record<string, (() => void)> | null,
 }));
@@ -36,6 +37,8 @@ let sessionFolderViewModeV1: 'off' | 'tree' = 'off';
 const setSessionFolderViewModeV1 = vi.fn();
 let sessionFoldersV1: any = { v: 1, folders: [] };
 const setSessionFoldersV1 = vi.fn();
+let sessionListOrderingModeV1: 'custom' | 'created' | 'updated' = 'custom';
+const setSessionListOrderingModeV1 = vi.fn();
 let sessionFolderAssignmentsBySessionKey: Record<string, string | null> = {};
 let rememberLastProjectSessionSelections: boolean | null = null;
 let allMachines = [
@@ -82,6 +85,34 @@ let allMachines = [
         daemonStateVersion: 1,
     },
 ];
+let machineDisplayById: Record<string, any> = {
+    'machine-target': {
+        id: 'machine-target',
+        updatedAt: 10,
+        active: true,
+        activeAt: 10,
+        revokedAt: null,
+        metadataVersion: 1,
+        metadata: {
+            displayName: 'Rebound workstation',
+            host: 'target.local',
+            homeDir: '/Users/test',
+        },
+    },
+    'machine-other': {
+        id: 'machine-other',
+        updatedAt: 5,
+        active: true,
+        activeAt: 5,
+        revokedAt: null,
+        metadataVersion: 1,
+        metadata: {
+            displayName: 'Other workstation',
+            host: 'other.local',
+            homeDir: '/Users/test',
+        },
+    },
+};
 
 function useLocalSettingMutableMock<K extends keyof LocalSettings>(
     key: K,
@@ -206,10 +237,15 @@ vi.mock('react-native-safe-area-context', () => ({
 
 vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
+    Easing: {
+        bezier: () => () => 0,
+        linear: () => 0,
+    },
     useSharedValue: (init: any) => ({ value: init }),
     useAnimatedReaction: vi.fn(),
     useAnimatedStyle: (fn: () => any) => fn(),
     withSpring: (value: any) => value,
+    withTiming: (value: any) => value,
 }));
 
 vi.mock('react-native-worklets', () => ({
@@ -274,12 +310,14 @@ vi.mock('@/sync/domains/session/listing/sessionListOrderingStateV1', () => ({
     SESSION_LIST_GROUP_ORDER_MAX_KEYS_PER_GROUP: 50,
 }));
 
-vi.mock('@/sync/domains/session/listing/deriveSessionListActivity', () => ({
+vi.mock('@/sync/domains/session/listing/deriveSessionListActivity', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/domains/session/listing/deriveSessionListActivity')>(),
     resolveSessionListSecondaryLineMode: ({ groupKind }: { groupKind?: string | null }) =>
         groupKind === 'date' ? 'path' : 'status',
 }));
 
-vi.mock('@/utils/sessions/sessionUtils', () => ({
+vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/sessions/sessionUtils')>(),
     getSessionName: () => 'Session',
     getSessionSubtitle: () => 'Subtitle',
     formatPathRelativeToHome: (path: string) => path,
@@ -366,10 +404,12 @@ installSessionShellCommonModuleMocks({
                 },
                 useHasUnreadMessages: () => false,
                 useAllMachines: () => allMachines,
+                useMachineDisplayById: () => machineDisplayById,
                 useSettingMutable: (key: string) => {
                     if (key === 'pinnedSessionKeysV1') return [pinnedSessionKeysV1, setPinnedSessionKeysV1];
                     if (key === 'sessionFolderViewModeV1') return [sessionFolderViewModeV1, setSessionFolderViewModeV1];
                     if (key === 'sessionFoldersV1') return [sessionFoldersV1, setSessionFoldersV1];
+                    if (key === 'sessionListOrderingModeV1') return [sessionListOrderingModeV1, setSessionListOrderingModeV1];
                     if (key === 'sessionMruOrderV1') {
                         throw new Error('sessionMruOrderV1 must stay in local settings');
                     }
@@ -409,6 +449,12 @@ vi.mock('@/sync/ops', async (importOriginal) => {
         },
     });
 });
+
+vi.mock('@/sync/sync', () => ({
+    sync: {
+        fetchMoreSessions: fetchMoreSessionsMock,
+    },
+}));
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
@@ -526,6 +572,16 @@ async function renderSessionsList() {
     return renderScreen(<SessionsList />);
 }
 
+async function renderSessionsListWithSurfaceOwnership(surfaceOwnership: Readonly<{
+    interactive: boolean;
+    dataActive: boolean;
+    visible?: boolean;
+    ownerKey?: string;
+}>) {
+    const { SessionsList } = await import('./SessionsList');
+    return renderScreen(<SessionsList surfaceOwnership={surfaceOwnership} />);
+}
+
 function findSessionItem(
     screen: Awaited<ReturnType<typeof renderSessionsList>>,
     sessionId: string,
@@ -571,6 +627,17 @@ function findPressableByAccessibilityLabel(
     )[0] ?? null;
 }
 
+function findDropdownByItemTitle(
+    screen: Awaited<ReturnType<typeof renderSessionsList>>,
+    title: string,
+) {
+    return screen.root.findAll((node) =>
+        String(node.type) === 'DropdownMenu'
+        && Array.isArray(node.props?.items)
+        && node.props.items.some((item: any) => item.title === title)
+    )[0] ?? null;
+}
+
 function childTreeContainsType(root: any, type: string): boolean {
     return root.children.some((child: unknown) => (
         typeof child === 'object'
@@ -591,7 +658,9 @@ function findRecordedGestureDetectors(
 }
 
 describe('SessionsList (native virtualization)', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        const { clearSessionListHeaderFilterRetentionForTests } = await import('./search/useSessionListHeaderFilterRetention');
+        clearSessionListHeaderFilterRetentionForTests();
         platformOs = 'ios';
         mockPathname = '';
         isTabletDevice = false;
@@ -602,8 +671,37 @@ describe('SessionsList (native virtualization)', () => {
         collapsedGroupKeysV1 = {};
         sessionFolderViewModeV1 = 'off';
         sessionFoldersV1 = { v: 1, folders: [] };
+        sessionListOrderingModeV1 = 'custom';
         sessionFolderAssignmentsBySessionKey = {};
         rememberLastProjectSessionSelections = null;
+        machineDisplayById = {
+            'machine-target': {
+                id: 'machine-target',
+                updatedAt: 10,
+                active: true,
+                activeAt: 10,
+                revokedAt: null,
+                metadataVersion: 1,
+                metadata: {
+                    displayName: 'Rebound workstation',
+                    host: 'target.local',
+                    homeDir: '/Users/test',
+                },
+            },
+            'machine-other': {
+                id: 'machine-other',
+                updatedAt: 5,
+                active: true,
+                activeAt: 5,
+                revokedAt: null,
+                metadataVersion: 1,
+                metadata: {
+                    displayName: 'Other workstation',
+                    host: 'other.local',
+                    homeDir: '/Users/test',
+                },
+            },
+        };
         setPinnedSessionKeysV1.mockClear();
         setSessionMruOrderV1.mockClear();
         setDefaultLocalSettingValue.mockClear();
@@ -612,7 +710,9 @@ describe('SessionsList (native virtualization)', () => {
         setCollapsedGroupKeysV1.mockClear();
         setSessionFolderViewModeV1.mockClear();
         setSessionFoldersV1.mockClear();
+        setSessionListOrderingModeV1.mockClear();
         navigateToSessionSpy.mockClear();
+        fetchMoreSessionsMock.mockClear();
         keyboardShortcutHandlersRef.current = null;
         routerPushSpy.mockClear();
         mockAllowedServerIds = ['server_a'];
@@ -641,6 +741,473 @@ describe('SessionsList (native virtualization)', () => {
         expect(first.props.isLast).toBe(false);
         expect(second.props.isFirst).toBe(false);
         expect(second.props.isLast).toBe(true);
+    });
+
+    it('expands the header search input and collapses it on blur when empty', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        expect(screen.findAllByTestId('session-list-search-input')).toHaveLength(0);
+
+        const trigger = expectPresent(
+            screen.findByTestId('session-list-search-trigger'),
+            'expected collapsed search trigger',
+        );
+        const stopPropagation = vi.fn(function (this: { nativeEvent?: unknown }) {
+            expect(this.nativeEvent).toEqual({ type: 'press' });
+        });
+        await act(async () => {
+            trigger.props.onPress?.({ nativeEvent: { type: 'press' }, stopPropagation });
+        });
+        expect(stopPropagation).toHaveBeenCalledTimes(1);
+
+        const input = expectPresent(
+            screen.findByTestId('session-list-search-input'),
+            'expected expanded search input',
+        );
+        expect(input.props.autoFocus).toBe(true);
+
+        await act(async () => {
+            input.props.onBlur?.();
+        });
+
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 60));
+        });
+
+        expect(screen.findAllByTestId('session-list-search-input')).toHaveLength(0);
+    });
+
+    it('shows the header controls on the pinned group when it is the first visible section', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Pinned',
+                headerKind: 'pinned',
+                groupKey: 'pinned',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'pinned',
+                groupKind: 'pinned',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+
+        expect(screen.findAllByTestId('session-list-search-trigger')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-list-ordering-menu-trigger')).toHaveLength(1);
+    });
+
+    it.each([
+        { headerKind: 'attention' as const, groupKind: 'attention' as const, title: 'Needs Attention' },
+        { headerKind: 'working' as const, groupKind: 'working' as const, title: 'Working' },
+    ])('shows the header controls on the $headerKind placement group when it is the first visible section', async ({ headerKind, groupKind, title }) => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title,
+                headerKind,
+                groupKey: headerKind,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: headerKind,
+                groupKind,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+
+        expect(screen.findAllByTestId('session-list-search-trigger')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-list-ordering-menu-trigger')).toHaveLength(1);
+    });
+
+    it('keeps the header search control anchored to the section that opened it', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Pinned',
+                headerKind: 'pinned',
+                groupKey: 'pinned',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'pinned',
+                groupKind: 'pinned',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const searchTriggers = screen.findAllByTestId('session-list-search-trigger');
+        expect(searchTriggers).toHaveLength(2);
+
+        await act(async () => {
+            expectPresent(
+                searchTriggers[1],
+                'expected active header search trigger',
+            ).props.onPress?.({ stopPropagation: vi.fn() });
+        });
+
+        const input = expectPresent(
+            screen.findByTestId('session-list-search-input'),
+            'expected expanded top header search input',
+        );
+        await act(async () => {
+            input.props.onChangeText?.('other-repo');
+        });
+
+        expect(screen.findAllByTestId('session-list-search-input').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-list-header:active')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+    });
+
+    it('keeps focused search open when clearing the last character after no results', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Pinned',
+                headerKind: 'pinned',
+                groupKey: 'pinned',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'pinned',
+                groupKind: 'pinned',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const searchTriggers = screen.findAllByTestId('session-list-search-trigger');
+        expect(searchTriggers).toHaveLength(2);
+
+        await act(async () => {
+            expectPresent(
+                searchTriggers[1],
+                'expected active header search trigger',
+            ).props.onPress?.({ stopPropagation: vi.fn() });
+        });
+
+        await act(async () => {
+            expectPresent(
+                screen.findByTestId('session-list-search-input'),
+                'expected expanded active header search input',
+            ).props.onChangeText?.('z');
+        });
+
+        expect(screen.findAllByTestId('session-list-header:active')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(0);
+
+        await act(async () => {
+            const inputBeforeClear = expectPresent(
+                screen.findByTestId('session-list-search-input'),
+                'expected search input to remain available before clearing',
+            );
+            inputBeforeClear.props.onChangeText?.('');
+            inputBeforeClear.props.onBlur?.();
+        });
+
+        const inputAfterClear = expectPresent(
+            screen.findByTestId('session-list-search-input'),
+            'expected focused search input to stay mounted after clearing',
+        );
+        expect(inputAfterClear.props.value).toBe('');
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+    });
+
+    it('keeps the header search input open with text and filters visible sessions', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        await act(async () => {
+            expectPresent(
+                screen.findByTestId('session-list-search-trigger'),
+                'expected collapsed search trigger',
+            ).props.onPress?.({ stopPropagation: vi.fn() });
+        });
+
+        const input = expectPresent(
+            screen.findByTestId('session-list-search-input'),
+            'expected expanded search input',
+        );
+        await act(async () => {
+            input.props.onChangeText?.('other-repo');
+            input.props.onBlur?.();
+        });
+
+        expect(screen.findAllByTestId('session-list-search-input').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+    });
+
+    it('retains active header search filters across a route-level sessions-list remount', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        await act(async () => {
+            expectPresent(
+                screen.findByTestId('session-list-search-trigger'),
+                'expected collapsed search trigger',
+            ).props.onPress?.({ stopPropagation: vi.fn() });
+        });
+        await act(async () => {
+            expectPresent(
+                screen.findByTestId('session-list-search-input'),
+                'expected expanded search input',
+            ).props.onChangeText?.('other-repo');
+        });
+
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+
+        standardCleanup();
+        const remounted = await renderSessionsList();
+
+        const retainedInput = expectPresent(
+            remounted.findByTestId('session-list-search-input'),
+            'expected retained search input after remount',
+        );
+        expect(retainedInput.props.value).toBe('other-repo');
+        expect(remounted.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+        expect(remounted.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+    });
+
+    it('stores expanded groups as explicit false tombstones', async () => {
+        collapsedGroupKeysV1 = { [groupKey]: true, legacyGroup: true };
+
+        const screen = await renderSessionsList();
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+
+        await act(async () => {
+            expectPresent(
+                screen.findByTestId(`session-list-header:${groupKey}`),
+                'expected collapsed date header',
+            ).props.onPress?.();
+        });
+
+        expect(setCollapsedGroupKeysV1).toHaveBeenCalledWith({
+            [groupKey]: false,
+            legacyGroup: true,
+        });
+    });
+
+    it('shows matching sessions from collapsed groups while header filters are active', async () => {
+        collapsedGroupKeysV1 = { [groupKey]: true };
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
+
+        await act(async () => {
+            expectPresent(
+                screen.findByTestId('session-list-search-trigger'),
+                'expected collapsed search trigger',
+            ).props.onPress?.({ stopPropagation: vi.fn() });
+        });
+
+        const input = expectPresent(
+            screen.findByTestId('session-list-search-input'),
+            'expected expanded search input',
+        );
+        await act(async () => {
+            input.props.onChangeText?.('stale-repo');
+        });
+
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(1);
+    });
+
+    it('shows the header tag filter only when known tags exist and filters by any selected tag', async () => {
+        sessionTagsV1 = { 'server_a:sess_a': ['important'], 'server_a:sess_b': ['later'] };
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Active',
+                headerKind: 'active',
+                groupKey: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionB,
+                groupKey: 'active',
+                groupKind: 'active',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const tagMenu = expectPresent(
+            findDropdownByItemTitle(screen, 'important'),
+            'expected tag filter dropdown',
+        );
+        const importantItem = expectPresent(
+            tagMenu.props.items.find((item: any) => item.title === 'important'),
+            'expected important tag filter item',
+        );
+
+        await act(async () => {
+            tagMenu.props.onSelect?.(importantItem.id);
+        });
+
+        expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(1);
+        expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(0);
     });
 
     it('passes stable recycling hints to native FlashList without deprecated size estimates', async () => {
@@ -710,6 +1277,184 @@ describe('SessionsList (native virtualization)', () => {
         );
         expect(updatedList.props.ListHeaderComponent).toBe(initialListHeaderComponent);
         expect(updatedList.props.ListFooterComponent).toBe(initialListFooterComponent);
+    });
+
+    it('keeps native row extra data stable when an equivalent session-list refresh only replaces data objects', async () => {
+        platformOs = 'android';
+        sessionFolderViewModeV1 = 'tree';
+
+        const screen = await renderSessionsList();
+        const initialList = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const initialExtraData = initialList.props.extraData;
+        const initialData = initialList.props.data as Array<SessionListViewItem & { rowModel?: unknown }>;
+        const initialSessionItem = expectPresent(
+            initialData.find((item) => item.type === 'session' && item.session.id === 'sess_a'),
+            'expected initial sess_a row',
+        );
+        const initialRow = initialList.props.renderItem({
+            item: initialSessionItem,
+            index: initialData.indexOf(initialSessionItem),
+        });
+        const { SessionsList } = await import('./SessionsList');
+
+        mockVisibleSessionListViewData = mockVisibleSessionListViewData?.map((item) => (
+            item.type === 'session'
+                ? { ...item, session: { ...item.session } }
+                : { ...item }
+        )) ?? null;
+        await screen.update(<SessionsList />);
+
+        const updatedList = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected updated native FlashListCompat',
+        );
+        const updatedData = updatedList.props.data as Array<SessionListViewItem & { rowModel?: unknown }>;
+        const updatedSessionItem = expectPresent(
+            updatedData.find((item) => item.type === 'session' && item.session.id === 'sess_a'),
+            'expected updated sess_a row',
+        );
+        const updatedRow = updatedList.props.renderItem({
+            item: updatedSessionItem,
+            index: updatedData.indexOf(updatedSessionItem),
+        });
+
+        expect(updatedList.props.extraData).toBe(initialExtraData);
+        expect(updatedRow.props.rowModel).toBe(initialRow.props.rowModel);
+        expect(updatedRow.props.onDragStart).toBe(initialRow.props.onDragStart);
+        expect(updatedRow.props.onDropResult).toBe(initialRow.props.onDropResult);
+        expect(updatedRow.props.onDragCancel).toBe(initialRow.props.onDragCancel);
+        expect(updatedRow.props.resolveDropResult).toBe(initialRow.props.resolveDropResult);
+        expect(updatedRow.props.onRegisterTreeRowBounds).toBe(initialRow.props.onRegisterTreeRowBounds);
+        expect(updatedRow.props.onUnregisterTreeRowBounds).toBe(initialRow.props.onUnregisterTreeRowBounds);
+        expect(updatedRow.props.folderMoveMenuItems).toBe(initialRow.props.folderMoveMenuItems);
+        expect(updatedRow.props.onMoveToFolder).toBe(initialRow.props.onMoveToFolder);
+        expect(updatedRow.props.onMoveToWorkspaceRoot).toBe(initialRow.props.onMoveToWorkspaceRoot);
+        expect(updatedRow.props.onMoveUp).toBe(initialRow.props.onMoveUp);
+        expect(updatedRow.props.onMoveDown).toBe(initialRow.props.onMoveDown);
+        expect(updatedRow.props.onSelectFolderMoveMenuItem).toBe(initialRow.props.onSelectFolderMoveMenuItem);
+    });
+
+    it('keeps row action props stable when FlashList re-renders the same item', async () => {
+        platformOs = 'android';
+        sessionFolderViewModeV1 = 'tree';
+
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const data = list.props.data as Array<SessionListViewItem & { rowModel?: unknown }>;
+        const sessionItem = expectPresent(data.find((item) => item.type === 'session'), 'expected session item');
+
+        const firstRow = list.props.renderItem({ item: sessionItem, index: data.indexOf(sessionItem) });
+        const secondRow = list.props.renderItem({ item: sessionItem, index: data.indexOf(sessionItem) });
+
+        expect(secondRow.props.rowModel).toBe(firstRow.props.rowModel);
+        expect(secondRow.props.onTogglePinned).toBe(firstRow.props.onTogglePinned);
+        expect(secondRow.props.onSetTags).toBe(firstRow.props.onSetTags);
+        expect(secondRow.props.onMoveToFolder).toBe(firstRow.props.onMoveToFolder);
+        expect(secondRow.props.onMoveToWorkspaceRoot).toBe(firstRow.props.onMoveToWorkspaceRoot);
+        expect(secondRow.props.onMoveUp).toBe(firstRow.props.onMoveUp);
+        expect(secondRow.props.onMoveDown).toBe(firstRow.props.onMoveDown);
+        expect(secondRow.props.onSelectFolderMoveMenuItem).toBe(firstRow.props.onSelectFolderMoveMenuItem);
+        expect(secondRow.props.tags).toBe(firstRow.props.tags);
+        expect(secondRow.props.allKnownTags).toBe(firstRow.props.allKnownTags);
+    });
+
+    it('passes model-backed session rows through virtualized data without widening row extra data', async () => {
+        platformOs = 'android';
+
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const data = list.props.data as Array<SessionListViewItem & { rowModel?: unknown }>;
+        const sessionItem = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session item');
+
+        expect(data[0]?.type).toBe('header');
+        expect(data[0]).toBe(mockVisibleSessionListViewData?.[0]);
+        expect(data[1]?.rowModel).toBeTruthy();
+        expect((data[1]?.rowModel as any)?.rowKey).toBe('server_a:sess_a');
+        expect(sessionItem.props.rowModel).toBe(data[1]?.rowModel);
+        expect(list.props.extraData.rowModels).toBeUndefined();
+        expect(list.props.extraData.relativeNowMs).toBeUndefined();
+        expect(list.props.extraData.runtimeNowMs).toBeUndefined();
+    });
+
+    it('updates only affected row data references on relative-time ticks while extra data remains stable', async () => {
+        vi.useFakeTimers();
+        const now = 1_700_000_000_000;
+        vi.setSystemTime(now);
+        platformOs = 'android';
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey,
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: {
+                    ...sessionA,
+                    id: 'recent-row',
+                    createdAt: now - 59_000,
+                    updatedAt: now - 59_000,
+                },
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: {
+                    ...sessionB,
+                    id: 'timeless-row',
+                    createdAt: 0,
+                    updatedAt: 0,
+                },
+                groupKey,
+                groupKind: 'date',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        try {
+            const screen = await renderSessionsList();
+            const initialList = expectPresent(
+                screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+                'expected native FlashListCompat',
+            );
+            const initialData = initialList.props.data as Array<SessionListViewItem & { rowModel?: any }>;
+            const initialExtraData = initialList.props.extraData;
+            expect(initialData[1]?.rowModel?.activity.label).toBe('now');
+            expect(initialData[2]?.rowModel?.activity.label).toBe('');
+
+            await act(async () => {
+                vi.advanceTimersByTime(60_000);
+            });
+
+            const updatedList = expectPresent(
+                screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+                'expected updated native FlashListCompat',
+            );
+            const updatedData = updatedList.props.data as Array<SessionListViewItem & { rowModel?: any }>;
+            expect(updatedList.props.extraData).toBe(initialExtraData);
+            expect(updatedData[0]).toBe(initialData[0]);
+            expect(updatedData[1]).not.toBe(initialData[1]);
+            expect(updatedData[2]).toBe(initialData[2]);
+            expect(updatedData[1]?.rowModel?.activity.label).toBe('1m');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('keeps hook order stable when session list data loads after an empty state', async () => {
@@ -964,6 +1709,20 @@ describe('SessionsList (native virtualization)', () => {
         expect(setSessionMruOrderV1).toHaveBeenCalledWith(['server_a:sess_b', 'server_a:sess_a']);
     });
 
+    it('does not record active session changes into MRU order when the surface is not data-active', async () => {
+        mockPathname = '/session/sess_b';
+        sessionMruOrderV1 = ['server_a:stale', 'server_a:sess_a'];
+
+        await renderSessionsListWithSurfaceOwnership({
+            ownerKey: 'phone-root',
+            visible: false,
+            interactive: false,
+            dataActive: false,
+        });
+
+        expect(setSessionMruOrderV1).not.toHaveBeenCalled();
+    });
+
     it('registers visible session shortcut handlers through the keyboard provider', async () => {
         mockPathname = '/session/sess_a';
 
@@ -980,6 +1739,111 @@ describe('SessionsList (native virtualization)', () => {
         });
 
         expect(navigateToSessionSpy).toHaveBeenCalledWith('sess_b', { serverId: 'server_a' });
+    });
+
+    it('does not register session list shortcut handlers when the surface is non-interactive', async () => {
+        mockPathname = '/session/sess_a';
+
+        await renderSessionsListWithSurfaceOwnership({ interactive: false, dataActive: true });
+
+        expect(keyboardShortcutHandlersRef.current).toEqual({});
+    });
+
+    it('does not handle web session navigation keys when the surface is non-interactive', async () => {
+        platformOs = 'web';
+        mockPathname = '/session/sess_a';
+
+        const screen = await renderSessionsListWithSurfaceOwnership({ interactive: false, dataActive: true });
+        const zone = expectPresent(
+            screen.findAllByTestId('sessions-list-keyboard-zone')[0],
+            'expected sessions list keyboard zone',
+        );
+
+        act(() => {
+            zone.props.onFocus?.();
+            zone.props.onKeyDown?.({
+                key: 'ArrowDown',
+                altKey: true,
+                preventDefault: vi.fn(),
+                stopPropagation: vi.fn(),
+            });
+        });
+
+        expect(navigateToSessionSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not expose a load-more handler when the surface is not data-active', async () => {
+        const screen = await renderSessionsListWithSurfaceOwnership({
+            ownerKey: 'phone-root',
+            visible: false,
+            interactive: false,
+            dataActive: false,
+        });
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+
+        expect(list.props.onEndReached).toBeUndefined();
+    });
+
+    it('loads more sessions from native scroll proximity when FlashList does not emit onEndReached', async () => {
+        const screen = await renderSessionsListWithSurfaceOwnership({
+            ownerKey: 'phone-root',
+            visible: true,
+            interactive: true,
+            dataActive: true,
+        });
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+
+        act(() => {
+            list.props.onScroll?.({
+                nativeEvent: {
+                    contentOffset: { y: 720 },
+                    contentSize: { height: 1000 },
+                    layoutMeasurement: { height: 240 },
+                },
+            });
+        });
+
+        expect(fetchMoreSessionsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores stale load-more callbacks after the surface becomes inactive', async () => {
+        const screen = await renderSessionsListWithSurfaceOwnership({
+            ownerKey: 'phone-root',
+            visible: true,
+            interactive: true,
+            dataActive: true,
+        });
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const staleOnEndReached = expectPresent(
+            list.props.onEndReached,
+            'expected active load-more handler',
+        );
+        const { SessionsList } = await import('./SessionsList');
+
+        await screen.update(
+            <SessionsList
+                surfaceOwnership={{
+                    ownerKey: 'phone-root',
+                    visible: false,
+                    interactive: false,
+                    dataActive: false,
+                }}
+            />,
+        );
+        await act(async () => {
+            await staleOnEndReached();
+        });
+
+        expect(fetchMoreSessionsMock).not.toHaveBeenCalled();
     });
 
     it('registers MRU session shortcut handlers through the keyboard provider', async () => {
@@ -1066,7 +1930,25 @@ describe('SessionsList (native virtualization)', () => {
         expect(updatedData[3]?.selected).toBe(false);
     });
 
-    it('records numeric aggregate telemetry for session-list render derivation chunks', async () => {
+    it('derives aggregate session-list render state for visible rows', async () => {
+        platformOs = 'android';
+        const { useSessionListViewState } = await import('./view-state/useSessionListViewState');
+        const hook = await renderHook(() => useSessionListViewState({
+            data: mockVisibleSessionListViewData,
+            pathname: '',
+        }));
+
+        expect(hook.getCurrent().listItems.filter((item) => item.type === 'session')).toHaveLength(2);
+        expect(hook.getCurrent().reachableSessionDisplayByKey.get('server_a:sess_a')).toMatchObject({
+            machineId: 'machine-target',
+            machineLabel: 'Rebound workstation',
+        });
+        expect(hook.getCurrent().hasMultipleMachines).toBe(true);
+
+        await hook.unmount();
+    });
+
+    it('does not rebuild reachability display data for machine heartbeat-only updates', async () => {
         platformOs = 'android';
         const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
         syncPerformanceTelemetry.configure({
@@ -1077,18 +1959,32 @@ describe('SessionsList (native virtualization)', () => {
         syncPerformanceTelemetry.reset();
 
         try {
-            const screen = await renderSessionsList();
+            const { useSessionListViewState } = await import('./view-state/useSessionListViewState');
+            const hook = await renderHook(({ tick }: { tick: number }) => {
+                void tick;
+                return useSessionListViewState({
+                    data: mockVisibleSessionListViewData,
+                    pathname: '',
+                });
+            }, {
+                initialProps: { tick: 0 },
+            });
 
-            expect(findSessionItem(screen, 'sess_a')).toBeTruthy();
-            const events = syncPerformanceTelemetry.snapshot().events;
-            expect(events.find((event) => event.name === 'ui.sessionsList.render.selectedMapping')?.fields)
-                .toMatchObject({ items: 3, selectable: 0 });
-            expect(events.find((event) => event.name === 'ui.sessionsList.render.reachabilityDisplayMap')?.fields)
-                .toMatchObject({ items: 3, sessions: 2 });
-            expect(events.find((event) => event.name === 'ui.sessionsList.render.collapsedFiltering')?.fields)
-                .toMatchObject({ items: 3, collapsedGroups: 0 });
+            syncPerformanceTelemetry.reset();
+            readMachineTargetForSessionMock.mockClear();
+            allMachines = allMachines.map((machine) => ({
+                ...machine,
+                seq: Number(machine.seq ?? 0) + 1,
+                updatedAt: Number(machine.updatedAt ?? 0) + 1,
+                daemonStateVersion: Number(machine.daemonStateVersion ?? 0) + 1,
+            }));
+            await hook.rerender({ tick: 1 });
 
-            await screen.unmount();
+            expect(syncPerformanceTelemetry.snapshot().events.some((event) =>
+                event.name === 'ui.sessionsList.render.reachabilityDisplayMap'
+            )).toBe(false);
+            expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
+            await hook.unmount();
         } finally {
             syncPerformanceTelemetry.configure({ enabled: false });
             syncPerformanceTelemetry.reset();
@@ -1115,6 +2011,19 @@ describe('SessionsList (native virtualization)', () => {
         }
         expect(String(nativeRowWrapper.type)).toContain('Animated.View');
         expect(nativeRowWrapper.props.collapsable).toBe(false);
+    });
+
+    it('does not mark iOS rows as inline-draggable in date mode when the account has no folders', async () => {
+        sessionListOrderingModeV1 = 'updated';
+        sessionFolderViewModeV1 = 'tree';
+        sessionFoldersV1 = { v: 1, folders: [] };
+
+        const screen = await renderSessionsList();
+
+        const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
+        expect(first.props.reorderHandleGesture).toBeUndefined();
+        expect(first.props.nativeInlineDragEnabled).toBeUndefined();
+        expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
     it('opens the iOS native context menu immediately when the row long-press gesture activates', async () => {
@@ -1154,6 +2063,69 @@ describe('SessionsList (native virtualization)', () => {
         expect(closed.props.nativeContextMenuOpen).toBe(false);
     });
 
+    it('suppresses iOS native context menu activation while the native list is being scrolled', async () => {
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const firstGesture = expectPresent(
+            findRecordedGestureDetectors(screen)[0]?.props.gesture,
+            'expected recorded native row gesture',
+        );
+        const longPress = findGestureByKind(firstGesture, 'longPress');
+
+        expect(typeof list.props.onScrollBeginDrag).toBe('function');
+        expect(typeof list.props.onScrollEndDrag).toBe('function');
+
+        await act(async () => {
+            list.props.onScrollBeginDrag?.();
+            longPress?.__handlers.onBegin?.({});
+            longPress?.__handlers.onStart?.({});
+        });
+
+        const suppressed = expectPresent(
+            findSessionItem(screen, 'sess_a'),
+            'expected sess_a session row after suppressed long press',
+        );
+        expect(suppressed.props.nativeContextMenuOpen).toBe(false);
+
+        await act(async () => {
+            list.props.onScrollEndDrag?.();
+            longPress?.__handlers.onBegin?.({});
+            longPress?.__handlers.onStart?.({});
+        });
+
+        const opened = expectPresent(
+            findSessionItem(screen, 'sess_a'),
+            'expected sess_a session row after fresh long press',
+        );
+        expect(opened.props.nativeContextMenuOpen).toBe(true);
+    });
+
+    it('closes an open iOS native context menu when native list scrolling starts', async () => {
+        const screen = await renderSessionsList();
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
+
+        await act(async () => {
+            first.props.onNativeContextMenuOpenChange(true);
+        });
+
+        const opened = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row after open');
+        expect(opened.props.nativeContextMenuOpen).toBe(true);
+
+        await act(async () => {
+            list.props.onScrollBeginDrag?.();
+        });
+
+        const closed = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row after scroll start');
+        expect(closed.props.nativeContextMenuOpen).toBe(false);
+    });
+
     it('ignores stale iOS native context menu close requests from another row', async () => {
         const screen = await renderSessionsList();
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
@@ -1174,19 +2146,17 @@ describe('SessionsList (native virtualization)', () => {
         expect(stillOpen.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('wraps Android rows in a full-row drag gesture without enabling iOS-only context menus', async () => {
+    it('does not wrap Android rows in drag or context-menu long-press gestures', async () => {
         platformOs = 'android';
 
         const screen = await renderSessionsList();
 
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(first.props.reorderHandleGesture).toBeUndefined();
-        expect(first.props.nativeInlineDragEnabled).toBe(true);
+        expect(first.props.nativeInlineDragEnabled).toBeUndefined();
         expect(first.props.nativeContextMenuOpen).toBeUndefined();
         expect(first.props.onNativeContextMenuOpenChange).toBeUndefined();
-        const nativeRowGestureDetectors = findRecordedGestureDetectors(screen);
-        expect(nativeRowGestureDetectors).toHaveLength(2);
-        expect(findGestureByKind(nativeRowGestureDetectors[0]?.props.gesture, 'pan')).toBeTruthy();
+        expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 
     it('passes scroll and viewport events to session-list drag autoscroll on native lists', async () => {
@@ -1583,6 +2553,7 @@ describe('SessionsList (native virtualization)', () => {
     });
 
     it('shows detected workspace favicons on project headers when enabled', async () => {
+        platformOs = 'web';
         resolveWorkspaceFaviconMock.mockResolvedValueOnce({
             status: 'found',
             uri: 'data:image/svg+xml;base64,PHN2Zy8+',
@@ -1636,10 +2607,14 @@ describe('SessionsList (native virtualization)', () => {
             height: 16,
             flexShrink: 0,
         }));
-        expect(images[0].props.style).toEqual(expect.objectContaining({
-            width: 16,
-            height: 16,
-        }));
+        expect(images[0].props.style).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                width: 16,
+                height: 16,
+                borderRadius: 4,
+            }),
+        ]));
+        expect(images[0].props.contentFit).toBe('cover');
     });
 
     it('hides expanded section chevrons until hover on web and keeps date headers on the subheader typography tier', async () => {
@@ -1790,7 +2765,95 @@ describe('SessionsList (native virtualization)', () => {
             findSessionItem(screen, 'sess_a'),
             'expected first session item',
         );
-        expect(item.props.subtitleOverride).toBe('Rebound workstation · repo');
+        expect(item.props.rowModel?.subtitle).toBe('Rebound workstation · repo');
+    });
+
+    it('keeps reachability subtitles scoped when servers share a session id', async () => {
+        platformOs = 'android';
+        const sharedSession = {
+            ...sessionA,
+            id: 'shared-session',
+        };
+        storageState = {
+            sessions: {},
+            machines: {},
+            getProjectForSession: () => null,
+        };
+        machineDisplayById = {
+            'machine-a': {
+                id: 'machine-a',
+                updatedAt: 10,
+                active: true,
+                activeAt: 10,
+                revokedAt: null,
+                metadataVersion: 1,
+                metadata: {
+                    displayName: 'Machine A',
+                    host: 'a.local',
+                    homeDir: '/Users/test',
+                },
+            },
+            'machine-b': {
+                id: 'machine-b',
+                updatedAt: 10,
+                active: true,
+                activeAt: 10,
+                revokedAt: null,
+                metadataVersion: 1,
+                metadata: {
+                    displayName: 'Machine B',
+                    host: 'b.local',
+                    homeDir: '/Users/test',
+                },
+            },
+        };
+        mockAllowedServerIds = ['server_a', 'server_b'];
+        mockVisibleSessionListViewData = [
+            {
+                type: 'session',
+                session: {
+                    ...sharedSession,
+                    metadata: {
+                        machineId: 'machine-a',
+                        path: '/Users/test/workspace/a',
+                        homeDir: '/Users/test',
+                        host: 'a.local',
+                    },
+                },
+                groupKey: 'server:server_a:project:a',
+                groupKind: 'project',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: {
+                    ...sharedSession,
+                    metadata: {
+                        machineId: 'machine-b',
+                        path: '/Users/test/workspace/b',
+                        homeDir: '/Users/test',
+                        host: 'b.local',
+                    },
+                },
+                groupKey: 'server:server_b:project:b',
+                groupKind: 'project',
+                serverId: 'server_b',
+                serverName: 'Server B',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+        const rows = screen.root.findAll((node) =>
+            String(node.type) === 'SessionItem'
+            && node.props?.session?.id === 'shared-session'
+        );
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.props.rowModel?.rowKey).toBe('server_a:shared-session');
+        expect(rows[0]?.props.rowModel?.subtitle).toBe('Machine A · a');
+        expect(rows[1]?.props.rowModel?.rowKey).toBe('server_b:shared-session');
+        expect(rows[1]?.props.rowModel?.subtitle).toBe('Machine B · b');
     });
 
     it('uses start-side overflow ellipsis for workspace path headers on web without reordering the path', async () => {

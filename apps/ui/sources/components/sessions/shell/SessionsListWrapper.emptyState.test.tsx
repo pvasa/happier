@@ -1,4 +1,5 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -9,11 +10,14 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 const sessionListState = vi.hoisted(() => ({
     data: [] as any[] | null,
     storageKinds: [] as string[],
-    paneOptions: [] as Array<{ activeSessionId?: string | null } | undefined>,
+    paneOptions: [] as Array<{ activeSessionId?: string | null; sessionListSurfaceDataActive?: boolean } | undefined>,
     paneHookCalls: 0,
+    contentRenderCalls: 0,
+    paneVersion: 0,
+    paneListeners: new Set<() => void>(),
 }));
 const routeState = vi.hoisted(() => ({
-    pathname: '/session/session-1',
+    pathname: '/',
 }));
 const emptyStateState = vi.hoisted(() => ({
     hasHiddenInactiveSessions: false,
@@ -25,7 +29,10 @@ const storageKindState = vi.hoisted(() => ({
     storageKind: 'persisted' as 'persisted' | 'direct',
     setStorageKind: vi.fn(),
 }));
-
+const focusState = vi.hoisted(() => ({
+    isFocused: true,
+    listeners: new Set<() => void>(),
+}));
 installSessionShellCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -55,7 +62,20 @@ vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
         sessionListState.storageKinds.push(storageKind ?? 'all');
         return sessionListState.data;
     },
-    useVisibleSessionListPaneState: (storageKind?: string, options?: { activeSessionId?: string | null }) => {
+    useVisibleSessionListPaneState: (
+        storageKind?: string,
+        options?: { activeSessionId?: string | null; sessionListSurfaceDataActive?: boolean },
+    ) => {
+        React.useSyncExternalStore(
+            (listener) => {
+                sessionListState.paneListeners.add(listener);
+                return () => {
+                    sessionListState.paneListeners.delete(listener);
+                };
+            },
+            () => sessionListState.paneVersion,
+            () => sessionListState.paneVersion,
+        );
         sessionListState.paneHookCalls += 1;
         sessionListState.storageKinds.push(storageKind ?? 'all');
         sessionListState.paneOptions.push(options);
@@ -88,9 +108,23 @@ vi.mock('@/components/sessions/guidance/HiddenInactiveSessionsEmptyState', () =>
 }));
 vi.mock('@/components/sessions/shell/SessionsList', () => ({
     SessionsList: (props: any) => React.createElement('SessionsList', props),
-    SessionsListContent: (props: any) => React.createElement('SessionsListContent', props),
+    SessionsListContent: (props: any) => {
+        sessionListState.contentRenderCalls += 1;
+        return React.createElement('SessionsListContent', props);
+    },
 }));
-
+vi.mock('@react-navigation/native', () => ({
+    useIsFocused: () => React.useSyncExternalStore(
+        (listener) => {
+            focusState.listeners.add(listener);
+            return () => {
+                focusState.listeners.delete(listener);
+            };
+        },
+        () => focusState.isFocused,
+        () => focusState.isFocused,
+    ),
+}));
 async function renderSessionsListWrapper() {
     const { SessionsListWrapper } = await import('./SessionsListWrapper');
     return renderScreen(<SessionsListWrapper />);
@@ -102,14 +136,20 @@ describe('SessionsListWrapper (empty state)', () => {
         sessionListState.storageKinds = [];
         sessionListState.paneOptions = [];
         sessionListState.paneHookCalls = 0;
-        routeState.pathname = '/session/session-1';
+        sessionListState.contentRenderCalls = 0;
+        sessionListState.paneVersion = 0;
+        sessionListState.paneListeners.clear();
+        routeState.pathname = '/';
         emptyStateState.hasHiddenInactiveSessions = false;
         featureDecisionState.enabled = false;
         storageKindState.storageKind = 'persisted';
         storageKindState.setStorageKind.mockReset();
+        focusState.isFocused = true;
+        focusState.listeners.clear();
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         standardCleanup();
     });
 
@@ -209,13 +249,129 @@ describe('SessionsListWrapper (empty state)', () => {
         await screen.unmount();
     });
 
-    it('passes active-session options into the pane state hook for attention-row stability', async () => {
+    it('marks the list inactive while retaining native list content on focus loss', async () => {
+        sessionListState.data = [{ type: 'session', session: { id: 'session-1' } }];
+
+        const screen = await renderSessionsListWrapper();
+
+        act(() => {
+            focusState.isFocused = false;
+            for (const listener of Array.from(focusState.listeners)) {
+                listener();
+            }
+        });
+
+        expect(sessionListState.paneOptions.at(-1)).toEqual({
+            activeSessionId: null,
+            sessionListSurfaceDataActive: false,
+        });
+        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
+            visible: true,
+            interactive: false,
+            dataActive: false,
+        });
+        await screen.unmount();
+    });
+
+    it('passes active-session identity while marking foreground session routes inactive', async () => {
         sessionListState.data = [{ type: 'session', session: { id: 'session-2' } }];
         routeState.pathname = '/session/session-2';
 
         const screen = await renderSessionsListWrapper();
 
-        expect(sessionListState.paneOptions).toEqual([{ activeSessionId: 'session-2' }]);
+        expect(sessionListState.paneOptions).toEqual([{
+            activeSessionId: 'session-2',
+            sessionListSurfaceDataActive: false,
+        }]);
+        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
+            visible: true,
+            interactive: false,
+            dataActive: false,
+        });
+
+        await screen.unmount();
+    });
+
+    it('uses an explicit pathname without treating it as the foreground surface route', async () => {
+        const { SessionsListWrapper } = await import('./SessionsListWrapper');
+        sessionListState.data = [{ type: 'session', session: { id: 'session-2' } }];
+        routeState.pathname = '/session/session-2';
+
+        const screen = await renderScreen(<SessionsListWrapper pathname="/" />);
+
+        expect(sessionListState.paneOptions).toEqual([{
+            activeSessionId: null,
+            sessionListSurfaceDataActive: false,
+        }]);
+        expect(screen.findByType('SessionsListContent' as any).props.pathname).toBe('/');
+        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
+            visible: true,
+            interactive: false,
+            dataActive: false,
+        });
+
+        await screen.unmount();
+    });
+
+    it('retains sessions list content while the new-session sheet makes the surface inactive', async () => {
+        const { SessionsListWrapper } = await import('./SessionsListWrapper');
+        sessionListState.data = [{ type: 'session', session: { id: 'session-2' } }];
+        focusState.isFocused = true;
+        routeState.pathname = '/new';
+
+        const screen = await renderScreen(<SessionsListWrapper pathname="/" surfaceRoutePathname="/new" />);
+
+        expect(sessionListState.paneOptions).toEqual([{
+            activeSessionId: null,
+            sessionListSurfaceDataActive: false,
+        }]);
+        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
+            visible: true,
+            interactive: false,
+            dataActive: false,
+        });
+
+        await screen.unmount();
+    });
+
+    it('retains sessions list content for a foreground session route on the phone root surface', async () => {
+        const { SessionsListWrapper } = await import('./SessionsListWrapper');
+        sessionListState.data = [{ type: 'session', session: { id: 'session-2' } }];
+        focusState.isFocused = true;
+        routeState.pathname = '/session/session-2';
+
+        const screen = await renderScreen(<SessionsListWrapper pathname="/" surfaceRoutePathname="/session/session-2" />);
+
+        expect(sessionListState.paneOptions).toEqual([{
+            activeSessionId: null,
+            sessionListSurfaceDataActive: false,
+        }]);
+        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
+            visible: true,
+            interactive: false,
+            dataActive: false,
+        });
+
+        await screen.unmount();
+    });
+
+    it('does not re-render the list content when wrapper-only state changes keep the same visible data', async () => {
+        const { SessionsListWrapper } = await import('./SessionsListWrapper');
+        sessionListState.data = [{ type: 'session', session: { id: 'session-1' } }];
+        routeState.pathname = '/';
+
+        const screen = await renderScreen(<SessionsListWrapper />);
+        expect(sessionListState.contentRenderCalls).toBe(1);
+
+        await act(async () => {
+            sessionListState.paneVersion += 1;
+            for (const listener of sessionListState.paneListeners) {
+                listener();
+            }
+        });
+
+        expect(sessionListState.paneHookCalls).toBeGreaterThanOrEqual(2);
+        expect(sessionListState.contentRenderCalls).toBe(1);
 
         await screen.unmount();
     });

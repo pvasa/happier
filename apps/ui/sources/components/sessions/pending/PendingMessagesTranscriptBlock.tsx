@@ -22,27 +22,50 @@ import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separat
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { PendingMessagesDragReorderList } from './PendingMessagesDragReorderList';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
     return String(raw);
 }
 
+function isKnownLiveSessionForPendingActions(session: ReturnType<typeof useSession>): boolean {
+    if (!session) {
+        return true;
+    }
+
+    return session.active === true && session.presence === 'online';
+}
+
 function canSteerNowForSession(session: ReturnType<typeof useSession>): boolean {
     const capabilities = session?.agentState?.capabilities;
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: session?.active,
+        activeAt: session?.activeAt,
+        presence: session?.presence,
+        thinking: session?.thinking,
+        thinkingAt: session?.thinkingAt,
+        latestTurnStatus: session?.latestTurnStatus,
+        latestTurnStatusObservedAt: session?.latestTurnStatusObservedAt,
+        meaningfulActivityAt: session?.meaningfulActivityAt,
+    }, Date.now());
     return Boolean(
-        session?.thinking
-        && session?.presence === 'online'
+        isKnownLiveSessionForPendingActions(session)
+        && runtimeStatus.working
         && (session?.agentStateVersion ?? 0) > 0
         && session?.agentState?.controlledByUser !== true
         && (capabilities?.inFlightSteerAvailable ?? capabilities?.inFlightSteer) === true
     );
 }
 
+function canSendNowForSession(session: ReturnType<typeof useSession>): boolean {
+    return isKnownLiveSessionForPendingActions(session);
+}
+
 function supportsInFlightSteerForSession(session: ReturnType<typeof useSession>): boolean {
     const capabilities = session?.agentState?.capabilities;
     return Boolean(
-        session?.presence === 'online'
+        isKnownLiveSessionForPendingActions(session)
         && (session?.agentStateVersion ?? 0) > 0
         && session?.agentState?.controlledByUser !== true
         && (capabilities?.inFlightSteerSupported ?? capabilities?.inFlightSteer) === true
@@ -58,12 +81,23 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     const session = useSession(props.sessionId);
 
     const canSteerNow = canSteerNowForSession(session);
+    const canSendNow = canSendNowForSession(session);
     const supportsInFlightSteer = supportsInFlightSteerForSession(session);
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: session?.active,
+        activeAt: session?.activeAt,
+        presence: session?.presence,
+        thinking: session?.thinking,
+        thinkingAt: session?.thinkingAt,
+        latestTurnStatus: session?.latestTurnStatus,
+        latestTurnStatusObservedAt: session?.latestTurnStatusObservedAt,
+        meaningfulActivityAt: session?.meaningfulActivityAt,
+    }, Date.now());
     const pendingCount = props.pendingMessages.length;
     const discardedCount = props.discardedMessages.length;
     const showNonSteerableNotice = Boolean(
         pendingCount > 0
-        && session?.thinking
+        && runtimeStatus.working
         && supportsInFlightSteer
         && !canSteerNow
     );
@@ -217,6 +251,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     }, [deleteOrDiscardAfterSend, props.sessionId]);
 
     const handleSendNow = React.useCallback(async (message: PendingMessage) => {
+        if (!canSendNow) return;
+
         const confirmed = await Modal.confirm(
             canSteerNow ? t('session.pendingMessages.sendConfirm.interruptTitle') : t('session.pendingMessages.sendConfirm.title'),
             t('session.pendingMessages.sendConfirm.body'),
@@ -239,7 +275,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         } catch (e) {
             Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.sendFailed'));
         }
-    }, [canSteerNow, deleteOrDiscardAfterSend, props.sessionId]);
+    }, [canSendNow, canSteerNow, deleteOrDiscardAfterSend, props.sessionId]);
 
     const handleRequeueDiscarded = React.useCallback(async (pendingId: string) => {
         try {
@@ -288,6 +324,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     }, [props.sessionId]);
 
     const handleSendDiscardedNow = React.useCallback(async (message: DiscardedPendingMessage) => {
+        if (!canSendNow) return;
+
         const confirmed = await Modal.confirm(
             canSteerNow ? t('session.pendingMessages.sendConfirm.interruptTitle') : t('session.pendingMessages.sendConfirm.title'),
             t('session.pendingMessages.sendConfirm.body'),
@@ -310,7 +348,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         } catch (e) {
             Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.sendDiscardedFailed'));
         }
-    }, [canSteerNow, props.sessionId]);
+    }, [canSendNow, canSteerNow, props.sessionId]);
 
     const renderMessage = React.useCallback((args: {
         message: PendingMessage;
@@ -340,7 +378,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	            if (canSteerNow && !hasDecryptFailure) {
 	                items.push({ id: 'steerNow', title: t('session.pendingMessages.actions.steerNow'), icon: <Ionicons name="navigate-outline" size={16} color={theme.colors.text.secondary} /> });
 	            }
-	            if (!hasDecryptFailure) {
+	            if (canSendNow && !hasDecryptFailure) {
 	                items.push({
 	                    id: 'sendNow',
 	                    title: canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow'),
@@ -490,7 +528,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                                        onPress={() => handleSteerNow(message)}
 	                                    />
 	                                ) : null}
-	                                {!hasDecryptFailure ? (
+	                                {canSendNow && !hasDecryptFailure ? (
 	                                    <IconAction
 	                                        testID={`pendingMessages.sendNow:${message.id}`}
 	                                        accessibilityLabel={canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow')}
@@ -517,6 +555,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             />
         );
     }, [
+        canSendNow,
         canSteerNow,
         hoveredMessageId,
         collapseThresholdChars,
@@ -548,7 +587,11 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             { id: 'requeue', title: t('session.pendingMessages.actions.requeue'), icon: <Ionicons name="return-up-back-outline" size={16} color={theme.colors.text.secondary} /> },
             { id: 'remove', title: t('common.remove'), icon: <Ionicons name="trash-outline" size={16} color={theme.colors.text.secondary} /> },
             ...(canSteerNow ? [{ id: 'steerNow', title: t('session.pendingMessages.actions.steerNow'), icon: <Ionicons name="navigate-outline" size={16} color={theme.colors.text.secondary} /> } as const] : []),
-            { id: 'sendNow', title: canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow'), icon: <Ionicons name="paper-plane-outline" size={16} color={theme.colors.text.secondary} /> },
+            ...(canSendNow ? [{
+                id: 'sendNow',
+                title: canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow'),
+                icon: <Ionicons name="paper-plane-outline" size={16} color={theme.colors.text.secondary} />,
+            } as const] : []),
         ];
 
         return (
@@ -626,12 +669,14 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                         onPress={() => handleSteerDiscardedNow(message)}
                                     />
                                 ) : null}
-                                <IconAction
-                                    testID={`pendingMessages.discarded.sendNow:${message.id}`}
-                                    accessibilityLabel={canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow')}
-                                    icon="paper-plane-outline"
-                                    onPress={() => handleSendDiscardedNow(message)}
-                                />
+                                {canSendNow ? (
+                                    <IconAction
+                                        testID={`pendingMessages.discarded.sendNow:${message.id}`}
+                                        accessibilityLabel={canSteerNow ? t('session.pendingMessages.actions.sendNowInterrupt') : t('session.pendingMessages.actions.sendNow')}
+                                        icon="paper-plane-outline"
+                                        onPress={() => handleSendDiscardedNow(message)}
+                                    />
+                                ) : null}
                             </View>
                         ) : null}
                     </View>
@@ -639,6 +684,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             />
         );
     }, [
+        canSendNow,
         canSteerNow,
         collapsedLines,
         hoveredMessageId,
@@ -697,12 +743,13 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 subtitle={discardedCount > 0 && pendingCount > 0 ? `${t('session.pendingMessages.discarded.label')} (${discardedCount})` : null}
                                 rightAccessory={canExpandPendingQueue ? (
                                     <Ionicons
-                                        name={isQueueExpanded ? 'chevron-up' : 'chevron-down'}
+                                        name={isQueueExpanded ? 'chevron-down' : 'chevron-up'}
                                         size={13}
                                         color={theme.colors.text.secondary}
                                     />
                                 ) : null}
                                 padding="none"
+                                chipChrome="minimal"
                             />
                         </View>
 
@@ -727,8 +774,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                         <View style={{ position: 'relative' }}>
                             <ScrollView
                                 testID="pendingMessages.scroll"
-                                style={{ height: clampedViewportHeightPx, maxHeight: maxHeight, marginTop: 8 }}
-                                contentContainerStyle={{ paddingTop: 14, paddingBottom: 2 }}
+                                style={{ height: clampedViewportHeightPx, maxHeight: maxHeight, marginTop: 0 }}
+                                contentContainerStyle={{ paddingTop: 6, paddingBottom: 0 }}
                                 ref={scrollRef}
                                 nestedScrollEnabled={true}
                                 scrollEventThrottle={16}
@@ -861,7 +908,7 @@ const styles = StyleSheet.create(() => ({
         paddingHorizontal: 16,
     },
     sectionHeader: {
-        marginTop: 2,
+        marginTop: 0,
     },
     pendingAffordanceRow: {
         flexDirection: 'row',
@@ -874,15 +921,15 @@ const styles = StyleSheet.create(() => ({
     },
     pendingAffordanceChip: {
         position: 'absolute',
-        top: -8,
+        top: -5,
         right: 0,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 3,
-        paddingHorizontal: 6,
-        paddingVertical: 3,
+        paddingHorizontal: 4,
+        paddingVertical: 1,
         borderRadius: 999,
-        borderWidth: 1,
+        borderWidth: 0,
         zIndex: 20,
     },
     nonSteerableNotice: {
@@ -905,7 +952,7 @@ const styles = StyleSheet.create(() => ({
         maxWidth: '100%',
         alignSelf: 'flex-end',
         position: 'relative',
-        paddingBottom: 16,
+        paddingBottom: 8,
     },
     userMessageWrapperHovered: {
         zIndex: 60,

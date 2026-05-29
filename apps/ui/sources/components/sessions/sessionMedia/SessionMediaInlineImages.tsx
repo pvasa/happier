@@ -17,6 +17,7 @@ import {
     AttachmentImagePreviewModal,
     type AttachmentImagePreviewModalImage,
 } from '@/components/sessions/attachments/preview/AttachmentImagePreviewModal';
+import * as FlashListCompat from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import type { SessionMediaInlineImageSummary } from '@/sync/domains/sessionMedia/sessionMediaMessageMeta';
 
 import { resolveSessionMediaImageMimeType } from './sessionMediaPresentation';
@@ -24,6 +25,15 @@ import { resolveSessionMediaImageMimeType } from './sessionMediaPresentation';
 const FALLBACK_THUMBNAIL_SIZE = 84;
 const MAX_THUMBNAIL_WIDTH = 220;
 const MAX_THUMBNAIL_HEIGHT = 160;
+const fallbackSessionMediaMappingHelper: FlashListCompat.FlashListMappingHelper = {
+    getMappingKey: (itemKey: FlashListCompat.FlashListMappingKey) => itemKey,
+};
+
+function useSessionMediaMappingHelper(): FlashListCompat.FlashListMappingHelper {
+    return typeof FlashListCompat.useMappingHelper === 'function'
+        ? FlashListCompat.useMappingHelper()
+        : fallbackSessionMediaMappingHelper;
+}
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
@@ -188,6 +198,7 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
     const containerTestID = props.containerTestID ?? 'message-session-media-inline-images';
     const imageTestIDPrefix = props.imageTestIDPrefix ?? 'message-session-media-inline-image';
     const previewTestIDPrefix = props.previewTestIDPrefix ?? 'message-session-media-inline-image-preview';
+    const { getMappingKey } = useSessionMediaMappingHelper();
 
     const images = React.useMemo(() => {
         const result: Array<Readonly<{
@@ -221,7 +232,7 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
         <View testID={containerTestID} style={styles.container}>
             {images.map((entry, index) => (
                 <SessionMediaInlineImageTile
-                    key={`${entry.media.path}:${entry.media.name}`}
+                    key={getMappingKey(`${entry.media.path}:${entry.media.name}`, index)}
                     sessionId={props.sessionId}
                     media={entry.media}
                     mimeType={entry.mimeType}

@@ -11,9 +11,9 @@ const revokeObjectURL = vi.hoisted(() => vi.fn());
 const originalPlatformOS = Platform.OS;
 
 installFilesContentCommonModuleMocks({
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
             useSetting: (key: string) => {
                 if (key === 'filesImagePreviewCacheMaxEntries') return 10;
                 if (key === 'filesImagePreviewCacheMaxTotalBytes') return 1_000_000;

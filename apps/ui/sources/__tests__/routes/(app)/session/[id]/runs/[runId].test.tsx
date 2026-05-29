@@ -66,8 +66,14 @@ const routerReplaceSpy = vi.fn();
 const navigateWithBlurOnWebSpy = vi.hoisted(() => vi.fn((action: () => void) => action()));
 const navigationCanGoBackSpy = vi.fn(() => true);
 let localSearchParamsMock: Record<string, unknown> = { id: 'session-1', runId: 'run_1' };
-let hydrateReady = true;
-const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => hydrateReady);
+let routeHydrationState: 'available' | 'loading' | 'missing' = 'available';
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) =>
+    routeHydrationState === 'available'
+        ? { kind: 'available', sessionId, serverId: options?.serverId }
+        : routeHydrationState === 'missing'
+            ? { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' }
+            : { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' },
+);
 let SessionRunDetailsScreen: typeof import('@/app/(app)/session/[id]/runs/[runId]').default;
 const sessionFixture: Session = {
     id: 'session-1',
@@ -241,7 +247,13 @@ vi.mock('@/sync/ops/machineExecutionRuns', () => ({
     machineExecutionRunsList: (...args: MachineExecutionRunsListArgs) => machineExecutionRunsListSpy(...args),
 }));
 
-vi.mock('@/components/ui/layout/layout', () => ({ layout: { maxWidth: 999 } }));
+vi.mock('@/components/ui/layout/layout', () => ({
+    layout: { maxWidth: 999 },
+    useLayoutMaxWidth: () => 999,
+}));
+vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
+    ActivitySpinner: (props: Record<string, unknown>) => React.createElement('ActivitySpinner', props),
+}));
 vi.mock('@/components/sessions/transcript/details/SessionMessageDetailsView', () => ({
     SessionMessageDetailsView: () => React.createElement('SessionMessageDetailsView'),
 }));
@@ -267,7 +279,7 @@ describe('Session Run Details Screen', () => {
         navigateWithBlurOnWebSpy.mockClear();
         navigationCanGoBackSpy.mockReturnValue(true);
         localSearchParamsMock = { id: 'session-1', runId: 'run_1' };
-        hydrateReady = true;
+        routeHydrationState = 'available';
     });
 
     afterEach(() => {
@@ -331,20 +343,30 @@ describe('Session Run Details Screen', () => {
     });
 
     it('does not load run details until route hydration is ready', async () => {
-        hydrateReady = false;
+        routeHydrationState = 'loading';
         localSearchParamsMock = { id: 'session-1', runId: 'run_1', serverId: 'server-b' };
         const screen = await renderRunDetailsScreen();
-        expect(screen.findAllByType('ActivityIndicator')).toHaveLength(1);
+        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
         expect(getRunSpy).not.toHaveBeenCalled();
         expect(hydrateSpy).toHaveBeenCalledWith('session-1', 'SessionRunDetailsScreen.hydrate', { serverId: 'server-b' });
     });
 
     it('keeps the loading state visible while route hydration is pending even if params are not ready yet', async () => {
-        hydrateReady = false;
+        routeHydrationState = 'loading';
         localSearchParamsMock = {};
         const screen = await renderRunDetailsScreen();
-        expect(screen.findAllByType('ActivityIndicator')).toHaveLength(1);
+        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
         expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(0);
+    });
+
+    it('renders the unavailable fallback when route hydration resolves missing', async () => {
+        routeHydrationState = 'missing';
+        localSearchParamsMock = { id: 'session-1', runId: 'run_1', serverId: 'server-b' };
+
+        const screen = await renderRunDetailsScreen();
+
+        expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
+        expect(getRunSpy).not.toHaveBeenCalled();
     });
 
     it('loads run details via session execution run get', async () => {

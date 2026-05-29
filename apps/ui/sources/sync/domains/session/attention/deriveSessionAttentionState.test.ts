@@ -13,17 +13,19 @@ const runtimeIssue = {
 } as const;
 
 describe('deriveSessionAttentionState', () => {
-    it('returns running for in-progress primary turns', () => {
+    it('returns running for in-progress primary turns with fresh runtime evidence', () => {
         expect(deriveSessionAttentionState({
             latestTurnStatus: 'in_progress',
             lastRuntimeIssue: null,
+            isRunning: true,
         })).toBe('running');
     });
 
-    it('lets in-progress turns override stale runtime issues', () => {
+    it('lets fresh running evidence override stale runtime issues', () => {
         expect(deriveSessionAttentionState({
             latestTurnStatus: 'in_progress',
             lastRuntimeIssue: runtimeIssue,
+            isRunning: true,
         })).toBe('running');
     });
 
@@ -39,5 +41,35 @@ describe('deriveSessionAttentionState', () => {
             latestTurnStatus: 'completed',
             lastRuntimeIssue: runtimeIssue,
         })).toBe('idle');
+    });
+
+    it('does not keep running attention after a terminal primary turn projection without fresh runtime evidence', () => {
+        expect(deriveSessionAttentionState({
+            latestTurnStatus: 'completed',
+            lastRuntimeIssue: null,
+        })).toBe('idle');
+    });
+
+    it('does not derive running attention from in-progress projection without fresh runtime evidence', () => {
+        expect(deriveSessionAttentionState({
+            latestTurnStatus: 'in_progress',
+            lastRuntimeIssue: null,
+        })).toBe('idle');
+    });
+
+    it('derives running attention from the shared fresh runtime evidence', () => {
+        expect(deriveSessionAttentionState({
+            latestTurnStatus: 'in_progress',
+            lastRuntimeIssue: null,
+            isRunning: true,
+        })).toBe('running');
+    });
+
+    it('lets shared fresh runtime evidence override terminal failure attention', () => {
+        expect(deriveSessionAttentionState({
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: runtimeIssue,
+            isRunning: true,
+        })).toBe('running');
     });
 });

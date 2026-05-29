@@ -2,12 +2,18 @@ import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import {
+    deriveLatestPendingRequestObservedAtFromSession,
     derivePendingRequestFlagsFromAgentState,
     derivePendingRequestFlagsFromSession,
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
+import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
+import { deriveSessionListMeaningfulActivityAt } from './deriveSessionListActivity';
+import type { SessionListAttentionPromotionReason } from './attentionPromotion/sessionListAttentionPromotionTypes';
+import { projectSessionListPlacement } from './placement/sessionListPlacementProjection';
+import { resolveSessionRuntimePresenceFields } from '../attention/deriveSessionRuntimePresentationState';
 
 export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
 
@@ -37,6 +43,7 @@ export interface SessionListRenderableSession {
     seq: number;
     createdAt: number;
     updatedAt: number;
+    meaningfulActivityAt?: number | null;
     active: boolean;
     activeAt: number;
     archivedAt?: number | null;
@@ -49,8 +56,11 @@ export interface SessionListRenderableSession {
     thinking: boolean;
     thinkingAt: number;
     presence: 'online' | number;
+    latestTurnId?: string | null;
     latestTurnStatus?: PrimaryTurnStatusV1 | null;
+    latestTurnStatusObservedAt?: number | null;
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
+    rollbackEligibleTurnStarts?: readonly number[] | null;
     latestReadyEventSeq?: number | null;
     latestReadyEventAt?: number | null;
     optimisticThinkingAt?: number | null;
@@ -60,6 +70,7 @@ export interface SessionListRenderableSession {
     canApprovePermissions?: boolean;
     hasPendingPermissionRequests?: boolean;
     hasPendingUserActionRequests?: boolean;
+    pendingRequestObservedAt?: number | null;
     hasUnreadMessages?: boolean;
     keepVisibleWhenInactive?: boolean;
     metadataUnavailable?: boolean;
@@ -75,10 +86,22 @@ function normalizeLastViewedSessionSeq(value: number | null | undefined): number
 }
 
 export function deriveSessionListRenderableHasUnreadMessagesFromSession(
-    session: Pick<Session, 'seq' | 'metadata' | 'lastViewedSessionSeq'>,
+    session: Pick<Session, 'seq' | 'metadata' | 'lastViewedSessionSeq'>
+        & Partial<Pick<Session, 'latestTurnStatus' | 'latestReadyEventSeq'>>,
+    messages?: ReadonlyArray<Message>,
+): boolean {
+    return deriveSessionListRenderableHasUnreadMessagesFromReadableSeq(
+        session,
+        resolveSessionListReadableSeq(session, messages),
+    );
+}
+
+export function deriveSessionListRenderableHasUnreadMessagesFromReadableSeq(
+    session: Pick<Session, 'metadata' | 'lastViewedSessionSeq'>,
+    readableSeq: number,
 ): boolean {
     return computeHasUnreadActivity({
-        sessionSeq: session.seq ?? 0,
+        sessionSeq: readableSeq,
         pendingActivityAt: 0,
         lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
         lastViewedPendingActivityAt: session.metadata?.readStateV1?.pendingActivityAt,
@@ -139,11 +162,33 @@ export function buildSessionListRenderableFromSession(
     messages?: ReadonlyArray<Message>,
 ): SessionListRenderableSession {
     const pending = derivePendingRequestFlagsFromSession(session, messages);
+    const latestCommittedMessageCreatedAt = Array.isArray(messages) && messages.length > 0
+        ? messages.reduce<number | null>((latest, message) => {
+            const createdAt = message.createdAt;
+            if (typeof createdAt !== 'number' || !Number.isFinite(createdAt) || createdAt <= 0) return latest;
+            return latest == null ? createdAt : Math.max(latest, createdAt);
+        }, null)
+        : null;
+    const latestTurnStatus = readSessionLatestTurnStatus(session);
+    const latestTurnStatusObservedAt = readSessionReadyEventNumber(session, 'latestTurnStatusObservedAt');
+    const runtimePresence = resolveSessionRuntimePresenceFields({
+        thinking: session.thinking,
+        thinkingAt: session.thinkingAt,
+        latestTurnStatus,
+        latestTurnStatusObservedAt,
+    });
     return {
         id: session.id,
         seq: session.seq,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
+        meaningfulActivityAt: deriveSessionListMeaningfulActivityAt({
+            sessionCreatedAt: session.createdAt,
+            sessionMeaningfulActivityAt: session.meaningfulActivityAt ?? null,
+            latestCommittedMessageCreatedAt,
+            latestThinkingActivityAt: null,
+            latestPendingMessageCreatedAt: null,
+        }),
         active: session.active,
         activeAt: session.activeAt,
         archivedAt: session.archivedAt ?? null,
@@ -153,11 +198,14 @@ export function buildSessionListRenderableFromSession(
         metadataVersion: session.metadataVersion,
         agentStateVersion: session.agentStateVersion,
         metadata: buildSessionListRenderableMetadata(session.metadata),
-        thinking: session.thinking,
-        thinkingAt: session.thinkingAt,
+        thinking: runtimePresence.thinking,
+        thinkingAt: runtimePresence.thinkingAt,
         presence: session.presence,
-        latestTurnStatus: readSessionLatestTurnStatus(session),
+        latestTurnId: readSessionLatestTurnId(session),
+        latestTurnStatus,
+        latestTurnStatusObservedAt,
         lastRuntimeIssue: readSessionLastRuntimeIssue(session),
+        rollbackEligibleTurnStarts: readRollbackEligibleTurnStarts(session.rollbackEligibleTurnStarts),
         latestReadyEventSeq: readSessionReadyEventNumber(session, 'latestReadyEventSeq'),
         latestReadyEventAt: readSessionReadyEventNumber(session, 'latestReadyEventAt'),
         optimisticThinkingAt: session.optimisticThinkingAt ?? null,
@@ -167,7 +215,8 @@ export function buildSessionListRenderableFromSession(
         canApprovePermissions: session.canApprovePermissions,
         hasPendingPermissionRequests: pending.hasPendingPermissionRequests,
         hasPendingUserActionRequests: pending.hasPendingUserActionRequests,
-        hasUnreadMessages: deriveSessionListRenderableHasUnreadMessagesFromSession(session),
+        pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(session, messages),
+        hasUnreadMessages: deriveSessionListRenderableHasUnreadMessagesFromSession(session, messages),
     };
 }
 
@@ -246,6 +295,9 @@ export function preserveSessionListRenderableStaleFields(
         hasPendingUserActionRequests: preservePendingFlags
             ? previous.hasPendingUserActionRequests
             : next.hasPendingUserActionRequests,
+        pendingRequestObservedAt: preservePendingFlags
+            ? previous.pendingRequestObservedAt ?? null
+            : next.pendingRequestObservedAt ?? null,
     };
 }
 
@@ -282,6 +334,7 @@ export function areSessionListRenderablesEqual(
         && previous.seq === next.seq
         && previous.createdAt === next.createdAt
         && previous.updatedAt === next.updatedAt
+        && (previous.meaningfulActivityAt ?? null) === (next.meaningfulActivityAt ?? null)
         && previous.active === next.active
         && previous.activeAt === next.activeAt
         && (previous.archivedAt ?? null) === (next.archivedAt ?? null)
@@ -293,8 +346,11 @@ export function areSessionListRenderablesEqual(
         && previous.thinking === next.thinking
         && previous.thinkingAt === next.thinkingAt
         && previous.presence === next.presence
+        && (previous.latestTurnId ?? null) === (next.latestTurnId ?? null)
         && (previous.latestTurnStatus ?? null) === (next.latestTurnStatus ?? null)
+        && (previous.latestTurnStatusObservedAt ?? null) === (next.latestTurnStatusObservedAt ?? null)
         && areSessionRuntimeIssuesEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)
+        && areRollbackEligibleTurnStartsEqual(previous.rollbackEligibleTurnStarts, next.rollbackEligibleTurnStarts)
         && (previous.latestReadyEventSeq ?? null) === (next.latestReadyEventSeq ?? null)
         && (previous.latestReadyEventAt ?? null) === (next.latestReadyEventAt ?? null)
         && (previous.optimisticThinkingAt ?? null) === (next.optimisticThinkingAt ?? null)
@@ -304,10 +360,16 @@ export function areSessionListRenderablesEqual(
         && (previous.canApprovePermissions ?? null) === (next.canApprovePermissions ?? null)
         && (previous.hasPendingPermissionRequests ?? null) === (next.hasPendingPermissionRequests ?? null)
         && (previous.hasPendingUserActionRequests ?? null) === (next.hasPendingUserActionRequests ?? null)
+        && (previous.pendingRequestObservedAt ?? null) === (next.pendingRequestObservedAt ?? null)
         && (previous.hasUnreadMessages === true) === (next.hasUnreadMessages === true)
         && (previous.keepVisibleWhenInactive === true) === (next.keepVisibleWhenInactive === true)
         && (previous.metadataUnavailable === true) === (next.metadataUnavailable === true)
         && areSessionListRenderableMetadataEqual(previous.metadata, next.metadata);
+}
+
+function readSessionLatestTurnId(session: Session): string | null {
+    const value = (session as { latestTurnId?: unknown }).latestTurnId;
+    return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
 function readSessionLatestTurnStatus(session: Session): PrimaryTurnStatusV1 | null {
@@ -317,6 +379,31 @@ function readSessionLatestTurnStatus(session: Session): PrimaryTurnStatusV1 | nu
         : null;
 }
 
+export function readRollbackEligibleTurnStarts(value: unknown): readonly number[] | null {
+    if (!Array.isArray(value)) return null;
+    const starts: number[] = [];
+    for (const entry of value) {
+        if (typeof entry !== 'number' || !Number.isFinite(entry)) continue;
+        const seq = Math.trunc(entry);
+        if (seq < 0 || starts.includes(seq)) continue;
+        starts.push(seq);
+    }
+    return starts;
+}
+
+function resolveSessionListReadableSeq(
+    session: Pick<Session, 'seq'> & Partial<Pick<Session, 'latestTurnStatus' | 'latestReadyEventSeq'>>,
+    messages: ReadonlyArray<Message> | undefined,
+): number {
+    return resolveSessionReadableSeq({
+        messages: messages ?? null,
+        sessionSeq: session.seq,
+        latestReadyEventSeq: session.latestReadyEventSeq,
+        latestTurnStatus: session.latestTurnStatus,
+        includeTerminalSessionSeq: true,
+    }) ?? 0;
+}
+
 function readSessionLastRuntimeIssue(session: Session): SessionRuntimeIssueV1 | null {
     const value = (session as { lastRuntimeIssue?: unknown }).lastRuntimeIssue;
     return isSessionRuntimeIssueV1(value) ? value : null;
@@ -324,7 +411,7 @@ function readSessionLastRuntimeIssue(session: Session): SessionRuntimeIssueV1 | 
 
 function readSessionReadyEventNumber(
     session: Session,
-    key: 'latestReadyEventSeq' | 'latestReadyEventAt',
+    key: 'latestReadyEventSeq' | 'latestReadyEventAt' | 'latestTurnStatusObservedAt',
 ): number | null {
     const value = (session as unknown as Record<string, unknown>)[key];
     return typeof value === 'number' && Number.isFinite(value)
@@ -361,6 +448,19 @@ function areSessionRuntimeIssuesEqual(
         && (previous.sanitizedPreview ?? null) === (next.sanitizedPreview ?? null);
 }
 
+type SessionListRenderableAttentionPromotionPlacement = Readonly<{
+    kind: 'none' | 'working' | SessionListAttentionPromotionReason;
+    timestamp: number | null;
+}>;
+
+export function resolveSessionListRenderableAttentionPromotionPlacement(
+    session: SessionListRenderableSession,
+    nowMs: number = Date.now(),
+): SessionListRenderableAttentionPromotionPlacement {
+    const projection = projectSessionListPlacement({ session, nowMs });
+    return { kind: projection.kind, timestamp: projection.timestamp };
+}
+
 export function didSessionListRenderableStructuralFieldsChange(
     previous: SessionListRenderableSession | undefined,
     next: SessionListRenderableSession,
@@ -382,58 +482,34 @@ export function didSessionListRenderableStructuralFieldsChange(
     return false;
 }
 
-function isAttentionPromotionWorkingSession(session: SessionListRenderableSession): boolean {
-    return session.latestTurnStatus === 'in_progress'
-        || session.thinking === true
-        || (typeof session.optimisticThinkingAt === 'number' && Number.isFinite(session.optimisticThinkingAt) && session.optimisticThinkingAt > 0)
-        || (typeof session.thinkingGraceUntil === 'number' && Number.isFinite(session.thinkingGraceUntil) && session.thinkingGraceUntil > Date.now());
-}
-
-function hasAttentionPromotionUpdatedAtOrdering(session: SessionListRenderableSession): boolean {
-    if (isAttentionPromotionWorkingSession(session)) return false;
-    const activeOnline = session.active === true && session.presence === 'online';
-    if (activeOnline && (session.hasPendingUserActionRequests === true || session.hasPendingPermissionRequests === true)) {
-        return true;
-    }
-    if (
-        session.latestTurnStatus === 'failed'
-        && session.lastRuntimeIssue?.v === 1
-        && session.lastRuntimeIssue.scope === 'primary_session'
-        && session.lastRuntimeIssue.status === 'failed'
-        && typeof session.lastRuntimeIssue.occurredAt !== 'number'
-    ) {
-        return true;
-    }
-    if (
-        typeof session.latestReadyEventSeq === 'number'
-        && session.latestReadyEventSeq > (typeof session.lastViewedSessionSeq === 'number' ? session.lastViewedSessionSeq : 0)
-        && typeof session.latestReadyEventAt !== 'number'
-    ) {
-        return true;
-    }
-    return false;
-}
-
 export function didSessionListRenderableAttentionPromotionFieldsChange(
     previous: SessionListRenderableSession | undefined,
     next: SessionListRenderableSession,
+    nowMs: number = Date.now(),
 ): boolean {
     if (!previous) return true;
-    if (previous.updatedAt !== next.updatedAt && (hasAttentionPromotionUpdatedAtOrdering(previous) || hasAttentionPromotionUpdatedAtOrdering(next))) return true;
-    if ((previous.lastViewedSessionSeq ?? null) !== (next.lastViewedSessionSeq ?? null)) return true;
-    if ((previous.latestReadyEventSeq ?? null) !== (next.latestReadyEventSeq ?? null)) return true;
-    if ((previous.latestReadyEventAt ?? null) !== (next.latestReadyEventAt ?? null)) return true;
-    if ((previous.hasPendingPermissionRequests ?? null) !== (next.hasPendingPermissionRequests ?? null)) return true;
-    if ((previous.hasPendingUserActionRequests ?? null) !== (next.hasPendingUserActionRequests ?? null)) return true;
-    if ((previous.latestTurnStatus ?? null) !== (next.latestTurnStatus ?? null)) return true;
-    if (!areSessionRuntimeIssuesEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)) return true;
-    if (previous.thinking !== next.thinking) return true;
-    if (previous.thinkingAt !== next.thinkingAt) return true;
-    if ((previous.optimisticThinkingAt ?? null) !== (next.optimisticThinkingAt ?? null)) return true;
-    if ((previous.thinkingGraceUntil ?? null) !== (next.thinkingGraceUntil ?? null)) return true;
-    if (previous.active !== next.active) return true;
-    if (previous.presence !== next.presence) return true;
-    return false;
+    if (didSessionListRenderableRetainedWorkingInvalidationFieldsChange(previous, next)) return true;
+    const previousPlacement = resolveSessionListRenderableAttentionPromotionPlacement(previous, nowMs);
+    const nextPlacement = resolveSessionListRenderableAttentionPromotionPlacement(next, nowMs);
+    return previousPlacement.kind !== nextPlacement.kind
+        || previousPlacement.timestamp !== nextPlacement.timestamp;
+}
+
+function didSessionListRenderableRetainedWorkingInvalidationFieldsChange(
+    previous: SessionListRenderableSession,
+    next: SessionListRenderableSession,
+): boolean {
+    if (!isRetainableWorkingProjectionCandidate(previous)) {
+        return false;
+    }
+    return !isRetainableWorkingProjectionCandidate(next);
+}
+
+function isRetainableWorkingProjectionCandidate(session: SessionListRenderableSession): boolean {
+    return session.archivedAt == null
+        && session.active === true
+        && session.presence === 'online'
+        && session.latestTurnStatus === 'in_progress';
 }
 
 export function didSessionListRenderableProjectGroupingFieldsChange(
@@ -460,7 +536,6 @@ export function didSessionListRenderableReachabilityPeerFieldsChange(
 ): boolean {
     if (!previous) return true;
     if (previous.active !== next.active) return true;
-    if (previous.updatedAt !== next.updatedAt) return true;
     if (previous.metadataVersion !== next.metadataVersion) return true;
 
     const prevMeta = previous.metadata;
@@ -479,17 +554,28 @@ export function didSessionListRenderableWarmCacheFieldsChange(
     next: SessionListRenderableSession,
 ): boolean {
     if (!previous) return true;
+    if (previous.seq !== next.seq) return true;
     if (previous.updatedAt !== next.updatedAt) return true;
+    if ((previous.meaningfulActivityAt ?? null) !== (next.meaningfulActivityAt ?? null)) return true;
     if (previous.createdAt !== next.createdAt) return true;
     if (previous.active !== next.active) return true;
     if (previous.activeAt !== next.activeAt) return true;
     if ((previous.archivedAt ?? null) !== (next.archivedAt ?? null)) return true;
+    if ((previous.lastViewedSessionSeq ?? null) !== (next.lastViewedSessionSeq ?? null)) return true;
     if ((previous.pendingCount ?? null) !== (next.pendingCount ?? null)) return true;
     if ((previous.pendingVersion ?? null) !== (next.pendingVersion ?? null)) return true;
+    if ((previous.latestTurnId ?? null) !== (next.latestTurnId ?? null)) return true;
+    if ((previous.latestTurnStatus ?? null) !== (next.latestTurnStatus ?? null)) return true;
+    if ((previous.latestTurnStatusObservedAt ?? null) !== (next.latestTurnStatusObservedAt ?? null)) return true;
+    if (!areSessionRuntimeIssuesEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)) return true;
+    if (!areRollbackEligibleTurnStartsEqual(previous.rollbackEligibleTurnStarts, next.rollbackEligibleTurnStarts)) return true;
+    if ((previous.latestReadyEventSeq ?? null) !== (next.latestReadyEventSeq ?? null)) return true;
+    if ((previous.latestReadyEventAt ?? null) !== (next.latestReadyEventAt ?? null)) return true;
     if ((previous.accessLevel ?? null) !== (next.accessLevel ?? null)) return true;
     if ((previous.canApprovePermissions ?? null) !== (next.canApprovePermissions ?? null)) return true;
     if (previous.metadataVersion !== next.metadataVersion) return true;
     if (previous.agentStateVersion !== next.agentStateVersion) return true;
+    if ((previous.pendingRequestObservedAt ?? null) !== (next.pendingRequestObservedAt ?? null)) return true;
 
     const prevMeta = previous.metadata;
     const nextMeta = next.metadata;
@@ -506,6 +592,59 @@ export function didSessionListRenderableWarmCacheFieldsChange(
 
     if ((previous.hasPendingPermissionRequests ?? null) !== (next.hasPendingPermissionRequests ?? null)) return true;
     if ((previous.hasPendingUserActionRequests ?? null) !== (next.hasPendingUserActionRequests ?? null)) return true;
+    if ((previous.hasUnreadMessages === true) !== (next.hasUnreadMessages === true)) return true;
+    if ((previous.keepVisibleWhenInactive === true) !== (next.keepVisibleWhenInactive === true)) return true;
 
     return false;
+}
+
+export function isSessionListRenderableWarmCacheProgressOnlyChange(
+    previous: SessionListRenderableSession | undefined,
+    next: SessionListRenderableSession,
+): boolean {
+    if (!previous) return false;
+    if (previous.active !== true || next.active !== true) return false;
+    if (previous.active !== next.active) return false;
+    if (previous.createdAt !== next.createdAt) return false;
+    if (previous.presence !== next.presence) return false;
+    if ((previous.archivedAt ?? null) !== (next.archivedAt ?? null)) return false;
+    if ((previous.pendingCount ?? null) !== (next.pendingCount ?? null)) return false;
+    if ((previous.pendingVersion ?? null) !== (next.pendingVersion ?? null)) return false;
+    if ((previous.lastViewedSessionSeq ?? null) !== (next.lastViewedSessionSeq ?? null)) return false;
+    if ((previous.latestTurnId ?? null) !== (next.latestTurnId ?? null)) return false;
+    if ((previous.latestTurnStatus ?? null) !== (next.latestTurnStatus ?? null)) return false;
+    if ((previous.latestTurnStatusObservedAt ?? null) !== (next.latestTurnStatusObservedAt ?? null)) return false;
+    if (!areSessionRuntimeIssuesEqual(previous.lastRuntimeIssue ?? null, next.lastRuntimeIssue ?? null)) return false;
+    if (!areRollbackEligibleTurnStartsEqual(previous.rollbackEligibleTurnStarts, next.rollbackEligibleTurnStarts)) return false;
+    if ((previous.latestReadyEventSeq ?? null) !== (next.latestReadyEventSeq ?? null)) return false;
+    if ((previous.latestReadyEventAt ?? null) !== (next.latestReadyEventAt ?? null)) return false;
+    if (previous.metadataVersion !== next.metadataVersion) return false;
+    if (previous.agentStateVersion !== next.agentStateVersion) return false;
+    if ((previous.accessLevel ?? null) !== (next.accessLevel ?? null)) return false;
+    if ((previous.canApprovePermissions ?? null) !== (next.canApprovePermissions ?? null)) return false;
+    if ((previous.pendingRequestObservedAt ?? null) !== (next.pendingRequestObservedAt ?? null)) return false;
+    if ((previous.hasPendingPermissionRequests ?? null) !== (next.hasPendingPermissionRequests ?? null)) return false;
+    if ((previous.hasPendingUserActionRequests ?? null) !== (next.hasPendingUserActionRequests ?? null)) return false;
+    if ((previous.hasUnreadMessages === true) !== (next.hasUnreadMessages === true)) return false;
+    if ((previous.keepVisibleWhenInactive === true) !== (next.keepVisibleWhenInactive === true)) return false;
+    if (!areSessionListRenderableMetadataEqual(previous.metadata, next.metadata)) return false;
+
+    return previous.seq !== next.seq
+        || previous.updatedAt !== next.updatedAt
+        || (previous.meaningfulActivityAt ?? null) !== (next.meaningfulActivityAt ?? null)
+        || previous.activeAt !== next.activeAt;
+}
+
+function areRollbackEligibleTurnStartsEqual(
+    previous: readonly number[] | null | undefined,
+    next: readonly number[] | null | undefined,
+): boolean {
+    if (previous === next) return true;
+    const previousStarts = previous ?? [];
+    const nextStarts = next ?? [];
+    if (previousStarts.length !== nextStarts.length) return false;
+    for (let index = 0; index < previousStarts.length; index += 1) {
+        if (previousStarts[index] !== nextStarts[index]) return false;
+    }
+    return true;
 }

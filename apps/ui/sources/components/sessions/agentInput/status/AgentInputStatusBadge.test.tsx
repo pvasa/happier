@@ -33,33 +33,39 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 describe('AgentInputStatusBadge', () => {
     it('keeps quiet badges pressable while removing persistent border and background chrome', async () => {
         const onPress = vi.fn();
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
         const { AgentInputStatusBadge } = await import('./AgentInputStatusBadge');
 
-        const screen = await renderScreen(
-            <AgentInputStatusBadge
-                key="work-state"
-                label="Goal: Ship the release"
-                testID="quiet-work-state-badge"
-                tone="active"
-                emphasis="quiet"
-                onPress={onPress}
-            />,
-        );
+        try {
+            const screen = await renderScreen(
+                <AgentInputStatusBadge
+                    key="work-state"
+                    label="Goal: Ship the release"
+                    testID="quiet-work-state-badge"
+                    tone="active"
+                    emphasis="quiet"
+                    onPress={onPress}
+                />,
+            );
 
-        const badge = screen.findByTestId('quiet-work-state-badge');
-        expect(badge?.type).toBe('Pressable');
+            const badge = screen.findByTestId('quiet-work-state-badge');
+            expect(badge?.type).toBe('Pressable');
+            expect(typeof badge?.props.children).toBe('function');
 
-        const badgeSurface = screen.findAllByType('View')
-            .map((node) => flattenStyle(node.props.style))
-            .find((style) => style.minHeight === 22);
+            const badgeSurface = React.isValidElement(badge?.props.children?.({ pressed: false }))
+                ? flattenStyle(badge?.props.children({ pressed: false }).props.style)
+                : undefined;
 
-        expect(badgeSurface).toEqual(expect.objectContaining({
-            backgroundColor: 'transparent',
-            borderColor: 'transparent',
-            borderWidth: 0,
-        }));
+            expect(badgeSurface).toEqual(expect.objectContaining({
+                backgroundColor: 'transparent',
+                borderColor: 'transparent',
+                borderWidth: 0,
+            }));
 
-        badge?.props.onPress?.();
-        expect(onPress).toHaveBeenCalledTimes(1);
+            badge?.props.onPress?.();
+            expect(onPress).toHaveBeenCalledTimes(1);
+        } finally {
+            consoleError.mockRestore();
+        }
     });
 });

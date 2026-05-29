@@ -47,6 +47,7 @@ describe('buildAttachmentMessageMeta', () => {
                         kind: 'image',
                         localPath: '.happier/uploads/messages/m1/screen.png',
                         path: '.happier/uploads/messages/m1/screen.png',
+                        provenance: { kind: 'sessionAttachmentUpload' },
                     },
                 ],
             },

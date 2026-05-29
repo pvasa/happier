@@ -390,7 +390,9 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
                     onOpenReviewAllChanges={() => {}}
                 />);
 
-        const textContent = screen.getTextContent();
+        const flatList = screen.tree.findByType('FlatList' as any);
+        const headerScreen = await renderScreen(flatList.props.ListHeaderComponent);
+        const textContent = headerScreen.getTextContent();
         const titleMatches = textContent.match(/Latest turn changes \(2\)/g) ?? [];
 
         expect(titleMatches).toHaveLength(1);
@@ -399,12 +401,12 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
         expect(textContent).not.toContain('files.toolbar.view');
         expect(textContent).toContain('Review');
 
-        const actionsRow = screen.tree.findByProps({ testID: 'session-rightpanel-git-scope-actions-row' });
+        const actionsRow = headerScreen.tree.findByProps({ testID: 'session-rightpanel-git-scope-actions-row' });
         expect(textFromInstance(actionsRow)).toContain('Latest turn changes (2)');
         expect(textFromInstance(actionsRow)).toContain('Review');
         expect(textFromInstance(actionsRow)).not.toContain('Provider-backed changes from the most recent completed turn.');
 
-        const description = screen.tree.findByProps({ testID: 'session-rightpanel-git-scope-description' });
+        const description = headerScreen.tree.findByProps({ testID: 'session-rightpanel-git-scope-description' });
         expect(textFromInstance(description)).toContain('Provider-backed changes from the most recent completed turn.');
     });
 
@@ -530,7 +532,62 @@ describe('SessionRightPanelGitCommitTab (virtualization)', () => {
                     showCommitComposer={false}
                 />)).tree;
 
-        expect(() => tree.findByType('FlatList' as any)).not.toThrow();
+        const flatList = tree.findByType('FlatList' as any);
+        expect(flatList.props.initialNumToRender).toBeLessThanOrEqual(12);
+        expect(flatList.props.maxToRenderPerBatch).toBeLessThanOrEqual(12);
+    });
+
+    it('renders session-scoped changed files through the bounded FlatList path', async () => {
+        const { SessionRightPanelGitCommitTab } = await import('./SessionRightPanelGitCommitTab');
+
+        const files = Array.from({ length: 200 }).map((_, idx) => makeScmFile(`src/session-file-${idx}.ts`));
+
+        const screen = await renderScreen(<SessionRightPanelGitCommitTab
+                    theme={makeGitTheme()}
+                    sessionId="s1"
+                    sessionPath="/workspace"
+                    backendLabel="Git"
+                    commitActionLabel="Commit"
+                    scmSnapshot={null}
+                    hasConflicts={false}
+                    scmOperationBusy={false}
+                    scmOperationStatus={null}
+                    hasGlobalOperationInFlight={false}
+                    inFlightScmOperation={null}
+                    commitAllowed={false}
+                    commitBlockedMessage={null}
+                    changedFilesViewMode="session"
+                    attributionReliability="high"
+                    allRepositoryChangedFiles={files as any}
+                    turnAttributedFiles={[] as any}
+                    sessionAttributedFiles={files.map((file) => ({ file, confidence: 'high' })) as any}
+                    repositoryOnlyFiles={[] as any}
+                    suppressedInferredCount={0}
+                    showSessionViewToggle={true}
+                    repositorySelectedCount={0}
+                    onSelectAll={() => {}}
+                    onSelectNone={() => {}}
+                    disableSelectAll={true}
+                    disableSelectNone={true}
+                    onFilePress={() => {}}
+                    onFilePressPinned={() => {}}
+                    onToggleSelectionForFile={() => {}}
+                    renderFileActions={() => null}
+                    renderFileTrailingActions={() => null}
+                    commitDraftMessage=""
+                    onCommitDraftMessageChange={() => {}}
+                    onCommitFromMessage={() => {}}
+                    commitMessageGeneratorEnabled={false}
+                    onGenerateCommitMessageSuggestion={async () => ({ ok: true, message: '' })}
+                    scmStatusFiles={null}
+                    showCommitComposer={false}
+                />);
+
+        const flatList = screen.tree.findByType('FlatList' as any);
+        expect(flatList.props.data).toHaveLength(200);
+        expect(flatList.props.initialNumToRender).toBeLessThanOrEqual(12);
+        expect(flatList.props.maxToRenderPerBatch).toBeLessThanOrEqual(12);
+        expect(screen.tree.findAllByType('ScrollView' as any)).toHaveLength(0);
     });
 
     it('does not render selection summary above the changes list (keeps it near commit composer)', async () => {

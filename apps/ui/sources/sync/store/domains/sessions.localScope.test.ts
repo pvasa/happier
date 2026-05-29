@@ -58,6 +58,7 @@ function createHarness() {
         actionDraftsBySessionId: {},
         isDataReady: false,
         machines: {},
+        machineDisplayById: {},
         sessionMessages: {},
         settings: { groupInactiveSessionsByProject: false },
     };

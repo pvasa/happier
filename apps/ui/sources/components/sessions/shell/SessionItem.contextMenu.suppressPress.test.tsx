@@ -1,9 +1,9 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -113,14 +113,30 @@ installSessionShellCommonModuleMocks({
                 connectedServicesV2: [],
             }),
             useSession: () => null,
-            useSessionListRowRenderable: () => null,
-            useSessionListMeaningfulActivityAt: () => null,
-            useSessionListActivityTimeLabel: () => null,
         });
     },
 });
 
 describe('SessionItem context menu press suppression', () => {
+    type SessionItemForTestProps = Omit<
+        React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>,
+        'rowModel'
+    > & {
+        rowModel?: React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>['rowModel'];
+    };
+
+    let SessionItem: React.ComponentType<SessionItemForTestProps>;
+
+    beforeEach(async () => {
+        const { SessionItem: ProductionSessionItem } = await import('./SessionItem');
+        SessionItem = (props) => (
+            <ProductionSessionItem
+                {...props}
+                rowModel={props.rowModel ?? createSessionItemTestRowModel(props)}
+            />
+        );
+    });
+
     afterEach(() => {
         standardCleanup();
         navigateToSessionSpy.mockClear();
@@ -132,10 +148,56 @@ describe('SessionItem context menu press suppression', () => {
         vi.useRealTimers();
     });
 
+    it('does not mount closed native context menus until they are opened', async () => {
+        const session = createSessionFixture({
+            id: 'sess_lazy_menu',
+            active: true,
+            metadata: null,
+        });
+
+        const onNativeContextMenuOpenChange = vi.fn();
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_a"
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                nativeContextMenuOpen={false}
+                onNativeContextMenuOpenChange={onNativeContextMenuOpenChange}
+            />,
+        );
+
+        expect(screen.tree.root.findAllByType('DropdownMenu' as React.ElementType)).toHaveLength(0);
+
+        await act(async () => {
+            screen.tree.update(
+                <SessionItem
+                    session={session}
+                    serverId="server_a"
+                    selected={false}
+                    isFirst={true}
+                    isLast={true}
+                    isSingle={true}
+                    variant="default"
+                    compact={false}
+                    nativeContextMenuOpen={true}
+                    onNativeContextMenuOpenChange={onNativeContextMenuOpenChange}
+                />,
+            );
+        });
+
+        const menus = screen.tree.root.findAllByType('DropdownMenu' as React.ElementType);
+        expect(menus).toHaveLength(1);
+        expect(hasRenameMenuItem(menus[0].props.items)).toBe(true);
+    });
+
     it('suppresses the release press after a native context menu is opened externally', async () => {
         vi.useFakeTimers();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_1',
@@ -207,8 +269,6 @@ describe('SessionItem context menu press suppression', () => {
     it('delegates iOS native inline drag context-menu opening to the outer row gesture', async () => {
         vi.useFakeTimers();
 
-        const { SessionItem } = await import('./SessionItem');
-
         const session = {
             id: 'sess_2',
             seq: 1,
@@ -252,8 +312,6 @@ describe('SessionItem context menu press suppression', () => {
 
     it('opens the iOS native context menu from a press-in timer before release', async () => {
         vi.useFakeTimers();
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_press_in',
@@ -309,8 +367,6 @@ describe('SessionItem context menu press suppression', () => {
     });
 
     it('does not wrap iOS native inline drag rows in Swipeable so long-press gestures can activate', async () => {
-        const { SessionItem } = await import('./SessionItem');
-
         const session = {
             id: 'sess_swipeable',
             seq: 1,
@@ -348,8 +404,6 @@ describe('SessionItem context menu press suppression', () => {
 
     it('disables row long-press actions on Android while the hotfix is active', async () => {
         platformOs = 'android';
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = {
             id: 'sess_3',
@@ -391,8 +445,6 @@ describe('SessionItem context menu press suppression', () => {
     it('opens the rename prompt after the native context menu close turn', async () => {
         vi.useFakeTimers();
         modalPromptSpy.mockResolvedValueOnce('Renamed Session');
-
-        const { SessionItem } = await import('./SessionItem');
 
         const session = createSessionFixture({
             id: 'sess_rename',

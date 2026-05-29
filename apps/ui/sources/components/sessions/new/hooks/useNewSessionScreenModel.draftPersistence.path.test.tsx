@@ -72,6 +72,7 @@ describe('useNewSessionScreenModel (draft hydration — path)', () => {
         expect(typeof element.type).toBe('function');
         expect((element.type as { name?: string }).name).toBe('NewSessionPathSelectionContent');
         expect((element.props as { onCommit?: unknown }).onCommit).toBeInstanceOf(Function);
+        expect((element.props as { initialSuggestionMode?: unknown }).initialSuggestionMode).toBe('history');
         expect((element.props as { onSubmitSelectedPath?: unknown }).onSubmitSelectedPath).toBeUndefined();
     });
 

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -139,6 +139,7 @@ function mountHook(props: HookProps) {
 
 describe('useFilesScmOperations integration', () => {
     beforeEach(() => {
+        vi.useRealTimers();
         storage.setState(initialStorageState, true);
         projectManager.clear();
         storage.getState().applySettingsLocal({ scmGitRepoPreferredBackend: 'git' } as any);
@@ -167,6 +168,10 @@ describe('useFilesScmOperations integration', () => {
 	        modalPrompt.mockResolvedValue('feat: hook integration commit');
 	        showScmCommitMessageEditorModal.mockResolvedValue('feat: hook integration commit');
 	    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
 
     it('creates a commit then pushes successfully against a real remote', async () => {
         const remote = mkdtempSync(join(tmpdir(), 'happier-ui-hook-remote-'));
@@ -822,6 +827,79 @@ describe('useFilesScmOperations integration', () => {
         expect(operationLog.some((entry) => entry.operation === 'fetch' && entry.status === 'success')).toBe(true);
 
         await hook.unmount();
+    });
+
+    it('releases the remote operation lock when the post-fetch refresh stalls', async () => {
+        const remote = mkdtempSync(join(tmpdir(), 'happier-ui-hook-fetch-stalled-refresh-remote-'));
+        initBareRemote(remote);
+
+        const workspace = mkdtempSync(join(tmpdir(), 'happier-ui-hook-fetch-stalled-refresh-workspace-'));
+        initRepo(workspace);
+        writeFileSync(join(workspace, 'a.txt'), 'base\n');
+        git(workspace, ['add', 'a.txt']);
+        git(workspace, ['commit', '-m', 'base']);
+        git(workspace, ['remote', 'add', 'origin', remote]);
+        const branch = git(workspace, ['rev-parse', '--abbrev-ref', 'HEAD']);
+        git(workspace, ['push', '-u', 'origin', branch]);
+
+        const other = mkdtempSync(join(tmpdir(), 'happier-ui-hook-fetch-stalled-refresh-other-'));
+        git(other, ['clone', remote, '.']);
+        git(other, ['config', 'user.email', 'other@example.com']);
+        git(other, ['config', 'user.name', 'Other User']);
+        writeFileSync(join(other, 'remote.txt'), 'remote\n');
+        git(other, ['add', 'remote.txt']);
+        git(other, ['commit', '-m', 'remote update']);
+        git(other, ['push', 'origin', branch]);
+
+        const sessionId = 'session-hook-stalled-refresh';
+        storage.getState().applySessions([createSession(sessionId, workspace) as any]);
+        mockSessionRPC.mockImplementation(createGitSessionRpcHarness(workspace));
+
+        const snapshotResponse = await sessionScmStatusSnapshot(sessionId, {});
+        expect(snapshotResponse.success).toBe(true);
+        if (!snapshotResponse.success || !snapshotResponse.snapshot) {
+            throw new Error('expected git snapshot');
+        }
+
+        const refreshScmData = vi.fn(() => new Promise<void>(() => {}));
+        const loadCommitHistory = vi.fn(async () => {});
+
+        const hook = await mountHook({
+            sessionId,
+            sessionPath: workspace,
+            scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
+            scmWriteEnabled: true,
+            scmCommitStrategy: 'git_staging',
+            scmRemoteConfirmPolicy: 'always',
+            scmPushRejectPolicy: 'prompt_fetch',
+            refreshScmData,
+            loadCommitHistory,
+        });
+
+        vi.useFakeTimers();
+
+        let settled = false;
+        let operationPromise: Promise<void>;
+        await act(async () => {
+            operationPromise = hook.getCurrent().runRemoteOperation('fetch').finally(() => {
+                settled = true;
+            });
+            await Promise.resolve();
+        });
+
+        expect(hook.getCurrent().scmOperationBusy).toBe(true);
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(10_000);
+            await Promise.resolve();
+        });
+
+        expect(settled).toBe(true);
+        expect(hook.getCurrent().scmOperationBusy).toBe(false);
+        expect(storage.getState().getSessionProjectScmInFlightOperation(sessionId)).toBeNull();
+
+        await hook.unmount();
+        await operationPromise!;
     });
 
     it('offers fetch after non-fast-forward push rejection', async () => {

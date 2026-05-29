@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ScrollView, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
@@ -96,6 +96,15 @@ function areSetsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
     return true;
 }
 
+function hasReviewCommentDrafts(props: FileContentPanelProps): boolean {
+    return (props.reviewCommentDrafts?.length ?? 0) > 0;
+}
+
+function reviewCommentCallbacksAffectRenderedOutput(props: FileContentPanelProps): boolean {
+    return props.reviewCommentsEnabled === true
+        && (props.reviewCommentModeActive === true || hasReviewCommentDrafts(props));
+}
+
 export function areFileContentPanelPropsEqual(
     previous: FileContentPanelProps,
     next: FileContentPanelProps,
@@ -113,6 +122,21 @@ export function areFileContentPanelPropsEqual(
         if (key === 'selectedLineKeys') {
             if (!areSetsEqual(previous.selectedLineKeys, next.selectedLineKeys)) return false;
             continue;
+        }
+        if (key === 'reviewCommentDrafts') {
+            if (!hasReviewCommentDrafts(previous) && !hasReviewCommentDrafts(next)) continue;
+        }
+        if (
+            key === 'onUpsertReviewCommentDraft'
+            || key === 'onDeleteReviewCommentDraft'
+            || key === 'onReviewCommentError'
+        ) {
+            if (
+                !reviewCommentCallbacksAffectRenderedOutput(previous)
+                && !reviewCommentCallbacksAffectRenderedOutput(next)
+            ) {
+                continue;
+            }
         }
         if (!Object.is(previous[key], next[key])) return false;
     }
@@ -162,9 +186,26 @@ function FileContentPanelInner({
         ? MARKDOWN_PREVIEW_WIDE_BOTTOM_PADDING
         : MARKDOWN_PREVIEW_COMPACT_PADDING;
 
+    const commentSource: ReviewCommentSource = displayMode === 'diff' ? 'diff' : 'file';
+    const draftsForThisView = React.useMemo(() => {
+        return filterReviewCommentDraftsForFile({
+            enabled: reviewCommentsEnabled === true,
+            filePath,
+            source: commentSource,
+            drafts: reviewCommentDrafts ?? [],
+        });
+    }, [commentSource, filePath, reviewCommentDrafts, reviewCommentsEnabled]);
+    const reviewCommentControlsEnabled = reviewCommentsEnabled === true
+        && (reviewCommentModeActive === true || draftsForThisView.length > 0);
+
     const needsDiffCodeLines = displayMode === 'diff'
         && typeof diffContent === 'string'
-        && (lineSelectionEnabled === true || selectedLineKeys.size > 0 || reviewCommentsEnabled === true || Boolean(jumpToAnchor));
+        && (
+            lineSelectionEnabled === true
+            || selectedLineKeys.size > 0
+            || reviewCommentControlsEnabled
+            || Boolean(jumpToAnchor)
+        );
 
     const lines = React.useMemo(() => {
         if (displayMode === 'diff' && typeof diffContent === 'string') {
@@ -181,18 +222,8 @@ function FileContentPanelInner({
         return [];
     }, [diffContent, displayMode, fileContent, intraLineDiff, needsDiffCodeLines]);
 
-    const commentSource: ReviewCommentSource = displayMode === 'diff' ? 'diff' : 'file';
-    const draftsForThisView = React.useMemo(() => {
-        return filterReviewCommentDraftsForFile({
-            enabled: reviewCommentsEnabled === true,
-            filePath,
-            source: commentSource,
-            drafts: reviewCommentDrafts ?? [],
-        });
-    }, [commentSource, filePath, reviewCommentDrafts, reviewCommentsEnabled]);
-
     const reviewCommentControls = useCodeLinesReviewComments({
-        enabled: Boolean(reviewCommentsEnabled),
+        enabled: reviewCommentControlsEnabled,
         filePath,
         source: commentSource,
         lines,
@@ -489,6 +520,7 @@ function FileContentPanelInner({
 
     const { lineThreshold, byteThreshold } = useInlineDiffVirtualizationThresholds();
     const virtualized = React.useMemo(() => {
+        if (Platform.OS !== 'web' && displayMode === 'file') return true;
         if (reviewCommentsEnabled !== true) return true;
         if (displayMode === 'diff') {
             return resolveInlineDiffVirtualization({
@@ -508,40 +540,57 @@ function FileContentPanelInner({
         }
         return false;
     }, [byteThreshold, diffContent, displayMode, fileContent, lineThreshold, reviewCommentsEnabled]);
+    const effectiveDiffVirtualized = displayMode === 'diff'
+        ? (jumpTarget.scrollToLineId ? false : virtualized)
+        : virtualized;
+    const diffViewer = displayMode === 'diff' && typeof diffContent === 'string'
+        ? (
+            <DiffViewer
+                mode="unified"
+                filePath={filePath}
+                unifiedDiff={diffContent}
+                selectedLineIds={selectedLineIds}
+                onPressLine={effectivePressLine}
+                onPressLineRange={effectivePressLineRangeHandler}
+                pressLineWhenNotSelectable={effectivePressLineWhenNotSelectable}
+                onPressAddComment={effectivePressAddComment}
+                isCommentActive={reviewCommentControls?.isCommentActive}
+                renderAfterLine={reviewCommentControls?.renderAfterLine}
+                contentPaddingHorizontal={16}
+                contentPaddingVertical={16}
+                virtualized={effectiveDiffVirtualized}
+                scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
+                highlightLineId={jumpTarget.scrollToLineId ?? undefined}
+                highlightLineIds={jumpTarget.highlightLineIds}
+                wrapLines={effectiveWrapLines}
+                showLineNumbers={effectiveShowLineNumbers}
+                showPrefix={effectiveShowPrefix}
+                testID={effectiveDiffVirtualized ? scrollTestID : undefined}
+                onLayout={effectiveDiffVirtualized ? onLayout : undefined}
+                onContentSizeChange={effectiveDiffVirtualized ? onContentSizeChange : undefined}
+                onScroll={effectiveDiffVirtualized ? onScroll : undefined}
+                scrollEventThrottle={effectiveDiffVirtualized ? 16 : undefined}
+            />
+        )
+        : null;
 
     return (
         <View style={{ flex: 1 }}>
             {displayMode === 'diff' && typeof diffContent === 'string' ? (
-                <ScrollView
-                    style={{ flex: 1, minHeight: 0 }}
-                    testID={scrollTestID}
-                    onLayout={onLayout}
-                    onContentSizeChange={onContentSizeChange}
-                    onScroll={onScroll}
-                    scrollEventThrottle={16}
-                >
-                    <DiffViewer
-                        mode="unified"
-                        filePath={filePath}
-                        unifiedDiff={diffContent}
-                        selectedLineIds={selectedLineIds}
-                        onPressLine={effectivePressLine}
-                        onPressLineRange={effectivePressLineRangeHandler}
-                        pressLineWhenNotSelectable={effectivePressLineWhenNotSelectable}
-                        onPressAddComment={effectivePressAddComment}
-                        isCommentActive={reviewCommentControls?.isCommentActive}
-                        renderAfterLine={reviewCommentControls?.renderAfterLine}
-                        contentPaddingHorizontal={16}
-                        contentPaddingVertical={16}
-                        virtualized={jumpTarget.scrollToLineId ? false : virtualized}
-                        scrollToLineId={jumpTarget.scrollToLineId ?? undefined}
-                        highlightLineId={jumpTarget.scrollToLineId ?? undefined}
-                        highlightLineIds={jumpTarget.highlightLineIds}
-                        wrapLines={effectiveWrapLines}
-                        showLineNumbers={effectiveShowLineNumbers}
-                        showPrefix={effectiveShowPrefix}
-                    />
-                </ScrollView>
+                effectiveDiffVirtualized ? (
+                    diffViewer
+                ) : (
+                    <ScrollView
+                        style={{ flex: 1, minHeight: 0 }}
+                        testID={scrollTestID}
+                        onLayout={onLayout}
+                        onContentSizeChange={onContentSizeChange}
+                        onScroll={onScroll}
+                        scrollEventThrottle={16}
+                    >
+                        {diffViewer}
+                    </ScrollView>
+                )
             ) : displayMode === 'markdown' && typeof fileContent === 'string' ? (
                 fileContent.length > 0 ? (
                     <ScrollView

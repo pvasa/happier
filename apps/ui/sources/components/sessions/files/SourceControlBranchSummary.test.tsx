@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 import { installSessionFilesCommonModuleMocks } from './sessionFilesTestHelpers';
 
@@ -34,6 +35,8 @@ vi.mock('@/components/sessions/sourceControl/branches/SourceControlBranchMenu', 
     SourceControlBranchMenu: (props: any) => React.createElement('SourceControlBranchMenu', props),
 }));
 
+const branchSummaryTheme = createThemeFixture();
+
 describe('SourceControlBranchSummary', () => {
     it('skips rendering counters when parent rerenders with unchanged summary props', async () => {
         const { SourceControlBranchSummary } = await import('./SourceControlBranchSummary');
@@ -51,17 +54,7 @@ describe('SourceControlBranchSummary', () => {
 
         function Wrapper(props: Readonly<{ tick: number }>) {
             void props.tick;
-            const theme = {
-                colors: {
-                    divider: '#000',
-                    input: { background: '#111' },
-                    surface: '#111',
-                    surfaceHigh: '#222',
-                    text: '#fff',
-                    textSecondary: '#aaa',
-                },
-            };
-            return <SourceControlBranchSummary theme={theme} scmStatusFiles={scmStatusFiles} variant="rail" />;
+            return <SourceControlBranchSummary theme={branchSummaryTheme} scmStatusFiles={scmStatusFiles} variant="rail" />;
         }
 
         octiconsRenderMock.mockClear();
@@ -94,17 +87,7 @@ describe('SourceControlBranchSummary', () => {
                         entries: [],
                         stashCount: 0,
                     } as any}
-                    theme={{
-                        colors: {
-                            divider: '#000',
-                            input: { background: '#111' },
-                            surface: '#111',
-                            surfaceHigh: '#222',
-                            text: '#fff',
-                            textSecondary: '#aaa',
-                            textLink: '#0af',
-                        },
-                    }}
+                    theme={branchSummaryTheme}
                     scmStatusFiles={{
                         branch: 'dev',
                         includedFiles: [],
@@ -137,17 +120,7 @@ describe('SourceControlBranchSummary', () => {
                 entries: [],
                 stashCount: 0,
             } as any}
-            theme={{
-                colors: {
-                    divider: '#000',
-                    input: { background: '#111' },
-                    surface: '#111',
-                    surfaceHigh: '#222',
-                    text: '#fff',
-                    textSecondary: '#aaa',
-                    textLink: '#0af',
-                },
-            }}
+            theme={branchSummaryTheme}
             scmStatusFiles={{
                 branch: 'dev',
                 includedFiles: [],
@@ -165,15 +138,7 @@ describe('SourceControlBranchSummary', () => {
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<SourceControlBranchSummary
-                    theme={{
-                        colors: {
-                            divider: '#000',
-                            input: { background: '#111' },
-                            surfaceHigh: '#222',
-                            text: '#fff',
-                            textSecondary: '#aaa',
-                        },
-                    }}
+                    theme={branchSummaryTheme}
                     scmStatusFiles={{
                         branch: 'main',
                         includedFiles: [],
@@ -194,15 +159,7 @@ describe('SourceControlBranchSummary', () => {
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<SourceControlBranchSummary
-                    theme={{
-                        colors: {
-                            divider: '#000',
-                            input: { background: '#111' },
-                            surfaceHigh: '#222',
-                            text: '#fff',
-                            textSecondary: '#aaa',
-                        },
-                    }}
+                    theme={branchSummaryTheme}
                     scmStatusFiles={{
                         branch: 'feature/refactor',
                         upstream: 'origin/feature/refactor',
@@ -236,15 +193,7 @@ describe('SourceControlBranchSummary', () => {
 
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<SourceControlBranchSummary
-                    theme={{
-                        colors: {
-                            divider: '#000',
-                            input: { background: '#111' },
-                            surfaceHigh: '#222',
-                            text: '#fff',
-                            textSecondary: '#aaa',
-                        },
-                    }}
+                    theme={branchSummaryTheme}
                     scmStatusFiles={{
                         branch: 'main',
                         changeSetModel: 'working-copy',

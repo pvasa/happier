@@ -122,19 +122,6 @@ export function buildDirectBrowseCandidateSubtitle(
     );
 }
 
-export function buildDirectBrowseCandidateSearchValue(candidate: DirectBrowseCandidate): string {
-    const path = readDirectBrowseCandidatePath(candidate.details);
-
-    return [
-        buildDirectBrowseCandidateDisplayTitle(candidate),
-        typeof candidate.title === 'string' ? candidate.title : '',
-        candidate.remoteSessionId,
-        path ?? '',
-    ]
-        .join('\n')
-        .toLowerCase();
-}
-
 export function buildDirectBrowseCandidateRightElement(
     candidate: DirectBrowseCandidate,
     theme: AppTheme,

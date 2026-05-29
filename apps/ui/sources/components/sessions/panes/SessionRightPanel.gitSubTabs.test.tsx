@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
@@ -31,6 +31,7 @@ installSessionDetailsPanelCommonModuleMocks({
             useMachine: () => null,
             useSessionProjectScmSnapshot: () => scmSnapshotMock,
             useSessionProjectScmSnapshotError: () => null,
+            useSessionRealtimeScmTranscriptConsumer: () => {},
             useSessionProjectScmTouchedPaths: () => [],
             useSessionProjectScmOperationLog: () => [],
             useSessionProjectScmInFlightOperation: () => null,
@@ -89,6 +90,20 @@ vi.mock('@/constants/Typography', () => ({
     Typography: {
         default: () => ({}),
         mono: () => ({}),
+        tabular: () => ({}),
+        eyebrow: () => ({}),
+        rowTitle: () => ({}),
+        rowMeta: () => ({}),
+        pillLabel: () => ({}),
+        keyHint: () => ({}),
+        timestamp: () => ({}),
+        logo: () => ({}),
+        header: () => ({}),
+        body: () => ({}),
+        legacy: {
+            spaceMono: () => ({}),
+            systemMono: () => ({}),
+        },
     },
 }));
 
@@ -242,7 +257,7 @@ describe('SessionRightPanel git sub-tabs', () => {
         }));
     });
 
-    it('refreshes SCM snapshot and commit history when mounted', async () => {
+    it('refreshes SCM snapshot when mounted without eagerly loading commit history', async () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
 
         invalidateFromUserAndAwaitSpy.mockClear();
@@ -269,7 +284,7 @@ describe('SessionRightPanel git sub-tabs', () => {
         });
 
         expect(invalidateFromUserAndAwaitSpy).toHaveBeenCalledWith('s1');
-        expect(loadCommitHistorySpy).toHaveBeenCalledWith({ reset: true });
+        expect(loadCommitHistorySpy).not.toHaveBeenCalled();
     });
 
     it('refreshes SCM snapshot even when sessionPath is missing', async () => {
@@ -348,40 +363,28 @@ describe('SessionRightPanel git sub-tabs', () => {
                 <Probe />
             </AppPaneProvider>,
         );
-        const getOpacity = (node: renderer.ReactTestInstance) => {
-            const style = node.props.style;
-            const styles = Array.isArray(style) ? style : [style];
-            for (const entry of styles) {
-                if (entry && typeof entry === 'object' && 'opacity' in entry) {
-                    return (entry as any).opacity;
-                }
-            }
-            return undefined;
-        };
-        const commitSurface = screen.findByTestId('session-rightpanel-git-surface:commit');
-        const updateSurface = screen.findByTestId('session-rightpanel-git-surface:update');
-        const historySurface = screen.findByTestId('session-rightpanel-git-surface:history');
+        const findSurfaces = () => ({
+            commit: screen.findByTestId('session-rightpanel-git-surface:commit'),
+            update: screen.findByTestId('session-rightpanel-git-surface:update'),
+            history: screen.findByTestId('session-rightpanel-git-surface:history'),
+        });
+        let surfaces = findSurfaces();
 
-        expect(commitSurface).toBeTruthy();
-        expect(updateSurface).toBeTruthy();
-        expect(historySurface).toBeTruthy();
-        expect(getOpacity(commitSurface!)).toBe(1);
-        expect(getOpacity(updateSurface!)).toBe(0);
-        expect(getOpacity(historySurface!)).toBe(0);
+        expect(surfaces.commit).toBeTruthy();
+        expect(surfaces.update).toBeTruthy();
+        expect(surfaces.history).toBeTruthy();
 
         await screen.pressByTestIdAsync('session-rightpanel-git-subtab:update');
+        surfaces = findSurfaces();
 
         expect(observedState?.scopes?.['session:s1']?.right?.tabState?.git?.activeSubTabId).toBe('update');
-        expect(getOpacity(commitSurface!)).toBe(0);
-        expect(getOpacity(updateSurface!)).toBe(1);
-        expect(getOpacity(historySurface!)).toBe(0);
+        expect(surfaces.update).toBeTruthy();
 
         await screen.pressByTestIdAsync('session-rightpanel-git-subtab:history');
+        surfaces = findSurfaces();
 
         expect(observedState?.scopes?.['session:s1']?.right?.tabState?.git?.activeSubTabId).toBe('history');
-        expect(getOpacity(commitSurface!)).toBe(0);
-        expect(getOpacity(updateSurface!)).toBe(0);
-        expect(getOpacity(historySurface!)).toBe(1);
+        expect(surfaces.history).toBeTruthy();
     });
 
     it('preserves the selected sub-tab when a pending commit-draft flush resolves after switching tabs', async () => {

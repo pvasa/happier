@@ -25,6 +25,7 @@ type SpawnPayloadCapture = {
     permissionMode?: string;
     permissionModeUpdatedAt?: number;
     connectedServices?: unknown;
+    connectedServicesUpdatedAt?: number;
     mcpSelection?: unknown;
     resume?: string;
     transcriptStorage?: 'persisted' | 'direct';
@@ -706,6 +707,9 @@ describe('useCreateNewSession permission seeding', () => {
                 anthropic: { source: 'connected', profileId: 'work' },
             },
         });
+        expect(typeof captured.value?.connectedServicesUpdatedAt).toBe('number');
+        expect(Number.isFinite(captured.value?.connectedServicesUpdatedAt)).toBe(true);
+        expect(captured.value?.connectedServicesUpdatedAt).toBe(captured.value?.permissionModeUpdatedAt);
     });
 
     it('passes mcpSelection into machineSpawnNewSession when provided', async () => {
@@ -1106,18 +1110,15 @@ describe('useCreateNewSession permission seeding', () => {
         });
 
         expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'follow-up failed');
-        expect(saveSessionDraftsSpy).toHaveBeenCalledWith({ sess_target: 'Ship the scoped follow-up fix' });
+        expect(saveSessionDraftsSpy).not.toHaveBeenCalled();
         expect(updateSessionDraftSpy).not.toHaveBeenCalled();
         expect(disableDraftPersistence).not.toHaveBeenCalled();
         expect(clearNewSessionDraftSpy).not.toHaveBeenCalled();
-        expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledWith('sess_target', {
-            forceRefresh: true,
-            serverId: 'server-b',
-        });
+        expect(ensureSessionVisibleForMessageRouteSpy).not.toHaveBeenCalled();
         expect(routerReplace).not.toHaveBeenCalled();
     });
 
-    it('clears and disables the /new draft before opening a hydrated created session when post-spawn follow-up fails', async () => {
+    it('keeps the /new draft active instead of opening a hydrated created session when post-spawn follow-up fails', async () => {
         const {
             useCreateNewSession,
             modalAlertSpy,
@@ -1189,14 +1190,14 @@ describe('useCreateNewSession permission seeding', () => {
         });
 
         expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'follow-up failed');
-        expect(saveSessionDraftsSpy).toHaveBeenCalledWith({ sess_target: 'Ship the scoped follow-up fix' });
-        expect(updateSessionDraftSpy).toHaveBeenCalledWith('sess_target', 'Ship the scoped follow-up fix');
-        expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
-        expect(clearNewSessionDraftSpy).toHaveBeenCalledTimes(1);
-        expect(routerReplace).toHaveBeenCalledWith('/session/sess_target?serverId=server-b', expect.anything());
+        expect(saveSessionDraftsSpy).not.toHaveBeenCalled();
+        expect(updateSessionDraftSpy).not.toHaveBeenCalled();
+        expect(disableDraftPersistence).not.toHaveBeenCalled();
+        expect(clearNewSessionDraftSpy).not.toHaveBeenCalled();
+        expect(routerReplace).not.toHaveBeenCalled();
     });
 
-    it('encodes the created session route when post-spawn follow-up fails after hydration', async () => {
+    it('does not encode a created session route when post-spawn follow-up fails after hydration', async () => {
         const {
             useCreateNewSession,
             modalAlertSpy,
@@ -1268,11 +1269,11 @@ describe('useCreateNewSession permission seeding', () => {
         });
 
         expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'follow-up failed');
-        expect(saveSessionDraftsSpy).toHaveBeenCalledWith({ 'sess/target': 'Ship the scoped follow-up fix' });
-        expect(updateSessionDraftSpy).toHaveBeenCalledWith('sess/target', 'Ship the scoped follow-up fix');
-        expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
-        expect(clearNewSessionDraftSpy).toHaveBeenCalledTimes(1);
-        expect(routerReplace).toHaveBeenCalledWith('/session/sess%2Ftarget?serverId=server-b', expect.anything());
+        expect(saveSessionDraftsSpy).not.toHaveBeenCalled();
+        expect(updateSessionDraftSpy).not.toHaveBeenCalled();
+        expect(disableDraftPersistence).not.toHaveBeenCalled();
+        expect(clearNewSessionDraftSpy).not.toHaveBeenCalled();
+        expect(routerReplace).not.toHaveBeenCalled();
     });
 
     it('creates an automation instead of spawning immediately when automation mode is enabled', async () => {

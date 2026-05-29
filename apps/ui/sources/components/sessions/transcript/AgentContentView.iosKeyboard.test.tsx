@@ -13,6 +13,10 @@ const scaffoldHarness = createMockComposerKeyboardScaffoldHarness();
 const bottomChromeMetricsState = vi.hoisted(() => ({
     height: 0,
 }));
+const safeAreaMetricsState = vi.hoisted(() => ({
+    bottom: 0,
+    top: 0,
+}));
 
 installTranscriptCommonModuleMocks({
     reactNative: async () => {
@@ -38,7 +42,12 @@ vi.mock('@/utils/platform/responsive', () => ({
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
-    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+    useSafeAreaInsets: () => ({
+        top: safeAreaMetricsState.top,
+        bottom: safeAreaMetricsState.bottom,
+        left: 0,
+        right: 0,
+    }),
 }));
 
 vi.mock('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry', () => ({
@@ -60,6 +69,8 @@ describe('AgentContentView (iOS keyboard)', () => {
     it('uses the composer keyboard scaffold instead of whole-container keyboard avoidance on iOS', async () => {
         scaffoldHarness.clear();
         bottomChromeMetricsState.height = 80;
+        safeAreaMetricsState.bottom = 0;
+        safeAreaMetricsState.top = 0;
         const { AgentContentView } = await import('./AgentContentView.native');
 
         const { tree } = await renderScreen(
@@ -78,6 +89,26 @@ describe('AgentContentView (iOS keyboard)', () => {
         expect(scaffoldRender?.props.mode).toBe('session');
         expect(scaffoldRender?.props.contentTestID).toBe('agent-content-scroll-region');
         expect(scaffoldRender?.props.composerTestID).toBe('agent-content-input-footer');
+        expect(scaffoldRender?.props.layoutBottomInset).toBe(80);
+    });
+
+    it('uses the full bottom chrome height for the session scaffold inset even when safe area is injected separately', async () => {
+        scaffoldHarness.clear();
+        bottomChromeMetricsState.height = 80;
+        safeAreaMetricsState.bottom = 8;
+        safeAreaMetricsState.top = 0;
+        const { AgentContentView } = await import('./AgentContentView.native');
+
+        await renderScreen(
+            <AgentContentView
+                content={<React.Fragment>content</React.Fragment>}
+                input={<React.Fragment>input</React.Fragment>}
+                safeAreaBottom={0}
+            />,
+        );
+
+        const scaffoldRender = scaffoldHarness.getLastRender();
+        expect(scaffoldRender?.props.safeAreaBottom).toBe(0);
         expect(scaffoldRender?.props.layoutBottomInset).toBe(80);
     });
 });

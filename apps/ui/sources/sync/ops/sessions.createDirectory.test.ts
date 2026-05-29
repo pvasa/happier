@@ -79,15 +79,50 @@ vi.mock('../runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSes
     resolvePreferredServerIdForSessionId: () => 'server-1',
 }));
 
-vi.mock('../domains/state/storage', () => ({
-    storage: {
-        getState: () => getStateSpy(),
-    },
-}));
+vi.mock('@/sync/domains/state/storage', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    const readSnapshot = () => getStateSpy();
+    const storage = Object.assign(
+        ((selector?: (value: ReturnType<typeof readSnapshot>) => unknown) => {
+            const snapshot = readSnapshot();
+            return typeof selector === 'function' ? selector(snapshot) : snapshot;
+        }),
+        {
+            getState: readSnapshot,
+            getInitialState: readSnapshot,
+            setState: () => undefined,
+            subscribe: () => () => undefined,
+            destroy: () => undefined,
+        },
+    );
+    return createStorageModuleStub({ storage });
+});
 
 function resetPolicyFlags() {
     enforcePolicyConsultedBeforeMachineRpc = false;
     policyConsulted = false;
+}
+
+function setActiveSessionMachineState(overrides?: Readonly<{ active?: boolean }>) {
+    const active = overrides?.active ?? true;
+    getStateSpy.mockReturnValue({
+        sessions: {
+            s1: {
+                active,
+                metadata: {
+                    path: '~/repo',
+                    machineId: 'm1',
+                },
+            },
+        },
+        machines: {
+            m1: {
+                id: 'm1',
+                active: true,
+                metadata: {},
+            },
+        },
+    });
 }
 
 describe('sessionCreateDirectory', () => {
@@ -96,16 +131,7 @@ describe('sessionCreateDirectory', () => {
         resetPolicyFlags();
         enforcePolicyConsultedBeforeMachineRpc = true;
 
-        getStateSpy.mockReturnValue({
-            sessions: {
-                s1: {
-                    metadata: {
-                        path: '~/repo',
-                        machineId: 'm1',
-                    },
-                },
-            },
-        });
+        setActiveSessionMachineState();
 
         sessionRPCSpy.mockClear();
         machineRPCSpy.mockClear();
@@ -123,17 +149,7 @@ describe('sessionCreateDirectory', () => {
         resetPolicyFlags();
         enforcePolicyConsultedBeforeMachineRpc = true;
 
-        getStateSpy.mockReturnValue({
-            sessions: {
-                s1: {
-                    active: false,
-                    metadata: {
-                        path: '~/repo',
-                        machineId: 'm1',
-                    },
-                },
-            },
-        });
+        setActiveSessionMachineState({ active: false });
 
         machineRPCSpy.mockRejectedValueOnce(
             createRpcCallError({ error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
@@ -153,17 +169,7 @@ describe('sessionCreateDirectory', () => {
         resetPolicyFlags();
         enforcePolicyConsultedBeforeMachineRpc = true;
 
-        getStateSpy.mockReturnValue({
-            sessions: {
-                s1: {
-                    active: false,
-                    metadata: {
-                        path: '~/repo',
-                        machineId: 'm1',
-                    },
-                },
-            },
-        });
+        setActiveSessionMachineState({ active: false });
 
         machineRPCSpy.mockResolvedValueOnce(null);
 

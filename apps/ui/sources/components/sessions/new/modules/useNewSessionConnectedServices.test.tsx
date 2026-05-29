@@ -1,7 +1,10 @@
+import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit';
+import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
+import type { ConnectedServicesDefaultAuthByAgentIdV1 } from '@happier-dev/protocol';
+import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installNewSessionModulesCommonModuleMocks } from './newSessionModulesTestHelpers';
-import type { NewSessionConnectedServicesResult } from './useNewSessionConnectedServices';
 
 (
     globalThis as typeof globalThis & {
@@ -11,7 +14,23 @@ import type { NewSessionConnectedServicesResult } from './useNewSessionConnected
 
 const modalShowMock = vi.hoisted(() => vi.fn());
 const useFeatureEnabledMock = vi.hoisted(() => vi.fn());
-const profileState = vi.hoisted(() => ({
+
+type TestConnectedServiceProfile = {
+    profileId: string;
+    status: string;
+    kind: string;
+    providerEmail?: string;
+};
+
+type TestAccountProfile = {
+    connectedServicesV2: Array<{
+        serviceId: string;
+        profiles: TestConnectedServiceProfile[];
+        groups?: unknown;
+    }>;
+};
+
+const profileState = vi.hoisted((): { current: TestAccountProfile } => ({
     current: {
         connectedServicesV2: [
             {
@@ -64,11 +83,6 @@ vi.mock('@/components/ui/rendering/normalizeNodeForView', () => ({
     normalizeNodeForView: (node: React.ReactNode) => node,
 }));
 
-vi.mock('@/components/sessions/new/components/ConnectedServicesAuthModal', () => ({
-    CONNECTED_SERVICES_BINDINGS_KEY: 'connectedServicesBindings',
-    ConnectedServicesAuthModal: 'ConnectedServicesAuthModal',
-}));
-
 vi.mock('@/components/sessions/agentInput/components/AgentInputChipLabel', () => ({
     AgentInputChipLabel: 'AgentInputChipLabel',
 }));
@@ -81,17 +95,39 @@ vi.mock('@/sync/store/hooks', () => ({
     useProfile: () => profileState.current,
 }));
 
+function requireCollapsedContentPopover(chip: AgentInputExtraActionChip | null) {
+    const popover = chip?.collapsedContentPopover;
+    if (!popover) {
+        throw new Error('Expected connected services collapsed content popover');
+    }
+    return popover;
+}
+
 describe('useNewSessionConnectedServices', () => {
     beforeEach(() => {
         modalShowMock.mockReset();
         useFeatureEnabledMock.mockReset();
         useFeatureEnabledMock.mockReturnValue(true);
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'anthropic',
+                    profiles: [
+                        {
+                            profileId: 'work',
+                            status: 'connected',
+                            kind: 'token',
+                            providerEmail: 'work@example.com',
+                        },
+                    ],
+                },
+            ],
+        };
     });
 
-    it('returns a connected-services chip with canonical control metadata and a collapsed action', async () => {
+    it('returns a connected-services chip that opens the anchored account picker popover', async () => {
         const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
 
-        const dismiss = vi.fn();
         const routerPush = vi.fn();
         const setAgentOptionStateForCurrentAgent = vi.fn();
 
@@ -107,6 +143,7 @@ describe('useNewSessionConnectedServices', () => {
                 settings: {
                     connectedServicesProfileLabelByKey: { 'anthropic:work': 'Work' },
                     connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
                 },
                 targetServerId: null,
                 router: { push: routerPush },
@@ -121,28 +158,97 @@ describe('useNewSessionConnectedServices', () => {
                 controlId: 'connectedServices',
             }),
         );
-        expect(typeof chip?.collapsedAction).toBe('function');
-        if (!chip?.collapsedAction) {
-            throw new Error('expected connectedServicesAuthChip.collapsedAction');
-        }
+        expect(chip?.collapsedAction).toBeUndefined();
+        expect(chip?.collapsedContentPopover).toEqual(expect.objectContaining({
+            title: 'connectedServices.authChip.nativeLabel',
+            label: 'connectedServices.authChip.nativeLabel',
+            scrollEnabled: false,
+            renderContent: expect.any(Function),
+        }));
 
-        const collapsedActionResult = chip.collapsedAction({
-            tint: '#000',
-            dismiss,
-            blurInput: () => {},
+        const toggleCollapsedPopover = vi.fn();
+        const renderedChip = chip!.render({
+            chipStyle: () => null,
+            iconColor: '#000',
+            showLabel: true,
+            textStyle: null,
+            countTextStyle: null,
+            chipAnchorRef: { current: null },
+            popoverAnchorRef: { current: null },
+            toggleCollapsedPopover,
+        }) as React.ReactElement<{ onPress?: () => void; testID?: string }>;
+        expect(renderedChip.props.testID).toBe('new-session-connected-services-auth-chip');
+
+        renderedChip.props.onPress?.();
+
+        expect(toggleCollapsedPopover).toHaveBeenCalledWith('new-session-connected-services-auth');
+        expect(modalShowMock).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
+
+    it('updates the chip label and reopened popover selection after choosing a connected profile', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        const routerPush = vi.fn();
+        const setAgentOptionStateForCurrentAgent = vi.fn();
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    connectedServices: {
+                        supportedServiceIds: ['anthropic'],
+                        supportedKindsByServiceId: { anthropic: ['token'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: { 'anthropic/work': 'Work' },
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+                },
+                targetServerId: null,
+                router: { push: routerPush },
+                setAgentOptionStateForCurrentAgent,
+            }),
+        );
+
+        const firstPopoverRenderer = requireCollapsedContentPopover(
+            hook.getCurrent().connectedServicesAuthChip,
+        ).renderContent;
+        if (typeof firstPopoverRenderer !== 'function') {
+            throw new Error('Expected connected services popover content renderer');
+        }
+        const firstPopover = firstPopoverRenderer({
+            requestClose: vi.fn(),
+            maxHeight: 420,
+        }) as React.ReactElement<{ setBindingForService: (serviceId: string, binding: unknown) => void }>;
+
+        await act(async () => {
+            firstPopover.props.setBindingForService('anthropic', { source: 'connected', selection: 'profile', profileId: 'work' });
         });
-        const collapsedAction = Array.isArray(collapsedActionResult)
-            ? collapsedActionResult[0]
-            : collapsedActionResult;
-        expect(collapsedAction?.id).toBe('connected-services');
-        if (!collapsedAction?.onPress) {
-            throw new Error('expected connectedServicesAuthChip.collapsedAction.onPress');
+
+        expect(setAgentOptionStateForCurrentAgent).toHaveBeenCalledWith(
+            'connectedServicesBindingsByServiceId',
+            { anthropic: { source: 'connected', selection: 'profile', profileId: 'work' } },
+        );
+        expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
+            .toBe('connectedServices.serviceNames.anthropic: Work');
+
+        const reopenedPopoverRenderer = requireCollapsedContentPopover(
+            hook.getCurrent().connectedServicesAuthChip,
+        ).renderContent;
+        if (typeof reopenedPopoverRenderer !== 'function') {
+            throw new Error('Expected connected services popover content renderer');
         }
+        const reopenedPopover = reopenedPopoverRenderer({
+            requestClose: vi.fn(),
+            maxHeight: 420,
+        }) as React.ReactElement<{ bindingsByServiceId: Record<string, unknown> }>;
 
-        collapsedAction.onPress();
+        expect(reopenedPopover.props.bindingsByServiceId).toEqual({
+            anthropic: { source: 'connected', selection: 'profile', profileId: 'work' },
+        });
 
-        expect(dismiss).toHaveBeenCalledTimes(1);
-        expect(modalShowMock).toHaveBeenCalledTimes(1);
         await hook.unmount();
     });
 
@@ -167,6 +273,7 @@ describe('useNewSessionConnectedServices', () => {
                 settings: {
                     connectedServicesProfileLabelByKey: { 'anthropic:work': 'Work' },
                     connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
                 },
                 targetServerId: 'server-123',
                 router: { push: vi.fn() },
@@ -180,6 +287,385 @@ describe('useNewSessionConnectedServices', () => {
                 controlId: 'connectedServices',
             }),
         );
+        await hook.unmount();
+    });
+
+    it('applies the per-agent default connected auth binding before the user opens the chip', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'claude',
+                    connectedServices: {
+                        supportedServiceIds: ['anthropic'],
+                        supportedKindsByServiceId: { anthropic: ['token'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: { 'anthropic/work': 'Work' },
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: {
+                        v: 1,
+                        bindingsByAgentId: {
+                            claude: {
+                                v: 1,
+                                bindingsByServiceId: {
+                                    anthropic: { source: 'connected', selection: 'profile', profileId: 'work' },
+                                },
+                            },
+                        },
+                    },
+                },
+                targetServerId: null,
+                router: { push: vi.fn() },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        expect(hook.getCurrent().connectedServicesBindingsPayload).toEqual({
+            v: 1,
+            bindingsByServiceId: {
+                anthropic: { source: 'connected', selection: 'profile', profileId: 'work' },
+            },
+        });
+        expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
+            .toBe('connectedServices.serviceNames.anthropic: Work');
+
+        await hook.unmount();
+    });
+
+    it('falls back to native auth when persisted per-agent default auth settings are malformed', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+        const malformedDefaultAuthSettings = { v: 1 };
+        Object.defineProperty(malformedDefaultAuthSettings, 'bindingsByAgentId', {
+            enumerable: true,
+            get: () => {
+                throw new Error('corrupt default auth settings');
+            },
+        });
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'claude',
+                    connectedServices: {
+                        supportedServiceIds: ['anthropic'],
+                        supportedKindsByServiceId: { anthropic: ['token'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: { 'anthropic/work': 'Work' },
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: malformedDefaultAuthSettings as unknown as ConnectedServicesDefaultAuthByAgentIdV1,
+                },
+                targetServerId: null,
+                router: { push: vi.fn() },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        expect(hook.getCurrent().connectedServicesBindingsPayload).toBeNull();
+        expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
+            .toBe('connectedServices.authChip.nativeLabel');
+
+        await hook.unmount();
+    });
+
+    it('preserves a per-agent default group binding when the active profile changes', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [
+                        {
+                            profileId: 'fresh-profile',
+                            status: 'connected',
+                            kind: 'oauth',
+                            providerEmail: 'fresh@example.com',
+                        },
+                    ],
+                    groups: [{
+                        groupId: 'primary',
+                        displayName: 'Primary pool',
+                        activeProfileId: 'fresh-profile',
+                        memberProfileIds: ['fresh-profile'],
+                    }],
+                },
+            ],
+        };
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'codex',
+                    connectedServices: {
+                        supportedServiceIds: ['openai-codex'],
+                        supportedKindsByServiceId: { 'openai-codex': ['oauth'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: {},
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: {
+                        v: 1,
+                        bindingsByAgentId: {
+                            codex: {
+                                v: 1,
+                                bindingsByServiceId: {
+                                    'openai-codex': {
+                                        source: 'connected',
+                                        selection: 'group',
+                                        groupId: 'primary',
+                                        profileId: 'stale-profile',
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                targetServerId: null,
+                router: { push: vi.fn() },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        expect(hook.getCurrent().connectedServicesBindingsPayload).toEqual({
+            v: 1,
+            bindingsByServiceId: {
+                'openai-codex': {
+                    source: 'connected',
+                    selection: 'group',
+                    groupId: 'primary',
+                },
+            },
+        });
+        expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
+            .toBe('connectedServices.serviceNames.openaiCodex: Primary pool');
+
+        await hook.unmount();
+    });
+
+    it('degrades a stale default group binding to native with a warning in the popover path', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [
+                        {
+                            profileId: 'work',
+                            status: 'connected',
+                            kind: 'oauth',
+                            providerEmail: 'work@example.com',
+                        },
+                    ],
+                    groups: [],
+                },
+            ],
+        };
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'codex',
+                    connectedServices: {
+                        supportedServiceIds: ['openai-codex'],
+                        supportedKindsByServiceId: { 'openai-codex': ['oauth'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: {},
+                    connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
+                    connectedServicesDefaultAuthByAgentIdV1: {
+                        v: 1,
+                        bindingsByAgentId: {
+                            codex: {
+                                v: 1,
+                                bindingsByServiceId: {
+                                    'openai-codex': {
+                                        source: 'connected',
+                                        selection: 'group',
+                                        groupId: 'missing-group',
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                targetServerId: null,
+                router: { push: vi.fn() },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        expect(hook.getCurrent().connectedServicesBindingsPayload).toBeNull();
+        expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
+            .toBe('connectedServices.authChip.nativeLabel');
+
+        const popoverRenderer = requireCollapsedContentPopover(
+            hook.getCurrent().connectedServicesAuthChip,
+        ).renderContent;
+        if (typeof popoverRenderer !== 'function') {
+            throw new Error('Expected connected services popover content renderer');
+        }
+        const popover = popoverRenderer({
+            requestClose: vi.fn(),
+            maxHeight: 420,
+        }) as React.ReactElement<{
+            resolveOptionAvailability?: (params: { serviceId: string; optionId: string }) => { subtitle?: string };
+        }>;
+
+        expect(popover.props.resolveOptionAvailability?.({
+            serviceId: 'openai-codex',
+            optionId: 'connected-service:openai-codex:native',
+        })).toEqual({
+            subtitle: 'connectedServices.defaultAuth.warning.connected_group_unavailable',
+        });
+
+        await hook.unmount();
+    });
+
+    it('routes oauth profiles that need reauth from the new-session popover to the reconnect flow', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [
+                        {
+                            profileId: 'happier',
+                            status: 'needs_reauth',
+                            kind: 'oauth',
+                            providerEmail: 'happier@example.com',
+                        },
+                    ],
+                    groups: [],
+                },
+            ],
+        };
+        const requestClose = vi.fn();
+        const routerPush = vi.fn();
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'codex',
+                    connectedServices: {
+                        supportedServiceIds: ['openai-codex'],
+                        supportedKindsByServiceId: { 'openai-codex': ['oauth'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: {},
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+                },
+                targetServerId: null,
+                router: { push: routerPush },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        const popoverRenderer = requireCollapsedContentPopover(
+            hook.getCurrent().connectedServicesAuthChip,
+        ).renderContent;
+        if (typeof popoverRenderer !== 'function') {
+            throw new Error('Expected connected services popover content renderer');
+        }
+        const popover = popoverRenderer({
+            requestClose,
+            maxHeight: 420,
+        }) as React.ReactElement<{
+            onReconnectProfile?: (serviceId: string, profileId: string) => void;
+        }>;
+
+        expect(typeof popover.props.onReconnectProfile).toBe('function');
+        act(() => {
+            popover.props.onReconnectProfile?.('openai-codex', 'happier');
+        });
+
+        expect(requestClose).not.toHaveBeenCalled();
+        expect(routerPush).toHaveBeenCalledWith('/settings/connected-services/oauth?serviceId=openai-codex&profileId=happier');
+
+        await hook.unmount();
+    });
+
+    it('routes token profiles that need reauth from the new-session popover to the profile action surface', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'claude-subscription',
+                    profiles: [
+                        {
+                            profileId: 'leeroy.brun@gmail.com',
+                            status: 'needs_reauth',
+                            kind: 'token',
+                            providerEmail: 'work@example.com',
+                        },
+                    ],
+                    groups: [],
+                },
+            ],
+        };
+        const requestClose = vi.fn();
+        const routerPush = vi.fn();
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'claude',
+                    connectedServices: {
+                        supportedServiceIds: ['claude-subscription'],
+                        supportedKindsByServiceId: { 'claude-subscription': ['token'] },
+                    },
+                },
+                agentOptionState: null,
+                settings: {
+                    connectedServicesProfileLabelByKey: {},
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+                },
+                targetServerId: null,
+                router: { push: routerPush },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        const popoverRenderer = requireCollapsedContentPopover(
+            hook.getCurrent().connectedServicesAuthChip,
+        ).renderContent;
+        if (typeof popoverRenderer !== 'function') {
+            throw new Error('Expected connected services popover content renderer');
+        }
+        const popover = popoverRenderer({
+            requestClose,
+            maxHeight: 420,
+        }) as React.ReactElement<{
+            onReconnectProfile?: (serviceId: string, profileId: string) => void;
+        }>;
+
+        expect(typeof popover.props.onReconnectProfile).toBe('function');
+        act(() => {
+            popover.props.onReconnectProfile?.('claude-subscription', 'leeroy.brun@gmail.com');
+        });
+
+        expect(requestClose).not.toHaveBeenCalled();
+        expect(routerPush).toHaveBeenCalledWith(
+            '/settings/connected-services/profile?serviceId=claude-subscription&profileId=leeroy.brun%40gmail.com',
+        );
+
         await hook.unmount();
     });
 });

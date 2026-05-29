@@ -1,21 +1,22 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { installRouteRootCommonModuleMocks } from '../../routeRootTestHelpers';
+import { installSessionRouteCommonModuleMocks } from './[id]/sessionRouteTestHelpers';
 
 
 type SearchParams = { id?: string; jumpSeq?: string };
 let searchParams: SearchParams = {};
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
 let hydrateReady = true;
+let lastMobileSurfaceBySessionId: Record<string, string> = {};
 const routerMock = createExpoRouterMock({
     params: () => searchParams,
 });
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installRouteRootCommonModuleMocks({
+installSessionRouteCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
@@ -26,6 +27,33 @@ installRouteRootCommonModuleMocks({
         });
     },
     router: async () => routerMock.module,
+    storageModule: async (importOriginal) => {
+        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleMock({
+            importOriginal,
+            overrides: {
+                useSetting: ((key: string) => {
+                    if (key === 'mobileWorkspaceExperienceV1') return 'classic';
+                    return null;
+                }) as any,
+                useSettingMutable: ((key: string) => [
+                    key === 'mobileWorkspaceExperienceV1' ? 'classic' : null,
+                    vi.fn(),
+                ]) as any,
+                useLocalSetting: ((key: string) => {
+                    if (key === 'sessionLastMobileSurfaceBySessionId') return lastMobileSurfaceBySessionId;
+                    return null;
+                }) as any,
+                getStorage: (() => ({
+                    getState: () => ({
+                        localSettings: {
+                            sessionLastMobileSurfaceBySessionId: lastMobileSurfaceBySessionId,
+                        },
+                    }),
+                })) as any,
+            },
+        });
+    },
 });
 
 vi.mock('@react-navigation/native', () => ({
@@ -37,6 +65,14 @@ vi.mock('@react-navigation/native', () => ({
 vi.mock('@/components/sessions/shell/SessionView', () => ({
     SessionView: ({ id, jumpToSeq, paneUrlState }: { id: string; jumpToSeq?: number | null; paneUrlState?: any }) =>
         React.createElement('SessionView', { id, jumpToSeq, paneUrlState }),
+}));
+
+vi.mock('@/components/workspaceCockpit/session/SessionCockpitShell', () => ({
+    SessionCockpitShell: (props: any) => React.createElement('SessionCockpitShell', props),
+}));
+
+vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
+    SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback', { testID: 'session-invalid-link' }),
 }));
 
 vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
@@ -59,6 +95,15 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     }),
 }));
 
+vi.mock('@/components/sessions/terminal/useSessionTerminalAvailability', () => ({
+    useSessionTerminalAvailability: () => ({
+        deviceType: 'desktop',
+        terminalEnabled: false,
+        dockLocation: 'sidebar',
+        sidebarTabAvailable: false,
+    }),
+}));
+
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     useHydrateSessionForRoute: (sessionId: string) => {
         if (sessionId) {
@@ -66,6 +111,19 @@ vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
         }
         return hydrateReady;
     },
+}));
+
+vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    getActiveServerSnapshot: () => ({ serverId: '', serverUrl: '', generation: 1 }),
+    subscribeActiveServer: () => () => undefined,
+}));
+
+vi.mock('@/utils/platform/responsive', () => ({
+    useDeviceType: () => 'desktop',
+}));
+
+vi.mock('@/utils/sessions/tempDataStore', () => ({
+    getTempData: () => null,
 }));
 
 async function renderSessionScreenTree() {
@@ -86,9 +144,11 @@ async function renderSessionScreen() {
 
 describe('session/[id] param parsing', () => {
     afterEach(() => {
+        standardCleanup();
         vi.resetModules();
         ensureSessionVisibleSpy.mockClear();
         hydrateReady = true;
+        lastMobileSurfaceBySessionId = {};
     });
 
     it('renders the session view using expo-router search params', async () => {

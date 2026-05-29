@@ -3,11 +3,16 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-type SessionItemProps = React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>;
+type SessionItemProps = Omit<
+    React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>,
+    'rowModel'
+> & {
+    rowModel?: React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>['rowModel'];
+};
 
 vi.mock('react-native-reanimated', () => ({}));
 installSessionShellCommonModuleMocks({
@@ -45,7 +50,6 @@ installSessionShellCommonModuleMocks({
                     connectedServicesV2: [],
                 }),
                 useSession: () => null,
-                useSessionListMeaningfulActivityAt: () => null,
             },
         });
     },
@@ -71,8 +75,14 @@ vi.mock('@/utils/sessions/sessionUtils', () => ({
 vi.mock('@/components/ui/avatar/Avatar', () => ({
     Avatar: 'Avatar',
 }));
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
+}));
 vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: 'StatusDot',
+}));
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
 }));
 vi.mock('@/hooks/session/useNavigateToSession', () => ({
     useNavigateToSession: () => vi.fn(),
@@ -119,7 +129,12 @@ describe('SessionItem pin hover affordance (web)', () => {
 
     async function renderSessionItem(props: SessionItemProps) {
         const { SessionItem } = await import('./SessionItem');
-        return renderScreen(<SessionItem {...props} />);
+        return renderScreen(
+            <SessionItem
+                {...props}
+                rowModel={props.rowModel ?? createSessionItemTestRowModel(props)}
+            />,
+        );
     }
 
     function findSessionRow(screen: Awaited<ReturnType<typeof renderSessionItem>>, sessionId: string) {

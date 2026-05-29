@@ -28,6 +28,7 @@ installSessionFilesViewCommonModuleMocks({
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
             useSessionProjectScmSnapshot: () => null,
             useSessionProjectScmSnapshotError: () => null,
+            useSessionRealtimeScmTranscriptConsumer: () => {},
             useSessionProjectScmTouchedPaths: () => [],
             useSessionProjectScmOperationLog: () => [],
             useProjectForSession: () => null,
@@ -118,6 +119,6 @@ describe('SessionScmReviewDetailsView (loading)', () => {
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />)).tree;
 
-        expect(tree!.findAllByType('ActivityIndicator')).toHaveLength(1);
+        expect(tree!.findAll((node) => node.props.accessibilityRole === 'progressbar')).toHaveLength(1);
     });
 });

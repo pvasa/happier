@@ -1,19 +1,76 @@
 import * as React from 'react';
 import { useLocalSearchParams } from 'expo-router';
+import { View } from 'react-native';
 import { SessionView } from '@/components/sessions/shell/SessionView';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SessionCockpitShell } from '@/components/workspaceCockpit/session/SessionCockpitShell';
+import { selectSessionViewShellSessionForRouteState } from '@/components/sessions/shell/sessionViewStableSession';
 import { resolveSessionMobileSurfaceIntent } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
 import { useSessionTerminalAvailability } from '@/components/sessions/terminal/useSessionTerminalAvailability';
 import { getTempData } from '@/utils/sessions/tempDataStore';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { resolveSessionRouteAuthRecoveryState } from '@/hooks/session/sessionRouteAuthRecovery';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { useLocalSetting } from '@/sync/domains/state/storage';
+import {
+    isSessionRouteHydrationAvailable,
+    isSessionRouteHydrationPending,
+} from '@/sync/domains/session/sessionRouteHydrationState';
+import {
+    getStorage,
+    readSessionLastMobileSurfaceFromMap,
+    useEndpointConnectivity,
+    useSyncError,
+} from '@/sync/domains/state/storage';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+
+type InitialMobileSurfaceHintCache = Readonly<{
+    sessionId: string;
+    serverId: string | null;
+    explicitMobileSurfaceHint: string | null;
+    persistedSurface: string | null;
+}>;
+
+function readPersistedMobileSurfaceSnapshot(sessionId: string, serverId: string | null): string | null {
+    return readSessionLastMobileSurfaceFromMap(
+        getStorage().getState().localSettings.sessionLastMobileSurfaceBySessionId,
+        {
+            sessionId,
+            explicitServerId: serverId,
+        },
+    );
+}
+
+function useInitialMobileSurfaceHint(
+    sessionId: string,
+    explicitMobileSurfaceHint: string | null,
+    serverId: string | null,
+): string | null {
+    const cacheRef = React.useRef<InitialMobileSurfaceHintCache | null>(null);
+    const cached = cacheRef.current;
+
+    if (
+        !cached
+        || cached.sessionId !== sessionId
+        || cached.serverId !== serverId
+        || cached.explicitMobileSurfaceHint !== explicitMobileSurfaceHint
+    ) {
+        cacheRef.current = {
+            sessionId,
+            serverId,
+            explicitMobileSurfaceHint,
+            persistedSurface: explicitMobileSurfaceHint ?? (
+                sessionId ? readPersistedMobileSurfaceSnapshot(sessionId, serverId) : null
+            ),
+        };
+    }
+
+    return cacheRef.current?.persistedSurface ?? null;
+}
 
 export default React.memo(() => {
     const params = useLocalSearchParams<{
@@ -28,7 +85,7 @@ export default React.memo(() => {
         sha?: string | string[];
         recoveryDataId?: string | string[];
     }>();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
+    const routeScope = useSessionRouteServerScope(params as Record<string, unknown>);
     const {
         id: sessionIdParam,
         mobileSurface: mobileSurfaceParam,
@@ -59,6 +116,11 @@ export default React.memo(() => {
         : Array.isArray(mobileSurfaceParam)
             ? (mobileSurfaceParam[0] ?? null)
             : null;
+    const initialMobileSurfaceHint = useInitialMobileSurfaceHint(
+        sessionId,
+        explicitMobileSurfaceHint,
+        routeScope.serverId ?? null,
+    );
     const recoverableAttachmentDrafts = React.useMemo(() => {
         const trimmedRecoveryDataId = recoveryDataId.trim();
         if (!trimmedRecoveryDataId) {
@@ -72,22 +134,53 @@ export default React.memo(() => {
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
-    const lastMobileSurfaceBySessionId = useLocalSetting('sessionLastMobileSurfaceBySessionId');
     const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability({
         sessionId,
         serverId: routeScope.serverId ?? null,
     });
 
-    const activeServerGeneration = useActiveServerSnapshot().generation;
+    const endpointConnectivity = useEndpointConnectivity();
+    const syncError = useSyncError();
+    const activeServerSnapshot = useActiveServerSnapshot();
+    const activeServerGeneration = activeServerSnapshot.generation;
 
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId,
         `SessionRoute.ensureSessionVisible gen=${activeServerGeneration}`,
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionCached = React.useMemo(() => {
+        const state = getStorage().getState();
+        return Boolean(selectSessionViewShellSessionForRouteState(
+            {
+                sessions: state.sessions,
+                sessionListViewDataByServerId: state.sessionListViewDataByServerId,
+            },
+            sessionId,
+            routeHydrationState.serverId ?? routeScope.serverId ?? null,
+        ));
+    }, [routeHydrationState.serverId, routeScope.serverId, sessionId]);
+    const authRecoveryState = React.useMemo(() => {
+        return resolveSessionRouteAuthRecoveryState({
+            routeParams: params as Record<string, string | string[] | undefined>,
+            activeServerId: activeServerSnapshot.serverId,
+            endpointStatus: endpointConnectivity.status,
+            syncError,
+        });
+    }, [activeServerSnapshot.serverId, endpointConnectivity.status, params, syncError]);
+    const authRecoveryActive = Boolean(authRecoveryState.authSurfaceState);
 
     if (!sessionId) {
         return <SessionInvalidLinkFallback />;
+    }
+
+    if (isSessionRouteHydrationPending(routeHydrationState) && !sessionCached && !authRecoveryActive) {
+        return (
+            <View testID="session-route-loading" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <ActivitySpinner size="small" />
+            </View>
+        );
     }
 
     if (cockpitEnabled) {
@@ -95,7 +188,7 @@ export default React.memo(() => {
             routeKind: 'index',
             activeRightTabId: pane.scopeState?.right?.activeTabId,
             detailsTargetPresent: (pane.scopeState?.details?.tabs?.length ?? 0) > 0,
-            persistedSurface: explicitMobileSurfaceHint ?? lastMobileSurfaceBySessionId?.[sessionId] ?? null,
+            persistedSurface: initialMobileSurfaceHint,
             terminalTabAvailable,
         });
 
@@ -107,9 +200,10 @@ export default React.memo(() => {
                 routeServerId={routeScope.serverId ?? undefined}
                 jumpToSeq={jumpToSeq}
                 paneUrlState={paneUrlState ?? undefined}
-                initialAttachmentDrafts={recoverableAttachmentDrafts}
-                terminalTabAvailable={terminalTabAvailable}
-            />
+            initialAttachmentDrafts={recoverableAttachmentDrafts}
+            routeHydrationState={routeHydrationState}
+            terminalTabAvailable={terminalTabAvailable}
+        />
         );
     }
 
@@ -120,6 +214,8 @@ export default React.memo(() => {
             jumpToSeq={jumpToSeq}
             paneUrlState={paneUrlState ?? undefined}
             initialAttachmentDrafts={recoverableAttachmentDrafts}
+            routeAnchorOverride={true}
+            routeHydrationState={routeHydrationState}
         />
     );
 });

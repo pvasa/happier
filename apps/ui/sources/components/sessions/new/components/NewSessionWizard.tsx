@@ -1112,6 +1112,7 @@ function NewSessionWizardComposerInput(props: NewSessionWizardComposerInputProps
             <AgentInput
                 {...agentInputProps}
                 maxPanelHeight={maxPanelHeight}
+                panelMaxHeightMode="host-constrained"
             />
             {attachmentsUploadsEnabled ? (
                 <AttachmentFilePicker ref={filePickerRef} onAttachmentsPicked={onAttachmentsPicked} multiple />

@@ -1,17 +1,35 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
 const runAfterInteractionsSpy = vi.hoisted(() => vi.fn(() => () => {}));
+type MockRouteHydrationState =
+    | Readonly<{ kind: 'available'; sessionId: string; serverId?: string }>
+    | Readonly<{ kind: 'loading'; sessionId: string; serverId?: string; reason: 'cold' }>;
+const hydrateSessionForRouteSpy = vi.hoisted(
+    () => vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }): MockRouteHydrationState => ({
+        kind: 'available',
+        sessionId,
+        serverId: options?.serverId,
+    })),
+);
 let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
 let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
 let lastMobileSurfaceBySessionId: Record<string, string> = {};
 let terminalTabAvailableForSessionId: string | null = null;
+let sessionsById: Record<string, unknown> = {};
+let endpointConnectivityStatus = 'idle';
+let syncError: { message: string; kind: 'auth' | 'config' | 'network' | 'server' | 'unknown'; serverId?: string | null } | null = null;
 const terminalAvailabilityCalls: Array<unknown> = [];
 const routeParams = vi.hoisted(() => ({
     value: { id: 'session-1' } as Record<string, string | undefined>,
+}));
+const activeServerRuntimeState = vi.hoisted(() => ({
+    snapshot: { generation: 1 },
+    listener: null as null | (() => void),
 }));
 
 installSessionRouteCommonModuleMocks({
@@ -49,6 +67,25 @@ installSessionRouteCommonModuleMocks({
                     if (key === 'sessionLastMobileSurfaceBySessionId') return lastMobileSurfaceBySessionId;
                     return null;
                 }) as any,
+                getStorage: (() => ({
+                    getState: () => ({
+                        sessions: sessionsById,
+                        sessionListViewDataByServerId: {},
+                        localSettings: {
+                            sessionLastMobileSurfaceBySessionId: lastMobileSurfaceBySessionId,
+                        },
+                    }),
+                })) as any,
+                useEndpointConnectivity: (() => ({
+                    status: endpointConnectivityStatus,
+                    reason: null,
+                    attempt: 0,
+                    nextRetryAt: null,
+                    lastConnectedAt: null,
+                    lastDisconnectedAt: null,
+                    lastErrorMessage: null,
+                })) as any,
+                useSyncError: (() => syncError) as any,
             },
         });
     },
@@ -84,8 +121,13 @@ vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
     SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback'),
 }));
 
+vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
+    ActivitySpinner: (props: Record<string, unknown>) => React.createElement('ActivitySpinner', props),
+}));
+
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: () => true,
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSessionForRouteSpy(sessionId, tag, options),
 }));
 
 vi.mock('@/utils/timing/runAfterInteractionsWithFallback', () => ({
@@ -97,8 +139,15 @@ vi.mock('@/utils/sessions/tempDataStore', () => ({
 }));
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ generation: 1 }),
-    subscribeActiveServer: () => () => {},
+    getActiveServerSnapshot: () => activeServerRuntimeState.snapshot,
+    subscribeActiveServer: (listener: () => void) => {
+        activeServerRuntimeState.listener = listener;
+        return () => {
+            if (activeServerRuntimeState.listener === listener) {
+                activeServerRuntimeState.listener = null;
+            }
+        };
+    },
 }));
 
 vi.mock('@/components/sessions/panes/url/sessionPaneUrlState', () => ({
@@ -113,12 +162,23 @@ describe('session route index', () => {
     afterEach(() => {
         standardCleanup();
         runAfterInteractionsSpy.mockClear();
+        hydrateSessionForRouteSpy.mockReset();
+        hydrateSessionForRouteSpy.mockImplementation((sessionId: string, _tag: string, options?: { serverId?: string }): MockRouteHydrationState => ({
+            kind: 'available',
+            sessionId,
+            serverId: options?.serverId,
+        }));
         deviceType = 'desktop';
         mobileWorkspaceExperience = 'classic';
         lastMobileSurfaceBySessionId = {};
         terminalTabAvailableForSessionId = null;
+        sessionsById = {};
+        endpointConnectivityStatus = 'idle';
+        syncError = null;
         terminalAvailabilityCalls.length = 0;
         routeParams.value = { id: 'session-1' };
+        activeServerRuntimeState.snapshot = { generation: 1 };
+        activeServerRuntimeState.listener = null;
     });
 
     it('mounts the session view immediately on native instead of waiting for interaction deferral', async () => {
@@ -128,6 +188,73 @@ describe('session route index', () => {
 
         expect(runAfterInteractionsSpy).not.toHaveBeenCalled();
         expect(screen.findAllByType('SessionView')).toHaveLength(1);
+        const sessionView = screen.findByType('SessionView' as never);
+        expect(sessionView.props.routeAnchorOverride).toBe(true);
+        const [hydratedSessionId, hydrateTag] = hydrateSessionForRouteSpy.mock.calls.at(-1) ?? [];
+        expect(hydratedSessionId).toBe('session-1');
+        expect(String(hydrateTag)).toContain('gen=1');
+    });
+
+    it('shows a loading spinner while hydration is pending and the session is not cached', async () => {
+        hydrateSessionForRouteSpy.mockReturnValue({ kind: 'loading', sessionId: 'session-1', reason: 'cold' });
+        const Route = await import('@/app/(app)/session/[id]');
+
+        const screen = await renderScreen(React.createElement(Route.default));
+
+        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
+        expect(screen.findAllByType('SessionView')).toHaveLength(0);
+        expect(screen.findAllByType('SessionCockpitShell')).toHaveLength(0);
+    });
+
+    it('keeps loading when a cached same-id session belongs to a different route server', async () => {
+        routeParams.value = { id: 'session-1', serverId: 'server-target' };
+        sessionsById = {
+            'session-1': {
+                id: 'session-1',
+                serverId: 'server-stale',
+            },
+        };
+        hydrateSessionForRouteSpy.mockReturnValue({
+            kind: 'loading',
+            sessionId: 'session-1',
+            serverId: 'server-target',
+            reason: 'cold',
+        });
+        const Route = await import('@/app/(app)/session/[id]');
+
+        const screen = await renderScreen(React.createElement(Route.default));
+
+        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
+        expect(screen.findAllByType('SessionView')).toHaveLength(0);
+        expect(screen.findAllByType('SessionCockpitShell')).toHaveLength(0);
+    });
+
+    it('shows a loading spinner before mounting the cockpit shell while hydration is pending', async () => {
+        hydrateSessionForRouteSpy.mockReturnValue({ kind: 'loading', sessionId: 'session-1', reason: 'cold' });
+        deviceType = 'phone';
+        mobileWorkspaceExperience = 'cockpit';
+        const Route = await import('@/app/(app)/session/[id]');
+
+        const screen = await renderScreen(React.createElement(Route.default));
+
+        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
+        expect(screen.findAllByType('SessionView')).toHaveLength(0);
+        expect(screen.findAllByType('SessionCockpitShell')).toHaveLength(0);
+    });
+
+    it('rehydrates when active server listener reports a new generation', async () => {
+        const Route = await import('@/app/(app)/session/[id]');
+        await renderScreen(React.createElement(Route.default));
+
+        expect(activeServerRuntimeState.listener).not.toBeNull();
+
+        await act(async () => {
+            activeServerRuntimeState.snapshot = { generation: 2 };
+            activeServerRuntimeState.listener?.();
+        });
+
+        const latestTag = hydrateSessionForRouteSpy.mock.calls.at(-1)?.[1] ?? '';
+        expect(String(latestTag)).toContain('gen=2');
     });
 
     it('renders the session cockpit shell on phone when cockpit mode is enabled by default', async () => {
@@ -145,6 +272,22 @@ describe('session route index', () => {
         expect(cockpit.props.surface).toBe('git');
         expect(cockpit.props.routeServerId).toBe('server-b');
         expect(screen.findAllByType('SessionView')).toHaveLength(0);
+    });
+
+    it('prefers the route server-scoped mobile surface over a legacy bare session id entry', async () => {
+        deviceType = 'phone';
+        mobileWorkspaceExperience = 'cockpit';
+        routeParams.value = { id: 'session-1', serverId: 'server-b' };
+        lastMobileSurfaceBySessionId = {
+            'session-1': 'git',
+            'server-b:session-1': 'tabs',
+        };
+        const Route = await import('@/app/(app)/session/[id]');
+
+        const screen = await renderScreen(React.createElement(Route.default));
+
+        const cockpit = screen.findByType('SessionCockpitShell' as never);
+        expect(cockpit.props.surface).toBe('tabs');
     });
 
     it('keeps the cockpit terminal surface when the viewed session server enables terminal', async () => {

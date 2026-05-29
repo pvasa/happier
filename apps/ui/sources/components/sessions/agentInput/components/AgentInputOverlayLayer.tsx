@@ -7,25 +7,17 @@ import {
 } from '@/sync/domains/permissions/permissionModeOptions';
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import type { EffectivePermissionModeDescription } from '@/sync/domains/permissions/describeEffectivePermissionMode';
-import { AgentInputAutocomplete } from './AgentInputAutocomplete';
-import type { AgentInputAutocompleteItem } from './AgentInputAutocomplete';
 import { AgentInputContentPopover, type AgentInputContentPopoverConfig } from './AgentInputContentPopover';
 import { AgentInputActionMenuPopoverContent } from './AgentInputActionMenuPopoverContent';
 import { AgentInputChipPickerPopover } from './AgentInputChipPickerPopover';
 import { shouldShowAgentInputChipPickerRail } from './AgentInputChipPickerLayout';
 import { AgentInputSelectionListPopover } from './AgentInputSelectionListPopover';
-import { AgentInputSelectionPopover } from '../selection/AgentInputSelectionPopover';
 import { PermissionModePicker, type PermissionModePickerOption } from './PermissionModePicker';
 import type { PermissionModePickerStyles } from './permissionModePickerStyles';
 import type { AgentInputExtraActionChip, AgentInputPopoverAnchor } from '../agentInputContracts';
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { AgentInputChipPickerOption } from './AgentInputChipPickerTypes';
 import type { SelectionListStep } from '@/components/ui/selectionList';
-import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
-
-const noopAutocompleteRequestClose = () => {};
-
-type SuggestionItem = AutocompleteSuggestion;
 
 type SimpleOption = Readonly<{
     id: string;
@@ -71,29 +63,6 @@ function resolvePopoverAnchorRef(
     actionMenuAnchorRef: React.RefObject<View | null>,
 ): React.RefObject<View | null> {
     return anchor === 'chip' ? chipAnchorRef : actionMenuAnchorRef;
-}
-
-function buildAutocompleteItem(suggestion: SuggestionItem): AgentInputAutocompleteItem | null {
-    if (suggestion.label) {
-        return {
-            id: suggestion.key,
-            label: suggestion.label,
-            subtitle: suggestion.description,
-            minHeight: suggestion.rowHeight,
-        };
-    }
-
-    if (typeof suggestion.component !== 'function') {
-        return null;
-    }
-
-    const Component = suggestion.component;
-    return {
-        id: suggestion.key,
-        label: suggestion.text,
-        minHeight: suggestion.rowHeight,
-        content: <Component />,
-    };
 }
 
 function renderContentPopover(entry: AgentInputContentPopoverEntry): React.ReactNode {
@@ -142,12 +111,52 @@ function resolveSharedContentPopoverOptions(
     };
 }
 
+function orderOptionsByFrozenIds(
+    options: ReadonlyArray<AgentInputChipPickerOption>,
+    frozenIds: readonly string[],
+): ReadonlyArray<AgentInputChipPickerOption> {
+    if (options.length <= 1 || frozenIds.length === 0) return options;
+
+    const optionById = new Map(options.map((option) => [option.id, option]));
+    const seenIds = new Set<string>();
+    const orderedOptions: AgentInputChipPickerOption[] = [];
+
+    for (const id of frozenIds) {
+        const option = optionById.get(id);
+        if (!option) continue;
+        seenIds.add(id);
+        orderedOptions.push(option);
+    }
+
+    for (const option of options) {
+        if (seenIds.has(option.id)) continue;
+        orderedOptions.push(option);
+    }
+
+    return orderedOptions;
+}
+
+function useOpenStableAgentPickerOptions(
+    options: ReadonlyArray<AgentInputChipPickerOption>,
+    open: boolean,
+): ReadonlyArray<AgentInputChipPickerOption> {
+    const openOrderRef = React.useRef<readonly string[] | null>(null);
+
+    if (!open) {
+        openOrderRef.current = null;
+        return options;
+    }
+
+    if (!openOrderRef.current) {
+        openOrderRef.current = options.map((option) => option.id);
+        return options;
+    }
+
+    return orderOptionsByFrozenIds(options, openOrderRef.current);
+}
+
 export function AgentInputOverlayLayer(props: Readonly<{
-    suggestions: readonly SuggestionItem[];
-    overlayAnchorRef: React.RefObject<View | null>;
     screenWidth: number;
-    autocompleteSelectedIndex: number;
-    onAutocompleteSelect: (index: number) => void;
 
     showPermissionPopover: boolean;
     permissionChipAnchorRef: React.RefObject<View | null>;
@@ -230,6 +239,10 @@ export function AgentInputOverlayLayer(props: Readonly<{
     envVarsPopover?: SharedContentPopoverLike;
     onEnvVarsPopoverRequestClose: () => void;
 }>): React.ReactNode {
+    const agentPickerOptions = useOpenStableAgentPickerOptions(
+        props.agentPickerOptions,
+        props.showAgentPicker && props.hasAgentPickerOptions,
+    );
     const sharedContentPopovers: AgentInputContentPopoverEntry[] = [
         {
             key: 'permission',
@@ -345,28 +358,6 @@ export function AgentInputOverlayLayer(props: Readonly<{
 
     return (
         <>
-            {props.suggestions.length > 0 && (
-                <AgentInputSelectionPopover
-                    open={props.suggestions.length > 0}
-                    anchorRef={props.overlayAnchorRef}
-                    maxHeightCap={240}
-                    maxWidthCap={props.maxWidthCap}
-                    onRequestClose={noopAutocompleteRequestClose}
-                >
-                    {({ maxHeight }) => (
-                        <AgentInputAutocomplete
-                            maxHeight={maxHeight}
-                            items={props.suggestions.flatMap((suggestion) => {
-                                const item = buildAutocompleteItem(suggestion);
-                                return item === null ? [] : [item];
-                            })}
-                            selectedIndex={props.autocompleteSelectedIndex}
-                            onSelect={props.onAutocompleteSelect}
-                        />
-                    )}
-                </AgentInputSelectionPopover>
-            )}
-
             {sharedContentPopovers.map(renderContentPopover)}
 
             {props.showAgentPicker && props.hasAgentPickerOptions ? (
@@ -374,7 +365,7 @@ export function AgentInputOverlayLayer(props: Readonly<{
                     open={props.showAgentPicker}
                     anchorRef={props.agentPickerAnchor === 'chip' ? props.agentChipAnchorRef : props.actionMenuAnchorRef}
                     title={props.agentPickerTitle}
-                    options={props.agentPickerOptions}
+                    options={agentPickerOptions}
                     selectedOptionId={props.effectiveAgentPickerSelectedOptionId}
                     onSelect={(selectedId) => {
                         props.onAgentPickerSelect?.(selectedId);
@@ -384,7 +375,7 @@ export function AgentInputOverlayLayer(props: Readonly<{
                     detailPaneHeaderAccessory={props.agentPickerDetailPaneHeaderAccessory}
                     // Keep the popover narrower when the detail rail is hidden so stacked layouts
                     // don't waste horizontal space.
-                    maxWidthCap={shouldShowAgentInputChipPickerRail(props.agentPickerOptions, props.screenWidth) ? 720 : 570}
+                    maxWidthCap={shouldShowAgentInputChipPickerRail(agentPickerOptions, props.screenWidth) ? 720 : 570}
                     maxHeightCap={460}
                 />
             ) : null}

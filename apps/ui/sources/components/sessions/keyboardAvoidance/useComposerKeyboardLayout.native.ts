@@ -277,6 +277,19 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
     ]);
 
     React.useEffect(() => {
+        if (Platform.OS === 'android') return undefined;
+
+        const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+            if (keyboardRetentionCountRef.current > 0) return;
+            applyFinalKeyboardHeightFromJS(0);
+        });
+
+        return () => {
+            hideSubscription.remove();
+        };
+    }, [applyFinalKeyboardHeightFromJS]);
+
+    React.useEffect(() => {
         if (Platform.OS !== 'android') return undefined;
 
         const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
@@ -334,14 +347,24 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         viewportHeight,
     ]);
 
+    const shouldRetainAndroidZeroProgressStartFrame = Platform.OS === 'android';
+
     useKeyboardHandler({
         onStart: (event) => {
             'worklet';
             isInteractiveDismissActive.value = false;
             const nextHeight = Math.max(0, Math.abs(event.height));
+            const nextProgress = typeof event.progress === 'number' && Number.isFinite(event.progress)
+                ? Math.max(0, event.progress)
+                : 0;
+            const shouldRetainOpenKeyboardStartFrame = shouldRetainAndroidZeroProgressStartFrame
+                && !isKeyboardLiftSuppressed.value
+                && nextHeight === 0
+                && nextProgress <= 0
+                && keyboardHeightAbsolute.value > 0;
             lastKeyboardEventHeightAbsolute.value = nextHeight;
             const retainedHeight = !isKeyboardLiftSuppressed.value
-                && isKeyboardLiftRetained.value
+                && (isKeyboardLiftRetained.value || shouldRetainOpenKeyboardStartFrame)
                 && nextHeight === 0
                 ? keyboardHeightAbsolute.value
                 : nextHeight;
@@ -352,12 +375,11 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
             keyboardHeightLive.value = storedHeight;
             keyboardHeightForInset.value = storedHeight;
             runOnJS(notifyKeyboardHeight)(storedHeight);
-            const nextProgress = typeof event.progress === 'number' && Number.isFinite(event.progress)
-                ? Math.max(0, event.progress)
-                : 0;
             keyboardProgress.value = isKeyboardLiftSuppressed.value ? 0 : nextProgress;
             const effectiveLiveHeight = storedHeight;
-            const startFrameLiveHeight = nextProgress <= 0 ? 0 : effectiveLiveHeight;
+            const startFrameLiveHeight = nextProgress <= 0 && !shouldRetainOpenKeyboardStartFrame
+                ? 0
+                : effectiveLiveHeight;
             bottomInset.value = Math.max(safeAreaBottomValue.value, startFrameLiveHeight);
             const nextListBottomInset = composerHeight.value + Math.max(safeAreaBottomValue.value, effectiveLiveHeight);
             listBottomInset.value = nextListBottomInset;
@@ -377,12 +399,18 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         onMove: (event) => {
             'worklet';
             const eventHeight = Math.max(0, Math.abs(event.height));
+            const eventProgress = typeof event.progress === 'number' && Number.isFinite(event.progress)
+                ? Math.max(0, event.progress)
+                : 0;
             const reanimatedHeight = Math.max(0, Math.abs(keyboardAnimation.height.value));
             const keyboardLiftIsSuppressed = isKeyboardLiftSuppressed.value;
             if (keyboardLiftIsSuppressed) {
                 isInteractiveDismissActive.value = false;
             }
-            const rawAbsoluteLiveHeight = Math.max(eventHeight, reanimatedHeight);
+            const eventReportsClosedFrame = eventHeight === 0 && eventProgress <= 0;
+            const rawAbsoluteLiveHeight = eventReportsClosedFrame
+                ? 0
+                : Math.max(eventHeight, reanimatedHeight);
             lastKeyboardEventHeightAbsolute.value = rawAbsoluteLiveHeight;
             const absoluteLiveHeight = !keyboardLiftIsSuppressed
                 && isKeyboardLiftRetained.value
@@ -401,7 +429,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
                 keyboardHeightForInset.value = insetHeight;
             }
             runOnJS(notifyKeyboardHeight)(liveHeight);
-            keyboardProgress.value = keyboardLiftIsSuppressed ? 0 : event.progress;
+            keyboardProgress.value = keyboardLiftIsSuppressed ? 0 : eventProgress;
             bottomInset.value = Math.max(safeAreaBottomValue.value, effectiveLiveHeight);
             const nextListBottomInset = composerHeight.value + Math.max(safeAreaBottomValue.value, effectiveInsetHeight);
             listBottomInset.value = nextListBottomInset;
@@ -498,6 +526,7 @@ export function useComposerKeyboardLayout(options: ComposerKeyboardLayoutOptions
         notifyKeyboardHeight,
         notifyListBottomInset,
         scaffoldMeasuredHeight,
+        shouldRetainAndroidZeroProgressStartFrame,
     ]);
 
     const retainKeyboardLift = React.useCallback(() => {

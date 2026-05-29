@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { SelectionList } from '@/components/ui/selectionList';
+import { SelectionList, resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
 import type { ServerScopedMachine, ServerScopedMachineGroup } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
@@ -55,6 +55,11 @@ export function NewSessionMachineSelectionContent(props: NewSessionMachineSelect
             onRequestClose={() => {}}
             autoFocusInputOnWeb
             maxHeight={props.maxHeight}
+            heightBehavior={
+                props.maxHeight === undefined
+                    ? undefined
+                    : resolvePopoverSelectionListHeightBehavior()
+            }
         />
     );
 }

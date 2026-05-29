@@ -1,4 +1,5 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { collectUnexpectedRawTextNodes, renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
@@ -9,8 +10,10 @@ type MultiTextInputState = { text: string; selection: MultiTextInputSelection };
 const multiTextInputHandleMocks = vi.hoisted(() => ({
     blur: vi.fn(),
     focus: vi.fn(),
+    setSelection: vi.fn(),
     setTextAndSelection: vi.fn(),
 }));
+const useActiveSuggestionsMock = vi.hoisted(() => vi.fn(() => [[], -1, () => {}, () => {}] as const));
 
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
@@ -135,6 +138,15 @@ vi.mock('@/components/ui/forms/MultiTextInput', () => ({
             },
             focus: multiTextInputHandleMocks.focus,
             blur: multiTextInputHandleMocks.blur,
+            setSelection: (
+                selection: MultiTextInputSelection,
+            ) => {
+                multiTextInputHandleMocks.setSelection(selection);
+                const onStateChange = props.onStateChange as ((state: MultiTextInputState) => void) | undefined;
+                const onSelectionChange = props.onSelectionChange as ((selection: MultiTextInputSelection) => void) | undefined;
+                onStateChange?.({ text: String(props.value ?? ''), selection });
+                onSelectionChange?.(selection);
+            },
         }));
         return React.createElement('MultiTextInput', props, null);
     }),
@@ -163,7 +175,7 @@ vi.mock('@/components/autocomplete/useActiveWord', () => ({
 }));
 
 vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: () => [[], 0, () => {}, () => {}],
+    useActiveSuggestions: useActiveSuggestionsMock,
 }));
 
 vi.mock('@/components/autocomplete/applySuggestion', () => ({
@@ -225,6 +237,61 @@ describe('AgentInput (send button accessibility)', () => {
         vi.clearAllMocks();
     });
 
+    it('does not request autocomplete suggestions before the composer text changes', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const autocompleteSuggestions = vi.fn(async () => []);
+
+        const screen = await renderScreen(<AgentInput
+            sessionId="session-1"
+            value="@src"
+            placeholder="Type"
+            onChangeText={() => {}}
+            onSend={() => {}}
+            autocompletePrefixes={['@']}
+            autocompleteSuggestions={autocompleteSuggestions}
+        />);
+
+        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
+            null,
+            autocompleteSuggestions,
+            expect.objectContaining({ clampSelection: true, wrapAround: true }),
+        );
+
+        const input = screen.root.findByType('MultiTextInput' as any);
+        await act(async () => {
+            input.props.onFocus?.();
+        });
+
+        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
+            null,
+            autocompleteSuggestions,
+            expect.objectContaining({ clampSelection: true, wrapAround: true }),
+        );
+
+        await act(async () => {
+            input.props.onStateChange?.({ text: '@/src', selection: { start: 5, end: 5 } });
+        });
+
+        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
+            null,
+            autocompleteSuggestions,
+            expect.objectContaining({ clampSelection: true, wrapAround: true }),
+        );
+
+        await act(async () => {
+            input.props.onChangeText?.('@/src');
+            input.props.onStateChange?.({ text: '@/src', selection: { start: 5, end: 5 } });
+        });
+
+        expect(useActiveSuggestionsMock).toHaveBeenLastCalledWith(
+            '@/src',
+            autocompleteSuggestions,
+            expect.objectContaining({ clampSelection: true, wrapAround: true }),
+        );
+
+        await screen.unmount();
+    });
+
     it('hides the voice icon when voice is disabled (no text)', async () => {
         featureEnabledState.voice = false;
         const { AgentInput } = await import('./AgentInput');
@@ -250,6 +317,69 @@ describe('AgentInput (send button accessibility)', () => {
 
         const octicons = send.findAllByType('Octicons' as any);
         expect(octicons.some((n) => n.props?.name === 'arrow-up')).toBe(true);
+
+        await screen.unmount();
+        featureEnabledState.voice = true;
+    });
+
+    it('shows a stop icon when the session can be aborted and the composer is empty', async () => {
+        featureEnabledState.voice = false;
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(<AgentInput
+                    sessionId="session-1"
+                    value=""
+                    placeholder="Type"
+                    onChangeText={() => {}}
+                    onSend={() => {}}
+                    onAbort={() => {}}
+                    showAbortButton={true}
+                    autocompletePrefixes={[]}
+                    autocompleteSuggestions={async () => []}
+                />);
+
+        const send = screen.findByTestId('session-composer-send');
+        expect(send).toBeTruthy();
+        if (!send) throw new Error('session-composer-send not found');
+
+        const ionicons = send.findAllByType('Ionicons' as any);
+        expect(ionicons.some((n) => n.props?.name === 'stop')).toBe(true);
+
+        const octicons = send.findAllByType('Octicons' as any);
+        expect(octicons.some((n) => n.props?.name === 'stop')).toBe(false);
+        expect(octicons.some((n) => n.props?.name === 'arrow-up')).toBe(false);
+
+        await screen.unmount();
+        featureEnabledState.voice = true;
+    });
+
+    it('runs abort from the empty composer stop button', async () => {
+        featureEnabledState.voice = false;
+        const { AgentInput } = await import('./AgentInput');
+        const onAbort = vi.fn();
+        const onSend = vi.fn();
+
+        const screen = await renderScreen(<AgentInput
+                    sessionId="session-1"
+                    value=""
+                    placeholder="Type"
+                    onChangeText={() => {}}
+                    onSend={onSend}
+                    onAbort={onAbort}
+                    showAbortButton={true}
+                    autocompletePrefixes={[]}
+                    autocompleteSuggestions={async () => []}
+                />);
+
+        const send = screen.findByTestId('session-composer-send');
+        expect(send).toBeTruthy();
+        if (!send) throw new Error('session-composer-send not found');
+        expect(send.props.accessibilityState?.disabled).toBe(false);
+
+        await screen.pressByTestIdAsync('session-composer-send');
+
+        expect(onAbort).toHaveBeenCalledTimes(1);
+        expect(onSend).not.toHaveBeenCalled();
 
         await screen.unmount();
         featureEnabledState.voice = true;
@@ -474,7 +604,7 @@ describe('AgentInput (send button accessibility)', () => {
         await screen.unmount();
     });
 
-    it('clears the session composer value immediately when sending', async () => {
+    it('does not clear the session composer value before the send coordinator acknowledges it', async () => {
         const { AgentInput } = await import('./AgentInput');
 
         const onChangeText = vi.fn();
@@ -493,7 +623,7 @@ describe('AgentInput (send button accessibility)', () => {
         screen.pressByTestId('session-composer-send');
 
         expect(onSend).toHaveBeenCalledTimes(1);
-        expect(onChangeText).toHaveBeenCalledWith('');
+        expect(onChangeText).not.toHaveBeenCalledWith('');
 
         await screen.unmount();
     });

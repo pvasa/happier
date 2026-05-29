@@ -80,6 +80,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                 forceExcludeServerIds: ['disabled'],
             },
             connectedServices: { github: { installationId: '123' } },
+            connectedServicesUpdatedAt: null,
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
             windowsRemoteSessionConsole: 'hidden',
@@ -119,6 +120,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             modelUpdatedAt: 456,
             mcpSelection: null,
             connectedServices: { github: { installationId: '123' } },
+            connectedServicesUpdatedAt: null,
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
             windowsRemoteSessionConsole: 'visible',
@@ -192,6 +194,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                 forceExcludeServerIds: ['disabled'],
             },
             connectedServices: { github: { installationId: '123' } },
+            connectedServicesUpdatedAt: 321,
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
             windowsRemoteSessionConsole: 'visible',
@@ -264,6 +267,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                 forceExcludeServerIds: ['disabled'],
             },
             connectedServices: { github: { installationId: '123' } },
+            connectedServicesUpdatedAt: 321,
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
             windowsRemoteSessionConsole: 'visible',
@@ -339,6 +343,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             },
             connectedServices: { github: { installationId: '123' } },
             terminal: { mode: 'integrated' },
+            connectedServicesUpdatedAt: null,
             windowsRemoteSessionLaunchMode: null,
             windowsRemoteSessionConsole: null,
             windowsTerminalWindowName: null,
@@ -870,6 +875,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                 baseRef: 'main',
                 branchMode: 'new',
             },
+            connectedServicesUpdatedAt: null,
             automation: null,
         });
         expect(tempData).toEqual(expect.objectContaining({
@@ -1082,6 +1088,11 @@ describe('sessionAuthoringDraftAdapters', () => {
         const persistedDraft = buildPersistedNewSessionDraftFromAuthoringDraft({
             draft,
             machineId: 'machine-1',
+            targetServerId: 'server-b',
+            windowsRemoteSessionLaunchModeOverride: {
+                machineId: 'machine-1',
+                mode: 'console',
+            },
             selectedSecretId: 'secret-1',
             selectedSecretIdByProfileIdByEnvVarName: {
                 'profile-1': {
@@ -1105,6 +1116,11 @@ describe('sessionAuthoringDraftAdapters', () => {
             input: 'Review the queued invoices',
             selectedMachineId: 'machine-1',
             selectedPath: '/tmp/project',
+            targetServerId: 'server-b',
+            windowsRemoteSessionLaunchModeOverride: {
+                machineId: 'machine-1',
+                mode: 'console',
+            },
             checkoutCreationDraft: {
                 kind: 'git_worktree',
                 displayName: 'feature/auth',

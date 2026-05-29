@@ -47,6 +47,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdFo
 
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
     readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
+    readMachineControlTargetForSession: (sessionId: string) => readMachineTargetForSessionMock(sessionId),
     canUseSessionRpc: (sessionId: string) => canUseSessionRpcMock(sessionId),
     shouldFallbackToSessionRpc: (sessionId: string, error: unknown) =>
         shouldFallbackToSessionRpcMock(sessionId, error),
@@ -211,6 +212,33 @@ describe('sessionMachineRpcFallback', () => {
             payload: { path: 'hello.txt' },
             preferScoped: true,
             timeoutMs: 4321,
+        });
+    });
+
+    it('returns a structured error code when a guarded fallback cannot resolve the session machine target', async () => {
+        readMachineTargetForSessionMock.mockReturnValue(null);
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+
+        const caller = createSessionMachineRpcFallbackCaller({
+            sessionId: 'session-1',
+            resolveFallbackRoute: async () => ({
+                kind: 'selected',
+                route: {
+                    kind: 'server_routed_stream',
+                    serverId: 'server-owned',
+                },
+            }),
+            reuseResolvedRoute: false,
+        });
+
+        await expect(caller.call({
+            request: { path: 'hello.txt' },
+            machineMethod: RPC_METHODS.LIST_DIRECTORY,
+            sessionMethod: RPC_METHODS.LIST_DIRECTORY,
+        })).resolves.toEqual({
+            success: false,
+            error: 'Machine target not available for session',
+            errorCode: 'SESSION_MACHINE_TARGET_UNAVAILABLE',
         });
     });
 

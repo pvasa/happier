@@ -68,6 +68,9 @@ const featureEnabledState = vi.hoisted(() => ({
     sessionsDirect: false,
 }));
 const featureEnabledCalls = vi.hoisted(() => [] as Array<Readonly<{ featureId: string; scope: unknown }>>);
+const chromeSafeAreaInsetsState = vi.hoisted(() => ({
+    value: { top: 0, bottom: 0, left: 0, right: 0 },
+}));
 const preflightModelOptionsByTargetKeyState = vi.hoisted(() => ({
     value: {} as Record<string, Array<{ value: string; label: string; description?: string }>>,
 }));
@@ -282,6 +285,9 @@ installNewSessionScreenModelCommonModuleMocks({
         return createPartialStorageModuleMock(importOriginal, {
             // Boundary fixture: this suite only consumes the machine id + metadata shape.
             useAllMachines: (() => machineState.value as any) as any,
+            useLaunchSelectionMachines: (() => machineState.value as any) as any,
+            useMachineListByServerId: (() => ({ s_active: machineState.value, s1: machineState.value }) as any) as any,
+            useMachineListStatusByServerId: (() => ({ s_active: 'loaded', s1: 'loaded' }) as any) as any,
             storage: Object.assign((selector: (state: ReturnType<typeof getMockStorageState>) => unknown) => selector(getMockStorageState()), {
                 getState: () => getMockStorageState(),
             }) as any,
@@ -298,6 +304,10 @@ installNewSessionScreenModelCommonModuleMocks({
 
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+vi.mock('@/components/ui/layout/useChromeSafeAreaInsets', () => ({
+    useChromeSafeAreaInsets: () => chromeSafeAreaInsetsState.value,
 }));
 
 vi.mock('@/utils/platform/responsive', () => ({
@@ -359,8 +369,22 @@ vi.mock('@/sync/ops', () => ({
     machineCapabilitiesInvoke,
 }));
 
+vi.mock('@/hooks/server/useDaemonScopedMachineCapabilitiesCache', () => ({
+    useDaemonScopedMachineCapabilitiesCache: () => ({
+        state: {
+            status: 'loaded' as const,
+            snapshot: {
+                response: {
+                    protocolVersion: 1 as const,
+                    results: machineCapabilitiesResultsState.value,
+                },
+            },
+        },
+        refresh: machineCapabilitiesCacheRefreshMock,
+    }),
+}));
+
 vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: machineCapabilitiesCacheRefreshMock }),
     prefetchMachineCapabilities: async () => {},
     prefetchMachineCapabilitiesIfStale: async () => {},
     getMachineCapabilitiesSnapshot: () => ({
@@ -468,6 +492,10 @@ vi.mock('@/sync/domains/profiles/profileUtils', () => ({
     getBuiltInProfile: () => null,
     DEFAULT_PROFILES: [],
     getProfilePrimaryCli: () => null,
+    isProfileEnabled: (profile: { id: string; defaultEnabled?: boolean }, profileEnabledById?: Record<string, boolean> | null) => {
+        const override = profileEnabledById?.[profile.id];
+        return typeof override === 'boolean' ? override : profile.defaultEnabled !== false;
+    },
     getProfileSupportedAgentIds: (profile: any) => profileCompatibilityState.getProfileSupportedAgentIds(profile),
     isProfileCompatibleWithAnyAgent: (profile: any, agentIds: readonly string[]) =>
         profileCompatibilityState.isProfileCompatibleWithAnyAgent(profile, agentIds),
@@ -558,6 +586,13 @@ vi.mock('@/components/sessions/new/hooks/useSecretRequirementFlow', () => ({
     }),
 }));
 
+vi.mock('@/utils/timing/runAfterInteractionsWithFallback', () => ({
+    runAfterInteractionsWithFallback: (fn: () => void) => {
+        fn();
+        return undefined;
+    },
+}));
+
 vi.mock('@/components/sessions/new/hooks/useNewSessionWizardProps', () => ({
     useNewSessionWizardProps: (params: any) => {
         React.useMemo(() => null, []);
@@ -646,11 +681,24 @@ describe('useNewSessionScreenModel (installables)', () => {
         preflightModelOptionsByTargetKeyState.value = {};
         preflightSessionModeOptionsByTargetKeyState.value = {};
         preflightConfigOptionsByTargetKeyState.value = {};
+        chromeSafeAreaInsetsState.value = { top: 0, bottom: 0, left: 0, right: 0 };
     });
 
     it('renders without throwing during initial new-session screen model setup', async () => {
         const hook = await renderNewSessionScreenModel();
         expect(hook.getCurrent()).toBeTruthy();
+    });
+
+    it('keeps simple composer padding visual while the scaffold owns the safe-area inset', async () => {
+        chromeSafeAreaInsetsState.value = { top: 12, bottom: 34, left: 0, right: 0 };
+
+        const hook = await renderNewSessionScreenModel();
+        const model = hook.getCurrent();
+
+        expect(model?.variant).toBe('simple');
+        expect(model?.simpleProps?.safeAreaTop).toBe(12);
+        expect(model?.simpleProps?.safeAreaBottom).toBe(34);
+        expect(model?.simpleProps?.newSessionBottomPadding).toBe(8);
     });
 
     it('reads sessions.direct in target-server spawn scope', async () => {
@@ -663,6 +711,8 @@ describe('useNewSessionScreenModel (installables)', () => {
     });
 
     it('triggers background codex-acp install even when codex CLI is not detected', async () => {
+        settingsState.experiments = true;
+
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
 
@@ -1297,6 +1347,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             },
             envVarRequirements: [],
             isBuiltIn: false,
+            defaultEnabled: true,
             createdAt: 0,
             updatedAt: 0,
             version: '1.0.0',
@@ -1593,6 +1644,7 @@ describe('useNewSessionScreenModel (installables)', () => {
             compatibilityByTargetKey: {},
             envVarRequirements: [],
             isBuiltIn: false,
+            defaultEnabled: true,
             createdAt: 0,
             updatedAt: 0,
             version: '1.0.0',

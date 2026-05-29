@@ -8,7 +8,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { storage, useSession, useIsDataReady, useLocalSetting, useSetting } from '@/sync/domains/state/storage';
-import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId } from '@/utils/sessions/sessionUtils';
+import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId, type SessionStatus } from '@/utils/sessions/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
 import { sessionArchiveWithServerScope, sessionDelete, sessionRename, sessionSetManualReadStateWithServerScope, sessionStopWithServerScope } from '@/sync/ops';
@@ -21,12 +21,17 @@ import { CodeView } from '@/components/ui/media/CodeView';
 import { Session } from '@/sync/domains/state/storageTypes';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import {
+    isSessionRouteHydrationAvailable,
+    isSessionRouteHydrationMissing,
+} from '@/sync/domains/session/sessionRouteHydrationState';
 import { HappyError } from '@/utils/errors/errors';
 import { clearSessionVisibleWhenInactive, isSessionActiveArchiveResult, stopSessionAndMaybeArchive } from '@/components/sessions/sessionStopArchiveFlow';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { resolveProfileById } from '@/sync/domains/profiles/profileUtils';
 import { getProfileDisplayName } from '@/components/profiles/profileDisplay';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getAgentVendorResumeId } from '@/agents/runtime/resumeCapabilities';
 import { useSessionSharingSupport } from '@/hooks/session/useSessionSharingSupport';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
@@ -48,7 +53,7 @@ import {
 import { readDisplayMachineTargetForSession, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { getActionSpec } from '@happier-dev/protocol';
 import { SessionRetentionNotice } from '@/components/sessions/info/SessionRetentionNotice';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope, type SessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import {
     useSessionHandoffSourceReachability,
@@ -61,22 +66,274 @@ import { buildNewSessionTempDataFromSessionConfiguration } from '@/components/se
 import { storeTempData } from '@/utils/sessions/tempDataStore';
 import { completeSessionForkNavigation } from '@/components/sessions/transcript/forkContext/completeSessionForkNavigation';
 
+type RawJsonSectionId = 'agentState' | 'metadata' | 'sessionStatus' | 'session';
+
+function shallowEqualRecord(
+    left: Readonly<Record<string, unknown>>,
+    right: Readonly<Record<string, unknown>>,
+): boolean {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+        if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
+        if (!Object.is(left[key], right[key])) return false;
+    }
+    return true;
+}
+
+function areSessionInfoStaticFieldsEqual(previous: Session, next: Session): boolean {
+    if (previous === next) return true;
+    const {
+        updatedAt: _previousUpdatedAt,
+        seq: _previousSeq,
+        lastViewedSessionSeq: _previousLastViewedSessionSeq,
+        activeAt: _previousActiveAt,
+        latestReadyEventSeq: _previousLatestReadyEventSeq,
+        latestReadyEventAt: _previousLatestReadyEventAt,
+        pendingVersion: _previousPendingVersion,
+        metadataVersion: _previousMetadataVersion,
+        agentStateVersion: _previousAgentStateVersion,
+        thinkingAt: _previousThinkingAt,
+        ...previousStaticFields
+    } = previous;
+    const {
+        updatedAt: _nextUpdatedAt,
+        seq: _nextSeq,
+        lastViewedSessionSeq: _nextLastViewedSessionSeq,
+        activeAt: _nextActiveAt,
+        latestReadyEventSeq: _nextLatestReadyEventSeq,
+        latestReadyEventAt: _nextLatestReadyEventAt,
+        pendingVersion: _nextPendingVersion,
+        metadataVersion: _nextMetadataVersion,
+        agentStateVersion: _nextAgentStateVersion,
+        thinkingAt: _nextThinkingAt,
+        ...nextStaticFields
+    } = next;
+    return shallowEqualRecord(previousStaticFields, nextStaticFields);
+}
+
+function useStableSessionInfoContentSession(session: Session | null): Session | null {
+    return React.useMemo(() => session, [
+        session?.id,
+        session?.serverId,
+        session?.encryptionMode,
+        session?.createdAt,
+        session?.active,
+        session?.archivedAt,
+        session?.pendingCount,
+        session?.pendingPermissionRequestCount,
+        session?.pendingUserActionRequestCount,
+        session?.pendingRequestObservedAt,
+        session?.latestTurnStatus,
+        session?.latestTurnStatusObservedAt,
+        session?.lastRuntimeIssue,
+        session?.metadata,
+        session?.agentState,
+        session?.thinking,
+        session?.presence,
+        session?.optimisticThinkingAt,
+        session?.thinkingGraceUntil,
+        session?.todos,
+        session?.draft,
+        session?.permissionMode,
+        session?.permissionModeUpdatedAt,
+        session?.modelMode,
+        session?.modelModeUpdatedAt,
+        session?.owner,
+        session?.ownerProfile,
+        session?.accessLevel,
+        session?.canApprovePermissions,
+    ]);
+}
+
+function areSessionInfoContentPropsEqual(
+    previous: Readonly<{
+        session: Session;
+        sessionServerId: string | null;
+        sourceMachineIdForHandoff: string | null;
+        runtimeAvailability: SessionHandoffRuntimeAvailability;
+        routeScope: SessionRouteServerScope;
+    }>,
+    next: Readonly<{
+        session: Session;
+        sessionServerId: string | null;
+        sourceMachineIdForHandoff: string | null;
+        runtimeAvailability: SessionHandoffRuntimeAvailability;
+        routeScope: SessionRouteServerScope;
+    }>,
+): boolean {
+    return previous.sessionServerId === next.sessionServerId
+        && previous.sourceMachineIdForHandoff === next.sourceMachineIdForHandoff
+        && previous.runtimeAvailability === next.runtimeAvailability
+        && previous.routeScope === next.routeScope
+        && areSessionInfoStaticFieldsEqual(previous.session, next.session);
+}
+
+function SessionInfoVolatileDetailItems({
+    sessionId,
+    formatDate,
+}: Readonly<{
+    sessionId: string;
+    formatDate: (timestamp: number) => string;
+}>) {
+    const { theme } = useUnistyles();
+    const session = useSession(sessionId);
+    if (!session) return null;
+
+    return (
+        <>
+            <Item
+                title={t('sessionInfo.lastUpdated')}
+                subtitle={formatDate(session.updatedAt)}
+                icon={<Ionicons name="time-outline" size={29} color={theme.colors.accent.blue} />}
+                showChevron={false}
+            />
+            <Item
+                title={t('sessionInfo.sequence')}
+                detail={session.seq.toString()}
+                icon={<Ionicons name="git-commit-outline" size={29} color={theme.colors.accent.blue} />}
+                showChevron={false}
+            />
+        </>
+    );
+}
+
+function SessionInfoReadStateActionItem({
+    sessionId,
+    scopedMutationServerId,
+}: Readonly<{
+    sessionId: string;
+    scopedMutationServerId: string | null;
+}>) {
+    const { theme } = useUnistyles();
+    const session = useSession(sessionId);
+    const readStateAction = React.useMemo(() => {
+        if (!session || session.archivedAt != null) {
+            return { kind: 'none', visible: false } as const;
+        }
+        return resolveSessionReadStateAction(session);
+    }, [session]);
+    const readStateInfoItem = React.useMemo(
+        () => createSessionReadStateInfoItemProps(readStateAction, theme.colors.accent.blue),
+        [readStateAction, theme.colors.accent.blue],
+    );
+    const handleReadStateAction = useCallback(async () => {
+        if (!readStateAction.visible) return;
+        const result = await sessionSetManualReadStateWithServerScope(
+            sessionId,
+            readStateAction.targetState,
+            { serverId: scopedMutationServerId },
+        );
+        if (!result.success) {
+            throw new HappyError(
+                result.message || t(
+                    readStateAction.targetState === 'read'
+                        ? 'sessionInfo.failedToMarkSessionRead'
+                        : 'sessionInfo.failedToMarkSessionUnread',
+                ),
+                false,
+            );
+        }
+    }, [readStateAction, scopedMutationServerId, sessionId]);
+    const [updatingReadState, performReadStateAction] = useHappyAction(handleReadStateAction);
+
+    if (!readStateInfoItem) return null;
+    return (
+        <Item
+            {...readStateInfoItem}
+            onPress={performReadStateAction}
+            loading={updatingReadState}
+        />
+    );
+}
+
+function SessionInfoActivityGroup({
+    sessionId,
+    formatDate,
+    sessionStatus,
+    showRawDiagnostics,
+}: Readonly<{
+    sessionId: string;
+    formatDate: (timestamp: number) => string;
+    sessionStatus: SessionStatus;
+    showRawDiagnostics: boolean;
+}>) {
+    const { theme } = useUnistyles();
+    const session = useSession(sessionId);
+    if (!session) return null;
+
+    return (
+        <ItemGroup title={t('sessionInfo.activity')}>
+            <Item
+                title={t('sessionInfo.sessionStatus')}
+                detail={sessionStatus.statusText}
+                icon={<Ionicons name="pulse-outline" size={29} color={sessionStatus.statusColor} />}
+                showChevron={false}
+            />
+            {showRawDiagnostics ? (
+                <>
+                    <Item
+                        title={t('sessionInfo.thinking')}
+                        detail={session.thinking ? t('common.yes') : t('common.no')}
+                        icon={<Ionicons name="bulb-outline" size={29} color={session.thinking ? theme.colors.accent.yellow : theme.colors.text.secondary} />}
+                        showChevron={false}
+                    />
+                    {session.thinking && (
+                        <Item
+                            title={t('sessionInfo.thinkingSince')}
+                            subtitle={formatDate(session.thinkingAt)}
+                            icon={<Ionicons name="timer-outline" size={29} color={theme.colors.accent.yellow} />}
+                            showChevron={false}
+                        />
+                    )}
+                </>
+            ) : null}
+        </ItemGroup>
+    );
+}
+
+function SessionInfoExecutionRunsAction({
+    sessionId,
+    routeScope,
+    router,
+}: Readonly<{
+    sessionId: string;
+    routeScope: SessionRouteServerScope;
+    router: ReturnType<typeof useRouter>;
+}>) {
+    const { theme } = useUnistyles();
+    const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(sessionId);
+    if (!sessionExecutionRunsSupported) return null;
+
+    return (
+        <Item
+            title={t('runs.title')}
+            subtitle={t('sessionInfo.executionRunsSubtitle')}
+            icon={<Ionicons name="play-outline" size={29} color={theme.colors.accent.blue} />}
+            onPress={() => router.push(routeScope.buildHref(sessionId, { suffix: '/runs' }))}
+        />
+    );
+}
+
 function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandoff, runtimeAvailability, routeScope }: Readonly<{
     session: Session;
     sessionServerId: string | null;
     sourceMachineIdForHandoff: string | null;
     runtimeAvailability: SessionHandoffRuntimeAvailability;
-    routeScope: ReturnType<typeof createSessionRouteServerScope>;
+    routeScope: SessionRouteServerScope;
 }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const localDevModeEnabled = useLocalSetting('devModeEnabled');
     const devModeEnabled = __DEV__ || localDevModeEnabled === true;
     const sessionName = getSessionName(session);
-    const sessionStatus = useSessionStatus(session);
+    const sessionStatus = useSessionStatus(session, {
+        subscribeToSession: false,
+        subscribeToTranscript: false,
+    });
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
     const sessionHandoffEnabled = useFeatureEnabled('sessions.handoff');
-    const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(session.id);
     const serverSnapshot = useServerFeaturesSnapshotForServerId(sessionServerId, { enabled: Boolean(sessionServerId) });
     const useProfiles = useSetting('useProfiles') === true;
     const profilesSetting = useSetting('profiles');
@@ -88,6 +345,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const sharingSupported = useSessionSharingSupport();
     const automationsSupport = useAutomationsSupport();
     const showAutomations = automationsSupport?.enabled !== false;
+    const [expandedRawJsonSection, setExpandedRawJsonSection] = React.useState<RawJsonSectionId | null>(null);
     // Check if CLI version is outdated
     const isCliOutdated = session.metadata?.version && !isVersionSupported(session.metadata.version, MINIMUM_CLI_VERSION);
     const canManageSharing = !session.accessLevel || session.accessLevel === 'admin';
@@ -161,6 +419,34 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const tmuxFallbackReason = React.useMemo(() => {
         return getTmuxFallbackReason(session.metadata?.terminal);
     }, [session.metadata?.terminal]);
+    const rawSessionStatus = React.useMemo(() => ({
+        isConnected: sessionStatus.isConnected,
+        statusText: sessionStatus.statusText,
+        statusColor: sessionStatus.statusColor,
+        statusDotColor: sessionStatus.statusDotColor,
+        isPulsing: sessionStatus.isPulsing,
+    }), [sessionStatus.isConnected, sessionStatus.isPulsing, sessionStatus.statusColor, sessionStatus.statusDotColor, sessionStatus.statusText]);
+    const toggleRawJsonSection = React.useCallback((section: RawJsonSectionId) => {
+        setExpandedRawJsonSection((current) => (current === section ? null : section));
+    }, []);
+    const handleToggleAgentStateJson = React.useCallback(() => toggleRawJsonSection('agentState'), [toggleRawJsonSection]);
+    const handleToggleMetadataJson = React.useCallback(() => toggleRawJsonSection('metadata'), [toggleRawJsonSection]);
+    const handleToggleSessionStatusJson = React.useCallback(() => toggleRawJsonSection('sessionStatus'), [toggleRawJsonSection]);
+    const handleToggleSessionJson = React.useCallback(() => toggleRawJsonSection('session'), [toggleRawJsonSection]);
+    const expandedRawJsonCode = React.useMemo(() => {
+        switch (expandedRawJsonSection) {
+            case 'agentState':
+                return session.agentState ? JSON.stringify(session.agentState, null, 2) : null;
+            case 'metadata':
+                return session.metadata ? JSON.stringify(session.metadata, null, 2) : null;
+            case 'sessionStatus':
+                return JSON.stringify(rawSessionStatus, null, 2);
+            case 'session':
+                return JSON.stringify(session, null, 2);
+            default:
+                return null;
+        }
+    }, [expandedRawJsonSection, rawSessionStatus, session]);
     const reachableMachineTarget = React.useMemo(() => {
         return readMachineTargetForSession(session.id);
     }, [session.id, session.updatedAt, session.metadata]);
@@ -239,16 +525,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const canArchiveSession = canManageSharing && !isArchivedSession && (!session.active || canStopSession);
     const resolvedServerId = resolveServerIdForSessionIdFromLocalCache(session.id);
     const scopedMutationServerId = resolvedServerId ?? sessionServerId ?? routeScope.serverId ?? null;
-    const readStateAction = React.useMemo(() => {
-        if (isArchivedSession) {
-            return { kind: 'none', visible: false } as const;
-        }
-        return resolveSessionReadStateAction(session);
-    }, [isArchivedSession, session]);
-    const readStateInfoItem = React.useMemo(
-        () => createSessionReadStateInfoItemProps(readStateAction, theme.colors.accent.blue),
-        [readStateAction, theme.colors.accent.blue],
-    );
     const isPinnedSession = Boolean(
         resolvedServerId &&
         Array.isArray(pinnedSessionKeysV1) &&
@@ -359,27 +635,6 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     }, [executor.execute, session.id, sessionServerId, sourceMachineIdForHandoff]);
 
     const [handingOffSession, performHandoff] = useHappyAction(handleHandoffAction);
-
-    const handleReadStateAction = useCallback(async () => {
-        if (!readStateAction.visible) return;
-        const result = await sessionSetManualReadStateWithServerScope(
-            session.id,
-            readStateAction.targetState,
-            { serverId: scopedMutationServerId },
-        );
-        if (!result.success) {
-            throw new HappyError(
-                result.message || t(
-                    readStateAction.targetState === 'read'
-                        ? 'sessionInfo.failedToMarkSessionRead'
-                        : 'sessionInfo.failedToMarkSessionUnread',
-                ),
-                false,
-            );
-        }
-    }, [readStateAction, scopedMutationServerId, session.id]);
-
-    const [updatingReadState, performReadStateAction] = useHappyAction(handleReadStateAction);
 
     const handleArchiveSession = useCallback(async () => {
         const confirmed = await Modal.confirm(
@@ -520,7 +775,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         <Item
                             title={t(vendorResumeLabelKey)}
                             subtitle={`${vendorResumeId.substring(0, 8)}...${vendorResumeId.substring(vendorResumeId.length - 8)}`}
-                            icon={<Ionicons name={core.ui.agentPickerIconName as any} size={29} color={theme.colors.accent.blue} />}
+                            icon={<AgentIcon agentId={agentId} size={29} color={theme.colors.accent.blue} />}
                             onPress={async () => {
                                 try {
                                     await Clipboard.setStringAsync(vendorResumeId);
@@ -543,18 +798,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         icon={<Ionicons name="calendar-outline" size={29} color={theme.colors.accent.blue} />}
                         showChevron={false}
                     />
-                    <Item
-                        title={t('sessionInfo.lastUpdated')}
-                        subtitle={formatDate(session.updatedAt)}
-                        icon={<Ionicons name="time-outline" size={29} color={theme.colors.accent.blue} />}
-                        showChevron={false}
-                    />
-                    <Item
-                        title={t('sessionInfo.sequence')}
-                        detail={session.seq.toString()}
-                        icon={<Ionicons name="git-commit-outline" size={29} color={theme.colors.accent.blue} />}
-                        showChevron={false}
-                    />
+                    <SessionInfoVolatileDetailItems sessionId={session.id} formatDate={formatDate} />
                 </ItemGroup>
 
                 {/* Quick Actions */}
@@ -591,19 +835,15 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                             loading={handingOffSession}
                         />
                     )}
-                    {readStateInfoItem ? (
-                        <Item
-                            {...readStateInfoItem}
-                            onPress={performReadStateAction}
-                            loading={updatingReadState}
-                        />
-                    ) : null}
-                    {executionRunsEnabled && sessionExecutionRunsSupported ? (
-                        <Item
-                            title={t('runs.title')}
-                            subtitle={t('sessionInfo.executionRunsSubtitle')}
-                            icon={<Ionicons name="play-outline" size={29} color={theme.colors.accent.blue} />}
-                            onPress={() => router.push(routeScope.buildHref(session.id, { suffix: '/runs' }))}
+                    <SessionInfoReadStateActionItem
+                        sessionId={session.id}
+                        scopedMutationServerId={scopedMutationServerId}
+                    />
+                    {executionRunsEnabled ? (
+                        <SessionInfoExecutionRunsAction
+                            sessionId={session.id}
+                            routeScope={routeScope}
+                            router={router}
                         />
                     ) : null}
                     {showAutomations ? (
@@ -811,23 +1051,12 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     </ItemGroup>
                 )}
 
-                {/* Activity */}
-                <ItemGroup title={t('sessionInfo.activity')}>
-                    <Item
-                        title={t('sessionInfo.thinking')}
-                        detail={session.thinking ? t('common.yes') : t('common.no')}
-                        icon={<Ionicons name="bulb-outline" size={29} color={session.thinking ? theme.colors.accent.yellow : theme.colors.text.secondary} />}
-                        showChevron={false}
-                    />
-                    {session.thinking && (
-                        <Item
-                            title={t('sessionInfo.thinkingSince')}
-                            subtitle={formatDate(session.thinkingAt)}
-                            icon={<Ionicons name="timer-outline" size={29} color={theme.colors.accent.yellow} />}
-                            showChevron={false}
-                        />
-                    )}
-                </ItemGroup>
+                <SessionInfoActivityGroup
+                    sessionId={session.id}
+                    formatDate={formatDate}
+                    sessionStatus={sessionStatus}
+                    showRawDiagnostics={devModeEnabled}
+                />
 
                 {/* Raw JSON (Dev Mode Only) */}
                 {devModeEnabled && (
@@ -837,14 +1066,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                 <Item
                                     title={t('sessionInfo.agentState')}
                                     icon={<Ionicons name="code-working-outline" size={29} color={theme.colors.accent.orange} />}
-                                    showChevron={false}
+                                    onPress={handleToggleAgentStateJson}
                                 />
-                                <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                                {expandedRawJsonSection === 'agentState' && expandedRawJsonCode && (
+                                    <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
                                     <CodeView 
-                                        code={JSON.stringify(session.agentState, null, 2)}
+                                        code={expandedRawJsonCode}
                                         language="json"
                                     />
-                                </View>
+                                    </View>
+                                )}
                             </>
                         )}
                         {session.metadata && (
@@ -852,14 +1083,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                 <Item
                                     title={t('sessionInfo.metadata')}
                                     icon={<Ionicons name="information-circle-outline" size={29} color={theme.colors.accent.indigo} />}
-                                    showChevron={false}
+                                    onPress={handleToggleMetadataJson}
                                 />
-                                <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                                {expandedRawJsonSection === 'metadata' && expandedRawJsonCode && (
+                                    <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
                                     <CodeView 
-                                        code={JSON.stringify(session.metadata, null, 2)}
+                                        code={expandedRawJsonCode}
                                         language="json"
                                     />
-                                </View>
+                                    </View>
+                                )}
                             </>
                         )}
                         {sessionStatus && (
@@ -867,34 +1100,32 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                 <Item
                                     title={t('sessionInfo.sessionStatus')}
                                     icon={<Ionicons name="analytics-outline" size={29} color={theme.colors.accent.blue} />}
-                                    showChevron={false}
+                                    onPress={handleToggleSessionStatusJson}
                                 />
-                                <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                                {expandedRawJsonSection === 'sessionStatus' && expandedRawJsonCode && (
+                                    <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
                                     <CodeView 
-                                        code={JSON.stringify({
-                                            isConnected: sessionStatus.isConnected,
-                                            statusText: sessionStatus.statusText,
-                                            statusColor: sessionStatus.statusColor,
-                                            statusDotColor: sessionStatus.statusDotColor,
-                                            isPulsing: sessionStatus.isPulsing
-                                        }, null, 2)}
+                                        code={expandedRawJsonCode}
                                         language="json"
                                     />
-                                </View>
+                                    </View>
+                                )}
                             </>
                         )}
                         {/* Full Session Object */}
                         <Item
                             title={t('sessionInfo.fullSessionObject')}
                             icon={<Ionicons name="document-text-outline" size={29} color={theme.colors.state.success.foreground} />}
-                            showChevron={false}
+                            onPress={handleToggleSessionJson}
                         />
-                        <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
+                        {expandedRawJsonSection === 'session' && expandedRawJsonCode && (
+                            <View style={{ marginHorizontal: 16, marginBottom: 12 }}>
                             <CodeView 
-                                code={JSON.stringify(session, null, 2)}
+                                code={expandedRawJsonCode}
                                 language="json"
                             />
-                        </View>
+                            </View>
+                        )}
                     </ItemGroup>
                 )}
             </ItemList>
@@ -902,17 +1133,21 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     );
 }
 
+const MemoizedSessionInfoContent = React.memo(SessionInfoContent, areSessionInfoContentPropsEqual);
+
 export default () => {
     const { theme } = useUnistyles();
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const routeScope = useSessionRouteServerScope(params);
     const { id } = params;
     const sessionId = String(id ?? '').trim();
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId,
         'SessionInfoRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
     const session = useSession(sessionId);
     const isDataReady = useIsDataReady();
     const sessionServerId = usePreferredServerIdForSession(sessionId);
@@ -935,7 +1170,9 @@ export default () => {
     // Handle three states: loading, deleted, and exists.
     // If the session record is already present, fail open and render it even if global hydration
     // is still in progress; otherwise deep links can get stuck in a permanent spinner state.
-    if (!session && (!isDataReady || !sessionHydrated)) {
+    const contentSession = useStableSessionInfoContentSession(session);
+
+    if (!session && (!isDataReady || !sessionHydrated) && !sessionMissingAfterHydration) {
         // Still loading data
         return (
             <View testID="session-info-screen" style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -958,8 +1195,8 @@ export default () => {
 
     return (
         <View testID="session-info-screen" style={{ flex: 1 }}>
-            <SessionInfoContent
-                session={session}
+            <MemoizedSessionInfoContent
+                session={contentSession ?? session}
                 sessionServerId={sessionServerId}
                 sourceMachineIdForHandoff={sourceMachineIdForHandoff}
                 runtimeAvailability={runtimeAvailability}

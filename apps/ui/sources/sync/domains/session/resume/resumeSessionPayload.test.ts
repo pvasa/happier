@@ -112,6 +112,23 @@ describe('buildResumeHappySessionRpcParams', () => {
         });
     });
 
+    test('includes agent mode runtime controls when provided', () => {
+        expect(buildResumeHappySessionRpcParams({
+            sessionId: 's1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            agentModeId: 'plan',
+            agentModeUpdatedAt: 250,
+        } as any)).toEqual({
+            type: 'resume-session',
+            sessionId: 's1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            agentModeId: 'plan',
+            agentModeUpdatedAt: 250,
+        });
+    });
+
     test('includes initial goal controls when provided', () => {
         expect(buildResumeHappySessionRpcParams({
             sessionId: 's1',

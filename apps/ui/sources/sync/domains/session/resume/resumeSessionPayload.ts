@@ -29,6 +29,8 @@ export type ResumeHappySessionRpcParams = CodexBackendTransportFields & {
     attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy;
     permissionMode?: PermissionMode;
     permissionModeUpdatedAt?: number;
+    agentModeId?: string;
+    agentModeUpdatedAt?: number;
     modelId?: string;
     modelUpdatedAt?: number;
     accountSettingsVersionHint?: number;
@@ -54,6 +56,8 @@ const ResumeHappySessionRpcParamsSchema = z.object({
     attachMetadataIdentityPolicy: SessionAttachMetadataIdentityPolicySchema.optional(),
     permissionMode: z.string().refine((value) => isPermissionMode(value)).optional(),
     permissionModeUpdatedAt: z.number().optional(),
+    agentModeId: z.string().min(1).optional(),
+    agentModeUpdatedAt: z.number().optional(),
     modelId: z.string().min(1).optional(),
     modelUpdatedAt: z.number().optional(),
     accountSettingsVersionHint: z.number().int().min(0).optional(),

@@ -40,6 +40,16 @@ export function installLegacyChatListHarnessCommonModuleMocks(
         };
     });
 
+    vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', async () => {
+        const activeOptions = legacyChatListHarnessModuleState.options;
+        if (activeOptions.flashList) {
+            return await activeOptions.flashList();
+        }
+
+        const { createFlashListChatListModuleMock } = await import('@/dev/testkit/harness/chatListHarness');
+        return createFlashListChatListModuleMock();
+    });
+
     vi.mock('react-native', async () => {
         const activeOptions = legacyChatListHarnessModuleState.options;
         if (activeOptions.reactNative) {

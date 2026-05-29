@@ -2,13 +2,26 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
-import { createScmTreeBadgeIndex, type ScmTreeBadgeIndex } from './scmTreeBadges';
+import { buildScmTreeBadgeSignature, createScmTreeBadgeIndex, type ScmTreeBadgeIndex } from './scmTreeBadges';
 
 export function useScmTreeBadgeIndex(snapshot: ScmWorkingSnapshot | null | undefined): ScmTreeBadgeIndex | null {
     const [index, setIndex] = React.useState<ScmTreeBadgeIndex | null>(null);
+    const signature = React.useMemo(() => buildScmTreeBadgeSignature(snapshot), [snapshot]);
+    const nativeIndex = React.useMemo(() => {
+        if (Platform.OS === 'web') {
+            return null;
+        }
+        return snapshot ? createScmTreeBadgeIndex(snapshot) : null;
+    }, [signature]);
+    const snapshotRef = React.useRef(snapshot);
+    snapshotRef.current = snapshot;
 
     React.useEffect(() => {
-        if (!snapshot) {
+        if (Platform.OS !== 'web') {
+            return;
+        }
+        const currentSnapshot = snapshotRef.current;
+        if (!currentSnapshot) {
             setIndex(null);
             return;
         }
@@ -16,7 +29,7 @@ export function useScmTreeBadgeIndex(snapshot: ScmWorkingSnapshot | null | undef
         let cancelled = false;
         const compute = () => {
             if (cancelled) return;
-            setIndex(createScmTreeBadgeIndex(snapshot));
+            setIndex(createScmTreeBadgeIndex(currentSnapshot));
         };
 
         if (Platform.OS === 'web') {
@@ -31,7 +44,7 @@ export function useScmTreeBadgeIndex(snapshot: ScmWorkingSnapshot | null | undef
         return () => {
             cancelled = true;
         };
-    }, [snapshot]);
+    }, [signature]);
 
-    return index;
+    return Platform.OS === 'web' ? index : nativeIndex;
 }

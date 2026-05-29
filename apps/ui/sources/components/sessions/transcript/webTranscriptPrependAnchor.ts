@@ -20,6 +20,20 @@ export type WebTranscriptPrependRestoreResult = Readonly<{
     strategy: 'anchor' | 'item' | 'growth' | 'none';
 }>;
 
+export type WebTranscriptViewportAnchorKind = 'message' | 'toolGroup' | 'item';
+
+export type WebTranscriptViewportAnchor = Readonly<{
+    kind: WebTranscriptViewportAnchorKind;
+    messageId: string | null;
+    itemId: string;
+    itemOffsetPx: number;
+}>;
+
+export type WebTranscriptViewportAnchorRestoreResult = Readonly<{
+    didAdjustScroll: boolean;
+    status: 'restored' | 'already_aligned' | 'not_found';
+}>;
+
 function resolveElementByTestId(params: Readonly<{
     container: HTMLElement;
     anchorTestId: string;
@@ -62,6 +76,37 @@ function resolveTrackedAnchorPrefix(testId: string | null): string | null {
         return TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX;
     }
     return null;
+}
+
+function resolveViewportAnchorKindAndMessageId(testId: string): Readonly<{
+    kind: WebTranscriptViewportAnchorKind;
+    messageId: string | null;
+}> | null {
+    if (testId.startsWith(TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
+        return {
+            kind: 'message',
+            messageId: testId.slice(TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX.length),
+        };
+    }
+    if (testId.startsWith(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
+        return {
+            kind: 'toolGroup',
+            messageId: testId.slice(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX.length),
+        };
+    }
+    if (testId.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
+        return {
+            kind: 'item',
+            messageId: null,
+        };
+    }
+    return null;
+}
+
+function resolveTranscriptItemIdFromTestId(testId: string | null): string | null {
+    if (!testId?.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX)) return null;
+    const itemId = testId.slice(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX.length);
+    return itemId.length > 0 ? itemId : null;
 }
 
 function resolveClosestVisibleTestId(container: HTMLElement, matcher?: (testId: string) => boolean): string | null {
@@ -143,6 +188,74 @@ function resolveContainingItemAnchorTestId(
 
 function resolvePreferredItemAnchorTestId(container: HTMLElement, anchorTestId: string | null): string | null {
     return resolveContainingItemAnchorTestId(container, anchorTestId) ?? resolveFirstVisibleItemAnchorTestId(container);
+}
+
+function resolveViewportRestoreItemAnchorTestId(
+    container: HTMLElement,
+    anchor: WebTranscriptViewportAnchor,
+): string {
+    const stableAnchorTestId =
+        anchor.kind === 'message' && anchor.messageId
+            ? `${TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.messageId}`
+            : anchor.kind === 'toolGroup' && anchor.messageId
+                ? `${TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.messageId}`
+                : null;
+    if (stableAnchorTestId) {
+        const currentItemTestId = resolveContainingItemAnchorTestId(container, stableAnchorTestId);
+        if (currentItemTestId) return currentItemTestId;
+    }
+    return `${TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.itemId}`;
+}
+
+export function captureWebTranscriptViewportAnchor(params: Readonly<{
+    container: HTMLElement;
+}>): WebTranscriptViewportAnchor | null {
+    const anchorTestId = resolveFirstVisibleAnchorTestId(params.container);
+    if (!anchorTestId) return null;
+
+    const anchorIdentity = resolveViewportAnchorKindAndMessageId(anchorTestId);
+    if (!anchorIdentity) return null;
+
+    const itemTestId = resolvePreferredItemAnchorTestId(params.container, anchorTestId);
+    const itemId = resolveTranscriptItemIdFromTestId(itemTestId);
+    if (!itemId || !itemTestId) return null;
+
+    const itemTop = resolveVisibleAnchorTop({
+        container: params.container,
+        anchorTestId: itemTestId,
+    });
+    if (typeof itemTop !== 'number' || !Number.isFinite(itemTop)) return null;
+
+    return {
+        ...anchorIdentity,
+        itemId,
+        itemOffsetPx: itemTop,
+    };
+}
+
+export function restoreWebTranscriptViewportAnchor(params: Readonly<{
+    container: HTMLElement;
+    anchor: WebTranscriptViewportAnchor;
+}>): WebTranscriptViewportAnchorRestoreResult {
+    const itemTop = resolveVisibleAnchorTop({
+        container: params.container,
+        anchorTestId: resolveViewportRestoreItemAnchorTestId(params.container, params.anchor),
+    });
+    if (typeof itemTop !== 'number' || !Number.isFinite(itemTop)) {
+        return { didAdjustScroll: false, status: 'not_found' };
+    }
+
+    const delta = Math.trunc(itemTop - params.anchor.itemOffsetPx);
+    if (delta === 0) {
+        return { didAdjustScroll: false, status: 'already_aligned' };
+    }
+
+    try {
+        params.container.scrollTop += delta;
+        return { didAdjustScroll: true, status: 'restored' };
+    } catch {
+        return { didAdjustScroll: false, status: 'not_found' };
+    }
 }
 
 export function captureWebTranscriptPrependAnchor(params: Readonly<{

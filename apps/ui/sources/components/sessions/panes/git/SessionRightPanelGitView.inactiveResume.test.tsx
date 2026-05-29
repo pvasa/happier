@@ -15,6 +15,7 @@ let machineReachable = false;
 let machineRpcTargetAvailable = false;
 let sessionPath: string | null = '/repo';
 let projectPath: string | null = '/repo';
+let activeGitSubTab: 'commit' | 'update' | 'history' = 'commit';
 
 installSessionDetailsPanelCommonModuleMocks({
     storage: async () => {
@@ -39,6 +40,7 @@ installSessionDetailsPanelCommonModuleMocks({
             useSessionProjectScmOperationLog: () => [],
             useSessionProjectScmSnapshot: () => null,
             useSessionProjectScmSnapshotError: () => ({ message: 'RPC method not available', at: 1 }),
+            useSessionRealtimeScmTranscriptConsumer: () => {},
             useSessionProjectScmTouchedPaths: () => [],
         });
     },
@@ -52,7 +54,7 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
 
 vi.mock('./useSessionRightPanelGitTabState', () => ({
     useSessionRightPanelGitTabState: () => ({
-        activeGitSubTab: 'commit',
+        activeGitSubTab,
         setActiveGitSubTab: vi.fn(),
         commitDraftMessage: '',
         setCommitDraftMessage: vi.fn(),
@@ -136,6 +138,7 @@ describe('SessionRightPanelGitView (inactive session resume)', () => {
         machineRpcTargetAvailable = false;
         sessionPath = '/repo';
         projectPath = '/repo';
+        activeGitSubTab = 'commit';
         loadCommitHistorySpy.mockReset();
     });
 
@@ -206,6 +209,7 @@ describe('SessionRightPanelGitView (inactive session resume)', () => {
         machineReachable = true;
         sessionPath = null;
         projectPath = '/repo';
+        activeGitSubTab = 'history';
 
         const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
 

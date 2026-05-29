@@ -14,11 +14,12 @@ import { usePersistSessionMobileSurface } from '@/components/workspaceCockpit/se
 import { resolveFullscreenDetailsRouteSelection } from '@/components/workspaceCockpit/resolveFullscreenDetailsRouteSelection';
 import { useFullscreenDetailsRouteAutoRedirect } from '@/components/workspaceCockpit/useFullscreenDetailsRouteAutoRedirect';
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { buildSessionDetailsRouteQuery } from '@/components/workspaceCockpit/session/sessionCockpitNavigation';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 
 export default function FilesScreenRoute() {
     const router = useRouter();
@@ -27,12 +28,14 @@ export default function FilesScreenRoute() {
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
     const { id: sessionIdParam } = params;
     const sessionId = String(sessionIdParam ?? '').trim();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeScope = useSessionRouteServerScope(params);
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId,
         'SessionFilesRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
     const openRight = pane.openRight;
@@ -51,13 +54,14 @@ export default function FilesScreenRoute() {
     React.useEffect(() => {
         if (!isFocused) return;
         if (!sessionId) return;
+        if (!sessionHydrated) return;
         if (initializedRightPaneSessionRef.current === sessionId) return;
         initializedRightPaneSessionRef.current = sessionId;
         openRight({ tabId: 'files' });
         if (pane.scopeState?.right?.activeTabId !== 'files') {
             setRightTab('files');
         }
-    }, [isFocused, openRight, sessionId, setRightTab, pane.scopeState?.right?.activeTabId]);
+    }, [isFocused, openRight, sessionHydrated, sessionId, setRightTab, pane.scopeState?.right?.activeTabId]);
 
     const handleNavigateToDetails = React.useCallback((key: string) => {
         const targetHref = resolveSessionRoutePathForSurface(sessionId, 'tabs', {
@@ -90,7 +94,7 @@ export default function FilesScreenRoute() {
         safeRouterBack({ router, navigation, fallbackHref: routeScope.buildHref(sessionId) });
     }, [closeRight, navigation, routeScope, router, sessionId]);
 
-    if (!sessionId) {
+    if (!sessionId || sessionMissingAfterHydration) {
         return <SessionInvalidLinkFallback />;
     }
 
@@ -106,6 +110,7 @@ export default function FilesScreenRoute() {
                         scopeId={scopeId}
                         surface="browse"
                         routeServerId={routeScope.serverId ?? undefined}
+                        routeHydrationState={routeHydrationState}
                         safeAreaPadding={false}
                     />
                 ) : (

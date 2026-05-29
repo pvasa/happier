@@ -61,6 +61,10 @@ vi.mock('@/components/sessions/files/file/editor/FileEditorPanel', () => ({
   FileEditorPanel: (props: any) => React.createElement('FileEditorPanel', props),
 }));
 
+vi.mock('@/components/ui/markdown/editor/RichMarkdownEditorPanel', () => ({
+  RichMarkdownEditorPanel: (props: any) => React.createElement('RichMarkdownEditorPanel', props),
+}));
+
 vi.mock('@/components/sessions/files/file/FileScreenState', () => ({
   FileLoadingState: (props: any) => React.createElement('FileLoadingState', props),
   FileErrorState: (props: any) => React.createElement('FileErrorState', props),

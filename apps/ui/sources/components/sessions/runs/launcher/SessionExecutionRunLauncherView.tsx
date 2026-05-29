@@ -8,11 +8,17 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { buildResumeSessionExtrasFromUiState, DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
+import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { useExecutionRunsBackendsForSession } from '@/hooks/server/useExecutionRunsBackendsForSession';
 import { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import { useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import {
+    isSessionRouteHydrationAvailable,
+    isSessionRouteHydrationMissing,
+    type SessionRouteHydrationState,
+} from '@/sync/domains/session/sessionRouteHydrationState';
 import { Text } from '@/components/ui/text/Text';
 import { buildAvailableReviewEngineOptions } from '@/sync/domains/reviews/reviewEngineCatalog';
 import { getModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
@@ -88,25 +94,34 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export const SessionExecutionRunLauncherView = React.memo((props: Readonly<{
+type SessionExecutionRunLauncherViewProps = Readonly<{
     sessionId: string;
     scopeId?: string;
     initialIntent?: ExecutionRunIntent;
     presentation?: 'screen' | 'panel';
     onRequestClose?: () => void;
-}>) => {
+    routeHydrationState?: SessionRouteHydrationState;
+}>;
+
+type SessionExecutionRunLauncherContentProps = Omit<SessionExecutionRunLauncherViewProps, 'routeHydrationState'> & Readonly<{
+    routeHydrationState: SessionRouteHydrationState;
+}>;
+
+const SessionExecutionRunLauncherContent = React.memo((props: SessionExecutionRunLauncherContentProps) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
-    const hydrateReady = useHydrateSessionForRoute(props.sessionId, 'SessionExecutionRunLauncherView.hydrate');
+    const hydrateReady = isSessionRouteHydrationAvailable(props.routeHydrationState);
+    const hydrateMissing = isSessionRouteHydrationMissing(props.routeHydrationState);
     const session = useSession(props.sessionId);
     const settings = useSettings();
     const enabledAgentIds = useEnabledAgentIds();
     const executionRunsBackends = useExecutionRunsBackendsForSession(props.sessionId);
     const { machineReachable } = useSessionMachineReachability(props.sessionId);
+    const machineTarget = useSessionMachineTarget(props.sessionId);
     const machineId = React.useMemo(
-        () => resolveSessionMachineId((session as any)?.metadata),
-        [(session as any)?.metadata],
+        () => machineTarget?.machineId ?? resolveSessionMachineId((session as any)?.metadata),
+        [machineTarget?.machineId, (session as any)?.metadata],
     );
     const agentId = React.useMemo(
         () => {
@@ -437,6 +452,10 @@ export const SessionExecutionRunLauncherView = React.memo((props: Readonly<{
         validationError,
     ]);
 
+    if (hydrateMissing) {
+        return <Text style={styles.label}>{t('common.unavailable')}</Text>;
+    }
+
     if (!hydrateReady) {
         return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
     }
@@ -581,4 +600,17 @@ export const SessionExecutionRunLauncherView = React.memo((props: Readonly<{
             ) : null}
         </View>
     );
+});
+
+const SessionExecutionRunLauncherOwnHydration = React.memo((props: Omit<SessionExecutionRunLauncherViewProps, 'routeHydrationState'>) => {
+    const routeHydrationState = useHydrateSessionForRoute(props.sessionId, 'SessionExecutionRunLauncherView.hydrate');
+    return <SessionExecutionRunLauncherContent {...props} routeHydrationState={routeHydrationState} />;
+});
+
+export const SessionExecutionRunLauncherView = React.memo((props: SessionExecutionRunLauncherViewProps) => {
+    const { routeHydrationState, ...launcherProps } = props;
+    if (routeHydrationState) {
+        return <SessionExecutionRunLauncherContent {...launcherProps} routeHydrationState={routeHydrationState} />;
+    }
+    return <SessionExecutionRunLauncherOwnHydration {...launcherProps} />;
 });

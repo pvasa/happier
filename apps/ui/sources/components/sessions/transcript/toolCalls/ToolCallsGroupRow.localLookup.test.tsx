@@ -6,12 +6,19 @@ import {
     installTranscriptCommonModuleMocks,
     resetTranscriptCommonModuleMockState,
 } from '../transcriptTestHelpers';
+import type {
+    TranscriptForkCommon,
+    TranscriptMessageDisplayCommon,
+    TranscriptToolChromeCommon,
+    TranscriptToolRouteCommon,
+} from '@/components/sessions/transcript/transcriptSessionCommon';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let messageById: Record<string, any> = {};
 let renderedToolCallsGroupViewProps: any[] = [];
+let renderedToolCallsGroupViewWithCommonProps: any[] = [];
 
 installTranscriptCommonModuleMocks({
     storage: async () => {
@@ -19,9 +26,18 @@ installTranscriptCommonModuleMocks({
         return createStorageModuleStub({
             useMessagesByIds: (_sessionId: string, messageIds: readonly string[]) =>
                 messageIds.map((id) => messageById[id]).filter(Boolean),
+            useSessionForkSupportSource: () => null,
+            useSessionMessagesById: () => ({}),
+            useSessionMessagesReducerState: () => null,
+            useSessionWorkspacePath: () => null,
+            useSetting: () => null,
         });
     },
 });
+
+vi.mock('@/hooks/server/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => false,
+}));
 
 vi.mock('@/components/sessions/transcript/motion/TranscriptEnterWrapper', () => ({
   TranscriptEnterWrapper: (props: any) => React.createElement(React.Fragment, null, props.children),
@@ -32,12 +48,90 @@ vi.mock('@/components/sessions/transcript/turns/toolCalls/ToolCallsGroupView', (
     renderedToolCallsGroupViewProps.push(props);
     return React.createElement('ToolCallsGroupView', props);
   },
+  ToolCallsGroupViewWithSessionCommon: (props: any) => {
+    renderedToolCallsGroupViewWithCommonProps.push(props);
+    return React.createElement('ToolCallsGroupViewWithSessionCommon', props);
+  },
 }));
+
+function getRenderedToolCallsGroupViewProps() {
+    return [...renderedToolCallsGroupViewProps, ...renderedToolCallsGroupViewWithCommonProps];
+}
 
 describe('ToolCallsGroupRow', () => {
   beforeEach(() => {
     messageById = {};
     renderedToolCallsGroupViewProps = [];
+    renderedToolCallsGroupViewWithCommonProps = [];
+  });
+
+  it('forwards parent-provided transcript session common while keeping row-local tool lookup', async () => {
+    const messageDisplayCommon = {
+      sessionThinkingDisplayMode: 'inline',
+      sessionThinkingInlineChrome: 'plain',
+      sessionThinkingInlinePresentation: 'summary',
+      transcriptMessageTimestampDisplayMode: 'never',
+      transcriptStreamingMarkdownRenderingEnabled: false,
+      transcriptStreamingPartialOutputEnabled: true,
+      transcriptStreamingSettleDelayMs: 0,
+      transcriptStreamingSmoothingEnabled: false,
+      transcriptMessageSelectionEnabled: true,
+      transcriptMessageSendToSessionEnabled: false,
+      workspacePath: null,
+    } satisfies TranscriptMessageDisplayCommon;
+    const forkCommon = {
+      executionRunsEnabled: false,
+      sessionForkSupportSource: null,
+      sessionReplayEnabled: false,
+      sessionReplayMaxSeedChars: 120_000,
+      sessionReplayStrategy: 'recent_messages',
+      sessionReplaySummaryRunnerV1: null,
+    } satisfies TranscriptForkCommon;
+    const toolChromeCommon = {
+      toolViewTimelineChromeMode: 'cards',
+      transcriptToolCallsCollapsedPreviewCount: 1,
+      transcriptToolCallsGroupShowBackground: false,
+    } satisfies TranscriptToolChromeCommon;
+    const toolRouteCommon = {
+      messagesById: {},
+      reducerState: null,
+    } satisfies TranscriptToolRouteCommon;
+    const toolMessage = {
+      kind: 'tool-call',
+      id: 'tool-1',
+      localId: null,
+      createdAt: 1,
+      tool: { id: 'bash-1', name: 'Bash', state: 'completed', input: { command: 'pwd' } },
+      children: [],
+    };
+
+    const { ToolCallsGroupRowWithSessionCommon } = await import('./ToolCallsGroupRow');
+
+    await renderScreen(React.createElement(ToolCallsGroupRowWithSessionCommon as any, {
+      sessionId: 's1',
+      toolCallsGroupId: 'group-1',
+      toolMessageIds: ['tool-1'],
+      metadata: null,
+      expanded: false,
+      onSetExpanded: () => {},
+      interaction: { canSendMessages: true, canApprovePermissions: true },
+      getMessageById: (messageId: string) => (messageId === 'tool-1' ? toolMessage : null),
+      forkCommon,
+      messageDisplayCommon,
+      toolChromeCommon,
+      toolRouteCommon,
+    }));
+
+    expect(renderedToolCallsGroupViewProps).toHaveLength(0);
+    expect(renderedToolCallsGroupViewWithCommonProps).toEqual([
+      expect.objectContaining({
+        toolMessages: [expect.objectContaining({ id: 'tool-1' })],
+        forkCommon,
+        messageDisplayCommon,
+        toolChromeCommon,
+        toolRouteCommon,
+      }),
+    ]);
   });
 
   it('uses the provided local lookup for tool rows that are not yet present in the global store', async () => {
@@ -75,7 +169,7 @@ describe('ToolCallsGroupRow', () => {
           },
         }));
 
-    expect(renderedToolCallsGroupViewProps).toEqual(
+    expect(getRenderedToolCallsGroupViewProps()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           toolMessages: [
@@ -120,7 +214,7 @@ describe('ToolCallsGroupRow', () => {
           },
         }));
 
-    expect(renderedToolCallsGroupViewProps).toEqual(
+    expect(getRenderedToolCallsGroupViewProps()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           toolMessages: [
@@ -184,7 +278,7 @@ describe('ToolCallsGroupRow', () => {
           },
         }));
 
-    expect(renderedToolCallsGroupViewProps).toEqual(
+    expect(getRenderedToolCallsGroupViewProps()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           toolMessages: [

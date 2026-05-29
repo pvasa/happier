@@ -21,6 +21,7 @@ const scrollToIndexMock = vi.fn();
 const loadOlderMessagesMock = vi.fn();
 
 let flatListRefImpl: any = null;
+let sessionViewportState: { isPinned: boolean; offsetY: number; lastUpdatedAt: number; source: 'default' | 'observed' } | null = null;
 
 const buildChatListItemsMock = vi.fn((..._args: any[]) => ([] as any[]));
 
@@ -36,12 +37,17 @@ vi.mock('./ChatFooter', () => ({
 
 vi.mock('./MessageView', () => ({
   MessageView: () => React.createElement('MessageView'),
+  MessageViewWithSessionCommon: () => React.createElement('MessageViewWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/transcript/turns/TurnView', () => ({
   TurnView: (props: any) => {
     capturedTurnViewProps = props;
     return React.createElement('TurnView');
+  },
+  TurnViewWithSessionCommon: (props: any) => {
+    capturedTurnViewProps = props;
+    return React.createElement('TurnViewWithSessionCommon');
   },
 }));
 
@@ -66,6 +72,7 @@ vi.mock('@/sync/sync', () => ({
     loadOlderMessages: loadOlderMessagesMock,
     loadNewerMessages: vi.fn(),
     hasDeferredNewerMessages: () => false,
+    getSessionViewport: () => sessionViewportState,
     getSyncTuning: () => ({
       transcriptForwardPrefetchThresholdPx: 0,
       transcriptBackwardPrefetchThresholdPx: 0,
@@ -87,6 +94,7 @@ describe('ChatList (initial scroll/pagination behavior)', () => {
     scrollToIndexMock.mockClear();
     loadOlderMessagesMock.mockReset();
     buildChatListItemsMock.mockClear();
+    sessionViewportState = null;
 
     flatListRefImpl = {
       scrollToOffset: scrollToOffsetMock,
@@ -245,6 +253,59 @@ describe('ChatList (initial scroll/pagination behavior)', () => {
       const screen = await renderLegacyChatList({ flushOptions: { cycles: 0 } });
 
       expect(scrollerEl.scrollTop).toBe(0);
+      await screen.unmount();
+    } finally {
+      (globalThis as any).document = prevDocument;
+      (globalThis as any).window = prevWindow;
+    }
+  });
+
+  it('restores an observed unpinned viewport during initial fill without pinning it', async () => {
+    legacyChatListHarnessState.sessionState = { ...legacyChatListHarnessState.sessionState, seq: 25 };
+    legacyChatListHarnessState.sessionMessagesState = {
+      isLoaded: true,
+      messages: [{ id: 'm1' }],
+    };
+    sessionViewportState = {
+      isPinned: false,
+      offsetY: 320,
+      lastUpdatedAt: 1,
+      source: 'observed',
+    };
+    loadOlderMessagesMock.mockResolvedValue({ loaded: 0, hasMore: false, status: 'no_more' });
+
+    const scrollerEl: any = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      scrollTop: 0,
+    };
+    const rootEl: any = {
+      querySelectorAll: () => [scrollerEl],
+      scrollHeight: 0,
+      clientHeight: 0,
+    };
+
+    const prevDocument = (globalThis as any).document;
+    const prevWindow = (globalThis as any).window;
+    try {
+      (globalThis as any).document = {
+        getElementById: () => rootEl,
+      };
+      (globalThis as any).window = {
+        getComputedStyle: () => ({ overflowY: 'auto' }),
+      };
+
+      const screen = await renderLegacyChatList({ flushOptions: { cycles: 0 } });
+
+      requireCapturedFlatListProps();
+      await triggerLegacyChatListInitialFill({
+        contentHeight: 1000,
+        flushOptions: { cycles: 2 },
+        layoutHeight: 500,
+      });
+
+      expect(scrollerEl.scrollTop).toBe(320);
+      expect(scrollToOffsetMock).not.toHaveBeenCalled();
       await screen.unmount();
     } finally {
       (globalThis as any).document = prevDocument;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
     createToolCallMessageFixture,
@@ -13,7 +13,17 @@ import { installToolCallsGroupViewCommonModuleMocks } from './toolCallsGroupView
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-let collapsedPreviewCount: number = 1;
+let collapsedPreviewCount: number | null = 1;
+const stableMessagesById = {};
+const stableReducerState = createReducer();
+const flashListCompatMockState = vi.hoisted(() => ({
+    mappingKeyCalls: [] as Array<Readonly<{ index: number; itemKey: string | number | bigint }>>,
+}));
+const storageHookCalls = vi.hoisted(() => [] as string[]);
+const messageViewMockState = vi.hoisted(() => ({
+    messageViewCalls: [] as Array<Record<string, unknown>>,
+    messageViewWithCommonCalls: [] as Array<Record<string, unknown>>,
+}));
 
 installToolCallsGroupViewCommonModuleMocks({
     reactNative: async () => {
@@ -47,16 +57,34 @@ installToolCallsGroupViewCommonModuleMocks({
             importOriginal,
             overrides: {
                 useSetting: (key: string) => {
+                    storageHookCalls.push(`useSetting:${key}`);
                     if (key === 'toolViewTimelineChromeMode') return 'activity_feed';
                     if (key === 'transcriptToolCallsCollapsedPreviewCount') return collapsedPreviewCount;
                     return null;
                 },
-                useSessionMessagesById: () => ({}),
-                useSessionMessagesReducerState: () => createReducer(),
+                useSessionMessagesById: () => {
+                    storageHookCalls.push('useSessionMessagesById');
+                    return stableMessagesById;
+                },
+                useSessionMessagesReducerState: () => {
+                    storageHookCalls.push('useSessionMessagesReducerState');
+                    return stableReducerState;
+                },
             },
         });
     },
 });
+
+vi.mock('@/components/sessions/transcript/MessageView', () => ({
+    MessageView: (props: Record<string, unknown>) => {
+        messageViewMockState.messageViewCalls.push(props);
+        return React.createElement('MessageView', props);
+    },
+    MessageViewWithSessionCommon: (props: Record<string, unknown>) => {
+        messageViewMockState.messageViewWithCommonCalls.push(props);
+        return React.createElement('MessageViewWithSessionCommon', props);
+    },
+}));
 
 vi.mock('@/components/tools/shell/views/ToolView', () => ({
     ToolView: () => null,
@@ -82,8 +110,122 @@ vi.mock('@/components/sessions/transcript/motion/TranscriptCollapsible', () => (
     ),
 }));
 
+vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', () => ({
+    useMappingHelper: () => ({
+        getMappingKey: (itemKey: string | number | bigint, index: number) => {
+            flashListCompatMockState.mappingKeyCalls.push({ itemKey, index });
+            return index;
+        },
+    }),
+}));
+
 describe('ToolCallsGroupView (collapsed preview)', () => {
+    beforeEach(() => {
+        flashListCompatMockState.mappingKeyCalls = [];
+        storageHookCalls.length = 0;
+        messageViewMockState.messageViewCalls = [];
+        messageViewMockState.messageViewWithCommonCalls = [];
+    });
+
     afterEach(standardCleanup);
+
+    it('routes preview and body tool row keys through the FlashList mapping helper', async () => {
+        collapsedPreviewCount = 2;
+
+        const toolMessages = [
+            createToolCallMessageFixture({ id: 'm1', createdAt: 1 }),
+            createToolCallMessageFixture({ id: 'm2', createdAt: 2 }),
+            createToolCallMessageFixture({ id: 'm3', createdAt: 3 }),
+        ];
+
+        await renderToolCallsGroupView({
+            toolMessages,
+            expanded: false,
+            setExpanded: vi.fn(),
+        });
+
+        expect(flashListCompatMockState.mappingKeyCalls).toEqual([
+            { itemKey: 'preview:m2', index: 0 },
+            { itemKey: 'preview:m3', index: 1 },
+            { itemKey: 'm1', index: 0 },
+            { itemKey: 'm2', index: 1 },
+            { itemKey: 'm3', index: 2 },
+        ]);
+    });
+
+    it('renders with parent-provided transcript session common without row-local session storage subscriptions', async () => {
+        const { renderScreen } = await import('@/dev/testkit');
+        const { ToolCallsGroupViewWithSessionCommon } = await import('./ToolCallsGroupView');
+        const reducerState = createReducer();
+        const toolMessages: ToolCallMessage[] = [
+            {
+                ...createToolCallMessageFixture({ id: 'structured-tool', createdAt: 1 }),
+                meta: {
+                    happier: {
+                        kind: 'review_findings.v1',
+                        payload: { findings: [] },
+                    },
+                },
+            } as ToolCallMessage,
+        ];
+        const forkCommon = {
+            executionRunsEnabled: true,
+            sessionForkSupportSource: null,
+            sessionReplayEnabled: true,
+            sessionReplayMaxSeedChars: 1000,
+            sessionReplayStrategy: 'summary_plus_recent',
+            sessionReplaySummaryRunnerV1: null,
+        } as const;
+        const messageDisplayCommon = {
+            sessionThinkingDisplayMode: 'inline',
+            sessionThinkingInlineChrome: 'plain',
+            sessionThinkingInlinePresentation: 'full',
+            transcriptMessageTimestampDisplayMode: 'always',
+            transcriptStreamingMarkdownRenderingEnabled: true,
+            transcriptStreamingPartialOutputEnabled: true,
+            transcriptStreamingSettleDelayMs: 0,
+            transcriptStreamingSmoothingEnabled: true,
+            transcriptMessageSelectionEnabled: true,
+            transcriptMessageSendToSessionEnabled: false,
+            workspacePath: null,
+        } as const;
+        const toolChromeCommon = {
+            toolViewTimelineChromeMode: 'activity_feed',
+            transcriptToolCallsCollapsedPreviewCount: 1,
+            transcriptToolCallsGroupShowBackground: false,
+        } as const;
+        const toolRouteCommon = {
+            messagesById: {},
+            reducerState,
+        } as const;
+
+        await renderScreen(
+            <ToolCallsGroupViewWithSessionCommon
+                id="toolCalls:1"
+                status="completed"
+                toolMessages={toolMessages}
+                metadata={null}
+                sessionId="s1"
+                interaction={{ canSendMessages: true, canApprovePermissions: true }}
+                expanded={true}
+                setExpanded={vi.fn()}
+                forkCommon={forkCommon}
+                messageDisplayCommon={messageDisplayCommon}
+                toolChromeCommon={toolChromeCommon}
+                toolRouteCommon={toolRouteCommon}
+            />,
+        );
+
+        expect(storageHookCalls).toEqual([]);
+        expect(messageViewMockState.messageViewCalls).toHaveLength(0);
+        expect(messageViewMockState.messageViewWithCommonCalls).toHaveLength(1);
+        expect(messageViewMockState.messageViewWithCommonCalls[0]).toMatchObject({
+            forkCommon,
+            messageDisplayCommon,
+            toolChromeCommon,
+            toolRouteCommon,
+        });
+    });
 
     it('renders the last N tool previews when collapsed', async () => {
         collapsedPreviewCount = 2;
@@ -118,6 +260,30 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
             'transcript-tool-calls-preview-row',
             'transcript-tool-calls-preview-row',
         ]);
+    });
+
+    it('defaults to the newest three tool previews when the setting is unavailable', async () => {
+        collapsedPreviewCount = null;
+
+        const toolMessages = [
+            createToolCallMessageFixture({ id: 'm1', createdAt: 1 }),
+            createToolCallMessageFixture({ id: 'm2', createdAt: 2 }),
+            createToolCallMessageFixture({ id: 'm3', createdAt: 3 }),
+            createToolCallMessageFixture({ id: 'm4', createdAt: 4 }),
+        ];
+
+        const screen = await renderToolCallsGroupView({
+            toolMessages,
+            setExpanded: vi.fn(),
+        });
+
+        const previewIds = screen
+            .findAllByTestId('transcript-tool-calls-preview-row')
+            .map((p) => (p.props as any).children?.props?.messageId)
+            .filter(Boolean);
+
+        expect(previewIds).toEqual(['m2', 'm3', 'm4']);
+        expect(screen.findAllByTestId('transcript-tool-calls-preview-more')).toHaveLength(1);
     });
 
     it('updates collapsed previews to the newest tools when a tool is appended', async () => {

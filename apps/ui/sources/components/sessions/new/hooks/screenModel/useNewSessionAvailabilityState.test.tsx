@@ -17,6 +17,7 @@ installNewSessionScreenModelCommonModuleMocks({
 const cliRefreshA = vi.fn();
 const cliRefreshB = vi.fn();
 let cliRefreshCurrent = cliRefreshA;
+let cliDetectionTimestamp = 123;
 const useCLIDetectionMock = vi.fn();
 
 vi.mock('@/hooks/auth/useCLIDetection', () => ({
@@ -31,7 +32,7 @@ vi.mock('@/hooks/auth/useCLIDetection', () => ({
             resolutionSource: {},
             tmux: null,
             isDetecting: false,
-            timestamp: 123,
+            timestamp: cliDetectionTimestamp,
             refresh: cliRefreshCurrent,
         };
     },
@@ -69,8 +70,49 @@ describe('useNewSessionAvailabilityState', () => {
         capabilitiesRefreshA.mockClear();
         capabilitiesRefreshB.mockClear();
         cliRefreshCurrent = cliRefreshA;
+        cliDetectionTimestamp = 123;
         capabilitiesRefreshCurrent = capabilitiesRefreshA;
         capabilitiesStateCurrent = { status: 'idle' };
+    });
+
+    it('keeps selection callbacks stable when CLI detection stays ready', async () => {
+        vi.resetModules();
+
+        const { useNewSessionAvailabilityState } = await import('./useNewSessionAvailabilityState');
+        const settings = {};
+        const enabledAgentIds = ['claude', 'codex'] as any;
+        const agentNewSessionOptionStateByAgentId = {};
+        const resolvedBackendEntries: any[] = [];
+        const machines: Machine[] = [];
+        const setBackendTarget = vi.fn();
+        const setDismissedCliWarnings = vi.fn();
+        const allProfiles: any[] = [];
+
+        const hook = await renderHook((props: { salt: number }) => useNewSessionAvailabilityState({
+            selectedMachineId: null,
+            selectedMachine: null,
+            capabilityServerId: 'server-1',
+            settings: settings as any,
+            agentType: 'claude' as any,
+            resumeSessionId: null,
+            enabledAgentIds,
+            agentNewSessionOptionStateByAgentId,
+            resolvedBackendEntries,
+            selectedBackendEntry: null,
+            setBackendTarget,
+            machines,
+            dismissedCliWarnings: null,
+            setDismissedCliWarnings,
+            allProfiles,
+        }), { initialProps: { salt: 0 } });
+        const firstIsAgentSelectable = hook.getCurrent().isAgentSelectable;
+        const firstIsBackendEntrySelectable = hook.getCurrent().isBackendEntrySelectable;
+
+        cliDetectionTimestamp = 456;
+        await hook.rerender({ salt: 1 });
+
+        expect(hook.getCurrent().isAgentSelectable).toBe(firstIsAgentSelectable);
+        expect(hook.getCurrent().isBackendEntrySelectable).toBe(firstIsBackendEntrySelectable);
     });
 
     it('does not auto-switch the selected backend when CLI detection marks it unavailable', async () => {

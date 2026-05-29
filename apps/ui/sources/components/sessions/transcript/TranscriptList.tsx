@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { FlatList, Platform, View } from 'react-native';
 import { FlashList } from '@/components/ui/lists/flashListCompat/FlashListCompat';
-import { MessageView } from '@/components/sessions/transcript/MessageView';
+import { MessageViewWithSessionCommon } from '@/components/sessions/transcript/MessageView';
 import { ChatFooter } from '@/components/sessions/transcript/ChatFooter';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
@@ -9,6 +9,8 @@ import { useSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { TRANSCRIPT_TOP_GUTTER_PX } from '@/components/sessions/transcript/_constants';
+import { useTranscriptSessionCommon } from '@/components/sessions/transcript/transcriptSessionCommon';
+import { useOptionalTranscriptSelectionState } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 
 type TranscriptInteraction = {
     canSendMessages: boolean;
@@ -48,8 +50,10 @@ export const TranscriptList = React.memo((props: {
     isLoaded?: boolean;
 }) => {
     const transcriptListImplementation = useSetting('transcriptListImplementation');
-    const sessionThinkingDisplayMode = useSetting('sessionThinkingDisplayMode');
-    const sessionThinkingInlinePresentation = useSetting('sessionThinkingInlinePresentation');
+    const transcriptSessionCommon = useTranscriptSessionCommon(props.sessionId);
+    const transcriptMessageSelection = useOptionalTranscriptSelectionState();
+    const sessionThinkingDisplayMode = transcriptSessionCommon.messageDisplay.sessionThinkingDisplayMode;
+    const sessionThinkingInlinePresentation = transcriptSessionCommon.messageDisplay.sessionThinkingInlinePresentation;
     const listImplementation = transcriptListImplementation === 'flatlist_legacy' ? 'flatlist_legacy' : 'flash_v2';
     const listData = React.useMemo(() => {
         if (listImplementation === 'flatlist_legacy') {
@@ -89,21 +93,37 @@ export const TranscriptList = React.memo((props: {
             item.isThinking === true &&
             sessionThinkingDisplayMode === 'inline';
         return (
-            <MessageView
+            <MessageViewWithSessionCommon
                 message={item}
                 metadata={props.metadata}
                 sessionId={props.sessionId}
                 interaction={props.interaction}
+                forkCommon={transcriptSessionCommon.fork}
+                messageDisplayCommon={transcriptSessionCommon.messageDisplay}
+                toolChromeCommon={transcriptSessionCommon.toolChrome}
+                toolRouteCommon={transcriptSessionCommon.toolRoute}
                 thinkingExpanded={controlledThinking ? resolveThinkingExpanded(item.id) : undefined}
                 onThinkingExpandedChange={controlledThinking ? (next) => setThinkingExpanded(item.id, next) : undefined}
             />
         );
-    }, [props.interaction, props.metadata, props.sessionId, resolveThinkingExpanded, sessionThinkingDisplayMode, setThinkingExpanded]);
+    }, [
+        props.interaction,
+        props.metadata,
+        props.sessionId,
+        resolveThinkingExpanded,
+        sessionThinkingDisplayMode,
+        setThinkingExpanded,
+        transcriptSessionCommon.fork,
+        transcriptSessionCommon.messageDisplay,
+        transcriptSessionCommon.toolChrome,
+        transcriptSessionCommon.toolRoute,
+    ]);
 
     return (
         listImplementation === 'flatlist_legacy' ? (
             <FlatList
                 data={listData}
+                extraData={transcriptMessageSelection.selectionVersion}
                 inverted={true}
                 keyExtractor={keyExtractor}
                 maintainVisibleContentPosition={{
@@ -119,6 +139,7 @@ export const TranscriptList = React.memo((props: {
         ) : (
             <FlashList
                 data={listData}
+                extraData={transcriptMessageSelection.selectionVersion}
                 keyExtractor={keyExtractor}
                 getItemType={getItemType}
                 maintainVisibleContentPosition={{ startRenderingFromBottom: true }}

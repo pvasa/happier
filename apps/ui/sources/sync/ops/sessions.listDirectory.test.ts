@@ -52,27 +52,37 @@ const sessionRpcWithServerScopeSpy = vi.fn(
         return sessionRPCSpy(sessionId, method, payload);
     },
 );
+const machineRpcWithServerScopeSpy = vi.fn(
+    async (params: unknown): Promise<SessionListDirectoryRpcResponse> => {
+        const { machineId, method, payload } = params as { machineId: string; method: string; payload: unknown };
+        return machineRPCSpy(machineId, method, payload);
+    },
+);
 
-vi.mock('../api/session/apiSocket', () => ({
+vi.mock('@/sync/api/session/apiSocket', () => ({
     apiSocket: {
         sessionRPC: (sessionId: string, method: string, payload: any) => sessionRPCSpy(sessionId, method, payload),
         machineRPC: (machineId: string, method: string, payload: any) => machineRPCSpy(machineId, method, payload),
     },
 }));
 
-vi.mock('../api/capabilities/getReadyServerFeatures', () => ({
+vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
     getReadyServerFeatures: (params: unknown) => getReadyServerFeaturesSpy(params),
 }));
 
-vi.mock('../runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({
     sessionRpcWithServerScope: (params: unknown) => sessionRpcWithServerScopeSpy(params),
 }));
 
-vi.mock('../runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (params: unknown) => machineRpcWithServerScopeSpy(params),
+}));
+
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
     resolvePreferredServerIdForSessionId: () => 'server-1',
 }));
 
-vi.mock('../domains/state/storage', () => ({
+vi.mock('@/sync/domains/state/storage', () => ({
     storage: {
         getState: () => getStateSpy(),
     },
@@ -93,10 +103,19 @@ describe('sessionListDirectory', () => {
                     },
                 },
             },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'm1.local' },
+                },
+            },
         });
 
         sessionRPCSpy.mockClear();
         machineRPCSpy.mockClear();
+        machineRpcWithServerScopeSpy.mockClear();
         getReadyServerFeaturesSpy.mockClear();
 
         const res = await sessionListDirectory('s1', 'src');
@@ -117,6 +136,14 @@ describe('sessionListDirectory', () => {
                         path: '~/repo',
                         machineId: 'm1',
                     },
+                },
+            },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'm1.local' },
                 },
             },
         });
@@ -147,6 +174,14 @@ describe('sessionListDirectory', () => {
                     },
                 },
             },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'm1.local' },
+                },
+            },
             getProjectForSession: (sessionId: string) =>
                 sessionId === 's1'
                     ? {
@@ -160,6 +195,7 @@ describe('sessionListDirectory', () => {
 
         sessionRPCSpy.mockClear();
         machineRPCSpy.mockClear();
+        machineRpcWithServerScopeSpy.mockClear();
 
         const res = await sessionListDirectory('s1', 'src');
         expect(res.success).toBe(true);

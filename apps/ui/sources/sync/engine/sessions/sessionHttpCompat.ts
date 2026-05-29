@@ -87,6 +87,20 @@ function readNullableString(value: unknown): string | null | undefined {
     return typeof value === 'string' ? value : undefined;
 }
 
+function readRollbackEligibleTurnStarts(value: unknown): readonly number[] | null | undefined {
+    if (value === null) return null;
+    if (!Array.isArray(value)) return undefined;
+
+    const starts: number[] = [];
+    for (const entry of value) {
+        if (typeof entry !== 'number' || !Number.isFinite(entry)) continue;
+        const seq = Math.trunc(entry);
+        if (seq < 0 || starts.includes(seq)) continue;
+        starts.push(seq);
+    }
+    return starts;
+}
+
 function parseServerTimingDurationMs(value: string): number | null {
     const match = /(?:^|;)\s*dur=([0-9]+(?:\.[0-9]+)?)/.exec(value);
     if (!match?.[1]) return null;
@@ -155,12 +169,14 @@ function coerceLegacySessionRecord(raw: unknown): V2SessionRecord | null {
     const shareRecord = isRecord(raw.share) ? raw.share : null;
     const shareAccessLevel = readOptionalString(shareRecord?.accessLevel) ?? topLevelAccessLevel;
     const shareCanApprovePermissions = readOptionalBoolean(shareRecord?.canApprovePermissions) ?? topLevelCanApprovePermissions;
+    const rollbackEligibleTurnStarts = readRollbackEligibleTurnStarts(raw.rollbackEligibleTurnStarts);
 
     return {
         id,
         seq,
         createdAt,
         updatedAt,
+        meaningfulActivityAt: readNumber(raw.meaningfulActivityAt) ?? undefined,
         active,
         activeAt,
         archivedAt: readNullableNumber(raw.archivedAt),
@@ -172,6 +188,7 @@ function coerceLegacySessionRecord(raw: unknown): V2SessionRecord | null {
         lastViewedSessionSeq: readNullableNumber(raw.lastViewedSessionSeq),
         pendingPermissionRequestCount: readNumber(raw.pendingPermissionRequestCount) ?? undefined,
         pendingUserActionRequestCount: readNumber(raw.pendingUserActionRequestCount) ?? undefined,
+        latestTurnId: readNullableString(raw.latestTurnId),
         latestTurnStatus: raw.latestTurnStatus === 'in_progress'
             || raw.latestTurnStatus === 'completed'
             || raw.latestTurnStatus === 'cancelled'
@@ -180,10 +197,12 @@ function coerceLegacySessionRecord(raw: unknown): V2SessionRecord | null {
                 : raw.latestTurnStatus === null
                     ? null
                     : undefined,
+        latestTurnStatusObservedAt: readNullableNumber(raw.latestTurnStatusObservedAt),
         lastRuntimeIssue: raw.lastRuntimeIssue === null
             || (raw.lastRuntimeIssue && typeof raw.lastRuntimeIssue === 'object')
                 ? raw.lastRuntimeIssue as V2SessionRecord['lastRuntimeIssue']
                 : undefined,
+        ...(rollbackEligibleTurnStarts !== undefined ? { rollbackEligibleTurnStarts } : {}),
         pendingCount: readNumber(raw.pendingCount) ?? undefined,
         pendingVersion: readNumber(raw.pendingVersion) ?? undefined,
         dataEncryptionKey: readNullableString(raw.dataEncryptionKey) ?? null,

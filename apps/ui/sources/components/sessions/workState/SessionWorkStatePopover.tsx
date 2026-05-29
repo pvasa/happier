@@ -76,7 +76,10 @@ export function SessionWorkStatePopover(props: Readonly<{
         try {
             const result = await props.onSetGoal(request);
             if (result.ok) props.onRequestClose();
-            else Modal.alert(t('common.error'), result.error);
+            else {
+                props.onRequestClose();
+                Modal.alert(t('common.error'), result.error);
+            }
         } finally {
             setBusy(false);
         }
@@ -84,6 +87,7 @@ export function SessionWorkStatePopover(props: Readonly<{
 
     const clearGoal = React.useCallback(async () => {
         if (!props.onClearGoal) return;
+        props.onRequestClose();
         const confirmed = await Modal.confirm(
             t('session.workState.goal.clearTitle'),
             t('session.workState.goal.clearBody'),
@@ -93,8 +97,7 @@ export function SessionWorkStatePopover(props: Readonly<{
         setBusy(true);
         try {
             const result = await props.onClearGoal();
-            if (result.ok) props.onRequestClose();
-            else Modal.alert(t('common.error'), result.error);
+            if (!result.ok) Modal.alert(t('common.error'), result.error);
         } finally {
             setBusy(false);
         }
@@ -137,6 +140,7 @@ export function SessionWorkStatePopover(props: Readonly<{
                             }}
                             onPause={() => { void runGoalMutation({ status: 'paused' }); }}
                             onResume={() => { void runGoalMutation({ status: 'active' }); }}
+                            onComplete={() => { void runGoalMutation({ status: 'complete' }); }}
                             onClear={clearGoal}
                             busy={busy}
                         />
@@ -154,7 +158,8 @@ export function SessionWorkStatePopover(props: Readonly<{
 const styles = StyleSheet.create(() => ({
     content: {
         gap: 16,
-        minWidth: 320,
+        minWidth: 0,
+        maxWidth: '100%',
         paddingHorizontal: 14,
         paddingTop: 12,
         paddingBottom: 14,

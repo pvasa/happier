@@ -5,9 +5,10 @@ import { canResumeSessionWithOptions, getAgentVendorResumeId } from '@/agents/ru
 import { deriveAcpBackendIdFromFlavor } from '@/agents/runtime/acpFlavor';
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { SessionAuthoringValueV1Schema } from '@happier-dev/protocol';
 import type { PermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
 import type { ModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
-import { readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 
 export type ResumeSessionBaseOptions = ResumeSessionOptions;
 
@@ -22,6 +23,11 @@ function normalizeNonEmptyString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function parsePersistedConnectedServices(value: unknown): ResumeSessionBaseOptions['connectedServices'] | undefined {
+    const parsed = SessionAuthoringValueV1Schema.shape.connectedServices.safeParse(value);
+    return parsed.success && parsed.data != null ? parsed.data : undefined;
+}
+
 export function buildResumeSessionBaseOptionsFromSession(opts: {
     sessionId: string;
     session: Session;
@@ -32,7 +38,7 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
 }): ResumeSessionBaseOptions | null {
     const { sessionId, session, resumeCapabilityOptions, resumeTargetOverride, permissionOverride, modelOverride } = opts;
 
-    const reachableTarget = readMachineTargetForSession(sessionId);
+    const reachableTarget = readMachineControlTargetForSession(sessionId);
     const machineId = normalizeNonEmptyString(resumeTargetOverride?.machineId)
         ?? normalizeNonEmptyString(reachableTarget?.machineId);
     const directory = normalizeNonEmptyString(resumeTargetOverride?.directory)
@@ -69,6 +75,7 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
     if (!agentId) return null;
 
     const resume = getAgentVendorResumeId(session.metadata, agentId, resumeCapabilityOptions);
+    const connectedServices = parsePersistedConnectedServices(session.metadata?.connectedServices);
 
     return {
         sessionId,
@@ -76,6 +83,7 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
         directory,
         backendTarget: { kind: 'builtInAgent', agentId: getAgentCore(agentId).cli.spawnAgent },
         ...(resume ? { resume } : {}),
+        ...(connectedServices !== undefined ? { connectedServices } : {}),
         ...(session.metadata?.agentRuntimeDescriptorV1 ? { agentRuntimeDescriptorV1: session.metadata.agentRuntimeDescriptorV1 } : {}),
         ...(permissionOverride ? permissionOverride : {}),
         ...(modelOverride ? modelOverride : {}),

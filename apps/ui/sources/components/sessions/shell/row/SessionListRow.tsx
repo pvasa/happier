@@ -3,37 +3,45 @@ import { Platform, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
 
-import type {
-    TreeDropResult,
-    TreeInstructionVisual,
-} from '@/components/ui/treeDragDrop';
-import { SessionItem } from '../SessionItem';
+import type { TreeDropOverlaySharedValues } from '@/components/ui/treeDragDrop';
+import { SessionItem, type SessionItemProps } from '../SessionItem';
 import {
     useSessionInlineDrag,
-    type SessionInlineDragVisualSharedValues,
+    type UseSessionInlineDragCancelEvent,
     type UseSessionInlineDragDropResultEvent,
     type UseSessionInlineDragResolveDropResultEvent,
+    type UseSessionInlineDragResolvedDrop,
 } from '../useSessionInlineDrag';
 import type {
     RegisterSessionListTreeRowBounds,
     UnregisterSessionListTreeRowBounds,
 } from '../SessionListHeaderFrame';
-import { SessionListDropIndicator } from '../SessionListDropIndicator';
 
+/**
+ * A single draggable session row.
+ *
+ * Phase 3 of the session-list drag geometry & performance unification: this row
+ * no longer renders a row-local drop indicator and no longer receives any
+ * `activeDropVisual`/`activeDropTargetId` prop. The single list-level
+ * `SessionListDropOverlay` owns the indicator, so a pointer move never
+ * reconciles this row. The row still registers its content bounds on layout so
+ * the live geometry registry can hit-test the pointer against it.
+ */
 export type SessionListRowProps = Readonly<
-    React.ComponentProps<typeof SessionItem> & {
+    Omit<SessionItemProps, 'reorderHandleGesture' | 'isBeingDragged'> & {
         sessionKey: string | null;
         treeRowId: string;
         groupKey: string;
         onDragStart: (sessionKey: string) => void;
-        resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => TreeDropResult;
+        resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
         onDropResult: (event: UseSessionInlineDragDropResultEvent) => void;
-        onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
+        onDragCancel: (event: UseSessionInlineDragCancelEvent) => void;
         isDragActive: boolean;
         isBeingDragged: boolean;
+        dragEnabled?: boolean;
         dataIndex: number;
-        dropVisual: SessionInlineDragVisualSharedValues;
-        activeDropVisual: TreeInstructionVisual;
+        /** Numeric shared values for the single list-level drop overlay. */
+        overlayShared: TreeDropOverlaySharedValues;
         onRegisterTreeRowBounds: RegisterSessionListTreeRowBounds;
         onUnregisterTreeRowBounds: UnregisterSessionListTreeRowBounds;
     }
@@ -46,13 +54,13 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
         groupKey,
         onDragStart,
         onDropResult,
-        onDragUpdate,
+        onDragCancel,
         resolveDropResult,
         isDragActive,
         isBeingDragged,
+        dragEnabled = true,
         dataIndex,
-        dropVisual,
-        activeDropVisual,
+        overlayShared,
         onRegisterTreeRowBounds,
         onUnregisterTreeRowBounds,
         ...itemProps
@@ -88,28 +96,37 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
         onDropResult(event);
     }, [getCellWrapper, onDropResult]);
 
+    const handleDragCancel = React.useCallback((event: UseSessionInlineDragCancelEvent) => {
+        const cellWrapper = getCellWrapper();
+        if (cellWrapper) {
+            cellWrapper.style.zIndex = '';
+            cellWrapper.style.overflow = '';
+        }
+        onDragCancel(event);
+    }, [getCellWrapper, onDragCancel]);
+
     const isWeb = Platform.OS === 'web';
     const isIos = Platform.OS === 'ios';
-    const isNative = Platform.OS !== 'web';
-    const inlineDragEnabled = true;
+    const inlineDragEnabled = isWeb || isIos;
+    const rowDragEnabled = inlineDragEnabled && dragEnabled;
     const onNativeContextMenuOpenChange = itemProps.onNativeContextMenuOpenChange;
     const handleLongPressActivated = React.useCallback(() => {
-        if (isWeb || typeof onNativeContextMenuOpenChange !== 'function' || isDragActive) return;
+        if (!isIos || typeof onNativeContextMenuOpenChange !== 'function' || isDragActive) return;
         onNativeContextMenuOpenChange(true);
-    }, [isDragActive, isWeb, onNativeContextMenuOpenChange]);
+    }, [isDragActive, isIos, onNativeContextMenuOpenChange]);
 
     const { gesture, animatedStyle } = useSessionInlineDrag({
-        enabled: inlineDragEnabled,
+        enabled: rowDragEnabled,
         sessionKey,
         groupKey,
         onDragStart: handleDragStart,
         onDropResult: handleDropResult,
-        onDragUpdate,
+        onDragCancel: handleDragCancel,
         resolveDropResult,
         dataIndex,
-        dropVisual,
-        activateAfterLongPressMs: isWeb ? undefined : 350,
-        onLongPressActivated: !isWeb && typeof onNativeContextMenuOpenChange === 'function'
+        overlayShared,
+        activateAfterLongPressMs: isIos ? 350 : undefined,
+        onLongPressActivated: isIos && typeof onNativeContextMenuOpenChange === 'function'
             ? () => handleLongPressActivated()
             : undefined,
     });
@@ -140,7 +157,7 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
     const sessionItem = (
         <SessionItem
             {...itemProps}
-            reorderHandleGesture={isWeb ? gesture : undefined}
+            reorderHandleGesture={isWeb && rowDragEnabled ? gesture : undefined}
             isBeingDragged={isBeingDragged}
         />
     );
@@ -153,15 +170,11 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
             pointerEvents={rowPointerEvents}
             onLayout={() => onRegisterTreeRowBounds(treeRowId, wrapperRef.current)}
         >
-            <SessionListDropIndicator
-                targetId={treeRowId}
-                visual={activeDropVisual}
-            />
             {sessionItem}
         </Animated.View>
     );
 
-    if (isNative && gesture) {
+    if (isIos && rowDragEnabled && gesture) {
         return (
             <GestureDetector gesture={gesture}>
                 {rowNode}

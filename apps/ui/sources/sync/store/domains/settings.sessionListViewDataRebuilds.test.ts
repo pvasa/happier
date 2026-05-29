@@ -237,4 +237,21 @@ describe('settings domain: sessionListViewData rebuilds', () => {
 
         expect(get().sessionListViewData).not.toBe(initial);
     });
+
+    it('rebuilds sessionListViewData when the working placement setting changes', () => {
+        const { get } = createHarness();
+
+        get().applySettingsLocal({
+            groupInactiveSessionsByProject: true,
+            sessionListInactiveGroupingV1: 'project',
+        });
+        const initial = get().sessionListViewData;
+        expect(Array.isArray(initial)).toBe(true);
+
+        get().applySettingsLocal({
+            sessionListWorkingPlacementModeV1: 'global',
+        } as any);
+
+        expect(get().sessionListViewData).not.toBe(initial);
+    });
 });

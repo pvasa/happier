@@ -30,7 +30,11 @@ let sessionMachineId: string | null = null;
 let canonicalMachineTarget: { machineId: string; basePath: string | null } | null = null;
 let sessionHydrated = true;
 let mockServerId: string | undefined;
-const hydrateSpy = vi.fn((_sessionId: string, _tag: string, _options?: { serverId?: string }) => sessionHydrated);
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) =>
+    sessionHydrated
+        ? { kind: 'available', sessionId, serverId: options?.serverId }
+        : { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' },
+);
 
 installSessionRouteCommonModuleMocks({
     reactNative: async () => {

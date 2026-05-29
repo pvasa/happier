@@ -17,6 +17,35 @@ type DiffState = {
     error: string | null;
 };
 
+function resolveReviewDiffPathsToEnsure(input: {
+    requestedPaths: readonly string[] | null;
+    tooLarge: boolean;
+    selectedPath: string;
+    reviewFiles: readonly ScmFileStatus[];
+}): string[] {
+    const pathsToEnsure: string[] = [];
+    const normalized = input.requestedPaths;
+    if (normalized && normalized.length > 0) {
+        pathsToEnsure.push(...normalized);
+    } else if (input.tooLarge) {
+        const path = input.selectedPath || input.reviewFiles[0]?.fullPath;
+        if (path) pathsToEnsure.push(path);
+    } else {
+        // When no explicit requestedPaths are provided (for example during initial load),
+        // avoid loading every diff up-front. Load a single "anchor" diff, then rely on
+        // callers to provide requestedPaths as the user scrolls/expands.
+        const anchor = input.selectedPath || input.reviewFiles[0]?.fullPath;
+        if (anchor) pathsToEnsure.push(anchor);
+    }
+
+    const seen = new Set<string>();
+    return pathsToEnsure.filter((path) => {
+        if (seen.has(path)) return false;
+        seen.add(path);
+        return true;
+    });
+}
+
 export function useChangedFilesReviewDiffLoading(input: {
     sessionId: string;
     isRepo: boolean;
@@ -114,7 +143,13 @@ export function useChangedFilesReviewDiffLoading(input: {
 
     React.useEffect(() => {
         if (!providerDiffByPath || providerDiffByPath.size === 0) return;
-        for (const path of fileStatusByPath.keys()) {
+        const pathsToEnsure = resolveReviewDiffPathsToEnsure({
+            requestedPaths: requestedPathsNormalizedRef.current,
+            tooLarge,
+            selectedPath,
+            reviewFiles,
+        });
+        for (const path of pathsToEnsure) {
             const providerDiff = providerDiffByPath.get(path);
             if (typeof providerDiff !== 'string' || providerDiff.trim().length === 0) continue;
             diffStateSource.setDiffState(path, {
@@ -124,7 +159,7 @@ export function useChangedFilesReviewDiffLoading(input: {
             });
             lastFetchAtMsByPathRef.current[path] = Date.now();
         }
-    }, [diffStateSource, fileStatusByPath, providerDiffByPath]);
+    }, [diffStateSource, providerDiffByPath, requestedPathsKey, reviewFiles, selectedPath, tooLarge]);
 
     React.useEffect(() => {
         if (!sessionId) return;
@@ -228,26 +263,11 @@ export function useChangedFilesReviewDiffLoading(input: {
         };
 
         const run = async () => {
-            const pathsToEnsure: string[] = [];
-            const normalized = requestedPathsNormalizedRef.current;
-            if (normalized && normalized.length > 0) {
-                pathsToEnsure.push(...normalized);
-            } else if (tooLarge) {
-                const path = selectedPath || reviewFiles[0]!.fullPath;
-                if (path) pathsToEnsure.push(path);
-            } else {
-                // When no explicit requestedPaths are provided (for example during initial load),
-                // avoid fetching every diff up-front. Fetch a single "anchor" diff, then rely on
-                // callers to provide requestedPaths as the user scrolls/expands.
-                const anchor = selectedPath || reviewFiles[0]?.fullPath;
-                if (anchor) pathsToEnsure.push(anchor);
-            }
-
-            const seen = new Set<string>();
-            const uniquePaths = pathsToEnsure.filter((p) => {
-                if (seen.has(p)) return false;
-                seen.add(p);
-                return true;
+            const uniquePaths = resolveReviewDiffPathsToEnsure({
+                requestedPaths: requestedPathsNormalizedRef.current,
+                tooLarge,
+                selectedPath,
+                reviewFiles,
             });
 
             const resolvedConcurrency = (() => {

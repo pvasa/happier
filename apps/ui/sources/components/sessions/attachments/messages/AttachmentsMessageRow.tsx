@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
+import * as FlashListCompat from '@/components/ui/lists/flashListCompat/FlashListCompat';
 
 export type MessageAttachmentSummary = Readonly<{
     name: string;
@@ -47,6 +48,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+const fallbackAttachmentsMappingHelper: FlashListCompat.FlashListMappingHelper = {
+    getMappingKey: (itemKey: FlashListCompat.FlashListMappingKey) => itemKey,
+};
+
+function useAttachmentsMappingHelper(): FlashListCompat.FlashListMappingHelper {
+    return typeof FlashListCompat.useMappingHelper === 'function'
+        ? FlashListCompat.useMappingHelper()
+        : fallbackAttachmentsMappingHelper;
+}
+
 function formatBytes(bytes: number): string {
     const value = Number.isFinite(bytes) ? bytes : 0;
     if (value < 1024) return `${Math.max(0, Math.floor(value))} B`;
@@ -71,15 +82,16 @@ export const AttachmentsMessageRow = React.memo(function AttachmentsMessageRow(p
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
+    const { getMappingKey } = useAttachmentsMappingHelper();
 
     if (props.attachments.length === 0) return null;
 
     return (
         <View testID="message-attachments-row" style={styles.container}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
-                {props.attachments.map((a) => (
+                {props.attachments.map((a, index) => (
                     <Pressable
-                        key={`${a.path}:${a.name}`}
+                        key={getMappingKey(`${a.path}:${a.name}`, index)}
                         onPress={props.onOpenPath ? () => props.onOpenPath?.(a.path) : undefined}
                         style={styles.attachmentChip}
                     >

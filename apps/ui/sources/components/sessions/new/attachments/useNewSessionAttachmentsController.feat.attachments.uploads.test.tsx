@@ -6,10 +6,11 @@ import { Platform } from 'react-native';
 
 import type { PickedAttachment } from '@/components/sessions/attachments/AttachmentFilePicker.types';
 import { installNewSessionScreenModelCommonModuleMocks } from '@/components/sessions/new/hooks/newSessionScreenModelTestHelpers';
-import { clearAllNewSessionAttachmentDrafts } from './newSessionAttachmentDraftStore';
+import { clearAllNewSessionAttachmentDrafts, readNewSessionAttachmentDrafts } from './newSessionAttachmentDraftStore';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { followUpSpawnedSessionWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import type { NewSessionLaunchAttempt } from '@/components/sessions/new/modules/newSessionLaunchAttempt';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -115,6 +116,26 @@ installNewSessionScreenModelCommonModuleMocks({
 
 type HookValue = ReturnType<typeof import('./useNewSessionAttachmentsController').useNewSessionAttachmentsController>;
 
+function createTestLaunchAttempt(
+    attachmentMessageLocalId = 'launch-attempt-attachment-message',
+): NewSessionLaunchAttempt {
+    return {
+        attemptId: 'attempt-test',
+        spawnNonce: 'spawn-test',
+        scopeKey: 'machine:m1|server:server-a|path:/tmp|profiles:off|profile:',
+        createdSessionId: 'session-1',
+        firstTurnLocalId: 'first-turn-test',
+        attachmentMessageLocalId,
+        status: 'created',
+        prompt: {
+            prompt: '',
+            displayText: '',
+            meta: null,
+        },
+        phaseErrors: {},
+    };
+}
+
 async function renderHook(
     useValue: () => HookValue,
 ): Promise<{ getCurrent: () => HookValue; rerender: () => Promise<void>; unmount: () => void }> {
@@ -157,7 +178,8 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         uploadAttachmentDraftsToSessionSpy.mockReset();
         formatAttachmentsBlockSpy.mockClear();
         followUpSpawnedSessionWithServerScopeSpy.mockReset();
-        featureEnabledSpy.mockClear();
+        featureEnabledSpy.mockReset();
+        featureEnabledSpy.mockImplementation((featureId: string) => featureId === 'attachments.uploads');
         workspaceReviewDraftsState.draftsByRootPath.clear();
         clearWorkspaceReviewCommentDraftsSpy.mockClear();
         readCachedSnapshotForMachinePathSpy.mockReset();
@@ -221,6 +243,52 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         expect(second.getCurrent().drafts).toHaveLength(1);
         expect(second.getCurrent().agentInputAttachments).toEqual([
             expect.objectContaining({ label: 'note.txt', status: 'pending' }),
+        ]);
+    });
+
+    it('does not clear stored attachment drafts during a transient disabled feature decision', async () => {
+        const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
+        const handleCreateSession = vi.fn();
+
+        const first = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-feature-loading',
+            isCreating: false,
+            sessionPrompt: '',
+            handleCreateSession,
+            selectedProfileId: null,
+            targetServerId: 'server-a',
+            baseActionChips: [],
+        }));
+
+        await act(async () => {
+            first.getCurrent().addPickedAttachments([{
+                kind: 'native',
+                uri: 'file:///tmp/note.txt',
+                name: 'note.txt',
+                sizeBytes: 12,
+                mimeType: 'text/plain',
+            }]);
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+        await first.unmount();
+
+        featureEnabledSpy.mockImplementation((featureId: string) => (
+            featureId === 'attachments.uploads' ? false : featureId === 'files.reviewComments'
+        ));
+
+        const disabled = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-feature-loading',
+            isCreating: false,
+            sessionPrompt: '',
+            handleCreateSession,
+            selectedProfileId: null,
+            targetServerId: 'server-a',
+            baseActionChips: [],
+        }));
+        await disabled.unmount();
+
+        expect(readNewSessionAttachmentDrafts('flow-feature-loading')).toEqual([
+            expect.objectContaining({ status: 'pending' }),
         ]);
     });
 
@@ -325,6 +393,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             await afterCreated({
                 sessionId: 'session-1',
                 effectiveSpawnServerId: 'server-a',
+                launchAttempt: createTestLaunchAttempt('launch-success-message-id'),
             });
         });
 
@@ -341,6 +410,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             targetServerId: 'server-a',
             initialMessageText: 'Investigate this bug\n\n[attachments block]',
             displayText: 'Investigate this bug',
+            messageLocalId: expect.any(String),
             profileId: 'profile-work',
             metaOverrides: {
                 happier: {
@@ -371,6 +441,247 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         }));
 
         expect(remounted.getCurrent().drafts).toHaveLength(0);
+    });
+
+    it('keeps the upload message local id stable when the follow-up is retried', async () => {
+        const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
+        const handleCreateSession = vi.fn();
+        uploadAttachmentDraftsToSessionSpy.mockImplementation(async (params: { messageLocalId?: string }) => ({
+            messageLocalId: params.messageLocalId ?? 'missing-message-local-id',
+            uploaded: [{
+                name: 'note.txt',
+                path: '.happier/uploads/note.txt',
+                mimeType: 'text/plain',
+                sizeBytes: 12,
+                sha256: 'sha-note',
+            }],
+        }));
+        followUpSpawnedSessionWithServerScopeSpy
+            .mockRejectedValueOnce(new Error('temporary follow-up failure'))
+            .mockResolvedValueOnce(undefined);
+
+        const hook = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-retry-message-id',
+            isCreating: false,
+            sessionPrompt: 'Investigate this bug',
+            handleCreateSession,
+            selectedProfileId: 'profile-work',
+            targetServerId: 'server-b',
+            baseActionChips: [],
+        }));
+
+        await act(async () => {
+            hook.getCurrent().addPickedAttachments([{
+                kind: 'native',
+                uri: 'file:///tmp/note.txt',
+                name: 'note.txt',
+                sizeBytes: 12,
+                mimeType: 'text/plain',
+            }]);
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        await act(async () => {
+            hook.getCurrent().handleSend();
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        const afterCreated = handleCreateSession.mock.calls[0]?.[0]?.afterCreated;
+        expect(typeof afterCreated).toBe('function');
+
+        let retryError: unknown;
+        await act(async () => {
+            try {
+                await afterCreated({
+                    sessionId: 'session-1',
+                    effectiveSpawnServerId: 'server-b',
+                    launchAttempt: createTestLaunchAttempt(),
+                });
+            } catch (error) {
+                retryError = error;
+            }
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+        expect(retryError).toBeInstanceOf(Error);
+
+        await act(async () => {
+            await afterCreated({
+                sessionId: 'session-1',
+                effectiveSpawnServerId: 'server-b',
+                launchAttempt: createTestLaunchAttempt(),
+            });
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        const firstMessageLocalId = uploadAttachmentDraftsToSessionSpy.mock.calls[0]?.[0]?.messageLocalId;
+        const secondMessageLocalId = uploadAttachmentDraftsToSessionSpy.mock.calls[1]?.[0]?.messageLocalId;
+        expect(firstMessageLocalId).toBe('launch-attempt-attachment-message');
+        expect(secondMessageLocalId).toBe(firstMessageLocalId);
+        expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+            messageLocalId: 'launch-attempt-attachment-message',
+        }));
+    });
+
+    it('reuses uploaded draft metadata when the follow-up is retried', async () => {
+        const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
+        const handleCreateSession = vi.fn();
+        uploadAttachmentDraftsToSessionSpy.mockImplementation(async (params: {
+            drafts: ReadonlyArray<{ id: string; uploadedPath?: string }>;
+            applyDraftPatch: (id: string, patch: Record<string, unknown>) => void;
+            messageLocalId?: string;
+        }) => {
+            const firstDraft = params.drafts[0];
+            if (firstDraft && !firstDraft.uploadedPath) {
+                params.applyDraftPatch(firstDraft.id, {
+                    status: 'uploaded',
+                    uploadedPath: '.happier/uploads/note.txt',
+                    uploadedSizeBytes: 12,
+                    uploadedMimeType: 'text/plain',
+                    sha256: 'sha-note',
+                });
+            }
+            return {
+                messageLocalId: params.messageLocalId ?? 'missing-message-local-id',
+                uploaded: [{
+                    name: 'note.txt',
+                    path: '.happier/uploads/note.txt',
+                    mimeType: 'text/plain',
+                    sizeBytes: 12,
+                    sha256: 'sha-note',
+                }],
+            };
+        });
+        followUpSpawnedSessionWithServerScopeSpy.mockRejectedValue(new Error('temporary follow-up failure'));
+
+        const hook = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-retry-uploaded-draft',
+            isCreating: false,
+            sessionPrompt: 'Investigate this bug',
+            handleCreateSession,
+            selectedProfileId: 'profile-work',
+            targetServerId: 'server-b',
+            baseActionChips: [],
+        }));
+
+        await act(async () => {
+            hook.getCurrent().addPickedAttachments([{
+                kind: 'native',
+                uri: 'file:///tmp/note.txt',
+                name: 'note.txt',
+                sizeBytes: 12,
+                mimeType: 'text/plain',
+            }]);
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        await act(async () => {
+            hook.getCurrent().handleSend();
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        const afterCreated = handleCreateSession.mock.calls[0]?.[0]?.afterCreated;
+        expect(typeof afterCreated).toBe('function');
+
+        let firstRetryError: unknown;
+        await act(async () => {
+            try {
+                await afterCreated({
+                    sessionId: 'session-1',
+                    effectiveSpawnServerId: 'server-b',
+                    launchAttempt: createTestLaunchAttempt('launch-reuse-message-id'),
+                });
+            } catch (error) {
+                firstRetryError = error;
+            }
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+        expect(firstRetryError).toBeInstanceOf(Error);
+
+        let secondRetryError: unknown;
+        await act(async () => {
+            try {
+                await afterCreated({
+                    sessionId: 'session-1',
+                    effectiveSpawnServerId: 'server-b',
+                    launchAttempt: createTestLaunchAttempt('launch-reuse-message-id'),
+                });
+            } catch (error) {
+                secondRetryError = error;
+            }
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+        expect(secondRetryError).toBeInstanceOf(Error);
+
+        const secondDrafts = uploadAttachmentDraftsToSessionSpy.mock.calls[1]?.[0]?.drafts;
+        expect(secondDrafts).toEqual([
+            expect.objectContaining({
+                uploadedPath: '.happier/uploads/note.txt',
+                uploadedSizeBytes: 12,
+                uploadedMimeType: 'text/plain',
+                sha256: 'sha-note',
+            }),
+        ]);
+    });
+
+    it('adds recoverable attachment payload when upload fails', async () => {
+        const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
+        const handleCreateSession = vi.fn();
+        uploadAttachmentDraftsToSessionSpy.mockRejectedValue(new Error('temporary upload failure'));
+
+        const hook = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-retry-upload-failure',
+            isCreating: false,
+            sessionPrompt: 'Investigate this bug',
+            handleCreateSession,
+            selectedProfileId: 'profile-work',
+            targetServerId: 'server-b',
+            baseActionChips: [],
+        }));
+
+        await act(async () => {
+            hook.getCurrent().addPickedAttachments([{
+                kind: 'native',
+                uri: 'file:///tmp/note.txt',
+                name: 'note.txt',
+                sizeBytes: 12,
+                mimeType: 'text/plain',
+            }]);
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        await act(async () => {
+            hook.getCurrent().handleSend();
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        const afterCreated = handleCreateSession.mock.calls[0]?.[0]?.afterCreated;
+        expect(typeof afterCreated).toBe('function');
+
+        let uploadError: unknown;
+        await act(async () => {
+            try {
+                await afterCreated({
+                    sessionId: 'session-1',
+                    effectiveSpawnServerId: 'server-b',
+                    launchAttempt: createTestLaunchAttempt('launch-upload-failure-message-id'),
+                });
+            } catch (error) {
+                uploadError = error;
+            }
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        expect(uploadError).toMatchObject({
+            recoverableFollowUpPayload: {
+                profileId: 'profile-work',
+                attachmentDrafts: [
+                    expect.objectContaining({
+                        source: expect.objectContaining({ kind: 'native', name: 'note.txt' }),
+                    }),
+                ],
+            },
+        });
+        expect(hook.getCurrent().drafts).toHaveLength(1);
     });
 
     it('sends selected workspace review comments from a new session and keeps detached drafts', async () => {
@@ -453,6 +764,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             await afterCreated({
                 sessionId: 'session-1',
                 effectiveSpawnServerId: 'server-b',
+                launchAttempt: createTestLaunchAttempt('launch-review-message-id'),
             });
         });
 
@@ -460,6 +772,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             sessionId: 'session-1',
             targetServerId: 'server-b',
             displayText: 'Review comments (1)',
+            messageLocalId: 'launch-review-message-id',
             profileId: 'profile-work',
             metaOverrides: {
                 happier: {
@@ -624,6 +937,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
             await afterCreated({
                 sessionId: 'session-1',
                 effectiveSpawnServerId: 'server-b',
+                launchAttempt: createTestLaunchAttempt('launch-review-attachments-message-id'),
             });
         });
 

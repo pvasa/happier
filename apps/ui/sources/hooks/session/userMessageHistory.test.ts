@@ -22,6 +22,7 @@ describe('collectUserMessageHistoryEntries', () => {
       sessionId: 's1',
       messagesBySessionId: {
         s1: [user('u1', 1, 'hi'), agent('a1', 2, 'ok'), user('u2', 3, 'bye')],
+        s2: [user('u3', 4, 'other session')],
       },
       maxEntries: 50,
     });

@@ -4,6 +4,9 @@ import renderer, { act } from 'react-test-renderer';
 import { findTestInstanceByTypeContainingText, renderScreen } from '@/dev/testkit';
 import { installSessionFileViewCommonModuleMocks } from './sessionFileViewTestHelpers';
 
+const buildCodeLinesSpies = vi.hoisted(() => ({
+    unifiedDiffCalls: 0,
+}));
 
 // Required for React 18+ act() semantics with react-test-renderer.
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -38,6 +41,17 @@ vi.mock('@/components/ui/code/diff/DiffViewer', () => ({
         return React.createElement('DiffViewer', props);
     },
 }));
+
+vi.mock('@/components/ui/code/model/buildCodeLinesFromUnifiedDiff', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/components/ui/code/model/buildCodeLinesFromUnifiedDiff')>();
+    return {
+        ...actual,
+        buildCodeLinesFromUnifiedDiff: (...args: Parameters<typeof actual.buildCodeLinesFromUnifiedDiff>) => {
+            buildCodeLinesSpies.unifiedDiffCalls += 1;
+            return actual.buildCodeLinesFromUnifiedDiff(...args);
+        },
+    };
+});
 
 vi.mock('@/components/markdown/MarkdownView', () => ({
     MarkdownView: (props: any) => {
@@ -103,6 +117,41 @@ describe('FileContentPanel', () => {
             ...baseProps,
             fileContent: 'const a = 2;',
         })).toBe(false);
+    });
+
+    it('ignores review comment callback churn when read-only diff comments have no drafts', async () => {
+        const { areFileContentPanelPropsEqual } = await import('./FileContentPanel');
+        const baseProps = {
+            theme,
+            displayMode: 'diff' as const,
+            sessionId: 's1',
+            filePath: 'src/a.ts',
+            diffContent: 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n',
+            fileContent: null,
+            language: 'typescript',
+            selectedLineKeys: new Set<string>(),
+            lineSelectionEnabled: false,
+            onToggleLine: vi.fn(),
+            reviewCommentsEnabled: true,
+            reviewCommentModeActive: false,
+            reviewCommentDrafts: [],
+            onUpsertReviewCommentDraft: vi.fn(),
+            onDeleteReviewCommentDraft: vi.fn(),
+            onReviewCommentError: vi.fn(),
+        };
+
+        expect(areFileContentPanelPropsEqual(baseProps as any, {
+            ...baseProps,
+            reviewCommentDrafts: [],
+            onUpsertReviewCommentDraft: vi.fn(),
+            onDeleteReviewCommentDraft: vi.fn(),
+            onReviewCommentError: vi.fn(),
+        } as any)).toBe(true);
+        expect(areFileContentPanelPropsEqual(baseProps as any, {
+            ...baseProps,
+            reviewCommentModeActive: true,
+            onUpsertReviewCommentDraft: vi.fn(),
+        } as any)).toBe(false);
     });
 
     it('renders diff view when diff mode is selected and diff exists', async () => {
@@ -171,7 +220,7 @@ describe('FileContentPanel', () => {
         expect(markdownViewPropsState.current?.streamingMode).toBe('static');
     });
 
-    it('disables virtualization when review comments are enabled', async () => {
+    it('keeps native file content virtualized when review comments are available', async () => {
         const { FileContentPanel } = await import('./FileContentPanel');
 
         let tree: renderer.ReactTestRenderer | null = null;
@@ -191,7 +240,7 @@ describe('FileContentPanel', () => {
                     reviewCommentDrafts={[]}
                 />)).tree;
 
-        expect(codeLinesViewPropsState.current?.virtualized).toBe(false);
+        expect(codeLinesViewPropsState.current?.virtualized).toBe(true);
     });
 
     it('enables virtualization for large file content when review comments are enabled', async () => {
@@ -242,6 +291,35 @@ describe('FileContentPanel', () => {
         expect(diffViewerPropsState.current?.virtualized).toBe(true);
     });
 
+    it('does not wrap virtualized diffs in an outer vertical ScrollView', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 100 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        diffViewerPropsState.current = null;
+        const onScroll = vi.fn();
+
+        const screen = await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={'a'.repeat(2_000)}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentDrafts={[]}
+                    scrollTestID="diff-scroll"
+                    onScroll={onScroll}
+                />);
+
+        expect(diffViewerPropsState.current?.virtualized).toBe(true);
+        expect(diffViewerPropsState.current?.testID).toBe('diff-scroll');
+        expect(diffViewerPropsState.current?.onScroll).toBe(onScroll);
+        expect(screen.tree.findAllByType('ScrollView' as any)).toHaveLength(0);
+    });
+
     it('keeps review comment line actions disabled while reading', async () => {
         thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
         const { FileContentPanel } = await import('./FileContentPanel');
@@ -266,6 +344,30 @@ describe('FileContentPanel', () => {
         expect(diffViewerPropsState.current?.onPressAddComment).toBeUndefined();
         expect(diffViewerPropsState.current?.onPressLine).toBeUndefined();
         expect(diffViewerPropsState.current?.pressLineWhenNotSelectable).toBeUndefined();
+    });
+
+    it('does not precompute diff line models for read-only review comment mode without drafts', async () => {
+        thresholds = { lineThreshold: 50_000, byteThreshold: 120_000 };
+        const { FileContentPanel } = await import('./FileContentPanel');
+        buildCodeLinesSpies.unifiedDiffCalls = 0;
+
+        await renderScreen(<FileContentPanel
+                    theme={theme as any}
+                    displayMode="diff"
+                    sessionId="s1"
+                    filePath="src/a.ts"
+                    diffContent={['@@ -1,1 +1,1 @@', ' const a = 1;', ''].join('\n')}
+                    fileContent={null}
+                    language="typescript"
+                    selectedLineKeys={new Set()}
+                    lineSelectionEnabled={false}
+                    onToggleLine={vi.fn()}
+                    reviewCommentsEnabled
+                    reviewCommentModeActive={false}
+                    reviewCommentDrafts={[]}
+                />);
+
+        expect(buildCodeLinesSpies.unifiedDiffCalls).toBe(0);
     });
 
     it('turns the whole code line into a review-comment target in comment mode', async () => {

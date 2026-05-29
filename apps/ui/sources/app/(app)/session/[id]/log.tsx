@@ -10,8 +10,12 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { Typography } from '@/constants/Typography';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import {
+    isSessionRouteHydrationAvailable,
+    isSessionRouteHydrationMissing,
+} from '@/sync/domains/session/sessionRouteHydrationState';
 import { Modal } from '@/modal';
 import { useIsDataReady, useSession } from '@/sync/domains/state/storage';
 import { machineReadSessionLogTail } from '@/sync/ops';
@@ -26,14 +30,16 @@ const LOG_TAIL_MAX_BYTES = 200_000;
 export default function SessionLogScreen() {
     const { theme } = useUnistyles();
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const routeScope = useSessionRouteServerScope(params);
     const { id } = params;
     const sessionId = String(id ?? '').trim();
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId,
         'SessionLogRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
     const session = useSession(sessionId);
     const isDataReady = useIsDataReady();
 
@@ -104,7 +110,7 @@ export default function SessionLogScreen() {
         return <SessionInvalidLinkFallback />;
     }
 
-    if (!isDataReady || !sessionHydrated) {
+    if ((!isDataReady || !sessionHydrated) && !sessionMissingAfterHydration) {
         return (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
                 <Ionicons name="hourglass-outline" size={48} color={theme.colors.text.secondary} />

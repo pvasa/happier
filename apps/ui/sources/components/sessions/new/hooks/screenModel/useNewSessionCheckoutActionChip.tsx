@@ -202,7 +202,7 @@ export function useNewSessionCheckoutActionChip(params: Readonly<{
                 },
                 maxHeightCap: 480,
                 maxWidthCap: 720,
-                heightBehavior: 'fixedToMaxHeight',
+                heightBehavior: 'stabilizedContentHeight',
             },
             render: (ctx) => <CheckoutChip ctx={ctx} />,
         };

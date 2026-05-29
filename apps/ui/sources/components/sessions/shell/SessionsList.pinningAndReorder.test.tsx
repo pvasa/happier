@@ -113,6 +113,17 @@ installSessionShellCommonModuleMocks({
                     connectedServicesV2: [],
                 }),
                 useAllMachines: () => mockMachinesState.current,
+                useMachineDisplayById: () => Object.fromEntries(mockMachinesState.current.map((machine) => [
+                    machine.id,
+                    {
+                        updatedAt: 0,
+                        active: true,
+                        activeAt: 0,
+                        revokedAt: null,
+                        metadataVersion: 1,
+                        ...machine,
+                    },
+                ])),
                 useSettingMutable: (key: string) => {
                     if (key === 'hideInactiveSessions') return [hideInactiveSessions, vi.fn()];
                     if (key === 'pinnedSessionKeysV1') return [pinnedSessionKeysV1, setPinnedSessionKeysV1];
@@ -128,9 +139,15 @@ installSessionShellCommonModuleMocks({
 
 vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
+    Easing: {
+        bezier: () => () => 0,
+        linear: () => 0,
+    },
     useSharedValue: (init: any) => ({ value: init }),
     useAnimatedStyle: (fn: () => any) => fn(),
+    useAnimatedReaction: () => undefined,
     withSpring: (value: any) => value,
+    withTiming: (value: any) => value,
 }));
 
 vi.mock('react-native-gesture-handler', async () => {
@@ -154,7 +171,8 @@ vi.mock('@/components/ui/feedback/UpdateBanner', () => ({
     UpdateBanner: 'UpdateBanner',
 }));
 
-vi.mock('@/utils/sessions/sessionUtils', () => ({
+vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/sessions/sessionUtils')>(),
     getSessionName: () => 'Session',
     getSessionSubtitle: () => 'Subtitle',
     formatPathRelativeToHome: (path: string) => path,
@@ -407,6 +425,48 @@ describe('SessionsList pinning + per-group ordering', () => {
         expect(row.props.tags).toEqual(['important']);
         expect(row.props.allKnownTags).toContain('important');
         expect(row.props.tagsEnabled).toBe(true);
+    });
+
+    it('renders inactive date-grouped rows with updated-at activity timestamps', async () => {
+        const screen = await renderSessionsList();
+
+        const row = expectPresent(
+            findSessionItem(screen, 'sess_a'),
+            'expected sess_a session row',
+        );
+
+        expect(row.props.activityTimeMode).toBe('updatedAt');
+    });
+
+    it('keeps project-grouped rows on meaningful activity timestamps', async () => {
+        mockVisibleSessionListViewData = [
+            {
+                type: 'header',
+                title: 'Project',
+                headerKind: 'project',
+                groupKey: 'project:alpha',
+                groupKind: 'project',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+            {
+                type: 'session',
+                session: sessionA,
+                groupKey: 'project:alpha',
+                groupKind: 'project',
+                serverId: 'server_a',
+                serverName: 'Server A',
+            },
+        ];
+
+        const screen = await renderSessionsList();
+
+        const row = expectPresent(
+            findSessionItem(screen, 'sess_a'),
+            'expected sess_a session row',
+        );
+
+        expect(row.props.activityTimeMode).toBeUndefined();
     });
 
     it('writes updated session tags back to settings as a value (not an updater function)', async () => {

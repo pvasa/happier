@@ -7,14 +7,20 @@ import type { Metadata } from '@/sync/domains/state/storageTypes';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { useMessage } from '@/sync/domains/state/storage';
 
-import { MessageView } from '@/components/sessions/transcript/MessageView';
+import { MessageView, MessageViewWithSessionCommon } from '@/components/sessions/transcript/MessageView';
 import type { TranscriptTurn } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
 import { TranscriptEnterWrapper } from '@/components/sessions/transcript/motion/TranscriptEnterWrapper';
-import { ToolCallsGroupRow } from '@/components/sessions/transcript/toolCalls/ToolCallsGroupRow';
+import { ToolCallsGroupRow, ToolCallsGroupRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/ToolCallsGroupRow';
+import * as FlashListCompat from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX } from '@/components/sessions/transcript/webTranscriptPrependAnchor';
 import { isMessageRolledBack, type SessionRollbackRangeV1, type TranscriptRollbackAction } from '@/sync/domains/sessionRollback/rollbackUiSupport';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
 import { deriveReadOnlyTranscriptInteraction } from '@/components/sessions/transcript/forkContext/deriveReadOnlyTranscriptInteraction';
+import {
+    hasTranscriptSessionCommonProps,
+    type TranscriptSessionCommonProps,
+    useTranscriptSessionCommon,
+} from '@/components/sessions/transcript/transcriptSessionCommon';
 
 type TranscriptItemOriginLookup = (messageId: string) => {
     sessionId: string;
@@ -35,7 +41,7 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
     interaction: TranscriptInteraction;
     rollbackRanges?: readonly SessionRollbackRangeV1[];
     resolveRollbackAction?: (messageId: string) => TranscriptRollbackAction | null;
-}) {
+} & Partial<TranscriptSessionCommonProps>) {
     const origin = props.getMessageOrigin?.(props.messageId) ?? null;
     const effectiveSessionId = origin?.sessionId ?? props.sessionId;
     const effectiveInteraction = deriveReadOnlyTranscriptInteraction(props.interaction, origin?.isReadOnlyContext === true);
@@ -55,31 +61,73 @@ const TurnMessageRow = React.memo(function TurnMessageRow(props: {
         setThinkingExpanded != null;
     const rollbackRanges = props.rollbackRanges ?? [];
     const historical = isMessageRolledBack({ message, rollbackRanges });
+    const canUseParentCommon = effectiveSessionId === props.sessionId && hasTranscriptSessionCommonProps(props);
+    const messageView = canUseParentCommon ? (
+        <MessageViewWithSessionCommon
+            message={message}
+            metadata={props.metadata}
+            sessionId={effectiveSessionId}
+            forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
+            approvalRequests={props.approvalRequests}
+            activeThinkingMessageId={props.activeThinkingMessageId}
+            thinkingExpanded={controlledThinking ? resolveThinkingExpanded(message.id) : undefined}
+            onThinkingExpandedChange={controlledThinking ? (next) => setThinkingExpanded(message.id, next) : undefined}
+            interaction={effectiveInteraction}
+            historical={historical}
+            rollbackAction={props.resolveRollbackAction?.(message.id) ?? null}
+            forkCommon={props.forkCommon}
+            messageDisplayCommon={props.messageDisplayCommon}
+            toolChromeCommon={props.toolChromeCommon}
+            toolRouteCommon={props.toolRouteCommon}
+        />
+    ) : (
+        <MessageView
+            message={message}
+            metadata={props.metadata}
+            sessionId={effectiveSessionId}
+            forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
+            approvalRequests={props.approvalRequests}
+            activeThinkingMessageId={props.activeThinkingMessageId}
+            thinkingExpanded={controlledThinking ? resolveThinkingExpanded(message.id) : undefined}
+            onThinkingExpandedChange={controlledThinking ? (next) => setThinkingExpanded(message.id, next) : undefined}
+            interaction={effectiveInteraction}
+            historical={historical}
+            rollbackAction={props.resolveRollbackAction?.(message.id) ?? null}
+        />
+    );
 
     return (
         <View testID={`${TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX}${message.id}`}>
             <View testID={`transcript-message-${message.id}`}>
                 <TranscriptEnterWrapper id={message.id} createdAt={message.createdAt}>
-                    <MessageView
-                        message={message}
-                        metadata={props.metadata}
-                        sessionId={effectiveSessionId}
-                        forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
-                        approvalRequests={props.approvalRequests}
-                        activeThinkingMessageId={props.activeThinkingMessageId}
-                        thinkingExpanded={controlledThinking ? resolveThinkingExpanded(message.id) : undefined}
-                        onThinkingExpandedChange={controlledThinking ? (next) => setThinkingExpanded(message.id, next) : undefined}
-                        interaction={effectiveInteraction}
-                        historical={historical}
-                        rollbackAction={props.resolveRollbackAction?.(message.id) ?? null}
-                    />
+                    {messageView}
                 </TranscriptEnterWrapper>
             </View>
         </View>
     );
 });
 
-export const TurnView = React.memo((props: {
+const fallbackMappingHelper = {
+    getMappingKey: (itemKey: string | number | bigint) => itemKey,
+};
+
+function useFallbackMappingHelper() {
+    return fallbackMappingHelper;
+}
+
+function resolveTranscriptTurnMappingHelper() {
+    try {
+        return typeof FlashListCompat.useMappingHelper === 'function'
+            ? FlashListCompat.useMappingHelper
+            : useFallbackMappingHelper;
+    } catch {
+        return useFallbackMappingHelper;
+    }
+}
+
+const useTranscriptTurnMappingHelper = resolveTranscriptTurnMappingHelper();
+
+type TurnViewProps = Readonly<{
     turn: TranscriptTurn;
     metadata: Metadata | null;
     sessionId: string;
@@ -95,7 +143,25 @@ export const TurnView = React.memo((props: {
     interaction: TranscriptInteraction;
     rollbackRanges?: readonly SessionRollbackRangeV1[];
     resolveRollbackAction?: (messageId: string) => TranscriptRollbackAction | null;
-}) => {
+}>;
+
+export const TurnView = React.memo((props: TurnViewProps) => {
+    const transcriptSessionCommon = useTranscriptSessionCommon(props.sessionId);
+
+    return (
+        <TurnViewWithSessionCommon
+            {...props}
+            forkCommon={transcriptSessionCommon.fork}
+            messageDisplayCommon={transcriptSessionCommon.messageDisplay}
+            toolChromeCommon={transcriptSessionCommon.toolChrome}
+            toolRouteCommon={transcriptSessionCommon.toolRoute}
+        />
+    );
+});
+
+export const TurnViewWithSessionCommon = React.memo((props: TurnViewProps & TranscriptSessionCommonProps) => {
+    const { getMappingKey } = useTranscriptTurnMappingHelper();
+
     return (
         <View testID="transcript-turn" style={styles.container}>
             {props.turn.userMessageId ? (
@@ -113,13 +179,17 @@ export const TurnView = React.memo((props: {
                     interaction={props.interaction}
                     rollbackRanges={props.rollbackRanges}
                     resolveRollbackAction={props.resolveRollbackAction}
+                    forkCommon={props.forkCommon}
+                    messageDisplayCommon={props.messageDisplayCommon}
+                    toolChromeCommon={props.toolChromeCommon}
+                    toolRouteCommon={props.toolRouteCommon}
                 />
             ) : null}
-            {props.turn.content.map((c) => {
+            {props.turn.content.map((c, index) => {
                 if (c.kind === 'message') {
                     return (
                         <TurnMessageRow
-                            key={c.messageId}
+                            key={getMappingKey(c.messageId, index)}
                             sessionId={props.sessionId}
                             messageId={c.messageId}
                             metadata={props.metadata}
@@ -133,14 +203,18 @@ export const TurnView = React.memo((props: {
                             interaction={props.interaction}
                             rollbackRanges={props.rollbackRanges}
                             resolveRollbackAction={props.resolveRollbackAction}
+                            forkCommon={props.forkCommon}
+                            messageDisplayCommon={props.messageDisplayCommon}
+                            toolChromeCommon={props.toolChromeCommon}
+                            toolRouteCommon={props.toolRouteCommon}
                         />
                     );
                 }
                 const origin = props.getMessageOrigin?.(c.toolMessageIds[0] ?? '') ?? null;
                 const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, origin?.isReadOnlyContext === true);
                 return (
-                    <ToolCallsGroupRow
-                        key={c.id}
+                    <ToolCallsGroupRowWithSessionCommon
+                        key={getMappingKey(c.id, index)}
                         sessionId={props.sessionId}
                         toolCallsGroupId={c.id}
                         toolMessageIds={c.toolMessageIds}
@@ -151,6 +225,10 @@ export const TurnView = React.memo((props: {
                         expanded={c.toolMessageIds.some((id) => props.expandedToolCallsAnchorMessageIds.has(id))}
                         onSetExpanded={props.setToolCallsGroupExpanded}
                         interaction={interaction}
+                        forkCommon={props.forkCommon}
+                        messageDisplayCommon={props.messageDisplayCommon}
+                        toolChromeCommon={props.toolChromeCommon}
+                        toolRouteCommon={props.toolRouteCommon}
                     />
                 );
             })}

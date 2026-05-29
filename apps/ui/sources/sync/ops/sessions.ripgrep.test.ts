@@ -23,6 +23,12 @@ const machineRPCSpy = vi.fn(
     }),
 );
 const getStateSpy = vi.fn();
+const sessionRpcWithPreferredSessionScopeSpy = vi.fn(
+    async (params: unknown): Promise<SessionRipgrepRpcResponse> => {
+        const { sessionId, method, payload } = params as { sessionId: string; method: string; payload: unknown };
+        return sessionRPCSpy(sessionId, method, payload);
+    },
+);
 
 vi.mock('../api/session/apiSocket', () => ({
     apiSocket: {
@@ -31,7 +37,11 @@ vi.mock('../api/session/apiSocket', () => ({
     },
 }));
 
-vi.mock('../domains/state/storage', () => ({
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope', () => ({
+    sessionRpcWithPreferredSessionScope: (params: unknown) => sessionRpcWithPreferredSessionScopeSpy(params),
+}));
+
+vi.mock('@/sync/domains/state/storage', () => ({
     storage: {
         getState: () => getStateSpy(),
     },
@@ -44,15 +54,25 @@ describe('sessionRipgrep', () => {
         getStateSpy.mockReturnValue({
             sessions: {
                 s1: {
+                    active: true,
                     metadata: {
                         path: '~/repo',
                         machineId: 'm1',
                     },
                 },
             },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'm1.local' },
+                },
+            },
         });
 
         sessionRPCSpy.mockClear();
+        sessionRpcWithPreferredSessionScopeSpy.mockClear();
         machineRPCSpy.mockClear();
 
         const res = await sessionRipgrep('s1', ['--files'], 'src');
@@ -77,6 +97,14 @@ describe('sessionRipgrep', () => {
                     },
                 },
             },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    activeAt: 1,
+                    metadata: { host: 'm1.local' },
+                },
+            },
         });
 
         machineRPCSpy.mockRejectedValueOnce(
@@ -92,6 +120,7 @@ describe('sessionRipgrep', () => {
         const res = await sessionRipgrep('s1', ['--files'], undefined);
         expect(res.success).toBe(false);
         expect(sessionRPCSpy).not.toHaveBeenCalled();
+        expect(sessionRpcWithPreferredSessionScopeSpy).not.toHaveBeenCalled();
     });
 
     it('fails closed when inactive session has no machine target', async () => {
@@ -107,6 +136,7 @@ describe('sessionRipgrep', () => {
                     },
                 },
             },
+            machines: {},
             getProjectForSession: () => null,
         });
 

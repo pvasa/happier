@@ -14,11 +14,12 @@ import { usePersistSessionMobileSurface } from '@/components/workspaceCockpit/se
 import { resolveFullscreenDetailsRouteSelection } from '@/components/workspaceCockpit/resolveFullscreenDetailsRouteSelection';
 import { useFullscreenDetailsRouteAutoRedirect } from '@/components/workspaceCockpit/useFullscreenDetailsRouteAutoRedirect';
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { buildSessionDetailsRouteQuery } from '@/components/workspaceCockpit/session/sessionCockpitNavigation';
 import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 
 export default function SessionGitScreenRoute() {
     const router = useRouter();
@@ -27,12 +28,14 @@ export default function SessionGitScreenRoute() {
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
     const { id: sessionIdParam } = params;
     const sessionId = String(sessionIdParam ?? '').trim();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeScope = useSessionRouteServerScope(params);
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId,
         'SessionGitRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
@@ -50,11 +53,12 @@ export default function SessionGitScreenRoute() {
     React.useEffect(() => {
         if (!isFocused) return;
         if (!sessionId) return;
+        if (!sessionHydrated) return;
         openRight({ tabId: 'git' });
         if (pane.scopeState?.right?.activeTabId !== 'git') {
             setRightTab('git');
         }
-    }, [isFocused, openRight, pane.scopeState?.right?.activeTabId, sessionId, setRightTab]);
+    }, [isFocused, openRight, pane.scopeState?.right?.activeTabId, sessionHydrated, sessionId, setRightTab]);
 
     const handleNavigateToDetails = React.useCallback((key: string) => {
         const targetHref = resolveSessionRoutePathForSurface(sessionId, 'tabs', {
@@ -87,7 +91,7 @@ export default function SessionGitScreenRoute() {
         safeRouterBack({ router, navigation, fallbackHref: routeScope.buildHref(sessionId) });
     }, [closeRight, navigation, routeScope, router, sessionId]);
 
-    if (!sessionId) {
+    if (!sessionId || sessionMissingAfterHydration) {
         return <SessionInvalidLinkFallback />;
     }
 
@@ -103,6 +107,7 @@ export default function SessionGitScreenRoute() {
                         scopeId={scopeId}
                         surface="git"
                         routeServerId={routeScope.serverId ?? undefined}
+                        routeHydrationState={routeHydrationState}
                         safeAreaPadding={false}
                     />
                 ) : (

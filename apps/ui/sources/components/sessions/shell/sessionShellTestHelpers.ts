@@ -1,4 +1,163 @@
+import type {
+    SessionListAttentionState,
+    SessionListSecondaryLineMode,
+} from '@/sync/domains/session/listing/deriveSessionListActivity';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import type { Session } from '@/sync/domains/state/storageTypes';
+import type { SessionStatus } from '@/utils/sessions/sessionUtils';
 import { vi } from 'vitest';
+import {
+    resolveSessionRowAttentionState,
+    resolveSessionRowPresentation,
+} from './row/resolveSessionRowPresentation';
+import type { SessionListRowModel } from './row/sessionListRowModelTypes';
+
+type SessionItemTestSession = (Session | SessionListRenderableSession) & Readonly<{
+    archivedAt?: number | null;
+    pendingCount?: number | null;
+}>;
+
+export type SessionItemTestRowModelInput = Readonly<{
+    session: Session | SessionListRenderableSession;
+    rowModel?: SessionListRowModel;
+    serverId?: string | null;
+    serverName?: string;
+    currentUserId?: string | null;
+    showServerBadge?: boolean;
+    pinned?: boolean;
+    selected?: boolean;
+    isFirst?: boolean;
+    isLast?: boolean;
+    isSingle?: boolean;
+    variant?: 'default' | 'no-path';
+    secondaryLineMode?: SessionListSecondaryLineMode;
+    subtitleOverride?: string | null;
+    subtitleEllipsizeMode?: 'head' | 'tail';
+    compact?: boolean;
+    compactMinimal?: boolean;
+    folderDepth?: number;
+    tags?: readonly string[];
+    allKnownTags?: readonly string[];
+    tagsEnabled?: boolean;
+    hideInactiveSessions?: boolean;
+    activityTimeMode?: 'meaningful' | 'updatedAt';
+}>;
+
+export type SessionItemTestRowModelOverrides = Partial<SessionListRowModel> & Readonly<{
+    status?: SessionStatus;
+    listAttentionState?: SessionListAttentionState;
+}>;
+
+const defaultSessionItemTestStatus: SessionStatus = {
+    state: 'waiting',
+    isConnected: true,
+    statusText: '',
+    shouldShowStatus: false,
+    statusColor: 'status-color',
+    statusDotColor: 'status-dot-color',
+    isPulsing: false,
+};
+
+function resolveSessionItemTestListAttentionState(status: SessionStatus): SessionListAttentionState {
+    switch (status.state) {
+        case 'thinking':
+        case 'waiting':
+        case 'permission_required':
+        case 'action_required':
+            return status.state === 'waiting' ? 'quiet' : status.state;
+        case 'disconnected':
+        case 'resuming':
+            return 'quiet';
+    }
+}
+
+export function createSessionItemTestRowModel(
+    input: SessionItemTestRowModelInput,
+    overrides: SessionItemTestRowModelOverrides = {},
+): SessionListRowModel {
+    if (input.rowModel) return input.rowModel;
+
+    const session = input.session as SessionItemTestSession;
+    const sessionId = String(session.id);
+    const serverId = input.serverId ?? null;
+    const status = overrides.status ?? defaultSessionItemTestStatus;
+    const listState = overrides.listAttentionState ?? resolveSessionItemTestListAttentionState(status);
+    const rowState = overrides.attention?.rowState ?? resolveSessionRowAttentionState(listState);
+    const isMinimal = input.compact === true && input.compactMinimal === true;
+    const density = isMinimal ? 'minimal' : input.compact === true ? 'compact' : 'default';
+    const secondaryLineMode = input.secondaryLineMode ?? (input.variant === 'no-path' ? 'status' : 'path');
+    const subtitle = input.subtitleOverride ?? '';
+
+    const model: SessionListRowModel = {
+        rowKey: `${serverId ?? 'local'}:${sessionId}`,
+        sessionId,
+        serverId,
+        serverName: input.serverName,
+        treeRowId: `session:${serverId ?? 'local'}:${sessionId}`,
+        testID: `session-list-item-${sessionId}`,
+        dataIndex: 0,
+        session,
+        status,
+        statusSignature: `${status.state}|${status.isConnected ? 1 : 0}|${status.statusText}`,
+        nextRuntimeFreshnessAtMs: null,
+        secondaryLineMode,
+        attention: {
+            listState,
+            rowState,
+        },
+        presentation: resolveSessionRowPresentation({
+            attentionState: rowState,
+            density,
+            requestedSecondaryLineMode: secondaryLineMode,
+            hasPathSubtitle: Boolean(subtitle),
+        }),
+        activity: {
+            mode: input.activityTimeMode === 'updatedAt' ? 'updatedAt' : 'meaningful',
+            timestamp: typeof session.updatedAt === 'number' ? session.updatedAt : null,
+            label: '',
+            bucket: '',
+        },
+        isIdentityLoading: session.metadata == null && !('metadataUnavailable' in session),
+        title: session.metadata == null ? 'status.unknown' : 'Session',
+        subtitle,
+        subtitleEllipsizeMode: input.subtitleEllipsizeMode ?? 'head',
+        groupKey: 'group-a',
+        groupKind: null,
+        section: 'active',
+        variant: input.variant ?? 'default',
+        folder: {
+            id: null,
+            depth: input.folderDepth ?? 0,
+        },
+        adjacency: {
+            isFirst: input.isFirst ?? false,
+            isLast: input.isLast ?? false,
+            isSingle: input.isSingle ?? false,
+        },
+        isSelected: input.selected ?? false,
+        isPinned: input.pinned ?? false,
+        isArchived: session.archivedAt != null,
+        isActive: session.active === true,
+        hasUnreadMessages: false,
+        pendingCount: session.pendingCount ?? 0,
+        tags: [...(input.tags ?? [])],
+        allKnownTags: [...(input.allKnownTags ?? [])],
+        tagsEnabled: input.tagsEnabled ?? false,
+        currentUserId: input.currentUserId ?? 'u1',
+        showServerBadge: input.showServerBadge ?? false,
+        compact: input.compact ?? false,
+        compactMinimal: input.compactMinimal ?? false,
+        identityDisplay: 'avatar',
+        activeColorMode: 'activityAndAttention',
+        workingIndicatorMode: 'spinner',
+        hideInactiveSessions: input.hideInactiveSessions ?? false,
+    };
+
+    return {
+        ...model,
+        ...overrides,
+    };
+}
 
 type SessionShellModuleFactory = () => unknown | Promise<unknown>;
 type SessionShellImportOriginal = <T = unknown>() => Promise<T>;

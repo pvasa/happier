@@ -8,12 +8,14 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { sessionExecutionRunList } from '@/sync/ops/sessionExecutionRuns';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope, type SessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import type { ExecutionRunBackendCapabilityMap } from '@/sync/domains/executionRuns/resolveExecutionRunAvailableBackends';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import { t } from '@/text';
 import { ExecutionRunList } from '@/components/sessions/runs/ExecutionRunList';
+import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { resolveExecutionRunLauncherIntents } from '@/components/sessions/runs/launcher/executionRunLauncherModel';
 import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
 import { Text } from '@/components/ui/text/Text';
@@ -43,17 +45,38 @@ function readExecutionRunsErrorMessage(result: Readonly<{ error?: string; errorC
 export default function SessionRunsScreen() {
   const { theme } = useUnistyles();
   const params = useLocalSearchParams();
-  const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
+  const routeScope = useSessionRouteServerScope(params as Record<string, unknown>);
   const sessionId = normalizeSessionId((params as any)?.id);
   const headerTitle = t('runs.title');
   const screenOptions = React.useMemo(() => {
     return { headerShown: true, headerTitle };
   }, [headerTitle]);
-  const hydrateReady = useHydrateSessionForRoute(
+  const routeHydrationState = useHydrateSessionForRoute(
     sessionId ?? '',
     'SessionRunsScreen.hydrate',
     routeScope.hydrationOptions,
   );
+  const hydrateReady = isSessionRouteHydrationAvailable(routeHydrationState);
+  const hydrateMissing = isSessionRouteHydrationMissing(routeHydrationState);
+  if (!sessionId || hydrateMissing) {
+    return (
+      <View testID="session-runs-screen" style={{ flex: 1, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
+        <Stack.Screen options={screenOptions} />
+        <ConstrainedScreenContent
+          style={{
+            flex: 1,
+            paddingHorizontal: 16,
+            paddingTop: 12,
+            paddingBottom: 16,
+            gap: 12,
+          }}
+        >
+          <SessionInvalidLinkFallback />
+        </ConstrainedScreenContent>
+      </View>
+    );
+  }
+
   if (!hydrateReady) {
     return (
       <View testID="session-runs-screen" style={{ flex: 1, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
@@ -73,20 +96,12 @@ export default function SessionRunsScreen() {
     );
   }
 
-  if (!sessionId) {
-    return (
-      <View testID="session-runs-screen" style={{ flex: 1, backgroundColor: theme.colors.surface.base, padding: 16 }}>
-        <Text style={{ color: theme.colors.text.primary }}>{t('errors.sessionDeleted')}</Text>
-      </View>
-    );
-  }
-
   return <SessionRunsScreenContent routeScope={routeScope} sessionId={sessionId} />;
 }
 
 function SessionRunsScreenContent(props: Readonly<{
   sessionId: string;
-  routeScope: ReturnType<typeof createSessionRouteServerScope>;
+  routeScope: SessionRouteServerScope;
 }>) {
   const { theme } = useUnistyles();
   const router = useRouter();

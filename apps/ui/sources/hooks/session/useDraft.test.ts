@@ -61,6 +61,15 @@ type HarnessState = Readonly<{
   value: string;
   setValue: (next: string) => void;
   clearDraft: () => void;
+  clearDraftIfCurrentValueMatches?: (expectedValue: string) => boolean;
+  clearDraftForSessionIfCurrentValueMatches?: (snapshot: Readonly<{ sessionId: string; text: string }>) => boolean;
+  setDraftValue?: (nextValueOrUpdater: string | ((currentValue: string) => string)) => void;
+  restoreDraftForSessionIfCurrentValueMatches?: (
+    snapshot: Readonly<{ sessionId: string; text: string }>,
+    expectedCurrentValue: string,
+  ) => boolean;
+  restoreDraft?: (draft: string) => void;
+  restoreComposerSnapshot?: (snapshot: Readonly<{ sessionId: string; text: string }>) => void;
   rerender: () => void;
 }>;
 
@@ -74,8 +83,33 @@ async function renderHarness(params: { initialSessionId: string }): Promise<{
     const [sessionId, setSessionId] = React.useState(params.initialSessionId);
     const [value, setValue] = React.useState('');
     const [, setTick] = React.useState(0);
-    const { clearDraft } = useDraft(sessionId, value, setValue, { autoSaveInterval: 60_000 });
-    current = { sessionId, setSessionId, value, setValue, clearDraft, rerender: () => setTick((tick) => tick + 1) };
+    const draftApi = useDraft(sessionId, value, setValue, { autoSaveInterval: 60_000 });
+    current = {
+      sessionId,
+      setSessionId,
+      value,
+      setValue,
+      clearDraft: draftApi.clearDraft,
+      clearDraftIfCurrentValueMatches: 'clearDraftIfCurrentValueMatches' in draftApi
+        ? draftApi.clearDraftIfCurrentValueMatches
+        : undefined,
+      clearDraftForSessionIfCurrentValueMatches: 'clearDraftForSessionIfCurrentValueMatches' in draftApi
+        ? draftApi.clearDraftForSessionIfCurrentValueMatches
+        : undefined,
+      setDraftValue: 'setDraftValue' in draftApi
+        ? draftApi.setDraftValue
+        : undefined,
+      restoreDraftForSessionIfCurrentValueMatches: 'restoreDraftForSessionIfCurrentValueMatches' in draftApi
+        ? draftApi.restoreDraftForSessionIfCurrentValueMatches
+        : undefined,
+      restoreDraft: 'restoreDraft' in draftApi
+        ? draftApi.restoreDraft
+        : undefined,
+      restoreComposerSnapshot: 'restoreComposerSnapshot' in draftApi
+        ? draftApi.restoreComposerSnapshot
+        : undefined,
+      rerender: () => setTick((tick) => tick + 1),
+    };
     return null;
   }
 
@@ -209,6 +243,153 @@ describe('useDraft', () => {
     harness.unmount();
   });
 
+  it('hydrates sessionInitialPromptV1 replace mode into an empty composer and clears the metadata field', async () => {
+    sessionsById = {
+      s_target: {
+        draft: null,
+        metadata: {
+          sessionInitialPromptV1: {
+            v: 1,
+            text: 'selected transcript messages',
+            mode: 'replace',
+            createdAtMs: 1,
+            sourceSessionId: 's_source',
+          },
+        },
+      },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's_target' });
+
+    expect(harness.getCurrent().value).toBe('selected transcript messages');
+    expect(updateSessionDraftSpy).toHaveBeenCalledWith('s_target', 'selected transcript messages');
+    expect(patchSessionMetadataWithRetrySpy).toHaveBeenCalledWith('s_target', expect.any(Function));
+    harness.unmount();
+  });
+
+  it('does not re-append sessionInitialPromptV1 while waiting for the metadata clear to sync back', async () => {
+    const metadata = {
+      sessionInitialPromptV1: {
+        v: 1,
+        text: 'selected transcript messages',
+        mode: 'append',
+        createdAtMs: 1,
+      },
+    };
+    sessionsById = {
+      s_target: {
+        draft: 'existing destination draft',
+        metadata,
+      },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's_target' });
+    expect(harness.getCurrent().value).toBe('existing destination draft\n\nselected transcript messages');
+
+    sessionsById = {
+      s_target: {
+        draft: 'existing destination draft\n\nselected transcript messages',
+        metadata,
+      },
+    };
+
+    await act(async () => {
+      harness.getCurrent().rerender();
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('existing destination draft\n\nselected transcript messages');
+    harness.unmount();
+  });
+
+  it('appends sessionInitialPromptV1 to an existing stored draft', async () => {
+    sessionsById = {
+      s_target: {
+        draft: 'existing destination draft',
+        metadata: {
+          sessionInitialPromptV1: {
+            v: 1,
+            text: 'selected transcript messages',
+            mode: 'append',
+            createdAtMs: 1,
+          },
+        },
+      },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's_target' });
+
+    expect(harness.getCurrent().value).toBe('existing destination draft\n\nselected transcript messages');
+    expect(updateSessionDraftSpy).toHaveBeenCalledWith('s_target', 'existing destination draft\n\nselected transcript messages');
+    expect(patchSessionMetadataWithRetrySpy).toHaveBeenCalledWith('s_target', expect.any(Function));
+    harness.unmount();
+  });
+
+  it('applies forkInitialPromptV1 before appending sessionInitialPromptV1', async () => {
+    sessionsById = {
+      s_child: {
+        draft: null,
+        metadata: {
+          forkInitialPromptV1: {
+            v: 1,
+            text: 'fork seed',
+            createdAtMs: 1,
+          },
+          sessionInitialPromptV1: {
+            v: 1,
+            text: 'selected transcript messages',
+            mode: 'append',
+            createdAtMs: 2,
+          },
+        },
+      },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's_child' });
+
+    expect(harness.getCurrent().value).toBe('fork seed\n\nselected transcript messages');
+    expect(updateSessionDraftSpy).toHaveBeenCalledWith('s_child', 'fork seed\n\nselected transcript messages');
+    expect(patchSessionMetadataWithRetrySpy).toHaveBeenCalledWith('s_child', expect.any(Function));
+    harness.unmount();
+  });
+
+  it('defers sessionInitialPromptV1 adoption while the destination composer has unsaved local edits', async () => {
+    sessionsById = {
+      s_target: { draft: 'existing destination draft', metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's_target' });
+    expect(harness.getCurrent().value).toBe('existing destination draft');
+
+    await act(async () => {
+      harness.getCurrent().setValue('unsaved local edit');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    sessionsById = {
+      s_target: {
+        draft: 'existing destination draft',
+        metadata: {
+          sessionInitialPromptV1: {
+            v: 1,
+            text: 'selected transcript messages',
+            mode: 'append',
+            createdAtMs: 1,
+          },
+        },
+      },
+    };
+
+    await act(async () => {
+      harness.getCurrent().rerender();
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('unsaved local edit');
+    expect(patchSessionMetadataWithRetrySpy).not.toHaveBeenCalledWith('s_target', expect.any(Function));
+    harness.unmount();
+  });
+
   it('hydrates the composer when the current session draft changes externally while focused', async () => {
     sessionsById = {
       s1: { draft: null, metadata: {} },
@@ -307,6 +488,242 @@ describe('useDraft', () => {
 
     expect(harness.getCurrent().value).toBe('');
     expect(sessionsById.s1?.draft).toBe('');
+    harness.unmount();
+  });
+
+  it('clears the text draft on acknowledgement only when the composer still matches the submitted snapshot', async () => {
+    sessionsById = {
+      s1: { draft: null, metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    await act(async () => {
+      harness.getCurrent().setValue('submitted prompt');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      const cleared = harness.getCurrent().clearDraftIfCurrentValueMatches?.('submitted prompt');
+      expect(cleared).toBe(true);
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('');
+    expect(sessionsById.s1?.draft).toBeNull();
+    harness.unmount();
+  });
+
+  it('preserves a newer draft when send acknowledgement resolves after the user edits again', async () => {
+    sessionsById = {
+      s1: { draft: null, metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    await act(async () => {
+      harness.getCurrent().setValue('submitted prompt');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().setValue('new draft while send is pending');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      const cleared = harness.getCurrent().clearDraftIfCurrentValueMatches?.('submitted prompt');
+      expect(cleared).toBe(false);
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('new draft while send is pending');
+    expect(sessionsById.s1?.draft).toBe('new draft while send is pending');
+    harness.unmount();
+  });
+
+  it('does not clear a synchronous draft update before the next render', async () => {
+    sessionsById = {
+      s1: { draft: 'draft-1', metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    expect(harness.getCurrent().value).toBe('draft-1');
+    expect(typeof harness.getCurrent().setDraftValue).toBe('function');
+
+    let cleared = true;
+    await act(async () => {
+      const current = harness.getCurrent();
+      current.setDraftValue?.('draft typed during async send');
+      cleared = current.clearDraftForSessionIfCurrentValueMatches?.({
+        sessionId: 's1',
+        text: 'draft-1',
+      }) ?? true;
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(cleared).toBe(false);
+    expect(harness.getCurrent().value).toBe('draft typed during async send');
+    harness.unmount();
+  });
+
+  it('restores a failed outbound handoff only when the composer still matches the cleared value', async () => {
+    sessionsById = {
+      s1: { draft: null, metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    await act(async () => {
+      harness.getCurrent().setValue('submitted prompt');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      const cleared = harness.getCurrent().clearDraftForSessionIfCurrentValueMatches?.({
+        sessionId: 's1',
+        text: 'submitted prompt',
+      });
+      expect(cleared).toBe(true);
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      const restored = harness.getCurrent().restoreDraftForSessionIfCurrentValueMatches?.({
+        sessionId: 's1',
+        text: 'submitted prompt',
+      }, '');
+      expect(restored).toBe(true);
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('submitted prompt');
+    expect(sessionsById.s1?.draft).toBe('submitted prompt');
+
+    await act(async () => {
+      harness.getCurrent().setValue('new draft');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      const restored = harness.getCurrent().restoreDraftForSessionIfCurrentValueMatches?.({
+        sessionId: 's1',
+        text: 'submitted prompt',
+      }, '');
+      expect(restored).toBe(false);
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('new draft');
+    expect(sessionsById.s1?.draft).toBe('new draft');
+    harness.unmount();
+  });
+
+  it('does not mutate the visible composer or copy visible text when an old session acknowledgement resolves after a session switch', async () => {
+    sessionsById = {
+      s1: { draft: null, metadata: {} },
+      s2: { draft: null, metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    await act(async () => {
+      harness.getCurrent().setValue('submitted in s1');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().setSessionId('s2');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().setValue('visible s2 draft');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      const cleared = harness.getCurrent().clearDraftForSessionIfCurrentValueMatches?.({
+        sessionId: 's1',
+        text: 'submitted in s1',
+      });
+      expect(cleared).toBe(true);
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().sessionId).toBe('s2');
+    expect(harness.getCurrent().value).toBe('visible s2 draft');
+    expect(sessionsById.s1?.draft).toBeNull();
+    expect(sessionsById.s2?.draft).toBe('visible s2 draft');
+    expect(updateSessionDraftSpy).not.toHaveBeenCalledWith('s1', 'visible s2 draft');
+    harness.unmount();
+  });
+
+  it('restores text and persisted draft state after a failed clear-like command', async () => {
+    sessionsById = {
+      s1: { draft: null, metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    await act(async () => {
+      harness.getCurrent().setValue('/h.review Review this');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().clearDraft();
+      harness.getCurrent().setValue('');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+    expect(sessionsById.s1?.draft).toBeNull();
+
+    await act(async () => {
+      harness.getCurrent().restoreDraft?.('/h.review Review this');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().value).toBe('/h.review Review this');
+    expect(sessionsById.s1?.draft).toBe('/h.review Review this');
+    harness.unmount();
+  });
+
+  it('restores an old session draft without mutating the visible composer after a session switch', async () => {
+    sessionsById = {
+      s1: { draft: null, metadata: {} },
+      s2: { draft: null, metadata: {} },
+    };
+
+    const harness = await renderHarness({ initialSessionId: 's1' });
+    await act(async () => {
+      harness.getCurrent().setValue('/h.review Review this');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().clearDraft();
+      harness.getCurrent().setValue('');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+    expect(sessionsById.s1?.draft).toBeNull();
+
+    await act(async () => {
+      harness.getCurrent().setSessionId('s2');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().setValue('visible s2 draft');
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    await act(async () => {
+      harness.getCurrent().restoreComposerSnapshot?.({
+        sessionId: 's1',
+        text: '/h.review Review this',
+      });
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    expect(harness.getCurrent().sessionId).toBe('s2');
+    expect(harness.getCurrent().value).toBe('visible s2 draft');
+    expect(sessionsById.s1?.draft).toBe('/h.review Review this');
+    expect(sessionsById.s2?.draft).toBe('visible s2 draft');
     harness.unmount();
   });
 });

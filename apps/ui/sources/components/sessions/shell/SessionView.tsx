@@ -19,18 +19,42 @@ import { openAttachmentFilePickerFiles, openAttachmentFilePickerImages } from '@
 import { resolveReviewCommentDraftAnchorsForPrompt } from '@/components/sessions/reviews/comments/resolveReviewCommentDraftAnchorsForPrompt';
 import { useSessionFileUploadAvailability } from '@/components/sessions/files/useSessionFileUploadAvailability';
 import { useSessionAgentInputExtraActionChips } from '@/components/sessions/agentInput/sessionActions/useSessionAgentInputExtraActionChips';
+import {
+    useSessionConnectedServicesAuthSwitch,
+    type SessionConnectedServicesAuthSwitchRestartState,
+} from '@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch';
+import {
+    deriveSessionIntentionalRestartSignals,
+    resolveSessionIntentionalRestartRecoveryEvidenceAtMs,
+    type SessionIntentionalRestartSignal,
+} from '@/components/sessions/agentInput/hooks/sessionIntentionalRestartSignal';
+import {
+    resolveConnectedServiceDisplayName,
+} from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/sessions/transcript/ChatHeaderView';
 import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHeaderActionMenu';
 import { SessionHeaderSubagentsButton } from '@/components/sessions/actions/SessionHeaderSubagentsButton';
 import { SessionHeaderTerminalButton } from '@/components/sessions/actions/SessionHeaderTerminalButton';
-import { ChatList } from '@/components/sessions/transcript/ChatList';
+import { ChatList, type TranscriptViewportChangeState } from '@/components/sessions/transcript/ChatList';
+import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
+import { TranscriptSelectionToolbar, type TranscriptSelectionToolbarMessage } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbar';
+import { openTranscriptSendToSessionModal } from '@/components/sessions/transcript/messageSelection/openTranscriptSendToSessionModal';
+import { resolveTranscriptSelectionToolbarMessages } from '@/components/sessions/transcript/messageSelection/resolveTranscriptSelectionToolbarMessages';
+import { sendTranscriptSelectionToSession } from '@/components/sessions/transcript/messageSelection/sendTranscriptSelectionToSession';
 import { Deferred } from '@/components/ui/forms/Deferred';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { DependabotIcon } from '@/components/ui/icons/DependabotIcon';
 import { EmptyMessages } from '@/components/ui/empty/EmptyMessages';
 import { VoiceSurface } from '@/components/voice/surface/VoiceSurface';
 import { useDraft } from '@/hooks/session/useDraft';
+import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
+import { useSessionAgentInputComposerPersistence } from '@/hooks/session/useSessionAgentInputComposerPersistence';
+import {
+    captureComposerTransientInputStateForOutboundHandoff,
+    clearComposerAfterOutboundHandoff,
+    restoreComposerAfterFailedOutboundHandoff,
+} from '@/hooks/session/sessionComposerSendCoordinator';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSessionExecutionRunsSupported } from '@/hooks/server/useSessionExecutionRunsSupported';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
@@ -38,15 +62,18 @@ import { useWarmRepositoryDirectoryCacheOnSessionOpen } from '@/hooks/session/fi
 import { Modal } from '@/modal';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { continueSessionWithReplay, sessionAbort, resumeSession } from '@/sync/ops';
-import { storage, useAllMachines, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSetting, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
-import { setActiveViewingSessionId, clearActiveViewingSessionId } from '@/sync/domains/session/activeViewingSession';
-import { beginSessionViewingActivation, clearManualUnreadHold, endSessionViewingActivation, shouldSuppressAutomaticMarkViewed } from '@/sync/domains/session/readState/sessionManualUnreadHold';
+import { storage, useActiveServerAccountScope, useArtifacts, useAutomations, useEndpointConnectivity, useIsDataReady, useLaunchSelectionMachines, useLocalSetting, useProfile, useRealtimeStatus, useSessionConnectedServiceAccountSwitchEvents, useSessionMessages, useSessionPendingMessages, useSessionSubagentSourceMessages, useSessionTranscriptIds, useSessionUsage, useSessionVisibleReadSeq, useSetting, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { canResumeSessionWithOptions } from '@/agents/runtime/resumeCapabilities';
 import { DEFAULT_AGENT_ID, getAgentCore, resolveAgentIdFromFlavor, buildResumeSessionExtrasFromUiState } from '@/agents/catalog/catalog';
 import { buildSessionComposerNextMessageMetaOverridesFromUiState, supportsEditableSessionGoals } from '@/agents/registry/registryUiBehavior';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import {
+    evaluateAgentSessionCapabilitySupport,
+    resolveAgentIdFromSessionMetadata,
+} from '@happier-dev/agents';
+import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
 import { useSession } from '@/sync/domains/state/storage';
+import { writeSessionInitialPromptV1 } from '@/sync/domains/sessionInitialPrompt/sessionInitialPromptV1';
 import { Session, type Metadata } from '@/sync/domains/state/storageTypes';
 import { sync } from '@/sync/sync';
 import { computeNextAcpConfigOptionOverrideMetadata } from '@/sync/engine/overrides/acpConfigOptionOverridePublish';
@@ -59,17 +86,26 @@ import { resolveSessionComposerSend } from '@/sync/domains/input/slashCommands/r
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { resolvePromptInvocationComposerSendAction } from '@/sync/domains/input/slashCommands/promptInvocationBehavior';
 import { resolvePromptInvocationAutocompleteSelection } from '@/sync/domains/input/slashCommands/promptInvocationSuggestion';
+import {
+    clearSessionDraftValue,
+    clearSessionDraftValues,
+    flushSessionDraftValues,
+    readSessionDraftValue,
+    writeSessionDraftValue,
+    type SessionDraftValueByFieldId,
+} from '@/sync/domains/input/draftValues/sessionDraftValueStore';
+import type { AgentInputLocalUiStateV1 } from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
 import { applyPermissionModeSelection } from '@/sync/domains/permissions/permissionModeApply';
 import {
     supportsSessionModeOverrides,
 } from '@/sync/acp/sessionModeControl';
 import { shadowLevelStyle } from '@/shadowElevation';
-import { t } from '@/text';
+import { t, type TranslationKey } from '@/text';
 import { tracking, trackMessageSent } from '@/track';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { randomUUID } from '@/platform/randomUUID';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/platform/responsive';
-import { getSessionAvatarId, getSessionName, listPendingPermissionRequests, listPendingUserActionRequests, shouldShowAbortButtonForSessionState, useSessionStatus } from '@/utils/sessions/sessionUtils';
+import { getSessionAvatarId, getSessionName, listPendingAgentInputRequests, shouldReadTranscriptForPendingRequests, shouldShowAbortButtonForSessionState, useSessionStatus, type PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { isVersionSupported, MINIMUM_CLI_VERSION } from '@/utils/system/versionUtils';
@@ -77,16 +113,14 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboardImageAttachment';
 import { ensureAgentInstallablesBackground } from '@/capabilities/ensureAgentInstallablesBackground';
 import type { ModelMode, PermissionMode } from '@/sync/domains/permissions/permissionTypes';
-import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
 import { getPermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
 import { getModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
-import { readDisplayMachineTargetForSession, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { readDisplayMachineTargetForSession, readMachineControlTargetForSession, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useSessionRecipientState } from '@/components/sessions/agentInput/routing/useSessionRecipientState';
 import {
     resolveParticipantRoutedSend,
 } from '@/sync/domains/input/participants/resolveParticipantRoutedSend';
 import { useSessionAgentInputRoutingControls } from '@/components/sessions/agentInput/routing/useSessionAgentInputRoutingControls';
-import { useEnsureSidechainsLoaded } from '@/hooks/session/useEnsureSidechainsLoaded';
 import { useSessionSubagents } from '@/hooks/session/useSessionSubagents';
 import { hasSessionSubagentLaunchCards } from '@/agents/registry/sessionSubagentUiBehavior';
 import { isExecutionRunNotRunningSendError, sessionExecutionRunSend } from '@/sync/ops/sessionExecutionRuns';
@@ -108,6 +142,10 @@ import {
     SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX,
 } from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
 import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
+import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
+import { submitSessionUserMessage } from '@/sync/domains/session/input/submitSessionUserMessage';
+import { createSyncBackedSubmitPort } from '@/sync/domains/session/input/syncBackedSubmitPort';
+import type { SessionSubmitPort } from '@/sync/domains/session/input/types';
 import { isSessionLocallyAttached } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionSubagentCounts } from '@/sync/domains/session/subagents/deriveSessionSubagentCounts';
 import { resolveSessionWorkspacePresentation } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
@@ -115,8 +153,19 @@ import { isModelSelectableForSession } from '@/sync/domains/models/modelOptions'
 import { getInactiveSessionUiState } from '@/components/sessions/model/inactiveSessionUi';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { useCLIDetection } from '@/hooks/auth/useCLIDetection';
+import {
+    computeConnectedServiceQuotaGaugeViewModel,
+    selectConnectedServiceSessionProviderUsageSnapshot,
+    type ConnectedServiceQuotaGaugeLabelFormatter,
+    type ConnectedServiceQuotaGaugeWindowMode,
+} from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
+import { useConnectedServiceQuotaSnapshots } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSnapshots';
+import {
+    connectedServiceProfileKey,
+    resolveConnectedServiceProfileLabel,
+} from '@/sync/domains/connectedServices/connectedServiceProfilePreferences';
+import { resolveConnectedServiceQuotaProfileRefForSession } from './resolveConnectedServiceQuotaProfileRefForSession';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
 import { usePathname, useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
@@ -153,6 +202,11 @@ import { layout } from '@/components/ui/layout/layout';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
 import { useAttachmentDraftManager } from '@/components/sessions/attachments/useAttachmentDraftManager';
+import {
+    clearSessionAttachmentDrafts,
+    readSessionAttachmentDrafts,
+    writeSessionAttachmentDrafts,
+} from '@/components/sessions/attachments/sessionAttachmentDraftStore';
 import { formatAttachmentsBlock, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { buildAttachmentMessageMeta } from '@/components/sessions/attachments/buildAttachmentMessageMeta';
 import { mergeMessageMetaOverrides } from '@/components/sessions/agentInput/structuredInputMentions';
@@ -173,6 +227,7 @@ import { SessionResumeProvider } from '@/components/sessions/model/SessionResume
 import { useSessionResumeRequestListener } from '@/components/sessions/model/sessionResumeRequests';
 import { useDirectSessionTakeover } from '@/components/sessions/model/useDirectSessionTakeover';
 import { useDirectSessionRuntime } from '@/components/sessions/model/useDirectSessionRuntime';
+import { SessionWarningActionBanner } from './SessionWarningActionBanner';
 import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorkspaceScopeForSession';
 import { listOpenApprovalArtifactsForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
@@ -181,17 +236,97 @@ import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { readDirectSessionLink } from '@/sync/domains/session/directSessions/readDirectSessionLink';
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
-import { isHiddenSystemSession } from '@happier-dev/protocol';
-import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
+import {
+    isHiddenSystemSession,
+    ConnectedServiceIdSchema,
+    SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
+    SessionUsageLimitRecoveryV1Schema,
+    type SessionUsageLimitRecoveryV1,
+} from '@happier-dev/protocol';
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { resolveNextOptimisticAcpConfigOptionOverrides } from './resolveNextOptimisticAcpConfigOptionOverrides';
-import { useStableSessionViewShellSession } from './sessionViewStableSession';
+import { useSessionViewShellSession, useSessionViewShellSessionSeq } from './sessionViewStableSession';
+import { useSessionViewedLifecycle } from './view/useSessionViewedLifecycle';
+import { resolveSessionAuthSurfaceState, type SessionAuthSurfaceState } from './sessionAuthSurfaceState';
+import { useSessionRuntimeStatusSource } from './useSessionRuntimeStatusSource';
+import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import {
+    deriveLatestPendingRequestObservedAtFromSession,
+    derivePendingRequestFlagsFromSession,
+} from '@/sync/domains/session/pending/listPendingSessionRequests';
+import {
+    buildSessionUsageLimitRecoveryPresentation,
+    buildSessionUsageLimitStatusBadgePresentation,
+    type SessionUsageLimitRecoveryActionKind,
+    type SessionUsageLimitRecoveryTranslate,
+    type UsageLimitRecoveryOperationStatus,
+} from '@/components/sessions/usageLimitRecovery/sessionUsageLimitRecoveryPresentation';
+import { hasMeaningfulActivityAfterRuntimeIssue } from '@/components/sessions/usageLimitRecovery/sessionUsageLimitActivityStaleness';
+import {
+    sessionUsageLimitCheckNow,
+    sessionUsageLimitSwitchAccountNow,
+    sessionUsageLimitWaitResumeCancel,
+    sessionUsageLimitWaitResumeEnable,
+} from '@/sync/ops/sessionUsageLimitRecovery';
 
+const sessionSubmitPort = createSyncBackedSubmitPort(sync);
 const SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES: string[] = ['@', '/', '$'];
+const MAX_USAGE_LIMIT_RECOVERY_READY_TIMER_MS = 2_147_483_647;
+function resolveConnectedServicesAuthSwitchDisabledReason(params: Readonly<{
+    isReadOnly: boolean;
+    session: Session;
+    nowMs: number;
+}>): 'read_only' | 'active_turn' | null {
+    if (params.isReadOnly) return 'read_only';
 
-type SessionAuthSurfaceState = Readonly<{
-    message: string;
-}>;
+    const pendingFlags = derivePendingRequestFlagsFromSession(params.session);
+    const runtimeState = deriveSessionRuntimePresentationState({
+        active: params.session.active,
+        activeAt: params.session.activeAt,
+        presence: params.session.presence,
+        thinking: params.session.thinking,
+        thinkingAt: params.session.thinkingAt,
+        latestTurnStatus: params.session.latestTurnStatus,
+        latestTurnStatusObservedAt: params.session.latestTurnStatusObservedAt,
+        meaningfulActivityAt: params.session.meaningfulActivityAt,
+        hasPendingPermissionRequests: pendingFlags.hasPendingPermissionRequests,
+        hasPendingUserActionRequests: pendingFlags.hasPendingUserActionRequests,
+        pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(params.session),
+    }, params.nowMs);
+
+    return runtimeState.working || runtimeState.freshPermissionRequired || runtimeState.freshActionRequired
+        ? 'active_turn'
+        : null;
+}
+
+function normalizePositiveTimestamp(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.trunc(value)
+        : null;
+}
+
+function readObjectRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function resolveConnectedServiceProviderDisplayName(serviceId: string): string | null {
+    const parsed = ConnectedServiceIdSchema.safeParse(serviceId);
+    if (!parsed.success) return null;
+    return resolveConnectedServiceDisplayName(parsed.data, t);
+}
+
+const connectedServiceQuotaGaugeFormatter: ConnectedServiceQuotaGaugeLabelFormatter = {
+    remaining: ({ percent }) => t('agentInput.providerUsage.remaining', { percent }),
+    remainingWithReset: ({ percent, reset }) => t('agentInput.providerUsage.remainingWithReset', { percent, reset }),
+    used: ({ used, limit }) => t('agentInput.providerUsage.usedCount', { used, limit }),
+    durationNow: () => t('agentInput.providerUsage.duration.now'),
+    durationDaysHours: ({ days, hours }) => t('agentInput.providerUsage.duration.daysHours', { days, hours }),
+    durationHoursMinutes: ({ hours, minutes }) => t('agentInput.providerUsage.duration.hoursMinutes', { hours, minutes }),
+    durationHours: ({ hours }) => t('agentInput.providerUsage.duration.hours', { hours }),
+    durationMinutes: ({ minutes }) => t('agentInput.providerUsage.duration.minutes', { minutes }),
+};
 
 function isOwnedSessionRootPathname(pathname: string | null | undefined, sessionId: string): boolean {
     const normalizedPathname = typeof pathname === 'string' ? pathname.trim() : '';
@@ -211,79 +346,453 @@ function isOwnedSessionRootPathname(pathname: string | null | undefined, session
     }
 }
 
-function resolveSessionAuthSurfaceState(params: Readonly<{
-    endpointStatus: unknown;
-    syncError: {
-        message: string;
-        kind: 'auth' | 'config' | 'network' | 'server' | 'unknown';
-    } | null;
-}>): SessionAuthSurfaceState | null {
-    if (params.syncError?.kind === 'auth') {
-        return { message: params.syncError.message };
+function isOwnedSessionRoutePathname(pathname: string | null | undefined, sessionId: string): boolean {
+    const normalizedPathname = typeof pathname === 'string' ? pathname.trim().split('?')[0] ?? '' : '';
+    if (!normalizedPathname) {
+        return false;
     }
-    if (params.endpointStatus === 'auth_failed') {
-        return { message: createNotAuthenticatedError().message };
+
+    const match = /^\/session\/([^/]+)(?:\/.*)?$/.exec(normalizedPathname);
+    if (!match) {
+        return false;
     }
-    return null;
+
+    try {
+        return decodeURIComponent(match[1] ?? '') === sessionId;
+    } catch {
+        return false;
+    }
 }
 
-function SessionAuthRecoveryBanner({ message }: Readonly<{ message: string }>) {
-    const { theme } = useUnistyles();
+function readSessionUsageLimitRecovery(metadata: unknown): SessionUsageLimitRecoveryV1 | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+    const raw = (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
+    const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+}
+
+function formatResumeSessionFailureMessage(result: Readonly<{
+    errorCode?: string | null;
+    errorMessage?: string | null;
+}>): string {
+    const errorCode = typeof result.errorCode === 'string' ? result.errorCode.trim() : '';
+    if (errorCode === SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED) {
+        return t('session.resumeFailed');
+    }
+
+    const message = typeof result.errorMessage === 'string' ? result.errorMessage.trim() : '';
+    return message || t('session.resumeFailed');
+}
+
+function readFiniteTimestampMs(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readUsageLimitRecoveryResetAtMs(params: Readonly<{
+    issue: unknown;
+    recovery: SessionUsageLimitRecoveryV1 | null | undefined;
+}>): number | null {
+    const recoveryResetAtMs = readFiniteTimestampMs(params.recovery?.resetAtMs);
+    if (recoveryResetAtMs !== null) return recoveryResetAtMs;
+    const issue = readObjectRecord(params.issue);
+    const usageLimit = readObjectRecord(issue?.usageLimit);
+    return readFiniteTimestampMs(usageLimit?.resetAtMs);
+}
+
+function formatUsageLimitRecoveryOperationError(result: Readonly<{
+    error: string;
+    errorCode?: string;
+}>): string {
+    const code = result.errorCode ?? result.error;
+    switch (code) {
+        case 'session_usage_limit_recovery_control_remote_unavailable':
+        case 'session_usage_limit_recovery_control_machine_unavailable':
+        case 'session_usage_limit_recovery_control_current_machine_unknown':
+        case 'session_usage_limit_recovery_control_session_machine_unknown':
+        case 'session_usage_limit_recovery_control_metadata_unavailable':
+            return t('errors.daemonUnavailableBody');
+        case 'session_usage_limit_recovery_control_inactive':
+        case 'session_usage_limit_recovery_control_issue_mismatch':
+        case 'session_usage_limit_recovery_control_cwd_unavailable':
+            return t('errors.tryAgain');
+        default:
+            return code.startsWith('session_usage_limit_recovery_control_')
+                ? t('errors.operationFailed')
+                : result.error;
+    }
+}
+
+function isUsageLimitRecoveryCheckAction(kind: SessionUsageLimitRecoveryActionKind): boolean {
+    return kind === 'check_now'
+        || kind === 'retry_temporary_throttle';
+}
+
+function isUsageLimitRecoverySwitchAction(kind: SessionUsageLimitRecoveryActionKind): boolean {
+    return kind === 'switch_fallback_now'
+        || kind === 'switch_account_now';
+}
+
+function isUsageLimitRecoveryControlAction(kind: SessionUsageLimitRecoveryActionKind): boolean {
+    return isUsageLimitRecoveryCheckAction(kind)
+        || isUsageLimitRecoverySwitchAction(kind);
+}
+
+function SessionAuthRecoveryBanner({ message, style }: Readonly<{
+    message: string;
+    style?: React.ComponentProps<typeof SessionWarningActionBanner>['style'];
+}>) {
     const router = useRouter();
 
     return (
-        <View
+        <SessionWarningActionBanner
             testID="session-auth-sync-error"
-            style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                backgroundColor: theme.colors.state.warning.background,
-                borderWidth: 1,
-                borderColor: theme.colors.state.warning.border,
-                borderRadius: 10,
-                gap: 8,
-            }}
-        >
-            <Ionicons name="warning-outline" size={16} color={theme.colors.state.warning.foreground} />
-            <View style={{ flexBasis: 0, flexGrow: 1 }}>
-                <Text style={{ fontSize: 13, color: theme.colors.state.warning.foreground, fontWeight: '700' }}>
-                    {t('connect.restoreAccount')}
-                </Text>
-                <Text style={{ fontSize: 12, color: theme.colors.state.warning.foreground, lineHeight: 16 }}>
-                    {message}
-                </Text>
-            </View>
-            <Pressable
-                testID="session-auth-sync-error-restore"
-                accessibilityRole="button"
-                accessibilityLabel={t('connect.restoreAccount')}
-                onPress={() => router.push('/restore')}
-                style={({ pressed }) => ({
-                    flexShrink: 0,
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    borderRadius: 8,
-                    backgroundColor: theme.colors.state.warning.foreground,
-                    opacity: pressed ? 0.7 : 1,
-                })}
-            >
-                <Text style={{ fontSize: 12, color: theme.colors.state.warning.background, fontWeight: '700' }}>
-                    {t('connect.restoreAccount')}
-                </Text>
-            </Pressable>
-        </View>
+            actionTestID="session-auth-sync-error-restore"
+            title={t('connect.restoreAccount')}
+            body={message}
+            actionLabel={t('connect.restoreAccount')}
+            actionAccessibilityLabel={t('connect.restoreAccount')}
+            onActionPress={() => router.push('/restore')}
+            style={style}
+        />
     );
 }
 
+type SessionViewLoadedProps = Readonly<{
+    authSurfaceState: SessionAuthSurfaceState | null;
+    sessionId: string;
+    routeServerId?: string | null;
+    session: Session;
+    onBackPress: () => void;
+    isEncryptedSessionLocked: boolean;
+    executionRunsEnabled: boolean;
+    jumpToSeq: number | null;
+    participantTargets: readonly SessionParticipantTarget[];
+    paneUrlState: SessionPaneUrlState | null;
+    initialAttachmentDrafts: readonly AttachmentDraft[] | null;
+    paneScopeId: string;
+    // Stable per-pane-mount id (NOT keyed by session) used to seed the first-frame content width
+    // across the `key={sessionId}` remount so the bottom spacing does not flip on switch.
+    contentWidthSurfaceId: string;
+    pendingMessages: readonly PendingMessage[];
+    directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
+    chatBottomSpacing: 'default' | 'none';
+    paneUrlSyncRouteActive: boolean;
+    surfaceFocused: boolean;
+}>;
+
+type SessionViewLoadedWithPendingMessagesProps = Omit<
+    SessionViewLoadedProps,
+    'directSessionRuntime' | 'participantTargets' | 'pendingMessages'
+>;
+
 const MemoizedSessionViewLoaded = React.memo(SessionViewLoaded);
+
+const SessionViewLoadedWithPendingMessages = React.memo(function SessionViewLoadedWithPendingMessages(
+    props: SessionViewLoadedWithPendingMessagesProps,
+) {
+    const { messages: pendingMessages } = useSessionPendingMessages(props.sessionId);
+    const subagentSourceMessages = useSessionSubagentSourceMessages(props.sessionId);
+    const directSessionRuntime = useDirectSessionRuntime({
+        sessionId: props.sessionId,
+        metadata: props.session.metadata ?? null,
+    });
+    const { participantTargets } = useSessionSubagents({
+        sessionId: props.sessionId,
+        session: props.session,
+        messages: subagentSourceMessages,
+        directSessionRuntime,
+    });
+
+    return (
+        <>
+            <MemoizedSessionViewLoaded
+                {...props}
+                directSessionRuntime={directSessionRuntime}
+                participantTargets={participantTargets}
+                pendingMessages={pendingMessages}
+            />
+        </>
+    );
+});
+
+type SessionHeaderRightElementProps = Readonly<{
+    sessionId: string;
+    session: Session;
+    paneScopeId: string;
+    currentSessionRouteServerId: string;
+    mobileWorkspaceExperienceToggleActionId: string;
+    mobileWorkspaceExperienceToggleLabelKey: TranslationKey | null;
+    onToggleWorkspaceExperience: () => void;
+    sessionAutomationsEnabledCount: number;
+    shouldFoldHeaderIconActions: boolean;
+    showAutomations: boolean;
+    showWorkspaceExperienceToggle: boolean;
+}>;
+
+const SessionHeaderRightElement = React.memo(function SessionHeaderRightElement(props: SessionHeaderRightElementProps) {
+    const { theme } = useUnistyles();
+    const router = useRouter();
+    const pane = useAppPaneScope(props.paneScopeId);
+    const paneRef = React.useRef(pane);
+    paneRef.current = pane;
+    const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(props.sessionId, {
+        serverId: props.currentSessionRouteServerId,
+    });
+    const subagentSourceMessages = useSessionSubagentSourceMessages(props.sessionId);
+    const directSessionRuntime = useDirectSessionRuntime({
+        sessionId: props.sessionId,
+        metadata: props.session.metadata ?? null,
+    });
+    const { subagents } = useSessionSubagents({
+        sessionId: props.sessionId,
+        session: props.session,
+        messages: subagentSourceMessages,
+        directSessionRuntime,
+    });
+    const subagentCounts = React.useMemo(() => deriveSessionSubagentCounts(subagents), [subagents]);
+    const shouldShowSubagentsButton =
+        subagentCounts.total > 0
+        || sessionExecutionRunsSupported
+        || hasSessionSubagentLaunchCards(props.session);
+
+    const buildCurrentSessionHref = React.useCallback((suffix = '') => {
+        return buildScopedSessionRouteHref({
+            sessionId: props.sessionId,
+            serverId: props.currentSessionRouteServerId,
+            suffix,
+        });
+    }, [props.currentSessionRouteServerId, props.sessionId]);
+
+    const handleHeaderExtraItemSelect = React.useCallback((actionId: string) => {
+        if (actionId === props.mobileWorkspaceExperienceToggleActionId) {
+            if (actionId === 'header.openMobileWorkspaceCockpit') {
+                Keyboard.dismiss();
+            }
+            props.onToggleWorkspaceExperience();
+            return true;
+        }
+        if (actionId !== 'header.openSubagents') return false;
+        paneRef.current.openRight({ tabId: 'agents' });
+        paneRef.current.setRightTab('agents');
+        return true;
+    }, [props.mobileWorkspaceExperienceToggleActionId, props.onToggleWorkspaceExperience]);
+
+    const headerExtraItems = React.useMemo(() => {
+        const items: DropdownMenuItem[] = [];
+        if (props.showWorkspaceExperienceToggle && props.mobileWorkspaceExperienceToggleLabelKey) {
+            items.push({
+                id: props.mobileWorkspaceExperienceToggleActionId,
+                title: t(props.mobileWorkspaceExperienceToggleLabelKey),
+                icon: <Ionicons name="phone-portrait-outline" size={18} color={theme.colors.text.secondary} />,
+            });
+        }
+        if (!props.shouldFoldHeaderIconActions) return items;
+
+        if (shouldShowSubagentsButton) {
+            items.push({
+                id: 'header.openSubagents',
+                title: t('session.openSubagents', { count: subagentCounts.active }),
+                icon: <DependabotIcon size={18} color={theme.colors.text.secondary} />,
+            });
+        }
+        if (sessionExecutionRunsSupported) {
+            items.push({
+                id: 'header.openRuns',
+                title: t('session.openRuns'),
+                icon: <Ionicons name="play-outline" size={18} color={theme.colors.text.secondary} />,
+            });
+        }
+        if (props.showAutomations) {
+            items.push({
+                id: 'header.openAutomations',
+                title: t('session.openAutomations'),
+                icon: <Ionicons name="timer-outline" size={18} color={theme.colors.text.secondary} />,
+            });
+        }
+        return items;
+    }, [
+        props.mobileWorkspaceExperienceToggleActionId,
+        props.mobileWorkspaceExperienceToggleLabelKey,
+        props.shouldFoldHeaderIconActions,
+        props.showAutomations,
+        props.showWorkspaceExperienceToggle,
+        sessionExecutionRunsSupported,
+        shouldShowSubagentsButton,
+        subagentCounts.active,
+        theme.colors.text.secondary,
+    ]);
+
+    const badgeLabel =
+        props.sessionAutomationsEnabledCount > 99 ? '99+' : String(props.sessionAutomationsEnabledCount);
+
+    return (
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <SessionHeaderActionMenu
+                sessionId={props.sessionId}
+                session={props.session}
+                extraItems={headerExtraItems.length > 0 ? headerExtraItems : undefined}
+                onSelectExtraItem={handleHeaderExtraItemSelect}
+            />
+            {!props.shouldFoldHeaderIconActions ? (
+                <SessionHeaderSubagentsButton
+                    scopeId={props.paneScopeId}
+                    activeCount={subagentCounts.active}
+                    hasAnySubagents={shouldShowSubagentsButton}
+                />
+            ) : null}
+            <SessionHeaderTerminalButton
+                sessionId={props.sessionId}
+                scopeId={props.paneScopeId}
+                serverId={props.currentSessionRouteServerId}
+            />
+            {!props.shouldFoldHeaderIconActions && sessionExecutionRunsSupported ? (
+                <Pressable
+                    onPress={() => router.push(buildCurrentSessionHref('/runs') as any)}
+                    hitSlop={15}
+                    style={({ pressed }) => ({
+                        width: 44,
+                        height: 44,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: pressed ? 0.7 : 1,
+                    })}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('session.openRuns')}
+                >
+                    <Ionicons name="play-outline" size={22} color={theme.colors.chrome.header.foreground} />
+                </Pressable>
+            ) : null}
+            {!props.shouldFoldHeaderIconActions && props.showAutomations ? (
+                <Pressable
+                    onPress={() => navigateWithBlurOnWeb(() => router.push(buildCurrentSessionHref('/automations') as any))}
+                    hitSlop={15}
+                    style={({ pressed }) => ({
+                        width: 44,
+                        height: 44,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: pressed ? 0.7 : 1,
+                    })}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('session.openAutomations')}
+                >
+                    <View style={{ position: 'relative', width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
+                        <Ionicons name="timer-outline" size={22} color={theme.colors.chrome.header.foreground} />
+                        {props.sessionAutomationsEnabledCount > 0 ? (
+                            <View style={{
+                                position: 'absolute',
+                                top: -2,
+                                right: -6,
+                                backgroundColor: theme.colors.status.error,
+                                borderRadius: 8,
+                                minWidth: 16,
+                                height: 16,
+                                paddingHorizontal: 4,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                            }}>
+                                <Text style={{
+                                    color: theme.colors.overlay.foreground,
+                                    fontSize: 10,
+                                    fontWeight: '600',
+                                }}>
+                                    {badgeLabel}
+                                </Text>
+                            </View>
+                        ) : null}
+                    </View>
+                </Pressable>
+            ) : null}
+        </View>
+    );
+});
 
 type SessionAgentInputWithUsageProps = Omit<React.ComponentProps<typeof AgentInput>, 'usageData'> & {
     sessionId: string;
     sessionLatestUsage: Session['latestUsage'] | null | undefined;
+    inputComposerClearTransientStateRef: React.MutableRefObject<() => void>;
+    inputComposerCaptureTransientStateRef: React.MutableRefObject<() => AgentInputLocalUiStateV1 | null>;
+    inputComposerRestoreTransientStateRef: React.MutableRefObject<(state: AgentInputLocalUiStateV1 | null) => void>;
 };
+
+const noopInputComposerClearTransientState = () => {};
+const noopInputComposerCaptureTransientState = () => null;
+const noopInputComposerRestoreTransientState = () => {};
+
+type AgentInputOnSend = NonNullable<React.ComponentProps<typeof AgentInput>['onSend']>;
+type AgentInputOnFileViewerPress = NonNullable<React.ComponentProps<typeof AgentInput>['onFileViewerPress']>;
+type ComposerSemanticDraftSnapshot = Readonly<{
+    recipient: SessionDraftValueByFieldId['routing.recipient'] | undefined;
+    executionRunDelivery: SessionDraftValueByFieldId['routing.executionRunDelivery'] | undefined;
+    structuredInputMentions: SessionDraftValueByFieldId['structuredInput.mentions'] | undefined;
+}>;
+
+function useStableAgentInputOnSend(handler: AgentInputOnSend): AgentInputOnSend {
+    const handlerRef = React.useRef(handler);
+    handlerRef.current = handler;
+
+    return React.useCallback<AgentInputOnSend>((sendOptions) => handlerRef.current(sendOptions), []);
+}
+
+function useStableAgentInputFileViewerPress(handler: AgentInputOnFileViewerPress): AgentInputOnFileViewerPress {
+    const handlerRef = React.useRef(handler);
+    handlerRef.current = handler;
+
+    return React.useCallback<AgentInputOnFileViewerPress>(() => handlerRef.current(), []);
+}
+
+function areSemanticDraftValuesEqual(left: unknown, right: unknown): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+const EMPTY_AGENT_INPUT_REQUESTS: readonly PendingPermissionRequest[] = Object.freeze([]);
+
+function stringifyAgentInputRequestArguments(value: unknown): string {
+    if (typeof value === 'undefined') return '';
+    try {
+        return JSON.stringify(value) ?? '';
+    } catch {
+        return '';
+    }
+}
+
+function areAgentInputRequestListsEqual(
+    left: readonly PendingPermissionRequest[],
+    right: readonly PendingPermissionRequest[],
+): boolean {
+    if (left === right) return true;
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+        const leftRequest = left[i];
+        const rightRequest = right[i];
+        if (!leftRequest || !rightRequest) return false;
+        if (leftRequest.id !== rightRequest.id) return false;
+        if (leftRequest.kind !== rightRequest.kind) return false;
+        if (leftRequest.tool !== rightRequest.tool) return false;
+        if (leftRequest.createdAt !== rightRequest.createdAt) return false;
+        if (
+            stringifyAgentInputRequestArguments(leftRequest.arguments)
+            !== stringifyAgentInputRequestArguments(rightRequest.arguments)
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function useStableAgentInputRequests(
+    requests: readonly PendingPermissionRequest[],
+): readonly PendingPermissionRequest[] {
+    const previousRef = React.useRef<readonly PendingPermissionRequest[]>(EMPTY_AGENT_INPUT_REQUESTS);
+    return React.useMemo(() => {
+        const normalized = requests.length === 0 ? EMPTY_AGENT_INPUT_REQUESTS : requests;
+        if (areAgentInputRequestListsEqual(previousRef.current, normalized)) {
+            return previousRef.current;
+        }
+        previousRef.current = normalized;
+        return normalized;
+    }, [requests]);
+}
 
 function normalizeComposerKeyboardHeight(height: number | null | undefined): number {
     return typeof height === 'number' && Number.isFinite(height)
@@ -316,16 +825,47 @@ function useComposerKeyboardHeight(): number {
 const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsage({
     sessionId,
     sessionLatestUsage,
+    inputComposerClearTransientStateRef,
+    inputComposerCaptureTransientStateRef,
+    inputComposerRestoreTransientStateRef,
     ...agentInputProps
 }: SessionAgentInputWithUsageProps) {
     const sessionUsage = useSessionUsage(sessionId);
     const scaffoldAvailablePanelHeight = useComposerAvailablePanelHeight();
     const keyboardHeight = useComposerKeyboardHeight();
     const { height: windowHeight } = useWindowDimensions();
-    const [isInputExpanded, setIsInputExpanded] = React.useState(false);
+    const rawUiFontScale = useLocalSetting('uiFontScale');
+    const uiFontScale = typeof rawUiFontScale === 'number' ? rawUiFontScale : undefined;
+    const inputComposerPersistence = useSessionAgentInputComposerPersistence({
+        sessionId,
+        text: agentInputProps.value,
+        textLength: agentInputProps.value.length,
+        fontScale: uiFontScale,
+    });
     React.useEffect(() => {
-        setIsInputExpanded(false);
-    }, [sessionId]);
+        inputComposerClearTransientStateRef.current = inputComposerPersistence.clearTransientInputState;
+        inputComposerCaptureTransientStateRef.current = inputComposerPersistence.captureTransientInputState;
+        inputComposerRestoreTransientStateRef.current = inputComposerPersistence.restoreTransientInputState;
+        return () => {
+            if (inputComposerClearTransientStateRef.current === inputComposerPersistence.clearTransientInputState) {
+                inputComposerClearTransientStateRef.current = noopInputComposerClearTransientState;
+            }
+            if (inputComposerCaptureTransientStateRef.current === inputComposerPersistence.captureTransientInputState) {
+                inputComposerCaptureTransientStateRef.current = noopInputComposerCaptureTransientState;
+            }
+            if (inputComposerRestoreTransientStateRef.current === inputComposerPersistence.restoreTransientInputState) {
+                inputComposerRestoreTransientStateRef.current = noopInputComposerRestoreTransientState;
+            }
+        };
+    }, [
+        inputComposerCaptureTransientStateRef,
+        inputComposerClearTransientStateRef,
+        inputComposerPersistence.captureTransientInputState,
+        inputComposerPersistence.clearTransientInputState,
+        inputComposerPersistence.restoreTransientInputState,
+        inputComposerRestoreTransientStateRef,
+    ]);
+    const isInputExpanded = inputComposerPersistence.expanded;
     const maxPanelHeight = agentInputProps.maxPanelHeight
         ?? computeExistingSessionComposerPanelMaxHeight({
             availablePanelHeight: scaffoldAvailablePanelHeight,
@@ -351,9 +891,9 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
         expanded: isInputExpanded,
         collapsedMaxHeight: collapsedInputMaxHeight,
         onToggle: () => {
-            setIsInputExpanded((current) => !current);
+            inputComposerPersistence.setExpanded((current) => !current);
         },
-    }), [collapsedInputMaxHeight, isInputExpanded]);
+    }), [collapsedInputMaxHeight, inputComposerPersistence, isInputExpanded]);
     const agentInputUsageData = React.useMemo(() => {
         const usage = sessionUsage ?? sessionLatestUsage ?? null;
         return usage ? {
@@ -374,8 +914,101 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
             sessionId={sessionId}
             inputMaxHeight={inputMaxHeight}
             inputExpansion={inputExpansion}
+            inputPersistence={inputComposerPersistence.inputPersistence}
+            structuredInputMentions={inputComposerPersistence.structuredInputPersistence.mentions}
+            onStructuredInputMentionsChange={inputComposerPersistence.structuredInputPersistence.onMentionsChange}
             maxPanelHeight={maxPanelHeight}
             usageData={agentInputUsageData}
+        />
+    );
+});
+
+type SessionAgentInputWithUsageAndRequestsProps = Omit<
+    SessionAgentInputWithUsageProps,
+    'permissionRequests' | 'userActionRequests'
+> & {
+    session: Session;
+};
+
+const SessionAgentInputWithUsageAndRequests = React.memo(function SessionAgentInputWithUsageAndRequests({
+    session,
+    ...props
+}: SessionAgentInputWithUsageAndRequestsProps) {
+    const shouldReadTranscript = shouldReadTranscriptForPendingRequests(session);
+    const { messages: committedMessages } = useSessionMessages(props.sessionId, { enabled: shouldReadTranscript });
+    const pendingRequests = React.useMemo(
+        () => listPendingAgentInputRequests(session, shouldReadTranscript ? committedMessages : undefined),
+        [committedMessages, session, shouldReadTranscript],
+    );
+    const pendingPermissionRequests = useStableAgentInputRequests(pendingRequests.permissionRequests);
+    const pendingUserActionRequests = useStableAgentInputRequests(pendingRequests.userActionRequests);
+
+    return (
+        <SessionAgentInputWithUsage
+            {...props}
+            permissionRequests={pendingPermissionRequests}
+            userActionRequests={pendingUserActionRequests}
+        />
+    );
+});
+
+type SessionAgentInputRuntimeStatusBoundaryProps = Omit<
+    SessionAgentInputWithUsageAndRequestsProps,
+    'connectionStatus' | 'showAbortButton'
+> & {
+    inactiveStatusText: string | null;
+    isPendingQueueWakeResuming: boolean;
+    isResuming: boolean;
+    connectedServicesRestartState: SessionConnectedServicesAuthSwitchRestartState;
+};
+
+const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentInputRuntimeStatusBoundary({
+    inactiveStatusText,
+    isPendingQueueWakeResuming,
+    isResuming,
+    connectedServicesRestartState,
+    session,
+    ...props
+}: SessionAgentInputRuntimeStatusBoundaryProps) {
+    const sessionRuntimeStatusSource = useSessionRuntimeStatusSource(session);
+    const sessionStatus = useSessionStatus(sessionRuntimeStatusSource, {
+        subscribeToSession: false,
+        subscribeToTranscript: false,
+    });
+    const connectionStatus = React.useMemo(() => ({
+        text: connectedServicesRestartState?.status === 'restarting'
+            || connectedServicesRestartState?.status === 'pending_confirmation'
+            ? t('connectedServices.authSwitch.status.restarting')
+            : connectedServicesRestartState?.status === 'failed'
+            ? t('connectedServices.authSwitch.switchFailed')
+            : (isResuming || isPendingQueueWakeResuming || sessionStatus.state === 'resuming')
+            ? t('session.resuming')
+            : (inactiveStatusText || sessionStatus.statusText),
+        color: sessionStatus.statusColor,
+        dotColor: sessionStatus.statusDotColor,
+        isPulsing: connectedServicesRestartState?.status === 'restarting'
+            || connectedServicesRestartState?.status === 'pending_confirmation'
+            || isResuming
+            || isPendingQueueWakeResuming
+            || sessionStatus.isPulsing,
+    }), [
+        connectedServicesRestartState?.status,
+        inactiveStatusText,
+        isPendingQueueWakeResuming,
+        isResuming,
+        sessionStatus.isPulsing,
+        sessionStatus.state,
+        sessionStatus.statusColor,
+        sessionStatus.statusDotColor,
+        sessionStatus.statusText,
+    ]);
+
+    return (
+        <SessionAgentInputWithUsageAndRequests
+            {...props}
+            session={session}
+            connectionStatus={connectionStatus}
+            showAbortButton={shouldShowAbortButtonForSessionState(sessionStatus.state)}
         />
     );
 });
@@ -398,12 +1031,26 @@ function SessionAuthRecoveryFallback({ message }: Readonly<{ message: string }>)
     );
 }
 
+function resolveRouteHydrationRetryStatusKey(
+    cause: Extract<SessionRouteHydrationState, { kind: 'retrying' }>['cause'],
+): TranslationKey | null {
+    if (cause === 'network' || cause === 'server_unavailable') {
+        return 'newSession.notConnectedToServer';
+    }
+    if (cause === 'decrypting') {
+        return 'common.loading';
+    }
+    return null;
+}
+
 type SessionViewProps = Readonly<{
     id: string;
     routeServerId?: string | null;
+    routeHydrationState?: SessionRouteHydrationState | null;
     jumpToSeq?: number | null;
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
+    routeAnchorOverride?: boolean | null;
     contentOverride?: React.ReactNode;
     safeAreaTopMode?: 'internal' | 'external';
     headerSafeAreaTopMode?: 'internal' | 'external';
@@ -416,9 +1063,19 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const pathname = usePathname();
     const debugRouterEnabled = process.env.EXPO_PUBLIC_DEBUG === '1';
     const auth = useAuth();
-    const session = useSession(sessionId);
-    const stableSessionForLoadedView = useStableSessionViewShellSession(session);
-    const stableSessionForHeader = stableSessionForLoadedView ?? session;
+    const sessionSeq = useSessionViewShellSessionSeq(sessionId);
+    const routeHydrationState = props.routeHydrationState ?? null;
+    const expectedRouteServerId = routeHydrationState?.serverId ?? props.routeServerId ?? null;
+    const session = useSessionViewShellSession(sessionId, expectedRouteServerId);
+    const routeHydrationLoading = !session && routeHydrationState?.kind === 'loading';
+    const routeHydrationRetrying = !session && routeHydrationState?.kind === 'retrying';
+    const routeHydrationPending = routeHydrationLoading || routeHydrationRetrying;
+    const routeHydrationRetryStatusKey = routeHydrationRetrying
+        ? resolveRouteHydrationRetryStatusKey(routeHydrationState.cause)
+        : null;
+    const routeHydrationTerminalMissing = !session && routeHydrationState?.kind === 'missing';
+    const stableSessionForLoadedView = session;
+    const stableSessionForHeader = session;
     const isDataReady = useIsDataReady();
     const { theme } = useUnistyles();
     const automations = useAutomations();
@@ -439,7 +1096,6 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             fallbackHref: '/',
         });
     }, [router]);
-    const sessionExecutionRunsSupported = useSessionExecutionRunsSupported(sessionId, { serverId: currentSessionRouteServerId });
     const safeArea = useSafeAreaInsets();
     const safeAreaTopInset = props.safeAreaTopMode === 'external' ? 0 : safeArea.top;
     const headerSafeAreaTopMode = props.headerSafeAreaTopMode ?? props.safeAreaTopMode ?? 'internal';
@@ -452,6 +1108,10 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const voiceSnap = useVoiceSessionSnapshot();
     const hasAuthCredentials = Boolean(auth.credentials);
     const isFocused = useSessionScreenIsFocused();
+    const isRouteAnchor = typeof props.routeAnchorOverride === 'boolean'
+        ? props.routeAnchorOverride
+        : isOwnedSessionRoutePathname(pathname, sessionId);
+    const shouldRenderSessionSurface = isFocused || isRouteAnchor;
     const endpointConnectivity =
         typeof useEndpointConnectivity === 'function'
             ? useEndpointConnectivity()
@@ -465,7 +1125,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 lastErrorMessage: null,
             };
     const syncError = useSyncError();
-    const allMachines = useAllMachines();
+    const allMachines = useLaunchSelectionMachines();
     const machinesById = React.useMemo(() => {
         const next: Record<string, (typeof allMachines)[number]> = {};
         for (const machine of allMachines) {
@@ -517,34 +1177,17 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const multiPaneEnabled = useLocalSetting('uiMultiPanePanelsEnabled') !== false;
     const paneScopeId = useRegisterSessionPaneDriver(sessionId);
     const pane = useAppPaneScope(paneScopeId);
-    const paneRef = React.useRef(pane);
+    // Stable identity for THIS pane mount (not the session): `useId` is allocated by the outer
+    // SessionView, which survives the inner `key={sessionId}` remount, so the seeded content width
+    // persists across session switches in the same pane while staying isolated between panes.
     const contentWidthSurfaceId = React.useId();
+    // Release the seeded width when this pane mount unmounts (the cleanup only runs when the outer
+    // SessionView goes away, not on session switch), so the seed cache does not grow unbounded.
     React.useEffect(() => {
         return () => {
             forgetSessionViewContentWidthSurface(contentWidthSurfaceId);
         };
     }, [contentWidthSurfaceId]);
-    paneRef.current = pane;
-    const { messages: pendingMessages } = useSessionPendingMessages(sessionId);
-    const subagentSourceMessages = useSessionSubagentSourceMessages(sessionId);
-    const directSessionRuntime = useDirectSessionRuntime({
-        sessionId,
-        metadata: session?.metadata ?? null,
-    });
-    const { subagents, participantTargets, sidechainIds: participantSidechainIds } = useSessionSubagents({
-        sessionId,
-        session,
-        messages: subagentSourceMessages,
-        directSessionRuntime,
-    });
-    const subagentCounts = React.useMemo(() => deriveSessionSubagentCounts(subagents), [subagents]);
-    const shouldShowSubagentsButton = subagentCounts.total > 0 || sessionExecutionRunsSupported || hasSessionSubagentLaunchCards(session);
-
-    useEnsureSidechainsLoaded({
-        enabled: participantSidechainIds.length > 0,
-        sessionId,
-        sidechainIds: participantSidechainIds,
-    });
     const sessionAutomationsEnabledCount = React.useMemo(() => {
         if (!showAutomations) return 0;
         return countEnabledAutomationsLinkedToSession(automations, sessionId);
@@ -561,23 +1204,26 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     const toggleWorkspaceExperienceRef = React.useRef(mobileWorkspaceExperienceState.toggleWorkspaceExperience);
     toggleWorkspaceExperienceRef.current = mobileWorkspaceExperienceState.toggleWorkspaceExperience;
 
-    const handleHeaderExtraItemSelect = React.useCallback((actionId: string) => {
-        if (actionId === mobileWorkspaceExperienceToggleActionId) {
-            if (actionId === 'header.openMobileWorkspaceCockpit') {
-                Keyboard.dismiss();
-            }
-            toggleWorkspaceExperienceRef.current();
-            return true;
-        }
-        if (actionId !== 'header.openSubagents') return false;
-        paneRef.current.openRight({ tabId: 'agents' });
-        paneRef.current.setRightTab('agents');
-        return true;
-    }, [mobileWorkspaceExperienceToggleActionId]);
+    const handleToggleWorkspaceExperience = React.useCallback(() => {
+        toggleWorkspaceExperienceRef.current();
+    }, []);
+    const shouldFoldHeaderIconActions = windowWidth < 520;
 
     // Compute header props based on session state
     const headerProps = useMemo(() => {
-        if (!isDataReady && !session) {
+        if (!shouldRenderSessionSurface) {
+            return {
+                title: '',
+                subtitle: undefined,
+                avatarId: undefined,
+                onAvatarPress: undefined,
+                rightElement: undefined,
+                isConnected: false,
+                flavor: null
+            };
+        }
+
+        if ((!isDataReady && !session) || routeHydrationPending) {
             // Loading state - show empty header
             return {
                 title: '',
@@ -590,7 +1236,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             };
         }
 
-        if (!session) {
+        if (!session && (routeHydrationTerminalMissing || !routeHydrationState)) {
             // Deleted state - show deleted message in header
             return {
                 title: t('errors.sessionDeleted'),
@@ -605,11 +1251,19 @@ export const SessionView = React.memo((props: SessionViewProps) => {
 
         // Normal state - show session info
         const headerSession = stableSessionForHeader ?? session;
+        if (!headerSession) {
+            return {
+                title: t('common.loading'),
+                subtitle: undefined,
+                avatarId: undefined,
+                onAvatarPress: undefined,
+                rightElement: undefined,
+                isConnected: false,
+                flavor: null
+            };
+        }
         const isConnected = headerSession.presence === 'online';
         const directSessionLink = readDirectSessionLink(headerSession.metadata);
-        const shouldFoldHeaderIconActions = windowWidth < 520;
-        const badgeLabel =
-            sessionAutomationsEnabledCount > 99 ? '99+' : String(sessionAutomationsEnabledCount);
         const storageBadge = directSessionLink ? t('sessionsList.storageDirectTab') : t('sessionsList.storagePersistedTab');
         const providerBadge = directSessionLink
             ? [
@@ -619,119 +1273,20 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                     : directSessionLink.machineId,
             ].join(' · ')
             : null;
-        const headerExtraItems = (() => {
-            const items: DropdownMenuItem[] = [];
-            if (mobileWorkspaceExperienceState.showWorkspaceExperienceToggle) {
-                items.push({
-                    id: mobileWorkspaceExperienceToggleActionId,
-                    title: t(mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey),
-                    icon: <Ionicons name="phone-portrait-outline" size={18} color={theme.colors.text.secondary} />,
-                });
-            }
-            if (!shouldFoldHeaderIconActions) return items;
-
-            if (shouldShowSubagentsButton) {
-                items.push({
-                    id: 'header.openSubagents',
-                    title: t('session.openSubagents', { count: subagentCounts.active }),
-                    icon: <DependabotIcon size={18} color={theme.colors.text.secondary} />,
-                });
-            }
-            if (sessionExecutionRunsSupported) {
-                items.push({
-                    id: 'header.openRuns',
-                    title: t('session.openRuns'),
-                    icon: <Ionicons name="play-outline" size={18} color={theme.colors.text.secondary} />,
-                });
-            }
-            if (showAutomations) {
-                items.push({
-                    id: 'header.openAutomations',
-                    title: t('session.openAutomations'),
-                    icon: <Ionicons name="timer-outline" size={18} color={theme.colors.text.secondary} />,
-                });
-            }
-            return items;
-        })();
         const rightElement = (
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <SessionHeaderActionMenu
-                    sessionId={sessionId}
-                    session={headerSession}
-                    extraItems={headerExtraItems.length > 0 ? headerExtraItems : undefined}
-                    onSelectExtraItem={handleHeaderExtraItemSelect}
-                />
-                {!shouldFoldHeaderIconActions ? (
-                    <SessionHeaderSubagentsButton
-                        scopeId={paneScopeId}
-                        activeCount={subagentCounts.active}
-                        hasAnySubagents={shouldShowSubagentsButton}
-                    />
-                ) : null}
-                <SessionHeaderTerminalButton
-                    sessionId={sessionId}
-                    scopeId={paneScopeId}
-                    serverId={currentSessionRouteServerId}
-                />
-                {!shouldFoldHeaderIconActions && sessionExecutionRunsSupported ? (
-                    <Pressable
-                        onPress={() => routerRef.current.push(buildCurrentSessionHref('/runs') as any)}
-                        hitSlop={15}
-                        style={({ pressed }) => ({
-                            width: 44,
-                            height: 44,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            opacity: pressed ? 0.7 : 1,
-                        })}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('session.openRuns')}
-                    >
-                        <Ionicons name="play-outline" size={22} color={theme.colors.chrome.header.foreground} />
-                    </Pressable>
-                ) : null}
-                {!shouldFoldHeaderIconActions && showAutomations ? (
-                    <Pressable
-                        onPress={() => navigateWithBlurOnWeb(() => routerRef.current.push(buildCurrentSessionHref('/automations') as any))}
-                        hitSlop={15}
-                        style={({ pressed }) => ({
-                            width: 44,
-                            height: 44,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            opacity: pressed ? 0.7 : 1,
-                        })}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('session.openAutomations')}
-                    >
-                        <View style={{ position: 'relative', width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-                            <Ionicons name="timer-outline" size={22} color={theme.colors.chrome.header.foreground} />
-                            {sessionAutomationsEnabledCount > 0 ? (
-                                <View style={{
-                                    position: 'absolute',
-                                    top: -2,
-                                    right: -6,
-                                    backgroundColor: theme.colors.status.error,
-                                    borderRadius: 8,
-                                    minWidth: 16,
-                                    height: 16,
-                                    paddingHorizontal: 4,
-                                    justifyContent: 'center',
-                                    alignItems: 'center',
-                                }}>
-	                                    <Text style={{
-	                                        color: theme.colors.overlay.foreground,
-	                                        fontSize: 10,
-	                                        fontWeight: '600',
-	                                    }}>
-	                                        {badgeLabel}
-	                                    </Text>
-                                </View>
-                            ) : null}
-                        </View>
-                    </Pressable>
-                ) : null}
-            </View>
+            <SessionHeaderRightElement
+                sessionId={sessionId}
+                session={headerSession}
+                paneScopeId={paneScopeId}
+                currentSessionRouteServerId={currentSessionRouteServerId}
+                mobileWorkspaceExperienceToggleActionId={mobileWorkspaceExperienceToggleActionId}
+                mobileWorkspaceExperienceToggleLabelKey={mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey}
+                onToggleWorkspaceExperience={handleToggleWorkspaceExperience}
+                sessionAutomationsEnabledCount={sessionAutomationsEnabledCount}
+                shouldFoldHeaderIconActions={shouldFoldHeaderIconActions}
+                showAutomations={showAutomations}
+                showWorkspaceExperienceToggle={mobileWorkspaceExperienceState.showWorkspaceExperienceToggle}
+            />
         );
         return {
             title: getSessionName(headerSession),
@@ -749,57 +1304,55 @@ export const SessionView = React.memo((props: SessionViewProps) => {
 	            flavor: headerSession.metadata?.flavor || null,
 	        };
 	    }, [
-	        handleHeaderExtraItemSelect,
-	        isDataReady,
+        handleToggleWorkspaceExperience,
+        isDataReady,
         mobileWorkspaceExperienceState.showWorkspaceExperienceToggle,
         mobileWorkspaceExperienceState.workspaceExperienceToggleLabelKey,
         mobileWorkspaceExperienceToggleActionId,
         paneScopeId,
+        routeHydrationPending,
+        routeHydrationState,
+        routeHydrationTerminalMissing,
         stableSessionForHeader,
         sessionWorkspacePresentation,
         sessionAutomationsEnabledCount,
-        sessionExecutionRunsSupported,
         sessionId,
-        shouldShowSubagentsButton,
+        shouldRenderSessionSurface,
+        shouldFoldHeaderIconActions,
         showAutomations,
-        subagentCounts.active,
-        subagentCounts.total,
-        theme.colors.chrome.header.foreground,
-        theme.colors.status.error,
-        theme.colors.text.secondary,
-        windowWidth,
     ]);
 
-    const normalSessionContent = session
+    const normalSessionContent = session && shouldRenderSessionSurface
         ? (props.contentOverride ?? (
-            <>
-                <SessionViewedMarker sessionId={sessionId} sessionSeq={session.seq ?? 0} />
-                <MemoizedSessionViewLoaded
-                    authSurfaceState={authSurfaceState}
-                    key={sessionId}
-                    sessionId={sessionId}
-                    routeServerId={currentSessionRouteServerId}
-                    session={stableSessionForLoadedView ?? session}
-                    onBackPress={handleBackPress}
-                    isEncryptedSessionLocked={isEncryptedSessionLocked}
-                    executionRunsEnabled={executionRunsEnabled}
-                    jumpToSeq={props.jumpToSeq ?? null}
-                    participantTargets={participantTargets}
-                    paneUrlState={props.paneUrlState ?? null}
-                    initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
-                    paneScopeId={paneScopeId}
-                    contentWidthSurfaceId={contentWidthSurfaceId}
-                    pendingMessages={pendingMessages}
-                    directSessionRuntime={directSessionRuntime}
-                    chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
-                    paneUrlSyncRouteActive={paneUrlSyncRouteActive}
-                />
-            </>
+            <SessionViewLoadedWithPendingMessages
+                authSurfaceState={authSurfaceState}
+                key={sessionId}
+                sessionId={sessionId}
+                routeServerId={currentSessionRouteServerId}
+                session={stableSessionForLoadedView ?? session}
+                onBackPress={handleBackPress}
+                isEncryptedSessionLocked={isEncryptedSessionLocked}
+                executionRunsEnabled={executionRunsEnabled}
+                jumpToSeq={props.jumpToSeq ?? null}
+                paneUrlState={props.paneUrlState ?? null}
+                initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
+                paneScopeId={paneScopeId}
+                contentWidthSurfaceId={contentWidthSurfaceId}
+                chatBottomSpacing={props.chatBottomSpacing ?? 'default'}
+                paneUrlSyncRouteActive={paneUrlSyncRouteActive}
+                surfaceFocused={isFocused}
+            />
         ))
         : null;
-
     return (
         <SessionScreenTestIdsProvider enabled={isFocused}>
+            {session && isFocused && props.contentOverride != null ? (
+                <SessionContentOverrideViewedLifecycle
+                    sessionId={sessionId}
+                    sessionSeq={sessionSeq}
+                    surfaceFocused={isFocused}
+                />
+            ) : null}
             {debugRouterEnabled && Platform.OS === 'web' ? (
                 <View
                     testID="debug-expo-pathname"
@@ -823,7 +1376,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             )}
 
             {/* Header - always shown on desktop/Mac, hidden in landscape mode only on actual phones */}
-            {showTopHeader && (
+            {showTopHeader && shouldRenderSessionSurface && (
                 <View style={{
                     position: 'absolute',
                     top: 0,
@@ -844,14 +1397,23 @@ export const SessionView = React.memo((props: SessionViewProps) => {
             <View style={{ flex: 1, paddingTop: showTopHeader ? safeAreaTopInset + headerHeight : 0 }}>
                 {!session && authSurfaceState ? (
                     <SessionAuthRecoveryFallback message={authSurfaceState.message} />
-                ) : !isDataReady && !session ? (
+                ) : routeHydrationRetrying ? (
+                    <View testID="session-route-retrying" style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }}>
+                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                        {routeHydrationRetryStatusKey ? (
+                            <Text style={{ color: theme.colors.text.secondary, marginTop: 10, textAlign: 'center' }}>
+                                {t(routeHydrationRetryStatusKey)}
+                            </Text>
+                        ) : null}
+                    </View>
+                ) : ((!isDataReady && !session) || routeHydrationLoading) ? (
                     // Loading state
-                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <View testID="session-route-loading" style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                     </View>
-                ) : !session ? (
+                ) : !session && (routeHydrationTerminalMissing || !routeHydrationState) ? (
                     // Deleted state
-                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <View testID="session-root-unavailable" style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                         <Ionicons name="trash-outline" size={48} color={theme.colors.text.secondary} />
                         <Text style={{ color: theme.colors.text.primary, fontSize: 20, marginTop: 16, fontWeight: '600' }}>{t('errors.sessionDeleted')}</Text>
                         <Text style={{ color: theme.colors.text.secondary, fontSize: 15, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }}>{t('errors.sessionDeletedDescription')}</Text>
@@ -862,102 +1424,20 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     );
 });
 
-
-function SessionViewedMarker({
+function SessionContentOverrideViewedLifecycle({
     sessionId,
     sessionSeq,
-}: {
+    surfaceFocused,
+}: Readonly<{
     sessionId: string;
     sessionSeq: number;
-}) {
-    const isFocusedRef = React.useRef(false);
-    const viewingActivationIdRef = React.useRef<number | null>(null);
-    const markViewedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    // Unread is driven by committed transcript `session.seq` only (pending queue does not affect unread).
-    const lastMarkedRef = React.useRef<{ sessionSeq: number } | null>(null);
-
-    const markSessionViewed = React.useCallback((opts?: { sessionSeq?: number; activationId?: number | null }) => {
-        const nextSessionSeq = opts?.sessionSeq ?? storage.getState().sessions[sessionId]?.seq ?? 0;
-        const activationId = opts?.activationId ?? viewingActivationIdRef.current;
-        if (shouldSuppressAutomaticMarkViewed({
-            sessionId,
-            sessionSeq: nextSessionSeq,
-            activationId,
-        })) {
-            return;
-        }
-        fireAndForget(
-            sync.markSessionViewed(
-                sessionId,
-                opts?.sessionSeq === undefined ? undefined : { sessionSeq: opts.sessionSeq },
-            ).then(() => {
-                clearManualUnreadHold({ sessionId, activationId });
-            }),
-            { tag: 'SessionView.markSessionViewed' },
-        );
-    }, [sessionId]);
-
-    useFocusEffect(React.useCallback(() => {
-        isFocusedRef.current = true;
-        const activationId = beginSessionViewingActivation(sessionId);
-        viewingActivationIdRef.current = activationId;
-        setActiveViewingSessionId(sessionId, activationId);
-        {
-            const current = storage.getState().sessions[sessionId];
-            lastMarkedRef.current = {
-                sessionSeq: current?.seq ?? 0,
-            };
-        }
-        const cancelMarkViewed = runAfterInteractionsWithFallback(markSessionViewed);
-        return () => {
-            isFocusedRef.current = false;
-            const sessionSeqAtBlur = storage.getState().sessions[sessionId]?.seq ?? 0;
-            cancelMarkViewed();
-            if (markViewedTimeoutRef.current) {
-                clearTimeout(markViewedTimeoutRef.current);
-                markViewedTimeoutRef.current = null;
-            }
-            const blurActivationId = viewingActivationIdRef.current;
-            clearActiveViewingSessionId(sessionId, blurActivationId);
-            if (!shouldSuppressAutomaticMarkViewed({ sessionId, sessionSeq: sessionSeqAtBlur, activationId: blurActivationId })) {
-                runAfterInteractionsWithFallback(() => {
-                    markSessionViewed({ sessionSeq: sessionSeqAtBlur, activationId: blurActivationId });
-                });
-            }
-            if (blurActivationId !== null) {
-                endSessionViewingActivation(sessionId, blurActivationId);
-            }
-            viewingActivationIdRef.current = null;
-        };
-    }, [markSessionViewed, sessionId]));
-
-    React.useEffect(() => {
-        if (!isFocusedRef.current) return;
-
-        const last = lastMarkedRef.current;
-        if (last && last.sessionSeq >= sessionSeq) return;
-        if (shouldSuppressAutomaticMarkViewed({
-            sessionId,
-            sessionSeq,
-            activationId: viewingActivationIdRef.current,
-        })) {
-            return;
-        }
-
-        lastMarkedRef.current = { sessionSeq };
-        if (markViewedTimeoutRef.current) clearTimeout(markViewedTimeoutRef.current);
-        markViewedTimeoutRef.current = setTimeout(() => {
-            markViewedTimeoutRef.current = null;
-            markSessionViewed();
-        }, 250);
-        return () => {
-            if (markViewedTimeoutRef.current) {
-                clearTimeout(markViewedTimeoutRef.current);
-                markViewedTimeoutRef.current = null;
-            }
-        };
-    }, [markSessionViewed, sessionId, sessionSeq]);
-
+    surfaceFocused: boolean;
+}>) {
+    useSessionViewedLifecycle({
+        sessionId,
+        surfaceFocused,
+        visibleReadSeq: sessionSeq,
+    });
     return null;
 }
 
@@ -980,25 +1460,8 @@ function SessionViewLoaded({
     directSessionRuntime,
     chatBottomSpacing,
     paneUrlSyncRouteActive,
-}: {
-    authSurfaceState: SessionAuthSurfaceState | null;
-    sessionId: string;
-    routeServerId?: string | null;
-    session: Session;
-    onBackPress: () => void;
-    isEncryptedSessionLocked: boolean;
-    executionRunsEnabled: boolean;
-    jumpToSeq: number | null;
-    participantTargets: readonly SessionParticipantTarget[];
-    paneUrlState: SessionPaneUrlState | null;
-    initialAttachmentDrafts: readonly AttachmentDraft[] | null;
-    paneScopeId: string;
-    contentWidthSurfaceId: string;
-    pendingMessages: readonly PendingMessage[];
-    directSessionRuntime: ReturnType<typeof useDirectSessionRuntime>;
-    chatBottomSpacing: 'default' | 'none';
-    paneUrlSyncRouteActive: boolean;
-}) {
+    surfaceFocused,
+}: SessionViewLoadedProps) {
     const artifacts = useArtifacts();
     const { theme } = useUnistyles();
     const applyLocalSettings = useApplyLocalSettings();
@@ -1030,6 +1493,26 @@ function SessionViewLoaded({
         || (routeServerId ?? '').trim()
         || activeServerId;
     const capabilityServerId = sessionRouteServerId;
+    const usageLimitRecoveryFeatureEnabled = useFeatureEnabled('sessions.usageLimitRecovery', {
+        scopeKind: 'spawn',
+        serverId: capabilityServerId,
+    });
+    const [usageLimitRecoverySettingsV1, setUsageLimitRecoverySettingsV1] = useSettingMutable('usageLimitRecoverySettingsV1');
+    const usageLimitRecovery = React.useMemo(
+        () => readSessionUsageLimitRecovery(session.metadata),
+        [session.metadata],
+    );
+    const usageLimitRecoveryResetAtMs = React.useMemo(() => readUsageLimitRecoveryResetAtMs({
+        issue: session.lastRuntimeIssue ?? null,
+        recovery: usageLimitRecovery,
+    }), [session.lastRuntimeIssue, usageLimitRecovery]);
+    const [usageLimitRecoveryNowMs, setUsageLimitRecoveryNowMs] = React.useState(() => nowServerMs());
+    const [usageLimitRecoveryOperationStatus, setUsageLimitRecoveryOperationStatus] = React.useState<Readonly<{
+        issueFingerprint: string;
+        status: UsageLimitRecoveryOperationStatus;
+    }> | null>(null);
+    const [resolvedUsageLimitRecoveryIssueFingerprint, setResolvedUsageLimitRecoveryIssueFingerprint] = React.useState<string | null>(null);
+    const handleUsageLimitRecoveryResumeNowRef = React.useRef<((opts?: { silent?: boolean }) => Promise<boolean>) | null>(null);
     const buildSessionHref = React.useCallback((sid: string, suffix = '') => {
         return buildScopedSessionRouteHref({
             sessionId: sid,
@@ -1040,6 +1523,20 @@ function SessionViewLoaded({
     const buildCurrentSessionHref = React.useCallback((suffix = '') => {
         return buildSessionHref(sessionId, suffix);
     }, [buildSessionHref, sessionId]);
+
+    React.useEffect(() => {
+        const refreshNow = () => setUsageLimitRecoveryNowMs(nowServerMs());
+        refreshNow();
+
+        if (usageLimitRecoveryResetAtMs === null) return;
+        const delayMs = usageLimitRecoveryResetAtMs - nowServerMs();
+        if (delayMs <= 0 || delayMs > MAX_USAGE_LIMIT_RECOVERY_READY_TIMER_MS) return;
+
+        const timer = setTimeout(refreshNow, delayMs);
+        return () => {
+            clearTimeout(timer);
+        };
+    }, [sessionId, usageLimitRecoveryResetAtMs]);
 
     useSessionPaneUrlSync({
         enabled: paneUrlSyncRouteActive && multiPaneEnabled && Platform.OS === 'web',
@@ -1076,15 +1573,25 @@ function SessionViewLoaded({
     const [message, setMessage] = React.useState('');
     const realtimeStatus = useRealtimeStatus();
     const { ids: committedMessageIds, isLoaded } = useSessionTranscriptIds(sessionId);
-    const { messages: committedMessages } = useSessionMessages(sessionId);
-    const pendingPermissionRequests = React.useMemo(
-        () => listPendingPermissionRequests(session, committedMessages),
-        [committedMessages, session],
-    );
-    const pendingUserActionRequests = React.useMemo(
-        () => listPendingUserActionRequests(session, committedMessages),
-        [committedMessages, session],
-    );
+    const transcriptMessageSelectionEnabled = useSetting('transcriptMessageSelectionEnabled');
+    const transcriptMessageSendToSessionEnabled = useSetting('transcriptMessageSendToSessionEnabled');
+    const transcriptMessageSendToSessionTemplate = useSetting('transcriptMessageSendToSessionTemplate');
+    const transcriptBulkCopyFormat = useSetting('transcriptBulkCopyFormat');
+    const { messages: transcriptSelectionSourceMessages } = useSessionMessages(sessionId, {
+        enabled: transcriptMessageSelectionEnabled === true,
+    });
+    const navigateToSession = useNavigateToSession();
+    // Subscribe only to the derived visible-read-seq number so streaming token updates that do not
+    // change it never re-render this large shell (see useSessionVisibleReadSeq).
+    const visibleReadSeq = useSessionVisibleReadSeq(sessionId, {
+        sessionSeq: session.seq ?? null,
+        latestTurnStatus: session.latestTurnStatus,
+    });
+    useSessionViewedLifecycle({
+        sessionId,
+        surfaceFocused,
+        visibleReadSeq,
+    });
     const openToTranscriptTelemetryRef = React.useRef<{
         recorded: boolean;
         sessionId: string;
@@ -1107,6 +1614,9 @@ function SessionViewLoaded({
     }, [session.metadata]);
     const reachableMachineTarget = React.useMemo(() => {
         return readMachineTargetForSession(sessionId);
+    }, [sessionId, session.updatedAt, session.metadata]);
+    const controlMachineTarget = React.useMemo(() => {
+        return readMachineControlTargetForSession(sessionId);
     }, [sessionId, session.updatedAt, session.metadata]);
 
     // Check if CLI version is outdated and not already acknowledged
@@ -1213,6 +1723,323 @@ function SessionViewLoaded({
             ),
         }];
     }, [activeStatusBadgeKey, canEditSessionGoals, clearSessionGoalForView, primaryWorkStateItem, sessionWorkStateSnapshot, setSessionGoalForView]);
+    const usageLimitRecoveryCheckNowAgentId = React.useMemo(() => (
+        resolveAgentIdFromFlavor(session.lastRuntimeIssue?.provider)
+        ?? resolveAgentIdFromSessionMetadata(session.metadata)
+        ?? resolveAgentIdFromFlavor(session.metadata?.flavor)
+        ?? null
+    ), [session.lastRuntimeIssue?.provider, session.metadata]);
+    const usageLimitRecoveryCheckNowSupported = React.useMemo(() => (
+        usageLimitRecoveryCheckNowAgentId
+            ? evaluateAgentSessionCapabilitySupport({
+                agentId: usageLimitRecoveryCheckNowAgentId,
+                capability: 'usageLimitRecovery.checkNow',
+                metadata: session.metadata,
+            }) === 'supported'
+            : false
+    ), [session.metadata, usageLimitRecoveryCheckNowAgentId]);
+    const usageLimitRecoveryMode = usageLimitRecoverySettingsV1?.mode === 'auto_wait' ? 'auto_wait' : 'ask';
+    const usageLimitRecoveryResumePromptMode =
+        usageLimitRecoverySettingsV1?.resumePromptMode === 'off' ? 'off' : 'standard';
+    const formatUsageLimitRecoveryTime = React.useCallback((timeMs: number) => new Date(timeMs).toLocaleString(), []);
+    const translateUsageLimitRecovery = React.useCallback<SessionUsageLimitRecoveryTranslate>((key, params) => {
+        switch (key) {
+            case 'session.usageLimitRecovery.resetBody':
+                return t(key, { time: params?.time ?? '' });
+            case 'session.usageLimitRecovery.statusWaitingUntil':
+                return t(key, { time: params?.time ?? '' });
+            default:
+                return t(key);
+        }
+    }, []);
+    const usageLimitRuntimeState = React.useMemo(() => {
+        const pendingFlags = derivePendingRequestFlagsFromSession(session);
+        return deriveSessionRuntimePresentationState({
+            active: session.active,
+            activeAt: session.activeAt,
+            presence: session.presence,
+            thinking: session.thinking,
+            thinkingAt: session.thinkingAt,
+            latestTurnStatus: session.latestTurnStatus,
+            latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+            meaningfulActivityAt: session.meaningfulActivityAt,
+            hasPendingPermissionRequests: pendingFlags.hasPendingPermissionRequests,
+            hasPendingUserActionRequests: pendingFlags.hasPendingUserActionRequests,
+            pendingRequestObservedAt: deriveLatestPendingRequestObservedAtFromSession(session),
+        }, usageLimitRecoveryNowMs);
+    }, [
+        session,
+        usageLimitRecoveryNowMs,
+    ]);
+    const baseUsageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
+        featureEnabled: usageLimitRecoveryFeatureEnabled,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        issue: session.lastRuntimeIssue ?? null,
+        recovery: usageLimitRecovery,
+        operationStatus: null,
+        runtimeWorking: usageLimitRuntimeState.working,
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        rememberedMode: usageLimitRecoveryMode,
+        checkNowSupported: usageLimitRecoveryCheckNowSupported,
+        nowMs: usageLimitRecoveryNowMs,
+        translate: translateUsageLimitRecovery,
+        formatTime: formatUsageLimitRecoveryTime,
+    }), [
+        formatUsageLimitRecoveryTime,
+        session.latestTurnStatus,
+        session.latestTurnStatusObservedAt,
+        session.lastRuntimeIssue,
+        session.meaningfulActivityAt,
+        translateUsageLimitRecovery,
+        usageLimitRecovery,
+        usageLimitRecoveryCheckNowSupported,
+        usageLimitRecoveryFeatureEnabled,
+        usageLimitRecoveryMode,
+        usageLimitRuntimeState.working,
+        usageLimitRecoveryNowMs,
+    ]);
+    const usageLimitRecoveryIssueResolved = Boolean(
+        resolvedUsageLimitRecoveryIssueFingerprint
+        && baseUsageLimitRecoveryPresentation?.issueFingerprint === resolvedUsageLimitRecoveryIssueFingerprint
+    );
+    React.useEffect(() => {
+        if (!resolvedUsageLimitRecoveryIssueFingerprint) return;
+        if (baseUsageLimitRecoveryPresentation?.issueFingerprint === resolvedUsageLimitRecoveryIssueFingerprint) return;
+        setResolvedUsageLimitRecoveryIssueFingerprint(null);
+    }, [baseUsageLimitRecoveryPresentation?.issueFingerprint, resolvedUsageLimitRecoveryIssueFingerprint]);
+    const activeUsageLimitRecoveryOperationStatus = usageLimitRecoveryOperationStatus
+        && baseUsageLimitRecoveryPresentation?.issueFingerprint === usageLimitRecoveryOperationStatus.issueFingerprint
+        ? usageLimitRecoveryOperationStatus.status
+        : null;
+    const usageLimitRecoveryPresentation = React.useMemo(() => buildSessionUsageLimitRecoveryPresentation({
+        featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        issue: session.lastRuntimeIssue ?? null,
+        recovery: usageLimitRecovery,
+        operationStatus: activeUsageLimitRecoveryOperationStatus,
+        runtimeWorking: usageLimitRuntimeState.working,
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        rememberedMode: usageLimitRecoveryMode,
+        checkNowSupported: usageLimitRecoveryCheckNowSupported,
+        nowMs: usageLimitRecoveryNowMs,
+        translate: translateUsageLimitRecovery,
+        formatTime: formatUsageLimitRecoveryTime,
+    }), [
+        activeUsageLimitRecoveryOperationStatus,
+        formatUsageLimitRecoveryTime,
+        session.latestTurnStatus,
+        session.latestTurnStatusObservedAt,
+        session.lastRuntimeIssue,
+        session.meaningfulActivityAt,
+        translateUsageLimitRecovery,
+        usageLimitRecovery,
+        usageLimitRecoveryCheckNowSupported,
+        usageLimitRecoveryFeatureEnabled,
+        usageLimitRecoveryIssueResolved,
+        usageLimitRecoveryMode,
+        usageLimitRuntimeState.working,
+        usageLimitRecoveryNowMs,
+    ]);
+    const usageLimitStatusBadgePresentation = React.useMemo(() => buildSessionUsageLimitStatusBadgePresentation({
+        featureEnabled: usageLimitRecoveryFeatureEnabled && !usageLimitRecoveryIssueResolved,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        issue: session.lastRuntimeIssue ?? null,
+        recovery: usageLimitRecovery,
+        operationStatus: activeUsageLimitRecoveryOperationStatus,
+        runtimeWorking: usageLimitRuntimeState.working,
+        hasActivityAfterRuntimeIssue: hasMeaningfulActivityAfterRuntimeIssue(session),
+        nowMs: usageLimitRecoveryNowMs,
+        translate: translateUsageLimitRecovery,
+        formatTime: formatUsageLimitRecoveryTime,
+    }), [
+        activeUsageLimitRecoveryOperationStatus,
+        formatUsageLimitRecoveryTime,
+        session.latestTurnStatus,
+        session.latestTurnStatusObservedAt,
+        session.lastRuntimeIssue,
+        session.meaningfulActivityAt,
+        translateUsageLimitRecovery,
+        usageLimitRecovery,
+        usageLimitRecoveryFeatureEnabled,
+        usageLimitRecoveryIssueResolved,
+        usageLimitRuntimeState.working,
+        usageLimitRecoveryNowMs,
+    ]);
+    const markUsageLimitRecoveryIssueResolved = React.useCallback(() => {
+        const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint
+            ?? baseUsageLimitRecoveryPresentation?.issueFingerprint
+            ?? null;
+        if (issueFingerprint) {
+            setResolvedUsageLimitRecoveryIssueFingerprint(issueFingerprint);
+        }
+        setUsageLimitRecoveryOperationStatus(null);
+    }, [baseUsageLimitRecoveryPresentation?.issueFingerprint, usageLimitRecoveryPresentation?.issueFingerprint]);
+    const markCurrentUsageLimitRecoveryOperationStatus = React.useCallback((status: UsageLimitRecoveryOperationStatus) => {
+        const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint;
+        if (!issueFingerprint) return;
+        setUsageLimitRecoveryOperationStatus({
+            issueFingerprint,
+            status,
+        });
+    }, [usageLimitRecoveryPresentation?.issueFingerprint]);
+    const handleUsageLimitRecoveryAction = React.useCallback(async (kind: SessionUsageLimitRecoveryActionKind) => {
+        if (kind === 'resume_now') {
+            if (usageLimitRecoveryCheckNowSupported) {
+                markCurrentUsageLimitRecoveryOperationStatus('checking');
+                const result = await sessionUsageLimitCheckNow(sessionId, {
+                    provider: session.lastRuntimeIssue?.provider ?? null,
+                    serverId: sessionRouteServerId,
+                });
+                if (!result.ok) {
+                    setUsageLimitRecoveryOperationStatus(null);
+                    Modal.alert(t('common.error'), formatUsageLimitRecoveryOperationError(result));
+                    return;
+                }
+                if (result.status === 'resumed') {
+                    markUsageLimitRecoveryIssueResolved();
+                    return;
+                }
+                if (result.status === 'ready') {
+                    if (session.active !== true) {
+                        const resumed = await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: true });
+                        if (resumed) {
+                            markUsageLimitRecoveryIssueResolved();
+                            return;
+                        }
+                    }
+                    markUsageLimitRecoveryIssueResolved();
+                    return;
+                }
+                if (result.status === 'waiting' || result.status === 'exhausted' || result.status === 'inactive') {
+                    const issueFingerprint = usageLimitRecoveryPresentation?.issueFingerprint;
+                    if (issueFingerprint) {
+                        setUsageLimitRecoveryOperationStatus({
+                            issueFingerprint,
+                            status: result.status,
+                        });
+                    }
+                    return;
+                }
+            }
+
+            const resumed = await handleUsageLimitRecoveryResumeNowRef.current?.({ silent: false });
+            if (resumed) {
+                markUsageLimitRecoveryIssueResolved();
+            }
+            return;
+        }
+        if (kind === 'remember') {
+            const result = await sessionUsageLimitWaitResumeEnable(sessionId, {
+                issueFingerprint: usageLimitRecoveryPresentation?.issueFingerprint,
+                rememberPreference: true,
+            }, { serverId: sessionRouteServerId });
+            if (!result.ok) {
+                Modal.alert(t('common.error'), formatUsageLimitRecoveryOperationError(result));
+            } else {
+                setUsageLimitRecoverySettingsV1({
+                    v: 1,
+                    mode: 'auto_wait',
+                    promptMode: 'standard',
+                    resumePromptMode: usageLimitRecoveryResumePromptMode,
+                });
+                setUsageLimitRecoveryOperationStatus(null);
+            }
+            return;
+        }
+        if (kind === 'forget') {
+            setUsageLimitRecoverySettingsV1({
+                v: 1,
+                mode: 'ask',
+                promptMode: 'standard',
+                resumePromptMode: usageLimitRecoveryResumePromptMode,
+            });
+            return;
+        }
+
+        if (isUsageLimitRecoveryControlAction(kind)) {
+            markCurrentUsageLimitRecoveryOperationStatus('checking');
+        }
+        const result = kind === 'enable'
+            ? await sessionUsageLimitWaitResumeEnable(sessionId, {
+                issueFingerprint: usageLimitRecoveryPresentation?.issueFingerprint,
+                rememberPreference: false,
+            }, { serverId: sessionRouteServerId })
+            : kind === 'cancel'
+                ? await sessionUsageLimitWaitResumeCancel(sessionId, { serverId: sessionRouteServerId })
+                : isUsageLimitRecoverySwitchAction(kind)
+                    ? await sessionUsageLimitSwitchAccountNow(sessionId, {
+                        provider: session.lastRuntimeIssue?.provider ?? null,
+                        serverId: sessionRouteServerId,
+                    })
+                    : await sessionUsageLimitCheckNow(sessionId, {
+                        provider: session.lastRuntimeIssue?.provider ?? null,
+                        serverId: sessionRouteServerId,
+                    });
+        if (!result.ok) {
+            if (isUsageLimitRecoveryControlAction(kind)) {
+                setUsageLimitRecoveryOperationStatus(null);
+            }
+            Modal.alert(t('common.error'), formatUsageLimitRecoveryOperationError(result));
+            return;
+        }
+        if (isUsageLimitRecoveryControlAction(kind) && result.status && usageLimitRecoveryPresentation?.issueFingerprint) {
+            if (result.status === 'resumed') {
+                markUsageLimitRecoveryIssueResolved();
+                return;
+            }
+            setUsageLimitRecoveryOperationStatus({
+                issueFingerprint: usageLimitRecoveryPresentation.issueFingerprint,
+                status: result.status,
+            });
+        } else if (kind === 'enable' || kind === 'cancel') {
+            setUsageLimitRecoveryOperationStatus(null);
+        }
+    }, [
+        markCurrentUsageLimitRecoveryOperationStatus,
+        markUsageLimitRecoveryIssueResolved,
+        session.active,
+        session.lastRuntimeIssue?.provider,
+        sessionId,
+        sessionRouteServerId,
+        setUsageLimitRecoverySettingsV1,
+        usageLimitRecoveryCheckNowSupported,
+        usageLimitRecoveryPresentation?.issueFingerprint,
+        usageLimitRecoveryResumePromptMode,
+    ]);
+    const sessionStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
+        const usageBadge = usageLimitStatusBadgePresentation
+            ? [{
+                ...usageLimitStatusBadgePresentation,
+                icon: (tint: string) => <Ionicons name="timer-outline" size={12} color={tint} />,
+                renderPopover: () => usageLimitRecoveryPresentation ? (
+                    <View style={{ width: '100%', maxWidth: 420, paddingHorizontal: 8 }}>
+                        <SessionWarningActionBanner
+                            testID="session-usageLimit-recovery-status-popover"
+                            actionTestID={`${usageLimitRecoveryPresentation.banner.primaryAction.testID}-popover`}
+                            title={usageLimitRecoveryPresentation.banner.title}
+                            body={usageLimitRecoveryPresentation.banner.body}
+                            actionLabel={usageLimitRecoveryPresentation.banner.primaryAction.label}
+                            actionAccessibilityLabel={usageLimitRecoveryPresentation.banner.primaryAction.accessibilityLabel}
+                            onActionPress={() => void handleUsageLimitRecoveryAction(usageLimitRecoveryPresentation.banner.primaryAction.kind)}
+                            secondaryActions={usageLimitRecoveryPresentation.banner.secondaryActions.map((action) => ({
+                                key: action.kind,
+                                testID: `${action.testID}-popover`,
+                                label: action.label,
+                                accessibilityLabel: action.accessibilityLabel,
+                                onPress: () => void handleUsageLimitRecoveryAction(action.kind),
+                            }))}
+                        />
+                    </View>
+                ) : null,
+            } satisfies AgentInputStatusBadge]
+            : [];
+        return [...usageBadge, ...sessionWorkStateBadges];
+    }, [
+        handleUsageLimitRecoveryAction,
+        sessionWorkStateBadges,
+        usageLimitRecoveryPresentation,
+        usageLimitStatusBadgePresentation,
+    ]);
     React.useEffect(() => {
         if (primaryWorkStateItem) return;
         if (canEditSessionGoals && activeStatusBadgeKey === SESSION_WORK_STATE_STATUS_BADGE_KEY) return;
@@ -1240,10 +2067,6 @@ function SessionViewLoaded({
             }) as typeof current;
         });
     }, [sessionAcpConfigOptionOverrides, sessionId]);
-    const sessionStatus = useSessionStatus(session, {
-        subscribeToSession: false,
-        subscribeToTranscript: false,
-    });
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const scmSessionAutoRefreshIntervalMsSetting = useSetting('scmSessionAutoRefreshIntervalMs' as any);
     const scmSessionAutoRefreshIntervalMs =
@@ -1254,14 +2077,77 @@ function SessionViewLoaded({
     const voiceProviderId = voice?.providerId ?? 'off';
     const voiceSnap = useVoiceSessionSnapshot();
     const settings = useSettings();
+    const accountProfile = useProfile();
     const voiceEnabled = useFeatureEnabled('voice');
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments');
+    const connectedServiceQuotasEnabled = useFeatureEnabled('connectedServices.quotas');
     const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads', {
         scopeKind: 'spawn',
         serverId: capabilityServerId,
     });
     const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(sessionId);
     const attachmentsUploadsEnabled = attachmentsUploadsFeatureEnabled && attachmentsUploadsTransferAvailable;
+    const sessionProviderUsageGaugeMode = useSetting('sessionProviderUsageGaugeMode');
+    const sessionProviderUsageGaugeWindowModeSetting = useSetting('sessionProviderUsageGaugeWindowMode');
+    const sessionProviderUsageGaugeWindowMode: ConnectedServiceQuotaGaugeWindowMode =
+        sessionProviderUsageGaugeWindowModeSetting === 'daily'
+        || sessionProviderUsageGaugeWindowModeSetting === 'weekly'
+        || sessionProviderUsageGaugeWindowModeSetting === 'primary'
+        || sessionProviderUsageGaugeWindowModeSetting === 'secondary'
+        || sessionProviderUsageGaugeWindowModeSetting === 'session'
+            ? sessionProviderUsageGaugeWindowModeSetting
+            : 'most_constrained';
+    const connectedServiceQuotaProfileRef = React.useMemo(() => (
+        resolveConnectedServiceQuotaProfileRefForSession({
+            metadata: session.metadata,
+            agentId: liveComposerState.agentId,
+            accountProfileConnectedServicesV2: accountProfile?.connectedServicesV2 ?? [],
+        })
+    ), [accountProfile?.connectedServicesV2, liveComposerState.agentId, session.metadata]);
+    const connectedServiceQuotaSnapshotsByKey = useConnectedServiceQuotaSnapshots(
+        connectedServiceQuotaProfileRef ? [connectedServiceQuotaProfileRef] : [],
+    );
+    const connectedServiceQuotaSnapshot = connectedServiceQuotaProfileRef
+        ? connectedServiceQuotaSnapshotsByKey[connectedServiceProfileKey(connectedServiceQuotaProfileRef)] ?? null
+        : null;
+    const connectedServiceQuotaActiveAccountLabel = React.useMemo(() => {
+        if (!connectedServiceQuotaProfileRef) return connectedServiceQuotaSnapshot?.accountLabel ?? null;
+        return resolveConnectedServiceProfileLabel({
+            labelsByKey: settings.connectedServicesProfileLabelByKey,
+            serviceId: connectedServiceQuotaProfileRef.serviceId,
+            profileId: connectedServiceQuotaProfileRef.profileId,
+        }) ?? connectedServiceQuotaSnapshot?.accountLabel ?? connectedServiceQuotaProfileRef.profileId;
+    }, [
+        connectedServiceQuotaProfileRef,
+        connectedServiceQuotaSnapshot?.accountLabel,
+        settings.connectedServicesProfileLabelByKey,
+    ]);
+    const providerUsageGauge = React.useMemo(() => {
+        if (!connectedServiceQuotasEnabled || sessionProviderUsageGaugeMode === 'hidden') return null;
+        const quotaSnapshot = selectConnectedServiceSessionProviderUsageSnapshot({
+            connectedServiceSnapshot: connectedServiceQuotaSnapshot,
+            runtimeIssue: session.lastRuntimeIssue ?? null,
+        });
+        return computeConnectedServiceQuotaGaugeViewModel({
+            snapshot: quotaSnapshot,
+            windowMode: sessionProviderUsageGaugeWindowMode,
+            nowMs: nowServerMs(),
+            formatter: connectedServiceQuotaGaugeFormatter,
+            providerDisplayName: quotaSnapshot
+                ? resolveConnectedServiceProviderDisplayName(quotaSnapshot.serviceId)
+                : null,
+            activeAccountDisplayLabel: quotaSnapshot === connectedServiceQuotaSnapshot
+                ? connectedServiceQuotaActiveAccountLabel
+                : null,
+        });
+    }, [
+        connectedServiceQuotaActiveAccountLabel,
+        connectedServiceQuotasEnabled,
+        connectedServiceQuotaSnapshot,
+        session.lastRuntimeIssue,
+        sessionProviderUsageGaugeMode,
+        sessionProviderUsageGaugeWindowMode,
+    ]);
     const reviewScope = useWorkspaceScopeForSession(sessionId);
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(reviewScope);
     const includedReviewCommentDrafts = React.useMemo(
@@ -1284,15 +2170,40 @@ function SessionViewLoaded({
     }, [includedReviewCommentDrafts, reviewWorkspaceCacheKey, sessionId]);
 
     const attachmentsUploadConfig = useAttachmentsUploadConfig();
+    const initialSessionAttachmentDrafts = React.useMemo(() => {
+        if (initialAttachmentDrafts && initialAttachmentDrafts.length > 0) {
+            return initialAttachmentDrafts;
+        }
+        return readSessionAttachmentDrafts(sessionId);
+    }, [initialAttachmentDrafts, sessionId]);
 
     const attachmentDraftManager = useAttachmentDraftManager({
         enabled: attachmentsUploadsEnabled,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
-        initialDrafts: initialAttachmentDrafts ?? undefined,
+        initialDrafts: initialSessionAttachmentDrafts,
     });
     const filePickerRef = attachmentDraftManager.filePickerRef;
     const attachmentDrafts = attachmentDraftManager.drafts;
+    const attachmentDraftsSnapshotRef = React.useRef<readonly AttachmentDraft[]>(initialSessionAttachmentDrafts);
     const agentInputAttachments = attachmentDraftManager.agentInputAttachments;
+    const patchAttachmentDraft = attachmentDraftManager.applyDraftPatch;
+
+    React.useEffect(() => {
+        attachmentDraftsSnapshotRef.current = attachmentDrafts;
+        writeSessionAttachmentDrafts(sessionId, attachmentDrafts);
+    }, [attachmentDrafts, sessionId]);
+
+    const applySessionAttachmentDraftPatch = React.useCallback((
+        id: string,
+        patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>,
+    ) => {
+        patchAttachmentDraft(id, patch);
+        const nextDrafts = attachmentDraftsSnapshotRef.current.map((draft) => (
+            draft.id === id ? ({ ...draft, ...patch } as AttachmentDraft) : draft
+        ));
+        attachmentDraftsSnapshotRef.current = nextDrafts;
+        writeSessionAttachmentDrafts(sessionId, nextDrafts);
+    }, [patchAttachmentDraft, sessionId]);
     const addAttachments = attachmentDraftManager.addWebFiles;
     const addPickedAttachments = attachmentDraftManager.addPickedAttachments;
     const pasteAttachmentImage = React.useCallback(() => {
@@ -1310,7 +2221,15 @@ function SessionViewLoaded({
         });
     }, [addPickedAttachments]);
     const [isUploadingAttachments, setIsUploadingAttachments] = React.useState(false);
-    const recipientState = useSessionRecipientState({ targets: participantTargets, autoRecipient: null });
+    const [isComposerSendPending, setIsComposerSendPending] = React.useState(false);
+    const recipientState = useSessionRecipientState({
+        targets: participantTargets,
+        autoRecipient: null,
+        draftPersistence: {
+            sessionId,
+            surface: 'mainComposer',
+        },
+    });
 
     React.useEffect(() => {
         if (!sessionId) return;
@@ -1380,7 +2299,74 @@ function SessionViewLoaded({
     }, [isMachineReachable, isResumable, isSessionActive, persistedVoiceComposerRouting]);
 
     // Use draft hook for auto-saving message drafts
-    const { clearDraft } = useDraft(sessionId, message, setMessage);
+    const {
+        clearDraft,
+        clearDraftForSessionIfCurrentValueMatches,
+        restoreDraftForSessionIfCurrentValueMatches,
+        setDraftValue,
+        restoreDraft,
+        restoreComposerSnapshot,
+    } = useDraft(sessionId, message, setMessage);
+    const inputComposerClearTransientStateRef = React.useRef<() => void>(noopInputComposerClearTransientState);
+    const inputComposerCaptureTransientStateRef = React.useRef<() => AgentInputLocalUiStateV1 | null>(
+        noopInputComposerCaptureTransientState,
+    );
+    const inputComposerRestoreTransientStateRef = React.useRef<(state: AgentInputLocalUiStateV1 | null) => void>(
+        noopInputComposerRestoreTransientState,
+    );
+    const activeServerAccountScope = useActiveServerAccountScope();
+    const captureComposerSemanticDraftSnapshot = React.useCallback((): ComposerSemanticDraftSnapshot => ({
+        recipient: readSessionDraftValue(activeServerAccountScope, sessionId, 'routing.recipient'),
+        executionRunDelivery: readSessionDraftValue(activeServerAccountScope, sessionId, 'routing.executionRunDelivery'),
+        structuredInputMentions: readSessionDraftValue(activeServerAccountScope, sessionId, 'structuredInput.mentions'),
+    }), [activeServerAccountScope, sessionId]);
+    const isComposerSemanticDraftSnapshotCurrent = React.useCallback((snapshot: ComposerSemanticDraftSnapshot) => {
+        const current = captureComposerSemanticDraftSnapshot();
+        return areSemanticDraftValuesEqual(current, snapshot);
+    }, [captureComposerSemanticDraftSnapshot]);
+    const clearSemanticDraftValuesAfterOutboundHandoff = React.useCallback(() => {
+        clearSessionDraftValues(activeServerAccountScope, sessionId, {
+            lifecycle: 'outboundHandoff',
+        });
+    }, [activeServerAccountScope, sessionId]);
+    const restoreSemanticDraftValuesFromSnapshot = React.useCallback((snapshot: ComposerSemanticDraftSnapshot) => {
+        if (typeof snapshot.recipient === 'undefined') {
+            clearSessionDraftValue(activeServerAccountScope, sessionId, 'routing.recipient', { flush: false });
+        } else {
+            writeSessionDraftValue(activeServerAccountScope, sessionId, 'routing.recipient', snapshot.recipient, { flush: false });
+        }
+
+        if (typeof snapshot.executionRunDelivery === 'undefined') {
+            clearSessionDraftValue(activeServerAccountScope, sessionId, 'routing.executionRunDelivery', { flush: false });
+        } else {
+            writeSessionDraftValue(
+                activeServerAccountScope,
+                sessionId,
+                'routing.executionRunDelivery',
+                snapshot.executionRunDelivery,
+                { flush: false },
+            );
+        }
+
+        if (typeof snapshot.structuredInputMentions === 'undefined') {
+            clearSessionDraftValue(activeServerAccountScope, sessionId, 'structuredInput.mentions', { flush: false });
+        } else {
+            writeSessionDraftValue(
+                activeServerAccountScope,
+                sessionId,
+                'structuredInput.mentions',
+                snapshot.structuredInputMentions,
+                { flush: false },
+            );
+        }
+
+        flushSessionDraftValues(activeServerAccountScope);
+    }, [activeServerAccountScope, sessionId]);
+    const clearSemanticDraftValuesAfterAcceptedComposerClear = React.useCallback(() => {
+        clearSessionDraftValues(activeServerAccountScope, sessionId, {
+            lifecycle: 'composerCleared',
+        });
+    }, [activeServerAccountScope, sessionId]);
 
     React.useEffect(() => {
         return runAfterInteractionsWithFallback(() => {
@@ -1470,8 +2456,13 @@ function SessionViewLoaded({
     }, [agentId, sessionId, session.metadata]);
 
     // Handle resuming an inactive session
-    const handleResumeSession = React.useCallback(async (opts?: { silent?: boolean }): Promise<boolean> => {
+    const handleResumeSession = React.useCallback(async (opts?: { silent?: boolean; initialTranscriptAfterSeq?: number }): Promise<boolean> => {
         const silent = opts?.silent === true;
+        const initialTranscriptAfterSeq = typeof opts?.initialTranscriptAfterSeq === 'number'
+            && Number.isFinite(opts.initialTranscriptAfterSeq)
+            && opts.initialTranscriptAfterSeq >= 0
+            ? Math.trunc(opts.initialTranscriptAfterSeq)
+            : null;
         const resumeMachineId = reachableMachineTarget?.machineId ?? session.metadata?.machineId ?? null;
         const resumeDirectory = reachableMachineTarget?.basePath ?? session.metadata?.path ?? null;
 
@@ -1585,6 +2576,7 @@ function SessionViewLoaded({
             const result = await resumeSession({
                 ...base,
                 serverId: capabilityServerId,
+                ...(initialTranscriptAfterSeq !== null ? { initialTranscriptAfterSeq } : {}),
                 ...buildResumeSessionExtrasFromUiState({
                     agentId,
                     settings,
@@ -1593,7 +2585,7 @@ function SessionViewLoaded({
             });
 
             if (result.type === 'error') {
-                maybeAlert(result.errorMessage);
+                maybeAlert(formatResumeSessionFailureMessage(result));
                 return false;
             }
             // On success, the session will become active and UI will update automatically
@@ -1605,6 +2597,7 @@ function SessionViewLoaded({
             setIsResuming(false);
         }
     }, [agentId, capabilityServerId, executionRunsEnabled, isMachineReachable, reachableMachineTarget, resumeCapabilityOptions, router, session, sessionId, settings]);
+    handleUsageLimitRecoveryResumeNowRef.current = handleResumeSession;
 
     useSessionResumeRequestListener(React.useCallback((requestedSessionId) => {
         if (requestedSessionId !== sessionId) return;
@@ -1832,9 +2825,75 @@ function SessionViewLoaded({
         shouldRenderChatTimeline,
     ]);
 
-    const handleTranscriptViewportChange = React.useCallback((state: { isPinned: boolean; offsetY: number }) => {
+    const [followBottomIntentSeq, setFollowBottomIntentSeq] = React.useState(0);
+    const markTranscriptLiveTailIntent = React.useCallback(() => {
+        sync.markSessionLiveTailIntent(sessionId);
+        setFollowBottomIntentSeq((current) => current + 1);
+    }, [sessionId]);
+
+    const handleTranscriptViewportChange = React.useCallback((state: TranscriptViewportChangeState) => {
         sync.onSessionViewportChange(sessionId, state);
     }, [sessionId]);
+
+    const transcriptSelectionMessages = React.useMemo(
+        () => transcriptMessageSelectionEnabled === true
+            ? resolveTranscriptSelectionToolbarMessages(transcriptSelectionSourceMessages, session.metadata)
+            : [],
+        [session.metadata, transcriptMessageSelectionEnabled, transcriptSelectionSourceMessages],
+    );
+    const transcriptSelectionEligibleMessageIds = React.useMemo(
+        () => transcriptSelectionMessages.map((item) => item.id),
+        [transcriptSelectionMessages],
+    );
+    const transcriptSelectionRoleLabels = React.useMemo(
+        () => ({
+            user: t('voiceActivity.format.you'),
+            assistant: t('voiceActivity.format.assistant'),
+        }),
+        [],
+    );
+    const handleSendSelectedTranscriptMessages = React.useCallback(async (
+        selectedMessages: ReadonlyArray<TranscriptSelectionToolbarMessage>,
+    ) => {
+        try {
+            await sendTranscriptSelectionToSession({
+                sourceSessionId: sessionId,
+                sourceServerId: sessionRouteServerId,
+                sourceSessionName: getSessionName(session),
+                selectedMessages,
+                bulkCopyFormat: transcriptBulkCopyFormat,
+                template: transcriptMessageSendToSessionTemplate,
+                roleLabels: transcriptSelectionRoleLabels,
+                nowMs: Date.now,
+                chooseDestinationSessionId: openTranscriptSendToSessionModal,
+                writeInitialPrompt: async ({ destinationSessionId, serverId, prompt }) => {
+                    await sync.patchSessionMetadataWithRetry(destinationSessionId, (metadata) =>
+                        writeSessionInitialPromptV1({
+                            metadata,
+                            text: prompt.text,
+                            mode: prompt.mode,
+                            createdAtMs: prompt.createdAtMs,
+                            sourceMessageIds: prompt.sourceMessageIds,
+                            sourceSessionId: prompt.sourceSessionId,
+                        }),
+                    { serverId });
+                },
+                navigateToSession: ({ sessionId: destinationSessionId, serverId }) => {
+                    void navigateToSession(destinationSessionId, { serverId });
+                },
+            });
+        } catch {
+            Modal.alert(t('common.error'), t('transcript.selection.sendTo.sendFailed'));
+        }
+    }, [
+        navigateToSession,
+        session,
+        sessionRouteServerId,
+        sessionId,
+        transcriptBulkCopyFormat,
+        transcriptMessageSendToSessionTemplate,
+        transcriptSelectionRoleLabels,
+    ]);
 
       let content = (
           <>
@@ -1849,6 +2908,7 @@ function SessionViewLoaded({
                           directControlFooter={directControlFooter}
                           approvalRequests={openApprovalRequests}
                           jumpToSeq={jumpToSeq}
+                          followBottomIntentKey={followBottomIntentSeq}
                           onViewportChange={handleTranscriptViewportChange}
                       />
                   )}
@@ -1919,12 +2979,12 @@ function SessionViewLoaded({
             openAttachmentFilePickerImages(filePickerRef.current);
         }, [filePickerRef]);
         const handleAppendLinkedPath = React.useCallback((path: string) => {
-            setMessage((prev) => {
+            setDraftValue((prev) => {
                 const base = prev ?? '';
                 const spacer = base.length === 0 || base.endsWith(' ') || base.endsWith('\n') ? '' : ' ';
                 return `${base}${spacer}@${path} `;
             });
-        }, []);
+        }, [setDraftValue]);
         const extraActionChips = useSessionAgentInputExtraActionChips({
             sessionId,
             attachmentsUploadsEnabled,
@@ -1946,10 +3006,68 @@ function SessionViewLoaded({
             participantTargets,
             recipientState,
         });
+        const connectedServicesAuthSwitchDisabledReason = resolveConnectedServicesAuthSwitchDisabledReason({
+            isReadOnly,
+            session,
+            nowMs: Date.now(),
+        });
+        const intentionalRestartSourceEvents = useSessionConnectedServiceAccountSwitchEvents(sessionId);
+        const intentionalRestartRecoveryEvidenceAtMs = React.useMemo(() => {
+            return resolveSessionIntentionalRestartRecoveryEvidenceAtMs({
+                activeAt: session.activeAt,
+                latestReadyEventAt: session.latestReadyEventAt,
+                latestTurnStatus: session.latestTurnStatus,
+                latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+                meaningfulActivityAt: session.meaningfulActivityAt,
+            });
+        }, [
+            session.activeAt,
+            session.latestReadyEventAt,
+            session.latestTurnStatus,
+            session.latestTurnStatusObservedAt,
+            session.meaningfulActivityAt,
+        ]);
+        const intentionalRestartSignals = React.useMemo<ReadonlyArray<SessionIntentionalRestartSignal>>(() => {
+            return deriveSessionIntentionalRestartSignals({
+                runtimeIssue: session.lastRuntimeIssue ?? null,
+                events: intentionalRestartSourceEvents,
+                recoveryEvidenceAtMs: intentionalRestartRecoveryEvidenceAtMs,
+            });
+        }, [
+            intentionalRestartRecoveryEvidenceAtMs,
+            intentionalRestartSourceEvents,
+            session.lastRuntimeIssue,
+        ]);
+        const sessionConnectedServicesAuthSwitch = useSessionConnectedServicesAuthSwitch({
+            sessionId,
+            agentId: liveComposerState.agentId,
+            machineId: controlMachineTarget?.machineId ?? null,
+            serverId: capabilityServerId,
+            agentCore: getAgentCore(liveComposerState.agentId),
+            sessionMetadata: session.metadata,
+            settings: {
+                connectedServicesProfileLabelByKey: settings.connectedServicesProfileLabelByKey,
+                connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+                connectedServicesProviderStateSharingSettingsV1: settings.connectedServicesProviderStateSharingSettingsV1,
+            },
+            switchingDisabledReason: connectedServicesAuthSwitchDisabledReason,
+            sessionActive: session.active === true,
+            intentionalRestartSignals,
+        });
+        const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
+            ...sessionStatusBadges,
+            ...sessionConnectedServicesAuthSwitch.statusBadges,
+        ], [sessionConnectedServicesAuthSwitch.statusBadges, sessionStatusBadges]);
         const agentInputExtraActionChips = React.useMemo(() => {
-            const chips = [...(extraActionChips ?? []), ...(routingControls.extraActionChips ?? [])];
+            const chips = [
+                ...(extraActionChips ?? []),
+                ...(sessionConnectedServicesAuthSwitch.connectedServicesAuthChip
+                    ? [sessionConnectedServicesAuthSwitch.connectedServicesAuthChip]
+                    : []),
+                ...(routingControls.extraActionChips ?? []),
+            ];
             return chips.length > 0 ? chips : undefined;
-        }, [extraActionChips, routingControls.extraActionChips]);
+        }, [extraActionChips, routingControls.extraActionChips, sessionConnectedServicesAuthSwitch.connectedServicesAuthChip]);
 
     const openFileViewer = React.useCallback(() => {
         const layoutIfOpened = resolvePaneLayout({
@@ -1971,7 +3089,8 @@ function SessionViewLoaded({
 
         pane.openRight({ tabId: 'files' });
         pane.setRightTab('files');
-    }, [buildCurrentSessionHref, multiPaneDeviceType, multiPaneEnabled, pane, router, windowWidth]);
+    }, [buildCurrentSessionHref, multiPaneDeviceType, multiPaneEnabled, pane.openRight, pane.setRightTab, router, windowWidth]);
+    const handleAgentInputFileViewerPress = useStableAgentInputFileViewerPress(openFileViewer);
     const handleAgentInputAbort = React.useCallback(() => {
         void sessionAbort(sessionId);
     }, [sessionId]);
@@ -1992,95 +3111,571 @@ function SessionViewLoaded({
         },
         [],
     );
-    const agentInputConnectionStatus = React.useMemo(() => ({
-        text: (isResuming || isPendingQueueWakeResuming || sessionStatus.state === 'resuming')
-            ? t('session.resuming')
-            : (inactiveStatusText || sessionStatus.statusText),
-        color: sessionStatus.statusColor,
-        dotColor: sessionStatus.statusDotColor,
-        isPulsing: isResuming || isPendingQueueWakeResuming || sessionStatus.isPulsing,
-    }), [
-        inactiveStatusText,
-        isPendingQueueWakeResuming,
-        isResuming,
-        sessionStatus.isPulsing,
-        sessionStatus.state,
-        sessionStatus.statusColor,
-        sessionStatus.statusDotColor,
-        sessionStatus.statusText,
-    ]);
+    const handleAgentInputSend = useStableAgentInputOnSend((sendOptions) => {
+        if (!hasWriteAccess) {
+            Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
+            return;
+        }
+
+        const sendComposerText = async (
+            messageToSend: string,
+            composerTextBeforeSend: string,
+            sendIntent?: Readonly<{
+                forceImmediate?: boolean;
+                deliveryIntent?: 'server_pending';
+                structuredInputMetaOverrides?: Record<string, unknown>;
+            }>,
+        ) => {
+            const configuredMode = storage.getState().settings.sessionMessageSendMode;
+            const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
+            const forceImmediateSend = sendIntent?.forceImmediate === true;
+            const submitMode = chooseSubmitMode({
+                configuredMode,
+                busySteerSendPolicy,
+                explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
+                    ? 'server_pending'
+                    : undefined,
+                session,
+            });
+
+            const additionalMessage = messageToSend;
+            const trimmedText = messageToSend.trim();
+            const shouldSendReviewComments = hasIncludedReviewCommentDrafts;
+            const hasAttachments = attachmentsUploadsEnabled && attachmentDrafts.length > 0;
+            const participantRecipient = recipientState.recipient;
+
+            if (participantRecipient && (shouldSendReviewComments || hasAttachments)) {
+                Modal.alert(t('common.error'), t('session.participants.unsupportedAttachmentsOrReviewComments'));
+                return;
+            }
+
+            if (hasAttachments && !isSessionActive && !isResumable) {
+                Modal.alert(t('common.error'), t('session.inactiveNotResumableNoticeTitle'));
+                return;
+            }
+
+            const outboundBase = shouldSendReviewComments
+                ? { kind: 'review_comments' as const }
+                : { kind: 'plain' as const };
+
+            if (outboundBase.kind === 'plain' && trimmedText.length === 0 && !hasAttachments) {
+                return;
+            }
+
+            const previousMessage = composerTextBeforeSend;
+            const sendSnapshot = { sessionId, text: previousMessage };
+            const semanticDraftSnapshot = captureComposerSemanticDraftSnapshot();
+            let semanticDraftSnapshotAfterHandoffClear: ComposerSemanticDraftSnapshot | null = null;
+            const transientInputStateHandoff = captureComposerTransientInputStateForOutboundHandoff({
+                captureTransientInputState: inputComposerCaptureTransientStateRef.current,
+                clearTransientInputState: inputComposerClearTransientStateRef.current,
+                restoreTransientInputState: inputComposerRestoreTransientStateRef.current,
+            });
+            let didClearAtOutboundHandoff = false;
+            let didRecordOutboundAccepted = false;
+            const recordOutboundAccepted = () => {
+                if (didRecordOutboundAccepted) return;
+                didRecordOutboundAccepted = true;
+                trackMessageSent();
+                markTranscriptLiveTailIntent();
+            };
+            const clearAfterOutboundHandoff = () => {
+                const didClear = clearComposerAfterOutboundHandoff({
+                    snapshot: sendSnapshot,
+                    clearDraftForSessionIfCurrentValueMatches,
+                    clearTransientInputState: transientInputStateHandoff.clearTransientInputState,
+                    isSemanticSnapshotCurrent: () => isComposerSemanticDraftSnapshotCurrent(semanticDraftSnapshot),
+                    clearSemanticDraftValues: clearSemanticDraftValuesAfterOutboundHandoff,
+                });
+                if (didClear) {
+                    semanticDraftSnapshotAfterHandoffClear = captureComposerSemanticDraftSnapshot();
+                }
+                didClearAtOutboundHandoff = didClearAtOutboundHandoff || didClear;
+                return didClear;
+            };
+            const restoreAttachmentDraftsFromSnapshot = (drafts: readonly AttachmentDraft[]) => {
+                attachmentDraftsSnapshotRef.current = drafts;
+                writeSessionAttachmentDrafts(sessionId, drafts);
+                attachmentDraftManager.replaceDrafts(drafts);
+            };
+            const restoreAfterFailedOutboundHandoff = (attachmentDraftsForRestore?: readonly AttachmentDraft[]) => {
+                const didRestore = restoreComposerAfterFailedOutboundHandoff({
+                    snapshot: sendSnapshot,
+                    wasClearedAtHandoff: didClearAtOutboundHandoff,
+                    isSemanticRestoreSafe: () =>
+                        semanticDraftSnapshotAfterHandoffClear !== null
+                        && isComposerSemanticDraftSnapshotCurrent(semanticDraftSnapshotAfterHandoffClear),
+                    restoreDraftForSessionIfCurrentValueMatches,
+                    restoreTransientInputState: transientInputStateHandoff.restoreTransientInputState,
+                    restoreSemanticDraftValues: () => restoreSemanticDraftValuesFromSnapshot(semanticDraftSnapshot),
+                });
+                if (didRestore && attachmentDraftsForRestore) {
+                    restoreAttachmentDraftsFromSnapshot(attachmentDraftsForRestore);
+                }
+                return didRestore;
+            };
+
+            if (hasAttachments) {
+                setIsComposerSendPending(true);
+                fireAndForget((async () => {
+                    const submittedAttachmentDraftIds = new Set(attachmentDrafts.map((draft) => draft.id));
+                    const readSubmittedAttachmentDraftsFromCurrent = () => {
+                        const currentDraftsById = new Map(attachmentDraftsSnapshotRef.current.map((draft) => [draft.id, draft]));
+                        return attachmentDrafts.map((draft) => currentDraftsById.get(draft.id) ?? draft);
+                    };
+                    const canRestoreFailedAttachmentHandoffSnapshot = () => {
+                        const currentDrafts = attachmentDraftsSnapshotRef.current;
+                        return currentDrafts.length === 0
+                            || currentDrafts.every((draft) => submittedAttachmentDraftIds.has(draft.id));
+                    };
+                    let attachmentDraftsForRestore = readSubmittedAttachmentDraftsFromCurrent();
+                    try {
+                        const readyForSend = await directSessionTakeover.ensureReadyForSend();
+                        if (!readyForSend) {
+                            return;
+                        }
+                        setIsUploadingAttachments(true);
+
+                        if (!isSessionActive && isResumable) {
+                            const resumed = await handleResumeSession();
+                            if (!resumed) {
+                                throw new Error(t('session.resumeFailed'));
+                            }
+                        }
+
+                        const { uploaded } = await uploadAttachmentDraftsToSession({
+                            sessionId,
+                            drafts: attachmentDrafts,
+                            config: attachmentsUploadConfig,
+                            applyDraftPatch: applySessionAttachmentDraftPatch,
+                        });
+                        const attachmentsBlock = formatAttachmentsBlock(uploaded);
+                        const attachmentsMetaOverrides = buildAttachmentMessageMeta(uploaded);
+
+                        const reviewCommentDraftsForPrompt = shouldSendReviewComments
+                            ? await resolveReviewCommentDraftAnchorsForPrompt({
+                                drafts: includedReviewCommentDrafts,
+                                reviewScope,
+                            })
+                            : [];
+                        const outbound: {
+                            text: string;
+                            displayText?: string;
+                            metaOverrides?: Record<string, unknown>;
+                        } = shouldSendReviewComments
+                            ? buildReviewCommentsOutboundMessage({
+                                sessionId,
+                                drafts: reviewCommentDraftsForPrompt,
+                                additionalMessage: trimmedText.length > 0
+                                    ? `${additionalMessage}\n\n${attachmentsBlock}`
+                                    : attachmentsBlock,
+                                displayTextSuffix: attachmentsBlock,
+                                metaOverrides: attachmentsMetaOverrides,
+                            })
+                            : {
+                                text: trimmedText.length > 0 ? `${trimmedText}\n\n${attachmentsBlock}` : attachmentsBlock,
+                                displayText: trimmedText,
+                                metaOverrides: attachmentsMetaOverrides,
+                            };
+                        outbound.metaOverrides = buildNextMessageMetaOverrides(
+                            mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
+                        );
+
+                        if (submitMode === 'interrupt') {
+                            try { await sessionAbort(sessionId); } catch { }
+                        }
+                        attachmentDraftsForRestore = readSubmittedAttachmentDraftsFromCurrent();
+                        let didClearForAttachmentHandoff = false;
+                        const removeSubmittedAttachmentDraftsFromCurrent = () => {
+                            const currentDrafts = attachmentDraftsSnapshotRef.current;
+                            const nextDrafts = currentDrafts.filter((draft) => !submittedAttachmentDraftIds.has(draft.id));
+                            if (nextDrafts.length === currentDrafts.length) {
+                                return;
+                            }
+                            attachmentDraftsSnapshotRef.current = nextDrafts;
+                            writeSessionAttachmentDrafts(sessionId, nextDrafts);
+                            attachmentDraftManager.replaceDrafts(nextDrafts);
+                        };
+                        const areSubmittedAttachmentDraftsStillCurrent = () => {
+                            const currentDrafts = attachmentDraftsSnapshotRef.current;
+                            if (currentDrafts.length !== submittedAttachmentDraftIds.size) return false;
+                            return currentDrafts.every((draft) => submittedAttachmentDraftIds.has(draft.id));
+                        };
+                        const clearAttachmentsAfterProjectionHandoff = () => {
+                            if (didClearForAttachmentHandoff) return;
+                            if (!areSubmittedAttachmentDraftsStillCurrent()) {
+                                removeSubmittedAttachmentDraftsFromCurrent();
+                                didClearForAttachmentHandoff = clearAfterOutboundHandoff();
+                                return;
+                            }
+                            didClearForAttachmentHandoff = clearAfterOutboundHandoff();
+                            if (didClearForAttachmentHandoff) {
+                                attachmentDraftsSnapshotRef.current = [];
+                                clearSessionAttachmentDrafts(sessionId);
+                                attachmentDraftManager.clearDrafts();
+                            } else {
+                                removeSubmittedAttachmentDraftsFromCurrent();
+                            }
+                        };
+                        await sync.sendMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides, {
+                            onLocalPendingProjectionCreated: clearAttachmentsAfterProjectionHandoff,
+                        });
+                        if (shouldSendReviewComments) {
+                            clearSentReviewCommentDrafts();
+                        }
+                        if (!didClearForAttachmentHandoff) {
+                            clearAttachmentsAfterProjectionHandoff();
+                        }
+                        recordOutboundAccepted();
+                    } catch (e) {
+                        if (canRestoreFailedAttachmentHandoffSnapshot()) {
+                            restoreAfterFailedOutboundHandoff(attachmentDraftsForRestore);
+                        }
+                        Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+                    } finally {
+                        setIsUploadingAttachments(false);
+                        setIsComposerSendPending(false);
+                    }
+                })(), { tag: 'SessionView.sendMessage.attachments' });
+                return;
+            }
+
+            const reviewCommentDraftsForPrompt = shouldSendReviewComments
+                ? await resolveReviewCommentDraftAnchorsForPrompt({
+                    drafts: includedReviewCommentDrafts,
+                    reviewScope,
+                })
+                : [];
+            const outbound: {
+                text: string;
+                displayText?: string;
+                metaOverrides?: Record<string, unknown>;
+            } | null = shouldSendReviewComments
+                ? buildReviewCommentsOutboundMessage({
+                    sessionId,
+                    drafts: reviewCommentDraftsForPrompt,
+                    additionalMessage,
+                })
+                : (trimmedText.length > 0
+                    ? { text: trimmedText, displayText: undefined, metaOverrides: undefined }
+                    : null);
+
+            if (!outbound) return;
+
+            const voiceComposerRouting =
+                outboundBase.kind === 'plain' && !participantRecipient
+                    ? resolveVoiceSessionComposerRouting({
+                        conversationSessionId: sessionId,
+                        sessionMetadata: session.metadata,
+                    })
+                    : null;
+
+            if (voiceComposerRouting?.kind === 'adapter_text') {
+                setIsComposerSendPending(true);
+                fireAndForget((async () => {
+                    try {
+                        const voiceSend = await sendVoiceSessionComposerText({
+                            conversationSessionId: sessionId,
+                            text: outbound.text,
+                            sessionMetadata: session.metadata,
+                            getAdapter: (adapterId) => getVoiceAdapterRegistry().get(adapterId),
+                        });
+                        if (!voiceSend.ok) {
+                            Modal.alert(
+                                t('common.error'),
+                                voiceSend.reason === 'send_failed' && voiceSend.message
+                                    ? voiceSend.message
+                                    : t('errors.voiceServiceUnavailable'),
+                            );
+                            return;
+                        }
+                        clearAfterOutboundHandoff();
+                        recordOutboundAccepted();
+                        if (shouldSendReviewComments) {
+                            clearSentReviewCommentDrafts();
+                        }
+                    } finally {
+                        setIsComposerSendPending(false);
+                    }
+                })(), { tag: 'SessionView.sendMessage.voiceConversation' });
+                return;
+            }
+
+            let executionRunSend:
+                | Readonly<{
+                    runId: string;
+                    message: string;
+                    delivery: typeof recipientState.executionRunDelivery;
+                }>
+                | null = null;
+
+            if (outboundBase.kind === 'plain' && participantRecipient) {
+                const routed = resolveParticipantRoutedSend({
+                    text: outbound.text,
+                    recipient: participantRecipient,
+                    executionRunDelivery: recipientState.executionRunDelivery,
+                });
+                if (routed.type === 'execution_run_send') {
+                    executionRunSend = {
+                        runId: routed.runId,
+                        message: routed.message,
+                        delivery: routed.delivery,
+                    };
+                } else {
+                    outbound.text = routed.text;
+                    outbound.displayText = routed.displayText;
+                    outbound.metaOverrides = routed.metaOverrides;
+                }
+            }
+            outbound.metaOverrides = buildNextMessageMetaOverrides(
+                mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
+            );
+
+            if (executionRunSend) {
+                setIsComposerSendPending(true);
+                fireAndForget((async () => {
+                    try {
+                        const readyForSend = await directSessionTakeover.ensureReadyForSend();
+                        if (!readyForSend) {
+                            return;
+                        }
+
+                        const result = await sessionExecutionRunSend(sessionId, executionRunSend);
+                        if (!result.ok) {
+                            if (isExecutionRunNotRunningSendError(result)) {
+                                recipientState.clearPersistedManualRecipient();
+                            }
+                            Modal.alert(t('common.error'), result.error ?? t('runs.send.failedToSend'));
+                            return;
+                        }
+                        clearAfterOutboundHandoff();
+                        recordOutboundAccepted();
+                    } finally {
+                        setIsComposerSendPending(false);
+                    }
+                })(), { tag: 'SessionView.sendMessage.participantRouting.executionRun' });
+                return;
+            }
+
+            setIsComposerSendPending(true);
+            fireAndForget((async () => {
+                try {
+                    const readyForSend = await directSessionTakeover.ensureReadyForSend();
+                    if (!readyForSend) {
+                        return;
+                    }
+
+                    const submitPortWithUiWakeState: SessionSubmitPort = {
+                        ...sessionSubmitPort,
+                        resumeSession: async (options) => {
+                            setIsPendingQueueWakeResuming(true);
+                            try {
+                                return await sessionSubmitPort.resumeSession(options);
+                            } finally {
+                                setIsPendingQueueWakeResuming(false);
+                            }
+                        },
+                    };
+                    const result = await submitSessionUserMessage(submitPortWithUiWakeState, {
+                        sessionId,
+                        session,
+                        text: outbound.text,
+                        displayText: outbound.displayText,
+                        metaOverrides: outbound.metaOverrides,
+                        configuredMode,
+                        busySteerSendPolicy,
+                        explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
+                            ? 'server_pending'
+                            : undefined,
+                        forceImmediate: forceImmediateSend,
+                        profileId: liveComposerState.profileId,
+                        resumeCapabilityOptions,
+                        resumeTargetOverride: reachableMachineTarget
+                            ? {
+                                machineId: reachableMachineTarget.machineId,
+                                directory: reachableMachineTarget.basePath,
+                            }
+                            : null,
+                        permissionOverride: getPermissionModeOverrideForSpawn(session),
+                        serverId: capabilityServerId,
+                        requestRemoteControlAfterPendingEnqueue: shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null),
+                        onOutboundHandoff: (handoff) => {
+                            clearAfterOutboundHandoff();
+                            if (handoff.persistence === 'pending') {
+                                recordOutboundAccepted();
+                            }
+                        },
+                    });
+
+                    if (result.type === 'send_failed' || result.type === 'rejected') {
+                        if (result.persistence === 'none') {
+                            restoreAfterFailedOutboundHandoff();
+                        }
+                        Modal.alert(t('common.error'), result.errorMessage ?? t('errors.failedToSendMessage'));
+                        return;
+                    }
+
+                    recordOutboundAccepted();
+
+                    if ((result.type === 'wake_pending' || result.type === 'wake_failed') && !isSessionActive && isResumable) {
+                        setPendingQueueResumeFailed(true);
+                    }
+
+                    if (shouldSendReviewComments) {
+                        clearSentReviewCommentDrafts();
+                    }
+                } finally {
+                    setIsComposerSendPending(false);
+                }
+            })(), { tag: 'SessionView.sendMessage.submitSessionUserMessage' });
+        };
+
+        const promptInvocationsV1 = storage.getState().settings.promptInvocationsV1;
+        const resolved = resolveSessionComposerSend({ input: message, executionRunsEnabled, promptInvocationsV1 });
+        if (resolved.kind === 'noop') {
+            return;
+        }
+
+        if (resolved.kind === 'template') {
+            const composerTextBeforeSend = message;
+            fireAndForget((async () => {
+                try {
+                    const expanded = await expandPromptTemplateInvocation({
+                        targetArtifactId: resolved.targetArtifactId,
+                        argsText: resolved.rest,
+                    });
+
+                    if (resolvePromptInvocationComposerSendAction(resolved.behavior) === 'insert') {
+                        setDraftValue(expanded);
+                        return;
+                    }
+
+                    void sendComposerText(expanded, composerTextBeforeSend, sendOptions);
+                } catch (e) {
+                    Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+                }
+            })(), { tag: 'SessionView.sendMessage.template' });
+            return;
+        }
+
+        if (
+            resolved.kind === 'goal'
+            || (
+                resolved.kind === 'action' &&
+                (
+                    resolved.actionId === 'ui.voice_global.reset' ||
+                    resolved.actionId === 'ui.pet.choose' ||
+                    resolved.actionId === 'execution.run.list' ||
+                    resolved.actionId === 'review.start' ||
+                    resolved.actionId === 'subagents.plan.start' ||
+                    resolved.actionId === 'subagents.delegate.start'
+                )
+            )
+        ) {
+            const previousMessage = message;
+            void executeSessionComposerResolution({
+                resolved,
+                sessionId,
+                agentId,
+                backendTarget: sessionActionDefaultBackend?.backendTarget ?? null,
+                permissionMode,
+                actionExecutor,
+                previousMessage,
+                setMessage: setDraftValue,
+                clearDraft,
+                clearTransientInputState: inputComposerClearTransientStateRef.current,
+                clearSemanticDraftValues: clearSemanticDraftValuesAfterAcceptedComposerClear,
+                restoreDraft,
+                restoreComposerSnapshotIfCurrentValueMatches: restoreDraftForSessionIfCurrentValueMatches,
+                restoreComposerSnapshot,
+                trackMessageSent,
+                navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
+                navigateToPetSettings: () => router.push('/settings/pets' as any),
+                openGoalControls: canEditSessionGoals
+                    ? () => setActiveStatusBadgeKey(SESSION_WORK_STATE_STATUS_BADGE_KEY)
+                    : undefined,
+                setSessionGoal: canEditSessionGoals
+                    ? (targetSessionId, request) => sessionGoalSet(targetSessionId, request)
+                    : undefined,
+                clearSessionGoal: canEditSessionGoals
+                    ? (targetSessionId) => sessionGoalClear(targetSessionId)
+                    : undefined,
+                modalAlert: (title, msg) => Modal.alert(title, msg),
+            });
+            return;
+        }
+
+        if (resolved.kind !== 'send') return;
+        void sendComposerText(resolved.text, message, sendOptions);
+    });
+    const composerAuxiliaryBannerHorizontalPadding = windowWidth > 700 ? 16 : 8;
+    const composerAuxiliaryBannerStyle = { width: '100%' as const, maxWidth: layout.maxWidth };
     const input = shouldShowInput ? (
         <View>
             {voiceEnabled && voiceProviderId !== 'off' && !isHiddenSystemSessionSession ? <VoiceSurface variant="session" sessionId={sessionId} /> : null}
             {authSurfaceState ? (
-                <View style={{ marginTop: 8, marginHorizontal: 8 }}>
-                    <SessionAuthRecoveryBanner message={authSurfaceState.message} />
+                <View style={{ width: '100%', alignItems: 'center', paddingHorizontal: composerAuxiliaryBannerHorizontalPadding, paddingTop: 8 }}>
+                    <SessionAuthRecoveryBanner
+                        message={authSurfaceState.message}
+                        style={composerAuxiliaryBannerStyle}
+                    />
                 </View>
             ) : null}
             {pendingQueueResumeFailed ? (
-                <View
-                    testID="session-pendingQueue-resumeFailed"
-                    style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        flexWrap: 'wrap',
-                        paddingHorizontal: 12,
-                        paddingVertical: 8,
-                        backgroundColor: theme.colors.state.warning.background,
-                        borderWidth: 1,
-                        borderColor: theme.colors.state.warning.border,
-                        borderRadius: 10,
-                        marginTop: 8,
-                        marginHorizontal: 8,
-                        gap: 8,
-                    }}
-                >
-                    <Ionicons name="warning-outline" size={16} color={theme.colors.state.warning.foreground} />
-                    <View style={{ flexBasis: 0, flexGrow: 1 }}>
-                        <Text style={{ fontSize: 13, color: theme.colors.state.warning.foreground, fontWeight: '700' }}>
-                            {t('session.pendingQueuedResumeFailedTitle')}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: theme.colors.state.warning.foreground, lineHeight: 16 }}>
-                            {t('session.pendingQueuedResumeFailedBody')}
-                        </Text>
-                    </View>
-                    <Pressable
-                        testID="session-pendingQueue-resumeFailed-retry"
-                        accessibilityLabel={t('common.retry')}
+                <View style={{ width: '100%', alignItems: 'center', paddingHorizontal: composerAuxiliaryBannerHorizontalPadding, paddingTop: 8 }}>
+                    <SessionWarningActionBanner
+                        testID="session-pendingQueue-resumeFailed"
+                        actionTestID="session-pendingQueue-resumeFailed-retry"
+                        title={t('session.pendingQueuedResumeFailedTitle')}
+                        body={t('session.pendingQueuedResumeFailedBody')}
+                        actionLabel={t('common.retry')}
+                        actionAccessibilityLabel={t('common.retry')}
                         disabled={isResuming}
-                        onPress={async () => {
+                        onActionPress={async () => {
                             const ok = await handleResumeSession({ silent: false });
                             if (ok) {
                                 setPendingQueueResumeFailed(false);
                             }
                         }}
-                        style={({ pressed }) => ({
-                            flexShrink: 0,
-                            paddingHorizontal: 10,
-                            paddingVertical: 6,
-                            borderRadius: 8,
-                            backgroundColor: theme.colors.state.warning.foreground,
-                            opacity: pressed || isResuming ? 0.7 : 1,
-                        })}
-                    >
-                        <Text style={{ fontSize: 12, color: theme.colors.state.warning.background, fontWeight: '700' }}>
-                            {t('common.retry')}
-                        </Text>
-                    </Pressable>
+                        style={composerAuxiliaryBannerStyle}
+                    />
                 </View>
             ) : null}
-            <SessionAgentInputWithUsage
+            {usageLimitRecoveryPresentation ? (
+                <View style={{ width: '100%', alignItems: 'center', paddingHorizontal: composerAuxiliaryBannerHorizontalPadding, paddingTop: 8 }}>
+                    <SessionWarningActionBanner
+                        testID={usageLimitRecoveryPresentation.banner.testID}
+                        actionTestID={usageLimitRecoveryPresentation.banner.primaryAction.testID}
+                        title={usageLimitRecoveryPresentation.banner.title}
+                        body={usageLimitRecoveryPresentation.banner.body}
+                        actionLabel={usageLimitRecoveryPresentation.banner.primaryAction.label}
+                        actionAccessibilityLabel={usageLimitRecoveryPresentation.banner.primaryAction.accessibilityLabel}
+                        onActionPress={() => void handleUsageLimitRecoveryAction(usageLimitRecoveryPresentation.banner.primaryAction.kind)}
+                        secondaryActions={usageLimitRecoveryPresentation.banner.secondaryActions.map((action) => ({
+                            key: action.kind,
+                            testID: action.testID,
+                            label: action.label,
+                            accessibilityLabel: action.accessibilityLabel,
+                            onPress: () => void handleUsageLimitRecoveryAction(action.kind),
+                        }))}
+                        style={composerAuxiliaryBannerStyle}
+                    />
+                </View>
+            ) : null}
+            <SessionAgentInputRuntimeStatusBoundary
+                session={session}
                 sessionLatestUsage={session.latestUsage}
                 placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
                 value={message}
-                onChangeText={setMessage}
+                onChangeText={setDraftValue}
                 sessionId={sessionId}
+                inputComposerClearTransientStateRef={inputComposerClearTransientStateRef}
+                inputComposerCaptureTransientStateRef={inputComposerCaptureTransientStateRef}
+                inputComposerRestoreTransientStateRef={inputComposerRestoreTransientStateRef}
                 agentType={liveComposerState.agentId}
                 attachments={attachmentsUploadsEnabled ? agentInputAttachments : undefined}
                 onAttachmentsAdded={attachmentsUploadsEnabled ? addAttachments : undefined}
                 hasSendableAttachments={hasIncludedReviewCommentDrafts || (attachmentsUploadsEnabled && attachmentDrafts.length > 0)}
-                permissionRequests={pendingPermissionRequests}
-                userActionRequests={pendingUserActionRequests}
                 approvalRequests={openApprovalRequests}
                 canApprovePermissions={transcriptInteraction.canApprovePermissions}
                 permissionDisabledReason={transcriptInteraction.permissionDisabledReason}
@@ -2103,460 +3698,21 @@ function SessionViewLoaded({
                         `${t('profiles.sessionUses', { profile: profileInfo })}\n\n${t('profiles.profilesFixedPerSession')}`,
                     );
                 } : undefined}
-                connectionStatus={agentInputConnectionStatus}
-                statusBadges={sessionWorkStateBadges}
+                statusBadges={agentInputStatusBadges}
+                providerUsageGauge={providerUsageGauge}
                 activeStatusBadgeKey={activeStatusBadgeKey}
                 onActiveStatusBadgeKeyChange={setActiveStatusBadgeKey}
-                onSend={(sendOptions) => {
-                    if (!hasWriteAccess) {
-                        Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
-                        return;
-                    }
-
-                    const sendComposerText = async (
-                        messageToSend: string,
-                        composerTextBeforeSend: string,
-                        sendIntent?: Readonly<{
-                            forceImmediate?: boolean;
-                            deliveryIntent?: 'server_pending';
-                            structuredInputMetaOverrides?: Record<string, unknown>;
-                        }>,
-                    ) => {
-                        const configuredMode = storage.getState().settings.sessionMessageSendMode;
-                        const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
-                        const forceImmediateSend = sendIntent?.forceImmediate === true;
-                        const submitMode = chooseSubmitMode({
-                            configuredMode,
-                            busySteerSendPolicy,
-                            explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
-                                ? 'server_pending'
-                                : undefined,
-                            session,
-                        });
-
-                        const additionalMessage = messageToSend;
-                        const trimmedText = messageToSend.trim();
-                        const shouldSendReviewComments = hasIncludedReviewCommentDrafts;
-                        const hasAttachments = attachmentsUploadsEnabled && attachmentDrafts.length > 0;
-                        const participantRecipient = recipientState.recipient;
-
-                        if (participantRecipient && (shouldSendReviewComments || hasAttachments)) {
-                            Modal.alert(t('common.error'), t('session.participants.unsupportedAttachmentsOrReviewComments'));
-                            return;
-                        }
-
-                        if (hasAttachments && !isSessionActive && !isResumable) {
-                            Modal.alert(t('common.error'), t('session.inactiveNotResumableNoticeTitle'));
-                            return;
-                        }
-
-                        const outboundBase = shouldSendReviewComments
-                            ? { kind: 'review_comments' as const }
-                            : { kind: 'plain' as const };
-
-                        if (outboundBase.kind === 'plain' && trimmedText.length === 0 && !hasAttachments) {
-                            return;
-                        }
-
-                        const previousMessage = composerTextBeforeSend;
-                        const markComposerSent = () => {
-                            setMessage('');
-                            clearDraft();
-                            trackMessageSent();
-                        };
-
-                        if (hasAttachments) {
-                            fireAndForget((async () => {
-                                try {
-                                    const readyForSend = await directSessionTakeover.ensureReadyForSend();
-                                    if (!readyForSend) {
-                                        setMessage(previousMessage);
-                                        return;
-                                    }
-                                    setIsUploadingAttachments(true);
-
-                                    if (!isSessionActive && isResumable) {
-                                        const resumed = await handleResumeSession();
-                                        if (!resumed) {
-                                            throw new Error(t('session.resumeFailed'));
-                                        }
-                                    }
-
-                                    const { uploaded } = await uploadAttachmentDraftsToSession({
-                                        sessionId,
-                                        drafts: attachmentDrafts,
-                                        config: attachmentsUploadConfig,
-                                        applyDraftPatch: attachmentDraftManager.applyDraftPatch,
-                                    });
-                                    const attachmentsBlock = formatAttachmentsBlock(uploaded);
-                                    const attachmentsMetaOverrides = buildAttachmentMessageMeta(uploaded);
-
-                                    const reviewCommentDraftsForPrompt = shouldSendReviewComments
-                                        ? await resolveReviewCommentDraftAnchorsForPrompt({
-                                            drafts: includedReviewCommentDrafts,
-                                            reviewScope,
-                                        })
-                                        : [];
-                                    const outbound: {
-                                        text: string;
-                                        displayText?: string;
-                                        metaOverrides?: Record<string, unknown>;
-                                    } = shouldSendReviewComments
-                                        ? buildReviewCommentsOutboundMessage({
-                                            sessionId,
-                                            drafts: reviewCommentDraftsForPrompt,
-                                            additionalMessage: trimmedText.length > 0
-                                                ? `${additionalMessage}\n\n${attachmentsBlock}`
-                                                : attachmentsBlock,
-                                            displayTextSuffix: attachmentsBlock,
-                                            metaOverrides: attachmentsMetaOverrides,
-                                        })
-                                        : {
-                                            text: trimmedText.length > 0 ? `${trimmedText}\n\n${attachmentsBlock}` : attachmentsBlock,
-                                            displayText: trimmedText,
-                                            metaOverrides: attachmentsMetaOverrides,
-                                        };
-                                    outbound.metaOverrides = buildNextMessageMetaOverrides(
-                                        mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
-                                    );
-
-                                    if (submitMode === 'interrupt') {
-                                        try { await sessionAbort(sessionId); } catch { }
-                                    }
-                                    await sync.sendMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
-                                    if (shouldSendReviewComments) {
-                                        clearSentReviewCommentDrafts();
-                                    }
-                                    attachmentDraftManager.clearDrafts();
-                                    markComposerSent();
-                                } catch (e) {
-                                    setMessage(previousMessage);
-                                    Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
-                                } finally {
-                                    setIsUploadingAttachments(false);
-                                }
-                            })(), { tag: 'SessionView.sendMessage.attachments' });
-                            return;
-                        }
-
-                        const reviewCommentDraftsForPrompt = shouldSendReviewComments
-                            ? await resolveReviewCommentDraftAnchorsForPrompt({
-                                drafts: includedReviewCommentDrafts,
-                                reviewScope,
-                            })
-                            : [];
-                        const outbound: {
-                            text: string;
-                            displayText?: string;
-                            metaOverrides?: Record<string, unknown>;
-                        } | null = shouldSendReviewComments
-                        ? buildReviewCommentsOutboundMessage({
-                                sessionId,
-                                drafts: reviewCommentDraftsForPrompt,
-                                additionalMessage,
-                            })
-                          : (trimmedText.length > 0
-                              ? { text: trimmedText, displayText: undefined, metaOverrides: undefined }
-                              : null);
-
-                        if (!outbound) return;
-
-                        const voiceComposerRouting =
-                            outboundBase.kind === 'plain' && !participantRecipient
-                                ? resolveVoiceSessionComposerRouting({
-                                    conversationSessionId: sessionId,
-                                    sessionMetadata: session.metadata,
-                                })
-                                : null;
-
-                        if (voiceComposerRouting?.kind === 'adapter_text') {
-                            fireAndForget((async () => {
-                                const voiceSend = await sendVoiceSessionComposerText({
-                                    conversationSessionId: sessionId,
-                                    text: outbound.text,
-                                    sessionMetadata: session.metadata,
-                                    getAdapter: (adapterId) => getVoiceAdapterRegistry().get(adapterId),
-                                });
-                                if (!voiceSend.ok) {
-                                    Modal.alert(
-                                        t('common.error'),
-                                        voiceSend.reason === 'send_failed' && voiceSend.message
-                                            ? voiceSend.message
-                                            : t('errors.voiceServiceUnavailable'),
-                                    );
-                                    return;
-                                }
-                                markComposerSent();
-                                if (shouldSendReviewComments) {
-                                    clearSentReviewCommentDrafts();
-                                }
-                            })(), { tag: 'SessionView.sendMessage.voiceConversation' });
-                            return;
-                        }
-
-                        let executionRunSend:
-                            | Readonly<{
-                                runId: string;
-                                message: string;
-                                delivery: typeof recipientState.executionRunDelivery;
-                            }>
-                            | null = null;
-
-                        if (outboundBase.kind === 'plain' && participantRecipient) {
-                            const routed = resolveParticipantRoutedSend({
-                                text: outbound.text,
-                                recipient: participantRecipient,
-                                executionRunDelivery: recipientState.executionRunDelivery,
-                            });
-                            if (routed.type === 'execution_run_send') {
-                                executionRunSend = {
-                                    runId: routed.runId,
-                                    message: routed.message,
-                                    delivery: routed.delivery,
-                                };
-                            } else {
-                                outbound.text = routed.text;
-                                outbound.displayText = routed.displayText;
-                                outbound.metaOverrides = routed.metaOverrides;
-                            }
-                        }
-                        outbound.metaOverrides = buildNextMessageMetaOverrides(
-                            mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
-                        );
-
-                        if (executionRunSend) {
-                            fireAndForget((async () => {
-                                markComposerSent();
-                                const readyForSend = await directSessionTakeover.ensureReadyForSend();
-                                if (!readyForSend) {
-                                    setMessage(previousMessage);
-                                    return;
-                                }
-
-                                const result = await sessionExecutionRunSend(sessionId, executionRunSend);
-                                if (!result.ok) {
-                                    if (isExecutionRunNotRunningSendError(result)) {
-                                        recipientState.setManualRecipient(null);
-                                    }
-                                    setMessage(previousMessage);
-                                    Modal.alert(t('common.error'), result.error ?? t('runs.send.failedToSend'));
-                                }
-                            })(), { tag: 'SessionView.sendMessage.participantRouting.executionRun' });
-                            return;
-                        }
-
-                        if (submitMode === 'server_pending' && !forceImmediateSend) {
-                            fireAndForget((async () => {
-                                markComposerSent();
-                                const readyForSend = await directSessionTakeover.ensureReadyForSend();
-                                if (!readyForSend) {
-                                    setMessage(previousMessage);
-                                    return;
-                                }
-
-                                try {
-                                    await sync.enqueuePendingMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
-                                } catch (e) {
-                                    setMessage(previousMessage);
-                                    Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
-                                    return;
-                                }
-
-                                if (shouldSendReviewComments) {
-                                    clearSentReviewCommentDrafts();
-                                }
-
-                                const wakeOpts = getPendingQueueWakeResumeOptions({
-                                    sessionId,
-                                    session,
-                                    resumeCapabilityOptions,
-                                    resumeTargetOverride: reachableMachineTarget
-                                        ? {
-                                            machineId: reachableMachineTarget.machineId,
-                                            directory: reachableMachineTarget.basePath,
-                                        }
-                                        : null,
-                                    permissionOverride: getPermissionModeOverrideForSpawn(session),
-                                    canWakeMachineId: (machineId) => Boolean(sync.encryption.getMachineEncryption(machineId)),
-                                });
-                                if (!wakeOpts) {
-                                    if (!isSessionActive && isResumable) {
-                                        setPendingQueueResumeFailed(true);
-                                    }
-                                    return;
-                                }
-
-                                try {
-                                    setIsPendingQueueWakeResuming(true);
-                                    const result = await resumeSession({
-                                        ...wakeOpts,
-                                        serverId: capabilityServerId,
-                                    });
-                                    if (result.type === 'error') {
-                                        // Non-fatal: message is already persisted in the pending queue.
-                                        if (!isSessionActive && isResumable) {
-                                            setPendingQueueResumeFailed(true);
-                                        }
-                                    }
-                                } catch {
-                                    // Non-fatal: message is already persisted in the pending queue.
-                                    if (!isSessionActive && isResumable) {
-                                        setPendingQueueResumeFailed(true);
-                                    }
-                                } finally {
-                                    setIsPendingQueueWakeResuming(false);
-                                }
-
-                                if (shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null)) {
-                                    try {
-                                        await sessionSwitch(sessionId, 'remote');
-                                    } catch {
-                                        // Non-fatal: the message is already persisted in the pending queue.
-                                    }
-                                }
-                            })(), { tag: 'SessionView.sendMessage.serverPending' });
-                            return;
-                        }
-
-                        if (!isSessionActive && isResumable) {
-                            fireAndForget((async () => {
-                                markComposerSent();
-                                const readyForSend = await directSessionTakeover.ensureReadyForSend();
-                                if (!readyForSend) {
-                                    setMessage(previousMessage);
-                                    return;
-                                }
-
-                                try {
-                                    const supportsPendingQueueV2 = typeof session.pendingVersion === 'number';
-                                    if (supportsPendingQueueV2 && !forceImmediateSend) {
-                                        await sync.enqueuePendingMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
-                                        if (shouldSendReviewComments) {
-                                            clearSentReviewCommentDrafts();
-                                        }
-                                        const resumed = await handleResumeSession({ silent: true });
-                                        if (!resumed) {
-                                            setPendingQueueResumeFailed(true);
-                                        }
-                                        return;
-                                    }
-
-                                    const resumed = await handleResumeSession();
-                                    if (!resumed) {
-                                        setMessage(previousMessage);
-                                        return;
-                                    }
-                                    await sync.submitMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
-                                    if (shouldSendReviewComments) {
-                                        clearSentReviewCommentDrafts();
-                                    }
-                                } catch (e) {
-                                    setMessage(previousMessage);
-                                    Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToResumeSession'));
-                                }
-                            })(), { tag: 'SessionView.sendMessage.resumeInactive' });
-                            return;
-                        }
-
-                        fireAndForget((async () => {
-                            markComposerSent();
-                            const readyForSend = await directSessionTakeover.ensureReadyForSend();
-                            if (!readyForSend) {
-                                setMessage(previousMessage);
-                                return;
-                            }
-
-                            try {
-                                await sync.submitMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides);
-                                if (shouldSendReviewComments) {
-                                    clearSentReviewCommentDrafts();
-                                }
-                            } catch (e) {
-                                setMessage(previousMessage);
-                                Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
-                            }
-                        })(), { tag: 'SessionView.sendMessage.submitMessage' });
-                    };
-
-                    const promptInvocationsV1 = storage.getState().settings.promptInvocationsV1;
-                    const resolved = resolveSessionComposerSend({ input: message, executionRunsEnabled, promptInvocationsV1 });
-                    if (resolved.kind === 'noop') {
-                        return;
-                    }
-
-                    if (resolved.kind === 'template') {
-                        const composerTextBeforeSend = message;
-                        fireAndForget((async () => {
-                            try {
-                                const expanded = await expandPromptTemplateInvocation({
-                                    targetArtifactId: resolved.targetArtifactId,
-                                    argsText: resolved.rest,
-                                });
-
-                                if (resolvePromptInvocationComposerSendAction(resolved.behavior) === 'insert') {
-                                    setMessage(expanded);
-                                    return;
-                                }
-
-                                void sendComposerText(expanded, composerTextBeforeSend, sendOptions);
-                            } catch (e) {
-                                Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
-                            }
-                        })(), { tag: 'SessionView.sendMessage.template' });
-                        return;
-                    }
-
-                    if (
-                        resolved.kind === 'goal'
-                        || (
-                            resolved.kind === 'action' &&
-                            (
-                                resolved.actionId === 'ui.voice_global.reset' ||
-                                resolved.actionId === 'ui.pet.choose' ||
-                                resolved.actionId === 'execution.run.list' ||
-                                resolved.actionId === 'review.start' ||
-                                resolved.actionId === 'subagents.plan.start' ||
-                                resolved.actionId === 'subagents.delegate.start'
-                            )
-                        )
-                    ) {
-                        const previousMessage = message;
-                        void executeSessionComposerResolution({
-                            resolved,
-                            sessionId,
-                            agentId,
-                            backendTarget: sessionActionDefaultBackend?.backendTarget ?? null,
-                            permissionMode,
-                            actionExecutor,
-                            previousMessage,
-                            setMessage,
-                            clearDraft,
-                            trackMessageSent,
-                            navigateToRuns: () => router.push(buildCurrentSessionHref('/runs') as any),
-                            navigateToPetSettings: () => router.push('/settings/pets' as any),
-                            openGoalControls: canEditSessionGoals
-                                ? () => setActiveStatusBadgeKey(SESSION_WORK_STATE_STATUS_BADGE_KEY)
-                                : undefined,
-                            setSessionGoal: canEditSessionGoals
-                                ? (targetSessionId, request) => sessionGoalSet(targetSessionId, request)
-                                : undefined,
-                            clearSessionGoal: canEditSessionGoals
-                                ? (targetSessionId) => sessionGoalClear(targetSessionId)
-                                : undefined,
-                            modalAlert: (title, msg) => Modal.alert(title, msg),
-                        });
-                        return;
-                    }
-
-                    if (resolved.kind !== 'send') return;
-                    void sendComposerText(resolved.text, message, sendOptions);
-                }}
+                connectedServicesRestartState={sessionConnectedServicesAuthSwitch.restartState}
+                onSend={handleAgentInputSend}
                 isSendDisabled={!shouldShowInput || isResuming || isReadOnly || isUploadingAttachments}
+                isSending={isComposerSendPending}
                 onMicPress={micButtonState.onMicPress}
                 isMicActive={micButtonState.isMicActive}
                 onAbort={handleAgentInputAbort}
-                showAbortButton={shouldShowAbortButtonForSessionState(sessionStatus.state)}
-                onFileViewerPress={openFileViewer}
+                inactiveStatusText={inactiveStatusText}
+                isPendingQueueWakeResuming={isPendingQueueWakeResuming}
+                isResuming={isResuming}
+                onFileViewerPress={handleAgentInputFileViewerPress}
                 // Autocomplete configuration
                 autocompletePrefixes={SESSION_COMPOSER_AUTOCOMPLETE_PREFIXES}
                 autocompleteSuggestions={handleAutocompleteSuggestions}
@@ -2572,6 +3728,23 @@ function SessionViewLoaded({
                     multiple
                 />
             ) : null}
+        </View>
+    ) : null;
+
+    const transcriptSelectionToolbar = transcriptMessageSelectionEnabled === true ? (
+        <TranscriptSelectionToolbar
+            selectableMessagesInOrder={transcriptSelectionMessages}
+            bulkCopyFormat={transcriptBulkCopyFormat}
+            roleLabels={transcriptSelectionRoleLabels}
+            sendToSessionEnabled={transcriptMessageSendToSessionEnabled === true && sessionRouteServerId.trim().length > 0}
+            maxWidth={layout.maxWidth}
+            onSendToSession={handleSendSelectedTranscriptMessages}
+        />
+    ) : null;
+    const inputWithTranscriptSelection = transcriptSelectionToolbar || input ? (
+        <View style={{ gap: 8 }}>
+            {transcriptSelectionToolbar}
+            {input}
         </View>
     ) : null;
 
@@ -2647,12 +3820,18 @@ function SessionViewLoaded({
                     paddingBottom: contentPaddingBottom,
                 }}
             >
-                <AgentContentView
-                    content={content}
-                    input={input}
-                    placeholder={placeholder}
-                    safeAreaBottom={agentContentSafeAreaBottom}
-                />
+                <TranscriptMessageSelectionProvider
+                    sessionId={sessionId}
+                    eligibleMessageIdsInOrder={transcriptSelectionEligibleMessageIds}
+                    enabled={transcriptMessageSelectionEnabled === true && shouldRenderChatTimeline}
+                >
+                    <AgentContentView
+                        content={content}
+                        input={inputWithTranscriptSelection}
+                        placeholder={placeholder}
+                        safeAreaBottom={agentContentSafeAreaBottom}
+                    />
+                </TranscriptMessageSelectionProvider>
             </View >
 
             {/* Back button for landscape phone mode when header is hidden */}

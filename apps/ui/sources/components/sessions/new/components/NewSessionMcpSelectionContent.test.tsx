@@ -101,6 +101,7 @@ vi.mock('@/components/ui/selectionList', () => ({
     SelectionList: createCapturingComponent('SelectionList', (props) => {
         capturedSelectionLists.push(props as CapturedSelectionListProps);
     }),
+    resolvePopoverSelectionListHeightBehavior: () => 'measuredToMaxHeight',
     StatusPill: createPassThroughComponent('StatusPill'),
 }));
 vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemListStatic']));
@@ -263,20 +264,18 @@ describe('NewSessionMcpSelectionContent', () => {
         currentMcpServersSettings = mcpServersSettingsFixture;
     });
 
-    it('renders the MCP rows through SelectionList with the popover height cap', async () => {
+    it('renders the MCP rows through SelectionList with a measured native popover height cap', async () => {
         const screen = await renderMcpContent();
 
         const list = requireSelectionList();
         expect(list.testID).toBe('new-session.mcp.selection-list');
         expect(list.maxHeight).toBe(520);
+        expect(list.heightBehavior).toBe('measuredToMaxHeight');
         expect(list.keyboardHintsEnabled).toBe(false);
 
         const container = screen.findAllByType('View' as never)[0];
         expect(container?.props.style).toEqual(expect.arrayContaining([
             expect.objectContaining({ maxHeight: 520 }),
-        ]));
-        expect(container?.props.style).not.toEqual(expect.arrayContaining([
-            expect.objectContaining({ height: 520 }),
         ]));
     });
 

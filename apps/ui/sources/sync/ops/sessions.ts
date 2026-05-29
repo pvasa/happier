@@ -43,14 +43,12 @@ import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsD
 import { normalizeSpawnSessionResult } from './_shared';
 import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
 import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
-import {
-    canUseSessionRpc,
-    readMachineTargetForSession,
-    resolveMachinePathFromSessionBase,
-    shouldFallbackToSessionRpc,
-} from './sessionMachineTarget';
+import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
 import type { Metadata } from '../domains/state/storageTypes';
+export { sessionRipgrep } from './sessionRipgrep';
+export type { SessionRipgrepResponse } from './sessionRipgrep';
+
 export {
     sessionScmBranchCheckout,
     sessionScmBranchCreate,
@@ -128,20 +126,6 @@ interface SessionBashResponse {
     error?: string;
 }
 
-// Ripgrep operation types
-interface SessionRipgrepRequest {
-    args: string[];
-    cwd?: string;
-}
-
-interface SessionRipgrepResponse {
-    success: boolean;
-    exitCode?: number;
-    stdout?: string;
-    stderr?: string;
-    error?: string;
-}
-
 // Kill session operation types
 interface SessionKillResponse {
     success: boolean;
@@ -180,6 +164,8 @@ export interface ResumeSessionOptions {
      */
     permissionMode?: PermissionMode;
     permissionModeUpdatedAt?: number;
+    agentModeId?: string;
+    agentModeUpdatedAt?: number;
     /**
      * Optional: publish an explicit UI-selected model override at resume time.
      * Use only when the UI selection is newer than metadata.modelOverrideV1.updatedAt.
@@ -250,6 +236,8 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             attachMetadataIdentityPolicy,
             permissionMode,
             permissionModeUpdatedAt,
+            agentModeId,
+            agentModeUpdatedAt,
             modelId,
             modelUpdatedAt,
             experimentalCodexAcp,
@@ -263,7 +251,7 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
         } = preparedOptions;
         const serverId = typeof preparedOptions.serverId === 'string' ? preparedOptions.serverId.trim() : null;
 
-        const machineTarget = readMachineTargetForSession(sessionId);
+        const machineTarget = readMachineControlTargetForSession(sessionId);
         const machineId = preferRequestedMachineTarget ? rawMachineId.trim() : machineTarget?.machineId ?? rawMachineId.trim();
         const directory = preferRequestedMachineTarget ? rawDirectory.trim() : machineTarget?.basePath ?? rawDirectory.trim();
         if (!machineId || !directory) {
@@ -290,6 +278,8 @@ export async function resumeSession(options: ResumeSessionOptions): Promise<Resu
             ...(attachMetadataIdentityPolicy ? { attachMetadataIdentityPolicy } : {}),
             ...(permissionMode ? { permissionMode } : {}),
             ...(typeof permissionModeUpdatedAt === 'number' ? { permissionModeUpdatedAt } : {}),
+            ...(agentModeId ? { agentModeId } : {}),
+            ...(typeof agentModeUpdatedAt === 'number' ? { agentModeUpdatedAt } : {}),
             ...(modelId ? { modelId } : {}),
             ...(typeof modelUpdatedAt === 'number' ? { modelUpdatedAt } : {}),
             ...(typeof accountSettingsVersionHint === 'number' ? { accountSettingsVersionHint } : {}),
@@ -363,7 +353,7 @@ export type ContinueSessionWithReplayOptions = Readonly<{
 
 export async function continueSessionWithReplay(options: ContinueSessionWithReplayOptions): Promise<SessionContinueWithReplayRpcResult> {
     const serverId = typeof options.serverId === 'string' ? options.serverId.trim() : null;
-    const replayTarget = readMachineTargetForSession(options.replay.previousSessionId);
+    const replayTarget = readMachineControlTargetForSession(options.replay.previousSessionId);
     const machineId = replayTarget?.machineId ?? options.machineId;
     const directory = replayTarget?.basePath ?? options.directory;
     try {
@@ -422,7 +412,7 @@ export type ForkSessionOptions = Readonly<{
 
 export async function forkSession(options: ForkSessionOptions): Promise<SessionForkRpcResult> {
     const serverId = typeof options.serverId === 'string' ? options.serverId.trim() : null;
-    const parentTarget = readMachineTargetForSession(options.parentSessionId);
+    const parentTarget = readMachineControlTargetForSession(options.parentSessionId);
     const explicitMachineId = typeof options.machineId === 'string' ? options.machineId.trim() : '';
     const machineId = parentTarget?.machineId ?? explicitMachineId;
     if (!machineId) {
@@ -710,57 +700,6 @@ export async function sessionBash(sessionId: string, request: SessionBashRequest
             stdout: '',
             stderr: error instanceof Error ? error.message : 'Unknown error',
             exitCode: -1,
-            error: error instanceof Error ? error.message : 'Unknown error'
-        };
-    }
-}
-
-/**
- * Run ripgrep in the session
- */
-export async function sessionRipgrep(
-    sessionId: string,
-    args: string[],
-    cwd?: string
-): Promise<SessionRipgrepResponse> {
-    try {
-        const machineTarget = readMachineTargetForSession(sessionId);
-        if (machineTarget) {
-            try {
-                const request: SessionRipgrepRequest = {
-                    args,
-                    cwd: resolveMachinePathFromSessionBase({ basePath: machineTarget.basePath, requestPath: cwd }),
-                };
-                const response = await apiSocket.machineRPC<SessionRipgrepResponse, SessionRipgrepRequest>(
-                    machineTarget.machineId,
-                    'ripgrep',
-                    request,
-                );
-                return assertRpcResponseWithSuccess<SessionRipgrepResponse>(response);
-            } catch (error) {
-                if (!shouldFallbackToSessionRpc(sessionId, error)) {
-                    throw error;
-                }
-            }
-        }
-
-        if (!canUseSessionRpc(sessionId)) {
-            return {
-                success: false,
-                error: INACTIVE_SESSION_RPC_UNAVAILABLE_ERROR,
-            };
-        }
-
-        const request: SessionRipgrepRequest = { args, cwd };
-        const response = await sessionRpcWithPreferredSessionScope<SessionRipgrepResponse, SessionRipgrepRequest>({
-            sessionId,
-            method: 'ripgrep',
-            payload: request,
-        });
-        return assertRpcResponseWithSuccess<SessionRipgrepResponse>(response);
-    } catch (error) {
-        return {
-            success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
         };
     }
@@ -1057,7 +996,6 @@ export async function sessionRename(
 export type {
     SessionBashRequest,
     SessionBashResponse,
-    SessionRipgrepResponse,
     SessionKillResponse,
     SessionRenameResponse
 };

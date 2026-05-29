@@ -6,7 +6,7 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import { createStorageModuleStub, createStorageStoreMock } from '@/dev/testkit/mocks/storage';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
@@ -111,21 +111,21 @@ installSessionShellCommonModuleMocks({
             metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
             agentState: {},
         };
+        const storage = createStorageStoreMock({
+            sessions: { s1: session },
+            settings: settingsDefaults,
+            sessionListViewDataByServerId: {},
+        });
 
         return createStorageModuleStub({
-            storage: {
-                getState: () => ({
-                    sessions: { s1: session },
-                    settings: {},
-                    sessionListViewDataByServerId: {},
-                }),
-            } as any,
+            storage,
             useSession: () => session,
             useIsDataReady: () => true,
             useRealtimeStatus: () => 'connected',
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => pendingMessagesState,
+            useSessionSubagentSourceMessages: () => [],
             useSessionReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
             useLocalSetting: <K extends keyof LocalSettings>(key: K) => {
@@ -244,7 +244,7 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsTablet: () => true,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-    useDraft: () => ({ clearDraft: vi.fn() }),
+    useDraft: () => ({ clearDraft: vi.fn(), setDraftValue: vi.fn() }),
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
     getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -273,6 +273,7 @@ vi.mock('@/sync/sync', () => ({
         publishSessionModelOverrideToMetadata: async () => {},
         refreshSessions: async () => {},
         onSessionVisible: () => () => {},
+        markSessionLiveTailIntent: () => {},
         sendMessage: async () => {},
         enqueuePendingMessage: async () => {},
         submitMessage: async () => {},

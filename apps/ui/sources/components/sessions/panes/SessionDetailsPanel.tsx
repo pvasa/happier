@@ -211,6 +211,12 @@ function isExecutionRunLauncherResource(value: unknown): value is Readonly<{
     return maybe.intent == null || maybe.intent === 'review' || maybe.intent === 'plan' || maybe.intent === 'delegate';
 }
 
+function shouldKeepInactiveDetailsTabMounted(tab: Readonly<{ resource?: unknown }> | null | undefined): boolean {
+    if (Platform.OS === 'web') return true;
+    const resource = asResource(tab?.resource);
+    return resource?.kind !== 'scmReview';
+}
+
 type FileEditStartCallbackEntry = Readonly<{
     isPreview: boolean;
     callback: () => void;
@@ -240,6 +246,8 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
     const activeKey = details?.activeTabKey ?? null;
     const showHeaderActions = props.showHeaderActions !== false;
     const closeButtonAtStart = showHeaderActions && props.presentation === 'screen' && Platform.OS !== 'web';
+    const rightPaneOpen = pane.scopeState?.right?.isOpen === true;
+    const showRightPaneToggle = showHeaderActions && props.presentation !== 'screen';
 
     const activeTab = React.useMemo(() => tabs.find((t) => t.key === activeKey) ?? tabs.at(-1) ?? null, [activeKey, tabs]);
     const effectiveActiveKey = activeKey ?? activeTab?.key ?? null;
@@ -281,6 +289,14 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             );
         });
     }, [pane]);
+
+    const toggleRightPane = React.useCallback(() => {
+        if (rightPaneOpen) {
+            pane.closeRight();
+            return;
+        }
+        pane.openRight();
+    }, [pane, rightPaneOpen]);
 
     const renderLoadingFallback = React.useCallback(() => (
         <View style={styles.loading}>
@@ -563,6 +579,25 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                         />
                     </Pressable>
                 ) : null}
+                {showRightPaneToggle ? (
+                    <Pressable
+                        onPress={toggleRightPane}
+                        testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-details-right-pane-toggle')}
+                        style={styles.iconButton}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                            rightPaneOpen
+                                ? t('session.detailsPanel.closeRightSidebarA11y')
+                                : t('session.detailsPanel.openRightSidebarA11y')
+                        }
+                    >
+                        <Octicons
+                            name={rightPaneOpen ? 'sidebar-collapse' : 'sidebar-expand'}
+                            size={18}
+                            color={theme.colors.text.secondary}
+                        />
+                    </Pressable>
+                ) : null}
                 {showHeaderActions && !closeButtonAtStart ? closeButton : null}
             </View>
             {tabs.length === 0 ? (
@@ -573,6 +608,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
                 <View style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
                     {tabs.map((tab) => {
                         const isActive = effectiveActiveKey ? tab.key === effectiveActiveKey : false;
+                        if (!isActive && !shouldKeepInactiveDetailsTabMounted(tab)) return null;
                         return (
                             <DetailsTabSurface key={tab.key} isActive={isActive}>
                                 <React.Suspense fallback={<DetailsPaneLoadingFallback color={theme.colors.text.secondary} />}>

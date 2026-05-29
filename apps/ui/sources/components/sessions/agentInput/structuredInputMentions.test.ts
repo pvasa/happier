@@ -63,6 +63,15 @@ describe('structured input mentions', () => {
         expect(meta).toEqual({});
     });
 
+    it('filters selected mentions again when building message metadata', () => {
+        const meta = buildStructuredInputMetaOverrides({
+            mentions: [vendorPluginMention],
+            text: 'Call @gmai',
+        });
+
+        expect(meta).toEqual({});
+    });
+
     it('builds one structured input envelope for selected vendor plugins and skills', () => {
         const meta = buildStructuredInputMetaOverrides({
             mentions: [vendorPluginMention, skillMention],

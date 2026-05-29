@@ -4,17 +4,22 @@ import { assertRpcResponseWithSuccess } from '@/sync/runtime/assertRpcResponseWi
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
-import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
+import { readRpcErrorCode, RpcError } from '@/sync/runtime/rpcErrors';
+import {
+    INACTIVE_SESSION_RPC_UNAVAILABLE_ERROR,
+    SESSION_MACHINE_TARGET_UNAVAILABLE_ERROR,
+    SESSION_MACHINE_TARGET_UNAVAILABLE_ERROR_CODE,
+} from '@/sync/runtime/sessionMachineRpcErrorCodes';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { resolveAppSessionTransferAvailability } from '@happier-dev/transfers';
 import {
     canUseSessionRpc,
-    readMachineTargetForSession,
+    readMachineControlTargetForSession,
     resolveMachinePathFromSessionBase,
     shouldFallbackToSessionRpc,
 } from '@/sync/ops/sessionMachineTarget';
 
-export const INACTIVE_SESSION_RPC_UNAVAILABLE_ERROR = 'Session RPC unavailable for inactive session';
+export { INACTIVE_SESSION_RPC_UNAVAILABLE_ERROR };
 
 export type SessionMachineRpcTarget = Readonly<{
     machineId: string;
@@ -183,9 +188,9 @@ async function callDefaultSessionRoute<TResponse extends Readonly<{ success: boo
     callParams: SessionMachineRpcCallParams<TRequest>,
 ): Promise<TResponse> {
     if (shouldGuardMachineRpcDirectWithTransferPolicy(callParams.machineMethod)) {
-        const machineTarget = readMachineTargetForSession(sessionId);
+        const machineTarget = readMachineControlTargetForSession(sessionId);
         if (!machineTarget) {
-            throw new Error('Machine target not available for session');
+            throw new RpcError(SESSION_MACHINE_TARGET_UNAVAILABLE_ERROR, SESSION_MACHINE_TARGET_UNAVAILABLE_ERROR_CODE);
         }
         const machineRequest = callParams.toMachineRequest
             ? callParams.toMachineRequest({ request: callParams.request, machineTarget })
@@ -300,7 +305,7 @@ export function createSessionMachineRpcFallbackCaller<TFailure extends SessionMa
                     });
                 }
 
-                const machineTarget = readMachineTargetForSession(params.sessionId);
+                const machineTarget = readMachineControlTargetForSession(params.sessionId);
                 if (machineTarget && (params.shouldAttemptDirectRoute?.(machineTarget) ?? true)) {
                     if (shouldGuardMachineRpcDirectWithTransferPolicy(callParams.machineMethod)) {
                         const allowed = await resolveTransferPolicyAllowsMachineRpcDirect(params.sessionId);

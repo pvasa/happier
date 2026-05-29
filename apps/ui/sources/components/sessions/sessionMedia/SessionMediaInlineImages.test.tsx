@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
@@ -8,6 +8,10 @@ import { installUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 
 import { installSessionAttachmentCommonModuleMocks } from '../attachments/sessionAttachmentTestHelpers';
+
+const flashListCompatMockState = vi.hoisted(() => ({
+    mappingKeyCalls: [] as Array<Readonly<{ index: number; itemKey: string | number | bigint }>>,
+}));
 
 installSessionAttachmentCommonModuleMocks({
     reactNative: installReactNativeWebMock(),
@@ -36,6 +40,15 @@ vi.mock('@/components/sessions/files/content/imagePreview/useSessionImagePreview
     }),
 }));
 
+vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', () => ({
+    useMappingHelper: () => ({
+        getMappingKey: (itemKey: string | number | bigint, index: number) => {
+            flashListCompatMockState.mappingKeyCalls.push({ itemKey, index });
+            return index;
+        },
+    }),
+}));
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
@@ -45,6 +58,48 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 }
 
 describe('SessionMediaInlineImages', () => {
+    beforeEach(() => {
+        flashListCompatMockState.mappingKeyCalls = [];
+    });
+
+    it('routes inline image keys through the FlashList mapping helper', async () => {
+        const { SessionMediaInlineImages } = await import('./SessionMediaInlineImages');
+
+        const media = [
+            {
+                id: 'media-1',
+                name: 'first.png',
+                path: '.happier/uploads/generated/message-1/first.png',
+                mimeType: 'image/png',
+                sizeBytes: 10,
+                category: 'generated' as const,
+                role: 'output' as const,
+            },
+            {
+                id: 'media-2',
+                name: 'second.png',
+                path: '.happier/uploads/generated/message-1/second.png',
+                mimeType: 'image/png',
+                sizeBytes: 10,
+                category: 'generated' as const,
+                role: 'output' as const,
+            },
+        ];
+
+        await renderScreen(
+            <SessionMediaInlineImages
+                sessionId="s1"
+                media={media}
+                onOpenPath={() => {}}
+            />,
+        );
+
+        expect(flashListCompatMockState.mappingKeyCalls).toEqual([
+            { itemKey: `${media[0].path}:${media[0].name}`, index: 0 },
+            { itemKey: `${media[1].path}:${media[1].name}`, index: 1 },
+        ]);
+    });
+
     it('adds translated accessibility labels to generated image tiles', async () => {
         const { SessionMediaInlineImages } = await import('./SessionMediaInlineImages');
 

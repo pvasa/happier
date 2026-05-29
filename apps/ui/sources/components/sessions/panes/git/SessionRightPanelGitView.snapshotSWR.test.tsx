@@ -58,6 +58,7 @@ installSessionDetailsPanelCommonModuleMocks({
                 useSessionProjectScmOperationLog: () => [],
                 useSessionProjectScmSnapshot: () => mockSnapshot,
                 useSessionProjectScmSnapshotError: () => null,
+                useSessionRealtimeScmTranscriptConsumer: () => {},
                 useSessionProjectScmTouchedPaths: () => [],
             },
         );
@@ -196,17 +197,18 @@ describe('SessionRightPanelGitView (snapshot SWR)', () => {
         try {
             await renderScreen(React.createElement(SessionRightPanelGitView, { sessionId: 's1', scopeId: 'session:s1' }));
 
-            expect(invalidateFromUserAndAwaitMock).toHaveBeenCalledWith('s1');
+            expect(invalidateFromUserAndAwaitMock).not.toHaveBeenCalled();
+            expect(invalidateFromAutoRefreshAndAwaitMock).toHaveBeenCalledWith('s1');
 
             await flushHookEffects({ cycles: 1, turns: 1 });
-            expect(invalidateFromAutoRefreshAndAwaitMock).toHaveBeenCalledTimes(1);
+            expect(invalidateFromAutoRefreshAndAwaitMock).toHaveBeenCalledTimes(2);
 
             const nextTimeout = scheduledTimeouts.at(-1);
             expect(nextTimeout).toBeDefined();
             nextTimeout?.();
             await flushHookEffects({ cycles: 1, turns: 1 });
 
-            expect(invalidateFromAutoRefreshAndAwaitMock).toHaveBeenCalledTimes(2);
+            expect(invalidateFromAutoRefreshAndAwaitMock).toHaveBeenCalledTimes(3);
         } finally {
             setTimeoutSpy.mockRestore();
         }

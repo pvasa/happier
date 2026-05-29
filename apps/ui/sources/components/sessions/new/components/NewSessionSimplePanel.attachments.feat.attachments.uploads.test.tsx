@@ -73,6 +73,13 @@ installNewSessionComponentsCommonModuleMocks({
     },
 });
 
+vi.mock('react-native-safe-area-context', () => ({
+    SafeAreaProvider: ({ children }: { children?: React.ReactNode }) => children,
+    SafeAreaView: 'SafeAreaView',
+    useSafeAreaFrame: () => ({ x: 0, y: 0, width: 390, height: 844 }),
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('ItemGroup', props, props.children),
@@ -360,20 +367,25 @@ describe('NewSessionSimplePanel (attachments.uploads)', () => {
             await afterCreated({
                 sessionId: 'sess_target',
                 effectiveSpawnServerId: 'server-a',
+                launchAttempt: {
+                    attachmentMessageLocalId: 'attachment-message-test',
+                },
             });
         });
 
-        expect(uploadAttachmentDraftsToSessionSpy).toHaveBeenCalledWith({
+        expect(uploadAttachmentDraftsToSessionSpy).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'sess_target',
             drafts: attachmentDraftState.drafts,
             config: expect.any(Object),
-            applyDraftPatch: attachmentDraftState.applyDraftPatch,
-        });
+            messageLocalId: expect.any(String),
+            applyDraftPatch: expect.any(Function),
+        }));
         expect(followUpSpawnedSessionWithServerScopeSpy).toHaveBeenCalledWith({
             sessionId: 'sess_target',
             targetServerId: 'server-a',
             initialMessageText: 'Investigate this bug\n\n[attachments block]',
             displayText: 'Investigate this bug',
+            messageLocalId: expect.any(String),
             profileId: 'profile-work',
             metaOverrides: {
                 happier: {

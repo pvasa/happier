@@ -38,6 +38,16 @@ type ExistingSessionAuthoringSnapshotSession = Pick<
     'id' | 'encryptionMode' | 'metadata' | 'permissionMode' | 'permissionModeUpdatedAt' | 'modelMode' | 'modelModeUpdatedAt'
 >;
 
+function normalizeWindowsRemoteSessionLaunchModeOverride(
+    value: NewSessionDraft['windowsRemoteSessionLaunchModeOverride'] | undefined,
+): NonNullable<NewSessionDraft['windowsRemoteSessionLaunchModeOverride']> | null {
+    const machineId = normalizeOptionalString(value?.machineId);
+    const mode = value?.mode;
+    if (!machineId) return null;
+    if (mode !== 'hidden' && mode !== 'windows_terminal' && mode !== 'console') return null;
+    return { machineId, mode };
+}
+
 export type { ExistingSessionAuthoringSnapshotSession };
 
 function normalizeSessionConfigOptionOverrides(value: unknown): SessionAuthoringDraft['sessionConfigOptionOverrides'] {
@@ -72,6 +82,7 @@ function buildExistingSessionAuthoringDraftFromSnapshotData(params: Readonly<{
         modelUpdatedAt: params.snapshot.modelUpdatedAt,
         mcpSelection: params.snapshot.mcpSelection,
         connectedServices: params.snapshot.connectedServices,
+        connectedServicesUpdatedAt: params.snapshot.connectedServicesUpdatedAt,
         terminal: params.snapshot.terminal,
         windowsRemoteSessionLaunchMode: null,
         windowsRemoteSessionConsole: null,
@@ -110,6 +121,7 @@ export function mergeExistingSessionAuthoringDraftInheritedFields(
         modelUpdatedAt: current.modelUpdatedAt ?? fallback.modelUpdatedAt,
         mcpSelection: current.mcpSelection ?? fallback.mcpSelection,
         connectedServices: current.connectedServices ?? fallback.connectedServices,
+        connectedServicesUpdatedAt: current.connectedServicesUpdatedAt ?? fallback.connectedServicesUpdatedAt,
         terminal: current.terminal ?? fallback.terminal,
         windowsRemoteSessionLaunchMode: current.windowsRemoteSessionLaunchMode ?? fallback.windowsRemoteSessionLaunchMode,
         windowsRemoteSessionConsole: current.windowsRemoteSessionConsole ?? fallback.windowsRemoteSessionConsole,
@@ -223,8 +235,9 @@ function resolveConnectedServicesFromAgentOptionState(params: Readonly<{
 
 type NewSessionAuthoringDraftParams = Omit<
     SessionAuthoringDraft,
-    'targetType' | 'existingSessionId' | 'sessionEncryptionMode' | 'sessionEncryptionKeyBase64' | 'sessionEncryptionVariant' | 'experimentalCodexAcp' | 'windowsTerminalWindowName'
+    'targetType' | 'existingSessionId' | 'sessionEncryptionMode' | 'sessionEncryptionKeyBase64' | 'sessionEncryptionVariant' | 'experimentalCodexAcp' | 'windowsTerminalWindowName' | 'connectedServicesUpdatedAt'
 > & Readonly<{
+    connectedServicesUpdatedAt?: SessionAuthoringDraft['connectedServicesUpdatedAt'];
     experimentalCodexAcp?: boolean | null;
     windowsTerminalWindowName?: SessionAuthoringDraft['windowsTerminalWindowName'];
 }>;
@@ -253,6 +266,7 @@ export function buildNewSessionAuthoringDraft(params: NewSessionAuthoringDraftPa
         modelUpdatedAt: normalizeOptionalNumber(params.modelUpdatedAt),
         mcpSelection: params.mcpSelection ?? null,
         connectedServices: params.connectedServices,
+        connectedServicesUpdatedAt: normalizeOptionalNumber(params.connectedServicesUpdatedAt),
         terminal: params.terminal ?? null,
         windowsRemoteSessionLaunchMode: params.windowsRemoteSessionLaunchMode ?? null,
         windowsRemoteSessionConsole: params.windowsRemoteSessionConsole ?? null,
@@ -286,6 +300,7 @@ type ResolvedNewSessionAuthoringDraftInputs = Readonly<{
     modelUpdatedAt?: SessionAuthoringDraft['modelUpdatedAt'];
     mcpSelection?: SessionAuthoringDraft['mcpSelection'];
     connectedServices: SessionAuthoringDraft['connectedServices'];
+    connectedServicesUpdatedAt?: SessionAuthoringDraft['connectedServicesUpdatedAt'];
     terminal?: SessionAuthoringDraft['terminal'];
     windowsRemoteSessionLaunchMode?: SessionAuthoringDraft['windowsRemoteSessionLaunchMode'];
     windowsRemoteSessionConsole?: SessionAuthoringDraft['windowsRemoteSessionConsole'];
@@ -317,6 +332,7 @@ export function buildNewSessionAuthoringDraftFromResolvedInputs(
         modelUpdatedAt: params.modelUpdatedAt ?? null,
         mcpSelection: params.mcpSelection ?? null,
         connectedServices: params.connectedServices,
+        connectedServicesUpdatedAt: params.connectedServicesUpdatedAt ?? null,
         terminal: params.terminal ?? null,
         windowsRemoteSessionLaunchMode: params.windowsRemoteSessionLaunchMode ?? null,
         windowsRemoteSessionConsole: params.windowsRemoteSessionConsole ?? null,
@@ -507,6 +523,7 @@ export function hydrateSessionAuthoringDraftFromAutomationTemplate(params: Reado
         modelUpdatedAt: normalizeOptionalNumber(params.template.modelUpdatedAt),
         mcpSelection: params.template.mcpSelection ?? null,
         connectedServices: normalizeSessionAuthoringConnectedServices(params.template.connectedServices),
+        connectedServicesUpdatedAt: null,
         terminal: normalizeSessionAuthoringTerminal(params.template.terminal),
         windowsRemoteSessionLaunchMode: params.template.windowsRemoteSessionLaunchMode ?? null,
         windowsRemoteSessionConsole: params.template.windowsRemoteSessionConsole ?? null,
@@ -701,6 +718,9 @@ export function buildSpawnSessionOptionsFromAuthoringDraft(params: Readonly<{
         ...(params.draft.connectedServices !== undefined && params.draft.connectedServices !== null
             ? { connectedServices: params.draft.connectedServices }
             : {}),
+        ...(typeof params.draft.connectedServicesUpdatedAt === 'number'
+            ? { connectedServicesUpdatedAt: params.draft.connectedServicesUpdatedAt }
+            : {}),
         ...(params.draft.mcpSelection ? { mcpSelection: params.draft.mcpSelection } : {}),
     };
 }
@@ -761,6 +781,8 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
     selectedSecretIdByProfileIdByEnvVarName: NewSessionDraft['selectedSecretIdByProfileIdByEnvVarName'];
     sessionOnlySecretValueEncByProfileIdByEnvVarName: NewSessionDraft['sessionOnlySecretValueEncByProfileIdByEnvVarName'];
     agentNewSessionOptionStateByAgentId: NewSessionDraft['agentNewSessionOptionStateByAgentId'];
+    targetServerId?: NewSessionDraft['targetServerId'];
+    windowsRemoteSessionLaunchModeOverride?: NewSessionDraft['windowsRemoteSessionLaunchModeOverride'];
     updatedAt: number;
 }>): NewSessionDraft {
     const normalizedAgentId = isAgentId(params.draft.agentId) ? params.draft.agentId : null;
@@ -772,11 +794,17 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
         codexBackendMode: params.draft.codexBackendMode,
         experimentalCodexAcp: params.draft.experimentalCodexAcp,
     });
+    const targetServerId = normalizeOptionalString(params.targetServerId);
+    const windowsRemoteSessionLaunchModeOverride = normalizeWindowsRemoteSessionLaunchModeOverride(
+        params.windowsRemoteSessionLaunchModeOverride ?? null,
+    );
 
     return {
         input: params.draft.displayText || params.draft.prompt,
         selectedMachineId: params.machineId,
         selectedPath: params.draft.directory,
+        ...(targetServerId ? { targetServerId } : {}),
+        ...(windowsRemoteSessionLaunchModeOverride ? { windowsRemoteSessionLaunchModeOverride } : {}),
         ...(params.entryIntent ? { entryIntent: params.entryIntent } : {}),
         ...(params.draft.checkoutCreationDraft ? { checkoutCreationDraft: params.draft.checkoutCreationDraft } : {}),
         selectedProfileId: params.draft.profileId ?? null,

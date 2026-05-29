@@ -25,6 +25,7 @@ function WorkStateGroup(props: Readonly<{
                     id: item.id,
                     title: item.title,
                     status: item.status,
+                    selected: item.id === props.primaryItemId,
                     testID: `session-work-state-item-${item.id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`,
                 }))}
                 surface="plain"

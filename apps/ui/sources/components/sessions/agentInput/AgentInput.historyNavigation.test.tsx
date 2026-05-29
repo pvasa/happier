@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   historyIsBrowsing: vi.fn(),
   historyHasRetainedSession: vi.fn(),
   historyPause: vi.fn(),
+  historyHookArgs: [] as unknown[],
 
   suggestionMoveUp: vi.fn(),
   suggestionMoveDown: vi.fn(),
@@ -30,6 +31,7 @@ const localSettingState = vi.hoisted(() => ({
     keyboardSingleKeyShortcutsEnabled: true,
     keyboardShortcutOverridesV1: {},
     keyboardShortcutDisabledCommandIdsV1: [] as readonly string[],
+    agentInputHistoryScope: 'perSession' as 'perSession' | 'global',
   },
 }));
 
@@ -74,7 +76,7 @@ installAgentInputCommonModuleMocks({
         if (key === 'agentInputActionBarLayout') return 'wrap';
         if (key === 'agentInputChipDensity') return 'labels';
         if (key === 'sessionPermissionModeApplyTiming') return 'immediate';
-        if (key === 'agentInputHistoryScope') return 'perSession';
+        if (key === 'agentInputHistoryScope') return localSettingState.values.agentInputHistoryScope;
         return null;
       },
       useSettings: () => ({
@@ -87,7 +89,7 @@ installAgentInputCommonModuleMocks({
         agentInputActionBarLayout: 'wrap',
         agentInputChipDensity: 'labels',
         sessionPermissionModeApplyTiming: 'immediate',
-        agentInputHistoryScope: 'perSession',
+        agentInputHistoryScope: localSettingState.values.agentInputHistoryScope,
       }),
       useSessionMessages: () => ({ messages: [], isLoaded: true }),
       useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
@@ -111,7 +113,9 @@ vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
 }));
 
 vi.mock('@/hooks/session/useUserMessageHistory', () => ({
-  useUserMessageHistory: () => ({
+  useUserMessageHistory: (args: unknown) => {
+    mocks.historyHookArgs.push(args);
+    return {
     moveUp: (...args: any[]) => mocks.historyMoveUp(...args),
     moveDown: (...args: any[]) => mocks.historyMoveDown(...args),
     reset: (...args: any[]) => mocks.historyReset(...args),
@@ -119,7 +123,8 @@ vi.mock('@/hooks/session/useUserMessageHistory', () => ({
     isBrowsing: (...args: any[]) => mocks.historyIsBrowsing(...args),
     hasRetainedSession: (...args: any[]) => mocks.historyHasRetainedSession(...args),
     pause: (...args: any[]) => mocks.historyPause(...args),
-  }),
+    };
+  },
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
@@ -167,6 +172,11 @@ vi.mock('@/components/ui/forms/MultiTextInput', () => {
       setTextAndSelection: (text: string, selection: { start: number; end: number }) => {
         props.onChangeText?.(text);
         props.onStateChange?.({ text, selection });
+        props.onStateChange?.({ text, selection });
+        props.onSelectionChange?.(selection);
+      },
+      setSelection: (selection: MockMultiTextInputSelection) => {
+        const text = typeof props.value === 'string' ? props.value : '';
         props.onStateChange?.({ text, selection });
         props.onSelectionChange?.(selection);
       },
@@ -261,7 +271,53 @@ describe('AgentInput (history navigation)', () => {
       keyboardSingleKeyShortcutsEnabled: true,
       keyboardShortcutOverridesV1: {},
       keyboardShortcutDisabledCommandIdsV1: [],
+      agentInputHistoryScope: 'perSession',
     };
+  });
+
+  it('wires per-session history scope with the active session id by default', async () => {
+    const { AgentInput } = await import('./AgentInput');
+
+    await renderScreen(<AgentInput
+          sessionId="s1"
+          value="draft"
+          onChangeText={mocks.onChangeText}
+          placeholder="p"
+          onSend={mocks.onSend}
+          autocompletePrefixes={[]}
+          autocompleteSuggestions={async () => []}
+          isSendDisabled={false}
+          disabled={false}
+          showAbortButton={false}
+        />);
+
+    expect(mocks.historyHookArgs.at(-1)).toEqual({
+      scope: 'perSession',
+      sessionId: 's1',
+    });
+  });
+
+  it('wires global history scope while still passing the active session id for reset boundaries', async () => {
+    localSettingState.values.agentInputHistoryScope = 'global';
+    const { AgentInput } = await import('./AgentInput');
+
+    await renderScreen(<AgentInput
+          sessionId="s1"
+          value="draft"
+          onChangeText={mocks.onChangeText}
+          placeholder="p"
+          onSend={mocks.onSend}
+          autocompletePrefixes={[]}
+          autocompleteSuggestions={async () => []}
+          isSendDisabled={false}
+          disabled={false}
+          showAbortButton={false}
+        />);
+
+    expect(mocks.historyHookArgs.at(-1)).toEqual({
+      scope: 'global',
+      sessionId: 's1',
+    });
   });
 
   it('sends on Enter when there are sendable attachments (web enter-to-send)', async () => {
@@ -748,6 +804,42 @@ describe('AgentInput (history navigation)', () => {
     });
 
     expect(mocks.historyWarmup).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes persisted input scroll and selection callbacks to the text input', async () => {
+    const { AgentInput } = await import('./AgentInput');
+    const onScrollYChange = vi.fn();
+    const onSelectionChangePersist = vi.fn();
+    const screen = await renderScreen(<AgentInput
+          value="draft"
+          onChangeText={mocks.onChangeText}
+          placeholder="p"
+          onSend={mocks.onSend}
+          autocompletePrefixes={[]}
+          autocompleteSuggestions={async () => []}
+          disabled={false}
+          showAbortButton={false}
+          inputPersistence={{
+            initialScrollY: 44,
+            initialSelection: { start: 1, end: 3 },
+            restoreToken: 'session:s1:1',
+            onScrollYChange,
+            onSelectionChangePersist,
+          }}
+        />);
+
+    const input = findMultiTextInput(screen);
+    expect(input.props.initialScrollY).toBe(44);
+    expect(input.props.onScrollYChange).toBe(onScrollYChange);
+
+    await act(async () => {
+      input.props.onStateChange?.({
+        text: 'draft',
+        selection: { start: 2, end: 4 },
+      });
+    });
+
+    expect(onSelectionChangePersist).toHaveBeenCalledWith({ start: 2, end: 4 }, 5);
   });
 
   it('does not intercept ArrowUp when cursor is mid-text', async () => {

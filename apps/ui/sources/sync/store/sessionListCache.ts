@@ -20,6 +20,10 @@ export function setActiveServerSessionListCache(
     current: Record<string, SessionListViewItem[] | null>,
     sessionListViewData: SessionListViewItem[] | null,
 ): Record<string, SessionListViewItem[] | null> {
-    const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
+    const activeServerId = getActiveServerIdForSessionListCache();
     return setServerSessionListCache(current, activeServerId, sessionListViewData);
+}
+
+export function getActiveServerIdForSessionListCache(): string {
+    return String(getActiveServerSnapshot().serverId ?? '').trim();
 }

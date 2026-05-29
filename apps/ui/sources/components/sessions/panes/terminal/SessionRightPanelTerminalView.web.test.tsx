@@ -158,6 +158,27 @@ vi.mock('@/sync/ops/machineTerminal', () => ({
     machineTerminalResize: (...args: any[]) => machineTerminalResizeSpy(...args),
 }));
 
+vi.mock('@/sync/domains/state/storageStore', () => {
+    const storage = Object.assign(
+        (selector?: (state: any) => unknown) => {
+            const state = storageGetStateSpy();
+            return typeof selector === 'function' ? selector(state) : state;
+        },
+        {
+            getState: () => storageGetStateSpy(),
+            getInitialState: () => storageGetStateSpy(),
+            setState: vi.fn(),
+            subscribe: vi.fn(() => () => {}),
+            destroy: vi.fn(),
+        },
+    );
+
+    return {
+        getStorage: () => storage,
+        storage,
+    };
+});
+
 vi.mock('@/utils/ui/clipboard', () => ({
     setClipboardStringSafe: vi.fn(),
 }));
@@ -270,6 +291,16 @@ describe('SessionRightPanelTerminalView.web', () => {
                 },
             },
             machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    replacedByMachineId: 'm-project',
+                    replacedAt: 100,
+                    replacementReason: 'manual_repair',
+                    replacementSource: 'manual',
+                    metadata: { host: 'mbp.local' },
+                },
                 'm-project': {
                     id: 'm-project',
                     active: true,

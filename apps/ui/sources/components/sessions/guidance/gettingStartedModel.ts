@@ -51,7 +51,9 @@ export function computeSessionGettingStartedDecision(params: Readonly<{
 }
 
 export type SessionGettingStartedViewModelInput = Readonly<{
-    sessions: ReadonlyArray<Readonly<{ type: string }>> | null;
+    sessions?: ReadonlyArray<Readonly<{ type: string }>> | null;
+    sessionsReady?: boolean;
+    sessionCount?: number;
     selection: Readonly<{
         activeTarget: Readonly<{ kind: 'server' | 'group'; id: string; groupId?: string }>;
         activeServerId: string;
@@ -128,8 +130,12 @@ export function buildSessionGettingStartedViewModel(input: SessionGettingStarted
         machineListByServerId: input.machineListByServerId,
     });
 
-    const sessionsReady = input.sessions !== null;
-    const sessionCount = input.sessions ? countSessionItems(input.sessions) : 0;
+    const sessionsReady = typeof input.sessionsReady === 'boolean'
+        ? input.sessionsReady
+        : input.sessions !== null;
+    const sessionCount = typeof input.sessionCount === 'number'
+        ? input.sessionCount
+        : input.sessions ? countSessionItems(input.sessions) : 0;
 
     const kind = computeSessionGettingStartedDecision({
         sessionsReady,

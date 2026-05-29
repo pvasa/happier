@@ -14,6 +14,7 @@ import { SourceControlUnavailableState } from '@/components/sessions/sourceContr
 import { t } from '@/text';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { useScmTreeBadgeIndex } from '@/components/sessions/files/repositoryTree/useScmTreeBadgeIndex';
+import { buildScmTreeBadgeSignature } from '@/components/sessions/files/repositoryTree/scmTreeBadges';
 import { formatByteSize } from '@/utils/files/formatByteSize';
 import { RepositoryTreeRowActionsMenu, type RepositoryTreeRowActionMenuItemId } from '@/components/sessions/files/repositoryTree/RepositoryTreeRowActionsMenu';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
@@ -135,6 +136,11 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
     }, [props.onRootLoadingChange, rootLoading]);
 
     const badgeIndex = useScmTreeBadgeIndex(props.scmSnapshot ?? null);
+    const badgeSignature = React.useMemo(
+        () => buildScmTreeBadgeSignature(props.scmSnapshot ?? null),
+        [props.scmSnapshot],
+    );
+    const renderedBadgeSignature = badgeIndex ? badgeSignature : 'none';
     const rowActions = useRepositoryTreeRowActions({
         sessionId,
         writeActionsEnabled,
@@ -177,24 +183,23 @@ export const RepositoryTreeList = React.memo(function RepositoryTreeList(props: 
         writeActionsEnabled,
     };
 
-    const rowVisualExtraData = React.useMemo(() => ({
-        badgeIndex,
+    const hasDownloadRequest = onRequestDownload != null;
+    const rowVisualExtraData = React.useMemo(() => [
+        renderedBadgeSignature,
+        detailsMode ? 'details' : 'compact',
+        hasDownloadRequest ? 'download' : 'no-download',
+        theme.colors.state?.danger?.foreground ?? '',
+        theme.colors.state?.neutral?.foreground ?? '',
+        theme.colors.state?.success?.foreground ?? '',
+        theme.colors.surface?.pressed ?? '',
+        theme.colors.text?.link ?? '',
+        theme.colors.text?.secondary ?? '',
+        webDropHoverPath ?? '',
+        writeActionsEnabled ? 'write' : 'read',
+    ].join('\u0001'), [
         detailsMode,
-        hasDownloadRequest: onRequestDownload != null,
-        scmSnapshot,
-        stateDangerForeground: theme.colors.state?.danger?.foreground,
-        stateNeutralForeground: theme.colors.state?.neutral?.foreground,
-        stateSuccessForeground: theme.colors.state?.success?.foreground,
-        surfacePressed: theme.colors.surface?.pressed,
-        textLink: theme.colors.text?.link,
-        textSecondary: theme.colors.text?.secondary,
-        webDropHoverPath,
-        writeActionsEnabled,
-    }), [
-        badgeIndex,
-        detailsMode,
-        onRequestDownload,
-        scmSnapshot,
+        hasDownloadRequest,
+        renderedBadgeSignature,
         theme.colors.state?.danger?.foreground,
         theme.colors.state?.neutral?.foreground,
         theme.colors.state?.success?.foreground,

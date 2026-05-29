@@ -53,6 +53,14 @@ function writeTemporaryHiddenCliWarningKey(machineId: string | null | undefined,
     temporaryHiddenCliWarningKeysByMachineId[key] = { ...existing, [warningKey]: true };
 }
 
+function useStableValueBySignature<Value>(value: Value, signature: string): Value {
+    const stableRef = React.useRef<Readonly<{ signature: string; value: Value }> | null>(null);
+    if (!stableRef.current || stableRef.current.signature !== signature) {
+        stableRef.current = { signature, value };
+    }
+    return stableRef.current.value;
+}
+
 export function useNewSessionAvailabilityState(params: Readonly<{
     selectedMachineId: string | null;
     selectedMachine: Machine | null;
@@ -89,6 +97,22 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         includeLoginStatusForAgentIds: automaticLoginStatusAgentIds,
         serverId: params.capabilityServerId,
     });
+    const cliAvailabilityAvailableSignature = React.useMemo(
+        () => stableJsonStringify(cliAvailability.available),
+        [cliAvailability.available],
+    );
+    const cliAvailabilityAuthStatusSignature = React.useMemo(
+        () => stableJsonStringify(cliAvailability.authStatus),
+        [cliAvailability.authStatus],
+    );
+    const stableCliAvailabilityAvailable = useStableValueBySignature(
+        cliAvailability.available,
+        cliAvailabilityAvailableSignature,
+    );
+    const stableCliAvailabilityAuthStatus = useStableValueBySignature(
+        cliAvailability.authStatus,
+        cliAvailabilityAuthStatusSignature,
+    );
     const { state: selectedMachineCapabilities, refresh: refreshSelectedMachineCapabilities } = useDaemonScopedMachineCapabilitiesCache({
         machineId: params.selectedMachineId,
         serverId: params.capabilityServerId,
@@ -177,17 +201,18 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         }
         return out;
     }, [params.agentNewSessionOptionStateByAgentId, params.enabledAgentIds, params.settings]);
+    const cliDetectionSelectionTimestamp = cliAvailability.timestamp > 0 ? 1 : 0;
 
     const isAgentSelectable = React.useCallback((agentId: AgentId): boolean => {
         return isAgentSelectableForNewSession({
             agentId,
-            detectionTimestamp: cliAvailability.timestamp,
-            availabilityById: cliAvailability.available,
-            authStatusById: cliAvailability.authStatus,
+            detectionTimestamp: cliDetectionSelectionTimestamp,
+            availabilityById: stableCliAvailabilityAvailable,
+            authStatusById: stableCliAvailabilityAuthStatus,
             installableDepKeyCountByAgentId,
             selectableWithoutCliByAgentId,
         });
-    }, [cliAvailability.authStatus, cliAvailability.available, cliAvailability.timestamp, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId]);
+    }, [cliDetectionSelectionTimestamp, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId, stableCliAvailabilityAuthStatus, stableCliAvailabilityAvailable]);
 
     const isBackendEntrySelectable = React.useCallback((entry: ResolvedBackendCatalogEntry): boolean => {
         if (entry.family === 'configuredAcpBackend') {
@@ -348,13 +373,13 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     const isProfileAvailable = React.useCallback((profile: AIBackendProfile): ProfileAvailability => {
         return resolveProfileAvailabilityForNewSession({
             candidateBackendEntries: getCompatibleProfileBackendEntries(profile),
-            detectionTimestamp: cliAvailability.timestamp,
-            availabilityById: cliAvailability.available,
-            authStatusById: cliAvailability.authStatus,
+            detectionTimestamp: cliDetectionSelectionTimestamp,
+            availabilityById: stableCliAvailabilityAvailable,
+            authStatusById: stableCliAvailabilityAuthStatus,
             installableDepKeyCountByAgentId,
             selectableWithoutCliByAgentId,
         });
-    }, [cliAvailability.authStatus, cliAvailability.available, cliAvailability.timestamp, getCompatibleProfileBackendEntries, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId]);
+    }, [cliDetectionSelectionTimestamp, getCompatibleProfileBackendEntries, installableDepKeyCountByAgentId, selectableWithoutCliByAgentId, stableCliAvailabilityAuthStatus, stableCliAvailabilityAvailable]);
 
     const profileAvailabilityById = React.useMemo(() => {
         const map = new Map<string, ProfileAvailability>();

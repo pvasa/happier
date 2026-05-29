@@ -2,11 +2,16 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-type SessionItemProps = React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>;
+type SessionItemProps = Omit<
+    React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>,
+    'rowModel'
+> & {
+    rowModel?: React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>['rowModel'];
+};
 
 const navigateSpy = vi.fn();
 const themeColors = vi.hoisted(() => ({
@@ -64,7 +69,6 @@ installSessionShellCommonModuleMocks({
                     connectedServicesV2: [],
                 }),
                 useSession: () => null,
-                useSessionListMeaningfulActivityAt: () => null,
             },
         });
     },
@@ -80,9 +84,27 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
     Octicons: 'Octicons',
 }));
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: 'AgentIcon',
+}));
 vi.mock('@/constants/Typography', () => ({
     Typography: {
         default: () => ({}),
+        mono: () => ({}),
+        tabular: () => ({}),
+        eyebrow: () => ({}),
+        rowTitle: () => ({}),
+        rowMeta: () => ({}),
+        pillLabel: () => ({}),
+        keyHint: () => ({}),
+        timestamp: () => ({}),
+        logo: () => ({}),
+        header: () => ({}),
+        body: () => ({}),
+        legacy: {
+            spaceMono: () => ({}),
+            systemMono: () => ({}),
+        },
     },
 }));
 vi.mock('@/components/ui/text/Text', () => ({
@@ -106,6 +128,9 @@ vi.mock('@/components/ui/avatar/Avatar', () => ({
         ...props,
         testID: props.testID ?? 'session-item-avatar',
     }),
+}));
+vi.mock('@/agents/registry/AgentIcon', () => ({
+    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
 }));
 vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: 'StatusDot',
@@ -168,7 +193,12 @@ describe('SessionItem navigation', () => {
 
     async function renderSessionItem(props: SessionItemProps) {
         const { SessionItem } = await import('./SessionItem');
-        return renderScreen(<SessionItem {...props} />);
+        return renderScreen(
+            <SessionItem
+                {...props}
+                rowModel={props.rowModel ?? createSessionItemTestRowModel(props)}
+            />,
+        );
     }
 
     afterEach(() => {

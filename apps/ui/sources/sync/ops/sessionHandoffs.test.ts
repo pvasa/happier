@@ -20,6 +20,7 @@ vi.mock('../runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () =>
 
 vi.mock('./sessionMachineTarget', () => ({
     readMachineTargetForSession: readMachineTargetForSessionMock,
+    readMachineControlTargetForSession: readMachineTargetForSessionMock,
     shouldFallbackFromMachineRpc: (error: unknown) =>
         error instanceof Error
         && (

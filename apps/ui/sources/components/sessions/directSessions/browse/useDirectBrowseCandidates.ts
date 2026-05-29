@@ -14,18 +14,64 @@ export type DirectBrowseCandidate = Readonly<{
 
 const CANDIDATES_PAGE_LIMIT = 50;
 
+type CandidateApplyMode = 'replace' | 'append' | 'merge';
+
+function hasCandidateTitle(candidate: DirectBrowseCandidate): boolean {
+    return typeof candidate.title === 'string' && candidate.title.trim().length > 0;
+}
+
+function mergeCandidateDetails(
+    current: DirectBrowseCandidate['details'],
+    next: DirectBrowseCandidate['details'],
+): DirectBrowseCandidate['details'] {
+    if (!current) return next;
+    if (!next) return current;
+    return { ...current, ...next };
+}
+
+function mergeDirectBrowseCandidate(current: DirectBrowseCandidate, next: DirectBrowseCandidate): DirectBrowseCandidate {
+    return {
+        remoteSessionId: current.remoteSessionId,
+        title: hasCandidateTitle(next) ? next.title : current.title,
+        updatedAtMs: Math.max(current.updatedAtMs, next.updatedAtMs),
+        activity: next.activity ?? current.activity,
+        details: mergeCandidateDetails(current.details, next.details),
+    };
+}
+
+function compareDirectBrowseCandidates(a: DirectBrowseCandidate, b: DirectBrowseCandidate): number {
+    return b.updatedAtMs - a.updatedAtMs || a.remoteSessionId.localeCompare(b.remoteSessionId);
+}
+
+function mergeDirectBrowseCandidates(
+    current: readonly DirectBrowseCandidate[],
+    next: readonly DirectBrowseCandidate[],
+): readonly DirectBrowseCandidate[] {
+    const merged = new Map<string, DirectBrowseCandidate>();
+    for (const candidate of current) {
+        merged.set(candidate.remoteSessionId, candidate);
+    }
+    for (const candidate of next) {
+        const existing = merged.get(candidate.remoteSessionId);
+        merged.set(candidate.remoteSessionId, existing ? mergeDirectBrowseCandidate(existing, candidate) : candidate);
+    }
+    return Array.from(merged.values()).sort(compareDirectBrowseCandidates);
+}
+
 export function useDirectBrowseCandidates(params: Readonly<{
     machineId: string | null;
     serverId?: string | null;
     providerId: DirectSessionsProviderId | null;
     source: DirectSessionsSource | null;
+    searchTerm?: string;
 }>) {
-    const { machineId, providerId, source, serverId } = params;
+    const { machineId, providerId, searchTerm, source, serverId } = params;
 
     const [candidates, setCandidates] = React.useState<readonly DirectBrowseCandidate[]>([]);
     const [nextCursor, setNextCursor] = React.useState<string | null>(null);
     const [loading, setLoading] = React.useState(false);
     const [loadingMore, setLoadingMore] = React.useState(false);
+    const [searchAugmenting, setSearchAugmenting] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
 
     const loadGenerationRef = React.useRef(0);
@@ -43,32 +89,37 @@ export function useDirectBrowseCandidates(params: Readonly<{
             setLoadingMore(true);
         } else {
             setLoading(true);
+            setSearchAugmenting(false);
             setError(null);
         }
 
-        try {
+        const normalizedSearchTerm = typeof searchTerm === 'string' ? searchTerm.trim() : '';
+        const shouldStartWithFastSearch = !append && !opts?.cursor && normalizedSearchTerm.length > 0;
+        const requestCandidates = async (searchMode?: 'fast' | 'full') => {
             const request = {
                 machineId,
                 providerId,
                 source,
                 limit: CANDIDATES_PAGE_LIMIT,
                 ...(opts?.cursor ? { cursor: opts.cursor } : {}),
+                ...(normalizedSearchTerm.length > 0 ? { searchTerm: normalizedSearchTerm } : {}),
+                ...(searchMode ? { searchMode } : {}),
             };
-            const result = serverId
-                ? await machineDirectSessionsCandidatesList(request, { serverId })
-                : await machineDirectSessionsCandidatesList(request);
-
-            if (loadGenerationRef.current !== currentGeneration) {
-                return;
-            }
-
+            return serverId
+                ? machineDirectSessionsCandidatesList(request, { serverId })
+                : machineDirectSessionsCandidatesList(request);
+        };
+        const applyResult = (result: Awaited<ReturnType<typeof machineDirectSessionsCandidatesList>>, mode: CandidateApplyMode): boolean => {
             if (!result.ok) {
+                if (mode === 'merge') {
+                    return false;
+                }
                 setError(result.error);
                 if (!append) {
                     setCandidates([]);
                     setNextCursor(null);
                 }
-                return;
+                return false;
             }
 
             const nextItems = result.candidates.map((candidate) => ({
@@ -79,9 +130,43 @@ export function useDirectBrowseCandidates(params: Readonly<{
                 details: candidate.details,
             })) satisfies readonly DirectBrowseCandidate[];
 
-            setCandidates((current) => append ? [...current, ...nextItems] : nextItems);
-            setNextCursor(result.nextCursor ?? null);
+            setCandidates((current) => {
+                if (mode === 'append') return [...current, ...nextItems];
+                if (mode === 'merge') return mergeDirectBrowseCandidates(current, nextItems);
+                return nextItems;
+            });
+            if (mode === 'merge') {
+                setNextCursor((current) => result.nextCursor ?? (result.searchIncomplete ? current : null));
+            } else {
+                setNextCursor(result.nextCursor ?? null);
+            }
             setError(null);
+            return true;
+        };
+
+        try {
+            const result = await requestCandidates(shouldStartWithFastSearch ? 'fast' : undefined);
+
+            if (loadGenerationRef.current !== currentGeneration) {
+                return;
+            }
+
+            const ok = applyResult(result, append ? 'append' : 'replace');
+            if (!ok || !shouldStartWithFastSearch || !result.ok || !result.searchIncomplete) {
+                return;
+            }
+
+            setLoading(false);
+            setSearchAugmenting(true);
+            try {
+                const augmentedResult = await requestCandidates('full');
+                if (loadGenerationRef.current !== currentGeneration) {
+                    return;
+                }
+                applyResult(augmentedResult, 'merge');
+            } catch {
+                // Keep the fast search results visible when slower augmentation fails.
+            }
         } catch (loadError) {
             if (loadGenerationRef.current !== currentGeneration) {
                 return;
@@ -98,10 +183,11 @@ export function useDirectBrowseCandidates(params: Readonly<{
                     setLoadingMore(false);
                 } else {
                     setLoading(false);
+                    setSearchAugmenting(false);
                 }
             }
         }
-    }, [machineId, providerId, serverId, source]);
+    }, [machineId, providerId, searchTerm, serverId, source]);
 
     React.useEffect(() => {
         void loadCandidates();
@@ -117,8 +203,8 @@ export function useDirectBrowseCandidates(params: Readonly<{
         nextCursor,
         loading,
         loadingMore,
+        searchAugmenting,
         error,
         loadMore,
     } as const;
 }
-

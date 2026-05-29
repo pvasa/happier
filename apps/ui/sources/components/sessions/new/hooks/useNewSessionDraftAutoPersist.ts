@@ -1,6 +1,11 @@
 import * as React from 'react';
 import { InteractionManager, Platform } from 'react-native';
 
+const NEW_SESSION_DRAFT_AUTOPERSIST_DELAY_MS = {
+    native: 3000,
+    web: 250,
+} as const;
+
 export function useNewSessionDraftAutoPersist(params: Readonly<{
     persistDraftNow: () => void;
     persistenceEnabled?: boolean;
@@ -25,7 +30,9 @@ export function useNewSessionDraftAutoPersist(params: Readonly<{
         if ((params.persistenceEnabled ?? true) !== true) {
             return;
         }
-        const delayMs = Platform.OS === 'web' ? 250 : 900;
+        const delayMs = Platform.OS === 'web'
+            ? NEW_SESSION_DRAFT_AUTOPERSIST_DELAY_MS.web
+            : NEW_SESSION_DRAFT_AUTOPERSIST_DELAY_MS.native;
         draftSaveTimerRef.current = setTimeout(() => {
             draftSaveTimerRef.current = null;
             if (!persistenceEnabledRef.current) {

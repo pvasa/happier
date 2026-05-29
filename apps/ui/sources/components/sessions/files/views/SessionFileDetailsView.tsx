@@ -5,6 +5,7 @@ import { FileContentPanel } from '@/components/sessions/files/file/FileContentPa
 import { FileDownloadButton } from '@/components/sessions/files/file/FileDownloadButton';
 import { FileBinaryState, FileErrorState, FileLoadingState } from '@/components/sessions/files/file/FileScreenState';
 import { FileEditorPanel } from '@/components/sessions/files/file/editor/FileEditorPanel';
+import { RichMarkdownEditorPanel } from '@/components/ui/markdown/editor/RichMarkdownEditorPanel';
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
 import {
     useSessionsReady,
@@ -33,10 +34,12 @@ import type { ReviewCommentAnchor, ReviewCommentSource } from '@/sync/domains/in
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
 import { refreshSessionFileDetails, type SessionFileDetailsFileContent } from './sessionFileDetails/refreshSessionFileDetails';
 import { useSessionFileEditorState } from './sessionFileDetails/useSessionFileEditorState';
+import { useMarkdownFileEditMode } from './sessionFileDetails/useMarkdownFileEditMode';
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/sessions/reviews/comments/useWorkspaceReviewCommentDraftHandlers';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import { resolveShowDiffToggle } from './sessionFileDetails/resolveShowDiffToggle';
 import { resolveFileDetailsDisplayMode } from './sessionFileDetails/resolveFileDetailsDisplayMode';
+import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwitch';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
@@ -96,6 +99,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations');
     const reviewCommentsFeatureEnabled = useFeatureEnabled('files.reviewComments');
     const fileEditorFeatureEnabled = useFeatureEnabled('files.editor');
+    const markdownRichEditorFeatureEnabled = useFeatureEnabled('files.markdownRichEditor');
     const showLineNumbers = useSetting('showLineNumbers');
     const wrapLinesInDiffs = useSetting('wrapLinesInDiffs');
     const filesEditorAutoSave = useSetting('filesEditorAutoSave');
@@ -353,6 +357,7 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         editorSeedText,
         editorHandleRef,
         onEditorChange,
+        getEditorText,
         isSavingEdits,
         editorDirty,
         fileChangedExternally,
@@ -382,6 +387,33 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
         persistedDraft: persistedDraft ?? null,
         persistDraft,
     });
+
+    // Raw <-> Rich edit-mode state for markdown files (Lane I / R-A20). Owns the
+    // flush-then-reseed dance + eligibility so this view stays thin; the rich
+    // editor mounts only under `displayMode === 'file' && isEditingFile` (D5).
+    const {
+        markdownEditMode,
+        richEligible: markdownRichEligible,
+        richDisabledReason: markdownRichDisabledReason,
+        seedText: markdownSeedText,
+        resetKey: markdownResetKey,
+        onToggle: onMarkdownEditMode,
+        onUnavailable: onMarkdownEditorUnavailable,
+    } = useMarkdownFileEditMode({
+        filePath,
+        editorSeedText,
+        editorResetKey,
+        editorHandleRef,
+        onEditorChange,
+        getEditorText,
+    });
+
+    // `.md` and `.mdx` both flow through the markdown seed machinery (so the raw
+    // editor reseeds consistently), but rich editing — and therefore the Raw<->Rich
+    // toggle — is offered ONLY for plain `.md` (R-A1: `.mdx` stays raw/preview-only).
+    const isMarkdownFile = language === 'markdown' || language === 'mdx';
+    const showMarkdownEditToggle = markdownRichEditorFeatureEnabled === true && language === 'markdown';
+    const useRichMarkdownEditor = showMarkdownEditToggle && markdownEditMode === 'rich' && markdownRichEligible;
 
     React.useEffect(() => {
         const language = getFileLanguageFromPath(filePath);
@@ -570,6 +602,11 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     onStartEditingFile={handleStartEditingFile}
                     onCancelEditingFile={cancelEditingFile}
                     onSaveEditingFile={saveFileEdits}
+                    showMarkdownEditToggle={showMarkdownEditToggle}
+                    markdownEditMode={markdownEditMode}
+                    onMarkdownEditMode={onMarkdownEditMode}
+                    markdownRichEligible={markdownRichEligible}
+                    markdownRichDisabledReason={markdownRichDisabledReason}
                 />
                 {previewTooLarge && error ? (
                     <View
@@ -601,12 +638,46 @@ export function SessionFileDetailsView(props: SessionFileDetailsViewProps) {
                     ...(constrainWidth ? { maxWidth: layout.maxWidth, alignSelf: 'center' } : { maxWidth: '100%' }),
                 }}
             >
-                {displayMode === 'file' && isEditingFile ? (
+                {displayMode === 'file' && isEditingFile && showMarkdownEditToggle ? (
+                    // Plain `.md` editing: Raw<->Rich can swap, so crossfade the body
+                    // switch keyed on `markdownEditMode` (R-A20 / §4.5). Only the active
+                    // child mounts while not transitioning, so the surface tree stays
+                    // single-mounted (preserving the existing editor testIDs/behavior).
+                    <SlideTransitionSwitch
+                        contentKey={markdownEditMode}
+                        direction={markdownEditMode === 'rich' ? 'forward' : 'backward'}
+                    >
+                        {useRichMarkdownEditor ? (
+                            <RichMarkdownEditorPanel
+                                resetKey={markdownResetKey}
+                                editorRef={editorHandleRef}
+                                value={markdownSeedText}
+                                onChange={onEditorChange}
+                                onUnavailable={onMarkdownEditorUnavailable}
+                                changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
+                                bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
+                            />
+                        ) : (
+                            <FileEditorPanel
+                                theme={theme}
+                                resetKey={markdownResetKey}
+                                editorRef={editorHandleRef}
+                                value={markdownSeedText}
+                                language={language}
+                                onChange={onEditorChange}
+                                wrapLines={wrapLinesInDiffs}
+                                showLineNumbers={showLineNumbers}
+                                changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
+                                bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
+                            />
+                        )}
+                    </SlideTransitionSwitch>
+                ) : displayMode === 'file' && isEditingFile ? (
                     <FileEditorPanel
                         theme={theme}
-                        resetKey={String(editorResetKey)}
+                        resetKey={isMarkdownFile ? markdownResetKey : String(editorResetKey)}
                         editorRef={editorHandleRef}
-                        value={editorSeedText}
+                        value={isMarkdownFile ? markdownSeedText : editorSeedText}
                         language={language}
                         onChange={onEditorChange}
                         wrapLines={wrapLinesInDiffs}

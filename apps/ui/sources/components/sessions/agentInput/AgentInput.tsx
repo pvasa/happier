@@ -20,7 +20,6 @@ import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessio
 import { hapticsLight, hapticsError } from '@/components/ui/theme/haptics';
 import { type ShakeInstance } from '@/components/ui/feedback/Shaker';
 import { StatusDot } from '@/components/ui/status/StatusDot';
-import { useActiveWord } from '@/components/autocomplete/useActiveWord';
 import { useActiveSuggestions } from '@/components/autocomplete/useActiveSuggestions';
 import { TextInputState, MultiTextInputHandle } from '@/components/ui/forms/MultiTextInput';
 import { applySuggestion } from '@/components/autocomplete/applySuggestion';
@@ -61,16 +60,28 @@ import {
     computeAgentInputDefaultMaxHeight,
     computeAgentInputKeyboardOpenVariableSectionMaxHeight,
     computeMeasuredPanelInputMaxHeight,
+    resolveAgentInputHostPanelMaxHeight,
+    type AgentInputPanelMaxHeightMode,
 } from './inputMaxHeight';
-import { getContextUsageState } from './contextWarning';
+import {
+    formatContextTokenCount,
+    formatContextUsagePercent,
+    getContextUsageState,
+    type ContextUsageState,
+} from './contextWarning';
 import { resolveContextWindowTokens } from './resolveContextWarningWindowTokens';
 import { shouldRenderPermissionChip } from './permissionChipVisibility';
-import { type AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
+import { AgentInputContentPopover, type AgentInputContentPopoverConfig } from './components/AgentInputContentPopover';
 import { AgentInputEngineDetail } from './components/AgentInputEngineDetail';
 import { AgentInputContextUsageBadge } from './components/AgentInputContextUsageBadge';
+import { AgentInputProviderUsageBadge } from './components/AgentInputProviderUsageBadge';
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { AgentInputAttachmentsRow } from './components/AgentInputAttachmentsRow';
 import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
+import { CommandMenu, useCommandMenuKeyboard, type CommandMenuAnchor } from '@/components/ui/commandMenu';
+import { useAgentInputCommandMenu } from './commandMenu/useAgentInputCommandMenu';
+import { resolveAgentInputCommandMenuAnchor } from './commandMenu/resolveAgentInputCommandMenuAnchor';
+import { useTextInputCaretRect } from '@/hooks/ui/textInputCaretRect';
 import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import type { PermissionModePickerStyles } from './components/permissionModePickerStyles';
 import { AgentInputAttentionRequests } from './components/AgentInputPermissionRequests';
@@ -90,6 +101,7 @@ import { useAgentInputSelectionOverlayController } from './selection/useAgentInp
 import { computeSessionModePickerControl } from '@/sync/acp/sessionModeControl';
 import {
     computeAcpConfigOptionControls,
+    computeAcpConfigOptionControlsForProvider,
     computeAcpConfigOptionControlsFromOverride,
     type AcpConfigOption,
     type AcpConfigOptionValueId,
@@ -111,6 +123,7 @@ import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import { useLocalSetting } from '@/sync/store/hooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceQuotaGaugeViewModel } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
 import type {
     AgentInputAttachment,
     AgentInputComposerAttachmentBadge,
@@ -120,6 +133,7 @@ import type {
 import { AgentInputStatusBadge } from './status/AgentInputStatusBadge';
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { useComposerKeyboardLayoutContext } from '@/components/sessions/keyboardAvoidance';
 import { insertTextAtSelection } from './insertTextAtSelection';
 import { subscribeToIosHardwareShiftEnter } from './subscribeToIosHardwareShiftEnter';
 import {
@@ -144,9 +158,17 @@ const NATIVE_ACTION_BAR_SECTION_GAP_Y = 0;
 const WEB_ACTION_BAR_ROW_GAP_Y = 0;
 const WEB_ACTION_BAR_ROW_GAP_MOBILE_Y = 0;
 const ACTION_BAR_SCROLL_CONTENT_PADDING_RIGHT = 30;
+const STATUS_ROW_ITEM_GAP = 8;
+const STATUS_ROW_WRAP_GAP = 4;
+const INPUT_EXPANSION_TOGGLE_SHOW_OFFSET_PX = 1;
+const INPUT_EXPANSION_TOGGLE_HIDE_OFFSET_PX = 12;
+const AGENT_INPUT_CONTAINER_VERTICAL_PADDING = 4;
+const AGENT_INPUT_CONTAINER_VERTICAL_CHROME_HEIGHT = AGENT_INPUT_CONTAINER_VERTICAL_PADDING * 2;
+const AGENT_INPUT_PANEL_PADDING_TOP = 2;
+const AGENT_INPUT_PANEL_PADDING_BOTTOM = 8;
+const AGENT_INPUT_PANEL_VERTICAL_CHROME_HEIGHT = AGENT_INPUT_PANEL_PADDING_TOP + AGENT_INPUT_PANEL_PADDING_BOTTOM;
+const AGENT_INPUT_VARIABLE_SECTION_CONTENT_PADDING_BOTTOM = 4;
 const EMPTY_PERMISSION_LOCATIONS_BY_ID = new Map<string, PermissionToolCallMessageLocation | null>();
-const HISTORY_INPUT_PROGRAMMATIC_STATE_NOTIFICATION_BUDGET = 2;
-
 const AGENT_INPUT_TEST_IDS = {
     sessionInput: 'session-composer-input',
     sessionSend: 'session-composer-send',
@@ -188,19 +210,21 @@ function updateLayoutHeight(
 
 type ProgrammaticHistoryInputState = Readonly<{
     state: TextInputState;
-    remainingStateNotifications: number;
 }>;
 
 function resolveHistoryKeyInputState(event: KeyPressEvent, fallback: TextInputState): TextInputState {
     return event.inputState ?? fallback;
 }
 
-function scheduleAfterSynchronousInputStateNotifications(callback: () => void) {
-    if (typeof queueMicrotask === 'function') {
-        queueMicrotask(callback);
-        return;
-    }
-    setTimeout(callback, 0);
+function areTextInputSelectionsEqual(a: TextInputState['selection'], b: TextInputState['selection']): boolean {
+    return a.start === b.start && a.end === b.end;
+}
+
+function areStructuredInputMentionListsEqual(
+    left: readonly ComposerStructuredInputMention[],
+    right: readonly ComposerStructuredInputMention[],
+): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
 }
 
 interface AgentInputProps {
@@ -277,6 +301,7 @@ interface AgentInputProps {
         contextSize: number;
         contextWindowTokens?: number;
     };
+    providerUsageGauge?: ConnectedServiceQuotaGaugeViewModel | null;
     alwaysShowContextSize?: boolean;
     onFileViewerPress?: () => void;
     agentType?: AgentId;
@@ -308,7 +333,22 @@ interface AgentInputProps {
         collapsedMaxHeight?: number;
         onToggle: () => void;
     }>;
+    inputPersistence?: Readonly<{
+        initialScrollY?: number;
+        initialSelection?: TextInputState['selection'];
+        restoreToken: string;
+        onScrollYChange: (scrollY: number) => void;
+        onSelectionChangePersist: (selection: TextInputState['selection'], textLength: number) => void;
+    }>;
+    structuredInputMentions?: readonly ComposerStructuredInputMention[];
+    onStructuredInputMentionsChange?: (mentions: readonly ComposerStructuredInputMention[]) => void;
     maxPanelHeight?: number;
+    /**
+     * Defaults to native-floating so existing-session web composers stay flex-bounded
+     * without a late measured cap. New-session/modal hosts should use host-constrained
+     * when maxPanelHeight is the authoritative all-platform composer budget.
+     */
+    panelMaxHeightMode?: AgentInputPanelMaxHeightMode;
     profileId?: string | null;
     onProfileClick?: () => void;
     profilePopover?: AgentInputContentPopoverConfig;
@@ -406,6 +446,95 @@ function AgentInputAttentionRequestsWithLocations(
     );
 }
 
+type AgentInputHiddenUsageOverflowProps = Readonly<{
+    contextUsageState?: ContextUsageState | null;
+    providerUsageGauge?: ConnectedServiceQuotaGaugeViewModel | null;
+    marginLeft?: number;
+}>;
+
+function AgentInputHiddenUsageOverflow(props: AgentInputHiddenUsageOverflowProps) {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const anchorRef = React.useRef<any>(null);
+    const [open, setOpen] = React.useState(false);
+    const contextUsageState = props.contextUsageState ?? null;
+    const usedPercentageLabel = contextUsageState
+        ? formatContextUsagePercent(contextUsageState.usedPercentage)
+        : null;
+    const usedTokensLabel = contextUsageState
+        ? formatContextTokenCount(contextUsageState.usedTokens)
+        : null;
+    const contextWindowTokensLabel = contextUsageState
+        ? formatContextTokenCount(contextUsageState.contextWindowTokens)
+        : null;
+    const contextDetail = contextUsageState && usedPercentageLabel && usedTokensLabel && contextWindowTokensLabel
+        ? t('agentInput.context.usedDetail', {
+            percent: usedPercentageLabel,
+            used: usedTokensLabel,
+            total: contextWindowTokensLabel,
+        })
+        : null;
+    const providerUsageGauge = props.providerUsageGauge ?? null;
+
+    if (!contextDetail && !providerUsageGauge) return null;
+
+    return (
+        <>
+            <Pressable
+                ref={anchorRef}
+                testID="agent-input-hidden-usage-overflow"
+                accessibilityRole="button"
+                accessibilityLabel={t('agentInput.usageOverflow.accessibilityLabel')}
+                onPress={() => setOpen((value) => !value)}
+                style={({ pressed }) => [
+                    styles.hiddenUsageOverflow,
+                    { marginLeft: props.marginLeft ?? 0 },
+                    pressed ? styles.hiddenUsageOverflowPressed : null,
+                ]}
+            >
+                <Ionicons name="ellipsis-horizontal" size={14} color={theme.colors.text.secondary} />
+            </Pressable>
+            <AgentInputContentPopover
+                open={open}
+                anchorRef={anchorRef}
+                onRequestClose={() => setOpen(false)}
+                maxWidthCap={340}
+                scrollEnabled={false}
+                testID="agent-input-hidden-usage-overflow-popover"
+                content={(
+                    <View style={styles.hiddenUsageOverflowContent}>
+                        {contextDetail ? (
+                            <View style={styles.hiddenUsageOverflowSection}>
+                                <Text style={styles.hiddenUsageOverflowTitle}>
+                                    {t('agentInput.context.windowTitle')}
+                                </Text>
+                                <Text style={styles.hiddenUsageOverflowDetail}>
+                                    {contextDetail}
+                                </Text>
+                            </View>
+                        ) : null}
+                        {providerUsageGauge ? (
+                            <View style={styles.hiddenUsageOverflowSection}>
+                                <Text style={styles.hiddenUsageOverflowTitle}>
+                                    {t('agentInput.providerUsage.title')}
+                                </Text>
+                                <Text style={styles.hiddenUsageOverflowDetail}>
+                                    {providerUsageGauge.detailRightLabel}
+                                </Text>
+                                {providerUsageGauge.usedLimitLabel ? (
+                                    <Text style={styles.hiddenUsageOverflowSubdetail}>
+                                        {providerUsageGauge.usedLimitLabel}
+                                    </Text>
+                                ) : null}
+                            </View>
+                        ) : null}
+                    </View>
+                )}
+            />
+        </>
+    );
+}
+
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
         alignItems: 'center',
@@ -425,8 +554,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
             highlightColor: theme.colors.effect.surfaceHighlight,
         }),
         overflow: 'hidden',
-        paddingVertical: 2,
-        paddingBottom: 8,
+        paddingTop: AGENT_INPUT_PANEL_PADDING_TOP,
+        paddingBottom: AGENT_INPUT_PANEL_PADDING_BOTTOM,
         paddingHorizontal: 8,
     },
     inputContainer: {
@@ -436,7 +565,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderWidth: 0,
         paddingLeft: 8,
         paddingRight: 8,
-        paddingVertical: 4,
+        paddingVertical: AGENT_INPUT_CONTAINER_VERTICAL_PADDING,
         minHeight: 40,
     },
     nativeKeyboardPanelContent: {
@@ -448,7 +577,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         minHeight: 0,
     },
     nativeKeyboardVariableSectionContent: {
-        paddingBottom: 4,
+        paddingBottom: AGENT_INPUT_VARIABLE_SECTION_CONTENT_PADDING_BOTTOM,
     },
     webVariableSectionEdgeToEdge: {
         marginHorizontal: -8,
@@ -552,11 +681,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
+        columnGap: STATUS_ROW_ITEM_GAP,
+        rowGap: STATUS_ROW_WRAP_GAP,
         flex: 1,
+    },
+    connectionStatusGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 1,
     },
     statusText: {
         fontSize: 11,
-        marginRight: 8,
         ...Typography.default(),
     },
     statusDot: {
@@ -580,6 +715,41 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     inputExpansionTogglePressed: {
         backgroundColor: theme.colors.surface.pressed,
+    },
+    hiddenUsageOverflow: {
+        width: 20,
+        height: 20,
+        borderRadius: 999,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    hiddenUsageOverflowPressed: {
+        backgroundColor: theme.colors.surface.pressed,
+    },
+    hiddenUsageOverflowContent: {
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+        gap: 10,
+    },
+    hiddenUsageOverflowSection: {
+        gap: 6,
+    },
+    hiddenUsageOverflowTitle: {
+        fontSize: 11,
+        letterSpacing: 1,
+        textTransform: 'uppercase',
+        color: theme.colors.text.secondary,
+        ...Typography.header(),
+    },
+    hiddenUsageOverflowDetail: {
+        fontSize: 13,
+        color: theme.colors.text.primary,
+        ...Typography.default(),
+    },
+    hiddenUsageOverflowSubdetail: {
+        fontSize: 12,
+        color: theme.colors.text.secondary,
+        ...Typography.default(),
     },
     permissionModeContainer: {
         flexDirection: 'column',
@@ -695,12 +865,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     actionChipText: {
         fontSize: 13,
-        color: theme.colors.button.secondary.tint,
+        color: theme.colors.composer.chipTint,
         fontWeight: '600',
         ...Typography.default('semiBold'),
     },
     actionChipCountText: {
-        color: theme.colors.text.tertiary,
+        color: theme.colors.composer.chipTint,
     },
     overlayOptionRow: {
         flexDirection: 'row',
@@ -770,7 +940,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         opacity: 0.7,
     },
     actionButtonIcon: {
-        color: theme.colors.button.secondary.tint,
+        color: theme.colors.composer.chipTint,
     },
     fileDropOverlay: {
         position: 'absolute',
@@ -846,21 +1016,22 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             keyboardHeight: 0,
         });
     }, [screenHeight]);
-    // Native-only: the native composer is position:absolute; bottom:0 and floats free,
-    // so it needs an explicit panel maxHeight to stay above the keyboard. On web/Tauri the
-    // composer is laid out inside a flex column (ComposerKeyboardScaffold.web), so it is
-    // already viewport-bounded. Applying a web cap derived from the existing-session
-    // `maxPanelHeight` (which can be `undefined` on the first frame and a measured number
-    // shortly after) would re-constrain the panel from unconstrained to constrained during
-    // session switches. Keep web unconstrained.
-    const hostPanelMaxHeight = Platform.OS === 'web' ? undefined : props.maxPanelHeight;
+    // Existing-session web/Tauri composers are flex-bounded, so their late measured
+    // maxPanelHeight must not re-constrain the panel during session switches. Hosts that
+    // own an explicit composer budget (for example /new modals) opt into applying it on web.
+    const hostPanelMaxHeight = resolveAgentInputHostPanelMaxHeight({
+        platform: Platform.OS,
+        maxPanelHeight: props.maxPanelHeight,
+        mode: props.panelMaxHeightMode,
+    });
     const [rootHeightPx, setRootHeightPx] = React.useState<number | null>(null);
     const [panelHeightPx, setPanelHeightPx] = React.useState<number | null>(null);
     const [inputContainerHeightPx, setInputContainerHeightPx] = React.useState<number | null>(null);
-    const [inputViewportHeightPx, setInputViewportHeightPx] = React.useState<number | null>(null);
     const [inputContentHeightPx, setInputContentHeightPx] = React.useState<number | null>(null);
+    const [inputExpansionToggleVisible, setInputExpansionToggleVisible] = React.useState(false);
     const [actionFooterHeightPx, setActionFooterHeightPx] = React.useState<number>(0);
     const [composerAttentionHeightPx, setComposerAttentionHeightPx] = React.useState<number>(0);
+    const [variableContentBeforeInputHeightPx, setVariableContentBeforeInputHeightPx] = React.useState<number>(0);
     const effectivePanelMaxHeight = React.useMemo(() => {
         if (typeof hostPanelMaxHeight !== 'number') return undefined;
         const nonPanelChromeHeight = rootHeightPx != null && panelHeightPx != null
@@ -876,12 +1047,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         });
     }, [actionFooterHeightPx, composerAttentionHeightPx, effectivePanelMaxHeight]);
     const fallbackInputMaxHeight = props.inputMaxHeight ?? defaultInputMaxHeight;
+    const minimumMeasuredPanelFixedChromeHeight = Platform.OS === 'web'
+        ? actionFooterHeightPx
+            + composerAttentionHeightPx
+            + variableContentBeforeInputHeightPx
+            + AGENT_INPUT_PANEL_VERTICAL_CHROME_HEIGHT
+            + AGENT_INPUT_VARIABLE_SECTION_CONTENT_PADDING_BOTTOM
+        : undefined;
     const resolvedInputMaxHeight = React.useMemo(() => {
         return computeMeasuredPanelInputMaxHeight({
             panelMaxHeight: effectivePanelMaxHeight,
             panelHeight: panelHeightPx,
             inputContainerHeight: inputContainerHeightPx,
-            inputViewportHeight: inputViewportHeightPx,
+            inputContainerChromeHeight: AGENT_INPUT_CONTAINER_VERTICAL_CHROME_HEIGHT,
+            minimumFixedChromeHeight: minimumMeasuredPanelFixedChromeHeight,
             fallbackMaxHeight: fallbackInputMaxHeight,
             fallbackMaxHeightMode: props.sessionId ? 'cap' : 'seed',
         });
@@ -889,7 +1068,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         fallbackInputMaxHeight,
         effectivePanelMaxHeight,
         inputContainerHeightPx,
-        inputViewportHeightPx,
+        minimumMeasuredPanelFixedChromeHeight,
         panelHeightPx,
         props.sessionId,
     ]);
@@ -898,12 +1077,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         && props.inputExpansion.collapsedMaxHeight > 0
         ? props.inputExpansion.collapsedMaxHeight
         : null;
-    const shouldShowInputExpansionToggle = Boolean(
-        props.inputExpansion
-        && inputExpansionCollapsedMaxHeight != null
-        && inputContentHeightPx != null
-        && inputContentHeightPx > inputExpansionCollapsedMaxHeight + 1,
-    );
+    const hasInputExpansion = Boolean(props.inputExpansion);
+    React.useEffect(() => {
+        setInputExpansionToggleVisible((currentVisible) => {
+            if (!hasInputExpansion || inputExpansionCollapsedMaxHeight == null || inputContentHeightPx == null) {
+                return false;
+            }
+            if (currentVisible) {
+                return inputContentHeightPx >= inputExpansionCollapsedMaxHeight - INPUT_EXPANSION_TOGGLE_HIDE_OFFSET_PX;
+            }
+            return inputContentHeightPx > inputExpansionCollapsedMaxHeight + INPUT_EXPANSION_TOGGLE_SHOW_OFFSET_PX;
+        });
+    }, [hasInputExpansion, inputContentHeightPx, inputExpansionCollapsedMaxHeight]);
+    const shouldShowInputExpansionToggle = hasInputExpansion && inputExpansionToggleVisible;
     const composerAnchorRef = React.useRef<View>(null);
     const hasText = props.value.trim().length > 0;
     const hasSendableContent = hasText || props.hasSendableAttachments === true;
@@ -1061,8 +1247,31 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         selection: { start: props.value.length, end: props.value.length }
     });
     const inputStateRef = React.useRef(inputState);
-    const [structuredInputMentions, setStructuredInputMentions] = React.useState<ComposerStructuredInputMention[]>([]);
+    const [hasAutocompleteTextInteraction, setHasAutocompleteTextInteraction] = React.useState(false);
+    const [uncontrolledStructuredInputMentions, setUncontrolledStructuredInputMentions] = React.useState<ComposerStructuredInputMention[]>([]);
+    const structuredInputMentions = props.structuredInputMentions ?? uncontrolledStructuredInputMentions;
+    const structuredInputMentionsRef = React.useRef<readonly ComposerStructuredInputMention[]>(structuredInputMentions);
     const historyAppliedInputStateRef = React.useRef<ProgrammaticHistoryInputState | null>(null);
+
+    React.useEffect(() => {
+        structuredInputMentionsRef.current = structuredInputMentions;
+    }, [structuredInputMentions]);
+
+    const updateStructuredInputMentions = React.useCallback((
+        nextOrUpdater: readonly ComposerStructuredInputMention[]
+            | ((current: readonly ComposerStructuredInputMention[]) => readonly ComposerStructuredInputMention[]),
+    ) => {
+        const current = structuredInputMentionsRef.current;
+        const next = typeof nextOrUpdater === 'function'
+            ? nextOrUpdater(current)
+            : nextOrUpdater;
+        if (areStructuredInputMentionListsEqual(current, next)) return;
+        structuredInputMentionsRef.current = next;
+        if (!props.structuredInputMentions) {
+            setUncontrolledStructuredInputMentions([...next]);
+        }
+        props.onStructuredInputMentionsChange?.(next);
+    }, [props.onStructuredInputMentionsChange, props.structuredInputMentions]);
 
     const isHistoryBrowsing = React.useCallback(() => (
         typeof messageHistory.isBrowsing === 'function' && messageHistory.isBrowsing()
@@ -1078,24 +1287,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const isProgrammaticHistoryApply =
             historyAppliedInputState !== null
             && historyAppliedInputState.state.text === newState.text
-            && historyAppliedInputState.remainingStateNotifications > 0;
-        if (isProgrammaticHistoryApply) {
-            const remainingStateNotifications = historyAppliedInputState.remainingStateNotifications - 1;
-            historyAppliedInputStateRef.current = remainingStateNotifications > 0
-                ? { ...historyAppliedInputState, remainingStateNotifications }
-                : null;
-        } else if (hasRetainedHistorySession()) {
+            && areTextInputSelectionsEqual(historyAppliedInputState.state.selection, newState.selection);
+        if (!isProgrammaticHistoryApply && hasRetainedHistorySession()) {
             historyAppliedInputStateRef.current = null;
             messageHistory.pause(newState.text);
         }
-        setStructuredInputMentions((current) => reconcileStructuredInputMentionsWithText({
+        updateStructuredInputMentions((current) => reconcileStructuredInputMentionsWithText({
             previousText,
             nextText: newState.text,
             mentions: current,
         }));
         inputStateRef.current = newState;
         setInputState(newState);
-    }, [hasRetainedHistorySession, messageHistory]);
+        props.inputPersistence?.onSelectionChangePersist(newState.selection, newState.text.length);
+    }, [hasRetainedHistorySession, messageHistory, props.inputPersistence, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         historyAppliedInputStateRef.current = null;
@@ -1117,15 +1322,36 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             text: props.value,
             selection: nextSelection,
         };
+        updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
+            previousText: current.text,
+            nextText: props.value,
+            mentions: currentMentions,
+        }));
+        setHasAutocompleteTextInteraction(false);
         inputStateRef.current = nextState;
         setInputState(nextState);
-    }, [props.value]);
+    }, [props.value, updateStructuredInputMentions]);
+
+    React.useEffect(() => {
+        setHasAutocompleteTextInteraction(false);
+    }, [props.sessionId]);
+
+    const handleComposerTextChange = React.useCallback((text: string) => {
+        setHasAutocompleteTextInteraction(true);
+        props.onChangeText(text);
+    }, [props.onChangeText]);
+
+    React.useEffect(() => {
+        const selection = props.inputPersistence?.initialSelection;
+        if (!selection) return;
+        inputRef.current?.setSelection(selection);
+    }, [props.inputPersistence?.restoreToken]);
 
     React.useEffect(() => {
         if (props.value.length === 0) {
-            setStructuredInputMentions([]);
+            updateStructuredInputMentions([]);
         }
-    }, [props.value]);
+    }, [props.value, updateStructuredInputMentions]);
 
     const handleSend = React.useCallback((options?: Readonly<{ forceImmediate?: boolean; deliveryIntent?: 'server_pending' }>) => {
         if (sendActionDisabled) {
@@ -1134,14 +1360,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (props.sessionId) {
             inputRef.current?.blur();
         }
-        if (props.sessionId && props.value.trim().length > 0 && props.hasSendableAttachments !== true) {
-            // Clear immediately for existing sessions so Enter-to-send doesn't leave stale text behind
-            // if the input emits a late change event after the send action.
-            props.onChangeText('');
-        }
         messageHistory.reset();
         const structuredInputMetaOverrides = buildStructuredInputMetaOverrides({
-            mentions: structuredInputMentions,
+            mentions: structuredInputMentionsRef.current,
             text: inputStateRef.current.text,
         });
         const hasStructuredInputMeta = Object.keys(structuredInputMetaOverrides).length > 0;
@@ -1156,13 +1377,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         );
     }, [
         messageHistory,
-        props.hasSendableAttachments,
-        props.onChangeText,
         props.onSend,
         props.sessionId,
-        props.value,
         sendActionDisabled,
-        structuredInputMentions,
     ]);
 
     const effectiveChipDensity = React.useMemo<'auto' | 'labels' | 'icons'>(() => {
@@ -1213,15 +1430,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (setTextAndSelection) {
             const pendingHistoryApply: ProgrammaticHistoryInputState = {
                 state: nextState,
-                remainingStateNotifications: HISTORY_INPUT_PROGRAMMATIC_STATE_NOTIFICATION_BUDGET,
             };
             historyAppliedInputStateRef.current = pendingHistoryApply;
             setTextAndSelection(next, nextState.selection);
-            scheduleAfterSynchronousInputStateNotifications(() => {
-                if (historyAppliedInputStateRef.current === pendingHistoryApply) {
-                    historyAppliedInputStateRef.current = null;
-                }
-            });
         } else {
             props.onChangeText(next);
         }
@@ -1247,11 +1458,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         };
     }, [enterToSendEnabled, isInputFocused, props.disabled]);
 
-    // Use the tracked selection from inputState
-    const activeWord = useActiveWord(inputState.text, inputState.selection, props.autocompletePrefixes);
+    // Use the tracked selection from inputState.
+    const activeWordState = React.useMemo(
+        () => findActiveWord(inputState.text, inputState.selection, props.autocompletePrefixes),
+        [inputState.text, inputState.selection, props.autocompletePrefixes],
+    );
+    const activeWord = activeWordState?.activeWord ?? null;
+    const activeSuggestionQuery = isInputFocused && hasAutocompleteTextInteraction && !props.disabled ? activeWord : null;
     // Using default options: clampSelection=true, autoSelectFirst=true, wrapAround=true
     // To customize: useActiveSuggestions(activeWord, props.autocompleteSuggestions, { clampSelection: false, wrapAround: false })
-    const [suggestions, selected, moveUp, moveDown] = useActiveSuggestions(activeWord, props.autocompleteSuggestions, { clampSelection: true, wrapAround: true });
+    const [suggestions, selected, moveUp, moveDown] = useActiveSuggestions(activeSuggestionQuery, props.autocompleteSuggestions, { clampSelection: true, wrapAround: true });
 
     // Handle suggestion selection
     const handleSuggestionSelect = React.useCallback((index: number) => {
@@ -1280,7 +1496,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
             const mention = createStructuredInputMentionFromSuggestion({ suggestion, start: insertionStart });
             if (mention) {
-                setStructuredInputMentions((current) => [
+                updateStructuredInputMentions((current) => [
                     ...current.filter((existing) => existing.start !== mention.start || existing.end !== mention.end),
                     mention,
                 ]);
@@ -1308,7 +1524,67 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
         applyDefaultSelection();
         hapticsLight();
-    }, [suggestions, inputState, props.autocompletePrefixes, props.onAutocompleteSuggestionSelect]);
+    }, [suggestions, inputState, props.autocompletePrefixes, props.onAutocompleteSuggestionSelect, updateStructuredInputMentions]);
+
+    // --- Command Menu adapter ---
+    // Bridges existing autocomplete state into the CommandMenu primitive shape.
+    // D46: The adapter manages an explicit dismissed-trigger-key so Escape
+    // does not rely on selection-collapse to close the menu.
+    const {
+        commandMenuOpen,
+        items: commandMenuItems,
+        selectedIndex: commandMenuSelectedIndex,
+        query: commandMenuQuery,
+        onSelectFromMenu: commandMenuOnSelect,
+        onCloseMenu: commandMenuOnClose,
+        moveUp: commandMenuMoveUp,
+        moveDown: commandMenuMoveDown,
+    } = useAgentInputCommandMenu({
+        suggestions,
+        selected,
+        activeWord,
+        activeWordRange: activeWordState
+            ? { start: activeWordState.offset, end: activeWordState.endOffset }
+            : null,
+        inputTextLength: inputState.text.length,
+        moveUp,
+        moveDown,
+        handleSuggestionSelect,
+    });
+
+    // D21: The keyboard hook returns `handleKey` that returns `true` if consumed.
+    // Wired into handleKeyPress below, AFTER send/abort, BEFORE enter-to-send/history.
+    const { handleKey: handleCommandMenuKey } = useCommandMenuKeyboard({
+        open: commandMenuOpen,
+        onMoveUp: commandMenuMoveUp,
+        onMoveDown: commandMenuMoveDown,
+        onSelect: commandMenuOnSelect,
+        onClose: commandMenuOnClose,
+    });
+
+    // Caret-rect anchor with runtime fallback (D33/D34/D38/D42).
+    //
+    // - D38: `enabled` tracks composer focus (NOT menu-open) so the native
+    //   selection-change subscription is active *before* `/` triggers a menu
+    //   open, ensuring the first selection event has already been consumed
+    //   by the time we need the rect.
+    // - D34: no feature flag. The runtime guard `caretRect ? rect : view`
+    //   in `resolveAgentInputCommandMenuAnchor` is the only rollback path.
+    // - D42: do not pre-offset the caret rect; `Popover` placement + `gap`
+    //   position the popup relative to the caret.
+    // - D33: `MultiTextInputHandle` satisfies the `TextInputCaretRectHandle`
+    //   shape (`measureInWindow`, `getReactNodeTag`, `getInputElement`), so
+    //   `inputRef` is passed directly with no cast.
+    const caretRect = useTextInputCaretRect({
+        inputRef,
+        value: inputState.text,
+        selection: inputState.selection,
+        enabled: isInputFocused && !props.disabled,
+    });
+    const commandMenuAnchor: CommandMenuAnchor = React.useMemo(
+        () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef),
+        [caretRect, composerAnchorRef],
+    );
 
     const permissionRequestsFades = useScrollEdgeFades({
         enabledEdges: { top: true, bottom: true },
@@ -1473,19 +1749,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const acpConfigOptionControls = React.useMemo(() => {
         if (!props.onAcpConfigOptionChange) return null;
         if (props.acpConfigOptionsOverride) {
-            return computeAcpConfigOptionControlsFromOverride({
-                agentId,
+            return computeAcpConfigOptionControlsForProvider({
+                providerId: agentId,
                 configOptions: props.acpConfigOptionsOverride,
                 overrides: props.acpConfigOptionOverridesOverride?.overrides ?? null,
+                hideModeOption: Boolean(sessionModeChipControl),
+                hideModelOption: modelOptions.length > 0,
             });
         }
         return computeAcpConfigOptionControls({ agentId, metadata: props.metadata ?? null });
     }, [
         agentId,
+        modelOptions.length,
         props.acpConfigOptionsOverride,
         props.acpConfigOptionOverridesOverride,
         props.metadata,
         props.onAcpConfigOptionChange,
+        sessionModeChipControl,
     ]);
 
     const selectedModelOptionControls = React.useMemo(() => {
@@ -1634,6 +1914,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [agentPickerOptions, props.agentPickerSelectedOptionId]);
 
     const hasAgentPickerOptions = agentPickerOptions.length > 0;
+    const composerKeyboardLayout = useComposerKeyboardLayoutContext();
 
     const {
         overlayAnchorRef,
@@ -1677,6 +1958,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hasProfilePopover: Boolean(props.profilePopover),
         hasEnvVarsPopover: Boolean(props.envVarsPopover),
         hasAgentPickerOptions,
+        retainKeyboardLift: composerKeyboardLayout?.retainKeyboardLift,
     });
     const {
         showAgentPicker,
@@ -1773,11 +2055,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             .map((chip) => chip.composerAttachmentBadge)
             .filter((badge): badge is AgentInputComposerAttachmentBadge => Boolean(badge));
     }, [props.extraActionChips]);
+    const hasVariableContentBeforeInput = (props.attachments?.length ?? 0) > 0 || composerAttachmentBadges.length > 0;
+    React.useEffect(() => {
+        if (!hasVariableContentBeforeInput) {
+            updateLayoutHeight(setVariableContentBeforeInputHeightPx, 0);
+        }
+    }, [hasVariableContentBeforeInput]);
     const hasMachine = Boolean(props.onMachineClick || props.machinePopover);
     const hasPath = Boolean(props.onPathClick || props.pathPopover);
     const hasResume = Boolean(props.onResumeClick || props.resumePopover);
     const hasFiles = Boolean(props.sessionId && props.onFileViewerPress);
-    const hasStop = Boolean(props.onAbort && props.showAbortButton);
+    const canStopFromComposer = Boolean(props.onAbort && props.showAbortButton);
+    const hasStop = canStopFromComposer;
     const hasAnyActions = getHasAnyAgentInputActions({
         showPermissionChip,
         hasProfile,
@@ -1876,7 +2165,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const handleComposerAbortShortcut = React.useCallback(() => {
         const escapeAction = resolveComposerEscapeAction({ key: 'Escape', shiftKey: true }, {
-            canAbort: Boolean(props.showAbortButton && props.onAbort),
+            canAbort: canStopFromComposer,
             isAborting,
             abortConfirmationExpiresAt: abortConfirmationExpiresAtRef.current,
             nowMs: Date.now(),
@@ -1884,17 +2173,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (escapeAction) {
             runAbortShortcutAction(escapeAction);
         }
-    }, [isAborting, props.onAbort, props.showAbortButton, runAbortShortcutAction]);
+    }, [canStopFromComposer, isAborting, runAbortShortcutAction]);
 
     const keyboardShortcutHandlers = React.useMemo<KeyboardShortcutHandlers>(() => {
         const handlers: KeyboardShortcutHandlers = {
             'composer.focus': handleComposerFocusShortcut,
         };
-        if (props.showAbortButton && props.onAbort) {
+        if (canStopFromComposer) {
             handlers['composer.abortConfirm'] = handleComposerAbortShortcut;
         }
         return handlers;
-    }, [handleComposerAbortShortcut, handleComposerFocusShortcut, props.onAbort, props.showAbortButton]);
+    }, [canStopFromComposer, handleComposerAbortShortcut, handleComposerFocusShortcut]);
     useKeyboardShortcutHandlers(keyboardShortcutHandlers);
 
     const {
@@ -1919,7 +2208,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onAgentClick: props.onAgentClick,
         actionBarIsCollapsed,
         hasAnyActions,
-        tint: theme.colors.button.secondary.tint,
+        tint: theme.colors.composer.chipTint,
         agentId,
         profileLabel,
         profileIcon,
@@ -1945,7 +2234,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onPathClick: handlePathPress,
         onResumeClick: handleResumePress,
         onFileViewerPress: props.onFileViewerPress,
-        canStop: Boolean(props.onAbort && props.showAbortButton),
+        canStop: canStopFromComposer,
         onStop: () => {
             void handleAbortPress();
         },
@@ -1964,7 +2253,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onToggleExtraChipCollapsedPopover: (chipKey) => {
             toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
         },
-        themeTint: theme.colors.button.secondary.tint,
+        themeTint: theme.colors.composer.chipTint,
         showChipLabels,
         showAutoHideChipLabels,
         chipStyle,
@@ -2057,7 +2346,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             platformOS: Platform.OS,
         });
         const escapeAction = resolveComposerEscapeAction(event, {
-            canAbort: Boolean(props.showAbortButton && props.onAbort),
+            canAbort: canStopFromComposer,
             isAborting,
             abortConfirmationExpiresAt: abortConfirmationExpiresAtRef.current,
             nowMs: Date.now(),
@@ -2067,32 +2356,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             return true;
         }
 
-        // Handle autocomplete navigation first
-        if (suggestions.length > 0) {
-            if (event.key === 'ArrowUp') {
-                moveUp();
-                return true;
-            } else if (event.key === 'ArrowDown') {
-                moveDown();
-                return true;
-            } else if ((event.key === 'Enter' || (event.key === 'Tab' && !event.shiftKey))) {
-                // Both Enter and Tab select the current suggestion
-                // If none selected (selected === -1), select the first one
-                const indexToSelect = selected >= 0 ? selected : 0;
-                handleSuggestionSelect(indexToSelect);
-                return true;
-            } else if (event.key === 'Escape') {
-                // Clear suggestions by collapsing selection (triggers activeWord to clear)
-                if (inputRef.current) {
-                    const cursorPos = inputState.selection.start;
-                    inputRef.current.setTextAndSelection(inputState.text, {
-                        start: cursorPos,
-                        end: cursorPos
-                    });
-                }
-                return true;
-            }
-        }
+        // D21: Command menu keyboard navigation — THIRD in precedence.
+        // Replaces the old inline autocomplete navigation block.
+        // useCommandMenuKeyboard handles ArrowUp/Down, Enter, Tab (no-shift), Escape.
+        // Shift+Tab returns false so Shift+Tab permission-mode cycling still works.
+        if (handleCommandMenuKey(event)) return true;
 
         if (enterAction === 'send') {
             handleSend();
@@ -2150,7 +2418,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }
         }
         return false; // Key was not handled
-    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, runAbortShortcutAction, enterToSendEnabled, props.value, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, keyboardShortcutsV2Enabled, keyboardSingleKeyShortcutsEnabled, keyboardShortcutOverridesV1, keyboardShortcutDisabledCommandIdsV1, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, applyHistoryInputText, sendActionDisabled, isHistoryBrowsing, hasRetainedHistorySession]);
+    }, [handleCommandMenuKey, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, runAbortShortcutAction, enterToSendEnabled, props.value, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, keyboardShortcutsV2Enabled, keyboardSingleKeyShortcutsEnabled, keyboardShortcutOverridesV1, keyboardShortcutDisabledCommandIdsV1, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, applyHistoryInputText, sendActionDisabled, isHistoryBrowsing, hasRetainedHistorySession]);
 
     const handleSubmitEditing = React.useCallback(() => {
         if (Platform.OS === 'web') return;
@@ -2215,10 +2483,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 paddingTop={Platform.OS === 'web' ? 10 : 8}
                 paddingBottom={Platform.OS === 'web' ? 10 : 8}
                 paddingRight={shouldShowInputExpansionToggle ? 32 : undefined}
-                onChangeText={props.onChangeText}
+                onChangeText={handleComposerTextChange}
                 placeholder={props.placeholder}
                 onKeyPress={handleKeyPress}
                 onStateChange={handleInputStateChange}
+                initialScrollY={props.inputPersistence?.initialScrollY}
+                scrollRestoreToken={props.inputPersistence?.restoreToken}
+                onScrollYChange={props.inputPersistence?.onScrollYChange}
                 onFocus={handleComposerFocus}
                 onBlur={handleComposerBlur}
                 submitBehavior={submitBehavior}
@@ -2226,9 +2497,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 maxHeight={resolvedInputMaxHeight}
                 editable={!props.disabled}
                 onFilesPasted={props.onAttachmentsAdded}
-                onLayout={(event) => {
-                    updateNullableLayoutHeight(setInputViewportHeightPx, event.nativeEvent.layout.height);
-                }}
                 onContentHeightChange={(height) => {
                     updateNullableLayoutHeight(setInputContentHeightPx, height);
                 }}
@@ -2312,14 +2580,35 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         ) : null
     );
 
+    const renderVariableContentBeforeInput = () => {
+        if (!hasVariableContentBeforeInput) return null;
+
+        const attachmentsRow = (
+            <AgentInputAttachmentsRow
+                attachments={props.attachments ?? []}
+                composerBadges={composerAttachmentBadges}
+            />
+        );
+
+        if (Platform.OS !== 'web') {
+            return attachmentsRow;
+        }
+
+        return (
+            <View
+                testID="agent-input-variable-content-before-input"
+                onLayout={(event) => {
+                    updateLayoutHeight(setVariableContentBeforeInputHeightPx, event.nativeEvent.layout.height);
+                }}
+            >
+                {attachmentsRow}
+            </View>
+        );
+    };
+
     const renderComposerVariableContent = () => (
         <>
-            {((props.attachments?.length ?? 0) > 0 || composerAttachmentBadges.length > 0) ? (
-                <AgentInputAttachmentsRow
-                    attachments={props.attachments ?? []}
-                    composerBadges={composerAttachmentBadges}
-                />
-            ) : null}
+            {renderVariableContentBeforeInput()}
             {renderComposerInput()}
         </>
     );
@@ -2341,7 +2630,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             containerStyle={styles.actionButtonsLeftScroll}
                             contentStyle={styles.actionButtonsLeftScrollContent}
                             fadeColor={actionBarFadeColor}
-                            indicatorColor={theme.colors.button.secondary.tint}
+                            indicatorColor={theme.colors.composer.chipTint}
                             fadeLeftStyle={styles.actionButtonsFadeLeft}
                             fadeRightStyle={styles.actionButtonsFadeRight}
                         >
@@ -2356,12 +2645,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         testID={props.sessionId ? AGENT_INPUT_TEST_IDS.sessionSend : AGENT_INPUT_TEST_IDS.newSessionSend}
                         sessionId={props.sessionId}
                         submitAccessibilityLabel={props.submitAccessibilityLabel}
-                        disabled={Boolean(props.disabled || props.isSendDisabled || props.isSending || (!hasSendableContent && !micPressHandler))}
+                        disabled={Boolean(props.disabled || props.isSendDisabled || props.isSending || (!hasSendableContent && !micPressHandler && !canStopFromComposer))}
                         isSending={props.isSending}
+                        isStopping={isAborting}
                         hasSendableContent={hasSendableContent}
+                        canStop={canStopFromComposer}
                         micPressHandler={micPressHandler}
                         micActive={micActive}
                         onSend={handleSend}
+                        onStop={handleAbortPress}
                     />
                 </View>,
                 showSecondaryControlsRow ? (
@@ -2371,7 +2663,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             containerStyle={styles.actionButtonsSecondaryScroll}
                             contentStyle={styles.actionButtonsScrollViewportContent}
                             fadeColor={actionBarFadeColor}
-                            indicatorColor={theme.colors.button.secondary.tint}
+                            indicatorColor={theme.colors.composer.chipTint}
                             fadeLeftStyle={styles.actionButtonsFadeLeft}
                             fadeRightStyle={styles.actionButtonsFadeRight}
                         >
@@ -2387,7 +2679,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 fillAvailableWidth={false}
                                 leadingControls={secondaryLeadingControlsForWrap}
                                 showChipLabels={showChipLabels}
-                                iconColor={theme.colors.button.secondary.tint}
+                                iconColor={theme.colors.composer.chipTint}
                                 currentPath={props.currentPath}
                                 pathChipAnchorRef={pathChipAnchorRef}
                                 emptyPathLabel={t('newSession.selectPathTitle')}
@@ -2416,7 +2708,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             }}
                             leadingControls={secondaryLeadingControlsForWrap}
                             showChipLabels={showChipLabels}
-                            iconColor={theme.colors.button.secondary.tint}
+                            iconColor={theme.colors.composer.chipTint}
                             currentPath={props.currentPath}
                             pathChipAnchorRef={pathChipAnchorRef}
                             emptyPathLabel={t('newSession.selectPathTitle')}
@@ -2469,11 +2761,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         : [{ maxWidth: layout.maxWidth }])
             ]} ref={overlayAnchorRef}>
                 <AgentInputOverlayLayer
-                    suggestions={suggestions}
-                    overlayAnchorRef={overlayAnchorRef}
                     screenWidth={screenWidth}
-                    autocompleteSelectedIndex={selected}
-                    onAutocompleteSelect={handleSuggestionSelect}
                     showPermissionPopover={showPermissionPopover && Boolean(props.onPermissionModeChange)}
                     permissionChipAnchorRef={permissionChipAnchorRef}
                     onPermissionPopoverRequestClose={closePermissionPopover}
@@ -2546,13 +2834,29 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     envVarsPopover={props.envVarsPopover}
                     onEnvVarsPopoverRequestClose={closeEnvVarsPopover}
                 />
-
+                {/* CommandMenu renders autocomplete suggestions with caret-anchor fallback. */}
+                <CommandMenu
+                    open={commandMenuOpen}
+                    anchor={commandMenuAnchor}
+                    query={commandMenuQuery}
+                    items={commandMenuItems}
+                    selectedIndex={commandMenuSelectedIndex}
+                    onMoveUp={commandMenuMoveUp}
+                    onMoveDown={commandMenuMoveDown}
+                    onSelect={(item, index) => {
+                        handleSuggestionSelect(index);
+                    }}
+                    onRequestClose={commandMenuOnClose}
+                    maxHeight={240}
+                    placement="top"
+                    testID="agent-input-command-menu"
+                />
                 {/* Connection status, context usage, and permission mode */}
-                {(props.connectionStatus || contextUsageState || (props.statusBadges && props.statusBadges.length > 0)) && (
+                {(props.connectionStatus || contextUsageState || props.providerUsageGauge || (props.statusBadges && props.statusBadges.length > 0)) && (
                     <View style={styles.statusContainer}>
                         <View style={styles.statusRow}>
                             {props.connectionStatus && (
-                                <>
+                                <View style={styles.connectionStatusGroup}>
                                     <StatusDot
                                         color={props.connectionStatus.dotColor}
                                         isPulsing={props.connectionStatus.isPulsing}
@@ -2565,7 +2869,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     >
                                         {props.connectionStatus.text}
                                     </Text>
-                                </>
+                                </View>
                             )}
                             {props.statusBadges?.map(({ key, renderPopover, onPress, ...badge }) => (
                                 <AgentInputStatusBadge
@@ -2583,7 +2887,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             ))}
                         </View>
                         <View testID="agent-input-status-trailing" style={styles.statusTrailing}>
-                            <View style={[styles.permissionModeContainer, contextUsageState ? { marginRight: 8 } : null]}>
+                            <View style={[
+                                styles.permissionModeContainer,
+                                (contextUsageState || props.providerUsageGauge) ? { marginRight: 8 } : null,
+                            ]}>
                                 {shouldRenderPermissionChip(permissionChipLabel) ? (
                                     <Text
                                         style={[
@@ -2603,9 +2910,36 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     </Text>
                                 ) : null}
                             </View>
-                            {contextUsageState ? (
-                                <AgentInputContextUsageBadge state={contextUsageState} />
-                            ) : null}
+                            {(() => {
+                                const showOnlyOneGauge = screenWidth < 375 && Boolean(contextUsageState && props.providerUsageGauge);
+                                const providerIsMoreUrgent = props.providerUsageGauge?.tone === 'critical'
+                                    || (props.providerUsageGauge?.tone === 'warning' && contextUsageState?.severity !== 'critical');
+                                const showProviderGauge = Boolean(props.providerUsageGauge) && (!showOnlyOneGauge || providerIsMoreUrgent);
+                                const showContextGauge = Boolean(contextUsageState) && (!showOnlyOneGauge || !providerIsMoreUrgent);
+                                const hiddenContextUsageState = showOnlyOneGauge && !showContextGauge ? contextUsageState : null;
+                                const hiddenProviderUsageGauge = showOnlyOneGauge && !showProviderGauge ? props.providerUsageGauge : null;
+                                const showHiddenGaugeOverflow = Boolean(hiddenContextUsageState || hiddenProviderUsageGauge);
+                                return (
+                                    <>
+                                        {showContextGauge && contextUsageState ? (
+                                            <AgentInputContextUsageBadge state={contextUsageState} />
+                                        ) : null}
+                                        {showProviderGauge && props.providerUsageGauge ? (
+                                            <AgentInputProviderUsageBadge
+                                                viewModel={props.providerUsageGauge}
+                                                marginLeft={showContextGauge ? 8 : 0}
+                                            />
+                                        ) : null}
+                                        {showHiddenGaugeOverflow ? (
+                                            <AgentInputHiddenUsageOverflow
+                                                contextUsageState={hiddenContextUsageState}
+                                                providerUsageGauge={hiddenProviderUsageGauge}
+                                                marginLeft={(showContextGauge || showProviderGauge) ? 8 : 0}
+                                            />
+                                        ) : null}
+                                    </>
+                                );
+                            })()}
                         </View>
                     </View>
                 )}

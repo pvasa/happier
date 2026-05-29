@@ -17,13 +17,18 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-let hydrateReady = true;
+let hydrateState: 'available' | 'loading' | 'missing' = 'available';
 let routeServerId: string | undefined;
 const hydrateSpy = vi.fn((sessionId: string, tag: string, options?: { serverId?: string }) => {
     void sessionId;
     void tag;
-    void options;
-    return hydrateReady;
+    if (hydrateState === 'available') {
+        return { kind: 'available', sessionId, serverId: options?.serverId };
+    }
+    if (hydrateState === 'missing') {
+        return { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' };
+    }
+    return { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' };
 });
 const useSessionSpy = vi.fn<(sessionId: string) => Session | null>(() => null);
 const useExecutionRunsBackendsForSessionSpy = vi.fn<(sessionId: string) => Record<string, { available?: boolean; intents?: string[] }> | null>(() => executionRunsBackendsMock);
@@ -119,6 +124,10 @@ vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) => hydrateSpy(sessionId, tag, options),
 }));
 
+vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
+    SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback', { testID: 'session-invalid-link' }),
+}));
+
 vi.mock('@/hooks/server/useExecutionRunsBackendsForSession', () => ({
     useExecutionRunsBackendsForSession: (sessionId: string) => useExecutionRunsBackendsForSessionSpy(sessionId),
 }));
@@ -157,7 +166,7 @@ const Screen = (await import('@/app/(app)/session/[id]/runs')).default;
 
 describe('Session Runs Screen', () => {
     beforeEach(() => {
-        hydrateReady = true;
+        hydrateState = 'available';
         routeServerId = undefined;
         hydrateSpy.mockClear();
         useSessionSpy.mockClear();
@@ -200,7 +209,7 @@ describe('Session Runs Screen', () => {
     }
 
     it('waits for session hydration before listing runs', async () => {
-        hydrateReady = false;
+        hydrateState = 'loading';
         routeServerId = 'server-b';
         listRunsSpy.mockClear();
 
@@ -211,13 +220,23 @@ describe('Session Runs Screen', () => {
     });
 
     it('does not invoke session-dependent launchability hooks before hydration settles', async () => {
-        hydrateReady = false;
+        hydrateState = 'loading';
 
         await renderRunsScreen();
 
         expect(useSessionSpy).not.toHaveBeenCalled();
         expect(useExecutionRunsBackendsForSessionSpy).not.toHaveBeenCalled();
         expect(useSessionExecutionRunLaunchabilitySpy).not.toHaveBeenCalled();
+    });
+
+    it('renders the unavailable fallback when route hydration resolves missing', async () => {
+        hydrateState = 'missing';
+
+        const screen = await renderRunsScreen();
+
+        expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
+        expect(listRunsSpy).not.toHaveBeenCalled();
+        expect(useSessionSpy).not.toHaveBeenCalled();
     });
 
     it('reloads runs when the screen regains focus', async () => {

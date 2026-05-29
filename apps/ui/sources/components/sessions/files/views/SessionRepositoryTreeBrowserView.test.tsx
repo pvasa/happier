@@ -7,6 +7,8 @@ import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTes
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
 
+const stableExpandedPaths = vi.hoisted(() => [] as string[]);
+
 installSessionFilesViewCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -30,7 +32,7 @@ installSessionFilesViewCommonModuleMocks({
                     : [{ id: 'm1', active: false, activeAt: 1, metadata: { host: 'mbp', platform: 'darwin', happyCliVersion: '0', happyHomeDir: '/tmp/.h', homeDir: '/tmp' } }]
             ) as any,
             useMachine: () => ({ id: 'm1' }) as any,
-            useSessionRepositoryTreeExpandedPaths: () => [],
+            useSessionRepositoryTreeExpandedPaths: () => stableExpandedPaths,
             useSessionProjectScmSnapshot: () => null,
         });
     },
@@ -67,10 +69,10 @@ vi.mock('@/hooks/session/files/useWorkspaceFileTransfers', () => ({
 
 let repositoryTreeListProps: any[] = [];
 vi.mock('@/components/sessions/files/content/RepositoryTreeList', () => ({
-    RepositoryTreeList: (props: any) => {
+    RepositoryTreeList: React.memo((props: any) => {
         repositoryTreeListProps.push(props);
         return React.createElement('View', { ...props, testID: 'repository-tree-list' });
-    },
+    }),
 }));
 
 const searchFilesSpy = vi.fn();
@@ -79,8 +81,10 @@ vi.mock('@/sync/domains/input/suggestionFile', () => ({
     fileSearchCache: { clearCache: vi.fn() },
 }));
 
+let searchResultsListProps: any[] = [];
 vi.mock('@/components/sessions/files/content/SearchResultsList', () => ({
     SearchResultsList: (props: any) => {
+        searchResultsListProps.push(props);
         const first = props.searchResults?.[0];
         return React.createElement('View' as any, {
             testID: first ? `search-results:${first.fullPath}` : 'search-results:empty',
@@ -174,6 +178,7 @@ describe('SessionRepositoryTreeBrowserView', () => {
         searchFilesSpy.mockReset();
         latestWorkspaceTransferParams = null;
         repositoryTreeListProps = [];
+        searchResultsListProps = [];
         stableWorkspaceTransfers.startUploads.mockClear();
         stableWorkspaceTransfers.cancelUploads.mockClear();
         stableWorkspaceTransfers.startDownload.mockClear();
@@ -214,6 +219,70 @@ describe('SessionRepositoryTreeBrowserView', () => {
         expect(nextProps.onExpandedPathsChange).toBe(initialProps.onExpandedPathsChange);
     });
 
+    it('keeps the repository tree list stable when only scroll edge visibility changes', async () => {
+        await renderRepositoryTreeBrowserView();
+        const initialProps = repositoryTreeListProps.at(-1);
+        expect(initialProps).toBeTruthy();
+
+        await act(async () => {
+            initialProps.onLayout({
+                nativeEvent: { layout: { width: 320, height: 200 } },
+            });
+            initialProps.onContentSizeChange(320, 1000);
+        });
+
+        repositoryTreeListProps = [];
+
+        await act(async () => {
+            initialProps.onScroll({
+                nativeEvent: {
+                    contentOffset: { x: 0, y: 120 },
+                    contentSize: { width: 320, height: 1000 },
+                    layoutMeasurement: { width: 320, height: 200 },
+                },
+            });
+        });
+
+        const changedKeys = Object.keys(repositoryTreeListProps.at(-1) ?? {})
+            .filter((key) => repositoryTreeListProps.at(-1)?.[key] !== initialProps[key]);
+        expect(changedKeys).toEqual([]);
+    });
+
+    it('keeps repository tree file handlers stable while dispatching to the latest parent handlers', async () => {
+        const initialOpenFile = vi.fn();
+        const nextOpenFile = vi.fn();
+        const initialOpenFilePinned = vi.fn();
+        const nextOpenFilePinned = vi.fn();
+
+        const { screen, SessionRepositoryTreeBrowserView } = await renderRepositoryTreeBrowserView({
+            onOpenFile: initialOpenFile,
+            onOpenFilePinned: initialOpenFilePinned,
+        });
+        const initialProps = repositoryTreeListProps.at(-1);
+        expect(initialProps).toBeTruthy();
+
+        await screen.update(
+            <SessionRepositoryTreeBrowserView
+                sessionId="s1"
+                onOpenFile={nextOpenFile}
+                onOpenFilePinned={nextOpenFilePinned}
+            />,
+        );
+
+        const nextProps = repositoryTreeListProps.at(-1);
+        expect(nextProps).toBeTruthy();
+        expect(nextProps.onOpenFile).toBe(initialProps.onOpenFile);
+        expect(nextProps.onOpenFilePinned).toBe(initialProps.onOpenFilePinned);
+
+        nextProps.onOpenFile('src/api.ts');
+        nextProps.onOpenFilePinned('src/api.ts');
+
+        expect(initialOpenFile).not.toHaveBeenCalled();
+        expect(initialOpenFilePinned).not.toHaveBeenCalled();
+        expect(nextOpenFile).toHaveBeenCalledWith('src/api.ts');
+        expect(nextOpenFilePinned).toHaveBeenCalledWith('src/api.ts');
+    });
+
     it('can hide the internal search bar', async () => {
         const { screen } = await renderRepositoryTreeBrowserView({
             showSearchBar: false,
@@ -238,6 +307,65 @@ describe('SessionRepositoryTreeBrowserView', () => {
 
         expect(searchFilesSpy).toHaveBeenCalled();
         expect(onOpenFile).toHaveBeenCalledWith('src/api.ts');
+    });
+
+    it('keeps search result action props stable across unchanged parent rerenders', async () => {
+        searchFilesSpy.mockResolvedValue([
+            { fileName: 'api.ts', filePath: 'src/', fullPath: 'src/api.ts', fileType: 'file' },
+        ]);
+        const onOpenFile = vi.fn();
+
+        const { screen, SessionRepositoryTreeBrowserView } = await renderRepositoryTreeBrowserView({ onOpenFile });
+
+        await updateSearchQuery(screen, 'api');
+        await waitForTestId(screen, 'search-results:src/api.ts');
+
+        const initialProps = searchResultsListProps.at(-1);
+        expect(initialProps).toBeTruthy();
+        expect(initialProps.theme).toBeTruthy();
+
+        await act(async () => {
+            initialProps.onLayout?.({ nativeEvent: { layout: { width: 320, height: 400 } } });
+            initialProps.onContentSizeChange?.(320, 2000);
+        });
+
+        const nextProps = searchResultsListProps.at(-1);
+        expect(nextProps).toBeTruthy();
+        expect(nextProps.theme).toBe(initialProps.theme);
+        expect(nextProps.onFilePress).toBe(initialProps.onFilePress);
+        expect(nextProps.onFilePressPinned).toBe(initialProps.onFilePressPinned);
+    });
+
+    it('keeps search result action props stable while dispatching to the latest parent handlers', async () => {
+        searchFilesSpy.mockResolvedValue([
+            { fileName: 'api.ts', filePath: 'src/', fullPath: 'src/api.ts', fileType: 'file' },
+        ]);
+        const initialOpenFile = vi.fn();
+        const nextOpenFile = vi.fn();
+
+        const { screen, SessionRepositoryTreeBrowserView } = await renderRepositoryTreeBrowserView({
+            onOpenFile: initialOpenFile,
+        });
+
+        await updateSearchQuery(screen, 'api');
+        await waitForTestId(screen, 'search-results:src/api.ts');
+
+        const initialProps = searchResultsListProps.at(-1);
+        expect(initialProps).toBeTruthy();
+
+        await screen.update(<SessionRepositoryTreeBrowserView sessionId="s1" onOpenFile={nextOpenFile} />);
+
+        const nextProps = searchResultsListProps.at(-1);
+        expect(nextProps).toBeTruthy();
+        expect(nextProps.onFilePress).toBe(initialProps.onFilePress);
+        expect(nextProps.onFilePressPinned).toBe(initialProps.onFilePressPinned);
+
+        nextProps.onFilePress({ fullPath: 'src/api.ts' });
+        nextProps.onFilePressPinned({ fullPath: 'src/api.ts' });
+
+        expect(initialOpenFile).not.toHaveBeenCalled();
+        expect(nextOpenFile).toHaveBeenCalledTimes(2);
+        expect(nextOpenFile).toHaveBeenCalledWith('src/api.ts');
     });
 
     it('reruns file search after upload success when the query stays the same', async () => {

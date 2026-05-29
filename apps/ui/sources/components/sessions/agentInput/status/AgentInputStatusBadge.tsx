@@ -108,7 +108,7 @@ export function AgentInputStatusBadge(props: AgentInputStatusBadgeProps) {
             onPress={props.onPress}
             style={styles.wrapper}
         >
-            {content(false)}
+            {({ pressed }) => content(Boolean(pressed))}
         </Pressable>
     );
 }

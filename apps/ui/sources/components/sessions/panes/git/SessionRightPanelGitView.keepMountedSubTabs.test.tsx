@@ -13,6 +13,47 @@ let activeGitSubTab: 'commit' | 'update' | 'history' = 'commit';
 const setActiveGitSubTabSpy = vi.hoisted(() => vi.fn());
 const gitSubTabsBarSpy = vi.hoisted(() => vi.fn());
 const gitCommitTabContentSpy = vi.hoisted(() => vi.fn());
+const stableGitFixture = vi.hoisted(() => ({
+    allMachines: [{ id: 'm1', active: true, activeAt: 1, metadata: { host: 'mbp', homeDir: '/tmp' } }],
+    projectSessions: [],
+    commitSelectionPaths: [],
+    commitSelectionPatches: [],
+    operationLog: [],
+    touchedPaths: [],
+    machine: { online: true },
+    session: { active: true, metadata: { machineId: 'm1', path: '/repo' } },
+    scmSnapshot: {
+        fetchedAt: 1,
+        projectKey: 'm1:/repo',
+        repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git' },
+        capabilities: {
+            readStatus: true,
+            readDiffFile: true,
+            readDiffCommit: true,
+            readLog: true,
+            writeCommit: true,
+            writeInclude: true,
+            writeExclude: true,
+            writeRemoteFetch: true,
+            writeRemotePull: true,
+            writeRemotePush: true,
+            supportedDiffAreas: ['included', 'pending'],
+        },
+        branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+        stashCount: 0,
+        hasConflicts: false,
+        entries: [],
+        totals: {
+            includedFiles: 0,
+            pendingFiles: 0,
+            untrackedFiles: 0,
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 0,
+            pendingRemoved: 0,
+        },
+    },
+}));
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -39,48 +80,19 @@ installSessionDetailsPanelCommonModuleMocks({
             importOriginal,
             {
                 useSetting: () => null,
-                useAllMachines: () => [{ id: 'm1', active: true, activeAt: 1, metadata: { host: 'mbp', homeDir: '/tmp' } }],
+                useAllMachines: () => stableGitFixture.allMachines,
                 useProjectForSession: () => null,
-                useProjectSessions: () => [],
-                useMachine: () => ({ online: true }),
-                useSession: () => ({ active: true, metadata: { machineId: 'm1', path: '/repo' } }),
-                useSessionProjectScmCommitSelectionPaths: () => [],
-                useSessionProjectScmCommitSelectionPatches: () => [],
+                useProjectSessions: () => stableGitFixture.projectSessions,
+                useMachine: () => stableGitFixture.machine,
+                useSession: () => stableGitFixture.session,
+                useSessionProjectScmCommitSelectionPaths: () => stableGitFixture.commitSelectionPaths,
+                useSessionProjectScmCommitSelectionPatches: () => stableGitFixture.commitSelectionPatches,
                 useSessionProjectScmInFlightOperation: () => null,
-                useSessionProjectScmOperationLog: () => [],
-                useSessionProjectScmSnapshot: () => ({
-                    fetchedAt: 1,
-                    projectKey: 'm1:/repo',
-                    repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git' },
-                    capabilities: {
-                        readStatus: true,
-                        readDiffFile: true,
-                        readDiffCommit: true,
-                        readLog: true,
-                        writeCommit: true,
-                        writeInclude: true,
-                        writeExclude: true,
-                        writeRemoteFetch: true,
-                        writeRemotePull: true,
-                        writeRemotePush: true,
-                        supportedDiffAreas: ['included', 'pending'],
-                    },
-                    branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
-                    stashCount: 0,
-                    hasConflicts: false,
-                    entries: [],
-                    totals: {
-                        includedFiles: 0,
-                        pendingFiles: 0,
-                        untrackedFiles: 0,
-                        includedAdded: 0,
-                        includedRemoved: 0,
-                        pendingAdded: 0,
-                        pendingRemoved: 0,
-                    },
-                }),
+                useSessionProjectScmOperationLog: () => stableGitFixture.operationLog,
+                useSessionProjectScmSnapshot: () => stableGitFixture.scmSnapshot,
                 useSessionProjectScmSnapshotError: () => null,
-                useSessionProjectScmTouchedPaths: () => [],
+                useSessionRealtimeScmTranscriptConsumer: () => {},
+                useSessionProjectScmTouchedPaths: () => stableGitFixture.touchedPaths,
             },
         );
     },
@@ -180,10 +192,10 @@ vi.mock('@/scm/scmStatusSync', () => ({
 }));
 
 vi.mock('./SessionRightPanelGitCommitTabContent', () => ({
-    SessionRightPanelGitCommitTabContent: (props: SessionRightPanelGitCommitTabContentProps) => {
+    SessionRightPanelGitCommitTabContent: React.memo((props: SessionRightPanelGitCommitTabContentProps) => {
         gitCommitTabContentSpy(props);
         return React.createElement('CommitTab', { testID: 'session-right-panel-git-commit-tab' });
-    },
+    }),
 }));
 
 vi.mock('./SessionRightPanelGitUpdateTab', () => ({
@@ -275,5 +287,23 @@ describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
         });
 
         expect(gitCommitTabContentSpy.mock.calls).toHaveLength(callsAfterSwitch);
+    }, SLOW_TEST_TIMEOUT_MS);
+
+    it('does not update active commit content on unrelated parent rerenders', async () => {
+        const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
+
+        activeGitSubTab = 'commit';
+        const { tree } = await renderScreen(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1" />);
+        const callsAfterMount = gitCommitTabContentSpy.mock.calls.length;
+        const firstProps = gitCommitTabContentSpy.mock.calls.at(-1)?.[0];
+
+        await act(async () => {
+            tree.update(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1:rerender" />);
+        });
+
+        const nextProps = gitCommitTabContentSpy.mock.calls.at(-1)?.[0];
+        const changedPropKeys = Object.keys(nextProps).filter((key) => nextProps[key] !== firstProps[key]);
+        expect(changedPropKeys).toEqual([]);
+        expect(gitCommitTabContentSpy.mock.calls).toHaveLength(callsAfterMount);
     }, SLOW_TEST_TIMEOUT_MS);
 });

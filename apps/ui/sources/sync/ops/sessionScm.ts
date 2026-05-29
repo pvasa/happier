@@ -69,7 +69,7 @@ import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
 import { RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { assertScmResponse, runMachineScmRpc, scmFallbackError, withScmBackendPreference } from './scm/machineScm';
-import { canUseSessionRpc, readMachineTargetForSession, resolveMachinePathFromSessionBase, shouldFallbackToSessionRpc } from './sessionMachineTarget';
+import { canUseSessionRpc, readMachineControlTargetForSession, resolveMachinePathFromSessionBase, shouldFallbackToSessionRpc } from './sessionMachineTarget';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 
@@ -81,7 +81,7 @@ async function callScmPreferMachine<
     method: string,
     request: R,
 ): Promise<T> {
-    const machineTarget = readMachineTargetForSession(sessionId);
+    const machineTarget = readMachineControlTargetForSession(sessionId);
 
     if (machineTarget) {
         const cwd = resolveMachinePathFromSessionBase({ basePath: machineTarget.basePath, requestPath: request.cwd });

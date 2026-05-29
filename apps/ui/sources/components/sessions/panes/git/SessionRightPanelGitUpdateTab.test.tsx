@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { installSessionFilesCommonModuleMocks } from '@/components/sessions/files/sessionFilesTestHelpers';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -46,7 +47,9 @@ const invalidateFromMutationAndAwaitMock = vi.hoisted(() => vi.fn(async () => {}
 const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
 const modalAlertMock = vi.hoisted(() => vi.fn());
 
-installSessionFilesCommonModuleMocks();
+installSessionFilesCommonModuleMocks({
+    typography: async () => await vi.importActual<typeof import('@/constants/Typography')>('@/constants/Typography'),
+});
 
 vi.mock('@/components/sessions/files/SourceControlBranchSummary', () => ({
     SourceControlBranchSummary: (props: Record<string, unknown>) => React.createElement('SourceControlBranchSummary', props),
@@ -105,28 +108,7 @@ vi.mock('@/modal', async () => {
     }).module;
 });
 
-const theme = {
-    colors: {
-        background: 'background',
-        button: {
-            primary: {
-                background: 'button-primary-background',
-                tint: 'button-primary-tint',
-            },
-        },
-        divider: 'divider',
-        input: {
-            background: 'input-background',
-            border: 'input-border',
-        },
-        primary: 'primary',
-        surface: 'surface',
-        surfaceHigh: 'surface-high',
-        text: 'text',
-        textSecondary: 'text-secondary',
-        textLink: 'text-link',
-    },
-};
+const theme = createThemeFixture();
 
 function createSnapshot(overrides: Record<string, unknown> = {}) {
     return {

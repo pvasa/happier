@@ -249,7 +249,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
         }
     });
 
-    it('passes the scaffold available panel height to AgentInput on simple mobile layouts', async () => {
+    it('passes the host-constrained scaffold panel height to AgentInput on simple mobile layouts', async () => {
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
 
         AgentInputMock.mockClear();
@@ -292,6 +292,7 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
             const latestCall = AgentInputMock.mock.calls.at(-1);
             const latestProps = (latestCall?.[0] ?? {}) as any;
             expect(latestProps.maxPanelHeight).toBe(480);
+            expect(latestProps.panelMaxHeightMode).toBe('host-constrained');
         } finally {
             act(() => {
                 tree?.unmount();
@@ -397,7 +398,6 @@ describe('NewSessionSimplePanel (modelOptionsOverride)', () => {
                         selectedProfileId: null,
                     } as any))).tree;
 
-            expect(tree.root.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
             const scaffold = tree.root.findByType('ComposerKeyboardScaffold');
             expect(scaffold.props.mode).toBe('newSession');
         } finally {

@@ -2,7 +2,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { encodeBase64 } from '@/encryption/base64';
 import { digest } from '@/platform/digest';
-import { canUseSessionRpc, readMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { canUseSessionRpc, readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import {
     callDaemonSessionWriteFileRpc,
     downloadDaemonSessionFileToBase64,
@@ -50,7 +50,7 @@ export async function sessionReadFile(
     path: string,
     options?: Readonly<{ maxBytes?: number | null }>,
 ): Promise<SessionReadFileResponse> {
-    if (!readMachineTargetForSession(sessionId) && !canUseSessionRpc(sessionId)) {
+    if (!readMachineControlTargetForSession(sessionId) && !canUseSessionRpc(sessionId)) {
         return {
             success: false,
             error: INACTIVE_SESSION_RPC_UNAVAILABLE_ERROR,

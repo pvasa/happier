@@ -710,17 +710,18 @@ describe('useCreateNewSession (worktree gating)', () => {
         expect(setIsCreating).not.toHaveBeenCalledWith(false);
     });
 
-    it('preserves explicit server scope when navigating to a newly created session', async () => {
+    it('keeps the user on /new when the scoped first turn is not accepted', async () => {
         const { useCreateNewSession } = await import('./useCreateNewSession');
         const typecheck = useCreateNewSession;
 
         const routerReplace = vi.fn();
+        const setIsCreating = vi.fn();
         const params = {
             router: { push: vi.fn(), replace: routerReplace },
             selectedMachineId: 'machine-1',
             selectedPath: '/repo',
             selectedMachine: { id: 'machine-1', metadata: {} },
-            setIsCreating: vi.fn(),
+            setIsCreating,
             setIsResumeSupportChecking: vi.fn(),
             settings: {
                 ...testSettingsDefaults,
@@ -756,14 +757,9 @@ describe('useCreateNewSession (worktree gating)', () => {
             await hook.handleCreateSession();
         });
 
-        expect(routerReplace).toHaveBeenCalledWith('/session/session-created?serverId=server-a', expect.anything());
-        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', {
-            forceRefresh: true,
-            serverId: 'server-a',
-        });
-        expect(ensureSessionVisibleForMessageRouteMock.mock.invocationCallOrder[0]).toBeLessThan(
-            routerReplace.mock.invocationCallOrder[0],
-        );
+        expect(routerReplace).not.toHaveBeenCalled();
+        expect(ensureSessionVisibleForMessageRouteMock).not.toHaveBeenCalled();
+        expect(setIsCreating).toHaveBeenCalledWith(false);
     });
 
     it('removes the created worktree when spawn fails without linked workspace context', async () => {
@@ -1256,12 +1252,10 @@ describe('useCreateNewSession (worktree gating)', () => {
         consoleErrorSpy.mockRestore();
     });
 
-    it('preserves retryable draft state and avoids opening a non-hydrated session when active follow-up hydration fails before workspace metadata publication', async () => {
+    it('opens the created session after the first turn is accepted', async () => {
         const { useCreateNewSession } = await import('./useCreateNewSession');
         const { Modal } = await import('@/modal');
         const typecheck = useCreateNewSession;
-
-        ensureSessionVisibleForMessageRouteMock.mockImplementation(async () => {});
 
         const routerReplace = vi.fn();
         const disableDraftPersistence = vi.fn();
@@ -1285,7 +1279,7 @@ describe('useCreateNewSession (worktree gating)', () => {
             agentType: 'codex' as const,
             permissionMode: 'default' as const,
             modelMode: 'auto' as const,
-            sessionPrompt: '',
+            sessionPrompt: 'Investigate this bug',
             resumeSessionId: '',
             agentNewSessionOptions: null,
             machineEnvPresence: {
@@ -1323,56 +1317,43 @@ describe('useCreateNewSession (worktree gating)', () => {
         expect(spawnedOptions?.workspaceLocationId).toBeUndefined();
         expect(spawnedOptions?.workspaceCheckoutId).toBeUndefined();
         expect(updateSessionDraftMock).not.toHaveBeenCalled();
-        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', {
-            forceRefresh: true,
-            serverId: 'api.happier.dev',
-        });
-        expect(routerReplace).not.toHaveBeenCalled();
-        expect(disableDraftPersistence).not.toHaveBeenCalled();
-        expect(clearNewSessionDraftMock).not.toHaveBeenCalled();
-        expect(setIsCreating).toHaveBeenCalledWith(false);
-        expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith(
-            'common.error',
-            expect.stringContaining('Created session is not available locally yet'),
-        );
+        expect(routerReplace).toHaveBeenCalledWith('/session/session-created?serverId=api.happier.dev', expect.anything());
+        expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
+        expect(clearNewSessionDraftMock).toHaveBeenCalledTimes(1);
+        expect(setIsCreating).not.toHaveBeenCalledWith(false);
+        expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
     });
 
-    it('recovers the created-session draft and opens the hydrated session when afterCreated fails', async () => {
+    it('keeps the new-session draft active when afterCreated fails after session creation', async () => {
         const { useCreateNewSession } = await import('./useCreateNewSession');
         const { Modal } = await import('@/modal');
 
         for (const key of Object.keys(storedSessionsState.sessions)) {
             delete storedSessionsState.sessions[key];
         }
-        ensureSessionVisibleForMessageRouteMock.mockImplementationOnce(async (sessionId?: unknown) => {
-            const hydratedSessionId = String(sessionId ?? '').trim();
-            if (!hydratedSessionId) {
-                return;
-            }
-
-            storedSessionsState.sessions[hydratedSessionId] = {
-                id: hydratedSessionId,
-                createdAt: 1,
-                updatedAt: 2,
-                seq: 0,
-                active: true,
-                activeAt: 2,
-                encryptionMode: 'plain',
-                metadataVersion: 0,
-                metadata: null,
-                agentStateVersion: 1,
-                agentState: null,
-            } as Session;
-        });
 
         const routerReplace = vi.fn();
         const disableDraftPersistence = vi.fn();
+        const setIsCreating = vi.fn();
+        storedSessionsState.sessions['session-created'] = {
+            id: 'session-created',
+            createdAt: 1,
+            updatedAt: 2,
+            seq: 0,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadataVersion: 0,
+            metadata: null,
+            agentStateVersion: 1,
+            agentState: null,
+        } as Session;
         const params = {
             router: { push: vi.fn(), replace: routerReplace },
             selectedMachineId: 'machine-1',
             selectedPath: '/repo',
             selectedMachine: { id: 'machine-1', metadata: {} },
-            setIsCreating: vi.fn(),
+            setIsCreating,
             setIsResumeSupportChecking: vi.fn(),
             settings: testSettingsDefaults,
             useProfiles: false,
@@ -1431,69 +1412,33 @@ describe('useCreateNewSession (worktree gating)', () => {
             });
         });
 
-        expect(updateSessionDraftMock).toHaveBeenCalledWith('session-created', 'Recover this first message');
-        expect(storeTempDataMock).toHaveBeenCalledWith({
-            attachmentDrafts: [{
-                id: 'draft-retry',
-                source: {
-                    kind: 'native',
-                    uri: 'file:///tmp/retry.txt',
-                    name: 'retry.txt',
-                    sizeBytes: 12,
-                    mimeType: 'text/plain',
-                },
-                status: 'uploaded',
-                uploadedPath: 'uploads/retry.txt',
-                uploadedSizeBytes: 12,
-                uploadedMimeType: 'text/plain',
-                sha256: 'sha-retry',
-            }],
-        });
-        expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
-        expect(clearNewSessionDraftMock).toHaveBeenCalledTimes(1);
-        expect(routerReplace).toHaveBeenCalledWith(
-            '/session/session-created?serverId=api.happier.dev&recoveryDataId=temp-recovery-1',
-            expect.anything(),
-        );
+        expect(updateSessionDraftMock).not.toHaveBeenCalled();
+        expect(saveSessionDraftsMock).not.toHaveBeenCalled();
+        expect(storeTempDataMock).not.toHaveBeenCalled();
+        expect(disableDraftPersistence).not.toHaveBeenCalled();
+        expect(clearNewSessionDraftMock).not.toHaveBeenCalled();
+        expect(routerReplace).not.toHaveBeenCalled();
+        expect(setIsCreating).toHaveBeenCalledWith(false);
         expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', expect.any(String));
     });
 
-    it('hydrates and routes created-session recovery with explicit server scope when follow-up fails', async () => {
+    it('does not route created-session recovery with explicit server scope when follow-up fails', async () => {
         const { useCreateNewSession } = await import('./useCreateNewSession');
         const { Modal } = await import('@/modal');
 
         for (const key of Object.keys(storedSessionsState.sessions)) {
             delete storedSessionsState.sessions[key];
         }
-        ensureSessionVisibleForMessageRouteMock.mockImplementationOnce(async (sessionId?: unknown) => {
-            const hydratedSessionId = String(sessionId ?? '').trim();
-            if (!hydratedSessionId) {
-                return;
-            }
-
-            storedSessionsState.sessions[hydratedSessionId] = {
-                id: hydratedSessionId,
-                createdAt: 1,
-                updatedAt: 2,
-                seq: 0,
-                active: true,
-                activeAt: 2,
-                encryptionMode: 'plain',
-                metadataVersion: 0,
-                metadata: null,
-                agentStateVersion: 1,
-                agentState: null,
-            } as Session;
-        });
 
         const routerReplace = vi.fn();
         const disableDraftPersistence = vi.fn();
+        const setIsCreating = vi.fn();
         const params = {
             router: { push: vi.fn(), replace: routerReplace },
             selectedMachineId: 'machine-1',
             selectedPath: '/repo',
             selectedMachine: { id: 'machine-1', metadata: {} },
-            setIsCreating: vi.fn(),
+            setIsCreating,
             setIsResumeSupportChecking: vi.fn(),
             settings: testSettingsDefaults,
             useProfiles: false,
@@ -1537,52 +1482,62 @@ describe('useCreateNewSession (worktree gating)', () => {
             });
         });
 
-        expect(ensureSessionVisibleForMessageRouteMock).toHaveBeenCalledWith('session-created', {
-            forceRefresh: true,
-            serverId: 'server-a',
-        });
-        expect(routerReplace).toHaveBeenCalledWith(
-            '/session/session-created?serverId=server-a',
-            expect.anything(),
-        );
+        expect(ensureSessionVisibleForMessageRouteMock).not.toHaveBeenCalled();
+        expect(disableDraftPersistence).not.toHaveBeenCalled();
+        expect(clearNewSessionDraftMock).not.toHaveBeenCalled();
+        expect(routerReplace).not.toHaveBeenCalled();
+        expect(setIsCreating).toHaveBeenCalledWith(false);
         expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', expect.any(String));
     });
 
-    it('preserves the recoverable created-session payload when afterCreated fails before the created session hydrates locally', async () => {
+    it('retries afterCreated against the created session without spawning another session', async () => {
         const { useCreateNewSession } = await import('./useCreateNewSession');
         const { readRecoverableFollowUpPayload } = await import('@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession');
         const { Modal } = await import('@/modal');
 
-        ensureSessionVisibleForMessageRouteMock.mockImplementationOnce(async (sessionId?: unknown) => {
-            const hydratedSessionId = String(sessionId ?? '').trim();
-            if (!hydratedSessionId) {
-                return;
-            }
-
-            storedSessionsState.sessions[hydratedSessionId] = {
-                id: hydratedSessionId,
-                createdAt: 1,
-                updatedAt: 2,
-                seq: 0,
-                active: true,
-                activeAt: 2,
-                encryptionMode: 'plain',
-                metadataVersion: 0,
-                metadata: null,
-                agentStateVersion: 1,
-                agentState: null,
-            } as Session;
-        });
-        ensureSessionVisibleForMessageRouteMock.mockImplementationOnce(async () => {});
-
         const routerReplace = vi.fn();
         const disableDraftPersistence = vi.fn();
+        const setIsCreating = vi.fn();
+        storedSessionsState.sessions['session-created'] = {
+            id: 'session-created',
+            createdAt: 1,
+            updatedAt: 2,
+            seq: 0,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            metadataVersion: 0,
+            metadata: null,
+            agentStateVersion: 1,
+            agentState: null,
+        } as Session;
+        const afterCreated = vi.fn()
+            .mockImplementationOnce(async () => {
+                const error = new Error('Created session is not available locally yet');
+                Object.assign(error, {
+                    recoverableFollowUpPayload: {
+                        draftText: 'Investigate this bug\n\n[attachments block]',
+                        displayText: 'Investigate this bug',
+                        metaOverrides: {
+                            happier: {
+                                kind: 'attachments.v1',
+                            },
+                        },
+                        profileId: 'profile-work',
+                    },
+                });
+                expect(readRecoverableFollowUpPayload(error)).toEqual(expect.objectContaining({
+                    draftText: 'Investigate this bug\n\n[attachments block]',
+                }));
+                throw error;
+            })
+            .mockResolvedValueOnce(undefined);
         const params = {
             router: { push: vi.fn(), replace: routerReplace },
             selectedMachineId: 'machine-1',
             selectedPath: '/repo',
             selectedMachine: { id: 'machine-1', metadata: {} },
-            setIsCreating: vi.fn(),
+            setIsCreating,
             setIsResumeSupportChecking: vi.fn(),
             settings: testSettingsDefaults,
             useProfiles: false,
@@ -1614,37 +1569,34 @@ describe('useCreateNewSession (worktree gating)', () => {
         await act(async () => {
             await hook.handleCreateSession({
                 initialMessage: 'skip',
-                afterCreated: async () => {
-                    delete storedSessionsState.sessions['session-created'];
-                    const error = new Error('Created session is not available locally yet');
-                    Object.assign(error, {
-                        recoverableFollowUpPayload: {
-                            draftText: 'Investigate this bug\n\n[attachments block]',
-                            displayText: 'Investigate this bug',
-                            metaOverrides: {
-                                happier: {
-                                    kind: 'attachments.v1',
-                                },
-                            },
-                            profileId: 'profile-work',
-                        },
-                    });
-                    expect(readRecoverableFollowUpPayload(error)).toEqual(expect.objectContaining({
-                        draftText: 'Investigate this bug\n\n[attachments block]',
-                    }));
-                    throw error;
-                },
+                afterCreated,
             });
         });
 
-        expect(saveSessionDraftsMock).toHaveBeenCalledWith({
-            'session-created': 'Investigate this bug\n\n[attachments block]',
-        });
+        expect(machineSpawnNewSessionMock).toHaveBeenCalledTimes(1);
+        expect(afterCreated).toHaveBeenCalledTimes(1);
+        expect(saveSessionDraftsMock).not.toHaveBeenCalled();
         expect(saveNewSessionDraftMock).not.toHaveBeenCalled();
         expect(updateSessionDraftMock).not.toHaveBeenCalled();
         expect(disableDraftPersistence).not.toHaveBeenCalled();
         expect(clearNewSessionDraftMock).not.toHaveBeenCalled();
         expect(routerReplace).not.toHaveBeenCalled();
+
+        await act(async () => {
+            await hook.handleCreateSession({
+                initialMessage: 'skip',
+                afterCreated,
+            });
+        });
+
+        expect(machineSpawnNewSessionMock).toHaveBeenCalledTimes(1);
+        expect(afterCreated).toHaveBeenCalledTimes(2);
+        expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
+        expect(clearNewSessionDraftMock).toHaveBeenCalledTimes(1);
+        expect(routerReplace).toHaveBeenCalledWith(
+            '/session/session-created?serverId=api.happier.dev',
+            expect.anything(),
+        );
         expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', 'Created session is not available locally yet');
     });
 });

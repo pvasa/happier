@@ -59,6 +59,36 @@ function renderMachineRefreshState(initialProps: HookParams) {
 }
 
 describe('useNewSessionMachineRefreshState', () => {
+    it('keeps recent and favorite machine arrays stable when only heartbeat changes', async () => {
+        const machine = makeMachine({ id: 'machine-1', metadata: { homeDir: '/Users/test' } });
+        const initialProps: HookParams = {
+            capabilityServerId: 'server-a',
+            selectedMachineId: 'machine-1',
+            machines: [{ ...machine, activeAt: 100 }],
+            recentMachinePaths: [
+                { machineId: 'machine-1', path: '/Users/test/Development/lantern' },
+            ],
+            favoriteMachines: ['machine-1'],
+            useEnhancedSessionWizard: false,
+            refreshMachineEnvPresence: vi.fn(),
+            sessions: [],
+        };
+
+        const hook = await renderMachineRefreshState(initialProps);
+        const firstRecentMachines = hook.getCurrent().recentMachines;
+        const firstFavoriteMachineItems = hook.getCurrent().favoriteMachineItems;
+
+        await hook.rerender({
+            ...initialProps,
+            machines: [{ ...machine, activeAt: 200 }],
+        });
+
+        expect(hook.getCurrent().recentMachines).toBe(firstRecentMachines);
+        expect(hook.getCurrent().favoriteMachineItems).toBe(firstFavoriteMachineItems);
+
+        await hook.unmount();
+    });
+
     it('includes previous session paths in the selected machine path suggestions', async () => {
         const initialProps = {
             capabilityServerId: 'server-a',

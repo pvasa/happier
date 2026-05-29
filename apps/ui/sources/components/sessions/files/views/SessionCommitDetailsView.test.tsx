@@ -2,7 +2,7 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, createStorageStoreMock, flushHookEffects, renderScreen } from '@/dev/testkit';
 import type { Session, ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTestHelpers';
 
@@ -139,27 +139,32 @@ installSessionFilesViewCommonModuleMocks({
     storage: async (importOriginal) => {
         const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({
-            storage: {
-                getState: () => ({
-                    sessions: sessionMock ? {
+            storage: createStorageStoreMock({
+                sessions: sessionMock
+                    ? {
                         [commitSessionId]: {
                             ...sessionMock,
                             serverId: 'server-1',
                         },
-                    } : {},
-                    machines: {},
-                    sessionListViewDataByServerId: {},
-                    getProjectForSession: () => null,
-                    upsertWorkspaceReviewCommentDraft: () => {},
-                    deleteWorkspaceReviewCommentDraft: () => {},
-                }),
-            } as any,
+                    }
+                    : {},
+                machines: {},
+                sessionListViewDataByServerId: {},
+                getProjectForSession: () => null,
+                upsertWorkspaceReviewCommentDraft: () => {},
+                deleteWorkspaceReviewCommentDraft: () => {},
+            }),
             useSessions: () => sessionsMock,
             useSession: () => sessionMock,
             useProjectForSession: () => null,
             useSessionProjectScmSnapshot: () => stableSnapshot,
             useSessionProjectScmInFlightOperation: () => null,
             useWorkspaceReviewCommentsDrafts: () => [],
+            useSessionRpcAvailabilityState: () => ({
+                sessionExists: sessionMock !== null,
+                sessionRpcAvailable: sessionMock !== null,
+            }),
+            useSessionWorkspacePath: () => sessionMock?.metadata?.path ?? null,
             useSetting: (key: string) => {
                 if (key === 'wrapLinesInDiffs') return true;
                 if (key === 'showLineNumbers') return true;
@@ -186,6 +191,14 @@ vi.mock('@/sync/ops', () => ({
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => (featureId === 'files.reviewComments' ? reviewCommentsEnabled : false),
+}));
+
+vi.mock('@/sync/domains/session/resolveWorkspaceScopeForSession', () => ({
+    useWorkspaceScopeForSession: (sessionId: string | null | undefined) => (
+        sessionId === commitSessionId
+            ? { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' }
+            : null
+    ),
 }));
 
 vi.mock('@/track', () => ({
@@ -269,7 +282,7 @@ describe('SessionCommitDetailsView', () => {
         expect(tree.findAllByType('ScrollView' as any)).toHaveLength(0);
     });
 
-    it('does not auto-collapse diffs that are already above the viewport (prevents scroll snapping)', async () => {
+    it('tracks the first visible file as the large-review expansion anchor', async () => {
         sessionScmDiffCommitSpy.mockResolvedValueOnce({
             success: true,
             diff: [
@@ -322,7 +335,7 @@ describe('SessionCommitDetailsView', () => {
 
         const secondRenderProps = getLastDiffFilesListProps();
         const expandedKeys = (secondRenderProps as { expandedKeys: ReadonlySet<string> }).expandedKeys;
-        expect(expandedKeys.has(files[0].key)).toBe(true);
+        expect(expandedKeys.has(files[0].key)).toBe(false);
         expect(expandedKeys.has(files[1].key)).toBe(true);
 
         expect(tree.findAllByType('DiffPresentationStyleToggleButton' as any)).toHaveLength(1);
@@ -415,7 +428,7 @@ describe('SessionCommitDetailsView', () => {
         expect(node?.type).toBe('DiffReviewCommentsViewer');
     });
 
-    it('auto-expands the first review window for large commits using the same settings as the working tree review', async () => {
+    it('starts large commits with the initial bounded expansion window', async () => {
         sessionScmDiffCommitSpy.mockImplementationOnce(async () => ({
             success: true,
             diff: [
@@ -457,11 +470,11 @@ describe('SessionCommitDetailsView', () => {
         const props = getLastDiffFilesListProps() as { files: Array<{ key: string }>; expandedKeys: ReadonlySet<string> };
         expect(props).toBeTruthy();
 
-        const keys = props.files.map((file) => file.key);
-        const expandedKeys = Array.from(props.expandedKeys);
-        expandedKeys.sort();
-        const expected = keys.slice(0, 3).slice().sort(); // ahead(1)+behind(1)+1 = 3
-        expect(expandedKeys).toEqual(expected);
+        expect(Array.from(props.expandedKeys)).toEqual([
+            props.files[0].key,
+            props.files[1].key,
+            props.files[2].key,
+        ]);
         expect(typeof (getLastDiffFilesListProps() as { onViewableItemsChanged?: unknown }).onViewableItemsChanged).toBe('function');
     });
 
@@ -480,7 +493,7 @@ describe('SessionCommitDetailsView', () => {
             error: null,
         }));
         prefetchAheadCount = 1;
-        prefetchBehindCount = 2;
+        prefetchBehindCount = 0;
         await renderCommitDetailsView();
 
         const initialProps = getLastDiffFilesListProps() as {

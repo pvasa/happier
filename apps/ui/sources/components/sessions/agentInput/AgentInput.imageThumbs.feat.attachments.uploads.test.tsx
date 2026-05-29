@@ -1,6 +1,12 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import {
+    createUseLocalSettingMock,
+    createStorageStoreMock,
+    createStorageStoreModuleMock,
+    createStoreHooksModuleMock,
+    renderScreen,
+} from '@/dev/testkit';
 import type { AgentInputAttachment } from './agentInputContracts';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
@@ -63,6 +69,26 @@ installAgentInputCommonModuleMocks({
             useSessionMessagesReducerState: () => null,
         });
     },
+    storageStore: (importOriginal) =>
+        createStorageStoreModuleMock({
+            importOriginal,
+            overrides: {
+                getStorage: () => createStorageStoreMock({ sessionMessages: {} }),
+            },
+        }),
+    storeHooks: (importOriginal) =>
+        createStoreHooksModuleMock({
+            importOriginal,
+            overrides: {
+                useLocalSetting: createUseLocalSettingMock({
+                    values: {
+                        uiBackdropBlurEnabled: true,
+                        uiFontScale: 1,
+                    },
+                }),
+                useSessionServerId: () => null,
+            },
+        }),
 });
 
 vi.mock('expo-image', () => ({
@@ -99,14 +125,6 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
 vi.mock('@/components/sessions/sourceControl/status', () => ({
     SourceControlStatusBadge: () => null,
     useHasMeaningfulScmStatus: () => false,
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({

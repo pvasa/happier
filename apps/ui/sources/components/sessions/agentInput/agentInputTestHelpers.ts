@@ -3,12 +3,15 @@ import { vi } from 'vitest';
 type AgentInputModuleFactory = () => unknown | Promise<unknown>;
 type AgentInputImportOriginal = <T = unknown>() => Promise<T>;
 type AgentInputStorageModuleFactory = (importOriginal: AgentInputImportOriginal) => unknown | Promise<unknown>;
+type AgentInputImportOriginalModuleFactory = (importOriginal: AgentInputImportOriginal) => unknown | Promise<unknown>;
 
 type InstallAgentInputCommonModuleMocksOptions = Readonly<{
     icons?: AgentInputModuleFactory;
     modal?: AgentInputModuleFactory;
     reactNative?: AgentInputModuleFactory;
     storage?: AgentInputStorageModuleFactory;
+    storageStore?: AgentInputImportOriginalModuleFactory;
+    storeHooks?: AgentInputImportOriginalModuleFactory;
     text?: AgentInputModuleFactory;
     unistyles?: AgentInputModuleFactory;
 }>;
@@ -19,6 +22,8 @@ const agentInputCommonModuleState = vi.hoisted(() => ({
         modal: undefined as AgentInputModuleFactory | undefined,
         reactNative: undefined as AgentInputModuleFactory | undefined,
         storage: undefined as AgentInputStorageModuleFactory | undefined,
+        storageStore: undefined as AgentInputImportOriginalModuleFactory | undefined,
+        storeHooks: undefined as AgentInputImportOriginalModuleFactory | undefined,
         text: undefined as AgentInputModuleFactory | undefined,
         unistyles: undefined as AgentInputModuleFactory | undefined,
     },
@@ -32,6 +37,8 @@ export function installAgentInputCommonModuleMocks(
         modal: options.modal,
         reactNative: options.reactNative,
         storage: options.storage,
+        storageStore: options.storageStore,
+        storeHooks: options.storeHooks,
         text: options.text,
         unistyles: options.unistyles,
     };
@@ -103,5 +110,23 @@ export function installAgentInputCommonModuleMocks(
                 fallback: (key) => settingsDefaults[key],
             }),
         });
+    });
+
+    vi.mock('@/sync/domains/state/storageStore', async (importOriginal) => {
+        const activeOptions = agentInputCommonModuleState.options;
+        if (activeOptions.storageStore) {
+            return await activeOptions.storageStore(importOriginal as AgentInputImportOriginal);
+        }
+
+        return await importOriginal();
+    });
+
+    vi.mock('@/sync/store/hooks', async (importOriginal) => {
+        const activeOptions = agentInputCommonModuleState.options;
+        if (activeOptions.storeHooks) {
+            return await activeOptions.storeHooks(importOriginal as AgentInputImportOriginal);
+        }
+
+        return await importOriginal();
     });
 }

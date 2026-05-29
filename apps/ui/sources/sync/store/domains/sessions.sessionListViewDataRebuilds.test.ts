@@ -112,6 +112,19 @@ function createHarness(createSessionsDomain: any, initialState: Record<string, a
     return { get, domain, getSetCount: () => setCount };
 }
 
+function readSessionListRowIds(data: readonly any[] | null): string[] {
+    return (data ?? [])
+        .filter((item) => item?.type === 'session')
+        .map((item) => item.session?.id)
+        .filter((id): id is string => typeof id === 'string');
+}
+
+function readSessionListSessionById(data: readonly any[] | null, sessionId: string) {
+    return (data ?? [])
+        .find((item) => item?.type === 'session' && item.session?.id === sessionId)
+        ?.session ?? null;
+}
+
 describe('sessions domain: sessionListViewData rebuild gating', () => {
     it('lazily registers loaded sessions before writing per-session project SCM snapshots', async () => {
         mockSessionPersistenceBoundaries();
@@ -352,6 +365,83 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         expect(get().sessionListViewData).toBe(initial);
     });
 
+    it('rebuilds inactive date-grouped sessionListViewData when meaningful activity changes ordering', async () => {
+        vi.doMock('../../runtime/orchestration/projectManager', () => ({
+            projectManager: { updateSessions: vi.fn() },
+        }));
+        mockSessionPersistenceBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain, {
+            settings: {
+                groupInactiveSessionsByProject: false,
+                sessionListInactiveGroupingV1: 'date',
+            },
+        });
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 100,
+                meaningfulActivityAt: 100,
+                active: false,
+                activeAt: 100,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 100,
+            } as any,
+            {
+                id: 's2',
+                seq: 1,
+                createdAt: 2,
+                updatedAt: 200,
+                meaningfulActivityAt: 200,
+                active: false,
+                activeAt: 200,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 200,
+            } as any,
+        ]);
+
+        const initial = get().sessionListViewData;
+        expect(readSessionListRowIds(initial)).toEqual(['s2', 's1']);
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 2,
+                createdAt: 1,
+                updatedAt: 300,
+                meaningfulActivityAt: 300,
+                active: false,
+                activeAt: 300,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 300,
+            } as any,
+        ]);
+
+        const next = get().sessionListViewData;
+        expect(next).not.toBe(initial);
+        expect(readSessionListRowIds(next)).toEqual(['s1', 's2']);
+        expect(readSessionListSessionById(next, 's1')?.updatedAt).toBe(300);
+    });
+
     it('keeps sessionListViewData stable for attention-only updates when attention promotion is disabled', async () => {
         vi.doMock('../../runtime/orchestration/projectManager', () => ({
             projectManager: { updateSessions: vi.fn() },
@@ -464,6 +554,63 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         ]);
 
         expect(get().sessionListViewData).not.toBe(initial);
+    });
+
+    it('preserves local ready metadata when hydrated rows do not carry a fresher ready event', async () => {
+        vi.doMock('../../runtime/orchestration/projectManager', () => ({
+            projectManager: { updateSessions: vi.fn() },
+        }));
+        mockSessionPersistenceBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain, {
+            settings: { sessionListAttentionPromotionModeV1: 'global' },
+        });
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 10,
+                createdAt: 1,
+                updatedAt: 10,
+                active: false,
+                activeAt: 10,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 10,
+                latestTurnStatus: 'in_progress',
+                latestReadyEventSeq: 10,
+                latestReadyEventAt: 2_000,
+            } as any,
+        ]);
+
+        domain.applySessions([
+            {
+                id: 's1',
+                seq: 11,
+                createdAt: 1,
+                updatedAt: 11,
+                active: false,
+                activeAt: 11,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 11,
+                latestTurnStatus: 'in_progress',
+            } as any,
+        ]);
+
+        expect(get().sessions.s1.latestReadyEventSeq).toBe(10);
+        expect(get().sessions.s1.latestReadyEventAt).toBe(2_000);
+        expect(get().sessionListRenderables.s1.latestReadyEventSeq).toBe(10);
+        expect(get().sessionListRenderables.s1.latestReadyEventAt).toBe(2_000);
     });
 
     it('does not maintain the legacy sessionsData list during applySessions updates', async () => {
@@ -1040,6 +1187,126 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
             expect(get().sessions.s1?.thinking).toBe(true);
             expect(get().sessionListViewData).toBe(initialListViewData);
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+        }
+    });
+
+    it('skips warm cache writes for active streaming progress when list rows are stable', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_700_000_000_000);
+        try {
+            vi.doMock('../../runtime/orchestration/projectManager', () => ({
+                projectManager: { updateSessions: vi.fn() },
+            }));
+            mockSessionPersistenceBoundaries();
+
+            const warmCache = await import('../../domains/state/warmCachePersistence');
+            const { createSessionsDomain } = await import('./sessions');
+            const { get, domain } = createHarness(createSessionsDomain);
+
+            domain.applySessions([
+                {
+                    id: 'streaming',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: true,
+                    thinkingAt: 1,
+                    presence: 'online',
+                } as any,
+            ]);
+
+            const initialListViewData = get().sessionListViewData;
+            expect(Array.isArray(initialListViewData)).toBe(true);
+
+            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            expect(saveWarmCache).toHaveBeenCalledTimes(1);
+
+            for (let index = 0; index < 10; index += 1) {
+                domain.applySessions([
+                    {
+                        id: 'streaming',
+                        seq: index + 2,
+                        createdAt: 1,
+                        updatedAt: index + 2,
+                        active: true,
+                        activeAt: index + 2,
+                        metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                        metadataVersion: 1,
+                        agentState: null,
+                        agentStateVersion: 0,
+                        thinking: true,
+                        thinkingAt: 1,
+                        presence: 'online',
+                    } as any,
+                ]);
+            }
+
+            expect(get().sessionListViewData).toBe(initialListViewData);
+            expect(saveWarmCache).toHaveBeenCalledTimes(1);
+            vi.runOnlyPendingTimers();
+            expect(saveWarmCache).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+        }
+    });
+
+    it('coalesces warm cache writes for active streaming progress during renderable replacement', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_700_000_000_000);
+        try {
+            vi.doMock('../../runtime/orchestration/projectManager', () => ({
+                projectManager: { updateSessions: vi.fn() },
+            }));
+            mockSessionPersistenceBoundaries();
+
+            const warmCache = await import('../../domains/state/warmCachePersistence');
+            const { createSessionsDomain } = await import('./sessions');
+            const { get, domain } = createHarness(createSessionsDomain);
+
+            const buildStreamingSession = (seq: number) => ({
+                id: 'streaming',
+                seq,
+                createdAt: 1,
+                updatedAt: seq,
+                active: true,
+                activeAt: seq,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadataVersion: 1,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: true,
+                thinkingAt: 1,
+                presence: 'online',
+            } as any);
+
+            domain.applySessions([buildStreamingSession(1)]);
+
+            const initialListViewData = get().sessionListViewData;
+            expect(Array.isArray(initialListViewData)).toBe(true);
+
+            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            expect(saveWarmCache).toHaveBeenCalledTimes(1);
+
+            for (let seq = 2; seq <= 11; seq += 1) {
+                domain.replaceSessionListRenderables([
+                    buildSessionListRenderableFromSession(buildStreamingSession(seq)),
+                ]);
+            }
+
+            expect(get().sessionListViewData).toBe(initialListViewData);
+            expect(saveWarmCache).toHaveBeenCalledTimes(1);
+            vi.runOnlyPendingTimers();
+            expect(saveWarmCache).toHaveBeenCalledTimes(2);
         } finally {
             vi.clearAllTimers();
             vi.useRealTimers();

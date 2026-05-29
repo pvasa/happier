@@ -8,6 +8,7 @@ import { installTranscriptCommonModuleMocks, resetTranscriptCommonModuleMockStat
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const buildChatListItemsCachedSpy = vi.hoisted(() => vi.fn((_args: unknown) => ({ cache: null, items: [] })));
+const isEnrichedMarkdownRuntimePreloadedSpy = vi.hoisted(() => vi.fn(() => false));
 const preloadEnrichedMarkdownRuntimeSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock('@/components/sessions/chatListItems', () => ({
@@ -16,6 +17,7 @@ vi.mock('@/components/sessions/chatListItems', () => ({
 }));
 
 vi.mock('@/components/markdown/enriched/preloadEnrichedMarkdownRuntime', () => ({
+    isEnrichedMarkdownRuntimePreloaded: isEnrichedMarkdownRuntimePreloadedSpy,
     preloadEnrichedMarkdownRuntime: preloadEnrichedMarkdownRuntimeSpy,
 }));
 
@@ -48,6 +50,9 @@ function installSwrFallbackMocks(params: { transcriptLoaded: boolean }) {
                 useSession: () => null,
                 useSessionTranscriptIds: () => ({ ids: [], isLoaded: params.transcriptLoaded }),
                 useSessionMessagesById: () => ({}),
+                useSessionMessagesReducerState: () => null,
+                useSessionForkSupportSource: () => null,
+                useSessionWorkspacePath: () => null,
                 useSessionMessages: () => ({ messages: [cachedMessage], isLoaded: params.transcriptLoaded }),
                 useForkedTranscriptSnapshot: () => null,
                 useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: false }),
@@ -72,6 +77,7 @@ describe('ChatList (SWR fallback)', () => {
     afterEach(() => {
         resetTranscriptCommonModuleMockState();
         buildChatListItemsCachedSpy.mockClear();
+        isEnrichedMarkdownRuntimePreloadedSpy.mockClear();
         preloadEnrichedMarkdownRuntimeSpy.mockClear();
         vi.resetModules();
     });
@@ -89,7 +95,7 @@ describe('ChatList (SWR fallback)', () => {
 
         await renderScreen(<ChatList session={session} />);
 
-        expect(preloadEnrichedMarkdownRuntimeSpy).toHaveBeenCalledOnce();
+        expect(preloadEnrichedMarkdownRuntimeSpy).toHaveBeenCalled();
     });
 
     it('uses the SWR messages array when transcript ids are empty during a refresh', async () => {

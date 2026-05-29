@@ -6,12 +6,16 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ItemList } from '@/components/ui/lists/ItemList';
+import { ItemListStatic } from '@/components/ui/lists/ItemList';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot, listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { resolveActiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
+import {
+    listServerProfileScopeIds,
+    normalizeServerSelectionSettingsForProfileScopeIds,
+} from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { promptSignedOutServerSwitchConfirmation } from '@/components/settings/server/modals/ServerSwitchAuthPrompt';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -32,9 +36,8 @@ export type NewSessionServerSelectionContentProps = Readonly<{
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        flex: 1,
         backgroundColor: theme.colors.background.canvas,
-        minHeight: 0,
+        width: '100%',
     },
     header: {
         flexDirection: 'row',
@@ -61,8 +64,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         padding: 4,
     },
     list: {
-        flex: 1,
-        minHeight: 0,
+        width: '100%',
     },
     listContent: {
         paddingBottom: Platform.select({ ios: 16, default: 12 }),
@@ -110,14 +112,15 @@ export function NewSessionServerSelectionContent(props: NewSessionServerSelectio
     }, [activeServer.generation]);
 
     const resolvedTarget = React.useMemo(() => {
+        const settings = normalizeServerSelectionSettingsForProfileScopeIds({
+            serverSelectionGroups,
+            serverSelectionActiveTargetKind,
+            serverSelectionActiveTargetId,
+        }, serverProfiles);
         return resolveActiveServerSelectionFromRawSettings({
             activeServerId: activeServer.serverId,
-            availableServerIds: serverProfiles.map((profile) => profile.id),
-            settings: {
-                serverSelectionGroups,
-                serverSelectionActiveTargetKind,
-                serverSelectionActiveTargetId,
-            },
+            availableServerIds: listServerProfileScopeIds(serverProfiles),
+            settings,
         });
     }, [
         activeServer.serverId,
@@ -204,7 +207,7 @@ export function NewSessionServerSelectionContent(props: NewSessionServerSelectio
     }, [onClose]);
 
     return (
-        <View style={[styles.container, { maxHeight, height: maxHeight }]}>
+        <View style={[styles.container, { maxHeight }]}>
             <View style={styles.header}>
                 <View style={styles.headerTextBlock}>
                     <Text style={styles.headerTitle}>{t('server.switchToServer')}</Text>
@@ -227,7 +230,7 @@ export function NewSessionServerSelectionContent(props: NewSessionServerSelectio
                 </Pressable>
             </View>
 
-            <ItemList
+            <ItemListStatic
                 style={styles.list}
                 containerStyle={styles.listContent}
             >
@@ -253,7 +256,7 @@ export function NewSessionServerSelectionContent(props: NewSessionServerSelectio
                         );
                     })}
                 </ItemGroup>
-            </ItemList>
+            </ItemListStatic>
         </View>
     );
 }

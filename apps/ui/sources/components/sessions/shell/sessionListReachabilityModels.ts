@@ -2,6 +2,7 @@ import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDi
 import { resolveSessionWorkspacePresentation } from '@/sync/domains/session/listing/sessionWorkspacePresentation';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
 import { readDisplayMachineTargetForSession } from '@/sync/ops/sessionMachineTarget';
+import { sessionTagKey } from './sessionTagUtils';
 
 type SessionReachableDisplay = Readonly<{
     machineId: string | null;
@@ -11,14 +12,20 @@ type SessionReachableDisplay = Readonly<{
 }>;
 
 export type SessionListReachabilityModels = Readonly<{
-    reachableSessionDisplayById: Map<string, SessionReachableDisplay>;
+    reachableSessionDisplayByKey: Map<string, SessionReachableDisplay>;
     hasMultipleMachines: boolean;
 }>;
 
 const EMPTY_REACHABILITY_MODELS: SessionListReachabilityModels = {
-    reachableSessionDisplayById: new Map<string, SessionReachableDisplay>(),
+    reachableSessionDisplayByKey: new Map<string, SessionReachableDisplay>(),
     hasMultipleMachines: false,
 };
+
+function resolveReachableDisplayRowKey(item: Extract<SessionListViewItem, { type: 'session' }>): string {
+    const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
+    const sessionId = String(item.session.id);
+    return serverId ? sessionTagKey(serverId, sessionId) : sessionId;
+}
 
 export function buildSessionListReachabilityModels(input: Readonly<{
     items: ReadonlyArray<SessionListViewItem> | null | undefined;
@@ -30,7 +37,7 @@ export function buildSessionListReachabilityModels(input: Readonly<{
         return EMPTY_REACHABILITY_MODELS;
     }
 
-    const reachableSessionDisplayById = new Map<string, SessionReachableDisplay>();
+    const reachableSessionDisplayByKey = new Map<string, SessionReachableDisplay>();
     const machineIds = new Set<string>();
 
     for (const item of items) {
@@ -46,7 +53,7 @@ export function buildSessionListReachabilityModels(input: Readonly<{
             workspaceLabelsV1: input.workspaceLabelsV1,
         });
 
-        reachableSessionDisplayById.set(item.session.id, {
+        reachableSessionDisplayByKey.set(resolveReachableDisplayRowKey(item), {
             machineId: workspace.machineId,
             machineLabel: workspace.machineLabel,
             workspaceSubtitle: workspace.displayTitle,
@@ -57,12 +64,12 @@ export function buildSessionListReachabilityModels(input: Readonly<{
         if (machineKey) machineIds.add(machineKey);
     }
 
-    if (reachableSessionDisplayById.size === 0) {
+    if (reachableSessionDisplayByKey.size === 0) {
         return EMPTY_REACHABILITY_MODELS;
     }
 
     return {
-        reachableSessionDisplayById,
+        reachableSessionDisplayByKey,
         hasMultipleMachines: machineIds.size > 1,
     };
 }

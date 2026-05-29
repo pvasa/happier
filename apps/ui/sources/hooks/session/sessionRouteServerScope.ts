@@ -1,3 +1,5 @@
+import React from 'react';
+
 type SessionRouteServerScopeParams = Readonly<Record<string, unknown>>;
 
 type SessionRouteHrefQueryValue = string | number | boolean | null | undefined;
@@ -91,4 +93,15 @@ export function createSessionRouteServerScope(
             query: options?.query,
         }),
     };
+}
+
+export function useSessionRouteServerScope(
+    params: SessionRouteServerScopeParams | null | undefined,
+): SessionRouteServerScope {
+    const serverId = readSessionRouteServerId(params);
+
+    return React.useMemo(
+        () => createSessionRouteServerScope(serverId ? { serverId } : null),
+        [serverId],
+    );
 }

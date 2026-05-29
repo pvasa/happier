@@ -3,12 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionListRenderableSession } from '../../domains/session/listing/sessionListRenderable';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
 
+type SessionListCacheByServerId = Record<string, SessionListViewItem[] | null>;
+let activeServerId = 'server_1';
+
 beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    vi.useRealTimers();
+    activeServerId = 'server_1';
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
 });
 
@@ -31,6 +37,7 @@ function mockSessionsDomainBoundaries() {
         loadSessionActionDrafts: () => ({}),
         loadSessionReviewCommentsDrafts: () => ({}),
         loadWorkspaceReviewCommentsDrafts: () => ({}),
+        prepareSessionLocalStateScopeForActivation: vi.fn(),
         loadLocalPetSourcesBySourceKey: () => ({}),
         saveSessionDrafts: vi.fn(),
         saveSessionLastViewed: vi.fn(),
@@ -53,10 +60,22 @@ function mockSessionsDomainBoundaries() {
         saveSessionListWarmCacheEntries: vi.fn(),
     }));
     vi.doMock('../sessionListCache', () => ({
-        setActiveServerSessionListCache: vi.fn((current: any, value: any) => ({ ...current, server_1: value })),
+        getActiveServerIdForSessionListCache: vi.fn(() => 'server_1'),
+        setServerSessionListCache: vi.fn((
+            current: SessionListCacheByServerId,
+            serverId: string,
+            value: SessionListViewItem[] | null,
+        ): SessionListCacheByServerId => ({
+            ...current,
+            [serverId]: value,
+        })),
+        setActiveServerSessionListCache: vi.fn((
+            current: SessionListCacheByServerId,
+            value: SessionListViewItem[] | null,
+        ): SessionListCacheByServerId => ({ ...current, server_1: value })),
     }));
     vi.doMock('../../domains/server/serverRuntime', () => ({
-        getActiveServerSnapshot: vi.fn(() => ({ serverId: 'server_1' })),
+        getActiveServerSnapshot: vi.fn(() => ({ serverId: activeServerId })),
     }));
     vi.doMock('../../runtime/orchestration/projectManager', () => ({
         projectManager: {
@@ -101,7 +120,13 @@ function createHarness(createSessionsDomain: any) {
     };
 
     const domain = createSessionsDomain({ get, set } as any);
-    return { get, domain };
+    return {
+        get,
+        setState: (patch: Record<string, unknown>) => {
+            state = { ...state, ...patch };
+        },
+        domain,
+    };
 }
 
 function makeRenderable(
@@ -378,6 +403,60 @@ describe('sessions domain: renderable patches', () => {
         expect(saveWarmCache).toHaveBeenCalledTimes(1);
     });
 
+    it('cancels deferred warm-cache writes when switching local scope before the debounce fires', async () => {
+        vi.useFakeTimers();
+        mockSessionsDomainBoundaries();
+
+        const warmCache = await import('../../domains/state/warmCachePersistence');
+        const { createSessionsDomain } = await import('./sessions');
+        const { domain, setState } = createHarness(createSessionsDomain);
+
+        domain.activateSessionLocalStateScope({ serverId: 'server_1', accountId: 'account_a' });
+        domain.replaceSessionListRenderables([makeRenderable({ id: 's1' })]);
+
+        const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        saveWarmCache.mockClear();
+
+        domain.applySessionListRenderablePatches([
+            { sessionId: 's1', patch: { seq: 2, updatedAt: 20 } },
+        ]);
+
+        activeServerId = 'server_2';
+        setState({ profile: { id: 'account_b' } });
+        domain.activateSessionLocalStateScope({ serverId: 'server_2', accountId: 'account_b' });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(saveWarmCache).not.toHaveBeenCalled();
+    });
+
+    it('cancels deferred warm-cache writes when clearing local scope before the debounce fires', async () => {
+        vi.useFakeTimers();
+        mockSessionsDomainBoundaries();
+
+        const warmCache = await import('../../domains/state/warmCachePersistence');
+        const { createSessionsDomain } = await import('./sessions');
+        const { domain, setState } = createHarness(createSessionsDomain);
+
+        domain.activateSessionLocalStateScope({ serverId: 'server_1', accountId: 'account_a' });
+        domain.replaceSessionListRenderables([makeRenderable({ id: 's1' })]);
+
+        const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        saveWarmCache.mockClear();
+
+        domain.applySessionListRenderablePatches([
+            { sessionId: 's1', patch: { seq: 2, updatedAt: 20 } },
+        ]);
+
+        activeServerId = 'server_2';
+        setState({ profile: { id: 'account_b' } });
+        domain.clearSessionLocalStateScope();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(saveWarmCache).not.toHaveBeenCalled();
+    });
+
     it('records patch planning telemetry when structural patches rebuild list data', async () => {
         mockSessionsDomainBoundaries();
 
@@ -420,13 +499,15 @@ describe('sessions domain: renderable patches', () => {
         expect(listRebuildEvent?.count).toBe(1);
         expect(listRebuildEvent?.fields.renderables).toBe(1);
         const warmCacheEvent = telemetry.snapshot().events.find(
-            (candidate) => candidate.name === 'sync.store.sessions.renderables.patch.warmCache',
+            (candidate) => candidate.name === 'sync.store.sessions.renderables.patch.warmCache.deferred',
         );
         expect(warmCacheEvent?.count).toBe(1);
         expect(warmCacheEvent?.fields.renderables).toBe(1);
+        expect(warmCacheEvent?.fields.immediate).toBe(1);
     });
 
-    it('persists warm cache when patching unhydrated session list renderables', async () => {
+    it('defers warm cache persistence when patching unhydrated session list renderables', async () => {
+        vi.useFakeTimers();
         mockSessionsDomainBoundaries();
 
         const warmCache = await import('../../domains/state/warmCachePersistence');
@@ -461,6 +542,9 @@ describe('sessions domain: renderable patches', () => {
         expect(get().sessionListViewDataByServerId['server_1']).not.toBeUndefined();
 
         const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        expect(saveWarmCache).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1_000);
         expect(saveWarmCache).toHaveBeenCalledTimes(2);
         const lastCall = saveWarmCache.mock.calls.at(-1);
         const entries = lastCall?.[2] as Record<string, any>;

@@ -4,6 +4,7 @@ import { readStoredSessionMessage } from '@/sync/runtime/readStoredSessionConten
 import { markStreamingMessagesAppliedForSessionUiTelemetry } from '@/sync/runtime/performance/sessionUiTelemetry';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { normalizeRawMessage, type NormalizedMessage } from '@/sync/typesRaw';
+import { isLegacyMemoryArtifactTranscriptRow } from './legacyMemoryArtifactTranscriptRows';
 
 export type TranscriptStreamSegmentSessionMessageEncryption = {
     decryptMessage: (message: ApiMessage) => Promise<DecryptedMessage | null>;
@@ -24,6 +25,8 @@ export type TranscriptStreamSegmentEphemeralUpdate = Readonly<{
 type TranscriptStreamSegmentTelemetryFields = Readonly<{
     encrypted: number;
     plain: number;
+    activeViewingSession: number;
+    backgroundSession: number;
 }>;
 
 type HandleTranscriptStreamSegmentEphemeralUpdateParams = Readonly<{
@@ -31,6 +34,8 @@ type HandleTranscriptStreamSegmentEphemeralUpdateParams = Readonly<{
     getSessionEncryption: (sessionId: string) => TranscriptStreamSegmentSessionMessageEncryption | null;
     getSession: (sessionId: string) => Session | undefined;
     applyMessages: (sessionId: string, messages: NormalizedMessage[]) => void;
+    isSessionActivelyViewed?: (sessionId: string) => boolean;
+    skipWhenHidden?: boolean;
 }>;
 
 async function applyTranscriptStreamSegmentEphemeralUpdate(
@@ -76,6 +81,9 @@ async function applyTranscriptStreamSegmentEphemeralUpdate(
     if (!getSession(sessionId)) {
         return;
     }
+    if (isLegacyMemoryArtifactTranscriptRow(decrypted)) {
+        return;
+    }
 
     const normalizeMessage = () => normalizeRawMessage(
         update.message.localId,
@@ -113,14 +121,30 @@ export async function handleTranscriptStreamSegmentEphemeralUpdate(
     params: HandleTranscriptStreamSegmentEphemeralUpdateParams,
 ): Promise<void> {
     const { update } = params;
+    const hasVisibilitySignal = typeof params.isSessionActivelyViewed === 'function';
+    const sessionActivelyViewed = params.isSessionActivelyViewed?.(update.sessionId) === true;
+    const shouldSkipHidden = params.skipWhenHidden === true && hasVisibilitySignal && !sessionActivelyViewed;
     if (!syncPerformanceTelemetry.isEnabled()) {
+        if (shouldSkipHidden) {
+            return;
+        }
         return applyTranscriptStreamSegmentEphemeralUpdate(params);
     }
 
     const telemetryFields = {
         encrypted: update.message.content?.t === 'encrypted' ? 1 : 0,
         plain: update.message.content?.t === 'plain' ? 1 : 0,
+        activeViewingSession: sessionActivelyViewed ? 1 : 0,
+        backgroundSession: hasVisibilitySignal && !sessionActivelyViewed ? 1 : 0,
     };
+
+    if (shouldSkipHidden) {
+        return syncPerformanceTelemetry.measureAsync(
+            'sync.sessions.socket.transcriptStreamSegment',
+            { ...telemetryFields, skippedHidden: 1 },
+            async () => {},
+        );
+    }
 
     return syncPerformanceTelemetry.measureAsync(
         'sync.sessions.socket.transcriptStreamSegment',

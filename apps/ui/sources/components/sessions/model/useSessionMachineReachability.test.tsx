@@ -116,4 +116,67 @@ describe('useSessionMachineReachability', () => {
             storage.setState(previousState, true);
         }
     });
+
+    it('keeps reachability stable for machine heartbeats that do not change online state', async () => {
+        const previousState = storage.getState();
+        try {
+            const serverId = getActiveServerSnapshot().serverId;
+            const machine = { ...baseMachine, activeAt: Date.now() };
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                machines: {
+                    'machine-1': machine as any,
+                },
+                machineListByServerId: {
+                    [serverId]: [machine as any],
+                },
+                sessions: {
+                    visible: baseSession('visible', 1) as any,
+                },
+            }));
+
+            const seen: Array<ReturnType<typeof useSessionMachineReachability>> = [];
+            const hook = await renderHook(() => {
+                const value = useSessionMachineReachability('visible');
+                React.useEffect(() => {
+                    seen.push(value);
+                }, [value]);
+                return value;
+            }, { flushOptions: { cycles: 1, turns: 4 } });
+
+            expect(hook.getCurrent()).toEqual({
+                machineReachable: true,
+                machineOnline: true,
+                machineRpcTargetAvailable: true,
+            });
+            expect(seen).toHaveLength(1);
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    machines: {
+                        ...state.machines,
+                        'machine-1': {
+                            ...state.machines['machine-1'],
+                            activeAt: Date.now(),
+                        } as any,
+                    },
+                }));
+            });
+
+            await flushHookEffects({ cycles: 2, turns: 4 });
+
+            expect(hook.getCurrent()).toEqual({
+                machineReachable: true,
+                machineOnline: true,
+                machineRpcTargetAvailable: true,
+            });
+            expect(seen).toHaveLength(1);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState, true);
+        }
+    });
 });

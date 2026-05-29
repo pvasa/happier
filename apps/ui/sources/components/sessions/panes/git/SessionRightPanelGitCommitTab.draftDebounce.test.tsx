@@ -2,10 +2,13 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { installSessionGitPaneCommonModuleMocks } from './sessionGitPaneTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const gitCommitTabTheme = createThemeFixture();
 
 installSessionGitPaneCommonModuleMocks({
     reactNative: async () => {
@@ -25,6 +28,14 @@ installSessionGitPaneCommonModuleMocks({
             },
         });
     },
+    typography: () => ({
+        Typography: {
+            default: () => ({}),
+            mono: () => ({}),
+            eyebrow: () => ({}),
+            keyHint: () => ({}),
+        },
+    }),
 });
 
 vi.mock('@expo/vector-icons', () => ({
@@ -54,7 +65,7 @@ describe('SessionRightPanelGitCommitTab (draft debounce)', () => {
         const { SessionRightPanelGitCommitTab } = await import('./SessionRightPanelGitCommitTab');
 
         const screen = await renderScreen(<SessionRightPanelGitCommitTab
-            theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f', danger: '#c00' } }}
+            theme={gitCommitTabTheme}
             sessionId="s1"
             sessionPath="/workspace"
             backendLabel="Git"
@@ -121,7 +132,7 @@ describe('SessionRightPanelGitCommitTab (draft debounce)', () => {
         const { SessionRightPanelGitCommitTab } = await import('./SessionRightPanelGitCommitTab');
 
         const screen = await renderScreen(<SessionRightPanelGitCommitTab
-            theme={{ colors: { divider: '#ddd', surface: '#fff', surfaceHigh: '#f6f6f6', text: '#000', textSecondary: '#666', success: '#0a0', warning: '#f90', textLink: '#09f', danger: '#c00' } }}
+            theme={gitCommitTabTheme}
             sessionId="s1"
             sessionPath="/workspace"
             backendLabel="Git"

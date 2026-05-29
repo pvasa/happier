@@ -85,6 +85,118 @@ function createMachine(id: string): Machine {
 }
 
 describe('useServerScopedMachineOptions', () => {
+    it('refreshes groups when a machine freshness timestamp changes', async () => {
+        const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
+        const activeAt = Date.now();
+        const activeMachine = {
+            ...createMachine('machine-a'),
+            activeAt,
+        };
+
+        const screen = await renderScreen(<Probe
+                    allowedServerIds={['server-a']}
+                    activeServerId="server-a"
+                    activeMachines={[activeMachine]}
+                    onGroups={(groups) => captured.push(groups)}
+                />);
+        const firstGroups = captured.at(-1);
+
+        await act(async () => {
+            screen.tree.update(<Probe
+                        allowedServerIds={['server-a']}
+                        activeServerId="server-a"
+                        activeMachines={[{ ...activeMachine, activeAt: activeAt + 1000 }]}
+                        onGroups={(groups) => captured.push(groups)}
+                    />);
+        });
+        const secondGroups = captured.at(-1);
+
+        expect(secondGroups).not.toBe(firstGroups);
+        expect(secondGroups?.[0]?.machines[0]?.activeAt).toBe(activeAt + 1000);
+    });
+
+    it('keeps groups stable when refresh token changes but server profiles are equivalent', async () => {
+        const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
+        const activeMachine = createMachine('machine-a');
+
+        const screen = await renderScreen(<Probe
+                    allowedServerIds={['server-a']}
+                    activeServerId="server-a"
+                    activeMachines={[activeMachine]}
+                    refreshToken={1}
+                    onGroups={(groups) => captured.push(groups)}
+                />);
+        const firstGroups = captured.at(-1);
+
+        await act(async () => {
+            screen.tree.update(<Probe
+                        allowedServerIds={['server-a']}
+                        activeServerId="server-a"
+                        activeMachines={[activeMachine]}
+                        refreshToken={2}
+                        onGroups={(groups) => captured.push(groups)}
+                    />);
+        });
+        const secondGroups = captured.at(-1);
+
+        expect(secondGroups).toBe(firstGroups);
+    });
+
+    it('refreshes groups when scoped machine cache freshness changes', async () => {
+        const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
+        const activeMachine = createMachine('machine-a');
+        const remoteMachine = createMachine('machine-cache');
+
+        act(() => {
+            storage.setState((state) => ({
+                ...state,
+                machineListByServerId: {
+                    ...state.machineListByServerId,
+                    'server-b': [{ ...remoteMachine, activeAt: 100 }],
+                },
+                machineListStatusByServerId: {
+                    ...state.machineListStatusByServerId,
+                    'server-b': 'idle',
+                },
+            }));
+        });
+
+        const screen = await renderScreen(<Probe
+                    allowedServerIds={['server-a', 'server-b']}
+                    activeServerId="server-a"
+                    activeMachines={[activeMachine]}
+                    onGroups={(groups) => captured.push(groups)}
+                />);
+        const firstGroups = captured.at(-1);
+
+        act(() => {
+            storage.setState((state) => ({
+                ...state,
+                machineListByServerId: {
+                    ...state.machineListByServerId,
+                    'server-b': [{ ...remoteMachine, activeAt: 200 }],
+                },
+                machineListStatusByServerId: {
+                    ...state.machineListStatusByServerId,
+                    'server-b': 'idle',
+                },
+            }));
+        });
+
+        await act(async () => {
+            screen.tree.update(<Probe
+                        allowedServerIds={['server-a', 'server-b']}
+                        activeServerId="server-a"
+                        activeMachines={[activeMachine]}
+                        onGroups={(groups) => captured.push(groups)}
+                    />);
+        });
+        const secondGroups = captured.at(-1);
+
+        expect(secondGroups).not.toBe(firstGroups);
+        expect(secondGroups?.find((group) => group.serverId === 'server-b')?.machines[0]?.activeAt).toBe(200);
+    });
+
     it('keeps active server machines and uses server-scoped machine cache for non-active servers (no extra fetch)', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
         const activeMachine = createMachine('machine-a');

@@ -1,6 +1,7 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { isVersionSupported, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
 import { isSessionExclusiveLocalControl } from '@/sync/domains/session/control/sessionLocalControl';
+import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 
 export type MessageSendMode = 'agent_queue' | 'interrupt' | 'server_pending';
 
@@ -11,6 +12,7 @@ export function chooseSubmitMode(opts: {
     busySteerSendPolicy?: BusySteerSendPolicy;
     explicitMode?: MessageSendMode;
     session: Session | null;
+    nowMs?: number;
 }): MessageSendMode {
     const configuredMode = opts.configuredMode;
     const requestedMode = opts.explicitMode ?? configuredMode;
@@ -19,7 +21,7 @@ export function chooseSubmitMode(opts: {
     const session = opts.session;
     // Server-side pending queue V2 support is negotiated via session summary fields.
     // Mixed-version safety: older servers won't include these fields.
-    const supportsQueue = typeof (session as any)?.pendingVersion === 'number';
+    const supportsQueue = typeof session?.pendingVersion === 'number';
     if (!supportsQueue) {
         // If the user explicitly configured pending but the server doesn't support it,
         // fall back to agent_queue to avoid "phantom pending" that can never be processed.
@@ -40,8 +42,22 @@ export function chooseSubmitMode(opts: {
         return 'server_pending';
     }
 
+    if (session?.active === false) {
+        return 'server_pending';
+    }
+
     const controlledByUser = isSessionExclusiveLocalControl(session);
-    const isBusy = Boolean(session?.thinking);
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: session?.active,
+        activeAt: session?.activeAt,
+        presence: session?.presence,
+        thinking: session?.thinking,
+        thinkingAt: session?.thinkingAt,
+        latestTurnStatus: session?.latestTurnStatus,
+        latestTurnStatusObservedAt: session?.latestTurnStatusObservedAt,
+        meaningfulActivityAt: session?.meaningfulActivityAt,
+    }, opts.nowMs ?? Date.now());
+    const isBusy = runtimeStatus.working;
     const isOnline = session?.presence === 'online';
     const agentReady = Boolean(session && session.agentStateVersion > 0);
     const capabilities = session?.agentState?.capabilities;

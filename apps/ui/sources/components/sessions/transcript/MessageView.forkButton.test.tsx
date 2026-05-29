@@ -153,6 +153,8 @@ installMessageViewCommonModuleMocks({
         thinkingAt: 0,
         presence: 'online',
       }),
+      useSessionForkSupportSource: () => ({ metadata: sessionMetadata }),
+      useSessionWorkspacePath: () => projectForSession?.key?.path ?? sessionMetadata?.path ?? null,
       useSessionMessagesById: () => ({}),
       useSessionMessagesReducerState: () => ({} as any),
       storage: storageStore,
@@ -280,7 +282,7 @@ describe('MessageView (fork button)', () => {
     const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
 
     const actionContainer = getActionContainer(screen, 'm2');
-    const rowContainer = findAncestor(actionContainer, (node: any) => typeof node.props?.onPointerEnter === 'function');
+    const rowContainer = findAncestor(actionContainer, (node: any) => typeof node.props?.onHoverIn === 'function');
     expect(rowContainer).toBeTruthy();
     expect(rowContainer?.props.pointerEvents).toBeUndefined();
   });

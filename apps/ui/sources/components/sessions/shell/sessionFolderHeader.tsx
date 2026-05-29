@@ -28,22 +28,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderRadius: 8,
         alignSelf: 'stretch',
     },
-    dropTarget: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: 0,
-        bottom: 0,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        opacity: 0,
-    },
-    dropTargetActive: {
-        borderColor: theme.colors.accent.blue,
-        backgroundColor: theme.colors.state.active.background,
-        opacity: 1,
-    },
     content: {
         flex: 1,
         minWidth: 0,
@@ -92,7 +76,6 @@ export function FolderGroupHeader(props: Readonly<{
     onMoveDown?: () => void;
     onMoveToWorkspaceRoot?: () => void;
     onMoveUp?: () => void;
-    activeDropTargetId?: string | null;
     disabled?: boolean;
 }>) {
     const styles = stylesheet;
@@ -105,8 +88,6 @@ export function FolderGroupHeader(props: Readonly<{
     const iconColor = props.disabled ? theme.colors.text.tertiary : theme.colors.text.secondary;
     const normalizedDepth = Math.min(Math.max(0, Math.trunc(props.item.depth)), FOLDER_INDENT_CAP);
     const indent = FOLDER_ROOT_INDENT + normalizedDepth * FOLDER_NESTED_INDENT_STEP;
-    const dropTargetId = `folder:${props.item.folderId}`;
-    const isActiveDropTarget = props.activeDropTargetId === dropTargetId;
 
     const menuItems = React.useMemo((): DropdownMenuItem[] => [
         {
@@ -189,14 +170,6 @@ export function FolderGroupHeader(props: Readonly<{
                 onPointerEnter={isWeb ? () => setHovered(true) : undefined}
                 onPointerLeave={isWeb ? () => setHovered(false) : undefined}
             >
-                <View
-                    pointerEvents="none"
-                    testID={`session-folder-drop-target-${props.item.folderId}`}
-                    style={[
-                        styles.dropTarget,
-                        isActiveDropTarget ? styles.dropTargetActive : null,
-                    ]}
-                />
                 <Pressable
                     style={styles.actionButton}
                     onPress={(event) => {

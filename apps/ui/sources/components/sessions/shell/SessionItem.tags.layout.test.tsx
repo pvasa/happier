@@ -1,9 +1,9 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,8 +47,6 @@ installSessionShellCommonModuleMocks({
             importOriginal,
             overrides: {
                 useHasUnreadMessages: () => false,
-                useSessionListActivityTimeLabel: () => '1m',
-                useSessionListAttentionState: () => 'quiet',
                 useSetting: (key: string) => {
                     if (key === 'sessionListIdentityDisplay') return 'avatar';
                     if (key === 'sessionListActiveColorModeV1') return 'activityAndAttention';
@@ -67,7 +65,6 @@ installSessionShellCommonModuleMocks({
                     connectedServicesV2: [],
                 }),
                 useSession: () => null,
-                useSessionListMeaningfulActivityAt: () => null,
             },
         });
     },
@@ -176,13 +173,30 @@ function createSession(): any {
 }
 
 describe('SessionItem tags (layout)', () => {
+    type SessionItemForTestProps = Omit<
+        React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>,
+        'rowModel'
+    > & {
+        rowModel?: React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>['rowModel'];
+    };
+
+    let SessionItem: React.ComponentType<SessionItemForTestProps>;
+
+    beforeAll(async () => {
+        const { SessionItem: ProductionSessionItem } = await import('./SessionItem');
+        SessionItem = (props) => (
+            <ProductionSessionItem
+                {...props}
+                rowModel={props.rowModel ?? createSessionItemTestRowModel(props)}
+            />
+        );
+    });
+
     afterEach(() => {
         standardCleanup();
     });
 
     it('does not remove the fixed row height when tags are visible', async () => {
-        const { SessionItem } = await import('./SessionItem');
-
         const screen = await renderScreen(
             <SessionItem
                 session={createSession()}
@@ -209,9 +223,7 @@ describe('SessionItem tags (layout)', () => {
         expect(styleArray.some((s: any) => typeof s === 'object' && s?.paddingVertical === 10)).toBe(false);
     });
 
-    it('renders tags in very compact mode (compact + minimal)', async () => {
-        const { SessionItem } = await import('./SessionItem');
-
+    it('keeps narrow tags in the trailing metadata cluster', async () => {
         const screen = await renderScreen(
             <SessionItem
                 session={createSession()}
@@ -226,18 +238,49 @@ describe('SessionItem tags (layout)', () => {
                 compact={true}
                 compactMinimal={true}
                 tagsEnabled={true}
-                tags={['tag-a']}
-                allKnownTags={['tag-a']}
+                tags={['TODO']}
+                allKnownTags={['TODO']}
                 onSetTags={vi.fn()}
             />,
         );
 
-        expect(screen.getTextContent()).toContain('tag-a');
+        const rightArea = screen.findByTestId('session-item-right-area');
+        const rightAreaText = rightArea?.findAllByType('Text').map((node) => node.props.children).join(' ');
+        expect(rightAreaText).toContain('TODO');
+        expect(screen.findByTestId('session-item-tags-below-sess_1')).toBeNull();
+    });
+
+    it('shows shortest narrow tags inline with an overflow chip instead of wrapping', async () => {
+        const screen = await renderScreen(
+            <SessionItem
+                session={createSession()}
+                serverId="server_a"
+                serverName="Server A"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={true}
+                compactMinimal={true}
+                tagsEnabled={true}
+                tags={['tag', 'tag 12', 'tag 3']}
+                allKnownTags={['tag', 'tag 12', 'tag 3']}
+                onSetTags={vi.fn()}
+            />,
+        );
+
+        const rightArea = screen.findByTestId('session-item-right-area');
+        const rightAreaText = rightArea?.findAllByType('Text').map((node) => node.props.children).join(' ');
+        expect(rightAreaText).toContain('tag');
+        expect(rightAreaText).toContain('tag 3');
+        expect(rightAreaText).toContain('+1');
+        expect(rightAreaText).not.toContain('tag 12');
+        expect(screen.findByTestId('session-item-tags-below-sess_1')).toBeNull();
     });
 
     it('places a short compact tag in the trailing metadata cluster', async () => {
-        const { SessionItem } = await import('./SessionItem');
-
         const screen = await renderScreen(
             <SessionItem
                 session={createSession()}
@@ -262,8 +305,6 @@ describe('SessionItem tags (layout)', () => {
     });
 
     it('hides compact tags while row hover actions are visible', async () => {
-        const { SessionItem } = await import('./SessionItem');
-
         const screen = await renderScreen(
             <SessionItem
                 session={createSession()}

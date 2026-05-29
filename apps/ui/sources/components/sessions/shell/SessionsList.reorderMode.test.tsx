@@ -12,9 +12,15 @@ vi.mock('react-native-gesture-handler', async () => {
 
 vi.mock('react-native-reanimated', () => ({
     default: { View: (props: any) => React.createElement('Animated.View', props) },
+    Easing: {
+        bezier: () => () => 0,
+        linear: () => 0,
+    },
     useSharedValue: (init: any) => ({ value: init }),
     useAnimatedStyle: (fn: () => any) => fn(),
+    useAnimatedReaction: () => undefined,
     withSpring: (value: any) => value,
+    withTiming: (value: any) => value,
 }));
 
 vi.mock('react-native-worklets', () => ({

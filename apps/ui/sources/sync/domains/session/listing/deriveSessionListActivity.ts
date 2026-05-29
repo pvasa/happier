@@ -1,6 +1,7 @@
 import type { SessionState } from '@/utils/sessions/sessionUtils';
 import { deriveSessionAttentionState } from '../attention/deriveSessionAttentionState';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
+import { isSessionListReadyForReview } from './sessionListReadyForReview';
 
 export type SessionListSecondaryLineMode = 'status' | 'path';
 export type SessionListAttentionState =
@@ -13,13 +14,30 @@ export type SessionListAttentionState =
     | 'permission_required'
     | 'action_required';
 
+export function resolveSessionListUpdatedAt(params: Readonly<{
+    sessionCreatedAt: number | null | undefined;
+    sessionUpdatedAt: number | null | undefined;
+}>): number {
+    return typeof params.sessionUpdatedAt === 'number'
+        && Number.isFinite(params.sessionUpdatedAt)
+        && params.sessionUpdatedAt > 0
+        ? params.sessionUpdatedAt
+        : typeof params.sessionCreatedAt === 'number'
+            && Number.isFinite(params.sessionCreatedAt)
+            && params.sessionCreatedAt > 0
+            ? params.sessionCreatedAt
+            : 0;
+}
+
 export function deriveSessionListMeaningfulActivityAt(params: Readonly<{
     sessionCreatedAt: number | null | undefined;
+    sessionMeaningfulActivityAt?: number | null | undefined;
     latestCommittedMessageCreatedAt: number | null | undefined;
     latestThinkingActivityAt: number | null | undefined;
     latestPendingMessageCreatedAt: number | null | undefined;
 }>): number | null {
     const meaningfulCandidates = [
+        params.sessionMeaningfulActivityAt,
         params.latestCommittedMessageCreatedAt,
         params.latestPendingMessageCreatedAt,
         params.sessionCreatedAt,
@@ -40,6 +58,9 @@ export function deriveSessionListAttentionState(input: Readonly<{
     sessionState: SessionState;
     latestTurnStatus?: PrimaryTurnStatusV1 | null;
     lastRuntimeIssue?: SessionRuntimeIssueV1 | null;
+    seq?: number | null;
+    meaningfulActivityAt?: number | null;
+    latestTurnStatusObservedAt?: number | null;
     latestReadyEventSeq?: number | null;
     latestReadyEventAt?: number | null;
     lastViewedSessionSeq?: number | null;
@@ -47,36 +68,21 @@ export function deriveSessionListAttentionState(input: Readonly<{
     const sessionAttention = deriveSessionAttentionState({
         latestTurnStatus: input.latestTurnStatus,
         lastRuntimeIssue: input.lastRuntimeIssue,
+        isRunning: input.sessionState === 'thinking' || input.sessionState === 'resuming',
     });
-    if (sessionAttention === 'failed') return 'failed';
     if (input.sessionState === 'action_required') return 'action_required';
     if (input.sessionState === 'permission_required') return 'permission_required';
     // Legacy list/session internals call active turn work "thinking"; row presentation maps this to product "working".
     if (sessionAttention === 'running') return 'thinking';
-    if (input.sessionState === 'resuming') return 'thinking';
-    if (input.sessionState === 'thinking') return 'thinking';
-    if (isReadyEventAfterReadCursor(input)) return 'ready';
+    if (sessionAttention === 'failed') return 'failed';
+    if (isSessionListReadyForReview(input)) return 'ready';
     if (input.pendingCount > 0) return 'pending';
     if (input.hasUnreadMessages) return 'unread';
     return 'quiet';
 }
 
-function isReadyEventAfterReadCursor(input: Readonly<{
-    latestReadyEventSeq?: number | null;
-    lastViewedSessionSeq?: number | null;
-}>): boolean {
-    const latestReadyEventSeq = normalizeSeq(input.latestReadyEventSeq);
-    if (latestReadyEventSeq === null) return false;
-    return latestReadyEventSeq > (normalizeSeq(input.lastViewedSessionSeq) ?? 0);
-}
-
-function normalizeSeq(value: number | null | undefined): number | null {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-    return Math.max(0, Math.trunc(value));
-}
-
 export function resolveSessionListSecondaryLineMode(params: Readonly<{
-    groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'attention' | 'shared' | 'folder' | null;
+    groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'attention' | 'working' | 'shared' | 'folder' | null;
 }>): SessionListSecondaryLineMode {
     if (params.groupKind === 'date') {
         return 'path';

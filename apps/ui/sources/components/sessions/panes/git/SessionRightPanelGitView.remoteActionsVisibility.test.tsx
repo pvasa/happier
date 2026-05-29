@@ -64,6 +64,7 @@ installSessionDetailsPanelCommonModuleMocks({
             useSessionProjectScmOperationLog: () => [],
             useSessionProjectScmSnapshot: () => scmSnapshotMock,
             useSessionProjectScmSnapshotError: () => null,
+            useSessionRealtimeScmTranscriptConsumer: () => {},
             useSessionProjectScmTouchedPaths: () => [],
             useSessionProjectScmOperationLogEntryIds: () => [],
             useSessionProjectScmTouchedPathsCount: () => 0,

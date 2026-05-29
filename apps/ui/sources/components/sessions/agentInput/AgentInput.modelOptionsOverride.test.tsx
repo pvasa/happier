@@ -169,7 +169,11 @@ vi.mock('@/sync/domains/models/modelOptions', () => ({
 }));
 
 vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ effectiveModelId: 'default', applyScope: 'spawn_only', notes: [] }),
+    describeEffectiveModelMode: (params: { selectedModelId?: string | null }) => ({
+        effectiveModelId: params.selectedModelId?.trim() || 'default',
+        applyScope: 'spawn_only',
+        notes: [],
+    }),
 }));
 
 vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
@@ -218,6 +222,7 @@ vi.mock('@/components/autocomplete/applySuggestion', () => ({
 }));
 
 vi.mock('@/components/ui/popover', () => ({
+    MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: {},
     Popover: (props: any) => {
         lastPopoverProps = props;
         if (!props.open) return null;
@@ -1528,6 +1533,105 @@ describe('AgentInput (modelOptionsOverride)', () => {
         await screen.pressByTestIdAsync('agent-input-config-option-option:speed:fast');
 
         expect(onAcpConfigOptionChange).toHaveBeenCalledWith('speed', 'fast');
+    });
+
+    it('routes Cursor model_config options through the selected model controls instead of generic config controls', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const onAcpConfigOptionChange = vi.fn();
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+                    value: 'hello',
+                    placeholder: 'placeholder',
+                    onChangeText: () => {},
+                    onSend: () => {},
+                    autocompletePrefixes: [],
+                    autocompleteSuggestions: async () => [],
+                    agentType: 'codex',
+                    permissionMode: 'default',
+                    onPermissionModeChange: () => {},
+                    modelMode: 'composer-2.5',
+                    onModelModeChange: () => {},
+                    modelOptionsOverride: [
+                        { value: 'default', label: 'Use CLI settings', description: '' },
+                        {
+                            value: 'composer-2.5',
+                            label: 'Composer 2.5',
+                            description: 'Cursor default.',
+                            modelOptions: [
+                                {
+                                    id: 'fast',
+                                    name: 'Fast',
+                                    category: 'model_config',
+                                    type: 'select',
+                                    currentValue: 'true',
+                                    options: [
+                                        { value: 'false', name: 'Off' },
+                                        { value: 'true', name: 'Fast' },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                    acpSessionModeOptionsOverride: [
+                        { id: 'agent', name: 'Agent' },
+                        { id: 'plan', name: 'Plan' },
+                    ],
+                    acpSessionModeSelectedIdOverride: 'agent',
+                    onAcpSessionModeChange: () => {},
+                    acpConfigOptionsOverride: [
+                        {
+                            id: 'mode',
+                            name: 'Mode',
+                            category: 'mode',
+                            type: 'select',
+                            currentValue: 'agent',
+                            options: [
+                                { value: 'agent', name: 'Agent' },
+                                { value: 'plan', name: 'Plan' },
+                            ],
+                        },
+                        {
+                            id: 'model',
+                            name: 'Model',
+                            category: 'model',
+                            type: 'select',
+                            currentValue: 'composer-2.5',
+                            options: [
+                                { value: 'composer-2.5', name: 'Composer 2.5' },
+                            ],
+                        },
+                        {
+                            id: 'fast',
+                            name: 'Fast',
+                            category: 'model_config',
+                            type: 'select',
+                            currentValue: 'true',
+                            options: [
+                                { value: 'false', name: 'Off' },
+                                { value: 'true', name: 'Fast' },
+                            ],
+                        },
+                        {
+                            id: 'telemetry',
+                            name: 'Telemetry',
+                            type: 'select',
+                            currentValue: 'false',
+                            options: [
+                                { value: 'false', name: 'Off' },
+                                { value: 'true', name: 'On' },
+                            ],
+                        },
+                    ],
+                    onAcpConfigOptionChange,
+                } as any));
+        expect(screen.findByTestId('agent-input-action-menu-button')).toBeNull();
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        expect(screen.findByTestId('agent-input-config-option:mode')).toBeNull();
+        expect(screen.findByTestId('agent-input-config-option:model')).toBeNull();
+        expect(screen.findByTestId('agent-input-config-option:fast')).toBeNull();
+        expect(screen.findByTestId('agent-input-config-option:telemetry')).toBeTruthy();
+        expect(lastModelPickerOverlayProps?.selectedOptionControls?.map((control: any) => control.option.id)).toEqual(['fast']);
     });
 
     it('renders a config-options loading affordance when ACP config preflight is still loading', async () => {

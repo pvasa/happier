@@ -8,6 +8,9 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import type { ScmProjectInFlightOperation } from '@/sync/runtime/orchestration/projectManager';
+import type { MarkdownEditMode } from '@/components/ui/markdown/editor/markdownEditorTypes';
+import type { MarkdownRichIneligibleReason } from '@/components/ui/markdown/editor/core/eligibility/markdownRichEligibility';
+import { resolveMarkdownRichDisabledReasonCopy } from '@/components/ui/markdown/editor/core/eligibility/markdownRichDisabledReasonCopy';
 
 export type FileDisplayMode = 'file' | 'diff' | 'markdown';
 export type FileDiffMode = 'included' | 'pending' | 'both';
@@ -58,6 +61,18 @@ type FileActionToolbarProps = {
     onStartEditingFile?: () => void;
     onCancelEditingFile?: () => void;
     onSaveEditingFile?: () => void;
+    /** Raw<->Rich toggle (Lane I / I3): only shown for an editable markdown file. */
+    showMarkdownEditToggle?: boolean;
+    markdownEditMode?: MarkdownEditMode;
+    onMarkdownEditMode?: (mode: MarkdownEditMode) => void;
+    /**
+     * Authoritative rich-eligibility from the edit-mode hook (N2). Passed through
+     * explicitly rather than inferred from `markdownRichDisabledReason`, so the
+     * toggle never has to second-guess the single source of truth.
+     */
+    markdownRichEligible?: boolean;
+    /** When set, rich is unavailable; the reason is surfaced inline by the toggle. */
+    markdownRichDisabledReason?: MarkdownRichIneligibleReason;
 };
 
 export function FileActionToolbar(props: FileActionToolbarProps) {
@@ -101,6 +116,11 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         onStartEditingFile,
         onCancelEditingFile,
         onSaveEditingFile,
+        showMarkdownEditToggle,
+        markdownEditMode,
+        onMarkdownEditMode,
+        markdownRichEligible,
+        markdownRichDisabledReason,
     } = props;
 
     const actionBusy = isApplyingStage || Boolean(inFlightScmOperation);
@@ -116,6 +136,16 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         + (shouldShowFileToggle ? 1 : 0)
         + (shouldShowMarkdownToggle ? 1 : 0);
     const shouldShowDisplayToggles = displayToggleCount > 1;
+    // While editing a markdown file, the view-mode dropdown is REPURPOSED to pick
+    // the editing mode (Raw source vs Rich WYSIWYG): you cannot change the view
+    // (file/diff/markdown) mid-edit, so one context-dependent control replaces the
+    // old separate segmented Raw/Rich toggle. Editing always happens in the 'file'
+    // display, so this is the single condition that flips the dropdown's purpose.
+    const isMarkdownEditModeMenu = showFileEditorActions
+        && isEditingFile === true
+        && displayMode === 'file'
+        && showMarkdownEditToggle === true
+        && onMarkdownEditMode != null;
     const [toolbarWidth, setToolbarWidth] = React.useState<number | null>(null);
     const [displayMenuOpen, setDisplayMenuOpen] = React.useState(false);
     const [diffAreaMenuOpen, setDiffAreaMenuOpen] = React.useState(false);
@@ -197,6 +227,26 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         return items;
     }, [commandIconSize, shouldShowDiffToggle, shouldShowFileToggle, shouldShowMarkdownToggle, theme.colors.text.secondary]);
 
+    // Edit-mode options shown in the repurposed dropdown while editing markdown.
+    // Rich is disabled (with the reason as a subtitle) when the file is ineligible.
+    const markdownEditModeItems = React.useMemo<DropdownMenuItem[]>(() => {
+        const richDisabled = markdownRichEligible !== true;
+        return [
+            {
+                id: 'raw',
+                title: t('settingsSourceControl.markdownEditMode.options.raw.title'),
+                icon: <Octicons name="code" size={commandIconSize} color={theme.colors.text.secondary} />,
+            },
+            {
+                id: 'rich',
+                title: t('settingsSourceControl.markdownEditMode.options.rich.title'),
+                icon: <Octicons name="markdown" size={commandIconSize} color={theme.colors.text.secondary} />,
+                disabled: richDisabled,
+                subtitle: richDisabled ? resolveMarkdownRichDisabledReasonCopy(markdownRichDisabledReason) : undefined,
+            },
+        ];
+    }, [commandIconSize, markdownRichEligible, markdownRichDisabledReason, theme.colors.text.secondary]);
+
     const diffAreaItems = React.useMemo<DropdownMenuItem[]>(() => {
         const items: DropdownMenuItem[] = [];
         if (hasPendingDelta) {
@@ -233,6 +283,15 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         : displayMode === 'markdown'
             ? 'markdown'
             : 'file';
+    // Reflect the EFFECTIVE mode (what's actually rendered), not the stored
+    // preference: a 'rich' preference on an INELIGIBLE file renders Raw, so the
+    // dropdown trigger + selection must read "Raw" (the disabled Rich option + its
+    // reason explain why). Showing "Rich" while raw is rendered is misleading.
+    const effectiveMarkdownEditMode = markdownEditMode === 'rich' && markdownRichEligible === true ? 'rich' : 'raw';
+    const selectedMarkdownEditModeLabel = effectiveMarkdownEditMode === 'rich'
+        ? t('settingsSourceControl.markdownEditMode.options.rich.title')
+        : t('settingsSourceControl.markdownEditMode.options.raw.title');
+    const selectedMarkdownEditModeIconName = effectiveMarkdownEditMode === 'rich' ? 'markdown' : 'code';
     const selectedDiffAreaLabel = diffAreaItems.find((item) => item.id === diffMode)?.title
         ?? (diffMode === 'included'
             ? t('files.diffModes.included')
@@ -306,7 +365,30 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 flexShrink: 0,
             }}
         >
-            {shouldShowDisplayToggles ? (
+            {isMarkdownEditModeMenu ? (
+                <DropdownMenu
+                    open={displayMenuOpen}
+                    onOpenChange={setDisplayMenuOpen}
+                    items={markdownEditModeItems}
+                    selectedId={effectiveMarkdownEditMode}
+                    onSelect={(itemId) => {
+                        if (itemId === 'raw' || itemId === 'rich') {
+                            onMarkdownEditMode?.(itemId);
+                        }
+                    }}
+                    matchTriggerWidth={false}
+                    maxWidthCap={260}
+                    placement="bottom"
+                    popoverAnchorAlign="start"
+                    trigger={({ toggle }) => renderDropdownTrigger({
+                        label: selectedMarkdownEditModeLabel,
+                        icon: <Octicons name={selectedMarkdownEditModeIconName} size={commandIconSize} color={theme.colors.text.secondary} />,
+                        selected: true,
+                        testID: 'markdown-edit-mode-menu',
+                        toggle,
+                    })}
+                />
+            ) : shouldShowDisplayToggles ? (
                 <DropdownMenu
                     open={displayMenuOpen}
                     onOpenChange={setDisplayMenuOpen}
@@ -385,6 +467,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                             {t('common.cancel')}
                         </Text>
                     </Pressable>
+                    {/* Raw<->Rich selection now lives in the repurposed view-mode dropdown
+                        above (see `isMarkdownEditModeMenu`); no separate toggle here. */}
                 </>
             ) : null}
 

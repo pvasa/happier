@@ -1,6 +1,6 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -47,7 +47,7 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}), mono: () => ({}) },
+    Typography: { default: () => ({}), mono: () => ({}), eyebrow: () => ({}), keyHint: () => ({}) },
 }));
 
 vi.mock('@/components/ui/scroll/useWebScrollLockBypass', () => ({
@@ -74,7 +74,34 @@ vi.mock('@/components/sessions/agents/details/SessionSubagentDetailsView', () =>
     SessionSubagentDetailsView: (props: any) => React.createElement('SessionSubagentDetailsView', props),
 }));
 
-vi.mock('./SessionDetailsPanelDetailViews', async () => await import('./SessionDetailsPanelDetailViews.native'));
+vi.mock('./SessionDetailsPanelDetailViews', () => ({
+    SessionCommitDetailsViewForPanel: (props: any) => React.createElement('SessionCommitDetailsView', props),
+    SessionFileDetailsViewForPanel: (props: any) => React.createElement('SessionFileDetailsView', props),
+    SessionScmReviewDetailsViewForPanel: (props: any) => React.createElement('SessionScmReviewDetailsView', props),
+    SessionScmStashDetailsViewForPanel: (props: any) => React.createElement('SessionScmStashDetailsView', props),
+    SessionSubagentDetailsViewForPanel: (props: any) => React.createElement('SessionSubagentDetailsView', props),
+}));
+
+function createNativeScopeState() {
+    return {
+        details: {
+            isOpen: true,
+            activeTabKey: 'file:src/app.ts',
+            tabs: [
+                {
+                    key: 'file:src/app.ts',
+                    kind: 'file',
+                    title: 'app.ts',
+                    isPinned: true,
+                    isPreview: false,
+                    resource: { kind: 'file', path: 'src/app.ts' },
+                },
+            ],
+        },
+    };
+}
+
+let nativeScopeState = createNativeScopeState();
 
 vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     useAppPaneScope: () => ({
@@ -83,26 +110,15 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
         pinDetailsTab: vi.fn(),
         setActiveDetailsTab: vi.fn(),
         openDetailsTab: vi.fn(),
-        scopeState: {
-            details: {
-                isOpen: true,
-                activeTabKey: 'file:src/app.ts',
-                tabs: [
-                    {
-                        key: 'file:src/app.ts',
-                        kind: 'file',
-                        title: 'app.ts',
-                        isPinned: true,
-                        isPreview: false,
-                        resource: { kind: 'file', path: 'src/app.ts' },
-                    },
-                ],
-            },
-        },
+        scopeState: nativeScopeState,
     }),
 }));
 
 describe('SessionDetailsPanel (native details loading)', () => {
+    beforeEach(() => {
+        nativeScopeState = createNativeScopeState();
+    });
+
     afterEach(() => {
         vi.clearAllMocks();
     });
@@ -120,6 +136,48 @@ describe('SessionDetailsPanel (native details loading)', () => {
         const textNodes = tree!.root.findAllByType('Text' as any);
         const loadingFallbacks = textNodes.filter((node) => String(node.props.children).includes('common.loading'));
         expect(loadingFallbacks).toHaveLength(0);
+
+        act(() => {
+            tree!.unmount();
+        });
+    });
+
+    it('does not mount inactive native details tab contents', async () => {
+        nativeScopeState = {
+            details: {
+                isOpen: true,
+                activeTabKey: 'file:src/app.ts',
+                tabs: [
+                    {
+                        key: 'file:src/app.ts',
+                        kind: 'file',
+                        title: 'app.ts',
+                        isPinned: true,
+                        isPreview: false,
+                        resource: { kind: 'file', path: 'src/app.ts' },
+                    },
+                    {
+                        key: 'scmReview:working',
+                        kind: 'scmReview',
+                        title: 'Review',
+                        isPinned: true,
+                        isPreview: false,
+                        resource: { kind: 'scmReview', path: '' },
+                    },
+                ],
+            },
+        };
+
+        const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
+        let tree: renderer.ReactTestRenderer | null = null;
+
+        act(() => {
+            tree = renderer.create(<SessionDetailsPanel sessionId="s1" scopeId="session:s1" />);
+        });
+
+        expect(tree).toBeTruthy();
+        expect(tree!.root.findAllByType('SessionFileDetailsView' as any)).toHaveLength(1);
+        expect(tree!.root.findAllByType('SessionScmReviewDetailsView' as any)).toHaveLength(0);
 
         act(() => {
             tree!.unmount();

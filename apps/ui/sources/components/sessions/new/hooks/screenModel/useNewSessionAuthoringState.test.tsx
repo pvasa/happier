@@ -73,6 +73,8 @@ describe('useNewSessionAuthoringState', () => {
             agentNewSessionOptions: null,
             settings: settingsDefaults,
             effectiveWindowsRemoteSessionLaunchMode: null,
+            targetServerId: null,
+            windowsRemoteSessionLaunchModeOverride: null,
             acpSessionModeId: null,
             sessionConfigOptionOverrides: null,
             automationEditId: null,

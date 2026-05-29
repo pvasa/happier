@@ -33,11 +33,13 @@ export function GoalUsageSummary(props: Readonly<{
             used: formatTokenUsageCount(usedTokens),
             budget: formatTokenUsageCount(tokenBudget),
         })
-        : t('session.workState.goal.noTokenBudget');
+        : formatTokenUsageCount(usedTokens);
     const tokenUsageRingValue = hasTokenBudget
         ? formatTokenUsagePercent(resolveTokenUsageProgressRatio({ used: usedTokens, limit: tokenBudget }) * 100)
         : '';
-    const tokenMetricLabel = t('session.workState.goal.tokenBudget');
+    const tokenMetricLabel = hasTokenBudget
+        ? t('session.workState.goal.tokenBudget')
+        : t('session.workState.goal.tokensUsed');
 
     return (
         <>

@@ -23,6 +23,10 @@ function pendingHeadersContainFolder(headers: ReadonlyArray<Extract<SessionListI
     return headers.some((item) => item.headerKind === 'folder');
 }
 
+function isPrimarySectionHeader(item: Extract<SessionListIndexItem, { type: 'header' }>): boolean {
+    return item.headerKind === 'active' || item.headerKind === 'inactive' || item.headerKind === 'sessions';
+}
+
 function flushPendingFolderHeaders(params: Readonly<{
     out: SessionListIndexItem[];
     headerState: VisibleSessionListHeaderState;
@@ -48,7 +52,7 @@ export function inspectVisibleSessionListIndexSourceState(
 
     for (const item of items) {
         if (item.type === 'header') {
-            if (item.headerKind === 'active' || item.headerKind === 'inactive') {
+            if (isPrimarySectionHeader(item)) {
                 pendingSectionHeader = item;
                 pendingGroupHeader = null;
             } else {
@@ -93,7 +97,7 @@ export function pruneOrphanSessionListIndexHeaders(items: ReadonlyArray<SessionL
     for (const item of items) {
         if (item.type === 'header') {
             flushPendingFolderHeaders({ out, headerState });
-            if (item.headerKind === 'active' || item.headerKind === 'inactive') {
+            if (isPrimarySectionHeader(item)) {
                 headerState.pendingSectionHeader = item;
                 headerState.pendingGroupHeaders = [];
             } else {
@@ -126,7 +130,7 @@ export function filterHiddenInactiveSessionListIndexItems(
     for (const item of items) {
         if (item.type === 'header') {
             flushPendingFolderHeaders({ out, headerState });
-            if (item.headerKind === 'active' || item.headerKind === 'inactive') {
+            if (isPrimarySectionHeader(item)) {
                 headerState.pendingSectionHeader = item;
                 headerState.pendingGroupHeaders = [];
             } else {
@@ -140,7 +144,10 @@ export function filterHiddenInactiveSessionListIndexItems(
             continue;
         }
         if (headerState.pendingSectionHeader) {
-            if (headerState.pendingSectionHeader.headerKind === 'active') {
+            if (
+                headerState.pendingSectionHeader.headerKind === 'active'
+                || headerState.pendingSectionHeader.headerKind === 'sessions'
+            ) {
                 out.push(headerState.pendingSectionHeader);
             }
             headerState.pendingSectionHeader = null;

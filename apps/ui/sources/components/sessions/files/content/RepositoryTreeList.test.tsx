@@ -6,6 +6,7 @@ import {
     renderScreen,
     standardCleanup,
 } from '@/dev/testkit';
+import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { clearCachedRepositoryDirectoryEntries } from '@/sync/domains/input/repositoryDirectory';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { installFilesContentCommonModuleMocks } from './filesContentTestHelpers';
@@ -40,6 +41,11 @@ const theme = vi.hoisted(() => ({
         },
         warning: '#f80',
         success: '#0f0',
+        state: {
+            danger: { foreground: '#f00' },
+            neutral: { foreground: '#aaa' },
+            success: { foreground: '#0f0' },
+        },
         textDestructive: '#f00',
         deleteAction: '#f44',
         button: {
@@ -169,6 +175,53 @@ function findLoadingIndicators(screen: Awaited<ReturnType<typeof renderRepositor
         (node.type as any) === 'ActivityIndicator'
         || node.props?.accessibilityRole === 'progressbar',
     );
+}
+
+function makeScmSnapshot(fetchedAt: number): ScmWorkingSnapshot {
+    return {
+        projectKey: 'project-1',
+        fetchedAt,
+        repo: {
+            isRepo: true,
+            rootPath: '/workspace',
+            backendId: 'git',
+            mode: '.git',
+            worktrees: [],
+        },
+        branch: {
+            head: 'main',
+            upstream: null,
+            ahead: 0,
+            behind: 0,
+            detached: false,
+        },
+        entries: [{
+            path: 'README.md',
+            previousPath: null,
+            kind: 'modified',
+            includeStatus: '',
+            pendingStatus: 'M',
+            hasIncludedDelta: false,
+            hasPendingDelta: true,
+            stats: {
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 1,
+                pendingRemoved: 0,
+                isBinary: false,
+            },
+        }],
+        hasConflicts: false,
+        totals: {
+            includedFiles: 0,
+            pendingFiles: 1,
+            untrackedFiles: 0,
+            includedAdded: 0,
+            includedRemoved: 0,
+            pendingAdded: 1,
+            pendingRemoved: 0,
+        },
+    };
 }
 
 async function settleRepositoryTree() {
@@ -597,6 +650,52 @@ describe('RepositoryTreeList', () => {
         expect(flatListRenderPropsLog.current).toHaveLength(initialRenderCount);
     });
 
+    it('keeps the rendered tree stable when an equivalent download callback changes', async () => {
+        sessionListDirectorySpy.mockResolvedValue({
+            success: true,
+            entries: [{ name: 'README.md', type: 'file' }],
+        });
+
+        const { RepositoryTreeList } = await import('./RepositoryTreeList');
+        const onOpenFile = vi.fn();
+
+        function Wrapper() {
+            const [expandedPaths, setExpandedPaths] = React.useState<string[]>([]);
+            const [tick, setTick] = React.useState(0);
+            const onRequestDownload = React.useCallback(async () => {
+                void tick;
+                return { ok: true as const };
+            }, [tick]);
+            return (
+                <>
+                    <RepositoryTreeList
+                        theme={theme}
+                        sessionId="session-1"
+                        expandedPaths={expandedPaths}
+                        onExpandedPathsChange={setExpandedPaths}
+                        onOpenFile={onOpenFile}
+                        onRequestDownload={onRequestDownload}
+                    />
+                    {React.createElement('Pressable' as any, {
+                        testID: 'download-callback-rerender',
+                        onPress: () => setTick((value) => value + 1),
+                    })}
+                </>
+            );
+        }
+
+        const screen = await renderScreen(<Wrapper />);
+        await settleRepositoryTree();
+        const initialRenderCount = flatListRenderPropsLog.current.length;
+
+        await act(async () => {
+            screen.pressByTestId('download-callback-rerender');
+        });
+        await settleRepositoryTree();
+
+        expect(flatListRenderPropsLog.current).toHaveLength(initialRenderCount);
+    });
+
     it('keeps the rendered tree stable when equivalent theme objects change', async () => {
         sessionListDirectorySpy.mockResolvedValue({
             success: true,
@@ -641,5 +740,50 @@ describe('RepositoryTreeList', () => {
         await settleRepositoryTree();
 
         expect(flatListRenderPropsLog.current).toHaveLength(initialRenderCount);
+    });
+
+    it('keeps the rendered tree stable when an equivalent SCM snapshot refresh only changes fetch metadata', async () => {
+        sessionListDirectorySpy.mockResolvedValue({
+            success: true,
+            entries: [{ name: 'README.md', type: 'file' }],
+        });
+
+        const { RepositoryTreeList } = await import('./RepositoryTreeList');
+        const onOpenFile = vi.fn();
+
+        function Wrapper() {
+            const [expandedPaths, setExpandedPaths] = React.useState<string[]>([]);
+            const [snapshot, setSnapshot] = React.useState(() => makeScmSnapshot(1));
+            return (
+                <>
+                    <RepositoryTreeList
+                        theme={theme}
+                        sessionId="session-1"
+                        expandedPaths={expandedPaths}
+                        onExpandedPathsChange={setExpandedPaths}
+                        onOpenFile={onOpenFile}
+                        scmSnapshot={snapshot}
+                    />
+                    {React.createElement('Pressable' as any, {
+                        testID: 'scm-refresh',
+                        onPress: () => setSnapshot(makeScmSnapshot(2)),
+                    })}
+                </>
+            );
+        }
+
+        const screen = await renderScreen(<Wrapper />);
+        await settleRepositoryTree();
+        const initialRenderProps = flatListRenderPropsLog.current[flatListRenderPropsLog.current.length - 1];
+
+        await act(async () => {
+            screen.pressByTestId('scm-refresh');
+        });
+        await settleRepositoryTree();
+
+        const latestRenderProps = flatListRenderPropsLog.current[flatListRenderPropsLog.current.length - 1];
+        expect(latestRenderProps.data).toBe(initialRenderProps.data);
+        expect(latestRenderProps.renderItem).toBe(initialRenderProps.renderItem);
+        expect(latestRenderProps.keyExtractor).toBe(initialRenderProps.keyExtractor);
     });
 });

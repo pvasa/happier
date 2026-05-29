@@ -2,13 +2,14 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import type { SessionStatus } from '@/utils/sessions/sessionUtils';
+import type { SessionListRowModel } from './row/sessionListRowModelTypes';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
-const useSessionListRowRenderableSpy = vi.hoisted(() => vi.fn(() => null));
 
 vi.mock('react-native-reanimated', () => ({}));
 
@@ -43,8 +44,6 @@ installSessionShellCommonModuleMocks({
         return createStorageModuleStub({
             useHasUnreadMessages: () => false,
             useProfile: useProfileSpy,
-            useSessionListRowRenderable: useSessionListRowRenderableSpy,
-            useSessionListMeaningfulActivityAt: () => 0,
             useSetting: () => false,
         });
     },
@@ -151,6 +150,85 @@ function createMetadataUnavailableSession(id: string): SessionListRenderableSess
     };
 }
 
+function createWaitingStatus(): SessionStatus {
+    return {
+        state: 'waiting',
+        isConnected: false,
+        statusText: '',
+        shouldShowStatus: false,
+        statusColor: 'status-color',
+        statusDotColor: 'dot-color',
+        isPulsing: false,
+    };
+}
+
+function createMetadataPendingRowModel(id: string): SessionListRowModel {
+    const session = createMetadataPendingSession(id);
+    return {
+        rowKey: `server_a:${id}`,
+        sessionId: id,
+        serverId: 'server_a',
+        serverName: 'Server A',
+        treeRowId: `session:server_a:${id}`,
+        testID: `session-list-item-${id}`,
+        dataIndex: 0,
+        session,
+        status: createWaitingStatus(),
+        statusSignature: 'waiting|0|0||0|',
+        nextRuntimeFreshnessAtMs: null,
+        secondaryLineMode: 'path',
+        attention: {
+            listState: 'quiet',
+            rowState: 'quiet',
+        },
+        presentation: {
+            attentionIndicator: 'none',
+            titleTone: 'quiet',
+            secondaryLine: 'path',
+        },
+        activity: {
+            mode: 'meaningful',
+            timestamp: null,
+            label: '',
+            bucket: '',
+        },
+        isIdentityLoading: true,
+        title: 'status.unknown',
+        subtitle: '',
+        subtitleEllipsizeMode: 'head',
+        groupKey: 'group-a',
+        groupKind: 'project',
+        section: 'active',
+        variant: 'default',
+        folder: {
+            id: null,
+            depth: 0,
+        },
+        adjacency: {
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+        },
+        isSelected: false,
+        isPinned: false,
+        isArchived: false,
+        isActive: false,
+        hasUnreadMessages: false,
+        pendingCount: 0,
+        tags: [],
+        allKnownTags: [],
+        tagsEnabled: false,
+        currentUserId: 'u1',
+        showServerBadge: false,
+        compact: false,
+        compactMinimal: false,
+        identityDisplay: 'avatar',
+        activeColorMode: 'activityAndAttention',
+        workingIndicatorMode: 'spinner',
+        hideInactiveSessions: false,
+    };
+}
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.map((entry) => flattenStyle(entry)));
@@ -168,7 +246,6 @@ function getRawStyle(screen: Awaited<ReturnType<typeof renderScreen>>, testID: s
 describe('SessionItem loading identity', () => {
     beforeEach(() => {
         useProfileSpy.mockClear();
-        useSessionListRowRenderableSpy.mockClear();
     });
 
     afterEach(() => {
@@ -177,10 +254,12 @@ describe('SessionItem loading identity', () => {
 
     it('renders identity placeholders instead of unknown metadata text while metadata is pending', async () => {
         const { SessionItem } = await import('./SessionItem');
+        const session = createMetadataPendingSession('sess_loading');
 
         const screen = await renderScreen(
             <SessionItem
-                session={createMetadataPendingSession('sess_loading')}
+                session={session}
+                rowModel={createSessionItemTestRowModel({ session, serverId: 'server_a', isFirst: true, isLast: true, isSingle: true })}
                 serverId="server_a"
                 pinned={false}
                 selected={false}
@@ -200,10 +279,19 @@ describe('SessionItem loading identity', () => {
 
     it('keeps compact identity placeholders in one static style entry before animated opacity', async () => {
         const { SessionItem } = await import('./SessionItem');
+        const session = createMetadataPendingSession('sess_compact_loading');
 
         const screen = await renderScreen(
             <SessionItem
-                session={createMetadataPendingSession('sess_compact_loading')}
+                session={session}
+                rowModel={createSessionItemTestRowModel({
+                    session,
+                    serverId: 'server_a',
+                    isFirst: true,
+                    isLast: true,
+                    isSingle: true,
+                    compact: true,
+                })}
                 serverId="server_a"
                 pinned={false}
                 selected={false}
@@ -249,10 +337,21 @@ describe('SessionItem loading identity', () => {
 
     it('renders settled unknown identity instead of placeholders when metadata is unavailable', async () => {
         const { SessionItem } = await import('./SessionItem');
+        const session = createMetadataUnavailableSession('sess_unavailable');
 
         const screen = await renderScreen(
             <SessionItem
-                session={createMetadataUnavailableSession('sess_unavailable')}
+                session={session}
+                rowModel={createSessionItemTestRowModel({
+                    session,
+                    serverId: 'server_a',
+                    isFirst: true,
+                    isLast: true,
+                    isSingle: true,
+                }, {
+                    isIdentityLoading: false,
+                    title: 'status.unknown',
+                })}
                 serverId="server_a"
                 pinned={false}
                 selected={false}
@@ -268,5 +367,30 @@ describe('SessionItem loading identity', () => {
         expect(screen.findByTestId('session-list-title-loading-sess_unavailable')).toBeNull();
         expect(screen.findByTestId('session-list-subtitle-loading-sess_unavailable')).toBeNull();
         expect(screen.getTextContent()).toContain('status.unknown');
+    });
+
+    it('renders identity placeholders for row-model rows while metadata is pending', async () => {
+        const { SessionItem } = await import('./SessionItem');
+        const rowModel = createMetadataPendingRowModel('sess_row_model_loading');
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={rowModel.session}
+                rowModel={rowModel}
+                serverId="server_a"
+                pinned={false}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+            />,
+        );
+
+        expect(screen.findByTestId('session-list-avatar-loading-sess_row_model_loading')).toBeTruthy();
+        expect(screen.findByTestId('session-list-title-loading-sess_row_model_loading')).toBeTruthy();
+        expect(screen.findByTestId('session-list-subtitle-loading-sess_row_model_loading')).toBeTruthy();
+        expect(screen.getTextContent()).not.toContain('status.unknown');
     });
 });

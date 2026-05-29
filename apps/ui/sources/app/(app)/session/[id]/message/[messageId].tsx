@@ -11,9 +11,11 @@ import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope, type SessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { useSessionRealtimeTranscriptConsumer } from '@/hooks/session/useSessionRealtimeTranscriptConsumer';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import {
     createSessionMessageDetailsStyles,
     SessionMessageDetailsView,
@@ -62,7 +64,7 @@ function normalizeRouteParam(value: unknown): string {
 
 export default React.memo(function SessionMessageRoute() {
     const params = useLocalSearchParams<MessageRouteParams>();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const routeScope = useSessionRouteServerScope(params);
     const sessionId = normalizeRouteParam(params.id);
     const messageId = normalizeRouteParam(params.messageId);
     const jumpChildId = normalizeRouteParam(params.jumpChildId) || null;
@@ -85,7 +87,7 @@ function SessionMessageRouteLoaded(props: {
     sessionId: string;
     messageId: string;
     jumpChildId: string | null;
-    routeScope: ReturnType<typeof createSessionRouteServerScope>;
+    routeScope: SessionRouteServerScope;
 }) {
     const router = useRouter();
     const session = useSession(props.sessionId);
@@ -123,18 +125,23 @@ function SessionMessageRouteLoaded(props: {
         sync.onSessionVisible(props.sessionId);
     }, [props.sessionId]);
 
+    // This detail route renders live transcript-derived content but is a separate navigation screen
+    // that does not mark the session visible. Register it as an explicit transcript consumer so
+    // realtime projection routing keeps materializing transcript content while it is open.
+    useSessionRealtimeTranscriptConsumer(props.sessionId);
+
     React.useEffect(() => {
         setMessageBackfillComplete(false);
     }, [props.messageId, props.sessionId]);
 
     // Best-effort hydration for deep links / hard refreshes: sessions list is paginated, and message fetch
     // is guarded when a session isn't known on the active server snapshot yet.
-    const sessionHydratedOrTerminal = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         props.sessionId,
         'MessageRoute.ensureSessionVisible',
         props.routeScope.hydrationOptions,
     );
-    const sessionMissingAfterHydration = sessionHydratedOrTerminal && !session;
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState) && !session;
 
     // Message deep links may target messages older than the initial `/messages` page. If we can't find
     // the message after the initial load, try paging older messages until we either find it or run out.

@@ -194,7 +194,7 @@ describe('useNewSessionScreenModel (draft hydration — checkout)', () => {
         expect(toggleCollapsedPopover).toHaveBeenCalledWith('new-session-checkout');
     });
 
-    it('auto-opens the worktree picker when the route explicitly requests a new worktree flow', async () => {
+    it('exposes the worktree picker when the route explicitly requests a new worktree flow', async () => {
         persistedDraft.checkoutCreationDraft = null;
         workspaceGraphState.workspacesByServerId['server-a'] = [];
         workspaceGraphState.workspaceLocations = {};
@@ -218,23 +218,6 @@ describe('useNewSessionScreenModel (draft hydration — checkout)', () => {
             'current_path',
             'create_git_worktree',
         ]);
-
-        // With the shared overlay controller, "open" is bridged through ctx.toggleCollapsedPopover.
-        const toggleCollapsedPopover = vi.fn();
-        await renderScreen(
-            React.createElement(React.Fragment, null, checkoutChip!.render({
-                chipStyle: () => null,
-                showLabel: true,
-                iconColor: '#000',
-                textStyle: {},
-                countTextStyle: {},
-                popoverAnchorRef: { current: null },
-                chipAnchorRef: { current: null },
-                toggleCollapsedPopover,
-            })),
-        );
-        await flushHookEffects({ cycles: 1, turns: 1 });
-        expect(toggleCollapsedPopover).toHaveBeenCalledWith('new-session-checkout');
     });
 
     it('uses the shared checkout picker popover on ios when checkout options require a picker', async () => {

@@ -86,6 +86,7 @@ function canReuseSession(
         && areNullableValuesEqual(sourceSession.folderDepth, item.folderDepth)
         && (sourceSession.pinned === true) === (item.pinned === true)
         && areNullableValuesEqual(sourceSession.attentionPromotionReason, item.attentionPromotionReason)
+        && areNullableValuesEqual(sourceSession.workingPlacementReason, item.workingPlacementReason)
         && areNullableValuesEqual(sourceSession.variant, item.variant)
         && areNullableValuesEqual(sourceSession.serverId, item.serverId)
         && areNullableValuesEqual(sourceSession.serverName, item.serverName)
@@ -117,6 +118,7 @@ function rehydrateSession(
         folderDepth: item.folderDepth,
         pinned: item.pinned,
         attentionPromotionReason: item.attentionPromotionReason,
+        workingPlacementReason: item.workingPlacementReason,
         variant: item.variant,
         serverId: item.serverId,
         serverName: item.serverName,

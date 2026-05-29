@@ -145,6 +145,45 @@ describe('useChangedFilesReviewDiffLoading', () => {
         hook.unmount();
     });
 
+    it('hydrates provider-backed diffs only for requested paths', async () => {
+        const { sessionScmDiffFile } = await import('@/sync/ops');
+        const { useChangedFilesReviewDiffLoading } = await import('./useChangedFilesReviewDiffLoading');
+
+        const reviewFiles = [file('a.ts'), file('b.ts'), file('c.ts')];
+        const providerDiffByPath = new Map([
+            ['a.ts', 'provider-a'],
+            ['b.ts', 'provider-b'],
+            ['c.ts', 'provider-c'],
+        ]);
+
+        const hook = await renderHook(() => useChangedFilesReviewDiffLoading({
+            sessionId: 's1',
+            isRepo: true,
+            reviewFiles,
+            diffArea: 'pending',
+            requestedPaths: ['b.ts'],
+            snapshotSignature: 'sig1',
+            diffCache: null,
+            tooLarge: false,
+            selectedPath: '',
+            providerDiffByPath,
+            normalizeError,
+            fallbackError: 'failed',
+        } as any));
+
+        await waitForCondition(() => hook.getCurrent().diffStateSource.getDiffState('b.ts').status === 'loaded');
+
+        expect(vi.mocked(sessionScmDiffFile)).not.toHaveBeenCalled();
+        expect(hook.getCurrent().diffStateSource.getDiffState('a.ts').status).toBe('idle');
+        expect(hook.getCurrent().diffStateSource.getDiffState('b.ts')).toEqual({
+            status: 'loaded',
+            diff: 'provider-b',
+            error: null,
+        });
+        expect(hook.getCurrent().diffStateSource.getDiffState('c.ts').status).toBe('idle');
+        hook.unmount();
+    });
+
     it('starts fetching multiple requested diffs concurrently when maxConcurrency allows', async () => {
         const { sessionScmDiffFile } = await import('@/sync/ops');
         const { useChangedFilesReviewDiffLoading } = await import('./useChangedFilesReviewDiffLoading');

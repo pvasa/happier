@@ -153,6 +153,8 @@ const persistedDraft = vi.hoisted(() => ({
     resumeSessionId?: string | null;
     entryIntent?: unknown;
     codexBackendMode?: unknown;
+    targetServerId?: string | null;
+    windowsRemoteSessionLaunchModeOverride?: { machineId: string; mode: 'hidden' | 'windows_terminal' | 'console' } | null;
 });
 
 const cliDetectionState = vi.hoisted(() => ({
@@ -546,6 +548,7 @@ vi.doMock('@/sync/domains/state/storage', async (importOriginal) => {
     const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
     return createPartialStorageModuleMock(importOriginal, {
         useAllMachines: () => allMachinesState.value.map((machine) => createMachineFixture(machine)),
+        useLaunchSelectionMachines: () => allMachinesState.value.map((machine) => createMachineFixture(machine)),
         useSessionRecentPathEntries: () => [],
         useMachineListByServerId: () => ({}),
         useMachineListStatusByServerId: () => ({}),
@@ -753,16 +756,25 @@ vi.mock('@/components/sessions/new/modules/resolveNewSessionCapabilityServerId',
 }));
 
 vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState', () => ({
-    useNewSessionServerTargetState: () => ({
-        serverProfiles: [],
-        serverTargets: [],
-        resolvedSettingsTarget: { allowedServerIds: [] },
-        allowedTargetServerIds: targetServerState.allowedTargetServerIds,
-        targetServerId: targetServerState.targetServerId,
-        targetServerProfile: null,
-        targetServerName: targetServerState.targetServerName,
-        showServerPickerChip: targetServerState.allowedTargetServerIds.length > 1 && !!targetServerState.targetServerName,
-    }),
+    useNewSessionServerTargetState: (params: { request?: { spawnServerIdParam?: string | null } }) => {
+        const requestedServerId = typeof params.request?.spawnServerIdParam === 'string'
+            ? params.request.spawnServerIdParam.trim()
+            : '';
+        const requestedServerAllowed = requestedServerId.length > 0
+            && (targetServerState.allowedTargetServerIds.length === 0 || targetServerState.allowedTargetServerIds.includes(requestedServerId));
+        const targetServerId = targetServerState.targetServerId ?? (requestedServerAllowed ? requestedServerId : null);
+
+        return {
+            serverProfiles: [],
+            serverTargets: [],
+            resolvedSettingsTarget: { allowedServerIds: targetServerState.allowedTargetServerIds },
+            allowedTargetServerIds: targetServerState.allowedTargetServerIds,
+            targetServerId,
+            targetServerProfile: null,
+            targetServerName: targetServerState.targetServerName ?? targetServerId,
+            showServerPickerChip: targetServerState.allowedTargetServerIds.length > 1 && !!(targetServerState.targetServerName ?? targetServerId),
+        };
+    },
 }));
 
 vi.mock('@/hooks/server/useAutomationsSupport', () => ({
@@ -828,6 +840,10 @@ vi.mock('@/sync/domains/profiles/profileUtils', () => ({
     getBuiltInProfile: () => null,
     DEFAULT_PROFILES: [],
     getProfilePrimaryCli: () => null,
+    isProfileEnabled: (profile: { id: string; defaultEnabled?: boolean }, profileEnabledById?: Record<string, boolean> | null) => {
+        const override = profileEnabledById?.[profile.id];
+        return typeof override === 'boolean' ? override : profile.defaultEnabled !== false;
+    },
     getProfileSupportedAgentIds: () => [],
     isProfileCompatibleWithAnyAgent: () => true,
 }));
@@ -937,6 +953,8 @@ export function resetDraftPersistenceState(): void {
     persistedDraft.input = 'hello';
     persistedDraft.permissionMode = 'yolo';
     delete persistedDraft.resumeSessionId;
+    delete persistedDraft.targetServerId;
+    delete persistedDraft.windowsRemoteSessionLaunchModeOverride;
     persistedDraft.selectedMachineId = 'machine-2';
     persistedDraft.selectedPath = '/repo/custom';
     persistedDraft.updatedAt = 123;

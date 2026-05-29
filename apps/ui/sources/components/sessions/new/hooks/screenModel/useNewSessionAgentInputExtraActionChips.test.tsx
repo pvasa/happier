@@ -159,4 +159,55 @@ describe('useNewSessionAgentInputExtraActionChips', () => {
         directOption!.onSelect!();
         expect(onTranscriptStorageChange).toHaveBeenCalledWith('direct');
     });
+
+    it('passes the available server popover height through without imposing a minimum', async () => {
+        const { useNewSessionAgentInputExtraActionChips } = await import('./useNewSessionAgentInputExtraActionChips');
+
+        let chips: ReadonlyArray<AgentInputExtraActionChip> = [];
+
+        function Probe() {
+            chips = useNewSessionAgentInputExtraActionChips({
+                agentId: 'claude',
+                agentOptionState: null,
+                setAgentOptionState: vi.fn(),
+                showAutomationActionChips: false,
+                automationDraft: {
+                    enabled: false,
+                    name: '',
+                    description: '',
+                    scheduleKind: 'interval',
+                    everyMinutes: 60,
+                    cronExpr: '0 * * * *',
+                    timezone: null,
+                },
+                automationLabel: 'Automate',
+                onAutomationChange: vi.fn(),
+                showServerPickerChip: true,
+                targetServerId: 'server-a',
+                targetServerName: 'Server A',
+                directSessionsFeatureEnabled: false,
+                supportsDirectTranscriptStorage: false,
+                transcriptStorage: 'persisted',
+                onTranscriptStorageChange: vi.fn(),
+                selectedMachineIsWindows: false,
+                windowsRemoteSessionLaunchMode: null,
+                windowsTerminalAvailable: false,
+                onWindowsRemoteSessionLaunchModeChange: vi.fn(),
+                onActionShortcutPress: vi.fn(),
+            });
+            return null;
+        }
+
+        await renderScreen(<Probe />);
+
+        const serverChip = chips.find((chip) => chip.key === 'new-session-target-server');
+        const renderContent = serverChip?.collapsedContentPopover?.renderContent;
+        expect(typeof renderContent).toBe('function');
+        const renderedContent = typeof renderContent === 'function'
+            ? renderContent({ requestClose: vi.fn(), maxHeight: 300 })
+            : null;
+
+        expect(React.isValidElement(renderedContent)).toBe(true);
+        expect((renderedContent as React.ReactElement<{ maxHeight: number }>).props.maxHeight).toBe(300);
+    });
 });

@@ -70,6 +70,7 @@ vi.mock('@/constants/Typography', () => ({
 
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { headerMaxWidth: 1024 },
+    useLayoutMaxWidth: () => 1024,
 }));
 
 function flattenStyle(style: unknown): Record<string, unknown> {

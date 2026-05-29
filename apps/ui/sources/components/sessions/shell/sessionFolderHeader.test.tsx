@@ -82,11 +82,13 @@ describe('FolderGroupHeader', () => {
             />,
         );
 
-        const dropTarget = screen.findByTestId('session-folder-drop-target-folder-a');
-        expect(dropTarget).not.toBeNull();
-        if (!dropTarget) throw new Error('expected folder drop target');
-
-        expect(flattenStyleValue(dropTarget.parent?.props.style, 'paddingLeft')).toBe(20);
+        // The folder header row carries the depth indentation directly; there is
+        // no row-local drop-target outline anymore (the single list-level
+        // SessionListDropOverlay owns the drop indicator).
+        const header = screen.findByTestId('session-folder-header-folder-a');
+        expect(header).not.toBeNull();
+        if (!header) throw new Error('expected folder header');
+        expect(flattenStyleValue(header.parent?.props.style, 'paddingLeft')).toBe(20);
     });
 
     it('does not nest pressable controls inside another pressable on web', async () => {
@@ -117,7 +119,7 @@ describe('FolderGroupHeader', () => {
         }
     });
 
-    it('shows the folder outline only while it is the active drop target', async () => {
+    it('does not render a row-local drop-target outline (the list-level overlay owns it)', async () => {
         const screen = await renderScreen(
             <FolderGroupHeader
                 item={{
@@ -137,45 +139,12 @@ describe('FolderGroupHeader', () => {
                 onAddSubfolder={vi.fn()}
                 onRename={vi.fn()}
                 onDelete={vi.fn()}
-                activeDropTargetId={null}
             />,
         );
 
-        const dropTarget = screen.findByTestId('session-folder-drop-target-folder-a');
-        expect(dropTarget).not.toBeNull();
-        if (!dropTarget) throw new Error('expected folder drop target');
-        expect(flattenStyleValue(dropTarget.props.style, 'opacity')).toBe(0);
-
-        await act(async () => {
-            dropTarget.parent?.props.onPointerEnter?.();
-        });
-
-        expect(flattenStyleValue(dropTarget.props.style, 'opacity')).toBe(0);
-
-        await screen.update(
-            <FolderGroupHeader
-                item={{
-                    type: 'header',
-                    headerKind: 'folder',
-                    folderId: 'folder-a',
-                    parentFolderId: null,
-                    title: 'Folder A',
-                    depth: 0,
-                    sessionCount: 0,
-                    groupKey: 'folder:folder-a',
-                }}
-                collapsed={false}
-                onToggleCollapse={vi.fn()}
-                onFocus={vi.fn()}
-                onNewSession={vi.fn()}
-                onAddSubfolder={vi.fn()}
-                onRename={vi.fn()}
-                onDelete={vi.fn()}
-                activeDropTargetId="folder:folder-a"
-            />,
-        );
-
-        expect(flattenStyleValue(dropTarget.props.style, 'opacity')).toBe(1);
+        // The per-row drop-target outline has been removed: the single
+        // SessionListDropOverlay is the only thing that draws a drop indicator.
+        expect(screen.findByTestId('session-folder-drop-target-folder-a')).toBeNull();
     });
 
     it('exposes move menu and accessibility actions for keyboard and assistive input', async () => {

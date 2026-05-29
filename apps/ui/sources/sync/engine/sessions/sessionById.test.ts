@@ -79,6 +79,10 @@ describe('fetchAndApplySessionById', () => {
         }), { status: 404 });
       }
 
+      if (path === '/v1/sessions/s_legacy/turns') {
+        return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 });
+      }
+
       expect(path).toBe('/v2/sessions?limit=200');
       return new Response(JSON.stringify({
         sessions: [
@@ -127,6 +131,7 @@ describe('fetchAndApplySessionById', () => {
     expect(request.mock.calls.map((call) => call[0])).toEqual([
       '/v2/sessions/s_legacy',
       '/v2/sessions?limit=200',
+      '/v1/sessions/s_legacy/turns',
     ]);
   });
 
@@ -376,6 +381,138 @@ describe('fetchAndApplySessionById', () => {
         lastViewedSessionSeq: 2,
         pendingPermissionRequestCount: 3,
         pendingUserActionRequestCount: 1,
+      }),
+    ]);
+  });
+
+  it('hydrates session turn projection for rollback read models', async () => {
+    const applySessions = vi.fn();
+    const request = vi.fn(async (path: string) => {
+      if (path === '/v2/sessions/s1') {
+        return new Response(JSON.stringify({
+          session: {
+            id: 's1',
+            createdAt: 1,
+            updatedAt: 2,
+            seq: 3,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            dataEncryptionKey: null,
+            metadataVersion: 1,
+            metadata: JSON.stringify({ readStateV1: null }),
+            agentStateVersion: 1,
+            agentState: JSON.stringify({ controlledByUser: true }),
+            share: null,
+          },
+        }), { status: 200 });
+      }
+
+      expect(path).toBe('/v1/sessions/s1/turns');
+      return new Response(JSON.stringify({
+        v: 1,
+        sessionId: 's1',
+        latestTurnId: 'turn-1',
+        updatedAt: 4,
+        turns: [
+          {
+            turnId: 'turn-1',
+            status: 'completed',
+            startedAt: 1,
+            updatedAt: 4,
+            terminalAt: 4,
+            transcriptAnchors: {
+              startUserMessageSeq: 1,
+              userMessageSeqs: [1, 3],
+              startSeqInclusive: 1,
+              endSeqInclusive: 4,
+            },
+            rollback: { state: 'eligible', updatedAt: 4 },
+          },
+        ],
+      }), { status: 200 });
+    });
+
+    const result = await fetchAndApplySessionById({
+      sessionId: 's1',
+      credentials: { token: 't' } as any,
+      encryption: {
+        decryptEncryptionKey: async () => null,
+        initializeSessions: async () => {},
+        getSessionEncryption: () => null,
+      },
+      sessionDataKeys: new Map<string, Uint8Array>(),
+      request,
+      applySessions,
+      log: { log: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(request.mock.calls.map((call) => call[0])).toEqual([
+      '/v2/sessions/s1',
+      '/v1/sessions/s1/turns',
+    ]);
+    expect(applySessions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 's1',
+        sessionTurns: expect.objectContaining({
+          latestTurnId: 'turn-1',
+          turns: [expect.objectContaining({ turnId: 'turn-1' })],
+        }),
+        rollbackEligibleTurnStarts: [1],
+      }),
+    ]);
+  });
+
+  it('keeps mixed-version session-by-id hydration working when the turns route is missing', async () => {
+    const applySessions = vi.fn();
+    const request = vi.fn(async (path: string) => {
+      if (path === '/v2/sessions/s1') {
+        return new Response(JSON.stringify({
+          session: {
+            id: 's1',
+            createdAt: 1,
+            updatedAt: 2,
+            seq: 3,
+            active: true,
+            activeAt: 2,
+            encryptionMode: 'plain',
+            dataEncryptionKey: null,
+            metadataVersion: 1,
+            metadata: JSON.stringify({ readStateV1: null }),
+            agentStateVersion: 1,
+            agentState: JSON.stringify({ controlledByUser: true }),
+            share: null,
+          },
+        }), { status: 200 });
+      }
+
+      expect(path).toBe('/v1/sessions/s1/turns');
+      return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 });
+    });
+
+    const result = await fetchAndApplySessionById({
+      sessionId: 's1',
+      credentials: { token: 't' } as any,
+      encryption: {
+        decryptEncryptionKey: async () => null,
+        initializeSessions: async () => {},
+        getSessionEncryption: () => null,
+      },
+      sessionDataKeys: new Map<string, Uint8Array>(),
+      request,
+      applySessions,
+      log: { log: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(request.mock.calls.map((call) => call[0])).toEqual([
+      '/v2/sessions/s1',
+      '/v1/sessions/s1/turns',
+    ]);
+    expect(applySessions).toHaveBeenCalledWith([
+      expect.not.objectContaining({
+        sessionTurns: expect.anything(),
       }),
     ]);
   });

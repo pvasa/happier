@@ -10,8 +10,10 @@ import {
     type SessionExecutionRunDetailsViewHandle,
 } from '@/components/sessions/runs/details/SessionExecutionRunDetailsView';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { useSessionRealtimeTranscriptConsumer } from '@/hooks/session/useSessionRealtimeTranscriptConsumer';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import { t } from '@/text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
@@ -26,14 +28,20 @@ export default function SessionRunDetailsScreen() {
     const router = useRouter();
     const navigation = useNavigation();
     const params = useLocalSearchParams();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
+    const routeScope = useSessionRouteServerScope(params as Record<string, unknown>);
     const sessionId = normalizeParam((params as Record<string, unknown>)?.id);
     const runId = normalizeParam((params as Record<string, unknown>)?.runId);
-    const hydrateReady = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId ?? '',
         'SessionRunDetailsScreen.hydrate',
         routeScope.hydrationOptions,
     );
+    const hydrateReady = isSessionRouteHydrationAvailable(routeHydrationState);
+    const hydrateMissing = isSessionRouteHydrationMissing(routeHydrationState);
+    // The run detail view derives a live transcript fallback from the session's messages but is a
+    // separate navigation screen that does not mark the session visible. Register it as an explicit
+    // transcript consumer so hidden durable messages keep materializing while it is open.
+    useSessionRealtimeTranscriptConsumer(sessionId);
     const detailsRef = React.useRef<SessionExecutionRunDetailsViewHandle | null>(null);
     const headerTint = theme.colors.chrome?.header?.foreground ?? theme.colors.text.primary;
     const parentSessionHref = sessionId ? routeScope.buildHref(sessionId) : '/session';
@@ -80,9 +88,9 @@ export default function SessionRunDetailsScreen() {
     return (
         <View style={{ flex: 1, backgroundColor: theme.colors.background?.canvas ?? theme.colors.surface.base }}>
             <Stack.Screen options={screenOptions} />
-            {!hydrateReady ? (
+            {!hydrateReady && !hydrateMissing ? (
                 <ActivitySpinner size="small" color={theme.colors.text.secondary} />
-            ) : !sessionId || !runId ? (
+            ) : !sessionId || !runId || hydrateMissing ? (
                 <SessionInvalidLinkFallback />
             ) : (
                 <SessionExecutionRunDetailsView

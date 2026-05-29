@@ -1,94 +1,165 @@
-import { buildSessionFolderWorkspaceRefKey } from '@/sync/domains/session/folders/workspaceRefs';
-
 import type { SessionListIndexItem } from './sessionListIndex';
+import {
+    normalizeSessionListFolderSortModeV1,
+    type SessionListFolderSortModeV1,
+} from './sessionListFolderSortMode';
 import { normalizeSessionListKeyParts } from './sessionListKeyNormalization';
 import { normalizeTrimmedString } from './normalizeTrimmedString';
 import { resolveSessionRowForIndexItem, type ResolveSessionListIndexRow } from './sessionListIndexSessionRows';
+import { resolveProjectGroupKey } from './sessionListOrderingStateV1';
+import {
+    buildSessionListSessionOrderingKey,
+    compareSessionListSessionOrderingKeys,
+    normalizeSessionListOrderingSectionMode,
+    resolveEffectiveSessionListOrderingModeForGroup,
+    type SessionListOrderingModeV1,
+    type SessionListOrderingSectionMode,
+    type SessionListSessionOrderingKey,
+} from './sessionListOrderingRules';
 
-export type SessionListOrderingModeV1 = 'custom' | 'created' | 'updated';
+export type { SessionListOrderingModeV1 } from './sessionListOrderingRules';
 
-function compareSessionItemsByOrderingMode(
-    a: Extract<SessionListIndexItem, { type: 'session' }>,
-    b: Extract<SessionListIndexItem, { type: 'session' }>,
+type SessionItem = Extract<SessionListIndexItem, { type: 'session' }>;
+type SessionOrderingContext = Readonly<{
+    groupKey: string;
+    scopeKey: string;
+    effectiveMode: SessionListOrderingModeV1;
+}>;
+type SessionOrderingContextOptions = Readonly<{
+    sectionMode?: SessionListOrderingSectionMode;
+}>;
+
+function resolveOrderingContextForSessionItem(
+    item: SessionItem,
     orderingMode: SessionListOrderingModeV1,
+    options: SessionOrderingContextOptions = {},
+): SessionOrderingContext | null {
+    const groupKey = normalizeTrimmedString(item.groupKey);
+    if (!groupKey) return null;
+    const sectionMode = normalizeSessionListOrderingSectionMode(options.sectionMode);
+    const section = sectionMode === 'single' ? 'sessions' : item.section;
+    const effectiveMode = resolveEffectiveSessionListOrderingModeForGroup({
+        section,
+        sectionMode,
+        groupKind: item.groupKind,
+        userOrderingMode: orderingMode,
+    });
+    return {
+        groupKey,
+        scopeKey: `${sectionMode}:${section ?? 'unknown'}:${groupKey}`,
+        effectiveMode,
+    };
+}
+
+function resolveSessionOrderingScopeKey(
+    item: SessionItem,
+    orderingMode: SessionListOrderingModeV1,
+    options: SessionOrderingContextOptions = {},
+): string | null {
+    return resolveOrderingContextForSessionItem(item, orderingMode, options)?.scopeKey ?? null;
+}
+
+function resolveCustomSessionOrderingContext(
+    item: SessionItem,
+    options: SessionOrderingContextOptions = {},
+): SessionOrderingContext | null {
+    const context = resolveOrderingContextForSessionItem(item, 'custom', options);
+    return context?.effectiveMode === 'custom' ? context : null;
+}
+
+function buildOrderingKeyCache(
+    sessions: ReadonlyArray<SessionItem>,
     resolveSessionRow: ResolveSessionListIndexRow,
+): Map<SessionItem, SessionListSessionOrderingKey> {
+    const cache = new Map<SessionItem, SessionListSessionOrderingKey>();
+    for (const item of sessions) {
+        cache.set(item, buildSessionListSessionOrderingKey({
+            item,
+            row: resolveSessionRowForIndexItem(item, resolveSessionRow),
+        }));
+    }
+    return cache;
+}
+
+function compareSessionItemsByOrderingKey(
+    a: SessionItem,
+    b: SessionItem,
+    orderingMode: SessionListOrderingModeV1,
+    keyCache: ReadonlyMap<SessionItem, SessionListSessionOrderingKey>,
 ): number {
-    const rowA = resolveSessionRowForIndexItem(a, resolveSessionRow);
-    const rowB = resolveSessionRowForIndexItem(b, resolveSessionRow);
-
-    const updatedA = rowA?.updatedAt ?? 0;
-    const updatedB = rowB?.updatedAt ?? 0;
-    const createdA = rowA?.createdAt ?? 0;
-    const createdB = rowB?.createdAt ?? 0;
-
-    if (orderingMode === 'updated' && updatedB !== updatedA) return updatedB - updatedA;
-    if (orderingMode === 'created' && createdB !== createdA) return createdB - createdA;
-    if (orderingMode === 'custom' && createdB !== createdA) return createdB - createdA;
-    if (orderingMode === 'updated' && createdB !== createdA) return createdB - createdA;
-
-    return normalizeTrimmedString(a.sessionId).localeCompare(normalizeTrimmedString(b.sessionId));
+    const keyA = keyCache.get(a);
+    const keyB = keyCache.get(b);
+    if (!keyA || !keyB) return 0;
+    return compareSessionListSessionOrderingKeys(keyA, keyB, orderingMode);
 }
 
 function isSessionListIndexItemsAlreadyOrderedByOrderingMode(
     source: ReadonlyArray<SessionListIndexItem>,
     orderingMode: SessionListOrderingModeV1,
     resolveSessionRow: ResolveSessionListIndexRow,
+    options: SessionOrderingContextOptions = {},
 ): boolean {
-    const lastSessionByGroupKey = new Map<string, Extract<SessionListIndexItem, { type: 'session' }>>();
+    const lastSessionByScopeKey = new Map<string, SessionItem>();
+    const keyCache = new Map<SessionItem, SessionListSessionOrderingKey>();
 
     for (const item of source) {
         if (item.type !== 'session') continue;
 
-        const groupKey = normalizeTrimmedString(item.groupKey);
-        if (!groupKey) continue;
+        const context = resolveOrderingContextForSessionItem(item, orderingMode, options);
+        if (!context || context.effectiveMode === 'custom') continue;
+        keyCache.set(item, buildSessionListSessionOrderingKey({
+            item,
+            row: resolveSessionRowForIndexItem(item, resolveSessionRow),
+        }));
 
-        const previous = lastSessionByGroupKey.get(groupKey);
-        if (previous && compareSessionItemsByOrderingMode(previous, item, orderingMode, resolveSessionRow) > 0) {
+        const previous = lastSessionByScopeKey.get(context.scopeKey);
+        if (previous && compareSessionItemsByOrderingKey(previous, item, context.effectiveMode, keyCache) > 0) {
             return false;
         }
 
-        lastSessionByGroupKey.set(groupKey, item);
+        lastSessionByScopeKey.set(context.scopeKey, item);
     }
 
-    return lastSessionByGroupKey.size > 0;
+    return lastSessionByScopeKey.size > 0;
 }
 
 export function sortSessionListIndexItemsByOrderingMode(
     source: ReadonlyArray<SessionListIndexItem>,
     orderingMode: SessionListOrderingModeV1,
     resolveSessionRow: ResolveSessionListIndexRow,
+    options: SessionOrderingContextOptions = {},
 ): SessionListIndexItem[] {
-    if (orderingMode === 'custom') {
+    if (isSessionListIndexItemsAlreadyOrderedByOrderingMode(source, orderingMode, resolveSessionRow, options)) {
         return source as SessionListIndexItem[];
     }
 
-    if (isSessionListIndexItemsAlreadyOrderedByOrderingMode(source, orderingMode, resolveSessionRow)) {
-        return source as SessionListIndexItem[];
-    }
-
-    const sessionsByGroupKey = new Map<string, Array<Extract<SessionListIndexItem, { type: 'session' }>>>();
+    const sessionsByScopeKey = new Map<string, SessionItem[]>();
+    const effectiveModeByScopeKey = new Map<string, SessionListOrderingModeV1>();
     for (const item of source) {
         if (item.type !== 'session') continue;
-        const groupKey = normalizeTrimmedString(item.groupKey);
-        if (!groupKey) continue;
-        if (!sessionsByGroupKey.has(groupKey)) {
-            sessionsByGroupKey.set(groupKey, []);
+        const context = resolveOrderingContextForSessionItem(item, orderingMode, options);
+        if (!context || context.effectiveMode === 'custom') continue;
+        if (!sessionsByScopeKey.has(context.scopeKey)) {
+            sessionsByScopeKey.set(context.scopeKey, []);
+            effectiveModeByScopeKey.set(context.scopeKey, context.effectiveMode);
         }
-        sessionsByGroupKey.get(groupKey)!.push(item);
+        sessionsByScopeKey.get(context.scopeKey)!.push(item);
     }
 
-    const sortedByGroupKey = new Map<string, Array<Extract<SessionListIndexItem, { type: 'session' }>>>();
-    for (const [groupKey, sessions] of sessionsByGroupKey.entries()) {
+    const sortedByScopeKey = new Map<string, SessionItem[]>();
+    for (const [scopeKey, sessions] of sessionsByScopeKey.entries()) {
         if (sessions.length < 2) continue;
-        const next = [...sessions].sort((a, b) => compareSessionItemsByOrderingMode(a, b, orderingMode, resolveSessionRow));
-        sortedByGroupKey.set(groupKey, next);
+        const effectiveMode = effectiveModeByScopeKey.get(scopeKey) ?? orderingMode;
+        const keyCache = buildOrderingKeyCache(sessions, resolveSessionRow);
+        const next = [...sessions].sort((a, b) => compareSessionItemsByOrderingKey(a, b, effectiveMode, keyCache));
+        sortedByScopeKey.set(scopeKey, next);
     }
 
-    if (sortedByGroupKey.size === 0) {
+    if (sortedByScopeKey.size === 0) {
         return source as SessionListIndexItem[];
     }
 
-    const indicesByGroupKey = new Map<string, number>();
+    const indicesByScopeKey = new Map<string, number>();
     const out: SessionListIndexItem[] = [];
     let didChange = false;
     for (const item of source) {
@@ -96,19 +167,23 @@ export function sortSessionListIndexItemsByOrderingMode(
             out.push(item);
             continue;
         }
-        const groupKey = normalizeTrimmedString(item.groupKey);
-        const replacementList = groupKey ? sortedByGroupKey.get(groupKey) : undefined;
+        const scopeKey = resolveSessionOrderingScopeKey(item, orderingMode, options);
+        if (!scopeKey) {
+            out.push(item);
+            continue;
+        }
+        const replacementList = sortedByScopeKey.get(scopeKey);
         if (!replacementList) {
             out.push(item);
             continue;
         }
-        const index = indicesByGroupKey.get(groupKey) ?? 0;
+        const index = indicesByScopeKey.get(scopeKey) ?? 0;
         const replacement = replacementList[index] ?? item;
         if (replacement !== item) {
             didChange = true;
         }
         out.push(replacement);
-        indicesByGroupKey.set(groupKey, index + 1);
+        indicesByScopeKey.set(scopeKey, index + 1);
     }
 
     return didChange ? out : (source as SessionListIndexItem[]);
@@ -141,11 +216,8 @@ export function reorderSessionListIndexSessionItemsByKeys(
         }
     }
 
-    for (const item of items) {
-        if (!used.has(item)) out.push(item);
-    }
-
-    return out;
+    const unordered = items.filter((item) => !used.has(item));
+    return [...unordered, ...out];
 }
 
 function buildFolderOrderKey(folderIdRaw: unknown): string | null {
@@ -168,19 +240,14 @@ function readFolderDepth(item: SessionListIndexItem): number {
     return typeof depth === 'number' && Number.isFinite(depth) ? Math.max(0, Math.trunc(depth)) : 0;
 }
 
-function buildFolderRootGroupKey(item: Extract<SessionListIndexItem, { type: 'header' }>): string | null {
-    if (!item.workspace) return null;
-    const serverId = String(item.serverId ?? item.workspace.serverId ?? 'local').trim() || 'local';
-    return `folder:${serverId}:${buildSessionFolderWorkspaceRefKey(item.workspace)}:root`;
-}
-
 function resolveFolderParentGroupKeyFromVisibleItems(params: Readonly<{
     items: ReadonlyArray<SessionListIndexItem>;
     itemIndex: number;
     folder: Extract<SessionListIndexItem, { type: 'header' }>;
 }>): string | null {
     const depth = readFolderDepth(params.folder);
-    if (depth <= 0) return buildFolderRootGroupKey(params.folder);
+    const projectGroupKey = resolveProjectGroupKey(params.folder.groupKey);
+    if (depth <= 0) return projectGroupKey || null;
     for (let index = params.itemIndex - 1; index >= 0; index -= 1) {
         const candidate = params.items[index];
         if (candidate?.type !== 'header' || candidate.headerKind !== 'folder') continue;
@@ -188,7 +255,7 @@ function resolveFolderParentGroupKeyFromVisibleItems(params: Readonly<{
             return String(candidate.groupKey ?? '').trim() || null;
         }
     }
-    return buildFolderRootGroupKey(params.folder);
+    return projectGroupKey || null;
 }
 
 function isInsideFolderBlock(item: SessionListIndexItem, folderDepth: number): boolean {
@@ -230,6 +297,21 @@ function collectDirectChildOrderEntries(items: ReadonlyArray<SessionListIndexIte
     return entries;
 }
 
+function collectDirectFolderOrderEntries(items: ReadonlyArray<SessionListIndexItem>, groupKey: string): ChildOrderEntry[] {
+    const entries: ChildOrderEntry[] = [];
+    for (let index = 0; index < items.length; index += 1) {
+        const item = items[index]!;
+        if (item.type !== 'header' || item.headerKind !== 'folder') continue;
+        if (resolveFolderParentGroupKeyFromVisibleItems({ items, itemIndex: index, folder: item }) !== groupKey) continue;
+        const key = buildListItemOrderKey(item);
+        if (!key) continue;
+        const end = findFolderBlockEnd(items, index, readFolderDepth(item));
+        entries.push({ key, start: index, end });
+        index = end - 1;
+    }
+    return entries;
+}
+
 function reorderEntriesByKeys(entries: ReadonlyArray<ChildOrderEntry>, keys: ReadonlyArray<string>): ChildOrderEntry[] {
     const byKey = new Map(entries.map((entry) => [entry.key, entry]));
     const used = new Set<ChildOrderEntry>();
@@ -243,8 +325,74 @@ function reorderEntriesByKeys(entries: ReadonlyArray<ChildOrderEntry>, keys: Rea
             used.add(found);
         }
     }
+    const unordered = entries.filter((entry) => !used.has(entry));
+    return [...unordered, ...out];
+}
+
+function splitChildOrderEntriesIntoContiguousRuns(entries: ReadonlyArray<ChildOrderEntry>): ChildOrderEntry[][] {
+    const runs: ChildOrderEntry[][] = [];
+    let current: ChildOrderEntry[] = [];
     for (const entry of entries) {
-        if (!used.has(entry)) out.push(entry);
+        const previous = current[current.length - 1] ?? null;
+        if (!previous || previous.end === entry.start) {
+            current.push(entry);
+            continue;
+        }
+        if (current.length > 0) runs.push(current);
+        current = [entry];
+    }
+    if (current.length > 0) runs.push(current);
+    return runs;
+}
+
+function applyChildOrderEntriesByRuns(
+    source: ReadonlyArray<SessionListIndexItem>,
+    entries: ReadonlyArray<ChildOrderEntry>,
+    keys: ReadonlyArray<string>,
+): SessionListIndexItem[] {
+    let out = source as SessionListIndexItem[];
+    let didChange = false;
+    for (const run of splitChildOrderEntriesIntoContiguousRuns(entries)) {
+        if (run.length < 2) continue;
+        const reordered = reorderEntriesByKeys(run, keys);
+        if (reordered.every((entry, index) => entry === run[index])) continue;
+
+        const firstEntry = run[0]!;
+        const lastEntry = run[run.length - 1]!;
+        out = [
+            ...out.slice(0, firstEntry.start),
+            ...reordered.flatMap((entry) => out.slice(entry.start, entry.end)),
+            ...out.slice(lastEntry.end),
+        ];
+        didChange = true;
+    }
+    return didChange ? out : (source as SessionListIndexItem[]);
+}
+
+function applyFoldersFirstStructuralOrderingForGroup(
+    source: ReadonlyArray<SessionListIndexItem>,
+    groupKey: string,
+    keys: ReadonlyArray<string>,
+): SessionListIndexItem[] {
+    if (!keys.some((key) => typeof key === 'string' && key.startsWith('folder:'))) {
+        return source as SessionListIndexItem[];
+    }
+    const entries = collectDirectFolderOrderEntries(source, groupKey);
+    if (entries.length < 2) {
+        return source as SessionListIndexItem[];
+    }
+    return applyChildOrderEntriesByRuns(source, entries, keys);
+}
+
+function applyFoldersFirstStructuralOrdering(
+    source: ReadonlyArray<SessionListIndexItem>,
+    orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>,
+): SessionListIndexItem[] {
+    let out = source as SessionListIndexItem[];
+    for (const [groupKeyRaw, keys] of Object.entries(orderByGroupKey)) {
+        const groupKey = String(groupKeyRaw ?? '').trim();
+        if (!groupKey || !keys || keys.length === 0) continue;
+        out = applyFoldersFirstStructuralOrderingForGroup(out, groupKey, keys);
     }
     return out;
 }
@@ -261,18 +409,7 @@ function applyMixedChildOrderingForGroup(
     if (entries.length < 2) {
         return source as SessionListIndexItem[];
     }
-    const reordered = reorderEntriesByKeys(entries, keys);
-    if (reordered.every((entry, index) => entry === entries[index])) {
-        return source as SessionListIndexItem[];
-    }
-
-    const firstEntry = entries[0]!;
-    const lastEntry = entries[entries.length - 1]!;
-    return [
-        ...source.slice(0, firstEntry.start),
-        ...reordered.flatMap((entry) => source.slice(entry.start, entry.end)),
-        ...source.slice(lastEntry.end),
-    ];
+    return applyChildOrderEntriesByRuns(source, entries, keys);
 }
 
 function applyMixedChildOrdering(
@@ -291,29 +428,34 @@ function applyMixedChildOrdering(
 function applySessionOnlyGroupOrdering(
     source: ReadonlyArray<SessionListIndexItem>,
     orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>,
+    options: SessionOrderingContextOptions = {},
 ): SessionListIndexItem[] {
-    const sessionsByGroup = new Map<string, Array<Extract<SessionListIndexItem, { type: 'session' }>>>();
+    const sessionsByScope = new Map<string, {
+        groupKey: string;
+        items: Array<Extract<SessionListIndexItem, { type: 'session' }>>;
+    }>();
 
     for (const item of source) {
         if (item.type !== 'session') continue;
-        const groupKey = typeof item.groupKey === 'string' ? item.groupKey : '';
-        if (!groupKey) continue;
-        if (!sessionsByGroup.has(groupKey)) sessionsByGroup.set(groupKey, []);
-        sessionsByGroup.get(groupKey)!.push(item);
+        const context = resolveCustomSessionOrderingContext(item, options);
+        if (!context) continue;
+        const bucket = sessionsByScope.get(context.scopeKey) ?? { groupKey: context.groupKey, items: [] };
+        bucket.items.push(item);
+        sessionsByScope.set(context.scopeKey, bucket);
     }
 
-    const reorderedByGroup = new Map<string, Array<Extract<SessionListIndexItem, { type: 'session' }>>>();
-    for (const [groupKey, items] of sessionsByGroup.entries()) {
-        const keys = orderByGroupKey[groupKey];
+    const reorderedByScope = new Map<string, Array<Extract<SessionListIndexItem, { type: 'session' }>>>();
+    for (const [scopeKey, bucket] of sessionsByScope.entries()) {
+        const keys = orderByGroupKey[bucket.groupKey];
         if (!keys || keys.length === 0) continue;
-        reorderedByGroup.set(groupKey, reorderSessionListIndexSessionItemsByKeys(items, keys));
+        reorderedByScope.set(scopeKey, reorderSessionListIndexSessionItemsByKeys(bucket.items, keys));
     }
 
-    if (reorderedByGroup.size === 0) {
+    if (reorderedByScope.size === 0) {
         return source as SessionListIndexItem[];
     }
 
-    const indicesByGroup = new Map<string, number>();
+    const indicesByScope = new Map<string, number>();
     const out: SessionListIndexItem[] = [];
     let didChange = false;
     for (const item of source) {
@@ -321,26 +463,49 @@ function applySessionOnlyGroupOrdering(
             out.push(item);
             continue;
         }
-        const groupKey = typeof item.groupKey === 'string' ? item.groupKey : '';
-        const replacementList = reorderedByGroup.get(groupKey);
+        const scopeKey = resolveSessionOrderingScopeKey(item, 'custom', options);
+        if (!scopeKey) {
+            out.push(item);
+            continue;
+        }
+        const replacementList = reorderedByScope.get(scopeKey);
         if (!replacementList) {
             out.push(item);
             continue;
         }
-        const index = indicesByGroup.get(groupKey) ?? 0;
+        const index = indicesByScope.get(scopeKey) ?? 0;
         const replacement = replacementList[index] ?? item;
         if (replacement !== item) didChange = true;
         out.push(replacement);
-        indicesByGroup.set(groupKey, index + 1);
+        indicesByScope.set(scopeKey, index + 1);
     }
 
     return didChange ? out : (source as SessionListIndexItem[]);
 }
 
+export function applySessionListStructuralGroupOrder(
+    source: ReadonlyArray<SessionListIndexItem>,
+    orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>,
+    options: Readonly<{ folderSortMode?: SessionListFolderSortModeV1 }> = {},
+): SessionListIndexItem[] {
+    return normalizeSessionListFolderSortModeV1(options.folderSortMode) === 'mixed'
+        ? applyMixedChildOrdering(source, orderByGroupKey)
+        : applyFoldersFirstStructuralOrdering(source, orderByGroupKey);
+}
+
+export function applySessionListSessionSiblingOrder(
+    source: ReadonlyArray<SessionListIndexItem>,
+    orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>,
+    options: SessionOrderingContextOptions = {},
+): SessionListIndexItem[] {
+    return applySessionOnlyGroupOrdering(source, orderByGroupKey, options);
+}
+
 export function applySessionListIndexGroupOrdering(
     source: ReadonlyArray<SessionListIndexItem>,
     orderByGroupKey: Readonly<Record<string, ReadonlyArray<string> | undefined>>,
+    options: Readonly<{ folderSortMode?: SessionListFolderSortModeV1; sectionMode?: SessionListOrderingSectionMode }> = {},
 ): SessionListIndexItem[] {
-    const sessionOrdered = applySessionOnlyGroupOrdering(source, orderByGroupKey);
-    return applyMixedChildOrdering(sessionOrdered, orderByGroupKey);
+    const sessionOrdered = applySessionListSessionSiblingOrder(source, orderByGroupKey, options);
+    return applySessionListStructuralGroupOrder(sessionOrdered, orderByGroupKey, options);
 }

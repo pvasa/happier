@@ -1,6 +1,6 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPartialStorageModuleMock, renderScreen } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTestHelpers';
@@ -35,6 +35,7 @@ installSessionFilesViewCommonModuleMocks({
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
             useSessionProjectScmSnapshot: () => mockSnapshot,
             useSessionProjectScmSnapshotError: () => null,
+            useSessionRealtimeScmTranscriptConsumer: () => {},
             useSessionProjectScmTouchedPaths: () => [],
             useSessionProjectScmOperationLog: () => [],
             useProjectForSession: () => null,
@@ -57,7 +58,7 @@ vi.mock('@/components/ui/text/Text', () => ({
 const mockPaneScope = {
     openDetailsTab: vi.fn(),
     setDetailsTabState: vi.fn(),
-    scopeState: null,
+    scopeState: null as null | { details: { tabState: Record<string, unknown> } },
 };
 
 vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
@@ -151,7 +152,12 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
         changedFilesReviewSpy.mockClear();
         mockPaneScope.openDetailsTab.mockClear();
         mockPaneScope.setDetailsTabState.mockClear();
+        mockPaneScope.scopeState = null;
         mockSnapshot = null;
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('keeps last-known review content visible while snapshot is revalidating', async () => {
@@ -276,5 +282,255 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
         expect(nextProps.onFilePress).toBe(firstProps.onFilePress);
         expect(nextProps.onFilePressPinned).toBe(firstProps.onFilePressPinned);
         expect(nextProps.renderFileTrailingActions).toBe(firstProps.renderFileTrailingActions);
+    });
+
+    it('debounces review scroll position persistence during scrolling', async () => {
+        vi.useFakeTimers();
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        mockSnapshot = {
+            fetchedAt: 1,
+            projectKey: 'm1:/repo',
+            repo: { isRepo: true, rootPath: '/tmp/repo', backendId: 'git', mode: '.git' },
+            capabilities: { readLog: true },
+            branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+            stashCount: 0,
+            hasConflicts: false,
+            entries: [],
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 0,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 0,
+                pendingRemoved: 0,
+            },
+        };
+
+        await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+        const reviewProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        expect(typeof reviewProps.onScrollTopChange).toBe('function');
+
+        act(() => {
+            reviewProps.onScrollTopChange(120);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).not.toHaveBeenCalled();
+
+        await act(async () => {
+            vi.advanceTimersByTime(200);
+        });
+        expect(mockPaneScope.setDetailsTabState).not.toHaveBeenCalled();
+
+        act(() => {
+            reviewProps.onScrollTopChange(240);
+            reviewProps.onScrollTopChange(360);
+        });
+
+        await act(async () => {
+            vi.advanceTimersByTime(249);
+        });
+        expect(mockPaneScope.setDetailsTabState).not.toHaveBeenCalled();
+
+        await act(async () => {
+            vi.advanceTimersByTime(1);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledTimes(1);
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledWith('scmReview:working', {
+            scrollTop: 360,
+        });
+    });
+
+    it('does not feed persisted scroll updates back into the mounted review initial scroll position', async () => {
+        vi.useFakeTimers();
+        mockPaneScope.scopeState = {
+            details: {
+                tabState: {
+                    'scmReview:working': {
+                        scrollTop: 120,
+                    },
+                },
+            },
+        };
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        mockSnapshot = {
+            fetchedAt: 1,
+            projectKey: 'm1:/repo',
+            repo: { isRepo: true, rootPath: '/tmp/repo', backendId: 'git', mode: '.git' },
+            capabilities: { readLog: true },
+            branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+            stashCount: 0,
+            hasConflicts: false,
+            entries: [],
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 0,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 0,
+                pendingRemoved: 0,
+            },
+        };
+
+        const { tree } = await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+        const firstProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        expect(firstProps.initialScrollTop).toBe(120);
+
+        act(() => {
+            firstProps.onScrollTopChange(360);
+        });
+        await act(async () => {
+            vi.advanceTimersByTime(250);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledWith('scmReview:working', {
+            scrollTop: 360,
+        });
+
+        mockPaneScope.scopeState = {
+            details: {
+                tabState: {
+                    'scmReview:working': {
+                        scrollTop: 360,
+                    },
+                },
+            },
+        };
+
+        await act(async () => {
+            tree.update(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1:rerender" />);
+        });
+
+        const nextProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        expect(nextProps.initialScrollTop).toBe(120);
+    });
+
+    it('does not persist near-identical review scroll offsets during large diff settling', async () => {
+        vi.useFakeTimers();
+        mockPaneScope.scopeState = {
+            details: {
+                tabState: {
+                    'scmReview:working': {
+                        scrollTop: 360,
+                    },
+                },
+            },
+        };
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        mockSnapshot = {
+            fetchedAt: 1,
+            projectKey: 'm1:/repo',
+            repo: { isRepo: true, rootPath: '/tmp/repo', backendId: 'git', mode: '.git' },
+            capabilities: { readLog: true },
+            branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+            stashCount: 0,
+            hasConflicts: false,
+            entries: [],
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 0,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 0,
+                pendingRemoved: 0,
+            },
+        };
+
+        await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+        const reviewProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        expect(typeof reviewProps.onScrollTopChange).toBe('function');
+
+        act(() => {
+            reviewProps.onScrollTopChange(360.4);
+        });
+        await act(async () => {
+            vi.advanceTimersByTime(250);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).not.toHaveBeenCalled();
+
+        act(() => {
+            reviewProps.onScrollTopChange(362);
+        });
+        await act(async () => {
+            vi.advanceTimersByTime(250);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledTimes(1);
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledWith('scmReview:working', {
+            scrollTop: 362,
+        });
+    });
+
+    it('does not persist equivalent collapsed path arrays during review settling', async () => {
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        mockSnapshot = {
+            fetchedAt: 1,
+            projectKey: 'm1:/repo',
+            repo: { isRepo: true, rootPath: '/tmp/repo', backendId: 'git', mode: '.git' },
+            capabilities: { readLog: true },
+            branch: { head: 'main', upstream: null, ahead: 0, behind: 0, detached: false },
+            stashCount: 0,
+            hasConflicts: false,
+            entries: [],
+            totals: {
+                includedFiles: 0,
+                pendingFiles: 0,
+                untrackedFiles: 0,
+                includedAdded: 0,
+                includedRemoved: 0,
+                pendingAdded: 0,
+                pendingRemoved: 0,
+            },
+        };
+
+        await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+        const firstReviewProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+        expect(typeof firstReviewProps.onCollapsedPathsChange).toBe('function');
+
+        act(() => {
+            firstReviewProps.onCollapsedPathsChange([]);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).not.toHaveBeenCalled();
+
+        mockPaneScope.scopeState = {
+            details: {
+                tabState: {
+                    'scmReview:working': {
+                        collapsedPaths: ['src/a.ts', 'src/b.ts'],
+                    },
+                },
+            },
+        };
+
+        const { tree } = await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+        const nextReviewProps = changedFilesReviewSpy.mock.calls.at(-1)?.[0];
+
+        act(() => {
+            nextReviewProps.onCollapsedPathsChange(['src/a.ts', 'src/b.ts']);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).not.toHaveBeenCalled();
+
+        act(() => {
+            nextReviewProps.onCollapsedPathsChange(['src/a.ts']);
+        });
+
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledTimes(1);
+        expect(mockPaneScope.setDetailsTabState).toHaveBeenCalledWith('scmReview:working', {
+            collapsedPaths: ['src/a.ts'],
+        });
+
+        act(() => {
+            tree.unmount();
+        });
     });
 });

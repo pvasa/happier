@@ -115,10 +115,13 @@ installSessionFilesViewCommonModuleMocks({
                 React.createElement('span', { 'data-testid': testID, ...props }),
         });
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
-            storage: { getState: () => ({ setSessionRepositoryTreeExpandedPaths: vi.fn() }) } as any,
+    storage: async () => {
+        const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const storageStore = createStorageStoreMock({
+            setSessionRepositoryTreeExpandedPaths: vi.fn(),
+        } as any);
+        return createStorageModuleStub({
+            storage: storageStore,
             useSession: () => ({ active: true, metadata: { machineId: 'm1' } }) as any,
             useSessionRepositoryTreeExpandedPaths: () => [],
             useSessionProjectScmSnapshot: () => null,

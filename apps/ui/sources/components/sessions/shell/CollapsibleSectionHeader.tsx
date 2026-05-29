@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Eyebrow } from '@/components/ui/text/Eyebrow';
 import type { SessionListViewItem } from '@/sync/domains/state/storage';
+import { isSessionListPrimaryHeaderKind } from './sessionListPrimaryHeader';
 
 const stylesheet = StyleSheet.create((theme) => ({
     headerSection: {
@@ -74,7 +75,7 @@ export const CollapsibleSectionHeader = React.memo(function CollapsibleSectionHe
     const isWeb = Platform.OS === 'web';
     const [isHovered, setIsHovered] = React.useState(false);
     const headerChevronColor = theme.colors.text.secondary;
-    const isPrimaryHeader = props.headerKind === 'active' || props.headerKind === 'inactive';
+    const isPrimaryHeader = isSessionListPrimaryHeaderKind(props.headerKind);
     const showChevron = !isWeb || props.collapsed || isHovered;
     return (
         <Pressable

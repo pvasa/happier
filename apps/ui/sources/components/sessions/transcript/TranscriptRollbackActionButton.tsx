@@ -41,6 +41,12 @@ export const TranscriptRollbackActionButton = React.memo((props: {
         };
     }, []);
 
+    const isApprovalRequestCreated = React.useCallback((value: unknown): boolean => (
+        !!value
+        && typeof value === 'object'
+        && (value as { kind?: unknown }).kind === 'approval_request_created'
+    ), []);
+
     const handlePress = React.useCallback(async () => {
         if (isRollingBack) return;
         setIsRollingBack(true);
@@ -59,7 +65,15 @@ export const TranscriptRollbackActionButton = React.memo((props: {
                 return;
             }
 
+            if (isApprovalRequestCreated(result.result)) {
+                return;
+            }
+
             const inner = readInnerOkError(result.result);
+            if (!inner) {
+                Modal.alert(t('common.error'), t('errors.unknownError'));
+                return;
+            }
             if (inner && inner.ok !== true) {
                 Modal.alert(t('common.error'), inner.errorMessage ?? t('errors.unknownError'));
                 return;
@@ -74,7 +88,7 @@ export const TranscriptRollbackActionButton = React.memo((props: {
         } finally {
             setIsRollingBack(false);
         }
-    }, [executor, isRollingBack, props.restoredDraftText, props.sessionId, props.target, readInnerOkError]);
+    }, [executor, isApprovalRequestCreated, isRollingBack, props.restoredDraftText, props.sessionId, props.target, readInnerOkError]);
 
     const accessibilityLabel = props.target?.type === 'before_user_message'
         ? t('session.rollback.beforeUserMessageA11y')

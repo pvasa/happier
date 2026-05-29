@@ -94,6 +94,42 @@ describe('resolveSessionRowPresentation', () => {
         });
     });
 
+    it('keeps active work visible when the row prefers a path subtitle', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'working',
+            density: 'default',
+            requestedSecondaryLineMode: 'path',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'working',
+            titleTone: 'emphasized',
+            secondaryLine: 'status',
+        });
+    });
+
+    it('keeps blocked active work visible when the row prefers a path subtitle', () => {
+        expect(resolveSessionRowPresentation({
+            attentionState: 'permission_required',
+            density: 'default',
+            requestedSecondaryLineMode: 'path',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'permission',
+            titleTone: 'emphasized',
+            secondaryLine: 'status',
+        });
+        expect(resolveSessionRowPresentation({
+            attentionState: 'action_required',
+            density: 'default',
+            requestedSecondaryLineMode: 'path',
+            hasPathSubtitle: true,
+        })).toEqual({
+            attentionIndicator: 'action',
+            titleTone: 'emphasized',
+            secondaryLine: 'status',
+        });
+    });
+
     it('does not request status UI for quiet online rows', () => {
         expect(resolveSessionRowPresentation({
             attentionState: 'quiet',

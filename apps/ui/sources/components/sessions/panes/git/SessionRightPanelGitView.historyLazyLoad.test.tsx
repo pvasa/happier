@@ -75,6 +75,7 @@ installSessionDetailsPanelCommonModuleMocks({
                     },
                 }),
                 useSessionProjectScmSnapshotError: () => null,
+                useSessionRealtimeScmTranscriptConsumer: () => {},
                 useSessionProjectScmTouchedPaths: () => [],
             },
         );
@@ -186,7 +187,7 @@ vi.mock('@/components/sessions/panes/git/SessionRightPanelGitHistoryTab', () => 
 }));
 
 describe('SessionRightPanelGitView (history lazy load)', () => {
-    it('prefetches commit history on mount and does not double-load when switching to History', async () => {
+    it('defers commit history loading until the History tab is selected', async () => {
         const { SessionRightPanelGitView } = await import('./SessionRightPanelGitView');
 
         loadCommitHistoryMock.mockClear();
@@ -196,8 +197,7 @@ describe('SessionRightPanelGitView (history lazy load)', () => {
         tree = (await renderScreen(<SessionRightPanelGitView sessionId="s1" scopeId="session:s1" />)).tree;
 
         expect(tree.findAllByType('CommitTab' as any)).toHaveLength(1);
-        expect(loadCommitHistoryMock).toHaveBeenCalledTimes(1);
-        expect(loadCommitHistoryMock.mock.calls[0]?.[0]).toEqual({ reset: true });
+        expect(loadCommitHistoryMock).not.toHaveBeenCalled();
 
         activeGitSubTab = 'history';
         await act(async () => {
@@ -206,5 +206,6 @@ describe('SessionRightPanelGitView (history lazy load)', () => {
 
         expect(tree.findAllByType('HistoryTab' as any)).toHaveLength(1);
         expect(loadCommitHistoryMock).toHaveBeenCalledTimes(1);
+        expect(loadCommitHistoryMock.mock.calls[0]?.[0]).toEqual({ reset: true });
     });
 });

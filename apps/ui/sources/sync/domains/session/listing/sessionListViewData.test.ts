@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
-import { applySessionFoldersToSessionListViewData, buildSessionListViewData } from './sessionListViewData';
+import { applySessionFoldersToSessionListViewData, buildSessionListViewData, type SessionListViewItem } from './sessionListViewData';
+import { buildSessionListRenderableFromSession } from './sessionListRenderable';
 
 function makeSession(partial: Partial<Session> & Pick<Session, 'id'>): Session {
     const active = partial.active ?? false;
@@ -146,6 +147,95 @@ describe('buildSessionListViewData', () => {
         ]);
     });
 
+    it('can render active and inactive sessions in one workspace-grouped section', () => {
+        const machine = makeMachine({ id: 'm1', metadata: { host: 'm1', platform: 'darwin', happyCliVersion: '0.0.0', happyHomeDir: '/h', homeDir: '/home/u' } });
+
+        const sessions: Record<string, Session> = {
+            active: makeSession({
+                id: 'active',
+                active: true,
+                createdAt: 3,
+                updatedAt: 300,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+            inactive: makeSession({
+                id: 'inactive',
+                active: false,
+                createdAt: 2,
+                updatedAt: 200,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+            other: makeSession({
+                id: 'other',
+                active: false,
+                createdAt: 1,
+                updatedAt: 100,
+                metadata: { machineId: 'm1', path: '/home/u/repoB', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+        };
+
+        const data = buildSessionListViewData(sessions, { [machine.id]: machine }, {
+            groupInactiveSessionsByProject: false,
+            activeGroupingV1: 'project',
+            inactiveGroupingV1: 'date',
+            sectionModeV1: 'single',
+        });
+
+        const summary = data.map((item) => {
+            switch (item.type) {
+                case 'header':
+                    return `header:${item.headerKind ?? 'unknown'}:${item.title}`;
+                case 'session':
+                    return `session:${item.session.id}:${item.section ?? 'unknown'}:${item.groupKind ?? 'unknown'}:${item.variant ?? 'default'}`;
+            }
+        });
+
+        expect(summary).toEqual([
+            'header:sessions:Sessions',
+            'header:project:repoA',
+            'session:active:active:project:no-path',
+            'session:inactive:inactive:project:no-path',
+            'header:project:repoB',
+            'session:other:inactive:project:no-path',
+        ]);
+    });
+
+    it('uses section-agnostic project group keys for split activity sections', () => {
+        const machine = makeMachine({ id: 'm1', metadata: { host: 'm1', platform: 'darwin', happyCliVersion: '0.0.0', happyHomeDir: '/h', homeDir: '/home/u' } });
+
+        const sessions: Record<string, Session> = {
+            active: makeSession({
+                id: 'active',
+                active: true,
+                createdAt: 2,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+            inactive: makeSession({
+                id: 'inactive',
+                active: false,
+                createdAt: 1,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+        };
+
+        const data = buildSessionListViewData(sessions, { [machine.id]: machine }, {
+            groupInactiveSessionsByProject: true,
+            serverScope: { serverId: 'server-a', serverName: 'Server A' },
+        });
+
+        const projectGroupKeys = data
+            .filter((item): item is Extract<typeof item, { type: 'header' }> =>
+                item.type === 'header' && item.headerKind === 'project'
+            )
+            .map((item) => item.groupKey);
+
+        expect(projectGroupKeys).toHaveLength(2);
+        expect(projectGroupKeys[0]).toBe(projectGroupKeys[1]);
+        expect(projectGroupKeys[0]).toMatch(/^server:server-a:project:/);
+        expect(projectGroupKeys[0]).not.toContain(':active:');
+        expect(projectGroupKeys[0]).not.toContain(':inactive:');
+    });
+
     it('builds folder headers and assigned session rows from durable workspace refs', () => {
         const machine = makeMachine({
             id: 'm1',
@@ -223,6 +313,80 @@ describe('buildSessionListViewData', () => {
         });
     });
 
+    it('renders child folders before direct sessions inside a folder', () => {
+        const machine = makeMachine({
+            id: 'm1',
+            metadata: { host: 'm1', platform: 'darwin', happyCliVersion: '0.0.0', happyHomeDir: '/h', homeDir: '/home/u' },
+        });
+        const workspace = {
+            t: 'workspaceScope' as const,
+            serverId: 'server-a',
+            machineId: 'm1',
+            rootPath: '/home/u/repoA',
+        };
+        const sessions: Record<string, Session> = {
+            parentSession: makeSession({
+                id: 'parent-session',
+                active: true,
+                createdAt: 2,
+                updatedAt: 100,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+            childSession: makeSession({
+                id: 'child-session',
+                active: true,
+                createdAt: 1,
+                updatedAt: 50,
+                metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+            }),
+        };
+
+        const data = buildSessionListViewData(sessions, { [machine.id]: machine }, {
+            groupInactiveSessionsByProject: true,
+            serverScope: { serverId: 'server-a', serverName: 'Server A' },
+            sessionFolders: {
+                enabled: true,
+                folders: {
+                    v: 1 as const,
+                    folders: [
+                        {
+                            id: 'parent-folder',
+                            workspace,
+                            parentId: null,
+                            name: 'Parent',
+                            createdAt: 1,
+                            updatedAt: 1,
+                        },
+                        {
+                            id: 'child-folder',
+                            workspace,
+                            parentId: 'parent-folder',
+                            name: 'Child',
+                            createdAt: 2,
+                            updatedAt: 2,
+                        },
+                    ],
+                },
+                assignmentsBySessionKey: {
+                    'server-a:parent-session': 'parent-folder',
+                    'server-a:child-session': 'child-folder',
+                },
+            },
+        });
+
+        expect(data.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}:${item.title}:${item.folderId ?? 'root'}:${item.depth ?? 0}`
+            : `session:${item.session.id}:${item.folderId ?? 'root'}:${item.folderDepth ?? 0}`
+        )).toEqual([
+            'header:active:Active:root:0',
+            'header:project:repoA:root:0',
+            'header:folder:Parent:parent-folder:0',
+            'header:folder:Child:child-folder:1',
+            'session:child-session:child-folder:2',
+            'session:parent-session:parent-folder:1',
+        ]);
+    });
+
     it('keeps workspace folder headers visible when the workspace has no visible sessions', () => {
         const workspace = {
             t: 'workspaceScope' as const,
@@ -237,7 +401,7 @@ describe('buildSessionListViewData', () => {
                 type: 'header',
                 title: 'repoA',
                 headerKind: 'project',
-                groupKey: 'server:server-a:active:project:repoA',
+                groupKey: 'server:server-a:project:repoA',
                 workspaceKey: 'repoA',
                 workspaceScopeHint: workspace,
                 serverId: 'server-a',
@@ -269,6 +433,62 @@ describe('buildSessionListViewData', () => {
             'header:folder:Planning:folder-a:0',
             'header:inactive:Inactive:root:0',
         ]);
+    });
+
+    it('derives folderized row section from collected session state instead of project group key', () => {
+        const workspace = {
+            t: 'workspaceScope' as const,
+            serverId: 'server-a',
+            machineId: 'm1',
+            rootPath: '/home/u/repoA',
+        };
+        const staleGroupKey = 'server:server-a:active:project:repoA';
+        const inactiveSession = buildSessionListRenderableFromSession(makeSession({
+            id: 'inactive',
+            active: false,
+            createdAt: 1,
+            metadata: { machineId: 'm1', path: '/home/u/repoA', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
+        }));
+
+        const data = applySessionFoldersToSessionListViewData([
+            {
+                type: 'header',
+                title: 'repoA',
+                headerKind: 'project',
+                groupKey: staleGroupKey,
+                workspaceKey: 'repoA',
+                workspaceScopeHint: workspace,
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: inactiveSession,
+                groupKey: staleGroupKey,
+                groupKind: 'project',
+            },
+        ] satisfies SessionListViewItem[], {
+            enabled: true,
+            folders: {
+                v: 1,
+                folders: [{
+                    id: 'folder-a',
+                    workspace,
+                    renderWorkspaceKey: 'repoA',
+                    parentId: null,
+                    name: 'Planning',
+                    createdAt: 1,
+                    updatedAt: 1,
+                }],
+            },
+            assignmentsBySessionKey: {
+                'server-a:inactive': 'folder-a',
+            },
+        });
+
+        const folderizedSession = data.find((item): item is Extract<SessionListViewItem, { type: 'session' }> =>
+            item.type === 'session' && item.session.id === 'inactive'
+        );
+        expect(folderizedSession?.section).toBe('inactive');
     });
 
     it('stores the newest session id on project headers for contextual new-session seeding', () => {
@@ -416,7 +636,7 @@ describe('buildSessionListViewData', () => {
         }
     });
 
-    it('groups inactive sessions by updated date while grouping active sessions by project', () => {
+    it('groups inactive sessions by meaningful activity date while grouping active sessions by project', () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date(2026, 1, 17, 12, 0, 0));
 
@@ -445,6 +665,7 @@ describe('buildSessionListViewData', () => {
                     id: 'in1',
                     createdAt: new Date(2026, 1, 16, 7, 0, 0).getTime(),
                     updatedAt: new Date(2026, 1, 17, 7, 0, 0).getTime(),
+                    meaningfulActivityAt: new Date(2026, 1, 16, 7, 0, 0).getTime(),
                     metadata: { machineId: 'm1', path: '/home/u/repoC', homeDir: '/home/u', host: 'm1', version: '0.0.0', flavor: 'claude' },
                 }),
             };
@@ -471,7 +692,7 @@ describe('buildSessionListViewData', () => {
                 'header:project:repoA',
                 'session:act1:active:no-path',
                 'header:inactive:Inactive',
-                'header:date:Today',
+                'header:date:Yesterday',
                 'session:in1:inactive:default',
             ]);
         } finally {

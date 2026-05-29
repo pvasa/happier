@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
@@ -172,8 +173,69 @@ describe('NewSessionPathSelectionContent', () => {
         expect(captured.isFavorite('/Users/leeroy/recent')).toBe(false);
         // The toggle callback is forwarded so PathSelectionList rows can mutate.
         expect(typeof captured.onToggleFavorite).toBe('function');
-        captured.onToggleFavorite('/Users/leeroy/recent');
+        await act(async () => {
+            captured.onToggleFavorite('/Users/leeroy/recent');
+        });
         expect(onToggleFavoriteDirectory).toHaveBeenCalledWith('/Users/leeroy/recent');
+    });
+
+    it('RUX-3: updates favorite rows immediately while the popover stays mounted', async () => {
+        const onToggleFavoriteDirectory = vi.fn();
+        const { NewSessionPathSelectionContent } = await import('./NewSessionPathSelectionContent');
+
+        capturedPathSelectionListProps.length = 0;
+
+        const props = {
+            machineHomeDir: '/Users/leeroy',
+            selectedPath: '/repo',
+            onCommit: vi.fn(),
+            recentPaths: ['/Users/leeroy/recent'],
+            favoriteDirectories: [],
+            machineId: 'm-1',
+            machinePlatform: 'unix',
+            onToggleFavoriteDirectory,
+        } satisfies NewSessionPathSelectionContentProps;
+
+        await renderScreen(React.createElement(NewSessionPathSelectionContent, props));
+
+        const initial = capturedPathSelectionListProps[0] as {
+            favorites?: ReadonlyArray<{ path: string }>;
+            isFavorite?: (path: string) => boolean;
+            onToggleFavorite?: (path: string) => void;
+            recents?: ReadonlyArray<{ path: string }>;
+        };
+        expect(initial.favorites).toEqual([]);
+        expect(initial.recents?.map((entry) => entry.path)).toEqual(['/Users/leeroy/recent']);
+        expect(initial.isFavorite?.('/Users/leeroy/recent')).toBe(false);
+
+        await act(async () => {
+            initial.onToggleFavorite?.('/Users/leeroy/recent');
+        });
+
+        const afterFavorite = capturedPathSelectionListProps[capturedPathSelectionListProps.length - 1] as {
+            favorites?: ReadonlyArray<{ path: string }>;
+            isFavorite?: (path: string) => boolean;
+            recents?: ReadonlyArray<{ path: string }>;
+            onToggleFavorite?: (path: string) => void;
+        };
+        expect(onToggleFavoriteDirectory).toHaveBeenCalledWith('/Users/leeroy/recent');
+        expect(afterFavorite.favorites).toEqual([{ path: '/Users/leeroy/recent' }]);
+        expect(afterFavorite.recents?.map((entry) => entry.path)).toEqual([]);
+        expect(afterFavorite.isFavorite?.('/Users/leeroy/recent')).toBe(true);
+
+        await act(async () => {
+            afterFavorite.onToggleFavorite?.('/Users/leeroy/recent');
+        });
+
+        const afterUnfavorite = capturedPathSelectionListProps[capturedPathSelectionListProps.length - 1] as {
+            favorites?: ReadonlyArray<{ path: string }>;
+            isFavorite?: (path: string) => boolean;
+            recents?: ReadonlyArray<{ path: string }>;
+        };
+        expect(onToggleFavoriteDirectory).toHaveBeenCalledTimes(2);
+        expect(afterUnfavorite.favorites).toEqual([]);
+        expect(afterUnfavorite.recents?.map((entry) => entry.path)).toEqual(['/Users/leeroy/recent']);
+        expect(afterUnfavorite.isFavorite?.('/Users/leeroy/recent')).toBe(false);
     });
 
     it('RUX-3: treats Windows favorite paths with mixed separators and case as equivalent without matching home siblings', async () => {
@@ -223,7 +285,7 @@ describe('NewSessionPathSelectionContent', () => {
         expect(captured.isFavorite).toBeUndefined();
     });
 
-    it('RUX-8: forwards maxHeight to PathSelectionList so the popover body clamps to the available height', async () => {
+    it('RUX-8: forwards maxHeight and measured native height behavior to PathSelectionList', async () => {
         const { NewSessionPathSelectionContent } = await import('./NewSessionPathSelectionContent');
 
         capturedPathSelectionListProps.length = 0;
@@ -241,6 +303,7 @@ describe('NewSessionPathSelectionContent', () => {
 
         expect(capturedPathSelectionListProps).toHaveLength(1);
         expect((capturedPathSelectionListProps[0] as any).maxHeight).toBe(456);
+        expect(capturedPathSelectionListProps[0]?.heightBehavior).toBe('measuredToMaxHeight');
     });
 
     it('RUX-8: omits maxHeight on PathSelectionList when none is provided (back-compat)', async () => {
@@ -260,6 +323,30 @@ describe('NewSessionPathSelectionContent', () => {
 
         expect(capturedPathSelectionListProps).toHaveLength(1);
         expect((capturedPathSelectionListProps[0] as any).maxHeight).toBeUndefined();
+    });
+
+    it('forwards history-first suggestion mode to PathSelectionList when requested by a popover caller', async () => {
+        const { NewSessionPathSelectionContent } = await import('./NewSessionPathSelectionContent');
+
+        capturedPathSelectionListProps.length = 0;
+
+        const props = {
+            machineHomeDir: '/home/me',
+            selectedPath: '/repo',
+            onCommit: vi.fn(),
+            recentPaths: [],
+            favoriteDirectories: [],
+            machineId: 'm-1',
+            machinePlatform: 'unix',
+            initialSuggestionMode: 'history',
+        } satisfies NewSessionPathSelectionContentProps;
+
+        await renderScreen(React.createElement(NewSessionPathSelectionContent, props));
+
+        expect(capturedPathSelectionListProps).toHaveLength(1);
+        expect(capturedPathSelectionListProps[0]).toMatchObject({
+            initialSuggestionMode: 'history',
+        });
     });
 
     it('forwards the pre-browse callback to PathSelectionList when provided', async () => {

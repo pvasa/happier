@@ -32,6 +32,10 @@ vi.mock('./MessageView', () => ({
         capturedMessageViewProps.push(props);
         return React.createElement('MessageView', props);
     },
+    MessageViewWithSessionCommon: (props: any) => {
+        capturedMessageViewProps.push(props);
+        return React.createElement('MessageViewWithSessionCommon', props);
+    },
 }));
 
 vi.mock('@/components/sessions/transcript/motion/TranscriptEnterWrapper', () => ({
@@ -66,6 +70,10 @@ vi.mock('@/components/sessions/transcript/turns/TurnView', async (importOriginal
             capturedTurnViewProps.push(props);
             return ReactMod.createElement(actual.TurnView, props);
         },
+        TurnViewWithSessionCommon: (props: any) => {
+            capturedTurnViewProps.push(props);
+            return ReactMod.createElement(actual.TurnViewWithSessionCommon, props);
+        },
     };
 });
 
@@ -79,6 +87,7 @@ vi.mock('@/components/sessions/actions/SessionActionDraftCard', () => ({
 
 vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
     ToolCallsGroupRow: () => React.createElement('ToolCallsGroupRow'),
+    ToolCallsGroupRowWithSessionCommon: () => React.createElement('ToolCallsGroupRowWithSessionCommon'),
 }));
 
 vi.mock('@/sync/domains/state/agentStateCapabilities', () => ({
@@ -132,10 +141,23 @@ describe('ChatList rollback action', () => {
         legacyChatListHarnessState.settingValues.transcriptGroupingMode = 'linear';
         legacyChatListHarnessState.sessionState = {
             ...legacyChatListHarnessState.sessionState,
-            metadata: { flavor: 'codex', codexBackendMode: 'appServer' },
-        };
-        legacyChatListHarnessState.sessionState = {
-            ...legacyChatListHarnessState.sessionState,
+            sessionTurns: {
+                v: 1,
+                sessionId: 's1',
+                latestTurnId: 'turn-1',
+                updatedAt: 99,
+                turns: [
+                    {
+                        turnId: 'turn-1',
+                        status: 'completed',
+                        startedAt: 1,
+                        updatedAt: 99,
+                        terminalAt: 99,
+                        transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1, endSeqInclusive: 2 },
+                        rollback: { state: 'eligible', updatedAt: 99 },
+                    },
+                ],
+            },
             metadata: {
                 flavor: 'codex',
                 codexBackendMode: 'appServer',
@@ -180,6 +202,27 @@ describe('ChatList rollback action', () => {
 
     it('does not place rollback actions on tool-call or agent messages when rollback-to-point is available', async () => {
         legacyChatListHarnessState.settingValues.transcriptGroupingMode = 'linear';
+        legacyChatListHarnessState.sessionState = {
+            ...legacyChatListHarnessState.sessionState,
+            sessionTurns: {
+                v: 1,
+                sessionId: 's1',
+                latestTurnId: 'turn-1',
+                updatedAt: 1,
+                turns: [
+                    {
+                        turnId: 'turn-1',
+                        status: 'completed',
+                        startedAt: 1,
+                        updatedAt: 1,
+                        terminalAt: 1,
+                        transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1, endSeqInclusive: 3 },
+                        rollback: { state: 'eligible', updatedAt: 1 },
+                    },
+                ],
+            },
+            metadata: { flavor: 'codex', codexBackendMode: 'appServer' },
+        };
 
         const messages = [
             { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'first', seq: 1 },
@@ -251,6 +294,36 @@ describe('ChatList rollback action', () => {
 
     it('keeps rollback-to-point attached to user messages when turn grouping is enabled', async () => {
         legacyChatListHarnessState.settingValues.transcriptGroupingMode = 'turns';
+        legacyChatListHarnessState.sessionState = {
+            ...legacyChatListHarnessState.sessionState,
+            sessionTurns: {
+                v: 1,
+                sessionId: 's1',
+                latestTurnId: 'turn-2',
+                updatedAt: 1,
+                turns: [
+                    {
+                        turnId: 'turn-1',
+                        status: 'completed',
+                        startedAt: 1,
+                        updatedAt: 1,
+                        terminalAt: 1,
+                        transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1, endSeqInclusive: 2 },
+                        rollback: { state: 'eligible', updatedAt: 1 },
+                    },
+                    {
+                        turnId: 'turn-2',
+                        status: 'completed',
+                        startedAt: 3,
+                        updatedAt: 1,
+                        terminalAt: 1,
+                        transcriptAnchors: { startUserMessageSeq: 3, userMessageSeqs: [3], startSeqInclusive: 3, endSeqInclusive: 4 },
+                        rollback: { state: 'eligible', updatedAt: 1 },
+                    },
+                ],
+            },
+            metadata: { flavor: 'codex', codexBackendMode: 'appServer' },
+        };
 
         const messages = [
             { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'first', seq: 1 },
@@ -286,7 +359,7 @@ describe('ChatList rollback action', () => {
         await screen.unmount();
     });
 
-    it('shows rollback for older Codex app-server sessions that only have generic codex control metadata', async () => {
+    it('hides point rollback for older Codex app-server sessions that only have generic codex control metadata', async () => {
         legacyChatListHarnessState.settingValues.transcriptGroupingMode = 'linear';
         legacyChatListHarnessState.sessionState = {
             ...legacyChatListHarnessState.sessionState,
@@ -320,10 +393,7 @@ describe('ChatList rollback action', () => {
         const screen = await renderLegacyChatList();
 
         const byId = new Map(capturedMessageViewProps.map((props) => [props.message.id, props]));
-        expect(byId.get('u1')?.rollbackAction).toEqual({
-            target: { type: 'before_user_message', userMessageSeq: 1 },
-            restoredDraftText: 'first',
-        });
+        expect(byId.get('u1')?.rollbackAction ?? null).toBeNull();
 
         await screen.unmount();
     });

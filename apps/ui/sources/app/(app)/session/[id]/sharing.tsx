@@ -5,12 +5,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { useSession, useIsDataReady } from '@/sync/domains/state/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import { openFriendSelectorModal } from '@/components/sessions/sharing/openFriendSelectorModal';
 import { openPublicLinkDialog } from '@/components/sessions/sharing/openPublicLinkDialog';
 import { openSessionShareDialog } from '@/components/sessions/sharing/openSessionShareDialog';
@@ -370,16 +372,22 @@ function SharingManagementContent({ sessionId }: { sessionId: string }) {
 export default memo(() => {
     const { theme } = useUnistyles();
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
+    const routeScope = useSessionRouteServerScope(params);
     const { id } = params;
     const isDataReady = useIsDataReady();
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         String(id ?? '').trim(),
         'SessionSharingRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
     const headerTitle = t('session.sharing.title');
     const screenOptions = React.useMemo(() => ({ headerTitle }), [headerTitle]);
+
+    if (sessionMissingAfterHydration) {
+        return <SessionInvalidLinkFallback />;
+    }
 
     if (!isDataReady || !sessionHydrated) {
         return (

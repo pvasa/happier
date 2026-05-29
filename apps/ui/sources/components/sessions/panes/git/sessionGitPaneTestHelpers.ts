@@ -127,6 +127,8 @@ export function installSessionGitPaneCommonModuleMocks(
         return {
             Typography: {
                 default: () => ({}),
+                eyebrow: () => ({}),
+                keyHint: () => ({}),
                 mono: () => ({}),
             },
         };

@@ -76,6 +76,7 @@ vi.mock('./ChatFooter', () => ({
 
 vi.mock('./MessageView', () => ({
   MessageView: () => React.createElement('MessageView'),
+  MessageViewWithSessionCommon: () => React.createElement('MessageViewWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/pending/PendingMessagesTranscriptBlock', () => ({
@@ -88,6 +89,7 @@ vi.mock('@/components/sessions/actions/SessionActionDraftCard', () => ({
 
 vi.mock('@/components/sessions/transcript/turns/TurnView', () => ({
   TurnView: () => React.createElement('TurnView'),
+  TurnViewWithSessionCommon: () => React.createElement('TurnViewWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/transcript/motion/TranscriptMotionProvider', () => ({

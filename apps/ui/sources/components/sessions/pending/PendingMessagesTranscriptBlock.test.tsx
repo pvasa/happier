@@ -249,7 +249,10 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         const affordance = screen.findByTestId('pendingMessages.pendingAffordance:p1');
         expect(affordance).toBeTruthy();
-        expect(flattenStyle(affordance!.props.style).position).toBe('absolute');
+        const affordanceStyle = flattenStyle(affordance!.props.style);
+        expect(affordanceStyle.position).toBe('absolute');
+        expect(affordanceStyle.borderWidth).toBe(0);
+        expect(affordanceStyle.paddingVertical).toBe(1);
     });
 
     it('uses the transcript markdown typography for pending message markdown rows', async () => {
@@ -332,6 +335,8 @@ describe('PendingMessagesTranscriptBlock', () => {
 	        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
 	        sessionValue = {
 	            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
             presence: 'online',
             agentStateVersion: 1,
             agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
@@ -364,6 +369,8 @@ describe('PendingMessagesTranscriptBlock', () => {
 	        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
 	        sessionValue = {
 	            thinking: true,
+                thinkingAt: Date.now(),
+                active: true,
 	            presence: 'online',
 	            agentStateVersion: 1,
 	            agentState: {
@@ -400,10 +407,84 @@ describe('PendingMessagesTranscriptBlock', () => {
 	        expect(sendPendingMessageNow).toHaveBeenCalledWith('s1', expect.objectContaining({ localId: 'p1' }));
 	    });
 
+    it('does not expose steer-now or non-steerable notice for stale terminal thinking', async () => {
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(130_000);
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: true,
+            thinkingAt: 10_000,
+            active: true,
+            presence: 'online',
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 129_000,
+            agentStateVersion: 1,
+            agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
+        };
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+            sessionId: 's1',
+            pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+            discardedMessages: [],
+        }));
+
+        try {
+            expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeNull();
+
+            await hoverPendingMessageRow(screen, 'p1');
+
+            expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeNull();
+            expect(screen.findByTestId('pendingMessages.sendNow:p1')).toBeTruthy();
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
+    it('does not offer steer or send-now when a recent in-progress turn is no longer live', async () => {
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(130_000);
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: false,
+            active: false,
+            activeAt: 100_000,
+            presence: 'offline',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 129_500,
+            agentStateVersion: 1,
+            agentState: {
+                controlledByUser: false,
+                capabilities: {
+                    inFlightSteer: true,
+                    inFlightSteerSupported: true,
+                    inFlightSteerAvailable: true,
+                },
+            },
+        };
+
+        try {
+            const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+                sessionId: 's1',
+                pendingMessages: [{ id: 'p1', text: 'hello', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+                discardedMessages: [],
+            }));
+
+            expect(screen.findByTestId('pendingMessages.nonSteerableNotice')).toBeNull();
+
+            await hoverPendingMessageRow(screen, 'p1');
+
+            expect(screen.findByTestId('pendingMessages.steerNow:p1')).toBeNull();
+            expect(screen.findByTestId('pendingMessages.sendNow:p1')).toBeNull();
+            expect(sessionAbort).toHaveBeenCalledTimes(0);
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
 	    it('does not offer steer-now or send-now for pending rows that failed to decrypt', async () => {
 	        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
 	        sessionValue = {
 	            thinking: true,
+                thinkingAt: 1_000,
+                active: true,
 	            presence: 'online',
 	            agentStateVersion: 1,
 	            agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
@@ -497,6 +578,8 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         const scroll = screen.findByType('ScrollView');
         expect(scroll.props.style?.maxHeight).toBe(80);
+        expect(scroll.props.style?.marginTop).toBe(0);
+        expect(scroll.props.contentContainerStyle).toMatchObject({ paddingTop: 6, paddingBottom: 0 });
     });
 
     it('shows the collapsed header toggle only when pending content overflows the compact height', async () => {
@@ -518,8 +601,13 @@ describe('PendingMessagesTranscriptBlock', () => {
             scroll!.props.onContentSizeChange(0, 160);
         });
 
-        expect(screen.findByTestId('pendingMessages.headerToggle')).toBeTruthy();
-        expect(screen.findByProps({ name: 'chevron-down' })).toBeTruthy();
+        const headerToggle = screen.findByTestId('pendingMessages.headerToggle');
+        expect(headerToggle).toBeTruthy();
+        const headerToggleStyle = flattenStyle(headerToggle!.props.style({ pressed: false }));
+        expect(headerToggleStyle.borderWidth).toBe(0);
+        expect(headerToggleStyle.paddingHorizontal).toBe(0);
+        expect(headerToggleStyle.paddingVertical).toBe(0);
+        expect(screen.findByProps({ name: 'chevron-up' })).toBeTruthy();
         expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(80);
     });
 
@@ -560,7 +648,7 @@ describe('PendingMessagesTranscriptBlock', () => {
 
         await screen.pressByTestIdAsync('pendingMessages.headerToggle');
 
-        expect(screen.findByProps({ name: 'chevron-up' })).toBeTruthy();
+        expect(screen.findByProps({ name: 'chevron-down' })).toBeTruthy();
         expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(520);
     });
 
@@ -583,7 +671,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         await screen.pressByTestIdAsync('pendingMessages.headerToggle');
         await screen.pressByTestIdAsync('pendingMessages.headerToggle');
 
-        expect(screen.findByProps({ name: 'chevron-down' })).toBeTruthy();
+        expect(screen.findByProps({ name: 'chevron-up' })).toBeTruthy();
         expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(80);
     });
 
@@ -624,7 +712,7 @@ describe('PendingMessagesTranscriptBlock', () => {
             nextScroll!.props.onContentSizeChange(0, 160);
         });
 
-        expect(screen.findByProps({ name: 'chevron-down' })).toBeTruthy();
+        expect(screen.findByProps({ name: 'chevron-up' })).toBeTruthy();
         expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(80);
     });
 

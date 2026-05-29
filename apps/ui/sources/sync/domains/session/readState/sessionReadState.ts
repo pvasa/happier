@@ -1,8 +1,14 @@
 import { computeHasUnreadActivity } from '@/sync/domains/messages/unread';
+import { readStoredSessionMessages } from '@/sync/domains/messages/readStoredSessionMessages';
 import {
     resolveLastViewedSessionSeq,
     type LastViewedSessionSeqInput,
 } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
+import {
+    resolveSessionReadableSeq,
+    type ResolveSessionReadableSeqInput,
+} from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
+import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
 
 export type SessionReadState = 'read' | 'unread' | 'empty';
 
@@ -12,7 +18,11 @@ export type SessionReadStateAction =
     | { kind: 'none'; visible: false };
 
 type SessionReadStateInput = LastViewedSessionSeqInput & Readonly<{
+    id?: string;
     seq: number;
+    latestReadyEventSeq?: unknown;
+    latestMessageSeq?: unknown;
+    latestTurnStatus?: ResolveSessionReadableSeqInput['latestTurnStatus'];
     accessLevel?: 'view' | 'edit' | 'admin' | null;
 }>;
 
@@ -30,14 +40,29 @@ function resolveLegacyPendingActivityAt(metadata: unknown): number | undefined {
         : undefined;
 }
 
+function readSessionMessagesForReadState(session: SessionReadStateInput): ResolveSessionReadableSeqInput['messages'] {
+    const sessionId = typeof session.id === 'string' ? session.id.trim() : '';
+    if (!sessionId) return null;
+    const storageState = readRegisteredStorageState();
+    if (!storageState) return null;
+    return readStoredSessionMessages(storageState, sessionId);
+}
+
 export function deriveSessionReadState(session: SessionReadStateInput): SessionReadState {
-    const sessionSeq = Math.max(0, Math.trunc(session.seq));
-    if (sessionSeq <= 0) {
+    const readableSeq = resolveSessionReadableSeq({
+        messages: readSessionMessagesForReadState(session),
+        latestMessageSeq: session.latestMessageSeq,
+        sessionSeq: session.seq,
+        latestReadyEventSeq: session.latestReadyEventSeq,
+        latestTurnStatus: session.latestTurnStatus ?? null,
+        includeTerminalSessionSeq: true,
+    });
+    if (readableSeq == null || readableSeq <= 0) {
         return 'empty';
     }
 
     const hasUnread = computeHasUnreadActivity({
-        sessionSeq,
+        sessionSeq: readableSeq,
         pendingActivityAt: 0,
         lastViewedSessionSeq: resolveLastViewedSessionSeq(session),
         lastViewedPendingActivityAt: resolveLegacyPendingActivityAt(session.metadata),

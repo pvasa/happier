@@ -135,6 +135,58 @@ describe('buildSessionListKeyboardMoveResult', () => {
         });
     });
 
+    it('blocks moving a session up out of the top of the session band', () => {
+        const tree = buildTree();
+        const source = buildSessionListDragSource({
+            tree,
+            sourceRowId: treeRowId.session('server-a', 'root-a'),
+        });
+
+        const result = buildSessionListKeyboardMoveResult({ tree, source, direction: 'up' });
+
+        expect(result).toEqual({
+            instruction: {
+                kind: 'blocked',
+                reason: 'same-position',
+                hintTargetId: treeRowId.session('server-a', 'root-a'),
+            },
+            visual: {
+                kind: 'none',
+            },
+        });
+    });
+
+    it('moves a session around folder siblings in mixed mode', () => {
+        const tree = buildTree();
+        const source = buildSessionListDragSource({
+            tree,
+            sourceRowId: treeRowId.session('server-a', 'root-a'),
+        });
+
+        const result = buildSessionListKeyboardMoveResult({
+            tree,
+            source,
+            direction: 'up',
+            folderSortMode: 'mixed',
+        });
+
+        expect(result).toEqual({
+            instruction: {
+                kind: 'reorder-before',
+                targetId: treeRowId.folder('folder-b'),
+                containerId: treeRowId.workspaceRoot('project-a'),
+                parentId: null,
+                depth: 0,
+            },
+            visual: {
+                kind: 'line',
+                targetId: treeRowId.folder('folder-b'),
+                edge: 'top',
+                depth: 0,
+            },
+        });
+    });
+
     it('blocks keyboard movement at the edge of the sibling container', () => {
         const tree = buildTree();
         const source = buildSessionListDragSource({

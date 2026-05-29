@@ -11,6 +11,14 @@ import type { SessionListViewItem } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useWorkspaceFavicon } from './useWorkspaceFavicon';
 
+const WORKSPACE_FAVICON_SIZE = 16;
+const WORKSPACE_FAVICON_RADIUS = 4;
+const workspaceFaviconImageStyle = {
+    width: WORKSPACE_FAVICON_SIZE,
+    height: WORKSPACE_FAVICON_SIZE,
+    borderRadius: WORKSPACE_FAVICON_RADIUS,
+};
+
 const stylesheet = StyleSheet.create((theme) => ({
     section: {
         backgroundColor: theme.colors.background.canvas,
@@ -54,20 +62,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginTop: 2,
         ...Typography.default(),
     },
-    favicon: {
-        width: 16,
-        height: 16,
-        borderRadius: 4,
-    },
     faviconFrame: {
-        width: 16,
-        minWidth: 16,
-        maxWidth: 16,
-        height: 16,
-        minHeight: 16,
-        maxHeight: 16,
+        width: WORKSPACE_FAVICON_SIZE,
+        minWidth: WORKSPACE_FAVICON_SIZE,
+        maxWidth: WORKSPACE_FAVICON_SIZE,
+        height: WORKSPACE_FAVICON_SIZE,
+        minHeight: WORKSPACE_FAVICON_SIZE,
+        maxHeight: WORKSPACE_FAVICON_SIZE,
         flexShrink: 0,
-        borderRadius: 4,
+        borderRadius: WORKSPACE_FAVICON_RADIUS,
         backgroundColor: theme.colors.surface.base,
         overflow: 'hidden' as const,
     },
@@ -105,6 +108,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         opacity: 0,
     },
     hoverVisibleChevron: {
+        opacity: 1,
+    },
+    dragHandle: {
+        opacity: 0.72,
+    },
+    dragHandleActive: {
         opacity: 1,
     },
 }));
@@ -146,6 +155,7 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
     const showHoverActions = !isWeb || isRowHovered || isActionsHovered || menuOpen;
     const showChevron = !isWeb || collapsed || showHoverActions;
     const workspaceKey = item.workspaceKey ?? '';
+    const reorderHandleKey = item.groupKey ?? workspaceKey;
     const customLabel = workspaceKey ? workspaceLabelsV1[workspaceKey] : undefined;
     const displayTitle = customLabel || item.title;
     const hasCustomLabel = Boolean(customLabel);
@@ -216,8 +226,8 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                             <View testID="session-list-workspace-favicon" style={styles.faviconFrame}>
                                 <Image
                                     source={{ uri: favicon.uri }}
-                                    style={styles.favicon}
-                                    resizeMode="cover"
+                                    style={[workspaceFaviconImageStyle]}
+                                    contentFit="cover"
                                     accessibilityIgnoresInvertColors
                                 />
                             </View>
@@ -259,6 +269,26 @@ export const ProjectGroupHeader = React.memo(function ProjectGroupHeader(props: 
                     ) : null}
                 </Pressable>
                 <View style={styles.trailingActions}>
+                    {showHoverActions && reorderHandleKey ? (
+                        <Pressable
+                            style={styles.actionButton}
+                            testID={`session-workspace-reorder-handle:${reorderHandleKey}`}
+                            onPress={(event) => {
+                                (event as any)?.stopPropagation?.();
+                            }}
+                            onHoverIn={isWeb ? () => setIsActionsHovered(true) : undefined}
+                            onHoverOut={isWeb ? () => setIsActionsHovered(false) : undefined}
+                            accessible={false}
+                            hitSlop={8}
+                        >
+                            <Ionicons
+                                name="reorder-three-outline"
+                                size={14}
+                                color={actionIconColor}
+                                style={[styles.dragHandle, showHoverActions ? styles.dragHandleActive : null]}
+                            />
+                        </Pressable>
+                    ) : null}
                     {showHoverActions && workspaceKey ? (
                         <DropdownMenu
                             open={menuOpen}

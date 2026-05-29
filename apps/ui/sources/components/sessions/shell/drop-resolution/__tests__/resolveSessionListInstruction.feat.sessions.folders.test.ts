@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { WindowBounds, WindowPointer } from '@/components/ui/treeDragDrop';
 import type { SessionListIndexItem } from '@/sync/domains/session/listing/sessionListIndex';
+import { PINNED_GROUP_KEY_V1 } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import type { SessionFolderWorkspaceRefV1 } from '@/sync/domains/session/folders';
 
 import { buildSessionListDragSource } from '../buildSessionListDragSource';
@@ -95,6 +96,30 @@ function mixedWorkspaceItems(): SessionListIndexItem[] {
     ];
 }
 
+function pinnedItems(): SessionListIndexItem[] {
+    return [
+        { type: 'header', title: 'Pinned', headerKind: 'pinned', groupKey: PINNED_GROUP_KEY_V1 },
+        {
+            type: 'session',
+            sessionId: 'pinned-a',
+            serverId: 'server-a',
+            storageKind: 'persisted',
+            groupKey: PINNED_GROUP_KEY_V1,
+            groupKind: 'pinned',
+            pinned: true,
+        },
+        {
+            type: 'session',
+            sessionId: 'pinned-b',
+            serverId: 'server-a',
+            storageKind: 'persisted',
+            groupKey: PINNED_GROUP_KEY_V1,
+            groupKind: 'pinned',
+            pinned: true,
+        },
+    ];
+}
+
 function buildTree(items = mixedWorkspaceItems()) {
     const rowBoundsById = new Map<string, WindowBounds>([
         [treeRowId.workspaceRoot('project-a'), bounds(0)],
@@ -120,6 +145,57 @@ function buildTree(items = mixedWorkspaceItems()) {
 }
 
 describe('resolveSessionListInstruction', () => {
+    it('resolves a session drop before the first root folder to the root session band', () => {
+        const tree = buildTree();
+
+        const result = resolveSessionListInstruction({
+            tree,
+            source: buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'inside-a') }),
+            pointer: pointer(45),
+            foldersFeatureEnabled: true,
+        });
+
+        expect(result.instruction).toEqual({
+            kind: 'reorder-before',
+            targetId: treeRowId.session('server-a', 'root-a'),
+            containerId: treeRowId.workspaceRoot('project-a'),
+            parentId: null,
+            depth: 0,
+        });
+        expect(result.visual).toEqual({
+            kind: 'line',
+            targetId: treeRowId.session('server-a', 'root-a'),
+            edge: 'top',
+            depth: 0,
+        });
+    });
+
+    it('preserves exact session and folder interleaving in mixed mode', () => {
+        const tree = buildTree();
+
+        const result = resolveSessionListInstruction({
+            tree,
+            source: buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'inside-a') }),
+            pointer: pointer(45),
+            foldersFeatureEnabled: true,
+            folderSortMode: 'mixed',
+        });
+
+        expect(result.instruction).toEqual({
+            kind: 'reorder-before',
+            targetId: treeRowId.folder('folder-a'),
+            containerId: treeRowId.workspaceRoot('project-a'),
+            parentId: null,
+            depth: 0,
+        });
+        expect(result.visual).toEqual({
+            kind: 'line',
+            targetId: treeRowId.folder('folder-a'),
+            edge: 'top',
+            depth: 0,
+        });
+    });
+
     it('resolves workspace-root whitespace using implicit production drop zones', () => {
         const tree = buildSessionListTreeRows({
             items: mixedWorkspaceItems(),
@@ -148,6 +224,72 @@ describe('resolveSessionListInstruction', () => {
             rootId: treeRowId.workspaceRoot('project-a'),
             depth: 0,
             placement: 'after-last',
+        });
+    });
+
+    it('resolves pinned session reordering within the pinned group', () => {
+        const tree = buildSessionListTreeRows({
+            items: pinnedItems(),
+            rowBoundsById: new Map<string, WindowBounds>([
+                [treeRowId.session('server-a', 'pinned-a'), bounds(40)],
+                [treeRowId.session('server-a', 'pinned-b'), bounds(80)],
+            ]),
+        });
+
+        const result = resolveSessionListInstruction({
+            tree,
+            source: buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'pinned-a') }),
+            pointer: pointer(82),
+            foldersFeatureEnabled: true,
+        });
+
+        expect(result.instruction).toEqual({
+            kind: 'reorder-before',
+            targetId: treeRowId.session('server-a', 'pinned-b'),
+            containerId: PINNED_GROUP_KEY_V1,
+            parentId: null,
+            depth: 0,
+        });
+        expect(result.visual).toEqual({
+            kind: 'line',
+            targetId: treeRowId.session('server-a', 'pinned-b'),
+            edge: 'top',
+            depth: 0,
+        });
+    });
+
+    it('resolves whitespace after an expanded folder subtree to the root session band', () => {
+        const tree = buildSessionListTreeRows({
+            items: mixedWorkspaceItems(),
+            rowBoundsById: new Map<string, WindowBounds>([
+                [treeRowId.workspaceRoot('project-a'), bounds(0)],
+                [treeRowId.folder('folder-a'), bounds(40)],
+                [treeRowId.session('server-a', 'inside-a'), bounds(80)],
+                [treeRowId.folder('child-a'), bounds(120)],
+                [treeRowId.folder('folder-b'), bounds(170)],
+                [treeRowId.session('server-a', 'root-a'), bounds(220)],
+            ]),
+        });
+
+        const result = resolveSessionListInstruction({
+            tree,
+            source: buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'inside-a') }),
+            pointer: pointer(162),
+            foldersFeatureEnabled: true,
+        });
+
+        expect(result.instruction).toEqual({
+            kind: 'reorder-before',
+            targetId: treeRowId.session('server-a', 'root-a'),
+            containerId: treeRowId.workspaceRoot('project-a'),
+            parentId: null,
+            depth: 0,
+        });
+        expect(result.visual).toEqual({
+            kind: 'line',
+            targetId: treeRowId.session('server-a', 'root-a'),
+            edge: 'top',
+            depth: 0,
         });
     });
 

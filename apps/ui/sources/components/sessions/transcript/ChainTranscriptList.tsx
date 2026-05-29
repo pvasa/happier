@@ -13,15 +13,23 @@ import {
     type ChatListItem,
     type ChatListItemsBuildCache,
 } from '@/components/sessions/chatListItems';
-import { MessageView } from '@/components/sessions/transcript/MessageView';
+import { MessageViewWithSessionCommon } from '@/components/sessions/transcript/MessageView';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { resolveActiveThinkingMessageId } from '@/components/sessions/transcript/thinking/resolveActiveThinkingMessageId';
-import { ToolCallsGroupRow } from '@/components/sessions/transcript/toolCalls/ToolCallsGroupRow';
+import { ToolCallsGroupRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/ToolCallsGroupRow';
 import { buildTranscriptTurnsCached, type TranscriptTurn, type TranscriptTurnsBuildCache } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
-import { TurnView } from '@/components/sessions/transcript/turns/TurnView';
+import { TurnViewWithSessionCommon } from '@/components/sessions/transcript/turns/TurnView';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useTranscriptSessionCommon } from '@/components/sessions/transcript/transcriptSessionCommon';
+import { useOptionalTranscriptSelectionState } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
+import {
+    resolveTranscriptEdgePrefetchThresholdPx,
+    TRANSCRIPT_EDGE_PREFETCH_FALLBACK_VIEWPORT_RATIO,
+    TRANSCRIPT_EDGE_PREFETCH_MAX_PX,
+    TRANSCRIPT_EDGE_PREFETCH_MIN_PX,
+} from '@/components/sessions/transcript/scroll/resolveTranscriptEdgePrefetchThresholdPx';
 import { shouldPrefetchOlderFromTop } from '@/components/sessions/transcript/scroll/shouldPrefetchOlderFromTop';
 import { resolveLatestCommittedMessageId } from '@/components/sessions/transcript/resolveLatestCommittedMessageId';
 import {
@@ -105,13 +113,20 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
     header?: React.ReactNode;
     footer?: React.ReactNode;
     messageWrapperTestIdPrefix?: string;
+    // When the list is empty, the footer shows an initial-load spinner. Callers that know whether an
+    // initial/older load is genuinely in flight (e.g. sidechain hydration) should pass `false` once
+    // the load resolves empty so a legitimately loaded-but-empty list does not spin forever. When
+    // omitted, the spinner is shown on an empty list (legacy behavior for the main transcript).
+    isInitialLoadInFlight?: boolean;
 }) {
     const transcriptGroupingMode = useSetting('transcriptGroupingMode');
     const transcriptGroupToolCalls = useSetting('transcriptGroupToolCalls');
     const transcriptTurnToolCallsGroupStrategy = useSetting('transcriptTurnToolCallsGroupStrategy');
-    const toolViewTimelineChromeMode = useSetting('toolViewTimelineChromeMode');
-    const sessionThinkingDisplayMode = useSetting('sessionThinkingDisplayMode');
-    const sessionThinkingInlinePresentation = useSetting('sessionThinkingInlinePresentation');
+    const transcriptSessionCommon = useTranscriptSessionCommon(props.sessionId);
+    const transcriptMessageSelection = useOptionalTranscriptSelectionState();
+    const toolViewTimelineChromeMode = transcriptSessionCommon.toolChrome.toolViewTimelineChromeMode;
+    const sessionThinkingDisplayMode = transcriptSessionCommon.messageDisplay.sessionThinkingDisplayMode;
+    const sessionThinkingInlinePresentation = transcriptSessionCommon.messageDisplay.sessionThinkingInlinePresentation;
     const transcriptThinkingPulseStaleMs = useSetting('transcriptThinkingPulseStaleMs');
     const messageIdsOldestFirst = React.useMemo(() => props.messages.map((message) => message.id), [props.messages]);
     const messagesById = React.useMemo(() => buildMessagesById(props.messages), [props.messages]);
@@ -215,10 +230,17 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
     const [thinkingExpandedByMessageId, setThinkingExpandedByMessageId] = React.useState<ReadonlyMap<string, boolean>>(
         () => new Map<string, boolean>(),
     );
+    const localTranscriptInteractionDeferredInitialPinRef = React.useRef(false);
+    const deferAutoPinAfterLocalTranscriptInteraction = React.useCallback(() => {
+        localTranscriptInteractionDeferredInitialPinRef.current = true;
+    }, []);
     const resolveThinkingExpanded = React.useCallback((messageId: string): boolean => {
         return thinkingExpandedByMessageId.get(messageId) ?? thinkingDefaultExpanded;
     }, [thinkingDefaultExpanded, thinkingExpandedByMessageId]);
     const setThinkingExpanded = React.useCallback((messageId: string, expanded: boolean) => {
+        if (resolveThinkingExpanded(messageId) !== expanded) {
+            deferAutoPinAfterLocalTranscriptInteraction();
+        }
         setThinkingExpandedByMessageId((prev) => {
             const prevValue = prev.get(messageId);
             if (prevValue === expanded) return prev;
@@ -230,12 +252,16 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             }
             return next;
         });
-    }, [thinkingDefaultExpanded]);
+    }, [deferAutoPinAfterLocalTranscriptInteraction, resolveThinkingExpanded, thinkingDefaultExpanded]);
 
     const [expandedToolCallsAnchorMessageIds, setExpandedToolCallsAnchorMessageIds] = React.useState<ReadonlySet<string>>(
         () => new Set<string>(),
     );
     const setToolCallsGroupExpanded = React.useCallback((params: { toolCallsGroupId: string; toolMessageIds: readonly string[]; expanded: boolean }) => {
+        const isExpanded = params.toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id));
+        if (isExpanded !== params.expanded) {
+            deferAutoPinAfterLocalTranscriptInteraction();
+        }
         setExpandedToolCallsAnchorMessageIds((prev) => {
             const next = new Set(prev);
             if (params.expanded) {
@@ -250,7 +276,7 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             }
             return next;
         });
-    }, []);
+    }, [deferAutoPinAfterLocalTranscriptInteraction, expandedToolCallsAnchorMessageIds]);
 
     const listRef = React.useRef<FlashListRef<ChainTranscriptListItem> | null>(null);
     const itemsRef = React.useRef<ChainTranscriptListItem[]>(items);
@@ -262,6 +288,10 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
     const listLayoutHeightRef = React.useRef(0);
     const listContentHeightRef = React.useRef(0);
     const jumpAbortRef = React.useRef<AbortController | null>(null);
+    const [listLayoutHeight, setListLayoutHeight] = React.useState(0);
+    const syncTuning = sync.getSyncTuning();
+    const estimatedItemSize = syncTuning.transcriptFlashListEstimatedItemSize;
+    const configuredBackwardPrefetchThresholdPx = syncTuning.transcriptBackwardPrefetchThresholdPx;
     const jumpToMessageId =
         typeof props.jumpToMessageId === 'string' && props.jumpToMessageId.trim().length > 0
             ? props.jumpToMessageId.trim()
@@ -304,6 +334,35 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
         return metrics;
     }, []);
 
+    const resolveTopPrefetchThresholdPx = React.useCallback((viewportPx: number): number => {
+        return resolveTranscriptEdgePrefetchThresholdPx({
+            configuredPx: configuredBackwardPrefetchThresholdPx,
+            viewportPx,
+            fallbackViewportRatio: TRANSCRIPT_EDGE_PREFETCH_FALLBACK_VIEWPORT_RATIO,
+            minPx: TRANSCRIPT_EDGE_PREFETCH_MIN_PX,
+            maxPx: TRANSCRIPT_EDGE_PREFETCH_MAX_PX,
+        });
+    }, [configuredBackwardPrefetchThresholdPx]);
+
+    const resolveViewportGuardThresholdPx = React.useCallback((viewportPx: number): number => {
+        return resolveTranscriptEdgePrefetchThresholdPx({
+            configuredPx: Number.NaN,
+            viewportPx,
+            fallbackViewportRatio: TRANSCRIPT_EDGE_PREFETCH_FALLBACK_VIEWPORT_RATIO,
+            minPx: TRANSCRIPT_EDGE_PREFETCH_MIN_PX,
+            maxPx: TRANSCRIPT_EDGE_PREFETCH_MAX_PX,
+        });
+    }, []);
+
+    const startReachedThreshold = React.useMemo(() => {
+        const thresholdPx = resolveTopPrefetchThresholdPx(listLayoutHeight);
+        if (thresholdPx <= 0) return 0;
+        if (!Number.isFinite(listLayoutHeight) || listLayoutHeight <= 0) {
+            return TRANSCRIPT_EDGE_PREFETCH_FALLBACK_VIEWPORT_RATIO;
+        }
+        return thresholdPx / listLayoutHeight;
+    }, [listLayoutHeight, resolveTopPrefetchThresholdPx]);
+
     const loadOlder = React.useCallback(async (options?: Readonly<{ webPrependAnchor?: WebTranscriptScrollMetrics | null }>): Promise<ChainTranscriptLoadOlderResult | null> => {
         const fn = loadOlderRef.current;
         if (!fn) return null;
@@ -329,6 +388,7 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
     const pinToBottom = React.useCallback(() => {
         if (jumpToMessageId) return;
         if (initialPinDoneRef.current) return;
+        if (localTranscriptInteractionDeferredInitialPinRef.current) return;
         if (items.length === 0) return;
 
         const layoutH = listLayoutHeightRef.current;
@@ -406,11 +466,10 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
         return () => controller.abort();
     }, [jumpToMessageId, loadOlder]);
 
-    const estimatedItemSize = sync.getSyncTuning().transcriptFlashListEstimatedItemSize;
     const renderItem = React.useCallback(({ item }: { item: ChainTranscriptListItem }) => {
         if (item.kind === 'turn') {
             return (
-                <TurnView
+                <TurnViewWithSessionCommon
                     turn={item.turn}
                     metadata={props.metadata}
                     sessionId={props.sessionId}
@@ -423,13 +482,17 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                     setThinkingExpanded={setThinkingExpanded}
                     interaction={props.interaction}
                     rollbackRanges={[]}
+                    forkCommon={transcriptSessionCommon.fork}
+                    messageDisplayCommon={transcriptSessionCommon.messageDisplay}
+                    toolChromeCommon={transcriptSessionCommon.toolChrome}
+                    toolRouteCommon={transcriptSessionCommon.toolRoute}
                 />
             );
         }
 
         if (item.kind === 'tool-calls-group') {
             return (
-                <ToolCallsGroupRow
+                <ToolCallsGroupRowWithSessionCommon
                     sessionId={props.sessionId}
                     toolCallsGroupId={item.id}
                     toolMessageIds={item.toolMessageIds}
@@ -439,6 +502,10 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                     expanded={item.toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id))}
                     onSetExpanded={setToolCallsGroupExpanded}
                     interaction={props.interaction}
+                    forkCommon={transcriptSessionCommon.fork}
+                    messageDisplayCommon={transcriptSessionCommon.messageDisplay}
+                    toolChromeCommon={transcriptSessionCommon.toolChrome}
+                    toolRouteCommon={transcriptSessionCommon.toolRoute}
                 />
             );
         }
@@ -453,7 +520,7 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
 
         return (
             <View testID={`${testIdPrefix}-${message.id}`}>
-                <MessageView
+                <MessageViewWithSessionCommon
                     message={message}
                     metadata={props.metadata}
                     sessionId={props.sessionId}
@@ -462,6 +529,10 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                     activeThinkingMessageId={activeThinkingMessageId}
                     thinkingExpanded={isThinking ? resolveThinkingExpanded(message.id) : undefined}
                     onThinkingExpandedChange={isThinking ? (next) => setThinkingExpanded(message.id, next) : undefined}
+                    forkCommon={transcriptSessionCommon.fork}
+                    messageDisplayCommon={transcriptSessionCommon.messageDisplay}
+                    toolChromeCommon={transcriptSessionCommon.toolChrome}
+                    toolRouteCommon={transcriptSessionCommon.toolRoute}
                 />
             </View>
         );
@@ -469,6 +540,7 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
         activeThinkingMessageId,
         expandedToolCallsAnchorMessageIds,
         messagesById,
+        props.forcePermissionPromptsInTranscript,
         props.interaction,
         props.metadata,
         props.sessionId,
@@ -476,6 +548,10 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
         setThinkingExpanded,
         setToolCallsGroupExpanded,
         testIdPrefix,
+        transcriptSessionCommon.fork,
+        transcriptSessionCommon.messageDisplay,
+        transcriptSessionCommon.toolChrome,
+        transcriptSessionCommon.toolRoute,
     ]);
 
     return (
@@ -485,13 +561,17 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             }}
             style={{ flex: 1, minHeight: 0 }}
             data={items}
+            extraData={transcriptMessageSelection.selectionVersion}
             keyExtractor={(item: ChainTranscriptListItem) => item.id}
             renderItem={renderItem}
             scrollEventThrottle={16}
             onLayout={(e: LayoutChangeEvent) => {
                 const h = e?.nativeEvent?.layout?.height;
                 if (typeof h !== 'number' || !Number.isFinite(h)) return;
-                listLayoutHeightRef.current = h;
+                if (listLayoutHeightRef.current !== h) {
+                    listLayoutHeightRef.current = h;
+                    setListLayoutHeight(h);
+                }
                 pinToBottom();
             }}
             onContentSizeChange={(_w: number, h: number) => {
@@ -517,7 +597,8 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                 if (layoutH <= 0 || contentH <= 0) return;
                 if (contentH <= layoutH) return;
                 const distanceFromBottom = Math.max(0, Math.trunc(contentH - layoutH - yRaw));
-                const topPrefetchThresholdPx = layoutH * 0.2;
+                const topPrefetchThresholdPx = resolveTopPrefetchThresholdPx(layoutH);
+                const viewportGuardThresholdPx = resolveViewportGuardThresholdPx(layoutH);
 
                 // FlashList's `onStartReached` is not reliably fired on all platforms (notably web),
                 // so we also trigger older paging when the scroll position is near the top.
@@ -526,16 +607,18 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
                     offsetY: yRaw,
                     prefetchThresholdPx: topPrefetchThresholdPx,
                     distanceFromBottom,
-                    pinThresholdPx: topPrefetchThresholdPx,
+                    pinThresholdPx: viewportGuardThresholdPx,
                     wantsPinned: true,
                 })) {
-                    void loadOlder({ webPrependAnchor: buildWebPrependAnchor(topPrefetchThresholdPx) });
+                    void loadOlder({ webPrependAnchor: buildWebPrependAnchor(viewportGuardThresholdPx) });
                 }
             }}
-            onStartReachedThreshold={0.2}
+            onStartReachedThreshold={startReachedThreshold}
             onStartReached={() => {
-                const topPrefetchThresholdPx = listLayoutHeightRef.current * 0.2;
-                void loadOlder({ webPrependAnchor: buildWebPrependAnchor(topPrefetchThresholdPx) });
+                const topPrefetchThresholdPx = resolveTopPrefetchThresholdPx(listLayoutHeightRef.current);
+                if (topPrefetchThresholdPx <= 0) return;
+                const viewportGuardThresholdPx = resolveViewportGuardThresholdPx(listLayoutHeightRef.current);
+                void loadOlder({ webPrependAnchor: buildWebPrependAnchor(viewportGuardThresholdPx) });
             }}
             ListHeaderComponent={
                 props.header ? (
@@ -544,8 +627,8 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             }
             ListFooterComponent={
                 <>
-                    {items.length === 0 ? (
-                        <View style={{ paddingVertical: 12 }}>
+                    {items.length === 0 && props.isInitialLoadInFlight !== false ? (
+                        <View testID="chain-transcript-loading-footer" style={{ paddingVertical: 12 }}>
                             <ActivitySpinner size="small" />
                         </View>
                     ) : null}

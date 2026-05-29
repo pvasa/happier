@@ -1,6 +1,8 @@
-export type SessionListHydrationPriorityReason = 'required' | 'route' | 'active' | 'eager' | 'background';
+export type SessionListHydrationPriorityReason = 'required' | 'route' | 'active' | 'priority' | 'eager' | 'background';
 
-export type SessionListHydrationPriorityCounts = Record<SessionListHydrationPriorityReason, number>;
+export type SessionListHydrationPriorityCounts = Record<SessionListHydrationPriorityReason, number> & {
+    skippedBackground: number;
+};
 
 type SessionListHydrationPriorityRow = Readonly<{
     id: string;
@@ -12,7 +14,9 @@ type SessionListHydrationPriorityParams<Row extends SessionListHydrationPriority
     requiredSessionIds?: ReadonlySet<string> | readonly string[];
     routeSessionIds?: readonly string[];
     activeSessionIds?: ReadonlySet<string> | readonly string[];
+    prioritySessionIds?: ReadonlySet<string> | readonly string[];
     eagerHydrationCount?: number;
+    maxBackgroundHydrationRows?: number;
 }>;
 
 export type OrderedSessionListHydrationRows<Row extends SessionListHydrationPriorityRow> = Readonly<{
@@ -59,8 +63,10 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
         required: 0,
         route: 0,
         active: 0,
+        priority: 0,
         eager: 0,
         background: 0,
+        skippedBackground: 0,
     };
     const rowById = new Map(params.rows.map((row) => [row.id, row]));
     const assignedIds = new Set<string>();
@@ -83,6 +89,12 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
         assignedIds,
         out: orderedRows,
     });
+    counts.priority = appendRowsById({
+        ids: normalizeSessionIds(params.prioritySessionIds),
+        rowById,
+        assignedIds,
+        out: orderedRows,
+    });
 
     for (const row of params.rows) {
         if (!row.active || assignedIds.has(row.id)) continue;
@@ -92,14 +104,23 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
     }
 
     const eagerHydrationCount = Math.max(0, Math.trunc(params.eagerHydrationCount ?? 0));
+    const maxBackgroundHydrationRows = params.maxBackgroundHydrationRows === undefined
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, Math.trunc(params.maxBackgroundHydrationRows));
     for (const row of params.rows) {
         if (assignedIds.has(row.id)) continue;
-        assignedIds.add(row.id);
-        orderedRows.push(row);
         if (counts.eager < eagerHydrationCount) {
+            assignedIds.add(row.id);
+            orderedRows.push(row);
             counts.eager += 1;
-        } else {
+            continue;
+        }
+        if (counts.background < maxBackgroundHydrationRows) {
+            assignedIds.add(row.id);
+            orderedRows.push(row);
             counts.background += 1;
+        } else {
+            counts.skippedBackground += 1;
         }
     }
 

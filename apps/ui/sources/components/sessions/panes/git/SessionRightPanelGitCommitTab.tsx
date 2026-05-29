@@ -1,9 +1,8 @@
 import * as React from 'react';
-import { FlatList, Platform, Pressable, ScrollView, View } from 'react-native';
+import { FlatList, Platform, Pressable, View } from 'react-native';
 import { Octicons } from '@expo/vector-icons';
 
 import { SourceControlBranchSummary } from '@/components/sessions/files/SourceControlBranchSummary';
-import { ChangedFilesList } from '@/components/sessions/files/content/ChangedFilesList';
 import {
     ScmCommitComposerCard,
     type ScmCommitAdjacentPushAction,
@@ -280,11 +279,6 @@ function resolveSnapshotManagedStashCount(snapshot: ScmWorkingSnapshot | null): 
     return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function countVisibleAttributedFiles(files: readonly SessionAttributedFile[] | undefined): number {
-    if (!files) return 0;
-    return files.filter((entry) => entry?.file && !isDirectoryLikeScmFileStatus(entry.file)).length;
-}
-
 function resolveChangedFilesScopeTitle(params: Readonly<{
     changedFilesViewMode: ChangedFilesViewMode;
     repositoryCount: number;
@@ -336,6 +330,10 @@ const commitChangedFilesListContentContainerStyle = {
     paddingBottom: 12,
 };
 
+const COMMIT_CHANGED_FILES_INITIAL_RENDER_COUNT = 12;
+const COMMIT_CHANGED_FILES_RENDER_BATCH_SIZE = 12;
+const COMMIT_CHANGED_FILES_WINDOW_SIZE = 5;
+
 const repositoryChangedFileKeyExtractor = (file: ScmFileStatus) => `repo-all-${file.fullPath}`;
 const selectedChangedFileKeyExtractor = (file: ScmFileStatus) => `selected-${file.fullPath}`;
 
@@ -352,7 +350,6 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
     const themeSurfaceInset = props.theme.colors.surface?.inset ?? props.theme.colors.surfaceHigh ?? themeSurfaceBase;
     const themeTextPrimary = props.theme.colors.text?.primary ?? props.theme.colors.text;
     const themeTextSecondary = props.theme.colors.text?.secondary ?? props.theme.colors.textSecondary;
-    const repositoryMode = props.changedFilesViewMode === 'repository';
     const selectedMode = props.changedFilesViewMode === 'selected';
     const repositoryChangedFiles = React.useMemo(() => {
         return filterDirectoryLikeScmFileStatuses(props.allRepositoryChangedFiles);
@@ -360,7 +357,29 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
     const selectedChangedFiles = React.useMemo(() => {
         return filterDirectoryLikeScmFileStatuses(props.selectedRepositoryChangedFiles ?? []);
     }, [props.selectedRepositoryChangedFiles]);
-    const virtualizedChangedFiles = selectedMode ? selectedChangedFiles : repositoryChangedFiles;
+    const turnChangedFiles = React.useMemo(() => {
+        return (props.turnAttributedFiles ?? [])
+            .filter((entry) => entry?.file && !isDirectoryLikeScmFileStatus(entry.file))
+            .map((entry) => entry.file);
+    }, [props.turnAttributedFiles]);
+    const sessionChangedFiles = React.useMemo(() => {
+        return props.sessionAttributedFiles
+            .filter((entry) => entry?.file && !isDirectoryLikeScmFileStatus(entry.file))
+            .map((entry) => entry.file);
+    }, [props.sessionAttributedFiles]);
+    const virtualizedChangedFiles = React.useMemo(() => {
+        if (selectedMode) return selectedChangedFiles;
+        if (props.changedFilesViewMode === 'turn') return turnChangedFiles;
+        if (props.changedFilesViewMode === 'session') return sessionChangedFiles;
+        return repositoryChangedFiles;
+    }, [
+        props.changedFilesViewMode,
+        repositoryChangedFiles,
+        selectedChangedFiles,
+        selectedMode,
+        sessionChangedFiles,
+        turnChangedFiles,
+    ]);
     const virtualizedStatsColumnWidth = React.useMemo(
         () => resolveScmChangeStatsColumnWidth(virtualizedChangedFiles),
         [virtualizedChangedFiles],
@@ -369,12 +388,8 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
     const hasChangedFilesViewSelector = props.showTurnViewToggle === true
         || props.showSessionViewToggle === true
         || showSelectedViewToggle;
-    const turnChangedFilesCount = React.useMemo(() => {
-        return countVisibleAttributedFiles(props.turnAttributedFiles);
-    }, [props.turnAttributedFiles]);
-    const sessionChangedFilesCount = React.useMemo(() => {
-        return countVisibleAttributedFiles(props.sessionAttributedFiles);
-    }, [props.sessionAttributedFiles]);
+    const turnChangedFilesCount = turnChangedFiles.length;
+    const sessionChangedFilesCount = sessionChangedFiles.length;
     const scopedChangedFilesTitle = React.useMemo(() => {
         return resolveChangedFilesScopeTitle({
             changedFilesViewMode: props.changedFilesViewMode,
@@ -401,9 +416,16 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
         props.changedFilesViewMode,
         props.suppressedInferredCount,
     ]);
-    const virtualizedKeyExtractor = selectedMode
-        ? selectedChangedFileKeyExtractor
-        : repositoryChangedFileKeyExtractor;
+    const virtualizedKeyExtractor = React.useMemo(() => {
+        if (selectedMode) return selectedChangedFileKeyExtractor;
+        if (props.changedFilesViewMode === 'turn') {
+            return (file: ScmFileStatus) => `turn-${file.fullPath}`;
+        }
+        if (props.changedFilesViewMode === 'session') {
+            return (file: ScmFileStatus) => `session-${file.fullPath}`;
+        }
+        return repositoryChangedFileKeyExtractor;
+    }, [props.changedFilesViewMode, selectedMode]);
 
     const scrollFades = useScrollEdgeFades({
         enabledEdges: { top: true, bottom: true },
@@ -708,56 +730,41 @@ const CommitChangesSurface = React.memo((props: CommitChangesSurfaceProps) => {
         );
     }, []);
 
+    const emptyChangedFilesContent = React.useMemo(() => {
+        const label = props.changedFilesViewMode === 'turn'
+            ? t('files.noLatestTurnChanges')
+            : props.changedFilesViewMode === 'session'
+                ? t('files.noSessionAttributedChanges')
+                : t('files.noChanges');
+        return (
+            <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+                <Text style={{ color: themeTextSecondary, fontSize: 12, ...Typography.default() }}>
+                    {label}
+                </Text>
+            </View>
+        );
+    }, [props.changedFilesViewMode, themeTextSecondary]);
+
     return (
         <View style={{ flex: 1, position: 'relative' }}>
-            {repositoryMode || selectedMode ? (
-                <FlatList
-                    data={virtualizedChangedFiles}
-                    keyExtractor={virtualizedKeyExtractor}
-                    ListHeaderComponent={headerContent}
-                    contentContainerStyle={commitChangedFilesListContentContainerStyle}
-                    renderItem={renderVirtualizedRow}
-                    extraData={virtualizedRowExtraData}
-                    initialNumToRender={Math.min(24, virtualizedChangedFiles.length)}
-                    maxToRenderPerBatch={24}
-                    windowSize={7}
-                    removeClippedSubviews={Platform.OS !== 'web'}
-                    onLayout={scrollFades.onViewportLayout}
-                    onContentSizeChange={scrollFades.onContentSizeChange}
-                    onScroll={scrollFades.onScroll}
-                    scrollEventThrottle={16}
-                    getItemLayout={Platform.OS === 'web' ? compactScmChangeRowWebItemLayout : undefined}
-                />
-            ) : (
-                <ScrollView
-                    style={{ flex: 1 }}
-                    contentContainerStyle={{ paddingBottom: 12 }}
-                    onLayout={scrollFades.onViewportLayout}
-                    onContentSizeChange={scrollFades.onContentSizeChange}
-                    onScroll={scrollFades.onScroll}
-                    scrollEventThrottle={16}
-                >
-                    {headerContent}
-                    <ChangedFilesList
-                        theme={props.theme}
-                        changedFilesViewMode={props.changedFilesViewMode}
-                        attributionReliability={props.attributionReliability}
-                        allRepositoryChangedFiles={props.allRepositoryChangedFiles}
-                        turnAttributedFiles={props.turnAttributedFiles}
-                        turnRepositoryOnlyFiles={props.turnRepositoryOnlyFiles}
-                        sessionAttributedFiles={props.sessionAttributedFiles}
-                        repositoryOnlyFiles={props.repositoryOnlyFiles}
-                        suppressedInferredCount={props.suppressedInferredCount}
-                        onFilePress={(file) => props.onFilePress(file)}
-                        onFilePressPinned={(file) => props.onFilePressPinned(file)}
-                        onToggleSelectionForFile={props.onToggleSelectionForFile}
-                        renderFileActions={props.renderFileActions}
-                        renderFileTrailingActions={props.renderFileTrailingActions}
-                        rowDensity="compact"
-                        showSectionHeader={!hasChangedFilesViewSelector}
-                    />
-                </ScrollView>
-            )}
+            <FlatList
+                data={virtualizedChangedFiles}
+                keyExtractor={virtualizedKeyExtractor}
+                ListHeaderComponent={headerContent}
+                ListEmptyComponent={emptyChangedFilesContent}
+                contentContainerStyle={commitChangedFilesListContentContainerStyle}
+                renderItem={renderVirtualizedRow}
+                extraData={virtualizedRowExtraData}
+                initialNumToRender={Math.min(COMMIT_CHANGED_FILES_INITIAL_RENDER_COUNT, virtualizedChangedFiles.length)}
+                maxToRenderPerBatch={COMMIT_CHANGED_FILES_RENDER_BATCH_SIZE}
+                windowSize={COMMIT_CHANGED_FILES_WINDOW_SIZE}
+                removeClippedSubviews={Platform.OS !== 'web'}
+                onLayout={scrollFades.onViewportLayout}
+                onContentSizeChange={scrollFades.onContentSizeChange}
+                onScroll={scrollFades.onScroll}
+                scrollEventThrottle={16}
+                getItemLayout={Platform.OS === 'web' ? compactScmChangeRowWebItemLayout : undefined}
+            />
 
             <ScrollEdgeFades
                 color={themeSurfaceBase}

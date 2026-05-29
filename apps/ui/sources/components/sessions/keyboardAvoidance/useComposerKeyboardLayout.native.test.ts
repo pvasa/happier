@@ -11,6 +11,8 @@ const nativeHookState = vi.hoisted(() => ({
         onStart?: (event: { height: number; progress: number }) => void;
     },
     keyboardListeners: new Map<string, (event?: { endCoordinates?: { height?: number; screenY?: number } }) => void>(),
+    platformOS: 'android' as 'android' | 'ios',
+    reanimatedKeyboardHeight: 0,
     windowHeight: 800,
 }));
 
@@ -28,9 +30,14 @@ vi.mock('react-native', async () => {
             },
         },
         Platform: {
-            OS: 'android',
-            select: <T,>(options: { android?: T; default?: T; native?: T; ios?: T; web?: T }) =>
-                options.android ?? options.native ?? options.default ?? options.ios ?? options.web,
+            get OS() {
+                return nativeHookState.platformOS;
+            },
+            select: <T,>(options: { android?: T; default?: T; native?: T; ios?: T; web?: T }) => (
+                nativeHookState.platformOS === 'ios'
+                    ? options.ios ?? options.native ?? options.default ?? options.android ?? options.web
+                    : options.android ?? options.native ?? options.default ?? options.ios ?? options.web
+            ),
         },
         useWindowDimensions: () => ({
             width: 390,
@@ -46,7 +53,11 @@ vi.mock('react-native-keyboard-controller', () => ({
         nativeHookState.keyboardHandlers = handlers;
     },
     useReanimatedKeyboardAnimation: () => ({
-        height: { value: 0 },
+        height: {
+            get value() {
+                return nativeHookState.reanimatedKeyboardHeight;
+            },
+        },
         progress: { value: 0 },
     }),
 }));
@@ -64,6 +75,8 @@ describe('useComposerKeyboardLayout native', () => {
         standardCleanup();
         nativeHookState.keyboardHandlers = null;
         nativeHookState.keyboardListeners.clear();
+        nativeHookState.platformOS = 'android';
+        nativeHookState.reanimatedKeyboardHeight = 0;
         nativeHookState.windowHeight = 800;
     });
 
@@ -168,6 +181,136 @@ describe('useComposerKeyboardLayout native', () => {
         });
 
         expect(hook.getCurrent().bottomInset.value).toBe(20);
+    });
+
+    it('keeps the existing keyboard lift during Android zero-progress start frames while the keyboard is already open', async () => {
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(220);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(220);
+        expect(hook.getCurrent().listBottomInset.value).toBe(360);
+
+        act(() => {
+            nativeHookState.keyboardHandlers?.onStart?.({ height: 0, progress: 0 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(220);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(220);
+        expect(hook.getCurrent().listBottomInset.value).toBe(360);
+    });
+
+    it('collapses iOS keyboard lift on zero-progress start frames after programmatic blur', async () => {
+        nativeHookState.platformOS = 'ios';
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onStart?.({ height: 0, progress: 0 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(0);
+        expect(hook.getCurrent().listBottomInset.value).toBe(140);
+
+        act(() => {
+            nativeHookState.keyboardListeners.get('keyboardDidHide')?.();
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(0);
+        expect(hook.getCurrent().listBottomInset.value).toBe(140);
+    });
+
+    it('does not resurrect hidden keyboard lift from a stale reanimated closed-frame height', async () => {
+        nativeHookState.platformOS = 'ios';
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+        act(() => {
+            nativeHookState.keyboardListeners.get('keyboardDidHide')?.();
+        });
+
+        nativeHookState.reanimatedKeyboardHeight = 300;
+        act(() => {
+            nativeHookState.keyboardHandlers?.onMove?.({ height: 0, progress: 0 });
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(0);
+        expect(hook.getCurrent().listBottomInset.value).toBe(140);
+    });
+
+    it('does not let native keyboard hide fallback defeat retained overlay lift', async () => {
+        nativeHookState.platformOS = 'ios';
+        const { useComposerKeyboardLayout } = await import('./useComposerKeyboardLayout.native');
+        const hook = await renderHook(() => useComposerKeyboardLayout({
+            headerHeight: 100,
+            layoutBottomInset: 80,
+            safeAreaBottom: 0,
+        }));
+
+        act(() => {
+            hook.getCurrent().setComposerMeasuredHeight(140);
+        });
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 300, progress: 1 });
+        });
+        const release = hook.getCurrent().retainKeyboardLift?.();
+        act(() => {
+            nativeHookState.keyboardHandlers?.onEnd?.({ height: 0, progress: 0 });
+        });
+        act(() => {
+            nativeHookState.keyboardListeners.get('keyboardDidHide')?.();
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(220);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(220);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(220);
+        expect(hook.getCurrent().listBottomInset.value).toBe(360);
+
+        act(() => {
+            release?.();
+        });
+
+        expect(hook.getCurrent().bottomInset.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightLive.value).toBe(0);
+        expect(hook.getCurrent().keyboardHeightForInset.value).toBe(0);
+        expect(hook.getCurrent().listBottomInset.value).toBe(140);
     });
 
     it('notifies React bridge subscribers when the keyboard settles', async () => {

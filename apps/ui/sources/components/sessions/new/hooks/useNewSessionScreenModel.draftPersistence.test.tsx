@@ -6,6 +6,7 @@ import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 
 import {
     activeServerAccountScopeState,
+    allMachinesState,
     cliDetectionState,
     clearNewSessionDraftMock,
     computeNewSessionInputMaxHeightMock,
@@ -87,6 +88,143 @@ describe('useNewSessionScreenModel (draft hydration — core)', () => {
         }));
     });
 
+    it('hydrates the persisted target server when no route server is selected', async () => {
+        targetServerState.allowedTargetServerIds = ['server-a', 'server-b'];
+        persistedDraft.targetServerId = 'server-b';
+
+        let model: any = null;
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        expect(model?.simpleProps?.targetServerId).toBe('server-b');
+    });
+
+    it('prefers the route target server over the persisted target server', async () => {
+        targetServerState.allowedTargetServerIds = ['server-a', 'server-b', 'server-c'];
+        persistedDraft.targetServerId = 'server-b';
+        searchParamsState.value = { spawnServerId: 'server-c' };
+
+        let model: any = null;
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        expect(model?.simpleProps?.targetServerId).toBe('server-c');
+    });
+
+    it('ignores an unavailable persisted target server', async () => {
+        targetServerState.allowedTargetServerIds = ['server-a'];
+        persistedDraft.targetServerId = 'server-b';
+
+        let model: any = null;
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        expect(model?.simpleProps?.targetServerId).not.toBe('server-b');
+    });
+
+    it('persists the current target server with the launch draft', async () => {
+        targetServerState.allowedTargetServerIds = ['server-a', 'server-b'];
+        targetServerState.targetServerId = 'server-b';
+
+        await renderNewSessionScreenModel(() => {});
+
+        await act(async () => {
+            persistDraftNowRef.current?.();
+        });
+
+        expect(saveNewSessionDraftMock).toHaveBeenCalledWith(expect.objectContaining({
+            targetServerId: 'server-b',
+        }));
+    });
+
+    it('hydrates and persists a Windows remote launch override for the matching machine', async () => {
+        allMachinesState.value = [
+            { id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one', happyHomeDir: '/home/one', happyCliVersion: '1.0.0', platform: 'darwin' } },
+            { id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two', happyHomeDir: '/home/two', happyCliVersion: '1.0.0', platform: 'win32' } },
+        ];
+        persistedDraft.windowsRemoteSessionLaunchModeOverride = {
+            machineId: 'machine-2',
+            mode: 'windows_terminal',
+        };
+
+        await renderNewSessionScreenModel(() => {});
+
+        expect(useCreateNewSessionArgsRef.current?.windowsRemoteSessionLaunchModeOverride).toBe('windows_terminal');
+
+        await act(async () => {
+            persistDraftNowRef.current?.();
+        });
+
+        expect(saveNewSessionDraftMock).toHaveBeenCalledWith(expect.objectContaining({
+            windowsRemoteSessionLaunchModeOverride: {
+                machineId: 'machine-2',
+                mode: 'windows_terminal',
+            },
+        }));
+    });
+
+    it('ignores a persisted Windows remote launch override for a different machine', async () => {
+        allMachinesState.value = [
+            { id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one', happyHomeDir: '/home/one', happyCliVersion: '1.0.0', platform: 'win32' } },
+            { id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two', happyHomeDir: '/home/two', happyCliVersion: '1.0.0', platform: 'win32' } },
+        ];
+        persistedDraft.windowsRemoteSessionLaunchModeOverride = {
+            machineId: 'machine-1',
+            mode: 'windows_terminal',
+        };
+
+        await renderNewSessionScreenModel(() => {});
+
+        expect(useCreateNewSessionArgsRef.current?.windowsRemoteSessionLaunchModeOverride).toBeNull();
+
+        await act(async () => {
+            persistDraftNowRef.current?.();
+        });
+
+        expect(saveNewSessionDraftMock.mock.calls.at(-1)?.[0]).not.toEqual(expect.objectContaining({
+            windowsRemoteSessionLaunchModeOverride: expect.anything(),
+        }));
+    });
+
+    it('clears the Windows remote launch override from persisted drafts after the user changes machines', async () => {
+        allMachinesState.value = [
+            { id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one', happyHomeDir: '/home/one', happyCliVersion: '1.0.0', platform: 'win32' } },
+            { id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two', happyHomeDir: '/home/two', happyCliVersion: '1.0.0', platform: 'win32' } },
+        ];
+        persistedDraft.windowsRemoteSessionLaunchModeOverride = {
+            machineId: 'machine-2',
+            mode: 'windows_terminal',
+        };
+
+        let model: any = null;
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        const content = model?.simpleProps?.machinePopover?.renderContent({ requestClose: vi.fn() });
+        const machineSelectionContent = content as React.ReactElement<{
+            onSelectMachine: (machine: { id: string; metadata: { displayName: string; host: string; homeDir: string; happyHomeDir: string; happyCliVersion: string; platform: string } }) => void;
+        }>;
+        await act(async () => {
+            machineSelectionContent.props.onSelectMachine({
+                id: 'machine-1',
+                metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one', happyHomeDir: '/home/one', happyCliVersion: '1.0.0', platform: 'win32' },
+            });
+            await flushHookEffects({ cycles: 1, turns: 2 });
+        });
+
+        await act(async () => {
+            persistDraftNowRef.current?.();
+        });
+
+        expect(saveNewSessionDraftMock.mock.calls.at(-1)?.[0]).not.toEqual(expect.objectContaining({
+            windowsRemoteSessionLaunchModeOverride: expect.anything(),
+        }));
+    });
+
     it('defers machine popover close after selection on web to avoid click fall-through', async () => {
         vi.useFakeTimers();
         try {
@@ -146,6 +284,92 @@ describe('useNewSessionScreenModel (draft hydration — core)', () => {
         expect(secondProps?.machinePopover).toBe(firstProps?.machinePopover);
         expect(secondProps?.pathPopover).toBe(firstProps?.pathPopover);
         expect(secondProps?.agentInputExtraActionChips).toBe(firstProps?.agentInputExtraActionChips);
+
+        allMachinesState.value = allMachinesState.value.map((machine) => (
+            machine?.id === 'machine-2'
+                ? { ...machine, activeAt: 456 }
+                : machine
+        ));
+        await hook.rerender();
+
+        expect(model?.simpleProps?.machinePopover).toBe(firstProps?.machinePopover);
+
+        await hook.unmount();
+    });
+
+    it('keeps the default attachment flow id stable across new-session route remounts', async () => {
+        let firstModel: any = null;
+        const firstHook = await renderNewSessionScreenModel((nextModel) => {
+            firstModel = nextModel;
+        });
+        const firstAttachmentFlowId = firstModel?.simpleProps?.attachmentFlowId;
+        expect(typeof firstAttachmentFlowId).toBe('string');
+        expect(firstAttachmentFlowId.length).toBeGreaterThan(0);
+
+        await firstHook.unmount();
+
+        let secondModel: any = null;
+        const secondHook = await renderNewSessionScreenModel((nextModel) => {
+            secondModel = nextModel;
+        });
+
+        expect(secondModel?.simpleProps?.attachmentFlowId).toBe(firstAttachmentFlowId);
+
+        await secondHook.unmount();
+    });
+
+    it('keeps the agent picker probe stable when CLI detection remains in the same phase', async () => {
+        let model: any = null;
+        const hook = await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+        const firstProbe = model?.simpleProps?.agentPickerProbe;
+        const firstAgentPickerOptions = model?.simpleProps?.agentPickerOptions;
+        const firstHandleAgentClick = model?.simpleProps?.handleAgentClick;
+        const firstHandleAgentPickerSelect = model?.simpleProps?.onAgentPickerSelect;
+
+        cliDetectionState.value = {
+            ...cliDetectionState.value,
+            timestamp: cliDetectionState.value.timestamp + 1,
+            refresh: vi.fn(),
+        };
+        await hook.rerender();
+
+        expect(model?.simpleProps?.agentPickerProbe).toBe(firstProbe);
+        expect(model?.simpleProps?.agentPickerOptions).toBe(firstAgentPickerOptions);
+        expect(model?.simpleProps?.handleAgentClick).toBe(firstHandleAgentClick);
+        expect(model?.simpleProps?.onAgentPickerSelect).toBe(firstHandleAgentPickerSelect);
+
+        await hook.unmount();
+    });
+
+    it('clears backend route seed params after an explicit agent picker selection', async () => {
+        searchParamsState.value = {
+            agentType: 'codex',
+        };
+        persistedDraft.agentType = 'claude';
+
+        let model: any = null;
+        const hook = await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        expect(model?.simpleProps?.agentType).toBe('codex');
+
+        const claudeOption = model?.simpleProps?.agentPickerOptions?.find?.((option: { id: string }) => option.id === 'agent:claude');
+        expect(claudeOption).toBeTruthy();
+
+        await act(async () => {
+            claudeOption?.onSelectImmediate?.();
+            await flushHookEffects({ cycles: 1, turns: 2 });
+        });
+
+        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(routerSetParamsMock).toHaveBeenCalledWith({
+            agentType: undefined,
+            backendTarget: undefined,
+            backendTargetKey: undefined,
+        });
 
         await hook.unmount();
     });
@@ -482,6 +706,26 @@ describe('useNewSessionScreenModel (draft hydration — core)', () => {
             input: 'Focused draft prompt',
             resumeSessionId: 'sess_new',
         }));
+    });
+
+    it('does not invalidate the screen model when focus reloads an equivalent draft', async () => {
+        let model: any = null;
+        let renderCount = 0;
+
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+            renderCount += 1;
+        });
+
+        const renderedCount = renderCount;
+
+        const cleanups = await runFocusEffectsAndSettle();
+        for (const cleanup of cleanups) {
+            if (typeof cleanup === 'function') cleanup();
+        }
+
+        expect(loadNewSessionDraftMock).toHaveBeenCalled();
+        expect(renderCount).toBeLessThanOrEqual(renderedCount + 1);
     });
 
     it('hydrates mcpSelection into the MCP chip flow and persists it with the draft', async () => {

@@ -1,10 +1,10 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,20 +42,19 @@ installSessionShellCommonModuleMocks({
         return createStorageModuleMock({
             importOriginal,
             overrides: {
-            useHasUnreadMessages: () => false,
-            useProfile: () => ({
-                id: 'u1',
-                timestamp: 0,
-                firstName: null,
-                lastName: null,
-                username: null,
-                avatar: null,
-                linkedProviders: [],
-                connectedServices: [],
-                connectedServicesV2: [],
-            }),
-            useSession: () => null,
-            useSessionListMeaningfulActivityAt: () => null,
+                useHasUnreadMessages: () => false,
+                useProfile: () => ({
+                    id: 'u1',
+                    timestamp: 0,
+                    firstName: null,
+                    lastName: null,
+                    username: null,
+                    avatar: null,
+                    linkedProviders: [],
+                    connectedServices: [],
+                    connectedServicesV2: [],
+                }),
+                useSession: () => null,
             },
         });
     },
@@ -103,7 +102,14 @@ vi.mock('@/sync/ops', () => ({
     sessionArchiveWithServerScope: vi.fn(async () => ({ success: true })),
 }));
 
-const sessionItemModulePromise = import('./SessionItem');
+type SessionItemForTestProps = Omit<
+    React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>,
+    'rowModel'
+> & {
+    rowModel?: React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>['rowModel'];
+};
+
+let SessionItem: React.ComponentType<SessionItemForTestProps>;
 
 function triggerHoverEnter(node: ReactTestInstance) {
     node.props.onMouseEnter?.();
@@ -112,12 +118,21 @@ function triggerHoverEnter(node: ReactTestInstance) {
 }
 
 describe('SessionItem reorder handle', () => {
+    beforeAll(async () => {
+        const { SessionItem: ProductionSessionItem } = await import('./SessionItem');
+        SessionItem = (props) => (
+            <ProductionSessionItem
+                {...props}
+                rowModel={props.rowModel ?? createSessionItemTestRowModel(props)}
+            />
+        );
+    });
+
     afterEach(() => {
         standardCleanup();
     });
 
     it('renders a GestureDetector-wrapped reorder handle when reorderHandleGesture is provided', async () => {
-        const { SessionItem } = await sessionItemModulePromise;
         const session = {
             id: 'sess_1',
             seq: 1,
@@ -166,7 +181,6 @@ describe('SessionItem reorder handle', () => {
     });
 
     it('renders the reorder handle without hover when isBeingDragged is true', async () => {
-        const { SessionItem } = await sessionItemModulePromise;
         const session = {
             id: 'sess_3',
             seq: 1,
@@ -206,7 +220,6 @@ describe('SessionItem reorder handle', () => {
     });
 
     it('does not render a reorder handle when reorderHandleGesture is not provided', async () => {
-        const { SessionItem } = await sessionItemModulePromise;
         const session = {
             id: 'sess_2',
             seq: 1,

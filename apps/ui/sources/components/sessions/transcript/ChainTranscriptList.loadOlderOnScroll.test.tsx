@@ -6,22 +6,33 @@ import { createDeferred, flushHookEffects, invokeTestInstanceHandler, renderScre
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
+let syncTuningState = {
+    transcriptFlashListEstimatedItemSize: 120,
+    transcriptBackwardPrefetchThresholdPx: 800,
+};
+
 vi.mock('@/sync/sync', () => ({
     sync: {
-        getSyncTuning: () => ({
-            transcriptFlashListEstimatedItemSize: 120,
-        }),
+        getSyncTuning: () => syncTuningState,
     },
-}));
-
-vi.mock('@/components/sessions/transcript/MessageView', () => ({
-    MessageView: () => null,
 }));
 
 let scrollToEndSpy: ReturnType<typeof vi.fn> | null = null;
 let scrollToIndexSpy: ReturnType<typeof vi.fn> | null = null;
 let scrollToOffsetSpy: ReturnType<typeof vi.fn> | null = null;
 let scrollToIndexShouldReject = false;
+let renderedMessageViewProps: any[] = [];
+
+vi.mock('@/components/sessions/transcript/MessageView', () => ({
+    MessageView: (props: any) => {
+        renderedMessageViewProps.push(props);
+        return React.createElement('MessageView', props);
+    },
+    MessageViewWithSessionCommon: (props: any) => {
+        renderedMessageViewProps.push(props);
+        return React.createElement('MessageViewWithSessionCommon', props);
+    },
+}));
 
 vi.mock('@shopify/flash-list', () => ({
     FlashList: React.forwardRef((props: any, ref: any) => {
@@ -40,7 +51,14 @@ vi.mock('@shopify/flash-list', () => ({
         };
         if (typeof ref === 'function') ref(instance);
         else if (ref && typeof ref === 'object') ref.current = instance;
-        return React.createElement('FlashList', props);
+        const data = Array.isArray(props.data) ? props.data : [];
+        return React.createElement(
+            'FlashList',
+            props,
+            data.map((item: any, index: number) =>
+                React.createElement('FlashListItem', { key: props.keyExtractor?.(item, index) ?? item.id ?? index }, props.renderItem?.({ item, index })),
+            ),
+        );
     }),
 }));
 
@@ -59,6 +77,11 @@ describe('ChainTranscriptList', () => {
     }
 
     afterEach(() => {
+        syncTuningState = {
+            transcriptFlashListEstimatedItemSize: 120,
+            transcriptBackwardPrefetchThresholdPx: 800,
+        };
+        renderedMessageViewProps = [];
         standardCleanup();
     });
 
@@ -87,6 +110,10 @@ describe('ChainTranscriptList', () => {
         });
 
         const list = getFlashList(screen);
+        const initialScrollToIndexSpy = scrollToIndexSpy;
+        if (!initialScrollToIndexSpy) {
+            throw new Error('Expected FlashList ref to provide scrollToIndex');
+        }
 
         await act(async () => {
             invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 300 } } });
@@ -94,7 +121,7 @@ describe('ChainTranscriptList', () => {
             await settleListEffects();
         });
 
-        expect(scrollToIndexSpy).toHaveBeenCalledWith(
+        expect(initialScrollToIndexSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 index: 0,
                 animated: false,
@@ -118,6 +145,14 @@ describe('ChainTranscriptList', () => {
         });
 
         const list = getFlashList(screen);
+        const initialScrollToIndexSpy = scrollToIndexSpy;
+        const initialScrollToOffsetSpy = scrollToOffsetSpy;
+        if (!initialScrollToIndexSpy) {
+            throw new Error('Expected FlashList ref to provide scrollToIndex');
+        }
+        if (!initialScrollToOffsetSpy) {
+            throw new Error('Expected FlashList ref to provide scrollToOffset');
+        }
 
         await act(async () => {
             invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 300 } } });
@@ -125,19 +160,53 @@ describe('ChainTranscriptList', () => {
             await settleListEffects(2);
         });
 
-        expect(scrollToIndexSpy).toHaveBeenCalledWith(
+        expect(initialScrollToIndexSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 index: 0,
                 animated: false,
                 viewPosition: 1,
             }),
         );
-        expect(scrollToOffsetSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
+        const scrollToOffsetCalls = [
+            ...initialScrollToOffsetSpy.mock.calls,
+            ...(scrollToOffsetSpy && scrollToOffsetSpy !== initialScrollToOffsetSpy ? scrollToOffsetSpy.mock.calls : []),
+        ];
+        expect(scrollToOffsetCalls).toEqual(expect.arrayContaining([
+            [expect.objectContaining({
                 offset: 0,
                 animated: false,
-            }),
-        );
+            })],
+        ]));
+        expect(scrollToEndSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not pin to bottom after local thinking expansion changes before first layout', async () => {
+        scrollToIndexShouldReject = false;
+        const screen = await renderChainTranscriptList({
+            sessionId: 's1',
+            messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'thinking', isThinking: true }],
+            metadata: null,
+            interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            footer: React.createElement('Footer'),
+        });
+
+        const list = getFlashList(screen);
+        const initialScrollToIndexSpy = scrollToIndexSpy;
+        const initialScrollToOffsetSpy = scrollToOffsetSpy;
+        const messageViewProps = renderedMessageViewProps.find((props) => props.message?.id === 'm1');
+        expect(messageViewProps?.onThinkingExpandedChange).toBeTypeOf('function');
+
+        await act(async () => {
+            messageViewProps.onThinkingExpandedChange(messageViewProps.thinkingExpanded !== true);
+            invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 300 } } });
+            list.props.onContentSizeChange(0, 600);
+            await settleListEffects();
+        });
+
+        expect(initialScrollToIndexSpy).not.toHaveBeenCalled();
+        expect(scrollToIndexSpy).not.toHaveBeenCalled();
+        expect(initialScrollToOffsetSpy).not.toHaveBeenCalled();
+        expect(scrollToOffsetSpy).not.toHaveBeenCalled();
         expect(scrollToEndSpy).not.toHaveBeenCalled();
     });
 
@@ -227,6 +296,63 @@ describe('ChainTranscriptList', () => {
         });
 
         expect(loadOlder).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not load older before the configured top prefetch distance', async () => {
+        syncTuningState = {
+            ...syncTuningState,
+            transcriptBackwardPrefetchThresholdPx: 40,
+        };
+        scrollToIndexShouldReject = false;
+        const loadOlder = vi.fn(async () => ({ loaded: 1, hasMore: true, status: 'loaded' as const }));
+
+        const screen = await renderChainTranscriptList({
+            sessionId: 's1',
+            messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+            metadata: null,
+            interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            loadOlder,
+        });
+
+        const list = getFlashList(screen);
+        await act(async () => {
+            invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 500 } } });
+            list.props.onContentSizeChange(0, 1000);
+            list.props.onScroll({
+                nativeEvent: {
+                    contentOffset: { y: 60 },
+                    contentSize: { height: 1000 },
+                    layoutMeasurement: { height: 500 },
+                },
+            });
+            await settleListEffects();
+        });
+
+        expect(loadOlder).not.toHaveBeenCalled();
+    });
+
+    it('derives the start-reached threshold from the configured pixel distance', async () => {
+        syncTuningState = {
+            ...syncTuningState,
+            transcriptBackwardPrefetchThresholdPx: 250,
+        };
+        scrollToIndexShouldReject = false;
+
+        const screen = await renderChainTranscriptList({
+            sessionId: 's1',
+            messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+            metadata: null,
+            interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            loadOlder: vi.fn(async () => ({ loaded: 1, hasMore: true, status: 'loaded' as const })),
+        });
+
+        const list = getFlashList(screen);
+        await act(async () => {
+            invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 500 } } });
+            await settleListEffects();
+        });
+
+        expect(getFlashList(screen).props.onStartReachedThreshold).toBe(0.5);
     });
 
     it('loads older on web-like scroll events where layout/content sizes are not present', async () => {

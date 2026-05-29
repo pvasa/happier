@@ -429,6 +429,7 @@ describe('SessionHeaderActionMenu handoff', () => {
             id: 'sess_read',
             seq: 2,
             lastViewedSessionSeq: 2,
+            latestTurnStatus: 'completed',
             archivedAt: null,
             metadata: null,
           } as any}
@@ -453,6 +454,7 @@ describe('SessionHeaderActionMenu handoff', () => {
             id: 'sess_unread',
             seq: 2,
             lastViewedSessionSeq: 1,
+            latestTurnStatus: 'completed',
             archivedAt: null,
             metadata: null,
           } as any}
@@ -466,6 +468,25 @@ describe('SessionHeaderActionMenu handoff', () => {
     });
 
     expect(setManualReadStateMock).toHaveBeenCalledWith('sess_unread', 'read', { serverId: 'server_a' });
+  });
+
+  it('does not show mark-read for non-terminal raw session seq', async () => {
+    const { SessionHeaderActionMenu } = await import('./SessionHeaderActionMenu');
+
+    const screen = await renderScreen(<SessionHeaderActionMenu
+          sessionId="sess_non_terminal_raw"
+          session={{
+            id: 'sess_non_terminal_raw',
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            latestTurnStatus: 'in_progress',
+            archivedAt: null,
+            metadata: null,
+          } as any}
+        />);
+
+    const dropdown = screen.findByType('DropdownMenu' as any);
+    expect(dropdown.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread')).toBe(false);
   });
 
   it('does not show read-state actions for archived sessions', async () => {

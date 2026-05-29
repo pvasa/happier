@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
@@ -18,6 +18,56 @@ const machineDirectSessionTakeoverSpy = vi.hoisted(() => vi.fn(async () => ({ ok
 const machineDirectSessionTakeoverPersistSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true, converted: true })));
 const syncRefreshSessionMessagesSpy = vi.hoisted(() => vi.fn(async () => {}));
 const syncSubmitMessageSpy = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
+const resumeSessionSpy = vi.hoisted(() => vi.fn(async (_options: unknown) => ({ type: 'success' as const, sessionId: 's1' })));
+const sessionUsageLimitWaitResumeEnableSpy = vi.hoisted(() =>
+  vi.fn<
+    (
+      _sessionId: string,
+      _request?: unknown,
+      _opts?: unknown,
+    ) => Promise<{
+      ok: true;
+    } | {
+      ok: false;
+      error: string;
+      errorCode?: string;
+    }>
+  >(async (_sessionId: string, _request?: unknown, _opts?: unknown) => ({ ok: true })),
+);
+const sessionUsageLimitWaitResumeCancelSpy = vi.hoisted(() =>
+  vi.fn(async (_sessionId: string, _opts?: unknown) => ({ ok: true })),
+);
+const sessionUsageLimitCheckNowSpy = vi.hoisted(() =>
+  vi.fn<
+    (
+      _sessionId: string,
+      _opts?: unknown,
+    ) => Promise<{
+      ok: true;
+      status?: 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
+    } | {
+      ok: false;
+      error: string;
+      errorCode?: string;
+    }>
+  >(async (_sessionId: string, _opts?: unknown) => ({ ok: true })),
+);
+const sessionUsageLimitSwitchAccountNowSpy = vi.hoisted(() =>
+  vi.fn<
+    (
+      _sessionId: string,
+      _opts?: unknown,
+    ) => Promise<{
+      ok: true;
+      status?: 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
+    } | {
+      ok: false;
+      error: string;
+      errorCode?: string;
+    }>
+  >(async (_sessionId: string, _opts?: unknown) => ({ ok: true })),
+);
+const setUsageLimitRecoverySettingsSpy = vi.hoisted(() => vi.fn());
 const deleteSessionReviewCommentDraftSpy = vi.hoisted(() => vi.fn());
 const clearSessionReviewCommentDraftsSpy = vi.hoisted(() => vi.fn());
 const deleteWorkspaceReviewCommentDraftSpy = vi.hoisted(() => vi.fn());
@@ -41,15 +91,28 @@ const sendVoiceSessionComposerTextSpy = vi.hoisted(() =>
   >(async (_params: unknown) => ({ ok: false as const, reason: 'not_voice_session' as const })),
 );
 const resolveVoiceSessionComposerRoutingSpy = vi.hoisted(() => vi.fn((_params: any): any => null));
-const featureEnabledState = vi.hoisted(() => ({ voice: false, 'files.reviewComments': false }));
+const featureEnabledState = vi.hoisted(() => ({
+  voice: false,
+  'files.reviewComments': false,
+  'sessions.usageLimitRecovery': false,
+  'connectedServices.quotas': false,
+}));
 const keyboardAvoidanceState = vi.hoisted(() => ({
   availablePanelHeight: undefined as number | undefined,
+  keyboardHeight: 0,
 }));
 const settingsState = vi.hoisted(() => ({ current: {} as any }));
 const settingByKeyState = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const participantTargetsState = vi.hoisted(() => ({ current: [] as any[] }));
 const reviewCommentDraftsState = vi.hoisted(() => ({ current: [] as any[] }));
 const sessionMessagesState = vi.hoisted(() => ({ current: [] as any[] }));
+const draftHookState = vi.hoisted(() => ({
+  valuesBySessionId: new Map<string, string>(),
+}));
+const quotaSnapshotsState = vi.hoisted(() => ({
+  current: {} as Record<string, any>,
+  requestedProfiles: [] as ReadonlyArray<Readonly<{ serviceId: string; profileId: string }>>,
+}));
 const storageState = vi.hoisted(() => ({
   sessions: {
     s1: {
@@ -79,6 +142,9 @@ const storageState = vi.hoisted(() => ({
     } as any,
   },
   artifacts: {} as Record<string, any>,
+  profile: {
+    connectedServicesV2: [],
+  } as any,
   settings: {} as Record<string, unknown>,
   sessionListViewDataByServerId: {} as Record<string, unknown>,
   // Stable container references so the storage snapshot built lazily on first
@@ -90,10 +156,11 @@ const storageState = vi.hoisted(() => ({
 }));
 const recipientStateState = vi.hoisted(() => ({
   current: {
-    recipient: null as any,
-    setManualRecipient: vi.fn(),
-    executionRunDelivery: 'steer_if_supported',
-    setExecutionRunDelivery: vi.fn(),
+	    recipient: null as any,
+	    setManualRecipient: vi.fn(),
+	    clearPersistedManualRecipient: vi.fn(),
+	    executionRunDelivery: 'steer_if_supported',
+	    setExecutionRunDelivery: vi.fn(),
   },
 }));
 
@@ -208,9 +275,16 @@ installSessionShellCommonModuleMocks({
         useWorkspaceReviewCommentsDrafts: () => reviewCommentDraftsState.current,
         useSessionReviewCommentsDrafts: () => reviewCommentDraftsState.current,
         useSessionUsage: () => null,
+        useProfile: () => storageState.profile,
         useLocalSetting: readLocalSetting,
         useLocalSettingMutable: <K extends keyof LocalSettings>(key: K) => [readLocalSetting(key), vi.fn<(value: LocalSettings[K]) => void>()],
         useSetting: readSetting,
+        useSettingMutable: <K extends keyof Settings>(key: K) => [
+          readSetting(key),
+          key === 'usageLimitRecoverySettingsV1'
+            ? setUsageLimitRecoverySettingsSpy
+            : vi.fn<(value: Settings[K]) => void>(),
+        ],
         useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {}, codexBackendMode: 'acp' }),
         useAutomations: () => [],
         useArtifacts: () => Object.values(storageState.artifacts),
@@ -227,6 +301,13 @@ vi.mock('@react-navigation/native', () => ({
 
 vi.mock('@/auth/context/AuthContext', () => ({
   useAuth: () => ({ credentials: { token: 't', secret: 's' } }),
+}));
+
+vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaSnapshots', () => ({
+  useConnectedServiceQuotaSnapshots: (profiles: ReadonlyArray<Readonly<{ serviceId: string; profileId: string }>>) => {
+    quotaSnapshotsState.requestedProfiles = profiles;
+    return quotaSnapshotsState.current;
+  },
 }));
 
 vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
@@ -301,7 +382,62 @@ vi.mock('@/utils/platform/responsive', () => ({
   useIsTablet: () => true,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-  useDraft: () => ({ clearDraft: vi.fn() }),
+  useDraft: (_sessionId: string, value: string, onChange: (next: string) => void) => {
+    draftHookState.valuesBySessionId.set(_sessionId, value);
+    return {
+    clearDraft: () => {
+      draftHookState.valuesBySessionId.set(_sessionId, '');
+      onChange('');
+    },
+    setDraftValue: (nextValueOrUpdater: string | ((currentValue: string) => string)) => {
+      const currentValue = draftHookState.valuesBySessionId.get(_sessionId) ?? '';
+      const nextValue = typeof nextValueOrUpdater === 'function'
+        ? nextValueOrUpdater(currentValue)
+        : nextValueOrUpdater;
+      draftHookState.valuesBySessionId.set(_sessionId, nextValue);
+      onChange(nextValue);
+    },
+    clearDraftIfCurrentValueMatches: (expectedValue: string) => {
+      const currentValue = draftHookState.valuesBySessionId.get(_sessionId) ?? value;
+      if (currentValue !== expectedValue) return false;
+      draftHookState.valuesBySessionId.set(_sessionId, '');
+      return true;
+    },
+    clearDraftForSessionIfCurrentValueMatches: (snapshot: Readonly<{ sessionId: string; text: string }>) => {
+      const currentValue = draftHookState.valuesBySessionId.get(snapshot.sessionId) ?? '';
+      if (currentValue !== snapshot.text) return false;
+      draftHookState.valuesBySessionId.set(snapshot.sessionId, '');
+      if (snapshot.sessionId === _sessionId) {
+        onChange('');
+      }
+      return true;
+    },
+    restoreDraft: (draft: string) => {
+      draftHookState.valuesBySessionId.set(_sessionId, draft);
+      onChange(draft);
+    },
+    restoreDraftForSessionIfCurrentValueMatches: (
+      snapshot: Readonly<{ sessionId?: string; text: string }>,
+      expectedCurrentValue: string,
+    ) => {
+      const targetSessionId = snapshot.sessionId ?? _sessionId;
+      const currentValue = draftHookState.valuesBySessionId.get(targetSessionId) ?? '';
+      if (currentValue !== expectedCurrentValue) return false;
+      draftHookState.valuesBySessionId.set(targetSessionId, snapshot.text);
+      if (targetSessionId === _sessionId) {
+        onChange(snapshot.text);
+      }
+      return true;
+    },
+    restoreComposerSnapshot: (snapshot: Readonly<{ sessionId?: string; text: string }>) => {
+      const targetSessionId = snapshot.sessionId ?? _sessionId;
+      draftHookState.valuesBySessionId.set(targetSessionId, snapshot.text);
+      if (targetSessionId === _sessionId) {
+        onChange(snapshot.text);
+      }
+    },
+  };
+  },
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
   getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -335,7 +471,8 @@ vi.mock('@/sync/sync', () => ({
     refreshSessions: async () => {},
     refreshSessionMessages: syncRefreshSessionMessagesSpy,
     onSessionVisible: () => {},
-    sendMessage: async () => {},
+    markSessionLiveTailIntent: () => {},
+    sendMessage: syncSubmitMessageSpy,
     enqueuePendingMessage: async () => {},
     submitMessage: syncSubmitMessageSpy,
     encryption: { getMachineEncryption: () => null },
@@ -348,7 +485,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     ...actual,
     continueSessionWithReplay: vi.fn(),
     sessionAbort: vi.fn(),
-    resumeSession: vi.fn(),
+    resumeSession: resumeSessionSpy,
     sessionAttachmentsUploadFile: vi.fn(),
     sessionSwitch: vi.fn(async () => true),
   };
@@ -358,6 +495,16 @@ vi.mock('@/sync/ops/machineDirectSessions', () => ({
   machineDirectSessionTakeover: machineDirectSessionTakeoverSpy,
   machineDirectSessionTakeoverPersist: machineDirectSessionTakeoverPersistSpy,
 }));
+vi.mock('@/sync/ops/sessionUsageLimitRecovery', () => ({
+  sessionUsageLimitWaitResumeEnable: (sessionId: string, request?: unknown, opts?: unknown) =>
+    sessionUsageLimitWaitResumeEnableSpy(sessionId, request, opts),
+  sessionUsageLimitWaitResumeCancel: (sessionId: string, opts?: unknown) =>
+    sessionUsageLimitWaitResumeCancelSpy(sessionId, opts),
+  sessionUsageLimitCheckNow: (sessionId: string, opts?: unknown) =>
+    sessionUsageLimitCheckNowSpy(sessionId, opts),
+  sessionUsageLimitSwitchAccountNow: (sessionId: string, opts?: unknown) =>
+    sessionUsageLimitSwitchAccountNowSpy(sessionId, opts),
+}));
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
   createDefaultActionExecutor: () => ({ execute: vi.fn() }),
 }));
@@ -366,6 +513,13 @@ vi.mock('@/components/sessions/agentInput', () => ({
 }));
 vi.mock('@/components/sessions/keyboardAvoidance', () => ({
   useComposerAvailablePanelHeight: () => keyboardAvoidanceState.availablePanelHeight,
+  useComposerKeyboardLayoutContext: () => ({
+    getKeyboardHeight: () => keyboardAvoidanceState.keyboardHeight,
+    subscribeKeyboardHeight: (listener: (height: number) => void) => {
+      listener(keyboardAvoidanceState.keyboardHeight);
+      return () => {};
+    },
+  }),
 }));
 vi.mock('@/components/sessions/directSessions/takeover/showDirectSessionTakeoverDialog', () => ({
   showDirectSessionTakeoverDialog: showDirectSessionTakeoverDialogSpy,
@@ -390,17 +544,17 @@ vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOrigin
 });
 
 describe('SessionView (direct sessions)', () => {
-  async function renderSessionView() {
+  async function renderSessionView(props: { routeServerId?: string } = {}) {
     const { SessionView } = await import('./SessionView');
     return renderScreen(
       <AppPaneProvider>
-        <SessionView id="s1" />
+        <SessionView id="s1" routeServerId={props.routeServerId} />
       </AppPaneProvider>,
     );
   }
 
-  async function renderSessionViewAndSettle() {
-    const screen = await renderSessionView();
+  async function renderSessionViewAndSettle(props: { routeServerId?: string } = {}) {
+    const screen = await renderSessionView(props);
     await settleDirectSessionView();
     return screen;
   }
@@ -419,18 +573,47 @@ describe('SessionView (direct sessions)', () => {
     return screen.findByTestId('session-agent-input') as any;
   }
 
+  function findUsageLimitStatusBadge(screen: Awaited<ReturnType<typeof renderSessionView>>) {
+    return findAgentInput(screen).props.statusBadges.find((badge: { key?: string }) =>
+      badge.key === 'session-usage-limit-recovery');
+  }
+
+  function expectDirectSendProjectionOptions() {
+    return expect.objectContaining({
+      localId: undefined,
+      onLocalPendingProjectionCreated: expect.any(Function),
+      profileId: undefined,
+    });
+  }
+
   beforeEach(() => {
     chatListPropsSpy.mockReset();
     chatHeaderPropsSpy.mockReset();
     voiceSurfacePropsSpy.mockReset();
     featureEnabledState.voice = false;
     featureEnabledState['files.reviewComments'] = false;
+    featureEnabledState['sessions.usageLimitRecovery'] = false;
+    featureEnabledState['connectedServices.quotas'] = false;
     keyboardAvoidanceState.availablePanelHeight = undefined;
+    keyboardAvoidanceState.keyboardHeight = 0;
     settingsState.current = {};
     settingByKeyState.current = {};
     modalAlertSpy.mockReset();
     syncRefreshSessionMessagesSpy.mockReset();
     syncSubmitMessageSpy.mockReset();
+    syncSubmitMessageSpy.mockImplementation(async (...args: unknown[]) => {
+      const options = args[4] as
+        | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
+        | undefined;
+      options?.onLocalPendingProjectionCreated?.({ localId: 'direct-local-id' });
+    });
+    resumeSessionSpy.mockReset();
+    resumeSessionSpy.mockResolvedValue({ type: 'success', sessionId: 's1' });
+    sessionUsageLimitWaitResumeEnableSpy.mockClear();
+    sessionUsageLimitWaitResumeCancelSpy.mockClear();
+    sessionUsageLimitCheckNowSpy.mockClear();
+    sessionUsageLimitSwitchAccountNowSpy.mockClear();
+    setUsageLimitRecoverySettingsSpy.mockClear();
     deleteSessionReviewCommentDraftSpy.mockReset();
     clearSessionReviewCommentDraftsSpy.mockReset();
     deleteWorkspaceReviewCommentDraftSpy.mockReset();
@@ -447,6 +630,9 @@ describe('SessionView (direct sessions)', () => {
     participantTargetsState.current = [];
     reviewCommentDraftsState.current = [];
     sessionMessagesState.current = [];
+    draftHookState.valuesBySessionId.clear();
+    quotaSnapshotsState.current = {};
+    quotaSnapshotsState.requestedProfiles = [];
     storageState.sessions.s1 = {
       id: 's1',
       seq: 1,
@@ -471,8 +657,12 @@ describe('SessionView (direct sessions)', () => {
         },
       },
       agentState: {},
+      lastRuntimeIssue: null,
     };
     storageState.artifacts = {};
+    storageState.profile = {
+      connectedServicesV2: [],
+    };
     storageState.settings = settingsState.current;
     storageState.sessionListViewDataByServerId = {};
     // Clear the stable container references in place (see hoisted storageState
@@ -489,10 +679,11 @@ describe('SessionView (direct sessions)', () => {
     (storageState as any).clearWorkspaceReviewCommentDrafts = clearWorkspaceReviewCommentDraftsSpy;
     (storageState as any).setWorkspaceReviewCommentDraftIncluded = setWorkspaceReviewCommentDraftIncludedSpy;
     recipientStateState.current = {
-      recipient: null,
-      setManualRecipient: vi.fn(),
-      executionRunDelivery: 'steer_if_supported',
-      setExecutionRunDelivery: vi.fn(),
+	      recipient: null,
+	      setManualRecipient: vi.fn(),
+	      clearPersistedManualRecipient: vi.fn(),
+	      executionRunDelivery: 'steer_if_supported',
+	      setExecutionRunDelivery: vi.fn(),
     };
     showDirectSessionTakeoverDialogSpy.mockResolvedValue({ action: null, forceStop: false });
     machineDirectSessionStatusGetSpy.mockResolvedValue({
@@ -511,6 +702,545 @@ describe('SessionView (direct sessions)', () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it('surfaces generic usage-limit recovery actions and status for provider runtime issues', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'opencode',
+        usageLimit: {
+          v: 1,
+          resetAtMs: Date.UTC(2026, 4, 17, 17, 30, 0),
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    const agentInput = findAgentInput(screen);
+    const usageStatusBadge = agentInput.props.statusBadges.find((badge: { key?: string }) =>
+      badge.key === 'session-usage-limit-recovery');
+
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeTruthy();
+    expect(usageStatusBadge).toEqual(expect.objectContaining({
+      testID: 'session-usageLimit-status-badge',
+      tone: 'warning',
+    }));
+
+    expect(screen.findByTestId('session-usageLimit-recovery-checkNow')).toBeNull();
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-remember'));
+
+    expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledTimes(1);
+    expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledWith(
+      's1',
+      {
+        issueFingerprint: 'usage-limit:opencode:unknown-turn:1:1779039000000',
+        rememberPreference: true,
+      },
+      { serverId: 'server-route-1' },
+    );
+    expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
+    expect(setUsageLimitRecoverySettingsSpy).toHaveBeenCalledWith(expect.objectContaining({
+      v: 1,
+      mode: 'auto_wait',
+      resumePromptMode: 'off',
+    }));
+  });
+
+  it('does not persist auto-wait preference when arming usage-limit wait resume fails', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };
+    sessionUsageLimitWaitResumeEnableSpy.mockResolvedValueOnce({
+      ok: false,
+      error: 'usage_limit_issue_unavailable',
+      errorCode: 'usage_limit_issue_unavailable',
+    });
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'opencode',
+        usageLimit: {
+          v: 1,
+          resetAtMs: Date.UTC(2026, 4, 17, 17, 30, 0),
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-remember'));
+
+    expect(sessionUsageLimitWaitResumeEnableSpy).toHaveBeenCalledTimes(1);
+    expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+    expect(setUsageLimitRecoverySettingsSpy).not.toHaveBeenCalled();
+  });
+
+  it('clears inactive ready usage-limit recovery without surfacing a resume failure', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+    sessionUsageLimitCheckNowSpy.mockResolvedValueOnce({ ok: true, status: 'ready' });
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: false,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: 1,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+    storageState.machines['machine-1'] = {
+      id: 'machine-1',
+      active: true,
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-resumeNow'));
+
+    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', {
+      provider: 'codex',
+      serverId: 'server-route-1',
+    });
+    expect(modalAlertSpy).not.toHaveBeenCalled();
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
+  });
+
+  it('clears the stale usage-limit warning when an active check-now resumes the provider runtime', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+    sessionUsageLimitCheckNowSpy.mockResolvedValueOnce({ ok: true, status: 'resumed' });
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-checkNow'));
+
+    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', {
+      provider: 'codex',
+      serverId: 'server-route-1',
+    });
+    expect(resumeSessionSpy).not.toHaveBeenCalled();
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
+  });
+
+  it('clears a switchable group usage-limit warning when fallback switching resumes the provider runtime', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+    sessionUsageLimitSwitchAccountNowSpy.mockResolvedValueOnce({ ok: true, status: 'resumed' });
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'switch_account',
+          connectedService: {
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            groupId: 'codex-main',
+            groupExhausted: true,
+          },
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    expect(screen.findByTestId('session-usageLimit-recovery-checkNow')).toBeNull();
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-switchFallbackNow'));
+    await settleDirectSessionView();
+
+    expect(sessionUsageLimitSwitchAccountNowSpy).toHaveBeenCalledWith('s1', {
+      provider: 'codex',
+      serverId: 'server-route-1',
+    });
+    expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
+    expect(screen.findByTestId('session-usageLimit-recovery')).toBeNull();
+  });
+
+  it('surfaces switch-account recovery progress while the control request is in flight', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+    let resolveSwitchAccountNow: ((value: { ok: true; status: 'waiting' }) => void) | null = null;
+    sessionUsageLimitSwitchAccountNowSpy.mockImplementationOnce(async () => (
+      await new Promise<{ ok: true; status: 'waiting' }>((resolve) => {
+        resolveSwitchAccountNow = resolve;
+      })
+    ));
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'switch_account',
+          connectedService: {
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            groupId: 'codex-main',
+            groupExhausted: false,
+          },
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await act(async () => {
+      void screen.findByTestId('session-usageLimit-recovery-switchAccountNow')?.props.onPress?.();
+      await Promise.resolve();
+    });
+
+    expect(sessionUsageLimitSwitchAccountNowSpy).toHaveBeenCalledWith('s1', {
+      provider: 'codex',
+      serverId: 'server-route-1',
+    });
+    expect(sessionUsageLimitCheckNowSpy).not.toHaveBeenCalled();
+    expect(findUsageLimitStatusBadge(screen)).toEqual(expect.objectContaining({
+      label: 'session.usageLimitRecovery.statusChecking',
+    }));
+
+    await act(async () => {
+      resolveSwitchAccountNow?.({ ok: true, status: 'waiting' });
+      await Promise.resolve();
+    });
+
+    expect(findUsageLimitStatusBadge(screen)).toEqual(expect.objectContaining({
+      label: 'session.usageLimitRecovery.statusWaiting',
+    }));
+  });
+
+  it('shows a user-facing check-now error instead of raw recovery-control codes', async () => {
+    featureEnabledState['sessions.usageLimitRecovery'] = true;
+    settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask' };
+    sessionUsageLimitCheckNowSpy.mockResolvedValueOnce({
+      ok: false,
+      error: 'session_usage_limit_recovery_control_remote_unavailable',
+      errorCode: 'session_usage_limit_recovery_control_remote_unavailable',
+    });
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 1,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
+    await pressTestInstanceAsync(screen.findByTestId('session-usageLimit-recovery-checkNow'));
+
+    expect(sessionUsageLimitCheckNowSpy).toHaveBeenCalledWith('s1', {
+      provider: 'codex',
+      serverId: 'server-route-1',
+    });
+    expect(modalAlertSpy).toHaveBeenCalledTimes(1);
+    const [, message] = modalAlertSpy.mock.calls[0] ?? [];
+    expect(String(message ?? '')).not.toContain('session_usage_limit_recovery_control_remote_unavailable');
+    expect(String(message ?? '')).not.toContain('_');
+  });
+
+  it('updates AgentInput runtime status from fresh heartbeat fields without replacing the shell session', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    settingByKeyState.current.sessionListWorkingStatusAnimatedTextEnabled = false;
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: true,
+      activeAt: 1,
+      thinking: true,
+      thinkingAt: 1,
+      latestTurnStatus: 'in_progress',
+      latestTurnStatusObservedAt: 1,
+      presence: 'online',
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.text).toBe('status.online');
+    expect(findAgentInput(screen).props.showAbortButton).toBe(false);
+
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      activeAt: 1_000_000,
+      thinkingAt: 1_000_000,
+      latestTurnStatusObservedAt: 1_000_000,
+    };
+    const { SessionView } = await import('./SessionView');
+    await screen.update(
+      <AppPaneProvider>
+        <SessionView id="s1" routeServerId="server-runtime-refresh" />
+      </AppPaneProvider>,
+    );
+
+    expect(findAgentInput(screen).props.connectionStatus?.text).toBe('status.working');
+    expect(findAgentInput(screen).props.showAbortButton).toBe(true);
+  });
+
+  it('shows the main status as restarting while quota recovery is switching accounts', async () => {
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      active: false,
+      presence: 'offline',
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: Date.now(),
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'switch_account',
+          recoveryDecision: 'switching',
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.connectionStatus?.text).toBe('connectedServices.authSwitch.status.restarting');
+    expect(findAgentInput(screen).props.connectionStatus?.isPulsing).toBe(true);
+  });
+
+  it('uses runtime quota evidence for the provider usage account label when it overrides launch-time profile quota', async () => {
+    featureEnabledState['connectedServices.quotas'] = true;
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      metadata: {
+        ...storageState.sessions.s1.metadata,
+        connectedServices: {
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'profile',
+              profileId: 'launch-profile',
+            },
+          },
+        },
+      },
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 10_000,
+        provider: 'codex',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'switch_account',
+          quotaSnapshotRef: {
+            serviceId: 'openai-codex',
+            profileId: 'backup-profile',
+            groupId: 'backup-account',
+            fetchedAtMs: 10_000,
+          },
+          effectiveMeterId: 'weekly',
+          effectiveRemainingPct: 42,
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.providerUsageGauge).toEqual(expect.objectContaining({
+      serviceId: 'openai-codex',
+      providerDisplayName: 'connectedServices.serviceNames.openaiCodex',
+      activeAccountDisplayLabel: 'backup-account',
+    }));
+  });
+
+  it('uses runtime quota evidence for provider usage title when no launch-time profile binding exists', async () => {
+    featureEnabledState['connectedServices.quotas'] = true;
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'usage_limit',
+        source: 'usage_limit',
+        occurredAt: 10_000,
+        provider: 'claude',
+        usageLimit: {
+          v: 1,
+          resetAtMs: null,
+          retryAfterMs: null,
+          quotaScope: 'account',
+          recoverability: 'wait',
+          quotaSnapshotRef: {
+            serviceId: 'claude-subscription',
+            profileId: 'claude-backup',
+            groupId: 'claude-backup',
+            fetchedAtMs: 10_000,
+          },
+          effectiveMeterId: 'weekly',
+          effectiveRemainingPct: 52,
+        },
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(findAgentInput(screen).props.providerUsageGauge).toEqual(expect.objectContaining({
+      serviceId: 'claude-subscription',
+      providerDisplayName: 'connectedServices.serviceNames.claudeSubscription',
+      activeAccountDisplayLabel: 'claude-backup',
+    }));
+  });
+
+  it('uses the active group profile for provider usage when the binding stores only a group id', async () => {
+    featureEnabledState['connectedServices.quotas'] = true;
+    storageState.profile = {
+      connectedServicesV2: [{
+        serviceId: 'openai-codex',
+        profiles: [{
+          profileId: 'active-profile',
+          status: 'connected',
+          kind: 'oauth',
+        }],
+        groups: [{
+          groupId: 'happier',
+          activeProfileId: 'active-profile',
+          memberProfileIds: ['active-profile'],
+        }],
+      }],
+    };
+    storageState.sessions.s1 = {
+      ...storageState.sessions.s1,
+      metadata: {
+        ...storageState.sessions.s1.metadata,
+        connectedServices: {
+          bindingsByServiceId: {
+            'openai-codex': {
+              source: 'connected',
+              selection: 'group',
+              groupId: 'happier',
+            },
+          },
+        },
+      },
+    };
+    quotaSnapshotsState.current = {
+      'openai-codex/active-profile': {
+        v: 1,
+        serviceId: 'openai-codex',
+        profileId: 'active-profile',
+        fetchedAt: Date.now(),
+        staleAfterMs: 60_000,
+        planLabel: null,
+        accountLabel: 'Active Codex account',
+        meters: [{
+          meterId: 'weekly',
+          label: 'Weekly',
+          used: 35,
+          limit: 100,
+          unit: 'count',
+          utilizationPct: null,
+          remainingPct: null,
+          resetsAt: null,
+          status: 'ok',
+          details: {},
+        }],
+      },
+    };
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(quotaSnapshotsState.requestedProfiles).toEqual([{
+      serviceId: 'openai-codex',
+      profileId: 'active-profile',
+    }]);
+    expect(findAgentInput(screen).props.providerUsageGauge).toEqual(expect.objectContaining({
+      serviceId: 'openai-codex',
+      activeAccountDisplayLabel: 'Active Codex account',
+      ringValueLabel: '65',
+    }));
   });
 
   it('passes direct takeover footer actions to the transcript when a linked direct session is not yet controlled', async () => {
@@ -573,12 +1303,33 @@ describe('SessionView (direct sessions)', () => {
     ]);
   });
 
-  it('passes scaffold available panel height to AgentInput', async () => {
-    keyboardAvoidanceState.availablePanelHeight = 384;
+  it('passes scaffold available panel height to AgentInput when already below the session composer cap', async () => {
+    keyboardAvoidanceState.availablePanelHeight = 300;
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(findAgentInput(screen).props.maxPanelHeight).toBe(384);
+    expect(findAgentInput(screen).props.maxPanelHeight).toBe(300);
+  });
+
+  it('caps the existing-session text input viewport while preserving the scaffold panel height', async () => {
+    keyboardAvoidanceState.availablePanelHeight = 900;
+
+    const screen = await renderSessionViewAndSettle();
+
+    const agentInput = findAgentInput(screen);
+    expect(agentInput.props.maxPanelHeight).toBe(900);
+    expect(agentInput.props.inputMaxHeight).toBe(200);
+  });
+
+  it('tightens the collapsed existing-session text input cap while the keyboard is open', async () => {
+    keyboardAvoidanceState.availablePanelHeight = 900;
+    keyboardAvoidanceState.keyboardHeight = 320;
+
+    const screen = await renderSessionViewAndSettle();
+
+    const agentInput = findAgentInput(screen);
+    expect(agentInput.props.maxPanelHeight).toBe(900);
+    expect(agentInput.props.inputMaxHeight).toBe(120);
   });
 
   it('passes pending transcript-backed permission requests to AgentInput', async () => {
@@ -886,7 +1637,148 @@ describe('SessionView (direct sessions)', () => {
       expect.objectContaining({
         reasoningEffort: 'low',
       }),
+      expectDirectSendProjectionOptions(),
     );
+  });
+
+  it('clears composer text at direct-session outbound handoff and leaves it clear after acceptance', async () => {
+    let resolveSubmit!: () => void;
+    syncSubmitMessageSpy.mockImplementationOnce(
+      async (...args: unknown[]) => {
+        const options = args[4] as
+          | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
+          | undefined;
+        options?.onLocalPendingProjectionCreated?.({ localId: 'direct-local-id' });
+        return new Promise<void>((resolve) => {
+          resolveSubmit = resolve;
+        });
+      },
+    );
+    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
+
+    const screen = await renderSessionView();
+    let agentInput = findAgentInput(screen);
+    await act(async () => {
+      agentInput.props.onChangeText('continue this session');
+    });
+
+    await act(async () => {
+      agentInput.props.onSend();
+    });
+    await flushHookEffects({ cycles: 1, turns: 1 });
+
+    agentInput = findAgentInput(screen);
+    expect(agentInput.props.value).toBe('');
+
+    await act(async () => {
+      resolveSubmit();
+    });
+    await settleDirectSessionView();
+
+    agentInput = findAgentInput(screen);
+    expect(agentInput.props.value).toBe('');
+  });
+
+  it('restores composer text when direct-session outbound handoff fails before acceptance', async () => {
+    syncSubmitMessageSpy.mockImplementationOnce(async (...args: unknown[]) => {
+      const options = args[4] as
+        | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
+        | undefined;
+      options?.onLocalPendingProjectionCreated?.({ localId: 'direct-local-id' });
+      throw new Error('direct send rejected');
+    });
+    showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
+
+    const screen = await renderSessionView();
+    let agentInput = findAgentInput(screen);
+    await act(async () => {
+      agentInput.props.onChangeText('retry this direct send');
+    });
+
+    await act(async () => {
+      await agentInput.props.onSend();
+    });
+    await settleDirectSessionView();
+
+    agentInput = findAgentInput(screen);
+    expect(agentInput.props.value).toBe('retry this direct send');
+    expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'direct send rejected');
+  });
+
+  it('does not restore an old semantic snapshot over newer semantic choices after direct-session handoff failure', async () => {
+    const draftValues = await import('@/sync/domains/input/draftValues/sessionDraftValueStore');
+    const oldRecipient = { kind: 'execution_run' as const, runId: 'run-old' };
+    const newRecipient = { kind: 'execution_run' as const, runId: 'run-new' };
+    const oldMention = {
+      kind: 'skill' as const,
+      tokenText: '$old',
+      start: 8,
+      end: 12,
+      name: 'old',
+    };
+    const newMention = {
+      kind: 'skill' as const,
+      tokenText: '$new',
+      start: 8,
+      end: 12,
+      name: 'new',
+    };
+    let rejectSubmit!: (error: Error) => void;
+
+    draftValues.resetSessionDraftValuesCachesForTests();
+    draftValues.clearSessionDraftValues(null, 's1', { lifecycle: 'sessionDeleted' });
+    draftValues.writeSessionDraftValue(null, 's1', 'routing.recipient', oldRecipient);
+    draftValues.writeSessionDraftValue(null, 's1', 'routing.executionRunDelivery', 'interrupt');
+    draftValues.writeSessionDraftValue(null, 's1', 'structuredInput.mentions', [oldMention]);
+
+    try {
+      syncSubmitMessageSpy.mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[4] as
+          | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
+          | undefined;
+        options?.onLocalPendingProjectionCreated?.({ localId: 'direct-local-id' });
+        return new Promise<void>((_resolve, reject) => {
+          rejectSubmit = reject;
+        });
+      });
+      showDirectSessionTakeoverDialogSpy.mockResolvedValueOnce({ action: 'direct', forceStop: false });
+
+      const screen = await renderSessionView();
+      let agentInput = findAgentInput(screen);
+      await act(async () => {
+        agentInput.props.onChangeText('send to old target');
+      });
+
+      let sendPromise: Promise<void> | undefined;
+      await act(async () => {
+        sendPromise = agentInput.props.onSend();
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(draftValues.readSessionDraftValue(null, 's1', 'routing.recipient')).toBeUndefined();
+      expect(draftValues.readSessionDraftValue(null, 's1', 'routing.executionRunDelivery')).toBeUndefined();
+      expect(draftValues.readSessionDraftValue(null, 's1', 'structuredInput.mentions')).toBeUndefined();
+
+      draftValues.writeSessionDraftValue(null, 's1', 'routing.recipient', newRecipient);
+      draftValues.writeSessionDraftValue(null, 's1', 'routing.executionRunDelivery', 'prompt');
+      draftValues.writeSessionDraftValue(null, 's1', 'structuredInput.mentions', [newMention]);
+
+      await act(async () => {
+        rejectSubmit(new Error('direct send rejected'));
+        await sendPromise;
+      });
+      await settleDirectSessionView();
+
+      agentInput = findAgentInput(screen);
+      expect(agentInput.props.value).toBe('');
+      expect(draftValues.readSessionDraftValue(null, 's1', 'routing.recipient')).toEqual(newRecipient);
+      expect(draftValues.readSessionDraftValue(null, 's1', 'routing.executionRunDelivery')).toBe('prompt');
+      expect(draftValues.readSessionDraftValue(null, 's1', 'structuredInput.mentions')).toEqual([newMention]);
+      expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'direct send rejected');
+    } finally {
+      draftValues.clearSessionDraftValues(null, 's1', { lifecycle: 'sessionDeleted' });
+      draftValues.resetSessionDraftValuesCachesForTests();
+    }
   });
 
   it('prefers the shared live authoring snapshot overrides for permission and model composer props', async () => {
@@ -928,12 +1820,13 @@ describe('SessionView (direct sessions)', () => {
         recipient: { kind: 'execution_run', runId: 'run-1' },
       },
     ];
-    recipientStateState.current = {
-      recipient: { kind: 'execution_run', runId: 'run-1' },
-      setManualRecipient: vi.fn(),
-      executionRunDelivery: 'interrupt',
-      setExecutionRunDelivery: vi.fn(),
-    };
+	    recipientStateState.current = {
+	      recipient: { kind: 'execution_run', runId: 'run-1' },
+	      setManualRecipient: vi.fn(),
+	      clearPersistedManualRecipient: vi.fn(),
+	      executionRunDelivery: 'interrupt',
+	      setExecutionRunDelivery: vi.fn(),
+	    };
 
     const screen = await renderSessionViewAndSettle();
 
@@ -1054,6 +1947,7 @@ describe('SessionView (direct sessions)', () => {
           }),
         }),
       }),
+      expectDirectSendProjectionOptions(),
     );
     expect(syncSubmitMessageSpy.mock.calls[0]?.[1]).not.toContain('Keep this comment for later.');
     expect(deleteWorkspaceReviewCommentDraftSpy).toHaveBeenCalledWith(expect.any(String), 'included-draft');
@@ -1076,12 +1970,13 @@ describe('SessionView (direct sessions)', () => {
 
   it('does not surface delivery controls when live participant routing data is absent', async () => {
     participantTargetsState.current = [];
-    recipientStateState.current = {
-      recipient: { kind: 'execution_run', runId: 'run-1' },
-      setManualRecipient: vi.fn(),
-      executionRunDelivery: 'interrupt',
-      setExecutionRunDelivery: vi.fn(),
-    };
+	    recipientStateState.current = {
+	      recipient: { kind: 'execution_run', runId: 'run-1' },
+	      setManualRecipient: vi.fn(),
+	      clearPersistedManualRecipient: vi.fn(),
+	      executionRunDelivery: 'interrupt',
+	      setExecutionRunDelivery: vi.fn(),
+	    };
 
     const screen = await renderSessionViewAndSettle();
 
@@ -1098,12 +1993,13 @@ describe('SessionView (direct sessions)', () => {
         recipient: { kind: 'execution_run', runId: 'run-1' },
       },
     ];
-    recipientStateState.current = {
-      recipient: { kind: 'execution_run', runId: 'run-1' },
-      setManualRecipient: vi.fn(),
-      executionRunDelivery: 'interrupt',
-      setExecutionRunDelivery: vi.fn(),
-    };
+	    recipientStateState.current = {
+	      recipient: { kind: 'execution_run', runId: 'run-1' },
+	      setManualRecipient: vi.fn(),
+	      clearPersistedManualRecipient: vi.fn(),
+	      executionRunDelivery: 'interrupt',
+	      setExecutionRunDelivery: vi.fn(),
+	    };
 
     const screen = await renderSessionViewAndSettle();
 
@@ -1198,7 +2094,13 @@ describe('SessionView (direct sessions)', () => {
       machineId: 'machine-1',
       sessionId: 's1',
     }, { serverId: 'server-1' });
-    expect(syncSubmitMessageSpy).toHaveBeenCalledWith('s1', 'continue this session', undefined, undefined);
+    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
+      's1',
+      'continue this session',
+      undefined,
+      undefined,
+      expectDirectSendProjectionOptions(),
+    );
 
   });
 
@@ -1224,7 +2126,7 @@ describe('SessionView (direct sessions)', () => {
 
   });
 
-  it('clears the composer immediately while a direct takeover send prompt is still pending', async () => {
+  it('keeps the composer text visible while a direct takeover send prompt is still pending', async () => {
     showDirectSessionTakeoverDialogSpy.mockImplementationOnce(
       () => new Promise<{ action: 'direct' | 'persisted' | null; forceStop: boolean }>(() => {}),
     );
@@ -1240,7 +2142,7 @@ describe('SessionView (direct sessions)', () => {
     });
 
     agentInput = findAgentInput(screen);
-    expect(agentInput.props.value).toBe('');
+    expect(agentInput.props.value).toBe('clear me immediately');
     expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
 
   });
@@ -1273,7 +2175,13 @@ describe('SessionView (direct sessions)', () => {
       sessionId: 's1',
       forceStop: true,
     }, { serverId: 'server-1' });
-    expect(syncSubmitMessageSpy).toHaveBeenCalledWith('s1', 'persist this', undefined, undefined);
+    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
+      's1',
+      'persist this',
+      undefined,
+      undefined,
+      expectDirectSendProjectionOptions(),
+    );
 
   });
 

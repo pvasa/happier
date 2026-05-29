@@ -10,7 +10,8 @@ import { buildResumeSessionBaseOptionsFromSession } from '@/sync/domains/session
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
-import { readMachineTargetForSession } from './sessionMachineTarget';
+import { t } from '@/text';
+import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { resumeSession } from './sessions';
 
 export type SessionGoalMutationRequest = Readonly<{
@@ -70,7 +71,7 @@ function normalizeGoalObjective(value: unknown): string | null {
 
 function readGoalOperationResult(response: unknown): SessionGoalOperationResult {
     if (!response || typeof response !== 'object') {
-        return { ok: false, error: 'Unsupported response from session RPC' };
+        return { ok: false, error: t('session.workState.goal.errorUnsupportedResponse') };
     }
     const raw = response as Record<string, unknown>;
     if (raw.ok === true) return { ok: true };
@@ -84,7 +85,7 @@ function readGoalOperationResult(response: unknown): SessionGoalOperationResult 
     if (SessionWorkStateGetResponseV1Schema.safeParse(raw).success) {
         return { ok: true };
     }
-    return { ok: false, error: 'Unsupported response from session RPC' };
+    return { ok: false, error: t('session.workState.goal.errorUnsupportedResponse') };
 }
 
 async function runSessionGoalRpc(
@@ -104,7 +105,7 @@ async function runSessionGoalRpc(
     } catch (error) {
         return {
             ok: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
+            error: error instanceof Error ? error.message : t('session.workState.goal.errorUnknown'),
             errorCode: readRpcErrorCode(error),
         };
     }
@@ -121,7 +122,7 @@ async function runMachineGoalRpc(
     payload: Record<string, unknown>,
     opts?: Readonly<{ serverId?: string | null }>,
 ): Promise<SessionGoalOperationResult> {
-    const target = readMachineTargetForSession(sessionId);
+    const target = readMachineControlTargetForSession(sessionId);
     if (!target) {
         return {
             ok: false,
@@ -141,7 +142,7 @@ async function runMachineGoalRpc(
     } catch (error) {
         return {
             ok: false,
-            error: error instanceof Error ? error.message : 'Unknown error',
+            error: error instanceof Error ? error.message : t('session.workState.goal.errorUnknown'),
             errorCode: readRpcErrorCode(error),
         };
     }
@@ -170,7 +171,7 @@ async function resumeInactiveSessionWithInitialGoal(
         resumeCapabilityOptions,
     });
     if (!base) {
-        return { ok: false, error: 'Session cannot be resumed for native goal update' };
+        return { ok: false, error: t('session.workState.goal.errorCannotResume') };
     }
 
     const agentId = resolveAgentIdFromSessionMetadata(session.metadata);

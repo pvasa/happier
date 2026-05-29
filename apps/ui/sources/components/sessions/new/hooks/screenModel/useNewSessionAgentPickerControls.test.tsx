@@ -90,6 +90,24 @@ describe('useNewSessionAgentPickerControls', () => {
         vi.clearAllMocks();
     });
 
+    it('keeps hot-path picker outputs stable when semantic inputs are unchanged', async () => {
+        const initialParams = buildAgentPickerHookParams();
+        const hook = await renderHook((props: Parameters<typeof useNewSessionAgentPickerControls>[0]) => (
+            useNewSessionAgentPickerControls(props)
+        ), { initialProps: initialParams });
+
+        const first = hook.getCurrent();
+
+        await hook.rerender({ ...initialParams });
+
+        const second = hook.getCurrent();
+        expect(second.agentPickerOptions).toBe(first.agentPickerOptions);
+        expect(second.handleAgentPickerSelect).toBe(first.handleAgentPickerSelect);
+        expect(second.handleAgentClick).toBe(first.handleAgentClick);
+
+        await hook.unmount();
+    });
+
     it('keeps all backend options visible, suppresses redundant compatible subtitles, and disables entries that are incompatible with the selected profile', async () => {
         const setBackendTarget = vi.fn();
 
@@ -154,6 +172,75 @@ describe('useNewSessionAgentPickerControls', () => {
             { id: 'agent:claude', disabled: false, muted: false, subtitle: null },
             { id: 'agent:codex', disabled: true, muted: true, subtitle: 'newSession.aiBackendNotCompatibleWithSelectedProfile' },
         ]);
+    });
+
+    it('orders favorite engines first and exposes row toggle actions without selecting the engine', async () => {
+        const setFavoriteBackendTargetKeys = vi.fn();
+        const setBackendTarget = vi.fn();
+        const hook = await renderHook(() => useNewSessionAgentPickerControls(buildAgentPickerHookParams({
+            selectedBackendEntry: {
+                target: { kind: 'builtInAgent', agentId: 'claude' },
+                targetKey: 'agent:claude',
+                title: 'Claude',
+                subtitle: null,
+                providerAgentId: 'claude',
+                builtInAgentId: 'claude',
+                iconAgentId: 'claude',
+            } as any,
+            selectedBackendTargetKey: 'agent:claude',
+            setBackendTarget,
+            favoriteBackendTargetKeys: ['agent:codex'],
+            setFavoriteBackendTargetKeys,
+        })));
+
+        expect(hook.getCurrent().agentPickerOptions?.map((option) => option.id)).toEqual([
+            'agent:codex',
+            'agent:claude',
+        ]);
+
+        const claudeOption = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'agent:claude');
+        const claudeAction = (claudeOption as { railAction?: { selected: boolean; onPress: () => void } } | undefined)?.railAction;
+        expect(claudeAction?.selected).toBe(false);
+
+        claudeAction?.onPress();
+
+        expect(setFavoriteBackendTargetKeys).toHaveBeenCalledWith(['agent:codex', 'agent:claude']);
+        expect(setBackendTarget).not.toHaveBeenCalled();
+
+        const codexOption = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'agent:codex');
+        const codexAction = (codexOption as { railAction?: { selected: boolean; onPress: () => void } } | undefined)?.railAction;
+        expect(codexAction?.selected).toBe(true);
+
+        codexAction?.onPress();
+
+        expect(setFavoriteBackendTargetKeys).toHaveBeenLastCalledWith([]);
+    });
+
+    it('remembers the favorites rail as the focused picker view independently from the selected engine', async () => {
+        const onRememberAgentPickerView = vi.fn();
+        const hook = await renderHook(() => useNewSessionAgentPickerControls(buildAgentPickerHookParams({
+            favoriteModelSelections: [
+                { backendTargetKey: 'agent:codex', modelId: 'gpt-5.4' },
+            ],
+            setFavoriteModelSelections: vi.fn(),
+            rememberedAgentPickerView: { kind: 'favoriteModels' },
+            onRememberAgentPickerView,
+        })));
+
+        expect(hook.getCurrent().agentPickerSelectedOptionId).toBe('favorite-models');
+
+        const favoriteOption = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'favorite-models');
+        favoriteOption?.onSelectImmediate?.();
+
+        expect(onRememberAgentPickerView).toHaveBeenCalledWith({ kind: 'favoriteModels' });
+
+        const codexOption = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'agent:codex');
+        codexOption?.onSelectImmediate?.();
+
+        expect(onRememberAgentPickerView).toHaveBeenLastCalledWith({
+            kind: 'backend',
+            backendTargetKey: 'agent:codex',
+        });
     });
 
     it('adds a favorites rail option when favorite model selections exist', async () => {
@@ -239,14 +326,22 @@ describe('useNewSessionAgentPickerControls', () => {
         ), { initialProps: initialParams });
 
         const favoriteDetail = hook.getCurrent().agentPickerOptions?.[0]?.renderDetailContent?.() as React.ReactElement<{
-            onSelectFavoriteModel?: (entry: any, modelId: string) => void;
+            onSelectFavoriteModel?: (entry: any, modelId: string, configOverrides?: Readonly<Record<string, string>>) => void;
         }> | undefined;
         const codexEntry = initialParams.resolvedBackendEntries[1]!;
 
-        favoriteDetail?.props?.onSelectFavoriteModel?.(codexEntry, 'gpt-5.5');
+        favoriteDetail?.props?.onSelectFavoriteModel?.(codexEntry, 'gpt-5.5', { reasoning_effort: 'high' });
 
         expect(setBackendTarget).toHaveBeenCalledWith({ kind: 'builtInAgent', agentId: 'codex' });
         expect(setModelMode).toHaveBeenCalledWith('gpt-5.5');
+        expect(initialParams.setSessionConfigOptionOverrides).toHaveBeenCalledWith(expect.objectContaining({
+            overrides: {
+                reasoning_effort: {
+                    updatedAt: expect.any(Number),
+                    value: 'high',
+                },
+            },
+        }));
 
         await hook.rerender({
             ...initialParams,
@@ -259,6 +354,92 @@ describe('useNewSessionAgentPickerControls', () => {
             ?.renderDetailContent?.() as React.ReactElement<{ selectedModelId?: string }> | undefined;
 
         expect(codexDetail?.props.selectedModelId).toBe('gpt-5.5');
+    });
+
+    it('updates favorites detail selection props when a favorite model is selected while the picker stays open', async () => {
+        const favoriteGpt55 = {
+            backendTargetKey: 'agent:codex',
+            providerAgentId: 'codex',
+            builtInAgentId: 'codex',
+            modelId: 'gpt-5.5',
+            modelLabel: 'GPT 5.5',
+        };
+        const initialParams = buildAgentPickerHookParams({
+            favoriteModelSelections: [favoriteGpt55],
+            setFavoriteModelSelections: vi.fn(),
+        });
+        const hook = await renderHook((props: Parameters<typeof useNewSessionAgentPickerControls>[0]) => (
+            useNewSessionAgentPickerControls(props)
+        ), { initialProps: initialParams });
+
+        const firstOptions = hook.getCurrent().agentPickerOptions;
+        const codexEntry = initialParams.resolvedBackendEntries[1]!;
+
+        await hook.rerender({
+            ...initialParams,
+            selectedBackendEntry: codexEntry,
+            selectedBackendTargetKey: 'agent:codex',
+            modelMode: 'gpt-5.5',
+        });
+
+        expect(hook.getCurrent().agentPickerOptions).toBe(firstOptions);
+
+        const favoriteDetail = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'favorite-models')
+            ?.renderDetailContent?.() as React.ReactElement<{
+                selectedBackendTargetKey?: string;
+                selectedModelId?: string;
+            }> | undefined;
+
+        expect(favoriteDetail?.props.selectedBackendTargetKey).toBe('agent:codex');
+        expect(favoriteDetail?.props.selectedModelId).toBe('gpt-5.5');
+    });
+
+    it('updates engine detail favorite toggles when favorite model settings change while the picker stays open', async () => {
+        const setFavoriteModelSelections = vi.fn();
+        const favoriteGpt54 = {
+            backendTargetKey: 'agent:codex',
+            providerAgentId: 'codex',
+            builtInAgentId: 'codex',
+            modelId: 'gpt-5.4',
+            modelLabel: 'GPT 5.4',
+        };
+        const favoriteGpt55 = {
+            backendTargetKey: 'agent:codex',
+            providerAgentId: 'codex',
+            builtInAgentId: 'codex',
+            modelId: 'gpt-5.5',
+            modelLabel: 'GPT 5.5',
+        };
+        const initialParams = buildAgentPickerHookParams({
+            favoriteModelSelections: [favoriteGpt54],
+            setFavoriteModelSelections,
+        });
+        const hook = await renderHook((props: Parameters<typeof useNewSessionAgentPickerControls>[0]) => (
+            useNewSessionAgentPickerControls(props)
+        ), { initialProps: initialParams });
+
+        await hook.rerender({
+            ...initialParams,
+            favoriteModelSelections: [favoriteGpt54, favoriteGpt55],
+        });
+
+        const codexDetail = hook.getCurrent().agentPickerOptions?.find((option) => option.id === 'agent:codex')
+            ?.renderDetailContent?.() as React.ReactElement<{
+                favoriteModelSelections?: readonly typeof favoriteGpt54[];
+                onToggleFavoriteModel?: (model: { modelId: string; modelLabel: string }) => void;
+            }> | undefined;
+
+        expect(codexDetail?.props.favoriteModelSelections?.map((favorite) => favorite.modelId)).toEqual([
+            'gpt-5.4',
+            'gpt-5.5',
+        ]);
+
+        codexDetail?.props.onToggleFavoriteModel?.({
+            modelId: 'gpt-5.5',
+            modelLabel: 'GPT 5.5',
+        });
+
+        expect(setFavoriteModelSelections).toHaveBeenCalledWith([favoriteGpt54]);
     });
 
     it('does not expose favorite model selections for backends incompatible with the selected profile', async () => {

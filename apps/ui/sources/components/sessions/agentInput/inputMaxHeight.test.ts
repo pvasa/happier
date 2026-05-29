@@ -95,6 +95,13 @@ describe('inputMaxHeight', () => {
         })).toBe(120);
     });
 
+    it('uses the viewport cap before existing-session host panel height is measured', () => {
+        expect(computeExistingSessionComposerInputMaxHeight({
+            availablePanelHeight: null,
+            viewportHeight: 576,
+        })).toBe(144);
+    });
+
     it('allows existing-session text input viewports to expand on demand', () => {
         const params = {
             availablePanelHeight: 900,
@@ -133,9 +140,30 @@ describe('inputMaxHeight', () => {
             panelMaxHeight: 480,
             panelHeight: 220,
             inputContainerHeight: 60,
-            inputViewportHeight: 52,
             fallbackMaxHeight: 200,
         })).toBe(200);
+    });
+
+    it('derives measured input caps without depending on the live input viewport height', () => {
+        expect(computeMeasuredPanelInputMaxHeight({
+            panelMaxHeight: 480,
+            panelHeight: 220,
+            inputContainerHeight: 60,
+            fallbackMaxHeight: 360,
+            fallbackMaxHeightMode: 'seed',
+        })).toBe(320);
+    });
+
+    it('uses the explicit fixed chrome floor when a capped panel hides attachment and footer chrome', () => {
+        expect(computeMeasuredPanelInputMaxHeight({
+            panelMaxHeight: 300,
+            panelHeight: 300,
+            inputContainerHeight: 260,
+            inputContainerChromeHeight: 8,
+            minimumFixedChromeHeight: 164,
+            fallbackMaxHeight: 360,
+            fallbackMaxHeightMode: 'seed',
+        })).toBe(128);
     });
 
     it('falls back to the heuristic max height when panel layout metrics are incomplete', () => {
@@ -143,7 +171,6 @@ describe('inputMaxHeight', () => {
             panelMaxHeight: 480,
             panelHeight: null,
             inputContainerHeight: 60,
-            inputViewportHeight: 52,
             fallbackMaxHeight: 200,
         })).toBe(200);
     });
@@ -153,7 +180,6 @@ describe('inputMaxHeight', () => {
             panelMaxHeight: 80,
             panelHeight: 220,
             inputContainerHeight: 60,
-            inputViewportHeight: 52,
             fallbackMaxHeight: 200,
         })).toBeLessThanOrEqual(80);
     });

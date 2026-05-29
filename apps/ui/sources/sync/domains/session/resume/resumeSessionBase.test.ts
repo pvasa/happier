@@ -247,6 +247,42 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
         });
     });
 
+    it('carries persisted connected-service bindings into resume options', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
+        const connectedServices = {
+            v: 1 as const,
+            bindingsByServiceId: {
+                anthropic: {
+                    source: 'connected' as const,
+                    selection: 'group' as const,
+                    groupId: 'claude-group',
+                    profileId: 'profile-2',
+                },
+            },
+        };
+
+        expect(buildResumeSessionBaseOptionsFromSession({
+            sessionId: 's1',
+            session: {
+                metadata: {
+                    machineId: 'm1',
+                    path: '/tmp',
+                    flavor: 'claude',
+                    claudeSessionId: 'c1',
+                    connectedServices,
+                },
+            } as any,
+            resumeCapabilityOptions: { accountSettings: {} },
+        })).toEqual({
+            sessionId: 's1',
+            machineId: 'm1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'c1',
+            connectedServices,
+        });
+    });
+
     it('resolves configured ACP sessions to configured backend targets', () => {
         setCanonicalSessionTarget('m1', '/tmp');
         expect(buildResumeSessionBaseOptionsFromSession({

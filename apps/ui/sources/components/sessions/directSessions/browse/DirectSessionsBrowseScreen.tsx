@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import type { ScrollView } from 'react-native';
 import type { DirectSessionsProviderId, DirectSessionsSource } from '@happier-dev/protocol';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -10,6 +10,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { PopoverScope } from '@/components/ui/popover';
 import { Modal } from '@/modal';
 import { useAllMachines } from '@/sync/domains/state/storage';
 import { machineDirectSessionLinkEnsure } from '@/sync/ops/machineDirectSessions';
@@ -30,6 +31,8 @@ import { useDirectBrowseCandidates, type DirectBrowseCandidate } from './useDire
 
 type DirectBrowseProviderId = DirectSessionsProviderId;
 type AppTheme = Theme;
+
+const DIRECT_BROWSE_SEARCH_DEBOUNCE_MS = 250;
 
 export type DirectSessionsBrowseScopeLock = Readonly<{
     machineId: string;
@@ -116,9 +119,12 @@ export const DirectSessionsBrowseScreen = React.memo((props: Readonly<{
         lockScope ? 'locked' : sourceOptions[0]?.key ?? null
     ));
     const [linkingSessionId, setLinkingSessionId] = React.useState<string | null>(null);
+    const [searchQuery, setSearchQuery] = React.useState('');
+    const [candidateSearchTerm, setCandidateSearchTerm] = React.useState('');
     const [machineMenuOpen, setMachineMenuOpen] = React.useState(false);
     const [providerMenuOpen, setProviderMenuOpen] = React.useState(false);
     const [sourceMenuOpen, setSourceMenuOpen] = React.useState(false);
+    const popoverBoundaryRef = React.useRef<ScrollView>(null);
     const effectiveSelectedMachineId = React.useMemo(() => {
         if (lockScope) return lockScope.machineId;
         return getPreferredMachineId(machines, selectedMachineId);
@@ -138,6 +144,22 @@ export const DirectSessionsBrowseScreen = React.memo((props: Readonly<{
             setSelectedProviderId(preferredProviderId);
         }
     }, [lockScope, providerIds, selectedProviderId]);
+
+    React.useEffect(() => {
+        const normalizedSearchQuery = searchQuery.trim();
+        if (!normalizedSearchQuery) {
+            setCandidateSearchTerm('');
+            return;
+        }
+
+        const timeout = setTimeout(() => {
+            setCandidateSearchTerm(normalizedSearchQuery);
+        }, DIRECT_BROWSE_SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            clearTimeout(timeout);
+        };
+    }, [searchQuery]);
 
     React.useEffect(() => {
         if (lockScope) {
@@ -192,6 +214,7 @@ export const DirectSessionsBrowseScreen = React.memo((props: Readonly<{
         nextCursor,
         loading,
         loadingMore,
+        searchAugmenting,
         error,
         loadMore,
     } = useDirectBrowseCandidates({
@@ -199,6 +222,7 @@ export const DirectSessionsBrowseScreen = React.memo((props: Readonly<{
         serverId: lockScope?.serverId ?? null,
         providerId: selectedProviderId,
         source: selectedSource,
+        searchTerm: candidateSearchTerm,
     });
 
     const handleOpenCandidate = React.useCallback(async (candidate: DirectBrowseCandidate) => {
@@ -245,107 +269,115 @@ export const DirectSessionsBrowseScreen = React.memo((props: Readonly<{
     }, [effectiveSelectedMachineId, interaction, lockScope?.serverId, props, router, selectedProviderId, selectedSource]);
 
     return (
-        <ItemList style={styles.list} testID="direct-sessions-browse-modal">
-            {!locked ? (
-                <ItemGroup
-                    style={styles.filtersGroup}
-                    title={t('directSessions.browseFiltersTitle')}
-                    containerStyle={styles.filtersGroupContainer}
-                >
-                    {machines.length === 0 ? (
-                        <Item
-                            title={t('directSessions.browseNoMachines')}
-                            mode="info"
-                        />
-                    ) : (
-                        <>
-                            <DropdownMenu
-                            open={machineMenuOpen}
-                            onOpenChange={setMachineMenuOpen}
-                            items={machineMenuItems}
-                            selectedId={effectiveSelectedMachineId}
-                            onSelect={(itemId) => {
-                                setSelectedMachineId(itemId);
-                                setMachineMenuOpen(false);
-                            }}
-                            showCategoryTitles={false}
-                            variant="selectable"
-                            rowKind="item"
-                            matchTriggerWidth={true}
-                            connectToTrigger={true}
-                            itemTrigger={{
-                                title: t('directSessions.browseMachines'),
-                                icon: <Ionicons name="desktop-outline" size={18} color={theme.colors.text.secondary} />,
-                                subtitleFormatter: formatMachineTriggerSubtitle,
-                                showSelectedDetail: false,
-                                itemProps: {
-                                    testID: 'direct-session-machine-picker-trigger',
-                                },
-                            }}
-                        />
-                            <DropdownMenu
-                            open={providerMenuOpen}
-                            onOpenChange={setProviderMenuOpen}
-                            items={providerMenuItems}
-                            selectedId={selectedProviderId}
-                            onSelect={(itemId) => {
-                                setSelectedProviderId(itemId as DirectBrowseProviderId);
-                                setProviderMenuOpen(false);
-                            }}
-                            showCategoryTitles={false}
-                            variant="selectable"
-                            rowKind="item"
-                            matchTriggerWidth={true}
-                            connectToTrigger={true}
-                            itemTrigger={{
-                                title: t('directSessions.browseProviders'),
-                                icon: <Ionicons name="hardware-chip-outline" size={18} color={theme.colors.text.secondary} />,
-                                subtitleFormatter: formatSelectedTitleSubtitle,
-                                showSelectedDetail: false,
-                                itemProps: {
-                                    testID: 'direct-session-provider-picker-trigger',
-                                },
-                            }}
-                        />
-                            <DropdownMenu
-                            open={sourceMenuOpen}
-                            onOpenChange={setSourceMenuOpen}
-                            items={sourceMenuItems}
-                            selectedId={selectedSourceKey}
-                            onSelect={(itemId) => {
-                                setSelectedSourceKey(itemId);
-                                setSourceMenuOpen(false);
-                            }}
-                            showCategoryTitles={false}
-                            variant="selectable"
-                            rowKind="item"
-                            matchTriggerWidth={true}
-                            connectToTrigger={true}
-                            itemTrigger={{
-                                title: t('directSessions.browseSources'),
-                                icon: <Ionicons name="folder-open-outline" size={18} color={theme.colors.text.secondary} />,
-                                subtitleFormatter: formatSelectedTitleSubtitle,
-                                showSelectedDetail: false,
-                                itemProps: {
-                                    testID: 'direct-session-source-picker-trigger',
-                                },
-                            }}
-                        />
-                        </>
-                    )}
-                </ItemGroup>
-            ) : null}
+        <PopoverScope boundaryRef={popoverBoundaryRef}>
+            <ItemList ref={popoverBoundaryRef} style={styles.list} testID="direct-sessions-browse-modal">
+                {!locked ? (
+                    <ItemGroup
+                        style={styles.filtersGroup}
+                        title={t('directSessions.browseFiltersTitle')}
+                        containerStyle={styles.filtersGroupContainer}
+                    >
+                        {machines.length === 0 ? (
+                            <Item
+                                title={t('directSessions.browseNoMachines')}
+                                mode="info"
+                            />
+                        ) : (
+                            <>
+                                <DropdownMenu
+                                    open={machineMenuOpen}
+                                    onOpenChange={setMachineMenuOpen}
+                                    items={machineMenuItems}
+                                    selectedId={effectiveSelectedMachineId}
+                                    onSelect={(itemId) => {
+                                        setSelectedMachineId(itemId);
+                                        setMachineMenuOpen(false);
+                                    }}
+                                    showCategoryTitles={false}
+                                    variant="selectable"
+                                    rowKind="item"
+                                    matchTriggerWidth={true}
+                                    connectToTrigger={true}
+                                    popoverBoundaryRef={popoverBoundaryRef}
+                                    itemTrigger={{
+                                        title: t('directSessions.browseMachines'),
+                                        icon: <Ionicons name="desktop-outline" size={18} color={theme.colors.text.secondary} />,
+                                        subtitleFormatter: formatMachineTriggerSubtitle,
+                                        showSelectedDetail: false,
+                                        itemProps: {
+                                            testID: 'direct-session-machine-picker-trigger',
+                                        },
+                                    }}
+                                />
+                                <DropdownMenu
+                                    open={providerMenuOpen}
+                                    onOpenChange={setProviderMenuOpen}
+                                    items={providerMenuItems}
+                                    selectedId={selectedProviderId}
+                                    onSelect={(itemId) => {
+                                        setSelectedProviderId(itemId as DirectBrowseProviderId);
+                                        setProviderMenuOpen(false);
+                                    }}
+                                    showCategoryTitles={false}
+                                    variant="selectable"
+                                    rowKind="item"
+                                    matchTriggerWidth={true}
+                                    connectToTrigger={true}
+                                    popoverBoundaryRef={popoverBoundaryRef}
+                                    itemTrigger={{
+                                        title: t('directSessions.browseProviders'),
+                                        icon: <Ionicons name="hardware-chip-outline" size={18} color={theme.colors.text.secondary} />,
+                                        subtitleFormatter: formatSelectedTitleSubtitle,
+                                        showSelectedDetail: false,
+                                        itemProps: {
+                                            testID: 'direct-session-provider-picker-trigger',
+                                        },
+                                    }}
+                                />
+                                <DropdownMenu
+                                    open={sourceMenuOpen}
+                                    onOpenChange={setSourceMenuOpen}
+                                    items={sourceMenuItems}
+                                    selectedId={selectedSourceKey}
+                                    onSelect={(itemId) => {
+                                        setSelectedSourceKey(itemId);
+                                        setSourceMenuOpen(false);
+                                    }}
+                                    showCategoryTitles={false}
+                                    variant="selectable"
+                                    rowKind="item"
+                                    matchTriggerWidth={true}
+                                    connectToTrigger={true}
+                                    popoverBoundaryRef={popoverBoundaryRef}
+                                    itemTrigger={{
+                                        title: t('directSessions.browseSources'),
+                                        icon: <Ionicons name="folder-open-outline" size={18} color={theme.colors.text.secondary} />,
+                                        subtitleFormatter: formatSelectedTitleSubtitle,
+                                        showSelectedDetail: false,
+                                        itemProps: {
+                                            testID: 'direct-session-source-picker-trigger',
+                                        },
+                                    }}
+                                />
+                            </>
+                        )}
+                    </ItemGroup>
+                ) : null}
 
-            <DirectBrowseCandidatesList
-                candidates={candidates}
-                loading={loading}
-                error={error}
-                nextCursor={nextCursor}
-                loadingMore={loadingMore}
-                linkingSessionId={linkingSessionId}
-                onSelectCandidate={(candidate) => { void handleOpenCandidate(candidate); }}
-                onLoadMore={() => { void loadMore(); }}
-            />
-        </ItemList>
+                <DirectBrowseCandidatesList
+                    candidates={candidates}
+                    loading={loading}
+                    error={error}
+                    nextCursor={nextCursor}
+                    loadingMore={loadingMore}
+                    searchAugmenting={searchAugmenting}
+                    linkingSessionId={linkingSessionId}
+                    searchQuery={searchQuery}
+                    onSearchQueryChange={setSearchQuery}
+                    onSelectCandidate={(candidate) => { void handleOpenCandidate(candidate); }}
+                    onLoadMore={() => { void loadMore(); }}
+                />
+            </ItemList>
+        </PopoverScope>
     );
 });

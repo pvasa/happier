@@ -21,11 +21,13 @@ export function SessionGoalControlContent(props: Readonly<{
     onSave: (budgetDraft: GoalSaveBudgetDraft) => void;
     onPause: () => void;
     onResume: () => void;
+    onComplete: () => void;
     onClear: () => void;
     busy?: boolean;
 }>) {
     const { theme } = useUnistyles();
     const isPaused = props.goal?.status === 'paused';
+    const canComplete = Boolean(props.goal && props.goal.status !== 'complete' && props.goal.statusReason !== 'budgetLimited');
     const [editing, setEditing] = React.useState(!props.goal);
     const [budgetEnabled, setBudgetEnabled] = React.useState(typeof props.goal?.tokenBudget === 'number');
     const [draftBudget, setDraftBudget] = React.useState(
@@ -154,6 +156,19 @@ export function SessionGoalControlContent(props: Readonly<{
                                         </Text>
                                     </Pressable>
                                 ) : null}
+                                {canComplete ? (
+                                    <Pressable
+                                        testID="session-goal-complete-button"
+                                        accessibilityRole="button"
+                                        onPress={props.onComplete}
+                                        disabled={props.busy}
+                                        style={styles.headerActionButton}
+                                    >
+                                        <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
+                                            {t('session.workState.goal.statusComplete')}
+                                        </Text>
+                                    </Pressable>
+                                ) : null}
                                 <Pressable
                                     testID="session-goal-clear-button"
                                     accessibilityRole="button"
@@ -239,13 +254,15 @@ export function SessionGoalControlContent(props: Readonly<{
 const styles = StyleSheet.create(() => ({
     root: {
         gap: 12,
-        minWidth: 280,
+        minWidth: 0,
+        maxWidth: '100%',
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 12,
+        flexWrap: 'wrap',
     },
     heading: {
         flexDirection: 'row',
@@ -291,6 +308,7 @@ const styles = StyleSheet.create(() => ({
         alignItems: 'center',
         gap: 14,
         flexShrink: 0,
+        flexWrap: 'wrap',
     },
     headerActionButton: {
         minHeight: 34,

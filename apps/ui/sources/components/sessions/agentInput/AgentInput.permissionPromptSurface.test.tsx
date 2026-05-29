@@ -8,6 +8,9 @@ import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const permissionPromptSurfaceSetting = vi.hoisted(() => ({ value: 'composer' as any }));
+const layoutMockState = vi.hoisted(() => ({
+    platform: 'ios' as 'ios' | 'web',
+}));
 const transcriptMockState = vi.hoisted(() => ({
     emptyIds: [] as string[],
     emptyMessagesById: {} as Record<string, unknown>,
@@ -32,8 +35,10 @@ installAgentInputCommonModuleMocks({
             ActivityIndicator: (props: Record<string, unknown>) =>
                 React.createElement('ActivityIndicator', props, null),
             Platform: {
-                OS: 'ios',
-                select: (v: any) => v.ios,
+                get OS() {
+                    return layoutMockState.platform;
+                },
+                select: (v: any) => v?.[layoutMockState.platform] ?? v?.default ?? v?.ios,
             },
             useWindowDimensions: () => ({ width: 800, height: 600 }),
             Dimensions: {
@@ -166,10 +171,6 @@ vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
     useActiveSuggestions: () => [[], -1, () => {}, () => {}],
 }));
 
-vi.mock('./components/AgentInputAutocomplete', () => ({
-    AgentInputAutocomplete: () => null,
-}));
-
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
     FloatingOverlay: (props: any) => React.createElement(React.Fragment, null, props.children),
 }));
@@ -295,8 +296,32 @@ vi.mock('./attachActionBarMouseDragScroll', () => ({
     attachActionBarMouseDragScroll: () => () => {},
 }));
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (!style) return {};
+    if (Array.isArray(style)) {
+        return style.reduce<Record<string, unknown>>((merged, entry) => ({
+            ...merged,
+            ...flattenStyle(entry),
+        }), {});
+    }
+    if (typeof style === 'object') {
+        return style as Record<string, unknown>;
+    }
+    return {};
+}
+
+function hasAncestor(node: { parent?: unknown } | null | undefined, ancestor: unknown): boolean {
+    let current = node?.parent;
+    while (current) {
+        if (current === ancestor) return true;
+        current = (current as { parent?: unknown }).parent;
+    }
+    return false;
+}
+
 describe('AgentInput (permission prompt surface)', () => {
     beforeEach(() => {
+        layoutMockState.platform = 'ios';
         permissionPromptSurfaceSetting.value = 'composer';
     });
 
@@ -340,7 +365,38 @@ describe('AgentInput (permission prompt surface)', () => {
         act(() => tree.unmount());
     });
 
-    it('shows user action cards when surface is composer', async () => {
+    it('keeps composer permission chrome fixed above the web input scroll area', async () => {
+        layoutMockState.platform = 'web';
+        permissionPromptSurfaceSetting.value = 'composer';
+        const { AgentInput } = await import('./AgentInput');
+        let tree!: renderer.ReactTestRenderer;
+        tree = (await renderScreen(<AgentInput
+                    placeholder="x"
+                    value=""
+                    onChangeText={() => {}}
+                    onSend={() => {}}
+                    autocompletePrefixes={[]}
+                    autocompleteSuggestions={async () => []}
+                    sessionId="s1"
+                    permissionRequests={[{ id: 'p1', tool: 'Bash', arguments: { command: 'ls' }, createdAt: 1 } as any]}
+                    connectionStatus={null as any}
+                />)).tree;
+
+        const scrollViews = tree.root.findAll((node: any) => node.type === 'ScrollView');
+        const composerVariableScroll = scrollViews.find((node: any) => (
+            node.props.testID !== 'agentInput.permissionRequests.scroll'
+            && flattenStyle(node.props.style).marginHorizontal === -8
+        ));
+        expect(composerVariableScroll).toBeTruthy();
+        expect(flattenStyle(composerVariableScroll?.props.contentContainerStyle).paddingHorizontal).toBe(8);
+
+        const permissionChrome = tree.root.findByProps({ testID: 'agentInput.permissionRequests.chrome' });
+        expect(hasAncestor(permissionChrome, composerVariableScroll)).toBe(false);
+        expect(flattenStyle(permissionChrome.parent?.props.style).marginHorizontal).toBe(-8);
+        act(() => tree.unmount());
+    });
+
+    it('does not show user action cards when surface is composer', async () => {
         permissionPromptSurfaceSetting.value = 'composer';
         const { AgentInput } = await import('./AgentInput');
         let tree!: renderer.ReactTestRenderer;
@@ -356,7 +412,8 @@ describe('AgentInput (permission prompt surface)', () => {
                     connectionStatus={null as any}
                 />)).tree;
 
-        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(1);
+        expect(tree.findAllByType('UserActionPromptCard' as any)).toHaveLength(0);
+        expect(tree.root.findAllByProps({ testID: 'agentInput.permissionRequests.chrome' })).toHaveLength(0);
         act(() => tree.unmount());
     });
 

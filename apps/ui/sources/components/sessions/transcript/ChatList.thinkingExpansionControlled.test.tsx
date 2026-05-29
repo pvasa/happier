@@ -46,10 +46,15 @@ vi.mock('./MessageView', () => ({
     renderedMessageViewProps.push(props);
     return React.createElement('MessageView', props);
   },
+  MessageViewWithSessionCommon: (props: any) => {
+    renderedMessageViewProps.push(props);
+    return React.createElement('MessageViewWithSessionCommon', props);
+  },
 }));
 
 vi.mock('@/components/sessions/transcript/turns/TurnView', () => ({
   TurnView: () => React.createElement('TurnView'),
+  TurnViewWithSessionCommon: () => React.createElement('TurnViewWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/pending/PendingMessagesTranscriptBlock', () => ({

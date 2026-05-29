@@ -77,6 +77,34 @@ const repositoryTreeBrowserStyles = StyleSheet.create({
     },
 });
 
+function useStableFileOpenCallback(handler: (file: FileItem) => void) {
+    const handlerRef = React.useRef(handler);
+    React.useLayoutEffect(() => {
+        handlerRef.current = handler;
+    }, [handler]);
+
+    return React.useCallback((file: FileItem) => {
+        handlerRef.current(file);
+    }, []);
+}
+
+function useStablePathCallback(handler: (path: string) => void) {
+    const handlerRef = React.useRef(handler);
+    React.useLayoutEffect(() => {
+        handlerRef.current = handler;
+    }, [handler]);
+
+    return React.useCallback((path: string) => {
+        handlerRef.current(path);
+    }, []);
+}
+
+const RepositoryTreeMainContentHost = React.memo(function RepositoryTreeMainContentHost({
+    content,
+}: Readonly<{ content: React.ReactNode }>) {
+    return <>{content}</>;
+});
+
 export const SessionRepositoryTreeBrowserView = React.memo((props: SessionRepositoryTreeBrowserViewProps) => {
     const { theme } = useUnistyles();
     const { machineRpcTargetAvailable } = useSessionMachineReachability(props.sessionId);
@@ -106,6 +134,8 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
     });
     const webFileInputRef = React.useRef<HTMLInputElement | null>(null);
     const webFolderInputRef = React.useRef<HTMLInputElement | null>(null);
+    const handleRepositoryFileOpen = useStablePathCallback(props.onOpenFile);
+    const handleRepositoryFileOpenPinned = useStablePathCallback(props.onOpenFilePinned ?? props.onOpenFile);
     const setWebFolderInputRef = React.useCallback((node: HTMLInputElement | null) => {
         webFolderInputRef.current = node;
         applyWebDirectoryInputAttributes(node);
@@ -252,9 +282,9 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
             storage.getState().setSessionRepositoryTreeExpandedPaths(props.sessionId, nextExpanded);
             refresh();
 
-            (props.onOpenFilePinned ?? props.onOpenFile)(path);
+            handleRepositoryFileOpenPinned(path);
         })();
-    }, [expandedPaths, props.onOpenFile, props.onOpenFilePinned, props.sessionId, refresh]);
+    }, [expandedPaths, handleRepositoryFileOpenPinned, props.sessionId, refresh]);
 
     const createFolder = React.useCallback(() => {
         void (async () => {
@@ -581,80 +611,75 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
         theme.colors.text.secondary,
     ]);
 
-    const activeSearchResultsTheme = shouldShowSearchResults ? theme : null;
-    const dropZoneContent = React.useMemo(() => (
-        <>
-            <View style={repositoryTreeBrowserStyles.content}>
-                {showChangedOnly ? (
-                    <RepositoryTreeChangedFilesPane
-                        sessionId={props.sessionId}
-                        scmSnapshot={scmSnapshot}
-                        searchQuery={searchQuery}
+    const searchResultsTheme = React.useMemo(() => theme, [
+        theme.colors.border.default,
+        theme.colors.surface.inset,
+        theme.colors.text.link,
+        theme.colors.text.primary,
+        theme.colors.text.secondary,
+    ]);
+    const activeSearchResultsTheme = shouldShowSearchResults ? searchResultsTheme : null;
+    const handleSearchResultFilePress = useStableFileOpenCallback((file: FileItem) => {
+        props.onOpenFile(file.fullPath);
+    });
+    const handleSearchResultFilePressPinned = useStableFileOpenCallback((file: FileItem) => {
+        (props.onOpenFilePinned ?? props.onOpenFile)(file.fullPath);
+    });
+
+    const repositoryTreeMainContent = React.useMemo(() => (
+        <View style={repositoryTreeBrowserStyles.content}>
+            {showChangedOnly ? (
+                <RepositoryTreeChangedFilesPane
+                    sessionId={props.sessionId}
+                    scmSnapshot={scmSnapshot}
+                    searchQuery={searchQuery}
                         onSearchQueryChange={setSearchQuery}
                         onShowAllRepositoryFiles={() => setShowChangedOnly(false)}
-                        onOpenFile={props.onOpenFile}
-                        onOpenFilePinned={props.onOpenFilePinned}
-                    />
-                ) : shouldShowSearchResults ? (
-                    <SearchResultsList
-                        theme={activeSearchResultsTheme}
-                        isSearching={isSearching}
-                        searchQuery={searchQuery}
-                        searchResults={searchResults}
-                        onFilePress={(file) => props.onOpenFile(file.fullPath)}
-                        onFilePressPinned={(file) => (props.onOpenFilePinned ?? props.onOpenFile)(file.fullPath)}
-                        onLayout={scrollFades.onViewportLayout}
-                        onContentSizeChange={scrollFades.onContentSizeChange}
-                        onScroll={scrollFades.onScroll}
-                        scrollEventThrottle={16}
-                    />
-                ) : (
-                    <RepositoryTreeList
-                        theme={repositoryTreeTheme}
-                        sessionId={props.sessionId}
-                        reloadToken={treeReloadNonce}
-                        detailsMode={detailsMode}
-                        writeActionsEnabled={allowCreateActions}
-                        onRequestRefresh={refresh}
-                        onRequestDownload={handleRequestDownload}
-                        onWebDropTargetChange={webDropState.onDropTargetChange}
-                        webDropHoverPath={webDropState.dropHoverPath}
-                        expandedPaths={expandedPaths}
-                        onExpandedPathsChange={handleExpandedPathsChange}
-                        onOpenFile={props.onOpenFile}
-                        onOpenFilePinned={props.onOpenFilePinned}
-                        scmSnapshot={scmSnapshot}
-                        onLayout={scrollFades.onViewportLayout}
-                        onContentSizeChange={scrollFades.onContentSizeChange}
-                        onScroll={scrollFades.onScroll}
-                        scrollEventThrottle={16}
-                        showInlineLoadingHeader={false}
-                        onRootLoadingChange={setTreeRootLoading}
-                    />
-                )}
-                <RepositoryTreeDropOverlay
-                    visible={webDropState.fileDragActive}
-                    destinationLabel={webDropState.dropDestinationDir || t('files.projectRoot')}
+                        onOpenFile={handleRepositoryFileOpen}
+                        onOpenFilePinned={handleRepositoryFileOpenPinned}
                 />
-                <ScrollEdgeFades
-                    color={theme.colors.surface.base}
-                    size={18}
-                    edges={scrollFades.visibility}
+            ) : shouldShowSearchResults ? (
+                <SearchResultsList
+                    theme={activeSearchResultsTheme}
+                    isSearching={isSearching}
+                    searchQuery={searchQuery}
+                    searchResults={searchResults}
+                    onFilePress={handleSearchResultFilePress}
+                    onFilePressPinned={handleSearchResultFilePressPinned}
+                    onLayout={scrollFades.onViewportLayout}
+                    onContentSizeChange={scrollFades.onContentSizeChange}
+                    onScroll={scrollFades.onScroll}
+                    scrollEventThrottle={16}
                 />
-                <ScrollEdgeIndicators
-                    edges={scrollFades.visibility}
-                    color={theme.colors.text.secondary}
-                    size={14}
-                    opacity={0.35}
+            ) : (
+                <RepositoryTreeList
+                    theme={repositoryTreeTheme}
+                    sessionId={props.sessionId}
+                    reloadToken={treeReloadNonce}
+                    detailsMode={detailsMode}
+                    writeActionsEnabled={allowCreateActions}
+                    onRequestRefresh={refresh}
+                    onRequestDownload={handleRequestDownload}
+                    onWebDropTargetChange={webDropState.onDropTargetChange}
+                    webDropHoverPath={webDropState.dropHoverPath}
+                    expandedPaths={expandedPaths}
+                    onExpandedPathsChange={handleExpandedPathsChange}
+                    onOpenFile={handleRepositoryFileOpen}
+                    onOpenFilePinned={handleRepositoryFileOpenPinned}
+                    scmSnapshot={scmSnapshot}
+                    onLayout={scrollFades.onViewportLayout}
+                    onContentSizeChange={scrollFades.onContentSizeChange}
+                    onScroll={scrollFades.onScroll}
+                    scrollEventThrottle={16}
+                    showInlineLoadingHeader={false}
+                    onRootLoadingChange={setTreeRootLoading}
                 />
-            </View>
-            <RepositoryTreeTransferStatusBar
-                uploadState={transfers.uploadState}
-                downloadState={transfers.downloadState}
-                onCancelUploads={transfers.cancelUploads}
-                onCancelDownload={transfers.cancelDownload}
+            )}
+            <RepositoryTreeDropOverlay
+                visible={webDropState.fileDragActive}
+                destinationLabel={webDropState.dropDestinationDir || t('files.projectRoot')}
             />
-        </>
+        </View>
     ), [
         activeSearchResultsTheme,
         allowCreateActions,
@@ -662,9 +687,11 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
         expandedPaths,
         handleExpandedPathsChange,
         handleRequestDownload,
+        handleRepositoryFileOpen,
+        handleRepositoryFileOpenPinned,
+        handleSearchResultFilePress,
+        handleSearchResultFilePressPinned,
         isSearching,
-        props.onOpenFile,
-        props.onOpenFilePinned,
         props.sessionId,
         refresh,
         repositoryTreeTheme,
@@ -672,7 +699,6 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
         scrollFades.onContentSizeChange,
         scrollFades.onScroll,
         scrollFades.onViewportLayout,
-        scrollFades.visibility,
         searchQuery,
         searchResults,
         setSearchQuery,
@@ -739,7 +765,24 @@ export const SessionRepositoryTreeBrowserView = React.memo((props: SessionReposi
                 </>
             ) : null}
             <WebDropTargetView testID="repository-tree-drop-zone" style={repositoryTreeBrowserStyles.dropZone} {...dropZoneHandlersWithRoot}>
-                {dropZoneContent}
+                <RepositoryTreeMainContentHost content={repositoryTreeMainContent} />
+                <ScrollEdgeFades
+                    color={theme.colors.surface.base}
+                    size={18}
+                    edges={scrollFades.visibility}
+                />
+                <ScrollEdgeIndicators
+                    edges={scrollFades.visibility}
+                    color={theme.colors.text.secondary}
+                    size={14}
+                    opacity={0.35}
+                />
+                <RepositoryTreeTransferStatusBar
+                    uploadState={transfers.uploadState}
+                    downloadState={transfers.downloadState}
+                    onCancelUploads={transfers.cancelUploads}
+                    onCancelDownload={transfers.cancelDownload}
+                />
             </WebDropTargetView>
         </View>
     );

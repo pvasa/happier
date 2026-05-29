@@ -20,6 +20,7 @@ vi.mock('./sessionMachineTarget', async () => {
     return {
         ...actual,
         readMachineTargetForSession: readMachineTargetForSessionMock,
+        readMachineControlTargetForSession: readMachineTargetForSessionMock,
     };
 });
 
@@ -162,6 +163,35 @@ describe('sessions ops server-scoped routing', () => {
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
             payload: expect.objectContaining({
                 connectedServices: expect.any(Object),
+            }),
+        }));
+    });
+
+    it('passes session runtime controls through resumeSession when requested', async () => {
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ type: 'success', sessionId: 'sess-1' });
+        const { resumeSession } = await sessionsModulePromise;
+        await resumeSession({
+            sessionId: 'session-1',
+            machineId: 'machine-1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            permissionMode: 'yolo',
+            permissionModeUpdatedAt: 200,
+            agentModeId: 'plan',
+            agentModeUpdatedAt: 250,
+            modelId: 'gpt-5',
+            modelUpdatedAt: 300,
+            serverId: 'server-b',
+        } as any);
+
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({
+                permissionMode: 'yolo',
+                permissionModeUpdatedAt: 200,
+                agentModeId: 'plan',
+                agentModeUpdatedAt: 250,
+                modelId: 'gpt-5',
+                modelUpdatedAt: 300,
             }),
         }));
     });

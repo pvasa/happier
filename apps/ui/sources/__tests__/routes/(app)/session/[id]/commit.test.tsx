@@ -2,6 +2,8 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import {
+    createStorageStoreMock,
+    createThemeFixture,
     flushHookEffects,
     renderScreen,
     standardCleanup,
@@ -13,6 +15,16 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 let scmWriteEnabled = true;
 let searchParams: { id: string; sha: string } = { id: 'session-1', sha: 'abc123' };
 let routerBack: ReturnType<typeof vi.fn> = vi.fn();
+let routeHydrationState: 'available' | 'loading' | 'missing' = 'available';
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => {
+    if (routeHydrationState === 'available') {
+        return { kind: 'available', sessionId, serverId: options?.serverId };
+    }
+    if (routeHydrationState === 'missing') {
+        return { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' };
+    }
+    return { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' };
+});
 const storageFixture = vi.hoisted(() => ({
     isStorageDataReady: true,
     sessionById: {
@@ -27,7 +39,6 @@ const storageFixture = vi.hoisted(() => ({
 const codeLinesSpy = vi.fn();
 const diffFilesListSpy = vi.fn();
 const syntaxHookSpy = vi.fn();
-const loadingIndicatorSpy = vi.fn();
 
 installSessionRouteCommonModuleMocks({
     reactNative: async () => {
@@ -35,13 +46,6 @@ installSessionRouteCommonModuleMocks({
         return createReactNativeWebMock({
             ScrollView: ({ children }: any) => React.createElement('ScrollView', null, children),
             Pressable: ({ children, ...props }: any) => React.createElement('Pressable', props, children),
-            ActivityIndicator: (props: any) => {
-                loadingIndicatorSpy(props);
-                return React.createElement('ActivityIndicator', {
-                    ...props,
-                    testID: 'scm-commit-loading-indicator',
-                });
-            },
             Platform: { OS: 'web', select: (value: any) => value?.default ?? null },
             useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
         });
@@ -64,18 +68,9 @@ installSessionRouteCommonModuleMocks({
     },
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+        const theme = createThemeFixture();
         return createUnistylesMock({
-            theme: {
-                colors: {
-                    surface: '#111',
-                    surfaceHigh: '#222',
-                    divider: '#333',
-                    text: '#fff',
-                    textSecondary: '#aaa',
-                    textDestructive: '#f33',
-                    warning: '#f80',
-                },
-            },
+            theme,
         });
     },
     text: async () => {
@@ -90,39 +85,34 @@ installSessionRouteCommonModuleMocks({
             confirmResult: true,
         }).module;
     },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage: {
-                    getState: () => ({
-                        sessions: {
-                            'session-1': {
-                                metadata: {
-                                    path: '/repo',
-                                    host: 'localhost',
-                                },
-                            } as any,
-                        },
-                    }),
-                } as any,
-                useSessions: () => (storageFixture.isStorageDataReady ? [] : null),
-                useSession: (id: string) => storageFixture.sessionById[id] ?? null,
-                useSessionProjectScmInFlightOperation: () => null,
-                // Narrow test fixture: this route only reads repo/branch/totals from the snapshot.
-                useSessionProjectScmSnapshot: (() => ({
-                    projectKey: 'session-1',
-                    fetchedAt: 0,
-                    entries: [],
-                    repo: { isRepo: true, rootPath: '/repo' },
-                    branch: { head: 'main', detached: false },
-                    hasConflicts: false,
-                    totals: { includedFiles: 0, pendingFiles: 0 },
-                })) as any,
-                useSetting: () => true,
-                useLocalSetting: (() => null) as any,
-            },
+    storageModule: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            storage: createStorageStoreMock({
+                sessions: storageFixture.sessionById as any,
+            }),
+            useSessions: () => (storageFixture.isStorageDataReady ? [] : null),
+            useSession: (id: string) => storageFixture.sessionById[id] ?? null,
+            useSessionRpcAvailabilityState: (id: string) => ({
+                sessionExists: Boolean(storageFixture.sessionById[id]),
+                sessionRpcAvailable: Boolean(storageFixture.sessionById[id]),
+            }),
+            useSessionWorkspacePath: (id: string) => (
+                storageFixture.sessionById[id]?.metadata?.path ?? null
+            ),
+            useSessionProjectScmInFlightOperation: () => null,
+            // Narrow test fixture: this route only reads repo/branch/totals from the snapshot.
+            useSessionProjectScmSnapshot: (() => ({
+                projectKey: 'session-1',
+                fetchedAt: 0,
+                entries: [],
+                repo: { isRepo: true, rootPath: '/repo' },
+                branch: { head: 'main', detached: false },
+                hasConflicts: false,
+                totals: { includedFiles: 0, pendingFiles: 0 },
+            })) as any,
+            useSetting: () => true,
+            useLocalSetting: (() => null) as any,
         });
     },
 });
@@ -202,7 +192,14 @@ vi.mock('@/scm/operations/userFacingErrors', () => ({
 }));
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => scmWriteEnabled,
+    useFeatureEnabled: (featureId: string) => (
+        featureId === 'scm.writeOperations' ? scmWriteEnabled : false
+    ),
+}));
+
+vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
 }));
 
 vi.mock('@/scm/operations/revertFeedback', () => ({
@@ -236,6 +233,7 @@ describe('CommitScreen', () => {
         scmWriteEnabled = true;
         searchParams = { id: 'session-1', sha: 'abc123' };
         routerBack = vi.fn();
+        routeHydrationState = 'available';
         storageFixture.isStorageDataReady = true;
         storageFixture.sessionById = {
             'session-1': {
@@ -247,8 +245,8 @@ describe('CommitScreen', () => {
         };
         codeLinesSpy.mockClear();
         diffFilesListSpy.mockClear();
+        hydrateSpy.mockClear();
         syntaxHookSpy.mockClear();
-        loadingIndicatorSpy.mockClear();
         vi.clearAllMocks();
     });
 
@@ -311,8 +309,7 @@ describe('CommitScreen', () => {
         const screen = await renderCommitScreen(Screen);
 
         // Still loading; no diff call yet.
-        expect(screen.findByTestId('scm-commit-loading-indicator')).toBeTruthy();
-        expect(loadingIndicatorSpy).toHaveBeenCalled();
+        expect(screen.findAll((node: any) => node.props?.accessibilityRole === 'progressbar').length).toBeGreaterThan(0);
         expect(vi.mocked(sessionScmDiffCommit)).not.toHaveBeenCalled();
 
         // Storage rehydrates.

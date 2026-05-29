@@ -17,6 +17,16 @@ const openDetailsTabSpy = vi.fn();
 const openRightSpy = vi.fn();
 const setRightTabSpy = vi.fn();
 let shouldRedirectToPanes = false;
+let routeHydrationState: 'available' | 'loading' | 'missing' = 'available';
+const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => {
+    if (routeHydrationState === 'available') {
+        return { kind: 'available', sessionId, serverId: options?.serverId };
+    }
+    if (routeHydrationState === 'missing') {
+        return { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' };
+    }
+    return { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' };
+});
 
 installSessionRouteCommonModuleMocks({
     reactNative: async () => {
@@ -129,6 +139,11 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => true,
 }));
 
+vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
+    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
+        hydrateSpy(sessionId, tag, options),
+}));
+
 vi.mock('@/utils/code/fileLanguage', () => ({
     getFileLanguageFromPath: () => 'plaintext',
 }));
@@ -155,6 +170,8 @@ vi.mock('@/encryption/base64', () => ({
 describe('FileScreen session path hydration', () => {
     afterEach(() => {
         mockServerId = undefined;
+        routeHydrationState = 'available';
+        hydrateSpy.mockClear();
         standardCleanup();
     });
 
@@ -175,7 +192,7 @@ describe('FileScreen session path hydration', () => {
         expect(setRightTabSpy).not.toHaveBeenCalled();
     });
 
-    it('redirects to panes when details routes should be in the right panel', async () => {
+    it('opens file details without opening the right pane when details routes are handled by panes', async () => {
         const { default: FileScreen } = await import('@/app/(app)/session/[id]/file');
         shouldRedirectToPanes = true;
         mockFilePathParam = 'a.txt';
@@ -187,8 +204,8 @@ describe('FileScreen session path hydration', () => {
         await renderScreen(React.createElement(FileScreen));
         await flushHookEffects();
 
-        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'files' });
-        expect(setRightTabSpy).toHaveBeenCalledWith('files');
+        expect(openRightSpy).not.toHaveBeenCalled();
+        expect(setRightTabSpy).not.toHaveBeenCalled();
         expect(openDetailsTabSpy).toHaveBeenCalledTimes(1);
         expect(routerReplaceSpy).toHaveBeenCalledTimes(1);
         expect(routerReplaceSpy).toHaveBeenLastCalledWith('/session/session-1?serverId=server-b');
@@ -223,8 +240,8 @@ describe('FileScreen session path hydration', () => {
         const screen = await renderScreen(React.createElement(FileScreen));
         await flushHookEffects();
 
-        expect(openRightSpy).toHaveBeenCalledWith({ tabId: 'files' });
-        expect(setRightTabSpy).toHaveBeenCalledWith('files');
+        expect(openRightSpy).not.toHaveBeenCalled();
+        expect(setRightTabSpy).not.toHaveBeenCalled();
         expect(openDetailsTabSpy).toHaveBeenCalledTimes(1);
         expect(routerReplaceSpy).toHaveBeenCalledTimes(1);
 
@@ -233,8 +250,8 @@ describe('FileScreen session path hydration', () => {
         await screen.update(React.createElement(FileScreen));
         await flushHookEffects();
 
-        expect(openRightSpy).toHaveBeenCalledTimes(2);
-        expect(setRightTabSpy).toHaveBeenCalledTimes(2);
+        expect(openRightSpy).not.toHaveBeenCalled();
+        expect(setRightTabSpy).not.toHaveBeenCalled();
         expect(openDetailsTabSpy).toHaveBeenCalledTimes(2);
         expect(routerReplaceSpy).toHaveBeenCalledTimes(2);
         expect(routerReplaceSpy).toHaveBeenNthCalledWith(1, '/session/session-1/details?serverId=server-b&details=file&path=a.txt');

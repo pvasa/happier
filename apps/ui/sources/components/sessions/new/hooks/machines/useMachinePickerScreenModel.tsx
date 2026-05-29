@@ -15,6 +15,10 @@ import { CAPABILITIES_REQUEST_NEW_SESSION } from '@/capabilities/requests';
 import { HeaderTitleWithAction } from '@/components/navigation/HeaderTitleWithAction';
 import { getActiveServerId, listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { resolveActiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
+import {
+    listServerProfileScopeIds,
+    normalizeServerSelectionSettingsForProfileScopeIds,
+} from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
@@ -91,14 +95,15 @@ export function useMachinePickerScreenModel() {
         return listServerProfiles();
     }, [activeServerId, refreshToken]);
     const resolvedTarget = React.useMemo(() => {
+        const settings = normalizeServerSelectionSettingsForProfileScopeIds({
+            serverSelectionGroups,
+            serverSelectionActiveTargetKind,
+            serverSelectionActiveTargetId,
+        }, serverProfiles);
         return resolveActiveServerSelectionFromRawSettings({
             activeServerId,
-            availableServerIds: serverProfiles.map((profile) => profile.id),
-            settings: {
-                serverSelectionGroups,
-                serverSelectionActiveTargetKind,
-                serverSelectionActiveTargetId,
-            },
+            availableServerIds: listServerProfileScopeIds(serverProfiles),
+            settings,
         });
     }, [
         activeServerId,

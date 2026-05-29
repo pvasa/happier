@@ -34,6 +34,10 @@ vi.mock('./sessions', () => ({
     resumeSession: (options: unknown) => resumeSessionMock(options),
 }));
 
+vi.mock('@/text', () => ({
+    t: (key: string) => `t:${key}`,
+}));
+
 describe('session goal operations', () => {
     beforeEach(() => {
         vi.resetModules();
@@ -98,7 +102,7 @@ describe('session goal operations', () => {
 
         await expect(sessionGoalSet('session-1', { status: 'paused' })).resolves.toEqual({
             ok: false,
-            error: 'Unsupported response from session RPC',
+            error: 't:session.workState.goal.errorUnsupportedResponse',
         });
     });
 

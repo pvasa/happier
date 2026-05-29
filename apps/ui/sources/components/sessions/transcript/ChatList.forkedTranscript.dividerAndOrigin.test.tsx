@@ -118,6 +118,28 @@ vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', async () => {
     flashListRuntime.mock = flashListMock;
     return {
         ...flashListMock.module,
+        LayoutCommitObserver: ({ children, onCommitLayoutEffect }: any) => {
+            React.useLayoutEffect(() => {
+                onCommitLayoutEffect?.();
+            });
+            return React.createElement(React.Fragment, null, children);
+        },
+        useLayoutState: (initialState: any) => {
+            const [state, setState] = React.useState(() => (
+                typeof initialState === 'function' ? initialState() : initialState
+            ));
+            return [state, setState];
+        },
+        useRecyclingState: (initialState: any, _deps: React.DependencyList, onReset?: () => void) => {
+            const [state, setState] = React.useState(() => (
+                typeof initialState === 'function' ? initialState() : initialState
+            ));
+            React.useLayoutEffect(() => {
+                setState(typeof initialState === 'function' ? initialState() : initialState);
+                onReset?.();
+            }, _deps);
+            return [state, setState];
+        },
         flashListRuntime: { usingFallback: false },
     };
 });
@@ -226,12 +248,20 @@ vi.mock('./MessageView', () => ({
     capturedMessageViewProps.push(props);
     return React.createElement('MessageView');
   },
+  MessageViewWithSessionCommon: (props: any) => {
+    capturedMessageViewProps.push(props);
+    return React.createElement('MessageViewWithSessionCommon');
+  },
 }));
 
 vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
   ToolCallsGroupRow: (props: any) => {
     capturedToolCallsGroupRowProps.push(props);
     return React.createElement('ToolCallsGroupRow');
+  },
+  ToolCallsGroupRowWithSessionCommon: (props: any) => {
+    capturedToolCallsGroupRowProps.push(props);
+    return React.createElement('ToolCallsGroupRowWithSessionCommon');
   },
 }));
 
@@ -245,6 +275,7 @@ vi.mock('@/components/sessions/actions/SessionActionDraftCard', () => ({
 
 vi.mock('@/components/sessions/transcript/turns/TurnView', () => ({
   TurnView: () => React.createElement('TurnView'),
+  TurnViewWithSessionCommon: () => React.createElement('TurnViewWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/transcript/motion/TranscriptMotionProvider', () => ({
@@ -346,7 +377,12 @@ describe('ChatList (forked transcript)', () => {
             createdAt: 1,
             callId: 'call-parent',
             toolName: 'shell',
-            state: { status: 'completed' },
+            state: 'completed',
+            tool: {
+                name: 'shell',
+                state: 'completed',
+                permission: { status: 'granted' },
+            },
         };
 
         const screen = await renderChatList();

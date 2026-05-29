@@ -1,6 +1,10 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { storage } from '@/sync/domains/state/storage';
+import { resolveServerIdForSessionIdFromLocalState } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import type { StorageState } from '@/sync/store/types';
 
 type ShellVisibleAgentStateRequestSignature = ReadonlyArray<readonly [
     string,
@@ -97,4 +101,63 @@ export function useStableSessionViewShellSession(session: Session | null): Sessi
         ref.current = { signature, session };
     }
     return ref.current.session;
+}
+
+const sessionViewShellSessionCache = new Map<string, { signature: string; session: Session }>();
+
+function normalizeServerId(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function getStableSessionViewShellSession(session: Session): Session {
+    const signature = buildSessionViewShellSessionSignature(session);
+    const cached = sessionViewShellSessionCache.get(session.id);
+    if (cached?.signature === signature) {
+        return cached.session;
+    }
+    sessionViewShellSessionCache.set(session.id, { signature, session });
+    return session;
+}
+
+export function selectSessionViewShellSessionForRouteState(
+    state: Pick<StorageState, 'sessions' | 'sessionListViewDataByServerId'>,
+    sessionId: string,
+    expectedServerId?: string | null,
+): Session | null {
+    const session = state.sessions[sessionId] ?? null;
+    if (!session) return null;
+
+    const normalizedExpectedServerId = normalizeServerId(expectedServerId);
+    if (normalizedExpectedServerId) {
+        const cachedServerId = normalizeServerId(resolveServerIdForSessionIdFromLocalState({
+            sessions: state.sessions as Record<string, { serverId?: unknown } | null>,
+            sessionListViewDataByServerId: state.sessionListViewDataByServerId,
+        }, sessionId));
+        if (cachedServerId && cachedServerId !== normalizedExpectedServerId) {
+            return null;
+        }
+    }
+
+    return getStableSessionViewShellSession(session);
+}
+
+export function useSessionViewShellSession(sessionId: string, expectedServerId?: string | null): Session | null {
+    return storage(
+        useShallow((state) => {
+            return selectSessionViewShellSessionForRouteState(
+                {
+                    sessions: state.sessions,
+                    sessionListViewDataByServerId: state.sessionListViewDataByServerId,
+                },
+                sessionId,
+                expectedServerId,
+            );
+        }),
+    );
+}
+
+export function useSessionViewShellSessionSeq(sessionId: string): number {
+    return storage((state) => state.sessions[sessionId]?.seq ?? 0);
 }

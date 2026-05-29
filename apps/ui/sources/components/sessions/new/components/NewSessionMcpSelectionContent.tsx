@@ -10,7 +10,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import type { AgentId } from '@/agents/catalog/catalog';
-import { SelectionList } from '@/components/ui/selectionList';
+import { SelectionList, resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -147,6 +147,7 @@ export function NewSessionMcpSelectionContent(props: NewSessionMcpSelectionConte
                 testID="new-session.mcp.selection-list"
                 rootStep={rootStep}
                 maxHeight={props.maxHeight}
+                heightBehavior={resolvePopoverSelectionListHeightBehavior()}
                 keyboardHintsEnabled={false}
                 onRequestClose={() => {}}
                 onSelect={() => {}}

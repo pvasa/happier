@@ -1,6 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { deriveSessionReadState, resolveSessionReadStateAction } from './sessionReadState';
+import type { StorageState } from '@/sync/store/types';
+
+const storageState = {
+    sessionMessages: {},
+} as unknown as StorageState;
+
+beforeEach(async () => {
+    (storageState as { sessionMessages: Record<string, unknown> }).sessionMessages = {};
+    const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
+    registerStorageStateReader(() => storageState);
+});
 
 describe('sessionReadState', () => {
     it('derives empty state when a session has no committed activity', () => {
@@ -11,8 +22,45 @@ describe('sessionReadState', () => {
         });
     });
 
-    it('derives unread state from a missing cursor and offers mark-read', () => {
-        const session = { seq: 3, lastViewedSessionSeq: null, metadata: null };
+    it('ignores non-terminal raw session seq when deriving read-state actions', () => {
+        const session = {
+            id: 's_raw',
+            seq: 3,
+            lastViewedSessionSeq: 2,
+            latestTurnStatus: 'in_progress' as const,
+            metadata: null,
+        };
+
+        expect(deriveSessionReadState(session)).toBe('empty');
+        expect(resolveSessionReadStateAction(session)).toEqual({
+            kind: 'none',
+            visible: false,
+        });
+    });
+
+    it('derives unread state from a committed stored message and offers mark-read', () => {
+        (storageState as { sessionMessages: Record<string, unknown> }).sessionMessages = {
+            s_message: {
+                messageIdsOldestFirst: ['m3'],
+                messagesById: {
+                    m3: {
+                        id: 'm3',
+                        seq: 3,
+                        localId: null,
+                        kind: 'agent-text',
+                        text: 'done',
+                        createdAt: 100,
+                    },
+                },
+            },
+        };
+        const session = {
+            id: 's_message',
+            seq: 9,
+            lastViewedSessionSeq: 2,
+            latestTurnStatus: 'in_progress' as const,
+            metadata: null,
+        };
 
         expect(deriveSessionReadState(session)).toBe('unread');
         expect(resolveSessionReadStateAction(session)).toEqual({
@@ -22,8 +70,14 @@ describe('sessionReadState', () => {
         });
     });
 
-    it('derives unread state from a stale cursor and offers mark-read', () => {
-        const session = { seq: 3, lastViewedSessionSeq: 2, metadata: null };
+    it('derives unread state from a ready event and offers mark-read', () => {
+        const session = {
+            seq: 3,
+            lastViewedSessionSeq: 2,
+            latestReadyEventSeq: 3,
+            latestTurnStatus: 'in_progress' as const,
+            metadata: null,
+        };
 
         expect(deriveSessionReadState(session)).toBe('unread');
         expect(resolveSessionReadStateAction(session)).toEqual({
@@ -34,7 +88,12 @@ describe('sessionReadState', () => {
     });
 
     it('derives read state from a current cursor and offers mark-unread', () => {
-        const session = { seq: 3, lastViewedSessionSeq: 3, metadata: null };
+        const session = {
+            seq: 3,
+            lastViewedSessionSeq: 3,
+            latestTurnStatus: 'completed' as const,
+            metadata: null,
+        };
 
         expect(deriveSessionReadState(session)).toBe('read');
         expect(resolveSessionReadStateAction(session)).toEqual({
@@ -48,6 +107,7 @@ describe('sessionReadState', () => {
         const session = {
             seq: 3,
             lastViewedSessionSeq: null,
+            latestTurnStatus: 'completed' as const,
             metadata: {
                 path: '/repo',
                 host: 'localhost',
@@ -67,6 +127,7 @@ describe('sessionReadState', () => {
         const session = {
             seq: 3,
             lastViewedSessionSeq: 2,
+            latestTurnStatus: 'completed' as const,
             metadata: null,
             accessLevel: 'view' as const,
         };

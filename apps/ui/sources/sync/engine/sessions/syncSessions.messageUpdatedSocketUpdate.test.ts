@@ -165,6 +165,151 @@ describe('handleMessageUpdatedSocketUpdate', () => {
         expect(applySessions).not.toHaveBeenCalled();
     });
 
+    it('marks hidden message updates stale without decrypting or advancing materialized seq', async () => {
+        const decryptMessage = vi.fn(async () => ({
+            id: 'm2',
+            localId: null,
+            createdAt: 1_000,
+            content: { role: 'user', content: { type: 'text', text: 'edited' } },
+        }));
+        const markSessionKnownRemoteSeq = vi.fn();
+        const markSessionTranscriptStale = vi.fn();
+        const { params, applyMessages, applySessions, markSessionMaterializedMaxSeq } = buildHarness({
+            updateData: buildUpdate({ sid: 's1', messageId: 'm2', messageSeq: 2 }),
+            getSession: () => ({
+                ...buildSession('s1'),
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 900,
+            }),
+            getSessionEncryption: () => ({ decryptMessage }),
+            isSessionActivelyViewed: () => false,
+            isSessionFullContentConsumerActive: () => false,
+            realtimeProjectionMode: 'enabled',
+            markSessionKnownRemoteSeq,
+            markSessionTranscriptStale,
+        });
+
+        await handleMessageUpdatedSocketUpdate(params);
+
+        expect(decryptMessage).not.toHaveBeenCalled();
+        expect(applyMessages).not.toHaveBeenCalled();
+        expect(markSessionMaterializedMaxSeq).not.toHaveBeenCalled();
+        expect(markSessionKnownRemoteSeq).toHaveBeenCalledWith('s1', 2);
+        expect(markSessionTranscriptStale).toHaveBeenCalledWith('s1', expect.objectContaining({
+            messageId: 'm2',
+            seq: 2,
+        }));
+        expect(applySessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks already-loaded hidden message updates stale while still advancing projection', async () => {
+        const decryptMessage = vi.fn(async () => ({
+            id: 'm2',
+            localId: null,
+            createdAt: 1_000,
+            content: { role: 'user', content: { type: 'text', text: 'edited' } },
+        }));
+        const markSessionKnownRemoteSeq = vi.fn();
+        const markSessionTranscriptStale = vi.fn();
+        const { params, applyMessages, applySessions, markSessionMaterializedMaxSeq } = buildHarness({
+            updateData: buildUpdate({ sid: 's1', messageId: 'm2', messageSeq: 2 }),
+            getSession: () => ({
+                ...buildSession('s1'),
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 900,
+            }),
+            getSessionEncryption: () => ({ decryptMessage }),
+            getSessionMaterializedMaxSeq: () => 2,
+            isSessionActivelyViewed: () => false,
+            isSessionFullContentConsumerActive: () => false,
+            realtimeProjectionMode: 'enabled',
+            markSessionKnownRemoteSeq,
+            markSessionTranscriptStale,
+        });
+
+        await handleMessageUpdatedSocketUpdate(params);
+
+        expect(decryptMessage).not.toHaveBeenCalled();
+        expect(applyMessages).not.toHaveBeenCalled();
+        expect(markSessionMaterializedMaxSeq).not.toHaveBeenCalled();
+        expect(markSessionKnownRemoteSeq).toHaveBeenCalledWith('s1', 2);
+        expect(markSessionTranscriptStale).toHaveBeenCalledWith('s1', {
+            updateType: 'message-updated',
+            seq: 2,
+            messageId: 'm2',
+        });
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({
+                id: 's1',
+                seq: 2,
+                updatedAt: 1_000,
+                meaningfulActivityAt: 1_000,
+            }),
+        ]);
+    });
+
+    it('does not spend a session-list projection apply for hidden stale edits that do not advance visible row state', async () => {
+        const decryptMessage = vi.fn(async () => ({
+            id: 'm2',
+            localId: null,
+            createdAt: 1_000,
+            content: { role: 'user', content: { type: 'text', text: 'edited' } },
+        }));
+        const markSessionKnownRemoteSeq = vi.fn();
+        const markSessionTranscriptStale = vi.fn();
+        const { params, applySessions } = buildHarness({
+            updateData: buildUpdate({ sid: 's1', messageId: 'm2', messageSeq: 2 }),
+            getSession: () => ({
+                ...buildSession('s1', 5),
+                updatedAt: 5_000,
+                meaningfulActivityAt: 5_000,
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 4_900,
+            }),
+            getSessionEncryption: () => ({ decryptMessage }),
+            getSessionMaterializedMaxSeq: () => 2,
+            isSessionActivelyViewed: () => false,
+            isSessionFullContentConsumerActive: () => false,
+            realtimeProjectionMode: 'enabled',
+            markSessionKnownRemoteSeq,
+            markSessionTranscriptStale,
+        });
+
+        await handleMessageUpdatedSocketUpdate(params);
+
+        expect(applySessions).not.toHaveBeenCalled();
+        expect(markSessionKnownRemoteSeq).toHaveBeenCalledWith('s1', 2);
+        expect(markSessionTranscriptStale).toHaveBeenCalledWith('s1', expect.objectContaining({
+            messageId: 'm2',
+            seq: 2,
+        }));
+    });
+
+    it('keeps full apply for hidden message updates with active content consumers', async () => {
+        const decryptMessage = vi.fn(async () => ({
+            id: 'm2',
+            localId: null,
+            createdAt: 1_000,
+            content: { role: 'user', content: { type: 'text', text: 'edited' } },
+        }));
+        const { params, applyMessages } = buildHarness({
+            getSession: () => ({
+                ...buildSession('s1'),
+                latestTurnStatus: 'in_progress',
+                latestTurnStatusObservedAt: 900,
+            }),
+            getSessionEncryption: () => ({ decryptMessage }),
+            isSessionActivelyViewed: () => false,
+            isSessionFullContentConsumerActive: () => true,
+            realtimeProjectionMode: 'enabled',
+        });
+
+        await handleMessageUpdatedSocketUpdate(params);
+
+        expect(decryptMessage).toHaveBeenCalledTimes(1);
+        expect(applyMessages).toHaveBeenCalledTimes(1);
+    });
+
     it('triggers catch-up when a gap is detected for a loaded transcript', async () => {
         const { params, onMessageGapDetected, markSessionMaterializedMaxSeq } = buildHarness({
             updateData: buildUpdate({ sid: 's1', messageId: 'm5', messageSeq: 5 }),

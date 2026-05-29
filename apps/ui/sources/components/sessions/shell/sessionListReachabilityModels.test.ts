@@ -61,7 +61,7 @@ describe('buildSessionListReachabilityModels', () => {
         };
 
         const models = buildSessionListReachabilityModels({
-            items: [{ type: 'session', session } as any],
+            items: [{ type: 'session', session, serverId: 'server-a' } as any],
             machinesById: {
                 'machine-stale': {
                     id: 'machine-stale',
@@ -79,10 +79,75 @@ describe('buildSessionListReachabilityModels', () => {
             workspaceLabelsV1: {},
         });
 
-        expect(models.reachableSessionDisplayById.get('session-1')).toMatchObject({
+        expect(models.reachableSessionDisplayByKey.get('server-a:session-1')).toMatchObject({
             machineId: 'machine-stale',
             machineLabel: 'Old Machine',
-            workspaceSubtitle: '~/workspace/stable',
+            workspaceSubtitle: 'stable',
+        });
+    });
+
+    it('keeps reachability display scoped when two visible servers share a session id', async () => {
+        const { buildSessionListReachabilityModels } = await import('./sessionListReachabilityModels');
+
+        mockStorageState = {
+            sessions: {},
+            machines: {},
+            getProjectForSession: () => null,
+        };
+
+        const sharedSessionId = 'shared-session';
+        const first = {
+            id: sharedSessionId,
+            active: false,
+            updatedAt: 10,
+            metadata: {
+                machineId: 'machine-a',
+                path: '/Users/test/workspace/a',
+                homeDir: '/Users/test',
+                host: 'a.local',
+            },
+        };
+        const second = {
+            ...first,
+            metadata: {
+                machineId: 'machine-b',
+                path: '/Users/test/workspace/b',
+                homeDir: '/Users/test',
+                host: 'b.local',
+            },
+        };
+
+        const models = buildSessionListReachabilityModels({
+            items: [
+                { type: 'session', serverId: 'server-a', session: first } as any,
+                { type: 'session', serverId: 'server-b', session: second } as any,
+            ],
+            machinesById: {
+                'machine-a': {
+                    id: 'machine-a',
+                    title: 'Machine A',
+                    subtitle: 'a.local',
+                    metadata: { host: 'a.local', displayName: 'Machine A' },
+                } as any,
+                'machine-b': {
+                    id: 'machine-b',
+                    title: 'Machine B',
+                    subtitle: 'b.local',
+                    metadata: { host: 'b.local', displayName: 'Machine B' },
+                } as any,
+            },
+            workspaceLabelsV1: {},
+        });
+
+        expect(models.reachableSessionDisplayByKey.get('server-a:shared-session')).toMatchObject({
+            machineId: 'machine-a',
+            machineLabel: 'Machine A',
+            workspaceSubtitle: 'a',
+        });
+        expect(models.reachableSessionDisplayByKey.get('server-b:shared-session')).toMatchObject({
+            machineId: 'machine-b',
+            machineLabel: 'Machine B',
+            workspaceSubtitle: 'b',
         });
     });
 });

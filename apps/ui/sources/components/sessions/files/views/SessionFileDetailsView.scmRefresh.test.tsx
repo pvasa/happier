@@ -87,6 +87,13 @@ vi.mock('@/components/sessions/files/file/editor/FileEditorPanel', () => ({
   FileEditorPanel: (props: any) => React.createElement('FileEditorPanel', props),
 }));
 
+// Lane I added RichMarkdownEditorPanel to SessionFileDetailsView's import graph
+// (pulls the chrome + native surface + Expo native modules); mock it like the
+// other heavy children so this node-env suite doesn't load native modules.
+vi.mock('@/components/ui/markdown/editor/RichMarkdownEditorPanel', () => ({
+  RichMarkdownEditorPanel: (props: any) => React.createElement('RichMarkdownEditorPanel', props),
+}));
+
 vi.mock('@/components/sessions/sourceControl/changes/ScmChangeDiscardButton', () => ({
   ScmChangeDiscardButton: (props: any) => React.createElement('ScmChangeDiscardButton', props),
 }));

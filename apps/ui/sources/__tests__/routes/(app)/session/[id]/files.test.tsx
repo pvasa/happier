@@ -20,6 +20,7 @@ let canGoBack = true;
 let safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
 let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
 let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
+let hydrateState: 'available' | 'loading' | 'missing' = 'available';
 
 const openRightSpy = vi.fn();
 const closeRightSpy = vi.fn();
@@ -27,7 +28,13 @@ const setRightTabSpy = vi.fn();
 const ensureSessionVisibleSpy = vi.fn((_sessionId: string) => Promise.resolve());
 const hydrateSpy = vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }) => {
     ensureSessionVisibleSpy(sessionId);
-    return options;
+    if (hydrateState === 'available') {
+        return { kind: 'available', sessionId, serverId: options?.serverId };
+    }
+    if (hydrateState === 'missing') {
+        return { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' };
+    }
+    return { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' };
 });
 let scopeState: any = {
     right: { isOpen: false, activeTabId: null, tabState: {} },
@@ -125,8 +132,7 @@ vi.mock('@/sync/sync', () => ({
 
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) => {
-        hydrateSpy(sessionId, tag, options);
-        return true;
+        return hydrateSpy(sessionId, tag, options);
     },
 }));
 
@@ -144,6 +150,7 @@ describe('/session/[id]/files', () => {
         canGoBack = true;
         deviceType = 'desktop';
         mobileWorkspaceExperience = 'classic';
+        hydrateState = 'available';
         safeAreaInsets = { top: 47, right: 0, bottom: 34, left: 0 };
         scopeState = {
             right: { isOpen: false, activeTabId: null, tabState: {} },
@@ -244,6 +251,25 @@ describe('/session/[id]/files', () => {
             'SessionFilesRoute.ensureSessionVisible',
             { serverId: 'server-b' },
         );
+    });
+
+    it('keeps loading routes in progress instead of showing the unavailable fallback', async () => {
+        hydrateState = 'loading';
+
+        const screen = await renderRouteScreen();
+
+        expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(0);
+        expect(openRightSpy).not.toHaveBeenCalled();
+    });
+
+    it('renders the unavailable fallback when route hydration resolves missing', async () => {
+        hydrateState = 'missing';
+
+        const screen = await renderRouteScreen();
+
+        expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
+        expect(openRightSpy).not.toHaveBeenCalled();
+        expect(setRightTabSpy).not.toHaveBeenCalled();
     });
 
     it('closes by navigating back and closing the right-pane state', async () => {

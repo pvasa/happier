@@ -12,6 +12,9 @@ const clipboardMocks = vi.hoisted(() => ({
 const mockEnv = vi.hoisted(() => ({
   iconsRenderAsText: false,
 }));
+const centeredInfoTileMockState = vi.hoisted(() => ({
+  renderCount: 0,
+}));
 
 vi.mock('expo-clipboard', () => clipboardMocks);
 
@@ -32,6 +35,13 @@ vi.mock('@expo/vector-icons', () => ({
 
 vi.mock('expo-image', () => ({
   Image: (props: any) => React.createElement('Image', props, null),
+}));
+
+vi.mock('@/components/ui/lists/CenteredInfoTile', () => ({
+  CenteredInfoTile: (props: any) => {
+    centeredInfoTileMockState.renderCount += 1;
+    return React.createElement('CenteredInfoTile', props, props.icon ?? null);
+  },
 }));
 
 vi.mock('@/constants/Typography', () => ({
@@ -143,6 +153,77 @@ describe('SessionGettingStartedGuidanceView', () => {
     }
   });
 
+  it('keeps the phone manual terminal action available while deferring CLI follow-up until interactions settle', async () => {
+    vi.useFakeTimers();
+    try {
+      const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
+      const onConnectTerminal = vi.fn();
+      const onEnterUrlManually = vi.fn();
+
+      const screen = await renderScreen(
+        <SessionGettingStartedGuidanceView
+          variant="phone"
+          model={{
+            kind: 'connect_machine',
+            targetLabel: 'Company',
+            serverUrl: 'https://api.company.example',
+            serverName: 'company',
+            showServerSetup: true,
+            onConnectTerminal,
+            onEnterUrlManually,
+          }}
+        />,
+      );
+
+      expect(screen.findByTestId('session-getting-started-kind-connect_machine')).not.toBeNull();
+      expect(screen.findByTestId('session-getting-started-cli-follow-up')).toBeNull();
+      expect(screen.findAllByType('RoundButton' as any)).toHaveLength(1);
+
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+
+      expect(screen.findByTestId('session-getting-started-cli-follow-up')).not.toBeNull();
+      expect(screen.findByTestId('session-getting-started-step-install_cli')).not.toBeNull();
+      expect(screen.findByTestId('session-getting-started-step-auth_login')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('defers new-session blocking CLI follow-up while keeping the blocking header visible', async () => {
+    vi.useFakeTimers();
+    try {
+      const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
+
+      const screen = await renderScreen(
+        <SessionGettingStartedGuidanceView
+          variant="newSessionBlocking"
+          model={{
+            kind: 'connect_machine',
+            targetLabel: 'Company',
+            serverUrl: 'https://api.company.example',
+            serverName: 'company',
+            showServerSetup: true,
+          }}
+        />,
+      );
+
+      expect(screen.findByTestId('session-getting-started-logo')).not.toBeNull();
+      expect(screen.findByTestId('session-getting-started-kind-connect_machine')).not.toBeNull();
+      expect(screen.findByTestId('session-getting-started-cli-follow-up')).toBeNull();
+
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+
+      expect(screen.findByTestId('session-getting-started-cli-follow-up')).not.toBeNull();
+      expect(screen.findByTestId('session-getting-started-step-server_setup')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('offers the desktop setup CTA when machines exist but the daemon still needs attention', async () => {
     const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
     const onOpenSetup = vi.fn();
@@ -186,6 +267,32 @@ describe('SessionGettingStartedGuidanceView', () => {
     expect(content).toContain('happier service start');
     expect(content).not.toContain('happier daemon install');
     expect(content).not.toContain('happier daemon start');
+  });
+
+  it('skips rerendering the guidance view when props are equal by value', async () => {
+    const { SessionGettingStartedGuidanceView } = await import('./SessionGettingStartedGuidance');
+    centeredInfoTileMockState.renderCount = 0;
+    const createElement = () => (
+      <SessionGettingStartedGuidanceView
+        variant="primaryPane"
+        model={{
+          kind: 'select_session',
+          targetLabel: 'Company',
+          serverUrl: 'https://api.company.example',
+          serverName: 'company',
+          showServerSetup: false,
+        }}
+      />
+    );
+
+    const screen = await renderScreen(createElement());
+    expect(centeredInfoTileMockState.renderCount).toBe(1);
+
+    act(() => {
+      screen.tree.update(createElement());
+    });
+
+    expect(centeredInfoTileMockState.renderCount).toBe(1);
   });
 
   it('renders select-session as a centered icon empty state in the primary pane', async () => {

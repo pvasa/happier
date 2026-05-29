@@ -1,6 +1,7 @@
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
 import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
+import { getAgentStaticModels } from '@happier-dev/agents';
 
 export const DEFAULT_CONTEXT_WARNING_WINDOW_TOKENS = 190_000;
 export const CLAUDE_1M_CONTEXT_WARNING_WINDOW_TOKENS = 950_000;
@@ -26,6 +27,13 @@ function descriptionSuggestsClaude1m(description: unknown): boolean {
     return normalized.includes('1 million') || normalized.includes('1m context');
 }
 
+function resolveCatalogContextWindowTokens(agentId: AgentId, modelId: string): number | null {
+    if (!modelId) return null;
+    const matchingModel = getAgentStaticModels(agentId)
+        .find((model) => normalizeModelId(model.id) === modelId) ?? null;
+    return normalizeContextWindowTokens(matchingModel?.contextWindowTokens);
+}
+
 export function toContextWarningWindowTokens(contextWindowTokens: number): number {
     return Math.max(1, Math.floor(contextWindowTokens * CONTEXT_WARNING_WINDOW_RATIO));
 }
@@ -44,24 +52,29 @@ export function resolveContextWindowTokens(params: Readonly<{
         return liveContextWindowTokens;
     }
 
+    const overrideModelId = normalizeModelId(params.metadata?.modelOverrideV1?.modelId);
     const sessionModelsState = readSessionModelsState(params.metadata);
     if (sessionModelsState && sessionModelsState.provider === params.agentId) {
-        const overrideModelId = normalizeModelId(params.metadata?.modelOverrideV1?.modelId);
         const activeModelId = overrideModelId || normalizeModelId(sessionModelsState.currentModelId);
         const matchingModel = Array.isArray(sessionModelsState.availableModels)
             ? sessionModelsState.availableModels.find((model) => normalizeModelId(model.id) === activeModelId)
             : null;
-        const contextWindowTokens = normalizeContextWindowTokens(matchingModel?.contextWindowTokens);
+        const contextWindowTokens = normalizeContextWindowTokens(matchingModel?.contextWindowTokens)
+            ?? resolveCatalogContextWindowTokens(params.agentId, activeModelId);
         if (contextWindowTokens !== null) {
             return contextWindowTokens;
         }
+    }
+
+    const overrideCatalogContextWindowTokens = resolveCatalogContextWindowTokens(params.agentId, overrideModelId);
+    if (overrideCatalogContextWindowTokens !== null) {
+        return overrideCatalogContextWindowTokens;
     }
 
     if (params.agentId !== 'claude') {
         return null;
     }
 
-    const overrideModelId = normalizeModelId(params.metadata?.modelOverrideV1?.modelId);
     if (isClaude1mModelId(overrideModelId)) return CLAUDE_1M_CONTEXT_WINDOW_TOKENS;
 
     if (!sessionModelsState || sessionModelsState.provider !== 'claude') {

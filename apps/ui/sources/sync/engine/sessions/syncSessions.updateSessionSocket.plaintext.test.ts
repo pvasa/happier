@@ -90,6 +90,92 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     expect(nextSession.updatedAt).toBe(456);
   });
 
+  it('applies terminal primary turn projections without encrypted state payloads', async () => {
+    const base = {
+      ...createSession({ sessionId: 's1', encryptionMode: 'plain' }),
+      latestTurnStatus: 'in_progress' as const,
+      lastRuntimeIssue: {
+        v: 1,
+        scope: 'primary_session',
+        status: 'failed',
+        code: 'old_error',
+        source: 'unknown',
+        occurredAt: 111,
+      } as const,
+    };
+
+    const { nextSession } = await buildUpdatedSessionFromSocketUpdate({
+      session: base,
+      updateBody: {
+        latestTurnStatus: 'completed',
+        lastRuntimeIssue: null,
+      },
+      updateSeq: 10,
+      updateCreatedAt: 456,
+      sessionEncryption: null,
+    });
+
+    expect(nextSession.latestTurnStatus).toBe('completed');
+    expect(nextSession.lastRuntimeIssue).toBeNull();
+    expect(nextSession.agentStateVersion).toBe(base.agentStateVersion);
+    expect(nextSession.metadataVersion).toBe(base.metadataVersion);
+  });
+
+  it('applies primary turn projection observed timestamps from update-session payloads', async () => {
+    const base = createSession({ sessionId: 's1', encryptionMode: 'plain' });
+
+    const { nextSession } = await buildUpdatedSessionFromSocketUpdate({
+      session: base,
+      updateBody: {
+        latestTurnId: 'turn-1',
+        latestTurnStatus: 'in_progress',
+        latestTurnStatusObservedAt: 123_456,
+      },
+      updateSeq: 10,
+      updateCreatedAt: 456,
+      sessionEncryption: null,
+    });
+
+    expect(nextSession.latestTurnId).toBe('turn-1');
+    expect(nextSession.latestTurnStatus).toBe('in_progress');
+    expect(nextSession.latestTurnStatusObservedAt).toBe(123_456);
+  });
+
+  it('clears latest turn id from update-session payloads', async () => {
+    const base = {
+      ...createSession({ sessionId: 's1', encryptionMode: 'plain' }),
+      latestTurnId: 'turn-1',
+    };
+
+    const { nextSession } = await buildUpdatedSessionFromSocketUpdate({
+      session: base,
+      updateBody: {
+        latestTurnId: null,
+      },
+      updateSeq: 10,
+      updateCreatedAt: 456,
+      sessionEncryption: null,
+    });
+
+    expect(nextSession.latestTurnId).toBeNull();
+  });
+
+  it('applies flattened rollback eligibility from update-session payloads', async () => {
+    const base = createSession({ sessionId: 's1', encryptionMode: 'plain' });
+
+    const { nextSession } = await buildUpdatedSessionFromSocketUpdate({
+      session: base,
+      updateBody: {
+        rollbackEligibleTurnStarts: [1, 3],
+      },
+      updateSeq: 10,
+      updateCreatedAt: 456,
+      sessionEncryption: null,
+    });
+
+    expect(nextSession.rollbackEligibleTurnStarts).toEqual([1, 3]);
+  });
+
   it('decrypts encrypted metadata and agent-state socket updates in one batch when available', async () => {
     const base = createSession({ sessionId: 's1', encryptionMode: 'e2ee' });
     syncPerformanceTelemetry.configure({ enabled: true, slowThresholdMs: 1_000_000, flushIntervalMs: 60_000 });

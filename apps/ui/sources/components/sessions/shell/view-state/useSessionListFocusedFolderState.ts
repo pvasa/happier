@@ -10,11 +10,13 @@ import {
 const EMPTY_SESSION_FOLDER_BREADCRUMBS: ReadonlyArray<SessionFolderHeaderItem> = Object.freeze([]);
 
 type UseSessionListFocusedFolderStateInput = Readonly<{
+    canInvalidateFocusedFolder?: boolean;
     folderViewEnabled: boolean;
     folderPresentedData: ReadonlyArray<SessionListViewItem> | null | undefined;
 }>;
 
 export function useSessionListFocusedFolderState({
+    canInvalidateFocusedFolder = true,
     folderViewEnabled,
     folderPresentedData,
 }: UseSessionListFocusedFolderStateInput) {
@@ -32,11 +34,12 @@ export function useSessionListFocusedFolderState({
     }, [folderPresentedData, focusedFolderId, folderViewEnabled]);
 
     React.useEffect(() => {
+        if (!canInvalidateFocusedFolder) return;
         if (!focusedFolderId) return;
         if (!folderViewEnabled || folderBreadcrumbs.length === 0) {
             setSessionListFocusedFolderV1Ref.current(null);
         }
-    }, [focusedFolderId, folderBreadcrumbs.length, folderViewEnabled]);
+    }, [canInvalidateFocusedFolder, focusedFolderId, folderBreadcrumbs.length, folderViewEnabled]);
 
     const focusFolder = React.useCallback((folder: SessionFolderHeaderItem | null) => {
         if (!folder?.workspace) return;

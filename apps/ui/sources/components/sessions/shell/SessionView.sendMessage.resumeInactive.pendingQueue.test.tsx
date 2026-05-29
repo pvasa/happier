@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -9,6 +10,7 @@ import type { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import type { ResumeSessionResult } from '@/sync/ops/sessions';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import type { Settings } from '@/sync/domains/settings/settings';
+import type { Project } from '@/sync/runtime/orchestration/projectManager';
 import { emitSessionResumeRequest } from '@/components/sessions/model/sessionResumeRequests';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
@@ -16,6 +18,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 
 const previousDev = (globalThis as { __DEV__?: boolean }).__DEV__;
 const enqueuePendingMessageSpy = vi.hoisted(() => vi.fn(async (..._args: any[]) => {}));
+const sendMessageSpy = vi.hoisted(() => vi.fn(async (..._args: any[]) => {}));
 const submitMessageSpy = vi.hoisted(() => vi.fn(async (..._args: any[]) => {}));
 const resumeSessionSpy = vi.hoisted(() =>
     vi.fn<(..._args: any[]) => Promise<ResumeSessionResult>>(async (..._args: any[]) => ({
@@ -63,6 +66,9 @@ const inactiveSessionUiState = vi.hoisted(() => ({
 }));
 const sessionOptimisticThinkingAt = vi.hoisted(() => ({
     current: null as number | null,
+}));
+const draftHookState = vi.hoisted(() => ({
+    valuesBySessionId: new Map<string, string>(),
 }));
 const resolveSessionComposerSendMock = vi.hoisted(() =>
     vi.fn((...args: any[]) => {
@@ -199,7 +205,16 @@ installSessionShellCommonModuleMocks({
         return modalMock.module;
     },
     storage: async (importOriginal) => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+        const defaultSessionMetadata = {
+            machineId: 'm-stale',
+            flavor: 'codex',
+            version: '0.1.0',
+            path: '/tmp/target',
+            homeDir: '/tmp',
+            codexSessionId: 'codex-session-1',
+        };
         const session: any = {
             id: 's1',
             serverId: 'server-cache',
@@ -207,15 +222,14 @@ installSessionShellCommonModuleMocks({
             presence: Date.now() - 60_000,
             active: false,
             accessLevel: 'edit',
-            pendingVersion: 2,
-            metadata: {
-                machineId: 'm-stale',
-                flavor: 'codex',
-                version: '0.0.0',
-                path: '/tmp/target',
-                homeDir: '/tmp',
-                codexSessionId: 'codex-session-1',
-                ...sessionMetadataOverrides.current,
+            get pendingVersion() {
+                return sessionStateOverrides.current.pendingVersion ?? 2;
+            },
+            get metadata() {
+                return {
+                    ...defaultSessionMetadata,
+                    ...sessionMetadataOverrides.current,
+                };
             },
             agentState: {},
             get optimisticThinkingAt() {
@@ -241,29 +255,44 @@ installSessionShellCommonModuleMocks({
             sessionMessageSendMode: 'server_pending',
             sessionBusySteerSendPolicy: 'steer_immediately',
         };
+        const projectFixture: Project = {
+            id: 'project-1',
+            key: {
+                machineId: 'm-target',
+                path: '/tmp/target',
+            },
+            sessionIds: ['s1'],
+            createdAt: 1,
+            updatedAt: 1,
+        };
 
         return createStorageModuleStub({
-            storage: {
-                getState: () => ({
+            storage: createStorageStoreMock({
                     sessions: { s1: session },
                     machines: {
                         'm-target': {
                             id: 'm-target',
+                            seq: 1,
+                            createdAt: 1,
+                            updatedAt: 1,
                             active: true,
                             activeAt: 10,
-                            metadata: { host: 'workstation.local' },
+                            metadata: {
+                                host: 'workstation.local',
+                                platform: 'darwin',
+                                happyCliVersion: '0.0.0',
+                                happyHomeDir: '/tmp/.happy-dev',
+                                homeDir: '/tmp',
+                            },
+                            metadataVersion: 1,
+                            daemonState: null,
+                            daemonStateVersion: 0,
                         },
                     },
                     getProjectForSession: (sessionId: string) =>
-                        sessionId === 's1'
-                            ? {
-                                  key: {
-                                      machineId: 'm-target',
-                                      path: '/tmp/target',
-                                  },
-                              }
-                            : null,
+                        sessionId === 's1' ? projectFixture : null,
                     settings: {
+                        ...settingsDefaults,
                         ...settingsFixture,
                         ...settingsState.current,
                         experiments: true,
@@ -271,8 +300,7 @@ installSessionShellCommonModuleMocks({
                         codexBackendMode: 'acp',
                     },
                     sessionListViewDataByServerId: {},
-                }),
-            } as any,
+            }),
             useSession: () => session,
             useIsDataReady: () => true,
             useRealtimeStatus: () => 'connected',
@@ -282,6 +310,8 @@ installSessionShellCommonModuleMocks({
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
             useSessionReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
+            useProfile: () => null,
+            useActiveServerAccountScope: () => ({ serverId: 'server-cache', accountId: 'account-cache' }),
             useLocalSetting: (key: keyof LocalSettings) => (localSettingsFixture as any)[key],
             useLocalSettingMutable: (key: keyof LocalSettings) => [(localSettingsFixture as any)[key], vi.fn()],
             useSetting: (key: keyof Settings) => ((settingsState.current as any)[key] ?? (settingsFixture as any)[key]),
@@ -349,7 +379,44 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsTablet: () => false,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-    useDraft: () => ({ clearDraft: vi.fn() }),
+    useDraft: (_sessionId: string, value: string, onChange: (next: string) => void) => {
+        draftHookState.valuesBySessionId.set(_sessionId, value);
+        return {
+        clearDraft: () => {
+            draftHookState.valuesBySessionId.set(_sessionId, '');
+            onChange('');
+        },
+        setDraftValue: (nextValueOrUpdater: string | ((currentValue: string) => string)) => {
+            const currentValue = draftHookState.valuesBySessionId.get(_sessionId) ?? '';
+            const nextValue = typeof nextValueOrUpdater === 'function'
+                ? nextValueOrUpdater(currentValue)
+                : nextValueOrUpdater;
+            draftHookState.valuesBySessionId.set(_sessionId, nextValue);
+            onChange(nextValue);
+        },
+        clearDraftForSessionIfCurrentValueMatches: (snapshot: Readonly<{ text: string }>) => {
+            const currentValue = draftHookState.valuesBySessionId.get(_sessionId) ?? '';
+            if (currentValue !== snapshot.text) return false;
+            draftHookState.valuesBySessionId.set(_sessionId, '');
+            onChange('');
+            return true;
+        },
+        restoreDraftForSessionIfCurrentValueMatches: (
+            snapshot: Readonly<{ text: string }>,
+            expectedCurrentValue: string,
+        ) => {
+            const currentValue = draftHookState.valuesBySessionId.get(_sessionId) ?? '';
+            if (currentValue !== expectedCurrentValue) return false;
+            draftHookState.valuesBySessionId.set(_sessionId, snapshot.text);
+            onChange(snapshot.text);
+            return true;
+        },
+        restoreComposerSnapshot: (snapshot: Readonly<{ text: string }>) => {
+            draftHookState.valuesBySessionId.set(_sessionId, snapshot.text);
+            onChange(snapshot.text);
+        },
+        };
+    },
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
     getInactiveSessionUiState: () => inactiveSessionUiState.current,
@@ -381,7 +448,8 @@ vi.mock('@/sync/sync', () => ({
         publishSessionModelOverrideToMetadata: async () => {},
         refreshSessions: async () => {},
         onSessionVisible: () => {},
-        sendMessage: async () => {},
+        markSessionLiveTailIntent: () => {},
+        sendMessage: (...args: any[]) => sendMessageSpy(...args),
         enqueuePendingMessage: (...args: any[]) => enqueuePendingMessageSpy(...args),
         submitMessage: (...args: any[]) => submitMessageSpy(...args),
         encryption: {
@@ -411,6 +479,11 @@ vi.mock('@/sync/ops/sessionMachineTarget', async (importOriginal) => {
         readMachineTargetForSession: () => ({
             machineId: 'm-target',
             basePath: '/tmp/target',
+        }),
+        readMachineControlTargetForSession: () => ({
+            machineId: 'm-target',
+            basePath: '/tmp/target',
+            confidence: 'reachable',
         }),
     };
 });
@@ -482,6 +555,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
         authCredentials = { token: 't', secret: 's' };
         enqueuePendingMessageSpy.mockClear();
+        sendMessageSpy.mockClear();
         submitMessageSpy.mockClear();
         resumeCapabilityMachineIds.length = 0;
         resumeCapabilityServerIds.length = 0;
@@ -489,7 +563,8 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         settingsState.current = { experiments: true, featureToggles: {}, codexBackendMode: 'acp' };
         sessionMetadataOverrides.current = {};
         sessionStateOverrides.current = {};
-        machineEncryptionAvailable.current = false;
+        draftHookState.valuesBySessionId.clear();
+        machineEncryptionAvailable.current = true;
         sessionOptimisticThinkingAt.current = null;
         inactiveSessionUiState.current = { noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true };
         canResumeSessionWithOptionsSpy.mockReset();
@@ -559,6 +634,34 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
+    it('passes an explicit transcript cursor when resuming after pending enqueue', async () => {
+        const screen = await renderSessionView();
+        pendingFireAndForget.length = 0;
+
+        const agentInput = findAgentInput(screen);
+
+        await act(async () => {
+            agentInput.props.onChangeText('hello');
+        });
+        await act(async () => {
+            agentInput.props.onSend();
+        });
+
+        expect(pendingFireAndForget.length).toBeGreaterThan(0);
+        await act(async () => {
+            await pendingFireAndForget[0];
+        });
+
+        expect(enqueuePendingMessageSpy).toHaveBeenCalledTimes(1);
+        expect(resumeSessionSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                initialTranscriptAfterSeq: 0,
+            }),
+        );
+
+        await screen.unmount();
+    });
+
     it('shows resuming connection status while pending-queue wake is in flight', async () => {
         sessionMetadataOverrides.current = { version: '0.1.0' };
         machineEncryptionAvailable.current = true;
@@ -591,6 +694,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         });
 
         expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
+        expect(findAgentInput(screen).props.value).toBe('');
         expect(findAgentInput(screen).props.connectionStatus?.text).toBe('session.resuming');
         expect(findAgentInput(screen).props.connectionStatus?.isPulsing).toBe(true);
 
@@ -641,7 +745,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
-    it('bypasses server-pending enqueue when the send action is forced immediate', async () => {
+    it('bypasses server-pending enqueue and direct-sends once when the send action is forced immediate', async () => {
         sessionMetadataOverrides.current = { version: '0.1.0' };
         inactiveSessionUiState.current = {
             noticeKind: 'none',
@@ -668,8 +772,155 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
 
         expect(enqueuePendingMessageSpy).not.toHaveBeenCalled();
         expect(submitMessageSpy).not.toHaveBeenCalled();
-        expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
-        expect(findAgentInput(screen).props.value).toBe('hello now');
+        expect(resumeSessionSpy).not.toHaveBeenCalled();
+        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+        expect(sendMessageSpy).toHaveBeenCalledWith(
+            's1',
+            'hello now',
+            undefined,
+            undefined,
+            expect.objectContaining({
+                localId: undefined,
+                onLocalPendingProjectionCreated: expect.any(Function),
+                profileId: undefined,
+            }),
+        );
+        expect(findAgentInput(screen).props.value).toBe('');
+
+        await screen.unmount();
+    });
+
+    it('restores text when a direct send fails after creating a local pending projection', async () => {
+        sessionMetadataOverrides.current = { version: '0.1.0' };
+        inactiveSessionUiState.current = {
+            noticeKind: 'none',
+            inactiveStatusTextKey: null,
+            shouldShowInput: true,
+        };
+        sendMessageSpy.mockImplementationOnce(async (...args: any[]) => {
+            const options = args[4] as
+                | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
+                | undefined;
+            options?.onLocalPendingProjectionCreated?.({ localId: 'local-direct-id' });
+            throw new Error('direct send failed');
+        });
+
+        const screen = await renderSessionView({ routeServerId: 'server-cache' });
+        pendingFireAndForget.length = 0;
+
+        let agentInput = findAgentInput(screen);
+
+        await act(async () => {
+            agentInput.props.onChangeText('retry this');
+        });
+        await act(async () => {
+            agentInput.props.onSend({ forceImmediate: true });
+        });
+
+        expect(pendingFireAndForget.length).toBeGreaterThan(0);
+        await act(async () => {
+            await pendingFireAndForget[0];
+        });
+
+        agentInput = findAgentInput(screen);
+        expect(agentInput.props.value).toBe('retry this');
+        expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'direct send failed');
+
+        await screen.unmount();
+    });
+
+    it('does not restore a failed direct send over a newer draft typed after local projection', async () => {
+        sessionMetadataOverrides.current = { version: '0.1.0' };
+        inactiveSessionUiState.current = {
+            noticeKind: 'none',
+            inactiveStatusTextKey: null,
+            shouldShowInput: true,
+        };
+        let rejectSend: ((error: Error) => void) | null = null;
+        const projectionCreated = new Promise<void>((resolveProjection) => {
+            sendMessageSpy.mockImplementationOnce(async (...args: any[]) => {
+                const options = args[4] as
+                    | { onLocalPendingProjectionCreated?: (event: Readonly<{ localId: string }>) => void }
+                    | undefined;
+                options?.onLocalPendingProjectionCreated?.({ localId: 'local-direct-id' });
+                resolveProjection();
+                return await new Promise<void>((_resolve, reject) => {
+                    rejectSend = reject;
+                });
+            });
+        });
+
+        const screen = await renderSessionView({ routeServerId: 'server-cache' });
+        pendingFireAndForget.length = 0;
+
+        let agentInput = findAgentInput(screen);
+
+        await act(async () => {
+            agentInput.props.onChangeText('old draft');
+        });
+        await act(async () => {
+            agentInput.props.onSend({ forceImmediate: true });
+        });
+
+        await act(async () => {
+            await projectionCreated;
+        });
+
+        agentInput = findAgentInput(screen);
+        expect(agentInput.props.value).toBe('');
+
+        await act(async () => {
+            agentInput.props.onChangeText('new draft');
+        });
+
+        await act(async () => {
+            if (!rejectSend) throw new Error('send did not start');
+            rejectSend(new Error('direct send failed'));
+            await pendingFireAndForget[0];
+        });
+
+        agentInput = findAgentInput(screen);
+        expect(agentInput.props.value).toBe('new draft');
+
+        await screen.unmount();
+    });
+
+    it('uses the legacy direct commit path for inactive sessions when the CLI is too old for pending queue V2', async () => {
+        sessionMetadataOverrides.current = { version: '0.0.1' };
+        resumeSessionSpy.mockResolvedValueOnce({ type: 'success' as const });
+
+        const screen = await renderSessionView({ routeServerId: 'server-cache' });
+        pendingFireAndForget.length = 0;
+
+        const agentInput = findAgentInput(screen);
+
+        await act(async () => {
+            agentInput.props.onChangeText('legacy send');
+        });
+        await act(async () => {
+            agentInput.props.onSend();
+        });
+
+        expect(pendingFireAndForget.length).toBeGreaterThan(0);
+        await act(async () => {
+            await pendingFireAndForget[0];
+        });
+
+        expect(enqueuePendingMessageSpy).not.toHaveBeenCalled();
+        expect(resumeSessionSpy).not.toHaveBeenCalled();
+        expect(submitMessageSpy).not.toHaveBeenCalled();
+        expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+        expect(sendMessageSpy).toHaveBeenCalledWith(
+            's1',
+            'legacy send',
+            undefined,
+            undefined,
+            expect.objectContaining({
+                localId: undefined,
+                onLocalPendingProjectionCreated: expect.any(Function),
+                profileId: undefined,
+            }),
+        );
 
         await screen.unmount();
     });
@@ -789,6 +1040,46 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         });
 
         expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'Daemon RPC is not available');
+
+        await screen.unmount();
+    });
+
+    it('redacts internal spawn validation details when explicit retry cannot resume the queued message', async () => {
+        resumeSessionSpy
+            .mockImplementationOnce(async () => ({
+                type: 'error' as const,
+                errorCode: 'DAEMON_RPC_UNAVAILABLE' as const,
+                errorMessage: 'Daemon RPC is not available',
+            }))
+            .mockImplementationOnce(async () => ({
+                type: 'error' as const,
+                errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                errorMessage: 'connected_service_materialization_identity_missing',
+            }));
+
+        const screen = await renderSessionView();
+
+        pendingFireAndForget.length = 0;
+
+        const agentInput = findAgentInput(screen);
+        await act(async () => {
+            agentInput.props.onChangeText('hello');
+        });
+        await act(async () => {
+            agentInput.props.onSend();
+        });
+
+        await act(async () => {
+            await pendingFireAndForget[0];
+        });
+
+        modalMockState.current?.spies.alert.mockClear();
+
+        await act(async () => {
+            await screen.pressByTestIdAsync('session-pendingQueue-resumeFailed-retry');
+        });
+
+        expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'session.resumeFailed');
 
         await screen.unmount();
     });

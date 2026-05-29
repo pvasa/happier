@@ -11,8 +11,12 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 type SessionMachineTargetTestValue = { machineId: string; basePath: string } | null;
 
 const headerActionMenuSpy = vi.hoisted(() => vi.fn());
+const sessionConnectedServicesAuthSwitchSpy = vi.hoisted(() => vi.fn());
 const readMachineTargetForSessionSpy = vi.hoisted(() =>
   vi.fn<(sessionId: string) => SessionMachineTargetTestValue>(() => null),
+);
+const readMachineControlTargetForSessionSpy = vi.hoisted(() =>
+  vi.fn<(sessionId: string) => (SessionMachineTargetTestValue & { confidence?: string }) | null>(() => null),
 );
 const readDisplayMachineTargetForSessionSpy = vi.hoisted(() =>
   vi.fn<(input: unknown) => SessionMachineTargetTestValue>(() => null),
@@ -59,7 +63,18 @@ const sessionState = vi.hoisted(() => ({
   } as any,
 }));
 
-vi.mock('react-native-reanimated', () => ({}));
+vi.mock('react-native-reanimated', () => {
+  const Animated = {
+    View: 'Animated.View',
+    createAnimatedComponent: (component: unknown) => component,
+  };
+  return {
+    default: Animated,
+    ...Animated,
+    useAnimatedProps: () => ({}),
+    useAnimatedStyle: () => ({}),
+  };
+});
 vi.mock('expo-linear-gradient', () => ({
   LinearGradient: 'LinearGradient',
 }));
@@ -115,6 +130,12 @@ vi.mock('@/components/sessions/actions/SessionHeaderActionMenu', () => ({
     return React.createElement('SessionHeaderActionMenu');
   },
 }));
+vi.mock('@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch', () => ({
+  useSessionConnectedServicesAuthSwitch: (props: unknown) => {
+    sessionConnectedServicesAuthSwitchSpy(props);
+    return { connectedServicesAuthChip: null, statusBadges: [] };
+  },
+}));
 vi.mock('@/components/ui/icons/DependabotIcon', () => ({
   DependabotIcon: 'DependabotIcon',
 }));
@@ -152,7 +173,7 @@ vi.mock('@/utils/platform/responsive', () => ({
   useIsTablet: () => false,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-  useDraft: () => ({ clearDraft: vi.fn() }),
+  useDraft: () => ({ clearDraft: vi.fn(), setDraftValue: vi.fn() }),
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
   getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -174,6 +195,7 @@ vi.mock('@/sync/sync', () => ({
     fetchPendingMessages: async () => {},
     refreshSessions: async () => {},
     onSessionVisible: () => () => {},
+    markSessionLiveTailIntent: () => {},
     ensureSidechainMessagesLoaded: async () => {},
     sendMessage: async () => {},
     enqueuePendingMessage: async () => {},
@@ -193,7 +215,9 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
 }));
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
   resolveMachineTargetForSessionFromState: (_state: unknown, sessionId: string) => readMachineTargetForSessionSpy(sessionId),
+  resolveDisplayMachineTargetForSessionFromState: (_state: unknown, input: unknown) => readDisplayMachineTargetForSessionSpy(input),
   readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
+  readMachineControlTargetForSession: (sessionId: string) => readMachineControlTargetForSessionSpy(sessionId),
   readDisplayMachineTargetForSession: (input: unknown) => readDisplayMachineTargetForSessionSpy(input),
   readDisplayMachineIdForSession: (input: unknown) => readDisplayMachineTargetForSessionSpy(input)?.machineId ?? '',
   readDisplayPathForSession: (input: unknown) => readDisplayMachineTargetForSessionSpy(input)?.basePath ?? '',
@@ -290,8 +314,19 @@ installSessionShellCommonModuleMocks({
   },
   storage: async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    const getStorageStateForTest = () => ({
+      sessions: { s1: sessionState.session },
+      settings: {},
+      sessionListViewDataByServerId: {},
+    });
     return createStorageModuleStub({
-      storage: { getState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }) },
+      storage: Object.assign(
+        (selector?: (state: any) => unknown) => {
+          const state = getStorageStateForTest();
+          return typeof selector === 'function' ? selector(state) : state;
+        },
+        { getState: getStorageStateForTest },
+      ) as any,
       useSession: () => sessionState.session,
       useIsDataReady: () => true,
       useRealtimeStatus: () => ({ current: { status: 'connected' } as any }),
@@ -382,6 +417,7 @@ function getHeaderExtraItemIds(props: any): string[] {
 
 describe('SessionView header action menu visibility', () => {
   afterEach(() => {
+    vi.useRealTimers();
     standardCleanup();
     sessionState.session = {
       id: 's1',
@@ -404,8 +440,11 @@ describe('SessionView header action menu visibility', () => {
     mobileWorkspaceExperienceState.setValue.mockReset();
     keyboardDismissSpy.mockReset();
     headerActionMenuSpy.mockClear();
+    sessionConnectedServicesAuthSwitchSpy.mockClear();
     readMachineTargetForSessionSpy.mockReset();
     readMachineTargetForSessionSpy.mockReturnValue(null);
+    readMachineControlTargetForSessionSpy.mockReset();
+    readMachineControlTargetForSessionSpy.mockReturnValue(null);
     readDisplayMachineTargetForSessionSpy.mockReset();
     readDisplayMachineTargetForSessionSpy.mockReturnValue(null);
     resolveSessionWorkspacePresentationSpy.mockClear();
@@ -462,6 +501,70 @@ describe('SessionView header action menu visibility', () => {
         machineId: 'machine-origin',
         basePath: '/repo/origin',
       },
+    }));
+  });
+
+  it('passes a validated session control target to connected-services auth switching', async () => {
+    sessionState.session = {
+      ...sessionState.session,
+      metadata: {
+        machineId: 'machine-origin',
+        path: '/repo/origin',
+      },
+    };
+    readMachineTargetForSessionSpy.mockReturnValue(null);
+    readMachineControlTargetForSessionSpy.mockReturnValue({
+      machineId: 'machine-origin',
+      basePath: '/repo/origin',
+      confidence: 'metadata_direct',
+    });
+
+    await renderSessionView();
+
+    expect(sessionConnectedServicesAuthSwitchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: 'machine-origin',
+    }));
+  });
+
+  it('does not pass stale metadata machine id to connected-services auth switching without a control target', async () => {
+    sessionState.session = {
+      ...sessionState.session,
+      metadata: {
+        machineId: 'machine-origin',
+        path: '/repo/origin',
+      },
+    };
+    readMachineTargetForSessionSpy.mockReturnValue(null);
+    readMachineControlTargetForSessionSpy.mockReturnValue(null);
+
+    await renderSessionView();
+
+    expect(sessionConnectedServicesAuthSwitchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      machineId: null,
+    }));
+  });
+
+  it('does not block connected-services auth switching for stale in-progress projection', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_000_000));
+    sessionState.session = {
+      ...sessionState.session,
+      active: true,
+      activeAt: 0,
+      presence: 'online',
+      thinking: false,
+      thinkingAt: 0,
+      latestTurnStatus: 'in_progress',
+      latestTurnStatusObservedAt: 1,
+      pendingPermissionRequestCount: 0,
+      pendingUserActionRequestCount: 0,
+      pendingRequestObservedAt: null,
+    };
+
+    await renderSessionView();
+
+    expect(sessionConnectedServicesAuthSwitchSpy).toHaveBeenCalledWith(expect.objectContaining({
+      switchingDisabledReason: null,
     }));
   });
 
@@ -547,6 +650,30 @@ describe('SessionView header action menu visibility', () => {
     expect(extraIds).toContain('header.openRuns');
     expect(extraIds).toContain('header.openAutomations');
     expect(extraIds).toContain('header.openSubagents');
+  });
+
+  it('keeps folded header action menu items stable across unrelated session header updates', async () => {
+    platformState.os = 'web';
+    responsiveState.deviceType = 'phone';
+    responsiveState.isLandscape = false;
+    windowDimensionsState.width = 420;
+    executionRunsFeatureState.enabled = true;
+    sessionExecutionRunsSupportedState.supported = true;
+    executionRunsBackendsState.backends = null;
+    automationsSupportState.enabled = true;
+
+    const screen = await renderSessionView();
+    const firstExtraItems = getLastHeaderActionMenuProps().extraItems;
+
+    headerActionMenuSpy.mockClear();
+    sessionState.session = {
+      ...sessionState.session,
+      thinking: true,
+      latestTurnStatus: 'running',
+    };
+    await screen.update(<SessionView id="s1" />);
+
+    expect(getLastHeaderActionMenuProps().extraItems).toBe(firstExtraItems);
   });
 
   it('offers switching from default cockpit to classic on phones', async () => {

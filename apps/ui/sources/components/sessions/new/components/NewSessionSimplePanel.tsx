@@ -208,6 +208,7 @@ function NewSessionSimplePanelComposer({
                         extraActionChips={attachmentsController.extraActionChips}
                         inputMaxHeight={props.sessionPromptInputMaxHeight}
                         maxPanelHeight={maxPanelHeight}
+                        panelMaxHeightMode="host-constrained"
                         submitAccessibilityLabel={props.submitAccessibilityLabel}
                         agentType={props.agentType}
                         agentLabel={props.agentLabel}

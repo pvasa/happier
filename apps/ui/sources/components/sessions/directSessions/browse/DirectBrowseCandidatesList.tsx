@@ -13,7 +13,6 @@ import { t } from '@/text';
 import {
     buildDirectBrowseCandidateDisplayTitle,
     buildDirectBrowseCandidateRightElement,
-    buildDirectBrowseCandidateSearchValue,
     buildDirectBrowseCandidateSubtitle,
 } from './buildDirectBrowseCandidatePresentation';
 import type { DirectBrowseCandidate } from './useDirectBrowseCandidates';
@@ -28,6 +27,7 @@ const stylesheet = StyleSheet.create((theme: AppTheme) => ({
         fontSize: 13,
     },
     searchContainer: {
+        position: 'relative',
         paddingHorizontal: 12,
         paddingTop: 12,
         paddingBottom: 6,
@@ -39,6 +39,14 @@ const stylesheet = StyleSheet.create((theme: AppTheme) => ({
         backgroundColor: theme.colors.surface.inset,
         color: theme.colors.text.primary,
         fontSize: 13,
+    },
+    searchInputWithAugmentingIndicator: {
+        paddingRight: 40,
+    },
+    searchAugmentingIndicator: {
+        position: 'absolute',
+        right: 22,
+        top: 22,
     },
     loadingRow: {
         paddingVertical: 18,
@@ -53,33 +61,34 @@ export const DirectBrowseCandidatesList = React.memo(function DirectBrowseCandid
     error: string | null;
     nextCursor: string | null;
     loadingMore: boolean;
+    searchAugmenting: boolean;
     linkingSessionId: string | null;
+    searchQuery: string;
+    onSearchQueryChange: (value: string) => void;
     onSelectCandidate: (candidate: DirectBrowseCandidate) => void;
     onLoadMore: () => void;
 }>) {
     const { theme } = useUnistyles() as { theme: AppTheme };
     const styles = stylesheet;
     const itemDensity = useResolvedItemDensity(undefined);
-
-    const [searchQuery, setSearchQuery] = React.useState('');
-
-    const filteredCandidates = React.useMemo(() => {
-        const normalizedSearchQuery = searchQuery.trim().toLowerCase();
-        if (!normalizedSearchQuery) return props.candidates;
-        return props.candidates.filter((candidate) => buildDirectBrowseCandidateSearchValue(candidate).includes(normalizedSearchQuery));
-    }, [props.candidates, searchQuery]);
+    const hasSearchQuery = props.searchQuery.trim().length > 0;
 
     return (
         <ItemGroup title={t('directSessions.browseCandidates')}>
             <View style={styles.searchContainer}>
                 <TextInput
                     testID="direct-session-candidates-search-input"
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
+                    value={props.searchQuery}
+                    onChangeText={props.onSearchQueryChange}
                     placeholder={t('directSessions.browseSearchPlaceholder')}
                     placeholderTextColor={theme.colors.input.placeholder}
-                    style={styles.searchInput}
+                    style={[styles.searchInput, props.searchAugmenting ? styles.searchInputWithAugmentingIndicator : null]}
                 />
+                {props.searchAugmenting ? (
+                    <View testID="direct-session-candidates-search-augmenting" style={styles.searchAugmentingIndicator}>
+                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                    </View>
+                ) : null}
             </View>
 
             {props.loading ? (
@@ -90,17 +99,17 @@ export const DirectBrowseCandidatesList = React.memo(function DirectBrowseCandid
                 <View>
                     <Text style={styles.helperText}>{props.error}</Text>
                 </View>
+            ) : props.candidates.length === 0 && hasSearchQuery ? (
+                <View>
+                    <Text style={styles.helperText}>{t('directSessions.browseNoSearchResults')}</Text>
+                </View>
             ) : props.candidates.length === 0 ? (
                 <View>
                     <Text style={styles.helperText}>{t('directSessions.browseNoCandidates')}</Text>
                 </View>
-            ) : filteredCandidates.length === 0 ? (
-                <View>
-                    <Text style={styles.helperText}>{t('directSessions.browseNoSearchResults')}</Text>
-                </View>
             ) : (
                 <>
-                    {filteredCandidates.map((candidate) => (
+                    {props.candidates.map((candidate) => (
                         <Item
                             key={candidate.remoteSessionId}
                             testID={`direct-session-candidate:${candidate.remoteSessionId}`}

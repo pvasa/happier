@@ -8,7 +8,7 @@ import { Text } from '@/components/ui/text/Text';
 import { ChangedFilesReview } from '@/components/sessions/files/content/ChangedFilesReview';
 import { ChangedFilesViewModeMenu } from '@/components/sessions/files/ChangedFilesViewModeMenu';
 import { useChangedFilesData } from '@/hooks/session/files/useChangedFilesData';
-import { useProjectForSession, useProjectSessions, useSessionMessages, useSessionProjectScmOperationLog, useSessionProjectScmSnapshot, useSessionProjectScmSnapshotError, useSessionProjectScmTouchedPaths, useSessionWorkspacePath, useSetting, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { useProjectForSession, useProjectSessions, useSessionMessages, useSessionProjectScmOperationLog, useSessionProjectScmSnapshot, useSessionProjectScmSnapshotError, useSessionProjectScmTouchedPaths, useSessionRealtimeScmTranscriptConsumer, useSessionWorkspacePath, useSetting, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { ScmChangeDiscardButton } from '@/components/sessions/sourceControl/changes/ScmChangeDiscardButton';
@@ -34,6 +34,52 @@ import {
 } from '@/scm/scmAttribution';
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 
+const REVIEW_SCROLL_TOP_PERSIST_DEBOUNCE_MS = 250;
+const REVIEW_SCROLL_TOP_PERSIST_EPSILON_PX = 1;
+
+function areReviewScrollTopValuesEqual(previous: unknown, next: unknown): boolean {
+    if (Object.is(previous, next)) return true;
+    if (typeof previous !== 'number' || typeof next !== 'number') return false;
+    if (!Number.isFinite(previous) || !Number.isFinite(next)) return false;
+    return Math.abs(previous - next) < REVIEW_SCROLL_TOP_PERSIST_EPSILON_PX;
+}
+
+function areReviewTabStateValuesEqual(key: string, previous: unknown, next: unknown): boolean {
+    if (key === 'scrollTop') {
+        return areReviewScrollTopValuesEqual(previous, next);
+    }
+    if (Object.is(previous, next)) return true;
+    if (Array.isArray(previous) || Array.isArray(next)) {
+        const previousArray = Array.isArray(previous) ? previous : [];
+        const nextArray = Array.isArray(next) ? next : [];
+        if (previousArray.length !== nextArray.length) return false;
+        return previousArray.every((value, index) => Object.is(value, nextArray[index]));
+    }
+    return false;
+}
+
+function useMountedReviewInitialState(
+    sessionId: string,
+    scrollTop: number | null,
+    collapsedPaths: string[] | null,
+): Readonly<{ scrollTop: number | null; collapsedPaths: string[] | null }> {
+    const initialStateRef = React.useRef<Readonly<{
+        sessionId: string;
+        scrollTop: number | null;
+        collapsedPaths: string[] | null;
+    }> | null>(null);
+
+    if (!initialStateRef.current || initialStateRef.current.sessionId !== sessionId) {
+        initialStateRef.current = {
+            sessionId,
+            scrollTop,
+            collapsedPaths: collapsedPaths ? [...collapsedPaths] : null,
+        };
+    }
+
+    return initialStateRef.current;
+}
+
 export type SessionScmReviewDetailsViewProps = Readonly<{
     sessionId: string;
     scopeId: string;
@@ -57,6 +103,7 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
         const raw = persistedReviewTabState?.scrollTop;
         return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
     }, [persistedReviewTabState?.scrollTop]);
+    const mountedInitialReviewState = useMountedReviewInitialState(props.sessionId, persistedScrollTop, persistedCollapsedPaths);
     const persistedReviewTabStateRef = React.useRef<Record<string, unknown>>({});
     React.useEffect(() => {
         persistedReviewTabStateRef.current =
@@ -68,23 +115,52 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
         const prev = persistedReviewTabStateRef.current ?? {};
         let hasChange = false;
         for (const [key, value] of Object.entries(patch)) {
-            if (prev[key] !== value) {
+            if (!areReviewTabStateValuesEqual(key, prev[key], value)) {
                 hasChange = true;
                 break;
             }
         }
         if (!hasChange) return;
-        setDetailsTabState(reviewTabKey, { ...prev, ...patch });
+        const next = { ...prev, ...patch };
+        persistedReviewTabStateRef.current = next;
+        setDetailsTabState(reviewTabKey, next);
     }, [setDetailsTabState]);
     const onCollapsedPathsChange = React.useCallback((paths: string[]) => {
         setPersistedReviewTabState({ collapsedPaths: paths });
     }, [setPersistedReviewTabState]);
-    const onScrollTopChange = React.useCallback((top: number) => {
+    const pendingScrollTopRef = React.useRef<number | null>(null);
+    const scrollTopPersistTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const flushPendingScrollTop = React.useCallback(() => {
+        if (scrollTopPersistTimerRef.current) {
+            clearTimeout(scrollTopPersistTimerRef.current);
+            scrollTopPersistTimerRef.current = null;
+        }
+        const top = pendingScrollTopRef.current;
+        pendingScrollTopRef.current = null;
+        if (typeof top !== 'number' || !Number.isFinite(top)) return;
         setPersistedReviewTabState({ scrollTop: top });
     }, [setPersistedReviewTabState]);
+    const onScrollTopChange = React.useCallback((top: number) => {
+        if (!Number.isFinite(top)) return;
+        if (areReviewScrollTopValuesEqual(pendingScrollTopRef.current, top)) return;
+        if (pendingScrollTopRef.current === null && areReviewScrollTopValuesEqual(persistedReviewTabStateRef.current?.scrollTop, top)) return;
+        pendingScrollTopRef.current = top;
+        if (scrollTopPersistTimerRef.current) {
+            clearTimeout(scrollTopPersistTimerRef.current);
+        }
+        scrollTopPersistTimerRef.current = setTimeout(() => {
+            scrollTopPersistTimerRef.current = null;
+            const pendingTop = pendingScrollTopRef.current;
+            pendingScrollTopRef.current = null;
+            if (typeof pendingTop !== 'number' || !Number.isFinite(pendingTop)) return;
+            setPersistedReviewTabState({ scrollTop: pendingTop });
+        }, REVIEW_SCROLL_TOP_PERSIST_DEBOUNCE_MS);
+    }, [setPersistedReviewTabState]);
+    React.useEffect(() => flushPendingScrollTop, [flushPendingScrollTop]);
     const project = useProjectForSession(props.sessionId);
     const sessionPath = useSessionWorkspacePath(props.sessionId);
     const snapshot = useSessionProjectScmSnapshot(props.sessionId);
+    useSessionRealtimeScmTranscriptConsumer(props.sessionId, snapshot);
     const lastGoodSnapshot = useLastNonNullValue(snapshot, { resetKey: props.sessionId });
     const effectiveSnapshot = snapshot ?? lastGoodSnapshot;
     const snapshotError = useSessionProjectScmSnapshotError(props.sessionId);
@@ -304,9 +380,9 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
                 maxChangedLines={maxChangedLines}
                 onFilePress={openFileDefault}
                 onFilePressPinned={openFilePinned}
-                initialCollapsedPaths={persistedCollapsedPaths}
+                initialCollapsedPaths={mountedInitialReviewState.collapsedPaths}
                 onCollapsedPathsChange={onCollapsedPathsChange}
-                initialScrollTop={persistedScrollTop}
+                initialScrollTop={mountedInitialReviewState.scrollTop}
                 onScrollTopChange={onScrollTopChange}
                 renderFileTrailingActions={renderReviewFileTrailingActions}
                 rowDensity="compact"

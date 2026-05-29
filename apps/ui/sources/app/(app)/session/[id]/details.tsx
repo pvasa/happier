@@ -20,9 +20,10 @@ import { resolveFullscreenDetailsRouteSelection } from '@/components/workspaceCo
 import { useFullscreenDetailsRouteController } from '@/components/workspaceCockpit/useFullscreenDetailsRouteController';
 import { useFullscreenDetailsRouteParamSync } from '@/components/workspaceCockpit/useFullscreenDetailsRouteParamSync';
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 
 type SessionDetailsRouteParamsShape = Readonly<{
     details?: string;
@@ -49,12 +50,14 @@ export default function SessionDetailsScreenRoute() {
     const params = useLocalSearchParams<{ id: string; serverId?: string; details?: string; path?: string; sha?: string; terminalInstanceId?: string; sourceSurface?: string }>();
     const { id: sessionIdParam } = params;
     const sessionId = String(sessionIdParam ?? '').trim();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params), [params]);
-    const sessionHydrated = useHydrateSessionForRoute(
+    const routeScope = useSessionRouteServerScope(params);
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId,
         'SessionDetailsRoute.ensureSessionVisible',
         routeScope.hydrationOptions,
     );
+    const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
     const scopeId = React.useMemo(() => `session:${sessionId}`, [sessionId]);
     const pane = useAppPaneScope(scopeId);
@@ -158,7 +161,7 @@ export default function SessionDetailsScreenRoute() {
         enabled: isFocused,
     });
 
-    if (!sessionId) {
+    if (!sessionId || sessionMissingAfterHydration) {
         return <SessionInvalidLinkFallback />;
     }
 
@@ -174,6 +177,7 @@ export default function SessionDetailsScreenRoute() {
                         scopeId={scopeId}
                         surface="tabs"
                         routeServerId={routeScope.serverId ?? undefined}
+                        routeHydrationState={routeHydrationState}
                         safeAreaPadding={false}
                     />
                 ) : (

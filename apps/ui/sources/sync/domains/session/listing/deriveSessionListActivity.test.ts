@@ -69,6 +69,8 @@ describe('deriveSessionListAttentionState', () => {
         latestReadyEventSeq?: number | null;
         latestReadyEventAt?: number | null;
         lastViewedSessionSeq?: number | null;
+        latestTurnStatusObservedAt?: number | null;
+        meaningfulActivityAt?: number | null;
     } = {}) {
         return {
             hasUnreadMessages: false,
@@ -100,11 +102,32 @@ describe('deriveSessionListAttentionState', () => {
         }))).toBe('thinking');
     });
 
-    it('prioritizes failed primary turns over every other attention source', () => {
+    it('keeps action and permission blockers visible over failed primary turns', () => {
         expect(deriveSessionListAttentionState(input({
             latestTurnStatus: 'failed',
             lastRuntimeIssue: runtimeIssue,
             sessionState: 'action_required',
+            pendingCount: 2,
+            hasUnreadMessages: true,
+            latestReadyEventSeq: 10,
+            lastViewedSessionSeq: 1,
+        }))).toBe('action_required');
+
+        expect(deriveSessionListAttentionState(input({
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: runtimeIssue,
+            sessionState: 'permission_required',
+            pendingCount: 2,
+            hasUnreadMessages: true,
+            latestReadyEventSeq: 10,
+            lastViewedSessionSeq: 1,
+        }))).toBe('permission_required');
+    });
+
+    it('prioritizes failed primary turns over non-blocking attention sources', () => {
+        expect(deriveSessionListAttentionState(input({
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: runtimeIssue,
             pendingCount: 2,
             hasUnreadMessages: true,
             latestReadyEventSeq: 10,
@@ -136,6 +159,69 @@ describe('deriveSessionListAttentionState', () => {
         }))).toBe('thinking');
     });
 
+    it('does not keep stale working attention after a completed primary turn projection with no newer activity', () => {
+        expect(deriveSessionListAttentionState(input({
+            sessionState: 'waiting',
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 500,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('ready');
+    });
+
+    it('keeps unread attention when activity is clearly newer than the completed primary turn projection', () => {
+        expect(deriveSessionListAttentionState(input({
+            hasUnreadMessages: true,
+            sessionState: 'waiting',
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 3_500,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('unread');
+    });
+
+    it('keeps failed attention when activity is newer than a failed primary turn projection', () => {
+        expect(deriveSessionListAttentionState(input({
+            sessionState: 'waiting',
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: runtimeIssue,
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 1_500,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('failed');
+    });
+
+    it('uses fresh session status thinking after a failed terminal projection as working attention', () => {
+        expect(deriveSessionListAttentionState(input({
+            sessionState: 'thinking',
+            latestTurnStatus: 'failed',
+            lastRuntimeIssue: runtimeIssue,
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 500,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('thinking');
+    });
+
+    it('does not treat stale in-progress projection as working attention without fresh session status thinking', () => {
+        expect(deriveSessionListAttentionState(input({
+            sessionState: 'waiting',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 1_500,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('quiet');
+    });
+
     it('marks ready only when the latest ready seq is newer than the read cursor', () => {
         expect(deriveSessionListAttentionState(input({
             hasUnreadMessages: true,
@@ -147,6 +233,54 @@ describe('deriveSessionListAttentionState', () => {
             hasUnreadMessages: true,
             latestReadyEventSeq: 10,
             lastViewedSessionSeq: 10,
+        }))).toBe('unread');
+    });
+
+    it('marks completed turns as ready when the session seq is newer than the read cursor', () => {
+        expect(deriveSessionListAttentionState(input({
+            hasUnreadMessages: true,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 1_000,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('ready');
+
+        expect(deriveSessionListAttentionState(input({
+            hasUnreadMessages: true,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 1_000,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 10,
+        }))).toBe('unread');
+    });
+
+    it('marks completed turns as ready when final activity lands just after the terminal projection', () => {
+        expect(deriveSessionListAttentionState(input({
+            hasUnreadMessages: true,
+            sessionState: 'waiting',
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 1_044,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
+        }))).toBe('ready');
+    });
+
+    it('does not mark post-terminal work as ready just because later tool events advance the session seq', () => {
+        expect(deriveSessionListAttentionState(input({
+            hasUnreadMessages: true,
+            sessionState: 'waiting',
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 1_000,
+            meaningfulActivityAt: 3_500,
+            seq: 10,
+            latestReadyEventSeq: null,
+            lastViewedSessionSeq: 9,
         }))).toBe('unread');
     });
 

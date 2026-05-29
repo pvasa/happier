@@ -18,6 +18,7 @@ type AgentInputSelectOption = Readonly<{ value: string; name: string }>;
 type AgentInputOptionControl = Readonly<{
     id: string;
     name: string;
+    category?: string;
     type: string;
     currentValue: string;
     options?: ReadonlyArray<AgentInputSelectOption>;
@@ -220,6 +221,31 @@ describe('NewSessionEngineOptionDetail', () => {
         probeRefreshSpies.config.mockClear();
     });
 
+    it('renders an engine favorite action in the model header and toggles it without refreshing models', async () => {
+        const onToggleFavoriteEngine = vi.fn();
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        const screen = await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="default"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{}}
+            favoriteEngine={{
+                favorite: true,
+                onToggle: onToggleFavoriteEngine,
+            }}
+        />);
+
+        expect(lastModelPickerOverlayProps?.headerAccessory).toBeTruthy();
+
+        await screen.pressByTestIdAsync('new-session-engine-favorite-toggle');
+
+        expect(onToggleFavoriteEngine).toHaveBeenCalledTimes(1);
+        expect(probeRefreshSpies.models).not.toHaveBeenCalled();
+    });
+
     it('does not render session mode selection in the engine popover (mode is controlled by the dedicated chip) and preserves the incoming sessionModeId on model changes', async () => {
         type SelectionChange = {
             modelId: string;
@@ -278,7 +304,7 @@ describe('NewSessionEngineOptionDetail', () => {
         expect(lastModelPickerOverlayProps.canEnterCustomValue).toBe(true);
     });
 
-    it('marks only dynamically probed favorite models as favoritable for dynamic backends', async () => {
+    it('marks dynamically probed and catalog fallback models as favoritable for dynamic backends', async () => {
         modelOptionsState.value = [
             { value: 'default', label: 'Use CLI settings', description: '' },
             { value: 'preset-fast', label: 'Preset Fast', description: 'Fast preset model.' },
@@ -307,9 +333,14 @@ describe('NewSessionEngineOptionDetail', () => {
         />);
 
         expect(lastModelPickerOverlayProps?.favoriteOptions?.values.has('preset-fast')).toBe(true);
-        expect(lastModelPickerOverlayProps?.favoriteOptions?.values.has('catalog-only')).toBe(false);
+        expect(lastModelPickerOverlayProps?.favoriteOptions?.values.has('catalog-only')).toBe(true);
         expect(lastModelPickerOverlayProps?.favoriteOptions?.isFavoritable({ value: 'preset-fast' })).toBe(true);
-        expect(lastModelPickerOverlayProps?.favoriteOptions?.isFavoritable({ value: 'catalog-only' })).toBe(false);
+        expect(lastModelPickerOverlayProps?.favoriteOptions?.isFavoritable({ value: 'catalog-only' })).toBe(true);
+        expect((lastModelPickerOverlayProps?.options ?? []).map((option: ModelOptionEntry) => option.value)).toEqual([
+            'preset-fast',
+            'catalog-only',
+            'default',
+        ]);
     });
 
     it('marks static catalog models as favoritable for static-only backends', async () => {
@@ -529,6 +560,316 @@ describe('NewSessionEngineOptionDetail', () => {
             sessionModeId: 'default',
             configOverrides: {
                 thinking: 'high',
+            },
+        });
+    });
+
+    it('renders Cursor model-scoped ACP options only as selected-model controls', async () => {
+        const modelScopedOptions: ReadonlyArray<AgentInputOptionControl> = [
+            {
+                id: 'reasoning_effort',
+                name: 'Reasoning',
+                type: 'select',
+                currentValue: 'medium',
+                options: [
+                    { value: 'medium', name: 'Medium' },
+                    { value: 'high', name: 'High' },
+                ],
+            },
+            {
+                id: 'effort',
+                name: 'Effort',
+                type: 'select',
+                currentValue: 'high',
+                options: [
+                    { value: 'medium', name: 'Medium' },
+                    { value: 'high', name: 'High' },
+                ],
+            },
+            {
+                id: 'context',
+                name: 'Context',
+                type: 'select',
+                currentValue: '200k',
+                options: [
+                    { value: '200k', name: '200k' },
+                    { value: '272k', name: '272k' },
+                ],
+            },
+            {
+                id: 'fast',
+                name: 'Fast',
+                type: 'select',
+                currentValue: 'false',
+                options: [
+                    { value: 'false', name: 'Off' },
+                    { value: 'true', name: 'On' },
+                ],
+            },
+            {
+                id: 'thinking',
+                name: 'Thinking',
+                type: 'select',
+                currentValue: 'enabled',
+                options: [
+                    { value: 'disabled', name: 'Disabled' },
+                    { value: 'enabled', name: 'Enabled' },
+                ],
+            },
+        ];
+        modelOptionsState.value = [
+            {
+                value: 'composer-2.5',
+                label: 'Composer 2.5',
+                description: 'Cursor default.',
+                modelOptions: modelScopedOptions,
+            },
+        ];
+        configOptionsState.value = [
+            ...modelScopedOptions,
+            {
+                id: 'telemetry',
+                name: 'Telemetry',
+                type: 'select',
+                currentValue: 'false',
+                options: [
+                    { value: 'false', name: 'Off' },
+                    { value: 'true', name: 'On' },
+                ],
+            },
+        ];
+
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        const screen = await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="composer-2.5"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{}}
+        />);
+
+        for (const option of modelScopedOptions) {
+            expect(screen.findByTestId(`agent-input-config-option:${option.id}`)).toBeNull();
+        }
+        expect(screen.findByTestId('agent-input-config-option:telemetry')).toBeTruthy();
+        expect(lastModelPickerOverlayProps?.selectedOptionControls?.map((control: any) => control.option.id)).toEqual([
+            'reasoning_effort',
+            'effort',
+            'context',
+            'fast',
+            'thinking',
+        ]);
+    });
+
+    it('does not render model or mode ACP config options as generic engine controls while model probing is pending', async () => {
+        modelOptionsState.value = [];
+        configOptionsState.value = [
+            {
+                id: 'mode',
+                name: 'Mode',
+                category: 'mode',
+                type: 'select',
+                currentValue: 'agent',
+                options: [
+                    { value: 'agent', name: 'Agent' },
+                    { value: 'plan', name: 'Plan' },
+                ],
+            },
+            {
+                id: 'model',
+                name: 'Model',
+                category: 'model',
+                type: 'select',
+                currentValue: 'composer-2.5[fast=true]',
+                options: [
+                    { value: 'composer-2.5[fast=true]', name: 'Composer 2.5' },
+                    { value: 'gpt-5.5[context=272k,reasoning=medium,fast=false]', name: 'GPT-5.5' },
+                ],
+            },
+            {
+                id: 'telemetry',
+                name: 'Telemetry',
+                category: 'session',
+                type: 'select',
+                currentValue: 'false',
+                options: [
+                    { value: 'false', name: 'Off' },
+                    { value: 'true', name: 'On' },
+                ],
+            },
+        ];
+
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        const screen = await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="default"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{}}
+        />);
+
+        expect(screen.findByTestId('agent-input-config-option:mode')).toBeNull();
+        expect(screen.findByTestId('agent-input-config-option:model')).toBeNull();
+        expect(screen.findByTestId('agent-input-config-option:telemetry')).toBeTruthy();
+    });
+
+    it('drops incompatible model option overrides when another model is selected', async () => {
+        modelOptionsState.value = [
+            {
+                value: 'anthropic/claude-opus-4-1',
+                label: 'Claude Opus 4.1',
+                description: 'Previous model.',
+                modelOptions: [{
+                    id: 'reasoning_effort',
+                    name: 'Reasoning effort',
+                    type: 'select',
+                    currentValue: 'xhigh',
+                    options: [
+                        { value: 'high', name: 'High' },
+                        { value: 'xhigh', name: 'Extra high' },
+                    ],
+                }],
+            },
+            {
+                value: 'anthropic/claude-sonnet-4-6',
+                label: 'Claude Sonnet 4.6',
+                description: 'Selected model.',
+                modelOptions: [{
+                    id: 'reasoning_effort',
+                    name: 'Reasoning effort',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' },
+                    ],
+                }],
+            },
+        ];
+        configOptionsState.value = [{
+            id: 'service_tier',
+            name: 'Speed',
+            type: 'select',
+            currentValue: 'standard',
+            options: [
+                { value: 'standard', name: 'Standard' },
+                { value: 'fast', name: 'Fast' },
+            ],
+        }];
+
+        let latestSelection: { modelId: string; sessionModeId: string; configOverrides: Readonly<Record<string, string>> } | null = null;
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="anthropic/claude-opus-4-1"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{
+                reasoning_effort: 'xhigh',
+                service_tier: 'fast',
+            }}
+            onSelectionChange={(selection) => {
+                latestSelection = selection;
+            }}
+        />);
+
+        act(() => {
+            lastModelPickerOverlayProps.onSelect('anthropic/claude-sonnet-4-6');
+        });
+
+        expect(latestSelection).toEqual({
+            modelId: 'anthropic/claude-sonnet-4-6',
+            sessionModeId: 'default',
+            configOverrides: {
+                service_tier: 'fast',
+            },
+        });
+    });
+
+    it('publishes a valid model option override after the model changes', async () => {
+        modelOptionsState.value = [
+            {
+                value: 'anthropic/claude-opus-4-1',
+                label: 'Claude Opus 4.1',
+                description: 'Previous model.',
+                modelOptions: [{
+                    id: 'legacy_thinking',
+                    name: 'Legacy thinking',
+                    type: 'select',
+                    currentValue: 'xhigh',
+                    options: [
+                        { value: 'high', name: 'High' },
+                        { value: 'xhigh', name: 'Extra high' },
+                    ],
+                }],
+            },
+            {
+                value: 'anthropic/claude-sonnet-4-6',
+                label: 'Claude Sonnet 4.6',
+                description: 'Selected model.',
+                modelOptions: [{
+                    id: 'reasoning_effort',
+                    name: 'Reasoning effort',
+                    type: 'select',
+                    currentValue: 'medium',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'medium', name: 'Medium' },
+                        { value: 'high', name: 'High' },
+                    ],
+                }],
+            },
+        ];
+        configOptionsState.value = [{
+            id: 'service_tier',
+            name: 'Speed',
+            type: 'select',
+            currentValue: 'standard',
+            options: [
+                { value: 'standard', name: 'Standard' },
+                { value: 'fast', name: 'Fast' },
+            ],
+        }];
+
+        let latestSelection: { modelId: string; sessionModeId: string; configOverrides: Readonly<Record<string, string>> } | null = null;
+        const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+        await renderScreen(<NewSessionEngineOptionDetail
+            backendTarget={backendTarget}
+            selectedMachineId="machine-1"
+            capabilityServerId="server-1"
+            cwd="/repo"
+            selectedModelId="anthropic/claude-opus-4-1"
+            selectedSessionModeId="default"
+            selectedConfigOverrides={{
+                legacy_thinking: 'xhigh',
+                service_tier: 'fast',
+            }}
+            onSelectionChange={(selection) => {
+                latestSelection = selection;
+            }}
+        />);
+
+        act(() => {
+            lastModelPickerOverlayProps.onSelect('anthropic/claude-sonnet-4-6');
+        });
+
+        act(() => {
+            lastModelPickerOverlayProps.onSelectOptionControlValue('reasoning_effort', 'high');
+        });
+
+        expect(latestSelection).toEqual({
+            modelId: 'anthropic/claude-sonnet-4-6',
+            sessionModeId: 'default',
+            configOverrides: {
+                reasoning_effort: 'high',
+                service_tier: 'fast',
             },
         });
     });

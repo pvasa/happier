@@ -24,7 +24,7 @@ type UseServerScopedMachineOptionsParams = Readonly<{
     allowedServerIds: ReadonlyArray<string>;
     activeServerId: string;
     activeMachines: ReadonlyArray<Machine>;
-    refreshToken?: number;
+    refreshToken?: string | number;
 }>;
 
 function normalizeServerIds(ids: ReadonlyArray<string>): string[] {
@@ -52,20 +52,102 @@ function buildServerScopedMachine(machine: Machine, params: Readonly<{ serverId:
     };
 }
 
+function buildMachineOptionSignature(machine: Machine): string {
+    const readinessStatus = resolveMachineSpawnReadiness({
+        selectedMachineId: machine.id,
+        machine,
+        requireExactSpawnReadiness: true,
+    }).status;
+    const metadata = machine.metadata;
+    return [
+        machine.id,
+        String(machine.active === true),
+        String(machine.activeAt ?? ''),
+        String(machine.updatedAt ?? ''),
+        String(machine.daemonStateVersion ?? ''),
+        readinessStatus,
+        String(machine.revokedAt ?? ''),
+        String(machine.replacedByMachineId ?? ''),
+        String(metadata?.displayName ?? ''),
+        String(metadata?.host ?? ''),
+        String(metadata?.homeDir ?? ''),
+        String(metadata?.platform ?? ''),
+    ].join('|');
+}
+
+function buildMachineListSignature(machines: ReadonlyArray<Machine>): string {
+    return machines.map(buildMachineOptionSignature).join('\n');
+}
+
+function buildScopedMachineListsSignature(
+    serverIds: ReadonlyArray<string>,
+    machineListByServerId: Readonly<Record<string, ReadonlyArray<Machine> | null | undefined>>,
+    machineListStatusByServerId: Readonly<Record<string, string | undefined>>,
+): string {
+    return serverIds.map((serverId) => {
+        const hasCached = Object.prototype.hasOwnProperty.call(machineListByServerId, serverId);
+        const machines = machineListByServerId[serverId];
+        const machineSignature = Array.isArray(machines) ? buildMachineListSignature(machines) : '';
+        return [
+            serverId,
+            String(hasCached),
+            String(machineListStatusByServerId[serverId] ?? ''),
+            machineSignature,
+        ].join('|');
+    }).join('\n');
+}
+
+function buildServerProfilesSignature(profilesById: ReadonlyMap<string, ServerProfile>): string {
+    return Array.from(profilesById.values())
+        .map((profile) => [
+            profile.id,
+            profile.name,
+        ].join('|'))
+        .sort()
+        .join('\n');
+}
+
+function useStableValueBySignature<Value>(value: Value, signature: string): Value {
+    const stableRef = React.useRef<Readonly<{ signature: string; value: Value }> | null>(null);
+    if (!stableRef.current || stableRef.current.signature !== signature) {
+        stableRef.current = { signature, value };
+    }
+    return stableRef.current.value;
+}
+
 export function useServerScopedMachineOptions(params: UseServerScopedMachineOptionsParams): ServerScopedMachineGroup[] {
-    const allowedServerIds = React.useMemo(
-        () => normalizeServerIds(params.allowedServerIds),
+    const allowedServerIdsKey = React.useMemo(
+        () => normalizeServerIds(params.allowedServerIds).join('\n'),
         [params.allowedServerIds],
     );
-    const serverProfiles = React.useMemo(() => {
+    const allowedServerIds = React.useMemo(
+        () => allowedServerIdsKey ? allowedServerIdsKey.split('\n') : [],
+        [allowedServerIdsKey],
+    );
+    const rawServerProfiles = React.useMemo(() => {
         const byId = new Map<string, ServerProfile>();
         for (const profile of listServerProfiles()) {
             byId.set(profile.id, profile);
         }
         return byId;
-    }, [params.refreshToken, allowedServerIds.join(',')]);
-    const machineListByServerId = useMachineListByServerId();
-    const machineListStatusByServerId = useMachineListStatusByServerId();
+    }, [allowedServerIdsKey, params.refreshToken]);
+    const serverProfilesSignature = React.useMemo(
+        () => buildServerProfilesSignature(rawServerProfiles),
+        [rawServerProfiles],
+    );
+    const serverProfiles = useStableValueBySignature(rawServerProfiles, serverProfilesSignature);
+    const rawMachineListByServerId = useMachineListByServerId();
+    const rawMachineListStatusByServerId = useMachineListStatusByServerId();
+    const scopedMachineListsSignature = React.useMemo(
+        () => buildScopedMachineListsSignature(allowedServerIds, rawMachineListByServerId, rawMachineListStatusByServerId),
+        [allowedServerIds, rawMachineListByServerId, rawMachineListStatusByServerId],
+    );
+    const machineListByServerId = useStableValueBySignature(rawMachineListByServerId, scopedMachineListsSignature);
+    const machineListStatusByServerId = useStableValueBySignature(rawMachineListStatusByServerId, scopedMachineListsSignature);
+    const activeMachinesSignature = React.useMemo(
+        () => buildMachineListSignature(params.activeMachines),
+        [params.activeMachines],
+    );
 
     return React.useMemo(() => {
         const activeServerId = String(params.activeServerId ?? '').trim();
@@ -94,9 +176,9 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
         });
     }, [
         allowedServerIds,
+        activeMachinesSignature,
         machineListByServerId,
         machineListStatusByServerId,
-        params.activeMachines,
         params.activeServerId,
         serverProfiles,
     ]);

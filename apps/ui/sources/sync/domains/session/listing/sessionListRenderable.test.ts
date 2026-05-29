@@ -5,6 +5,7 @@ import {
     buildSessionListRenderableFromSession,
     derivePendingRequestFlagsFromAgentState,
     didSessionListRenderableAttentionPromotionFieldsChange,
+    didSessionListRenderableReachabilityPeerFieldsChange,
     preserveSessionListRenderableStaleFields,
 } from './sessionListRenderable';
 import type { SessionListRenderableSession } from './sessionListRenderable';
@@ -131,7 +132,33 @@ describe('preserveSessionListRenderableStaleFields', () => {
 });
 
 describe('buildSessionListRenderableFromSession', () => {
-    it('projects unread state onto renderable session rows', () => {
+    it('treats terminal turn projection as authoritative over legacy thinking in renderable state', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_terminal_thinking',
+            seq: 4,
+            lastViewedSessionSeq: 4,
+            createdAt: 1,
+            updatedAt: 10_000,
+            active: true,
+            activeAt: 10_000,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: 9_500,
+            thinking: true,
+            thinkingAt: 10_000,
+            presence: 'online',
+        } as Session);
+
+        expect(renderable.thinking).toBe(false);
+        expect(renderable.thinkingAt).toBe(9_500);
+        expect(renderable.latestTurnStatus).toBe('completed');
+    });
+
+    it('projects ready unread state onto renderable session rows', () => {
         const renderable = buildSessionListRenderableFromSession({
             id: 's_unread',
             seq: 4,
@@ -145,10 +172,96 @@ describe('buildSessionListRenderableFromSession', () => {
             metadataVersion: 1,
             agentState: null,
             agentStateVersion: 0,
+            latestTurnStatus: 'completed',
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } satisfies Session);
+            latestReadyEventSeq: 4,
+            latestReadyEventAt: 2_000,
+        } as Session);
+
+        expect(renderable.hasUnreadMessages).toBe(true);
+    });
+
+    it('does not mark cache-only non-terminal rows unread from raw session seq when transcript activity is unavailable', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_unhydrated_usage_tail',
+            seq: 946,
+            lastViewedSessionSeq: 945,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestTurnStatus: 'in_progress',
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        } as any);
+
+        expect(renderable.hasUnreadMessages).toBe(false);
+    });
+
+    it('does not keep rows unread for trailing non-displayable session activity after visible messages are read', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_read_usage_tail',
+            seq: 946,
+            lastViewedSessionSeq: 945,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestTurnStatus: 'in_progress',
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        } as any, [{
+            id: 'm-visible',
+            kind: 'agent-text',
+            seq: 945,
+            localId: null,
+            createdAt: 1,
+            text: 'Visible final assistant message',
+        }]);
+
+        expect(renderable.hasUnreadMessages).toBe(false);
+    });
+
+    it('keeps rows unread when a displayable message is newer than the cursor', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_unread_visible',
+            seq: 946,
+            lastViewedSessionSeq: 944,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            latestTurnStatus: 'in_progress',
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        } as any, [{
+            id: 'm-visible',
+            kind: 'agent-text',
+            seq: 945,
+            localId: null,
+            createdAt: 1,
+            text: 'Visible assistant message',
+        }]);
 
         expect(renderable.hasUnreadMessages).toBe(true);
     });
@@ -249,23 +362,33 @@ describe('buildSessionListRenderableFromSession', () => {
         expect(areSessionListRenderablesEqual(previous, next)).toBe(false);
     });
 
-    it('treats updatedAt as an attention promotion input', () => {
+    it('ignores progress timestamps when attention placement is unchanged', () => {
         const previous = buildRenderable({
             id: 's_action',
             updatedAt: 100,
+            seq: 10,
+            meaningfulActivityAt: 100,
             active: true,
             presence: 'online',
+            thinking: true,
+            thinkingAt: Date.now() - 1_000,
             hasPendingUserActionRequests: true,
+            pendingRequestObservedAt: Date.now() - 1_000,
         });
         const next = buildRenderable({
             id: 's_action',
             updatedAt: 200,
+            seq: 11,
+            meaningfulActivityAt: 200,
             active: true,
             presence: 'online',
+            thinking: true,
+            thinkingAt: Date.now() - 1_000,
             hasPendingUserActionRequests: true,
+            pendingRequestObservedAt: previous.pendingRequestObservedAt,
         });
 
-        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, next)).toBe(true);
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, next)).toBe(false);
     });
 
     it('keeps read-state actions derived from the projected session cursor', () => {
@@ -282,11 +405,13 @@ describe('buildSessionListRenderableFromSession', () => {
             metadataVersion: 1,
             agentState: null,
             agentStateVersion: 0,
+            latestTurnStatus: 'completed',
             thinking: false,
             thinkingAt: 0,
             presence: 1,
         } satisfies Session);
 
+        expect(renderable.latestTurnStatus).toBe('completed');
         expect(resolveSessionReadStateAction(renderable)).toEqual({
             kind: 'mark-unread',
             visible: true,
@@ -311,6 +436,7 @@ describe('buildSessionListRenderableFromSession', () => {
             metadataVersion: 1,
             agentState: null,
             agentStateVersion: 0,
+            latestTurnStatus: 'completed',
             thinking: false,
             thinkingAt: 0,
             presence: 1,
@@ -381,6 +507,32 @@ describe('buildSessionListRenderableFromSession', () => {
         expect(renderable.hasPendingUserActionRequests).toBe(false);
     });
 
+    it('projects pending request observed timestamps onto renderable session rows', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_pending_observed_at',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 100,
+            active: true,
+            activeAt: 1,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: {
+                requests: {},
+                completedRequests: null,
+            },
+            agentStateVersion: 0,
+            pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 0,
+            pendingRequestObservedAt: 25,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        } as any);
+
+        expect(renderable.pendingRequestObservedAt).toBe(25);
+    });
+
     it('still prefers projected pending-request counts when the cached transcript only has old terminal history', () => {
         storageState.sessionMessages = {
             s1: {
@@ -435,7 +587,7 @@ describe('buildSessionListRenderableFromSession', () => {
         expect(renderable.hasPendingUserActionRequests).toBe(false);
     });
 
-    it('does not prefer projected pending-request counts when the transcript has a newer terminal outcome', () => {
+    it('prefers projected pending-request counts even when cached transcript history has a terminal outcome', () => {
         storageState.sessionMessages = {
             s1: {
                 messages: [
@@ -485,7 +637,7 @@ describe('buildSessionListRenderableFromSession', () => {
             presence: 'online',
         } as any);
 
-        expect(renderable.hasPendingPermissionRequests).toBe(false);
+        expect(renderable.hasPendingPermissionRequests).toBe(true);
         expect(renderable.hasPendingUserActionRequests).toBe(false);
     });
 
@@ -630,16 +782,20 @@ describe('buildSessionListRenderableFromSession', () => {
 
 describe('didSessionListRenderableAttentionPromotionFieldsChange', () => {
     it('detects ready, pending, failed, and working-field changes that affect attention promotion', () => {
+        const now = 1_000_000;
         const previous = buildRenderable({ id: 's_attention' });
 
         expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
             ...previous,
             latestReadyEventSeq: 4,
-        })).toBe(true);
+        }, now)).toBe(true);
         expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
             ...previous,
+            active: true,
+            presence: 'online',
             hasPendingUserActionRequests: true,
-        })).toBe(true);
+            pendingRequestObservedAt: now - 1_000,
+        }, now)).toBe(true);
         expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
             ...previous,
             latestTurnStatus: 'failed',
@@ -651,11 +807,14 @@ describe('didSessionListRenderableAttentionPromotionFieldsChange', () => {
                 source: 'auth_error',
                 occurredAt: 123,
             },
-        })).toBe(true);
+        }, now)).toBe(true);
         expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
             ...previous,
+            active: true,
+            presence: 'online',
             thinking: true,
-        })).toBe(true);
+            thinkingAt: now - 1_000,
+        }, now)).toBe(true);
     });
 
     it('ignores unread-only changes so unread sessions do not reorder the list', () => {
@@ -664,6 +823,53 @@ describe('didSessionListRenderableAttentionPromotionFieldsChange', () => {
         expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
             ...previous,
             hasUnreadMessages: true,
+        })).toBe(false);
+    });
+
+    it('detects terminal status changes even when stale runtime freshness projects both rows outside placement', () => {
+        const now = 1_000_000;
+        const previous = buildRenderable({
+            id: 's_retained_working_terminal',
+            seq: 10,
+            lastViewedSessionSeq: 10,
+            active: true,
+            presence: 'online',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: now - 600_000,
+            activeAt: now - 600_000,
+            thinking: false,
+            thinkingAt: 0,
+        });
+
+        expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
+            ...previous,
+            latestTurnStatus: 'completed',
+            latestTurnStatusObservedAt: now,
+        }, now)).toBe(true);
+    });
+});
+
+describe('didSessionListRenderableReachabilityPeerFieldsChange', () => {
+    it('ignores progress timestamps that do not change reachability peers', () => {
+        const previous = buildRenderable({
+            id: 's_reachability',
+            seq: 1,
+            updatedAt: 100,
+            meaningfulActivityAt: 100,
+            active: true,
+            metadata: {
+                machineId: 'machine-a',
+                host: 'host-a',
+                path: '/repo',
+                homeDir: '/home/alice',
+            } as any,
+        });
+
+        expect(didSessionListRenderableReachabilityPeerFieldsChange(previous, {
+            ...previous,
+            seq: 2,
+            updatedAt: 200,
+            meaningfulActivityAt: 200,
         })).toBe(false);
     });
 });

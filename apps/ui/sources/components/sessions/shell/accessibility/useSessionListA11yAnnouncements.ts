@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
 
-import type { BlockedReason, TreeDropResult } from '@/components/ui/treeDragDrop';
+import type { BlockedReason } from '@/components/ui/treeDragDrop';
 import { t } from '@/text';
+import type { SessionListInstructionBlockReason, SessionListTreeDropResult } from '../drop-resolution/sessionListTreeTypes';
 
 export type SessionListA11yAnnouncementSubject = Readonly<{
     label: string;
@@ -10,7 +11,7 @@ export type SessionListA11yAnnouncementSubject = Readonly<{
 
 export type SessionListA11yDropAnnouncement = SessionListA11yAnnouncementSubject & Readonly<{
     destinationLabel?: string | null;
-    result: TreeDropResult;
+    result: SessionListTreeDropResult;
 }>;
 
 export type UseSessionListA11yAnnouncementsResult = Readonly<{
@@ -58,6 +59,22 @@ function formatBlockedReason(reason: BlockedReason): string {
     }
 }
 
+function formatSessionListBlockReason(reason: SessionListInstructionBlockReason | undefined): string | null {
+    switch (reason) {
+        case 'direct-session':
+            return t('sessionsList.dragA11yBlockedDirectSession');
+        case 'feature-disabled':
+            return t('sessionsList.dragA11yBlockedFeatureDisabled');
+        case 'unsupported-item':
+            return t('sessionsList.dragA11yBlockedUnsupportedItem');
+        case 'date-ordering-mode':
+            return t('sessionsList.dragA11yBlockedDateOrderingMode');
+        case undefined:
+        default:
+            return null;
+    }
+}
+
 function formatDropAnnouncement(input: SessionListA11yDropAnnouncement): string {
     const destination = input.destinationLabel ?? '';
     switch (input.result.instruction.kind) {
@@ -80,7 +97,8 @@ function formatDropAnnouncement(input: SessionListA11yDropAnnouncement): string 
         case 'blocked':
             return t('sessionsList.dragA11yBlocked', {
                 item: input.label,
-                reason: formatBlockedReason(input.result.instruction.reason),
+                reason: formatSessionListBlockReason(input.result.sessionListBlockReason)
+                    ?? formatBlockedReason(input.result.instruction.reason),
             });
         case 'idle':
         default:
@@ -101,11 +119,11 @@ export function useSessionListA11yAnnouncements(): UseSessionListA11yAnnouncemen
         announce(formatDropAnnouncement(drop));
     }, []);
 
-    return {
+    return React.useMemo(() => ({
         announcePickedUp,
         announceCancelled,
         announceDropResult,
-    };
+    }), [announceCancelled, announceDropResult, announcePickedUp]);
 }
 
 function ensureWebLiveRegion(doc: Document): HTMLElement {

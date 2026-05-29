@@ -7,13 +7,16 @@ import type {
 } from '@/components/ui/treeDragDrop';
 import type { SessionListIndexItem } from '@/sync/domains/session/listing/sessionListIndex';
 import type { SessionFolderWorkspaceRefV1 } from '@/sync/domains/session/folders';
+export type { SessionListFolderSortModeV1 as SessionListFolderSortMode } from '@/sync/domains/session/listing/sessionListFolderSortMode';
+export { SESSION_LIST_FOLDER_SORT_MODE_DEFAULT_V1 as DEFAULT_SESSION_LIST_FOLDER_SORT_MODE } from '@/sync/domains/session/listing/sessionListFolderSortMode';
 
 export type SessionListTreeRowKind = 'workspace-root' | 'folder' | 'session';
 
 export type SessionListInstructionBlockReason =
     | 'feature-disabled'
     | 'direct-session'
-    | 'unsupported-item';
+    | 'unsupported-item'
+    | 'date-ordering-mode';
 
 export type SessionListTreeDropResult = TreeDropResult & Readonly<{
     sessionListBlockReason?: SessionListInstructionBlockReason;
@@ -41,6 +44,7 @@ export type SessionListTreeRowMetadata = Readonly<{
 
 export type SessionListTreeContainerMetadata = Readonly<{
     containerId: string;
+    kind: 'workspace-order' | 'children';
     rootId: string;
     groupKey: string;
     parentRowId: string | null;

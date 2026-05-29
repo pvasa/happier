@@ -5,11 +5,11 @@
  * screen.
  *
  * Migration note (Phase 11.4): this file previously rendered the legacy
- * `PathSelector` with `searchVariant="belowInput"`. SelectionList unifies the
+ * `PathSelector` with the search field below the input. SelectionList unifies the
  * input + search into a single field, so the "below input" search header is
  * not part of the new model — fuzzy filtering happens through the same input
  * that types paths. Callers no longer need to pass `searchQuery` /
- * `onChangeSearchQuery` / `usePickerSearch` / `searchVariant`. Other survival
+ * `onChangeSearchQuery` / legacy picker-search props. Other survival
  * behaviors (favorites, recents, machine-aware browse, pre-browse hook) are
  * preserved end-to-end.
  */
@@ -18,15 +18,27 @@ import * as React from 'react';
 import { View, type ViewStyle } from 'react-native';
 
 import { layout } from '@/components/ui/layout/layout';
-import { resolveDirectoryFavoriteComparisonKey } from '@/components/sessions/new/hooks/favoriteDirectoriesToggle';
+import { resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
+import {
+    normalizeDirectoryFavoritePaths,
+    resolveDirectoryFavoriteComparisonKey,
+    toggleHomeAwareDirectoryFavorite,
+} from '@/components/sessions/new/hooks/favoriteDirectoriesToggle';
 import type { PathTargetPlatform } from '@/utils/path/browseSegments';
 
 import { PathSelectionList } from './PathSelectionList';
+import type { PathSelectionInitialSuggestionMode } from './createPathSelectionInputBehavior';
 
 export type NewSessionPathSelectionContentProps = Readonly<{
     machineHomeDir: string;
     /** Current absolute (or `~/`-relative) path that seeds the picker input. */
     selectedPath: string;
+    /**
+     * Popover callers use history-first so opening the path chip shows saved
+     * locations before machine folder suggestions. Dedicated picker surfaces
+     * omit this to preserve direct browse-from-selected-path behavior.
+     */
+    initialSuggestionMode?: PathSelectionInitialSuggestionMode;
     /** Called when the user commits a path (Enter, row tap, or browse modal). */
     onCommit: (path: string) => void;
     /** Called while the user edits the path input, before commit closes the popover. */
@@ -56,11 +68,29 @@ export type NewSessionPathSelectionContentProps = Readonly<{
 }>;
 
 export function NewSessionPathSelectionContent(props: NewSessionPathSelectionContentProps) {
+    const [optimisticFavoriteDirectories, setOptimisticFavoriteDirectories] = React.useState<ReadonlyArray<string>>(
+        () => normalizeDirectoryFavoritePaths(props.favoriteDirectories, props.machineHomeDir),
+    );
+    React.useEffect(() => {
+        setOptimisticFavoriteDirectories((current) => {
+            const next = normalizeDirectoryFavoritePaths(
+                props.favoriteDirectories,
+                props.machineHomeDir,
+            );
+            if (current.length === next.length && current.every((entry, index) => entry === next[index])) {
+                return current;
+            }
+            return next;
+        });
+    }, [props.favoriteDirectories, props.machineHomeDir]);
+
+    const visibleFavoriteDirectories = React.useMemo(
+        () => normalizeDirectoryFavoritePaths(optimisticFavoriteDirectories, props.machineHomeDir),
+        [optimisticFavoriteDirectories, props.machineHomeDir],
+    );
     const favorites = React.useMemo(
-        () => props.favoriteDirectories
-            .filter((p) => typeof p === 'string' && p.trim().length > 0)
-            .map((p) => ({ path: p })),
-        [props.favoriteDirectories],
+        () => visibleFavoriteDirectories.map((path) => ({ path })),
+        [visibleFavoriteDirectories],
     );
 
     // The legacy hook did not track per-row `lastUsedAt`; the recents array is
@@ -75,12 +105,28 @@ export function NewSessionPathSelectionContent(props: NewSessionPathSelectionCon
     // fresh `Date.now()` per render churns the recents identity downstream
     // and feeds the resolver-identity invalidation cycle (R16a).
     const synthesizedSeedRef = React.useRef<number>(Date.now());
+    const favoriteAbsolutePaths = React.useMemo(() => {
+        const set = new Set<string>();
+        for (const entry of visibleFavoriteDirectories) {
+            set.add(resolveDirectoryFavoriteComparisonKey(entry, props.machineHomeDir));
+        }
+        return set;
+    }, [visibleFavoriteDirectories, props.machineHomeDir]);
+
     const recents = React.useMemo(() => {
         const seed = synthesizedSeedRef.current;
+        const seenRecentPaths = new Set<string>();
         return props.recentPaths
             .filter((p) => typeof p === 'string' && p.trim().length > 0)
+            .filter((path) => {
+                const comparisonKey = resolveDirectoryFavoriteComparisonKey(path, props.machineHomeDir);
+                if (favoriteAbsolutePaths.has(comparisonKey)) return false;
+                if (seenRecentPaths.has(comparisonKey)) return false;
+                seenRecentPaths.add(comparisonKey);
+                return true;
+            })
             .map((p, index) => ({ path: p, lastUsedAt: seed - index }));
-    }, [props.recentPaths]);
+    }, [favoriteAbsolutePaths, props.machineHomeDir, props.recentPaths]);
 
     // R6 Fix 2: do NOT wrap the path picker in an ItemList. The SelectionList
     // primitive owns its outer popover chrome (background, radius, max-height);
@@ -89,16 +135,8 @@ export function NewSessionPathSelectionContent(props: NewSessionPathSelectionCon
     // contentWrapper is enough to apply layout width constraints.
     // RUX-3: build a Set of absolute favorite paths once per favorites change so
     // the per-row predicate is O(1) and stable. The orchestrator owns the
-    // mutation API; this hook only forwards the toggle.
-    const favoriteAbsolutePaths = React.useMemo(() => {
-        const set = new Set<string>();
-        for (const entry of props.favoriteDirectories) {
-            if (typeof entry !== 'string' || entry.trim().length === 0) continue;
-            set.add(resolveDirectoryFavoriteComparisonKey(entry, props.machineHomeDir));
-        }
-        return set;
-    }, [props.favoriteDirectories, props.machineHomeDir]);
-
+    // persistence API; this component also keeps an optimistic local copy so
+    // the open popover updates immediately while settings sync catches up.
     const isFavorite = React.useCallback(
         (absolutePath: string) => favoriteAbsolutePaths.has(
             resolveDirectoryFavoriteComparisonKey(absolutePath, props.machineHomeDir),
@@ -109,13 +147,21 @@ export function NewSessionPathSelectionContent(props: NewSessionPathSelectionCon
     const onToggleFavoriteDirectory = props.onToggleFavoriteDirectory;
     const onToggleFavorite = React.useMemo(() => {
         if (!onToggleFavoriteDirectory) return undefined;
-        return (absolutePath: string) => onToggleFavoriteDirectory(absolutePath);
-    }, [onToggleFavoriteDirectory]);
+        return (absolutePath: string) => {
+            setOptimisticFavoriteDirectories((current) => toggleHomeAwareDirectoryFavorite(
+                current,
+                absolutePath,
+                props.machineHomeDir,
+            ));
+            onToggleFavoriteDirectory(absolutePath);
+        };
+    }, [onToggleFavoriteDirectory, props.machineHomeDir]);
 
     return (
         <View style={styles.contentWrapper}>
             <PathSelectionList
                 initialValue={props.selectedPath}
+                initialSuggestionMode={props.initialSuggestionMode}
                 favorites={favorites}
                 recents={recents}
                 machineHomeDir={props.machineHomeDir}
@@ -129,6 +175,11 @@ export function NewSessionPathSelectionContent(props: NewSessionPathSelectionCon
                 isFavorite={onToggleFavorite ? isFavorite : undefined}
                 onToggleFavorite={onToggleFavorite}
                 maxHeight={props.maxHeight}
+                heightBehavior={
+                    props.maxHeight === undefined
+                        ? undefined
+                        : resolvePopoverSelectionListHeightBehavior('stabilizedContentHeight')
+                }
             />
         </View>
     );

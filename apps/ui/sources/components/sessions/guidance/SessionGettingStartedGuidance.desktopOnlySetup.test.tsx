@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionGuidanceCommonModuleMocks } from './sessionGuidanceTestHelpers';
@@ -42,6 +42,15 @@ const tauriState = vi.hoisted(() => ({
     desktop: false,
 }));
 
+const connectTerminalHookState = vi.hoisted(() => ({
+    calls: 0,
+}));
+
+const routerMockState = vi.hoisted(() => ({
+    push: vi.fn(),
+    useRouterCalls: 0,
+}));
+
 vi.mock('@/utils/platform/tauri', () => ({
     isTauriDesktop: () => tauriState.desktop,
 }));
@@ -51,15 +60,18 @@ vi.mock('@/config', () => ({
 }));
 
 vi.mock('@/hooks/session/useConnectTerminal', () => ({
-    useConnectTerminal: () => ({
-        connectTerminal: () => {},
-        connectWithUrl: () => {},
-        isLoading: false,
-    }),
+    useConnectTerminal: () => {
+        connectTerminalHookState.calls += 1;
+        return {
+            connectTerminal: () => {},
+            connectWithUrl: () => {},
+            isLoading: false,
+        };
+    },
 }));
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
-    useVisibleSessionListViewData: () => [],
+    useVisibleSessionListSessionSummary: () => ({ sessionsReady: true, visibleSessionCount: 0 }),
 }));
 
 vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({
@@ -79,9 +91,23 @@ vi.mock('@/sync/domains/features/featureBuildPolicy', () => ({
     getFeatureBuildPolicyDecision: () => 'neutral',
 }));
 
-installSessionGuidanceCommonModuleMocks();
+installSessionGuidanceCommonModuleMocks({
+    router: () => ({
+        router: { push: routerMockState.push },
+        useRouter: () => {
+            routerMockState.useRouterCalls += 1;
+            return { push: routerMockState.push };
+        },
+    }),
+});
 
 describe('SessionGettingStartedGuidance (desktop-only setup CTA)', () => {
+    beforeEach(() => {
+        connectTerminalHookState.calls = 0;
+        routerMockState.push.mockClear();
+        routerMockState.useRouterCalls = 0;
+    });
+
     it('hides the Open setup CTA on non-Tauri surfaces', async () => {
         tauriState.desktop = false;
         vi.resetModules();
@@ -89,6 +115,8 @@ describe('SessionGettingStartedGuidance (desktop-only setup CTA)', () => {
 
         const tree: renderer.ReactTestRenderer = (await renderScreen(<SessionGettingStartedGuidance variant="sidebar" />)).tree;
         expect(() => tree.root.findByProps({ testID: 'session-getting-started-open-setup' })).toThrow();
+        expect(connectTerminalHookState.calls).toBe(0);
+        expect(routerMockState.useRouterCalls).toBe(0);
     });
 
     it('shows the Open setup CTA on Tauri desktop', async () => {

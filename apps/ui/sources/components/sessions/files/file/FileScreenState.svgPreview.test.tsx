@@ -39,10 +39,16 @@ describe('FileBinaryState (svg previews)', () => {
 
         const theme = {
             colors: {
-                surface: '#000',
-                surfaceHigh: '#111',
-                divider: '#222',
-                textSecondary: '#bbb',
+                surface: {
+                    base: '#000',
+                    inset: '#111',
+                },
+                border: {
+                    default: '#222',
+                },
+                text: {
+                    secondary: '#bbb',
+                },
             },
         } as any;
 

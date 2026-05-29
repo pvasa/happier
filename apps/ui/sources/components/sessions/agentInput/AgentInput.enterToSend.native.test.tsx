@@ -148,6 +148,11 @@ vi.mock('@/components/ui/forms/MultiTextInput', () => ({
                 props.onChangeText?.(text);
                 props.onStateChange?.({ text, selection });
             },
+            setSelection: (selection: { start: number; end: number }) => {
+                const text = typeof props.value === 'string' ? props.value : '';
+                props.onStateChange?.({ text, selection });
+                props.onSelectionChange?.(selection);
+            },
             focus: mocks.inputFocus,
             blur: mocks.inputBlur,
         }));

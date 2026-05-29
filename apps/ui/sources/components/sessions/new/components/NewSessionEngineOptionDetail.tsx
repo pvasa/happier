@@ -1,4 +1,7 @@
 import * as React from 'react';
+import { Pressable } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { buildBackendTargetKey, type BackendTargetRefV1 } from '@happier-dev/protocol';
 
@@ -12,7 +15,9 @@ import {
     useNewSessionPreflightModelsState,
 } from '@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState';
 import type { NewSessionCapabilityProbeContext } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
-import { computeAcpConfigOptionControlsForProvider } from '@/sync/acp/configOptionsControl';
+import { collectNewSessionModelScopedOptionIds } from '@/components/sessions/new/modules/collectNewSessionModelScopedOptionIds';
+import { sanitizeNewSessionConfigOverridesForModelSelection } from '@/components/sessions/new/modules/newSessionConfigOptionOverrideSanitization';
+import { computeAcpConfigOptionControlsForProvider, type AcpConfigOptionControl } from '@/sync/acp/configOptionsControl';
 import {
     buildFavoriteModelAvailabilityById,
     resolveAvailableFavoriteModelsForBackend,
@@ -40,6 +45,10 @@ export type NewSessionEngineOptionDetailProps = Readonly<{
         modelId: string;
         modelLabel: string;
     }>) => void;
+    favoriteEngine?: Readonly<{
+        favorite: boolean;
+        onToggle: () => void;
+    }>;
     onSelectionChange?: (selection: Readonly<{
         modelId: string;
         sessionModeId: string;
@@ -94,6 +103,45 @@ function areSelectionsEqual(
     return current.modelId === next.modelId
         && current.sessionModeId === next.sessionModeId
         && areSelectedConfigOverridesEqual(current.configOverrides, next.configOverrides);
+}
+
+function removeModelScopedConfigControls(params: Readonly<{
+    controls: ReadonlyArray<AcpConfigOptionControl> | null;
+    modelOptions: ReadonlyArray<{
+        modelOptions?: ReadonlyArray<{ id: string }>;
+    }>;
+}>): ReadonlyArray<AcpConfigOptionControl> | null {
+    const modelScopedOptionIds = collectNewSessionModelScopedOptionIds(params.modelOptions);
+    if (!params.controls || params.controls.length === 0 || modelScopedOptionIds.size === 0) {
+        return params.controls;
+    }
+
+    const filtered = params.controls.filter((control) => !modelScopedOptionIds.has(control.option.id.trim()));
+    return filtered.length > 0 ? filtered : null;
+}
+
+function EngineFavoriteToggle(props: Readonly<{
+    favorite: boolean;
+    onToggle: () => void;
+}>) {
+    const { theme } = useUnistyles();
+    const selectedColor = theme.dark ? theme.colors.text.primary : theme.colors.button.primary.background;
+    return (
+        <Pressable
+            testID="new-session-engine-favorite-toggle"
+            accessibilityRole="button"
+            accessibilityLabel={props.favorite ? t('profiles.actions.removeFromFavorites') : t('profiles.actions.addToFavorites')}
+            accessibilityState={{ selected: props.favorite }}
+            onPress={props.onToggle}
+            style={styles.engineFavoriteButton}
+        >
+            <Ionicons
+                name={props.favorite ? 'star' : 'star-outline'}
+                size={20}
+                color={props.favorite ? selectedColor : theme.colors.text.secondary}
+            />
+        </Pressable>
+    );
 }
 
 export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetailProps) {
@@ -180,6 +228,9 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
         [props.backendTarget],
     );
     const providerCore = React.useMemo(() => getAgentCore(providerAgentId), [providerAgentId]);
+    const providerId = props.backendTarget.kind === 'configuredAcpBackend'
+        ? props.backendTarget.backendId
+        : props.backendTarget.agentId;
     const providerSupportsFreeform = providerCore.model.supportsFreeform === true;
     const canEnterCustomModel = preflightModels?.supportsFreeform === true || providerSupportsFreeform;
     const effectiveModelLabel = React.useMemo(
@@ -188,33 +239,43 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
     );
 
     const configControls = React.useMemo(
-        () => computeAcpConfigOptionControlsForProvider({
-            providerId:
-                props.backendTarget.kind === 'configuredAcpBackend'
-                    ? props.backendTarget.backendId
-                    : props.backendTarget.agentId,
-            configOptions,
-            overrides: Object.fromEntries(
-                Object.entries(selectedConfigOverrides).map(([optionId, value]) => [optionId, { value }]),
-            ),
-        }) ?? [],
-        [configOptions, props.backendTarget, selectedConfigOverrides],
+        () => removeModelScopedConfigControls({
+            controls: computeAcpConfigOptionControlsForProvider({
+                providerId,
+                configOptions,
+                overrides: Object.fromEntries(
+                    Object.entries(selectedConfigOverrides).map(([optionId, value]) => [optionId, { value }]),
+                ),
+                hideModeOption: true,
+                hideModelOption: true,
+            }) ?? null,
+            modelOptions,
+        }),
+        [configOptions, modelOptions, providerId, selectedConfigOverrides],
     );
 
     const selectedModelOptionControls = React.useMemo(() => {
         const selectedModel = modelOptions.find((option) => option.value === selectedModelId) ?? null;
         if (!selectedModel?.modelOptions?.length) return null;
         return computeAcpConfigOptionControlsForProvider({
-            providerId:
-                props.backendTarget.kind === 'configuredAcpBackend'
-                    ? props.backendTarget.backendId
-                    : props.backendTarget.agentId,
+            providerId,
             configOptions: selectedModel.modelOptions,
             overrides: Object.fromEntries(
                 Object.entries(selectedConfigOverrides).map(([optionId, value]) => [optionId, { value }]),
             ),
         }) ?? null;
-    }, [modelOptions, props.backendTarget, selectedConfigOverrides, selectedModelId]);
+    }, [modelOptions, providerId, selectedConfigOverrides, selectedModelId]);
+
+    const sanitizeConfigOverridesForModel = React.useCallback((
+        modelId: string,
+        configOverrides: Readonly<Record<string, string>>,
+    ) => sanitizeNewSessionConfigOverridesForModelSelection({
+        providerId,
+        configOptions,
+        modelOptions,
+        selectedModelId: modelId,
+        selectedConfigOverrides: configOverrides,
+    }), [configOptions, modelOptions, providerId]);
 
     const favoriteBackendIdentity = React.useMemo<FavoriteModelBackendIdentity>(() => ({
         backendTargetKey: buildBackendTargetKey(props.backendTarget),
@@ -263,6 +324,12 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             modelEmptyText={t('agentInput.model.configureInCli')}
             canEnterCustomModel={canEnterCustomModel}
             modelProbe={unifiedProbe}
+            modelHeaderAccessory={props.favoriteEngine ? (
+                <EngineFavoriteToggle
+                    favorite={props.favoriteEngine.favorite}
+                    onToggle={props.favoriteEngine.onToggle}
+                />
+            ) : undefined}
             favoriteModelValues={props.onToggleFavoriteModel ? favoriteModelValues : undefined}
             isModelFavoritable={isModelFavoritable}
             onToggleFavoriteModel={props.onToggleFavoriteModel ? (option) => {
@@ -272,15 +339,19 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
                 });
             } : undefined}
             onSelectModel={(modelId) => {
+                const configOverrides = sanitizeConfigOverridesForModel(modelId, selectionRef.current.configOverrides);
                 publishSelection({
                     ...selectionRef.current,
                     modelId,
+                    configOverrides,
                 });
             }}
             onSubmitCustomValue={canEnterCustomModel ? (modelId) => {
+                const configOverrides = sanitizeConfigOverridesForModel(modelId, selectionRef.current.configOverrides);
                 publishSelection({
                     ...selectionRef.current,
                     modelId,
+                    configOverrides,
                 });
             } : undefined}
             selectedModelOptionControls={selectedModelOptionControls}
@@ -307,3 +378,12 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
         />
     );
 }
+
+const styles = StyleSheet.create(() => ({
+    engineFavoriteButton: {
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+}));

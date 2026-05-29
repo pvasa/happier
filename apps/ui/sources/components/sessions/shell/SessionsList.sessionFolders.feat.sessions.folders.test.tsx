@@ -17,6 +17,8 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 const setSessionListGroupOrderV1 = vi.fn();
 const setCollapsedGroupKeysV1 = vi.fn();
 const setSessionFolderViewModeV1 = vi.fn();
+const setSessionListFolderSortModeV1 = vi.fn();
+const setSessionListOrderingModeV1 = vi.fn();
 const setSessionFoldersV1 = vi.fn();
 const setSessionTagsV1 = vi.fn();
 const setSessionListFocusedFolderV1 = vi.fn();
@@ -32,6 +34,8 @@ const setSessionFolderAssignmentSpy = vi.hoisted(() => vi.fn(async () => undefin
 const moveSessionFolderAssignmentsSpy = vi.hoisted(() => vi.fn(async () => undefined));
 
 let sessionFolderViewModeV1: 'off' | 'tree' = 'tree';
+let sessionListFolderSortModeV1: 'foldersFirst' | 'mixed' = 'foldersFirst';
+let sessionListOrderingModeV1: 'custom' | 'created' | 'updated' = 'custom';
 let sessionFoldersV1: any = { v: 1, folders: [] };
 let sessionListFocusedFolderV1: any = null;
 let collapsedGroupKeysV1: Record<string, boolean> = {};
@@ -84,6 +88,8 @@ installSessionShellCommonModuleMocks({
             if (key === 'rememberLastProjectSessionSelections') return false;
             if (key === 'sessionFolderViewModeV1') return sessionFolderViewModeV1;
             if (key === 'sessionFoldersV1') return sessionFoldersV1;
+            if (key === 'sessionListOrderingModeV1') return sessionListOrderingModeV1;
+            if (key === 'sessionListSectionModeV1') return 'activity';
             return null;
         },
         useSettingMutable: (key: string) => {
@@ -93,6 +99,7 @@ installSessionShellCommonModuleMocks({
             if (key === 'sessionFoldersV1') return [sessionFoldersV1, setSessionFoldersV1];
             if (key === 'sessionTagsV1') return [{}, setSessionTagsV1];
             if (key === 'pinnedSessionKeysV1') return [[], vi.fn()];
+            if (key === 'sessionListOrderingModeV1') return [sessionListOrderingModeV1, setSessionListOrderingModeV1];
             if (key === 'workspaceLabelsV1') return [{}, vi.fn()];
             return [null, vi.fn()];
         },
@@ -108,17 +115,18 @@ installSessionShellCommonModuleMocks({
                     },
                 ];
             }
+            if (key === 'sessionListFolderSortModeV1') {
+                return [sessionListFolderSortModeV1, setSessionListFolderSortModeV1];
+            }
             return [[], vi.fn()];
         },
     }),
 });
 
-vi.mock('react-native-reanimated', () => ({
-    default: { View: (props: any) => React.createElement('Animated.View', props) },
-    useSharedValue: (init: any) => ({ value: init }),
-    useAnimatedStyle: (fn: () => any) => fn(),
-    withSpring: (value: any) => value,
-}));
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return createReanimatedModuleMock();
+});
 
 vi.mock('react-native-gesture-handler', async () => {
     const { createGestureHandlerMock } = await import('@/dev/testkit/mocks/gestureHandler');
@@ -162,6 +170,13 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 
 vi.mock('@/sync/domains/server/serverProfiles', () => ({
     getServerProfileById: getServerProfileByIdSpy,
+    // `serverRuntime.getActiveServerSnapshot` re-exports this; the session-list
+    // memory-search augmentation reads it during render.
+    getActiveServerSnapshot: () => ({
+        serverId: 'server_a',
+        serverUrl: 'https://server-a.example',
+        generation: 0,
+    }),
 }));
 
 vi.mock('@/sync/ops/sessionFolders', () => ({
@@ -201,6 +216,7 @@ vi.mock('./SessionItem', () => ({
 }));
 
 const workspace = { t: 'workspaceScope', serverId: 'server_a', machineId: 'machine_a', rootPath: '/repo' };
+const otherWorkspace = { t: 'workspaceScope', serverId: 'server_a', machineId: 'machine_b', rootPath: '/elsewhere' };
 const projectGroupKey = 'server:server_a:active:project:project_a';
 const folderGroupKey = `${projectGroupKey}:folder:folder_a`;
 const sessionA = { id: 'sess_a', createdAt: 1, active: true, presence: 'online', metadata: null };
@@ -252,9 +268,52 @@ function resetFolderData() {
     ];
 }
 
+function resetProjectDataWithoutFolders() {
+    mockVisibleSessionListViewData = [
+        { type: 'header', title: 'Active', headerKind: 'active', groupKey: 'active', serverId: 'server_a' },
+        {
+            type: 'header',
+            title: '~/repo',
+            headerKind: 'project',
+            groupKey: projectGroupKey,
+            workspaceKey: 'project_a',
+            workspaceScopeHint: { serverId: 'server_a', machineId: 'machine_a', rootPath: '/repo' },
+            serverId: 'server_a',
+        },
+        {
+            type: 'session',
+            session: sessionA,
+            groupKey: projectGroupKey,
+            groupKind: 'project',
+            folderId: null,
+            folderDepth: 0,
+            serverId: 'server_a',
+        },
+        {
+            type: 'session',
+            session: sessionB,
+            groupKey: projectGroupKey,
+            groupKind: 'project',
+            folderId: null,
+            folderDepth: 0,
+            serverId: 'server_a',
+        },
+    ];
+}
+
 async function renderSessionsList() {
     const { SessionsList } = await import('./SessionsList');
     return renderScreen(<SessionsList />);
+}
+
+async function renderSessionsListWithSurfaceOwnership(surfaceOwnership: Readonly<{
+    ownerKey?: string;
+    visible?: boolean;
+    interactive: boolean;
+    dataActive: boolean;
+}>) {
+    const { SessionsList } = await import('./SessionsList');
+    return renderScreen(<SessionsList surfaceOwnership={surfaceOwnership} />);
 }
 
 function findSessionGesture(
@@ -278,6 +337,8 @@ function findFolderGesture(screen: Awaited<ReturnType<typeof renderSessionsList>
 describe('SessionsList session folders shell', () => {
     beforeEach(() => {
         sessionFolderViewModeV1 = 'tree';
+        sessionListFolderSortModeV1 = 'foldersFirst';
+        sessionListOrderingModeV1 = 'custom';
         sessionFoldersV1 = {
             v: 1,
             folders: [{
@@ -295,6 +356,8 @@ describe('SessionsList session folders shell', () => {
         setSessionListGroupOrderV1.mockClear();
         setCollapsedGroupKeysV1.mockClear();
         setSessionFolderViewModeV1.mockClear();
+        setSessionListFolderSortModeV1.mockClear();
+        setSessionListOrderingModeV1.mockClear();
         setSessionFoldersV1.mockClear();
         setSessionTagsV1.mockClear();
         setSessionListFocusedFolderV1.mockClear();
@@ -319,8 +382,34 @@ describe('SessionsList session folders shell', () => {
         expect(screen.findByTestId('session-folder-header-folder_a')).toBeTruthy();
         expect(screen.findByTestId('session-folder-reorder-handle-folder_a')).toBeTruthy();
         expect(screen.findByTestId('session-folder-menu-trigger-folder_a')).toBeTruthy();
-        expect(screen.findByTestId('session-folder-drop-target-folder_a')).toBeTruthy();
+        // The drop indicator is the single list-level SessionListDropOverlay;
+        // folder headers no longer render a row-local drop-target outline.
+        expect(screen.findByTestId('session-list-drop-overlay')).toBeTruthy();
         expect(screen.getTextContent()).not.toContain('47');
+    });
+
+    it('shows a workspace reorder handle with the project header hover actions', async () => {
+        const screen = await renderSessionsList();
+
+        const header = screen.findByTestId(`session-list-project-header:${projectGroupKey}`);
+        expect(header).toBeTruthy();
+        expect(screen.findByTestId(`session-workspace-reorder-handle:${projectGroupKey}`)).toBeNull();
+
+        await act(async () => {
+            invokeTestInstanceHandler(header, 'onHoverIn', undefined, 'expected project header');
+        });
+
+        const handle = screen.findByTestId(`session-workspace-reorder-handle:${projectGroupKey}`);
+        expect(handle).toBeTruthy();
+        expect(typeof handle?.props.onHoverIn).toBe('function');
+        expect(typeof handle?.props.onHoverOut).toBe('function');
+
+        await act(async () => {
+            invokeTestInstanceHandler(handle, 'onHoverIn', undefined, 'expected workspace reorder handle');
+            invokeTestInstanceHandler(header, 'onHoverOut', undefined, 'expected project header');
+        });
+
+        expect(screen.findByTestId(`session-workspace-reorder-handle:${projectGroupKey}`)).toBeTruthy();
     });
 
     it('attaches the folder drag gesture on web', async () => {
@@ -364,6 +453,24 @@ describe('SessionsList session folders shell', () => {
         expect(screen.findByTestId('session-list-session:sess_b')).toBeNull();
     });
 
+    it('does not clear stale focused folder state while the sessions surface is not data-active', async () => {
+        sessionListFocusedFolderV1 = {
+            folderId: 'missing-folder',
+            workspace,
+            renderWorkspaceKey: 'project_a',
+            serverId: 'server_a',
+        };
+
+        await renderSessionsListWithSurfaceOwnership({
+            ownerKey: 'phone-root',
+            visible: false,
+            interactive: false,
+            dataActive: false,
+        });
+
+        expect(setSessionListFocusedFolderV1).not.toHaveBeenCalledWith(null);
+    });
+
     it('renders the view menu with a folder view toggle on primary section headers', async () => {
         const screen = await renderSessionsList();
 
@@ -377,6 +484,62 @@ describe('SessionsList session folders shell', () => {
 
         dropdown?.props.onSelect('folder-view-off');
         expect(setSessionFolderViewModeV1).toHaveBeenCalledWith('off');
+    });
+
+    it('persists folder sort mode selections from the view menu', async () => {
+        const screen = await renderSessionsList();
+        const dropdown = screen.findAllByType('DropdownMenu' as React.ElementType)
+            .find((node) => node.props?.items?.some((item: any) => item.id === 'session-folder-sort-mode:mixed'));
+        const sortModeItems = dropdown?.props.items.filter((item: any) => String(item.id).startsWith('session-folder-sort-mode:')) ?? [];
+
+        expect(sortModeItems).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'session-folder-sort-mode:mixed', category: 'sessionsList.folderSortMode' }),
+            expect.objectContaining({ id: 'session-folder-sort-mode:foldersFirst', category: 'sessionsList.folderSortMode' }),
+        ]));
+        expect(sortModeItems.every((item: any) => item.submenu == null)).toBe(true);
+        expect(dropdown?.props.showCategoryTitles).toBe(true);
+
+        dropdown?.props.onSelect('session-folder-sort-mode:mixed');
+        expect(setSessionListFolderSortModeV1).toHaveBeenCalledWith('mixed');
+
+        dropdown?.props.onSelect('session-folder-sort-mode:foldersFirst');
+        expect(setSessionListFolderSortModeV1).toHaveBeenCalledWith('foldersFirst');
+    });
+
+    it('persists ordering mode selections from the view menu', async () => {
+        const screen = await renderSessionsList();
+        const dropdown = screen.findAllByType('DropdownMenu' as React.ElementType)
+            .find((node) => node.props?.items?.some((item: any) => item.id === 'created'));
+        const orderingItems = dropdown?.props.items.filter((item: any) => ['custom', 'created', 'updated'].includes(String(item.id))) ?? [];
+
+        expect(orderingItems.map((item: any) => item.id)).toEqual(['custom', 'created', 'updated']);
+        expect(orderingItems.every((item: any) => item.category === 'sessionsList.orderingMode.title')).toBe(true);
+
+        dropdown?.props.onSelect('created');
+        expect(setSessionListOrderingModeV1).toHaveBeenCalledWith('created');
+
+        dropdown?.props.onSelect('updated');
+        expect(setSessionListOrderingModeV1).toHaveBeenCalledWith('updated');
+    });
+
+    it('shows effective folders-first state and disables mixed folder sorting in date ordering modes', async () => {
+        sessionListOrderingModeV1 = 'updated';
+        sessionListFolderSortModeV1 = 'mixed';
+
+        const screen = await renderSessionsList();
+        const dropdown = screen.findAllByType('DropdownMenu' as React.ElementType)
+            .find((node) => node.props?.items?.some((item: any) => item.id === 'session-folder-sort-mode:mixed'));
+        const mixedItem = dropdown?.props.items.find((item: any) => item.id === 'session-folder-sort-mode:mixed');
+        const foldersFirstItem = dropdown?.props.items.find((item: any) => item.id === 'session-folder-sort-mode:foldersFirst');
+
+        expect(mixedItem?.disabled).toBe(true);
+        expect(mixedItem?.rightElement).toBeNull();
+        expect(mixedItem?.subtitle).toBe('sessionsList.folderSortMixedDisabledInDateMode');
+        expect(foldersFirstItem?.disabled).toBe(false);
+        expect(foldersFirstItem?.rightElement).toBeTruthy();
+
+        dropdown?.props.onSelect('session-folder-sort-mode:mixed');
+        expect(setSessionListFolderSortModeV1).not.toHaveBeenCalled();
     });
 
     it('passes folder indentation and move menu options to session rows', async () => {
@@ -473,6 +636,59 @@ describe('SessionsList session folders shell', () => {
     });
 
     it('passes a real drag gesture into session rows', async () => {
+        const screen = await renderSessionsList();
+
+        expect(findGestureByKind(findSessionGesture(screen, 'sess_a'), 'pan')).toBeTruthy();
+    });
+
+    it('hides session row drag gestures in date mode when the account has no folders', async () => {
+        sessionListOrderingModeV1 = 'updated';
+        sessionFoldersV1 = { v: 1, folders: [] };
+        resetProjectDataWithoutFolders();
+
+        const screen = await renderSessionsList();
+
+        const row = screen.findByTestId('session-list-session:sess_a');
+        expect(row?.props.reorderHandleGesture).toBeUndefined();
+    });
+
+    it('hides session row drag gestures in date mode when folder view is off', async () => {
+        sessionListOrderingModeV1 = 'updated';
+        sessionFolderViewModeV1 = 'off';
+        resetProjectDataWithoutFolders();
+
+        const screen = await renderSessionsList();
+
+        const row = screen.findByTestId('session-list-session:sess_a');
+        expect(row?.props.reorderHandleGesture).toBeUndefined();
+    });
+
+    it('keeps session row drag gestures in custom mode even when the account has no folders', async () => {
+        sessionListOrderingModeV1 = 'custom';
+        sessionFoldersV1 = { v: 1, folders: [] };
+        resetProjectDataWithoutFolders();
+
+        const screen = await renderSessionsList();
+
+        expect(findGestureByKind(findSessionGesture(screen, 'sess_a'), 'pan')).toBeTruthy();
+    });
+
+    it('shows date-mode session drag gestures when any normalized account folder exists', async () => {
+        sessionListOrderingModeV1 = 'created';
+        sessionFoldersV1 = {
+            v: 1,
+            folders: [{
+                id: 'other_folder',
+                workspace: otherWorkspace,
+                renderWorkspaceKey: 'other_project',
+                parentId: null,
+                name: 'Elsewhere',
+                createdAt: 1,
+                updatedAt: 1,
+            }],
+        };
+        resetProjectDataWithoutFolders();
+
         const screen = await renderSessionsList();
 
         expect(findGestureByKind(findSessionGesture(screen, 'sess_a'), 'pan')).toBeTruthy();
@@ -589,6 +805,71 @@ describe('SessionsList session folders shell', () => {
         const screen = await renderSessionsList();
 
         expect(findGestureByKind(findFolderGesture(screen), 'pan')).toBeTruthy();
+    });
+
+    it('renders exactly one viewport-level drop overlay and no row-local drop indicator', async () => {
+        const screen = await renderSessionsList();
+
+        // The single list-level overlay owns the indicator: exactly one HOST
+        // node carries the overlay testID (composite wrappers also carry the
+        // prop, so filter to host elements).
+        const overlayHosts = screen.findAllByTestId('session-list-drop-overlay')
+            .filter((node) => typeof node.type === 'string');
+        expect(overlayHosts).toHaveLength(1);
+        expect(overlayHosts[0].props.pointerEvents).toBe('none');
+
+        // No session row or folder header receives a legacy row-local visual
+        // prop — the overlay's geometry flows entirely through shared values.
+        for (const sessionId of ['sess_a', 'sess_b']) {
+            const row = screen.findByTestId(`session-list-session:${sessionId}`);
+            expect(row?.props.activeDropVisual).toBeUndefined();
+            expect(row?.props.activeDropTargetId).toBeUndefined();
+            expect(row?.props.dropVisual).toBeUndefined();
+        }
+    });
+
+    it('keeps the visible row order frozen while a background reorder lands mid-drag', async () => {
+        const { SessionsList } = await import('./SessionsList');
+        const screen = await renderSessionsList();
+
+        const readVisibleSessionOrder = () => screen
+            .findAll((node) => String(node.type) === 'SessionItem')
+            .map((node) => node.props.session?.id);
+        expect(readVisibleSessionOrder()).toEqual(['sess_a', 'sess_b']);
+
+        // Start a real drag on sess_a. This freezes the visible surface.
+        const pan = findGestureByKind(findSessionGesture(screen, 'sess_a'), 'pan') as any;
+        await act(async () => {
+            pan.__handlers.onStart?.({ absoluteX: 20, absoluteY: 200, translationY: 0 });
+            pan.__handlers.onUpdate?.({ absoluteX: 20, absoluteY: 230, translationY: 30 });
+        });
+
+        // A background reorder swaps the two session rows in the live list while
+        // the drag is active.
+        const sessionIndices = mockVisibleSessionListViewData
+            .map((item, index) => ({ item, index }))
+            .filter((entry) => entry.item.type === 'session');
+        const swapped = mockVisibleSessionListViewData.slice();
+        const [first, second] = sessionIndices;
+        swapped[first.index] = second.item;
+        swapped[second.index] = first.item;
+        mockVisibleSessionListViewData = swapped;
+        await act(async () => {
+            await screen.update(<SessionsList />);
+        });
+
+        // The visible (frozen) surface must NOT reflect the background swap.
+        expect(readVisibleSessionOrder()).toEqual(['sess_a', 'sess_b']);
+
+        // After the drag ends the latest live order renders again.
+        await act(async () => {
+            pan.__handlers.onEnd?.({ absoluteX: 20, absoluteY: 230, translationY: 30 });
+            pan.__handlers.onFinalize?.({ absoluteX: 20, absoluteY: 230, translationY: 30 });
+        });
+        await act(async () => {
+            await screen.update(<SessionsList />);
+        });
+        expect(readVisibleSessionOrder()).toEqual(['sess_b', 'sess_a']);
     });
 
     it('creates a root folder from the workspace menu', async () => {

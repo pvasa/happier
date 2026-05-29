@@ -38,9 +38,9 @@ vi.mock('@/constants/Typography', () => ({
 describe('FileHeader', () => {
     const theme = {
         colors: {
-            divider: '#ddd',
-            surfaceHigh: '#fff',
-            textSecondary: '#444',
+            border: { default: '#ddd' },
+            surface: { inset: '#fff' },
+            text: { secondary: '#444' },
         },
     };
 

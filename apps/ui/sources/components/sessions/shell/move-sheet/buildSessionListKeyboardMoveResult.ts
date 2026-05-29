@@ -1,10 +1,12 @@
 import type { TreeDropResult } from '@/components/ui/treeDragDrop';
 
 import type {
+    SessionListFolderSortMode,
     SessionListTreeDragSource,
     SessionListTreeModel,
     SessionListTreeRowMetadata,
 } from '../drop-resolution/sessionListTreeTypes';
+import { DEFAULT_SESSION_LIST_FOLDER_SORT_MODE } from '../drop-resolution/sessionListTreeTypes';
 
 export type SessionListKeyboardMoveDirection = 'up' | 'down';
 
@@ -12,6 +14,7 @@ export type BuildSessionListKeyboardMoveResultParams = Readonly<{
     tree: SessionListTreeModel;
     source: SessionListTreeDragSource;
     direction: SessionListKeyboardMoveDirection;
+    folderSortMode?: SessionListFolderSortMode;
 }>;
 
 function buildBlockedResult(source: SessionListTreeDragSource): TreeDropResult {
@@ -28,12 +31,14 @@ function buildBlockedResult(source: SessionListTreeDragSource): TreeDropResult {
 function resolveOrderedSiblingRows(params: Readonly<{
     tree: SessionListTreeModel;
     source: SessionListTreeDragSource;
+    folderSortMode: SessionListFolderSortMode;
 }>): SessionListTreeRowMetadata[] {
     return Array.from(params.tree.rowMetadataById.values())
         .filter((row) =>
             row.orderKey != null
             && row.containerId === params.source.metadata.containerId
             && row.parentRowId === params.source.metadata.parentRowId
+            && (params.folderSortMode === 'mixed' || row.kind === params.source.metadata.kind)
         )
         .sort((a, b) => a.itemIndex - b.itemIndex);
 }
@@ -41,7 +46,11 @@ function resolveOrderedSiblingRows(params: Readonly<{
 export function buildSessionListKeyboardMoveResult(
     params: BuildSessionListKeyboardMoveResultParams,
 ): TreeDropResult {
-    const siblings = resolveOrderedSiblingRows(params);
+    const siblings = resolveOrderedSiblingRows({
+        tree: params.tree,
+        source: params.source,
+        folderSortMode: params.folderSortMode ?? DEFAULT_SESSION_LIST_FOLDER_SORT_MODE,
+    });
     const sourceIndex = siblings.findIndex((row) => row.rowId === params.source.id);
     if (sourceIndex < 0) return buildBlockedResult(params.source);
 

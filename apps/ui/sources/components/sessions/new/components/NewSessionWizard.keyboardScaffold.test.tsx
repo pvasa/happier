@@ -197,7 +197,10 @@ describe('NewSessionWizard keyboard scaffold integration', () => {
             expect(scaffoldRender?.props.composerTestID).toBe('new-session-wizard-composer-keyboard-host');
             expect(screen.findByType('MockComposerKeyboardScaffoldContent')).toBeTruthy();
             expect(screen.findByType('MockComposerKeyboardScaffoldComposer')).toBeTruthy();
-            expect(testState.agentInputProps.at(-1)?.maxPanelHeight).toBe(280);
+            expect(testState.agentInputProps.at(-1)).toEqual(expect.objectContaining({
+                maxPanelHeight: 280,
+                panelMaxHeightMode: 'host-constrained',
+            }));
         } finally {
             act(() => {
                 screen?.tree.unmount();

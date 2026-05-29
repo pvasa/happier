@@ -1,5 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { StructuredMessageBlock } from './StructuredMessageBlock';
@@ -13,6 +14,50 @@ vi.mock('@/components/ui/text/Text', () => ({
 }));
 
 describe('StructuredMessageBlock', () => {
+    it('skips rendering when structured message props are referentially stable', async () => {
+        const meta = {
+            happier: {
+                kind: 'participant_message.v1',
+                payload: {
+                    recipient: {
+                        kind: 'agent_team_member',
+                        teamId: 'team_1',
+                        memberId: 'agent_1',
+                        memberLabel: 'Alice',
+                    },
+                },
+            },
+        };
+        let metaReadCount = 0;
+        const message = {
+            kind: 'user-text',
+            id: 'm1',
+            localId: null,
+            createdAt: 1,
+            text: 'hello there',
+            get meta() {
+                metaReadCount += 1;
+                return meta;
+            },
+        } as any;
+        const onJumpToAnchor = vi.fn();
+        const renderBlock = () => (
+            <StructuredMessageBlock
+                message={message}
+                sessionId="s1"
+                onJumpToAnchor={onJumpToAnchor}
+            />
+        );
+        const screen = await renderScreen(renderBlock());
+
+        metaReadCount = 0;
+        await act(async () => {
+            screen.tree.update(renderBlock());
+        });
+
+        expect(metaReadCount).toBe(0);
+    });
+
     it('returns null for unknown kinds', async () => {
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(<StructuredMessageBlock

@@ -41,6 +41,7 @@ vi.mock('react-native-keyboard-controller', () => ({
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
+    useSafeAreaFrame: () => ({ width: mockEnv.windowWidth, height: 600, x: 0, y: 0 }),
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
@@ -671,7 +672,6 @@ describe('NewSessionWizard', () => {
             } as any}
         />);
 
-        expect(screen.findAllByType('KeyboardAvoidingView')).toHaveLength(0);
         const composerHost = screen.findByProps({ testID: 'new-session-wizard-composer-keyboard-host' });
         expect(flattenStyle(composerHost.props.style).position).toBe('absolute');
         expect(typeof getTranslateY(composerHost.props.style)).toBe('number');

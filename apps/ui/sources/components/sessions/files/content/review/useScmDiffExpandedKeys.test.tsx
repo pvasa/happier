@@ -89,4 +89,99 @@ describe('useScmDiffExpandedKeys', () => {
         expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'c']);
         await hook.unmount();
     });
+
+    it('starts large reviews with the initial bounded prefetch window expanded', async () => {
+        const hook = await renderHook(() => useScmDiffExpandedKeys({
+            allKeys: ['a', 'b', 'c', 'd', 'e', 'f'],
+            viewableIndices: [],
+            tooLarge: true,
+            aheadCount: 2,
+            behindCount: 1,
+            resetKey: 'k1',
+            initialCollapsedKeys: [],
+        }));
+
+        await flushHookEffects({ cycles: 1, turns: 1 });
+
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b', 'c', 'd']);
+        await hook.unmount();
+    });
+
+    it('tracks the bounded visible window in large reviews', async () => {
+        const hook = await renderHook((props: { viewableIndices: readonly number[] }) => useScmDiffExpandedKeys({
+            allKeys: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+            viewableIndices: props.viewableIndices,
+            tooLarge: true,
+            aheadCount: 1,
+            behindCount: 1,
+            resetKey: 'k1',
+            initialCollapsedKeys: [],
+        }), {
+            initialProps: { viewableIndices: [] as number[] },
+        });
+
+        await flushHookEffects({ cycles: 1, turns: 1 });
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b', 'c']);
+
+        await hook.rerender({ viewableIndices: [3] });
+        await flushHookEffects({ cycles: 1, turns: 1 });
+
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['c', 'd', 'e']);
+        await hook.unmount();
+    });
+
+    it('keeps manually expanded rows outside the automatic large-review window', async () => {
+        const hook = await renderHook(() => useScmDiffExpandedKeys({
+            allKeys: ['a', 'b', 'c', 'd', 'e'],
+            viewableIndices: [],
+            tooLarge: true,
+            aheadCount: 1,
+            behindCount: 0,
+            resetKey: 'k1',
+            initialCollapsedKeys: [],
+            viewableExpansionEnabled: false,
+        }));
+
+        await flushHookEffects({ cycles: 1, turns: 1 });
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b']);
+
+        await act(async () => {
+            hook.getCurrent().toggleCollapsed('d');
+        });
+        await flushHookEffects({ cycles: 1, turns: 1 });
+
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b', 'd']);
+
+        await act(async () => {
+            hook.getCurrent().toggleCollapsed('d');
+        });
+        await flushHookEffects({ cycles: 1, turns: 1 });
+
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b']);
+        await hook.unmount();
+    });
+
+    it('ignores viewability changes while large-review viewable expansion is disabled', async () => {
+        const hook = await renderHook((props: { viewableIndices: readonly number[] }) => useScmDiffExpandedKeys({
+            allKeys: ['a', 'b', 'c', 'd', 'e'],
+            viewableIndices: props.viewableIndices,
+            tooLarge: true,
+            aheadCount: 3,
+            behindCount: 2,
+            resetKey: 'k1',
+            initialCollapsedKeys: [],
+            viewableExpansionEnabled: false,
+        }), {
+            initialProps: { viewableIndices: [] as number[] },
+        });
+
+        await flushHookEffects({ cycles: 1, turns: 1 });
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b', 'c', 'd', 'e']);
+
+        await hook.rerender({ viewableIndices: [2, 3, 4] });
+        await flushHookEffects({ cycles: 1, turns: 1 });
+
+        expect(Array.from(hook.getCurrent().expandedKeys)).toEqual(['a', 'b', 'c', 'd', 'e']);
+        await hook.unmount();
+    });
 });

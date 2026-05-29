@@ -33,13 +33,6 @@ export function SourceControlOperationsHistorySection(props: SourceControlOperat
         }
     }, [firstSha]);
 
-    React.useEffect(() => {
-        // Never hide commits when there is no pagination.
-        if (!historyHasMore && historyEntries.length > visibleCount) {
-            setVisibleCount(historyEntries.length);
-        }
-    }, [historyEntries.length, historyHasMore, visibleCount]);
-
     if (historyLoading && historyEntries.length === 0) {
         return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
     }
@@ -114,7 +107,9 @@ export function SourceControlOperationsHistorySection(props: SourceControlOperat
                     testID="scm-commit-load-more"
                     onPress={() => {
                         setVisibleCount((prev) => prev + LOAD_MORE_STEP);
-                        onLoadMoreHistory();
+                        if (historyHasMore) {
+                            onLoadMoreHistory();
+                        }
                     }}
                     style={(p) => ({
                         marginTop: 4,

@@ -74,44 +74,7 @@ installSessionShellCommonModuleMocks({
       },
     }),
   unistyles: async () =>
-    createUnistylesMock({
-      theme: {
-        dark: false,
-        colors: {
-          text: '#000',
-          textSecondary: '#666',
-          textLink: '#00f',
-          surface: '#fff',
-          surfaceHigh: '#f5f5f5',
-          surfaceSelected: '#eef4ff',
-          divider: '#ddd',
-          border: { default: '#ddd', surface: '#ddd', modal: '#ddd', strong: '#aaa' },
-          effect: { surfaceHighlight: 'transparent' },
-          indigo: '#5856D6',
-          radio: { active: '#007AFF' },
-          accent: {
-            blue: '#007AFF',
-            green: '#34C759',
-            orange: '#FF9500',
-            yellow: '#FFCC00',
-            red: '#FF3B30',
-            indigo: '#5856D6',
-            purple: '#AF52DE',
-          },
-          modal: { border: '#ddd' },
-          input: { background: '#f5f5f5' },
-          header: { tint: '#000' },
-          status: { error: '#f00' },
-          shadow: { color: '#000', opacity: 0.2 },
-          shadowLevels: {
-            0: { boxShadow: 'none', shadowColor: '#000', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0, shadowRadius: 0, elevation: 0 },
-            1: { boxShadow: '0 1px 2px rgba(0,0,0,0.1)', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1 },
-            2: { boxShadow: '0 2px 6px rgba(0,0,0,0.2)', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 2 },
-          },
-          groupped: { background: '#F5F5F5', chevron: '#C7C7CC', sectionTitle: '#8E8E93' },
-        },
-      },
-    }),
+    createUnistylesMock(),
   text: async () => createTextModuleMock({ translate: (key) => key }),
   modal: async () =>
     createModalModuleMock({
@@ -128,7 +91,25 @@ installSessionShellCommonModuleMocks({
     }).module,
   storage: async () =>
     createStorageModuleStub({
-      storage: { getState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }) },
+      storage: Object.assign(
+        (
+          selector?: (value: {
+            sessions: Record<string, unknown>;
+            settings: Record<string, unknown>;
+            sessionListViewDataByServerId: Record<string, unknown>;
+          }) => unknown,
+        ) => {
+          const snapshot = { sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} };
+          return typeof selector === 'function' ? selector(snapshot) : snapshot;
+        },
+        {
+          getState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }),
+          getInitialState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }),
+          setState: () => undefined,
+          subscribe: () => () => undefined,
+          destroy: () => undefined,
+        },
+      ),
       useSession: () => sessionState.session,
       useIsDataReady: () => true,
       useRealtimeStatus: () => ({ status: 'connected' }),
@@ -143,6 +124,8 @@ installSessionShellCommonModuleMocks({
       useSessionPendingMessages: () => ({ messages: [] }),
       useSessionReviewCommentsDrafts: () => [],
       useSessionUsage: () => null,
+      useProfile: () => null,
+      useActiveServerAccountScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),
       useSetting: () => null,
       useSettings: () => ({ experiments: true, featureToggles: {} }),
       useAutomations: () => [],
@@ -224,7 +207,17 @@ vi.mock('@/utils/platform/responsive', () => ({
   useIsTablet: () => false,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-  useDraft: () => ({ clearDraft: vi.fn() }),
+  useDraft: (_sessionId: string, value: string, onChange: (next: string) => void) => ({
+    clearDraft: () => onChange(''),
+    setDraftValue: (nextValueOrUpdater: string | ((currentValue: string) => string)) => {
+      onChange(typeof nextValueOrUpdater === 'function' ? nextValueOrUpdater(value) : nextValueOrUpdater);
+    },
+    clearDraftForSessionIfCurrentValueMatches: (snapshot: Readonly<{ text: string }>) => {
+      if (value !== snapshot.text) return false;
+      onChange('');
+      return true;
+    },
+  }),
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
   getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -255,6 +248,7 @@ vi.mock('@/sync/sync', () => ({
     publishSessionModelOverrideToMetadata: async () => {},
     refreshSessions: async () => {},
     onSessionVisible: () => {},
+    markSessionLiveTailIntent: () => {},
     sendMessage: async () => {},
     enqueuePendingMessage: async () => {},
     submitMessage: async () => {},
@@ -264,12 +258,18 @@ vi.mock('@/sync/sync', () => ({
   },
 }));
 
-vi.mock('@/sync/ops', () => ({
-  continueSessionWithReplay: vi.fn(),
-  sessionAbort: vi.fn(),
-  resumeSession: vi.fn(),
-  sessionAttachmentsUploadFile: vi.fn(),
-}));
+vi.mock('@/sync/ops', async (importOriginal) => {
+  const { createSyncOpsModuleMock } = await import('@/dev/testkit/mocks/syncOps');
+  return createSyncOpsModuleMock({
+    importOriginal,
+    overrides: {
+      continueSessionWithReplay: vi.fn(),
+      sessionAbort: vi.fn(),
+      resumeSession: vi.fn(),
+      sessionAttachmentsUploadFile: vi.fn(),
+    },
+  });
+});
 
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
   createDefaultActionExecutor: () => ({ execute: vi.fn() }),

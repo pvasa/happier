@@ -82,7 +82,7 @@ function approvalArtifact(id = 'a1'): DecryptedArtifact {
 }
 
 describe('AgentInputAttentionRequests', () => {
-    it('renders a single outer chrome wrapper and uses inline cards with dividers', async () => {
+    it('renders a single outer chrome wrapper for permissions and approvals with dividers', async () => {
         const { AgentInputAttentionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
@@ -125,14 +125,12 @@ describe('AgentInputAttentionRequests', () => {
         expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeTruthy();
 
         expect(capturedPermissionPromptCardProps).toHaveLength(2);
-        expect(capturedUserActionPromptCardProps).toHaveLength(1);
+        expect(capturedUserActionPromptCardProps).toHaveLength(0);
         expect(capturedApprovalPromptCardProps).toHaveLength(1);
         expect(capturedPermissionPromptCardProps[0].chrome).toBe('inline');
-        expect(capturedUserActionPromptCardProps[0].chrome).toBe('inline');
         expect(capturedApprovalPromptCardProps[0].chrome).toBe('inline');
 
         expect(screen.findByTestId('agentInput.permissionRequests.divider:permission:p2')).toBeTruthy();
-        expect(screen.findByTestId('agentInput.permissionRequests.divider:userAction:u1')).toBeTruthy();
         expect(screen.findByTestId('agentInput.permissionRequests.divider:approval:a1')).toBeTruthy();
     });
 

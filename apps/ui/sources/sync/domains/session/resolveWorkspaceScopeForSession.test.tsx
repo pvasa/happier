@@ -80,4 +80,43 @@ describe('useWorkspaceScopeForSession', () => {
 
         await hook.unmount();
     });
+
+    it('keeps the workspace scope available when the machine is temporarily inactive', async () => {
+        storage.setState({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    serverId: 'server-1',
+                    active: true,
+                    metadata: {
+                        machineId: 'm1',
+                        path: '/workspace',
+                    },
+                },
+            },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'tester.local',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+            isDataReady: true,
+        } as never);
+
+        const { useWorkspaceScopeForSession } = await import('./resolveWorkspaceScopeForSession');
+        const hook = await renderHook(() => useWorkspaceScopeForSession('s1'));
+
+        expect(hook.getCurrent()).toEqual({
+            serverId: 'server-1',
+            machineId: 'm1',
+            rootPath: '/workspace',
+        });
+
+        await hook.unmount();
+    });
 });

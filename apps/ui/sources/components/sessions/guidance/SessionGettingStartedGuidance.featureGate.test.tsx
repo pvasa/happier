@@ -43,7 +43,7 @@ vi.mock('@/hooks/session/useConnectTerminal', () => ({
 }));
 
 vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
-    useVisibleSessionListViewData: () => [],
+    useVisibleSessionListSessionSummary: () => ({ sessionsReady: true, visibleSessionCount: 0 }),
 }));
 
 vi.mock('@/hooks/server/useEffectiveServerSelection', () => ({

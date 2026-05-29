@@ -7,6 +7,7 @@ import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/exec
 const SESSION_RUNNING_EXECUTION_RUNS_POLL_INTERVAL_MS = 5_000;
 const SESSION_RUNNING_EXECUTION_RUNS_EMPTY_CONFIRM_DELAY_MS = 1_000;
 const SESSION_RUNNING_EXECUTION_RUNS_IDLE_ERROR_RETRY_LIMIT = 2;
+const EMPTY_RUNNING_EXECUTION_RUNS: readonly ExecutionRunPublicState[] = Object.freeze([]);
 
 function isRpcMethodNotAvailableError(input: unknown): boolean {
     if (!input || typeof input !== 'object') return false;
@@ -44,7 +45,7 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
     enabled: boolean;
     refreshKey?: unknown;
 }>): readonly ExecutionRunPublicState[] {
-    const [runningRuns, setRunningRuns] = React.useState<readonly ExecutionRunPublicState[]>([]);
+    const [runningRuns, setRunningRuns] = React.useState<readonly ExecutionRunPublicState[]>(EMPTY_RUNNING_EXECUTION_RUNS);
     const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const generationRef = React.useRef(0);
     const inFlightRef = React.useRef(false);
@@ -57,6 +58,12 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
         if (!timerRef.current) return;
         clearTimeout(timerRef.current);
         timerRef.current = null;
+    }, []);
+
+    const clearRunningRuns = React.useCallback(() => {
+        setRunningRuns((current) => (
+            current.length === 0 ? current : EMPTY_RUNNING_EXECUTION_RUNS
+        ));
     }, []);
 
     const pollOnce = React.useCallback(async (gen: number): Promise<void> => {
@@ -96,7 +103,7 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
                 }
 
                 clearTimer();
-                setRunningRuns([]);
+                clearRunningRuns();
                 return;
             }
 
@@ -121,7 +128,7 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
             hadRunningRunRef.current = false;
             pendingEmptyConfirmRef.current = false;
             clearTimer();
-            setRunningRuns([]);
+            clearRunningRuns();
         } finally {
             inFlightRef.current = false;
             if (pendingRepollRef.current && generationRef.current === gen) {
@@ -129,14 +136,14 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
                 void pollOnce(gen);
             }
         }
-    }, [clearTimer, params.enabled, params.sessionId]);
+    }, [clearRunningRuns, clearTimer, params.enabled, params.sessionId]);
 
     React.useEffect(() => {
         generationRef.current += 1;
         const gen = generationRef.current;
 
         // Clear state immediately when sessionId changes to prevent stale state from previous session
-        setRunningRuns([]);
+        clearRunningRuns();
         clearTimer();
         pendingRepollRef.current = false;
         hadRunningRunRef.current = false;
@@ -155,7 +162,7 @@ export function useSessionRunningExecutionRuns(params: Readonly<{
             clearTimer();
             pendingRepollRef.current = false;
         };
-    }, [clearTimer, params.enabled, params.sessionId, pollOnce]);
+    }, [clearRunningRuns, clearTimer, params.enabled, params.sessionId, pollOnce]);
 
     React.useEffect(() => {
         const normalizedSessionId = typeof params.sessionId === 'string' ? params.sessionId.trim() : '';

@@ -125,12 +125,27 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     const selectedMachineActiveAt = params.selectedMachine?.activeAt;
     const selectedMachineRevokedAt = params.selectedMachine?.revokedAt;
     const selectedMachineReplacedByMachineId = params.selectedMachine?.replacedByMachineId;
+    const selectedMachineOnline = React.useMemo(() => (
+        params.selectedMachine ? isMachineOnline(params.selectedMachine) : false
+    ), [
+        params.selectedMachine?.id,
+        selectedMachineActive,
+        selectedMachineActiveAt,
+        selectedMachineReplacedByMachineId,
+        selectedMachineRevokedAt,
+    ]);
+    const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
     const connectionStatus = React.useMemo(() => {
         if (!params.selectedMachine) return undefined;
-        const readinessStatus = params.selectedMachineSpawnReadiness?.status;
-        const broadOnline = isMachineOnline(params.selectedMachine);
-        const online = readinessStatus === 'ready'
-            || ((readinessStatus === undefined || readinessStatus === 'unknown' || readinessStatus === 'probing') && broadOnline);
+        const online = selectedMachineReadinessStatus === 'ready'
+            || (
+                (
+                    selectedMachineReadinessStatus === undefined
+                    || selectedMachineReadinessStatus === 'unknown'
+                    || selectedMachineReadinessStatus === 'probing'
+                )
+                && selectedMachineOnline
+            );
 
         return {
             text: online ? t('status.online') : t('newSession.machineOfflineCannotStartStatus'),
@@ -140,11 +155,8 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         };
     }, [
         params.selectedMachine?.id,
-        selectedMachineActive,
-        selectedMachineActiveAt,
-        selectedMachineReplacedByMachineId,
-        selectedMachineRevokedAt,
-        params.selectedMachineSpawnReadiness?.status,
+        selectedMachineOnline,
+        selectedMachineReadinessStatus,
         params.theme.colors.state.success.foreground,
         params.theme.colors.state.danger.foreground,
     ]);

@@ -139,7 +139,7 @@ export function filterSessionListItemsByFocusedFolder(
     return items.filter((item) => {
         if (item.type === 'header') {
             const headerKind = String(item.headerKind ?? '');
-            if (headerKind === 'active' || headerKind === 'inactive') return true;
+            if (headerKind === 'active' || headerKind === 'inactive' || headerKind === 'sessions') return true;
             if (headerKind === 'project' && focusedWorkspace) {
                 const workspace = resolveDurableWorkspaceRefForSessionListHeader(item);
                 return workspace ? compareSessionFolderWorkspaceRefs(workspace, focusedWorkspace) : false;

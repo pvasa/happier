@@ -35,6 +35,34 @@ export type RunScmRemoteOperationOptions = Readonly<{
     skipConfirmation?: boolean;
 }>;
 
+const SCM_REMOTE_POST_OPERATION_REFRESH_TIMEOUT_MS = 5_000;
+
+async function awaitScmRemotePostOperationRefresh(refresh: () => Promise<void>): Promise<void> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    const refreshPromise = refresh();
+
+    try {
+        await Promise.race([
+            refreshPromise,
+            new Promise<void>((resolve) => {
+                timeoutId = setTimeout(() => {
+                    timedOut = true;
+                    resolve();
+                }, SCM_REMOTE_POST_OPERATION_REFRESH_TIMEOUT_MS);
+            }),
+        ]);
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    if (timedOut) {
+        void refreshPromise.catch(() => {});
+    }
+}
+
 export function useScmRemoteOperations(input: {
     sessionId: string;
     sessionPath: string | null;
@@ -209,13 +237,15 @@ export function useScmRemoteOperations(input: {
                     });
                     setScmRemoteOperationStatusSafe('Refreshing repository status…');
                     if (kind === 'pull' || kind === 'push') {
-                        await scmStatusSync.invalidateFromMutationAndAwait(sessionId);
-                        if (mountedRef.current) {
-                            await loadCommitHistory({ reset: true });
-                        }
+                        await awaitScmRemotePostOperationRefresh(async () => {
+                            await scmStatusSync.invalidateFromMutationAndAwait(sessionId);
+                            if (mountedRef.current) {
+                                await loadCommitHistory({ reset: true });
+                            }
+                        });
                     } else {
                         if (mountedRef.current) {
-                            await refreshScmData();
+                            await awaitScmRemotePostOperationRefresh(refreshScmData);
                         }
                     }
                 } finally {

@@ -106,6 +106,59 @@ describe('context warning window resolution', () => {
         })).toBe(950_000);
     });
 
+    it('uses the 1M warning window for legacy Claude Opus 4.7 session metadata without context-window fields', () => {
+        expect(resolveContextWarningWindowTokens({
+            agentId: 'claude',
+            metadata: {
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'claude',
+                    updatedAt: 1,
+                    currentModelId: 'claude-opus-4-7',
+                    availableModels: [
+                        {
+                            id: 'claude-opus-4-7',
+                            name: 'Opus 4.7',
+                            description: 'Newest highest-capability Claude model for the hardest coding and reasoning tasks.',
+                        },
+                    ],
+                },
+            } as any,
+        })).toBe(950_000);
+    });
+
+    it('prefers reported Claude session model context window over the static Opus catalog fallback', () => {
+        const metadata = {
+            modelOverrideV1: {
+                v: 1,
+                updatedAt: 1,
+                modelId: 'claude-opus-4-7',
+            },
+            sessionModelsV1: {
+                v: 1,
+                provider: 'claude',
+                updatedAt: 1,
+                currentModelId: 'claude-opus-4-7',
+                availableModels: [
+                    {
+                        id: 'claude-opus-4-7',
+                        name: 'Opus 4.7',
+                        contextWindowTokens: 200_000,
+                    },
+                ],
+            },
+        } as any;
+
+        expect(resolveContextWindowTokens({
+            agentId: 'claude',
+            metadata,
+        })).toBe(200_000);
+        expect(resolveContextWarningWindowTokens({
+            agentId: 'claude',
+            metadata,
+        })).toBe(190_000);
+    });
+
     it('uses the 1M warning window when the active Claude model description reports a 1 million context window', () => {
         expect(resolveContextWarningWindowTokens({
             agentId: 'claude',

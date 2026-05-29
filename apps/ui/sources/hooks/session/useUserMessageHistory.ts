@@ -154,6 +154,15 @@ export function useUserMessageHistory(opts: {
     const remoteHistoryStateRef = React.useRef(remoteHistoryState);
     const localEntriesRef = React.useRef<ReadonlyArray<string>>([]);
     const combinedEntriesRef = React.useRef<ReadonlyArray<string>>([]);
+    const requestContextRef = React.useRef<Readonly<{
+        scope: AgentInputHistoryScope;
+        sessionId: string | null;
+        roleQuerySupported: boolean;
+    }>>({
+        scope: opts.scope,
+        sessionId: opts.sessionId,
+        roleQuerySupported: false,
+    });
     const inFlightCursorRef = React.useRef<string | null>(null);
     const failedCursorKeysRef = React.useRef<Set<string>>(new Set());
     const activeHistoryScopeKeyRef = React.useRef<string>('');
@@ -195,22 +204,28 @@ export function useUserMessageHistory(opts: {
     remoteHistoryStateRef.current = remoteHistoryState;
     localEntriesRef.current = localEntries;
     combinedEntriesRef.current = entries;
+    requestContextRef.current = {
+        scope: opts.scope,
+        sessionId: opts.sessionId,
+        roleQuerySupported,
+    };
 
     const requestRemoteHistoryPage = React.useCallback(() => {
-        if (opts.scope !== 'perSession') return;
-        if (!opts.sessionId || roleQuerySupported !== true) return;
+        const requestContext = requestContextRef.current;
+        if (requestContext.scope !== 'perSession') return;
+        if (!requestContext.sessionId || requestContext.roleQuerySupported !== true) return;
 
         const current = remoteHistoryStateRef.current;
         if (current.hasMore !== true) return;
 
         const beforeSeq = current.nextBeforeSeq;
         const cursorKey = beforeSeq === null ? 'latest' : String(beforeSeq);
-        const requestScopeKey = `${opts.scope}:${opts.sessionId}`;
+        const requestScopeKey = `${requestContext.scope}:${requestContext.sessionId}`;
         const requestCursorKey = `${requestScopeKey}:${cursorKey}`;
         if (inFlightCursorRef.current === requestCursorKey || failedCursorKeysRef.current.has(requestCursorKey)) return;
 
         inFlightCursorRef.current = requestCursorKey;
-        void sync.fetchUserMessageHistoryPage(opts.sessionId, {
+        void sync.fetchUserMessageHistoryPage(requestContext.sessionId, {
             limit: USER_MESSAGE_HISTORY_REMOTE_PAGE_SIZE,
             ...(beforeSeq !== null ? { beforeSeq } : {}),
         }).then((result) => {
@@ -244,7 +259,7 @@ export function useUserMessageHistory(opts: {
                 inFlightCursorRef.current = null;
             }
         });
-    }, [opts.scope, opts.sessionId, roleQuerySupported]);
+    }, []);
 
     const warmup = React.useCallback(() => {
         if (localEntriesRef.current.length > 0) return;

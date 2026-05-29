@@ -36,6 +36,7 @@ export interface SpawnSessionOptions {
     // - Custom variables (DEEPSEEK_*, Z_AI_*, etc.)
     environmentVariables?: Record<string, string>;
     resume?: string;
+    spawnNonce?: string;
     permissionMode?: PermissionMode;
     permissionModeUpdatedAt?: number;
     agentModeId?: string;
@@ -68,6 +69,7 @@ export interface SpawnSessionOptions {
      * and decrypt/materialize them locally for the provider runtime.
      */
     connectedServices?: unknown;
+    connectedServicesUpdatedAt?: number;
     mcpSelection?: SessionMcpSelectionV1;
     /**
      * Internal daemon freshness barrier. Callers should normally omit this and let
@@ -85,6 +87,7 @@ export type SpawnHappySessionRpcParams = CodexBackendTransportFields & {
     profileId?: string
     environmentVariables?: Record<string, string>
     resume?: string
+    spawnNonce?: string
     agentRuntimeDescriptorV1?: AgentRuntimeDescriptorV1
     permissionMode?: PermissionMode
     permissionModeUpdatedAt?: number
@@ -98,6 +101,7 @@ export type SpawnHappySessionRpcParams = CodexBackendTransportFields & {
     windowsRemoteSessionConsole?: 'hidden' | 'visible'
     windowsTerminalWindowName?: string
     connectedServices?: unknown
+    connectedServicesUpdatedAt?: number
     mcpSelection?: SessionMcpSelectionV1
     /**
      * Internal daemon freshness barrier captured immediately before the RPC.
@@ -121,6 +125,7 @@ export type LegacySpawnHappySessionRpcParams = {
     terminal?: TerminalSpawnOptions
     windowsRemoteSessionConsole?: 'hidden' | 'visible'
     connectedServices?: unknown
+    connectedServicesUpdatedAt?: number
 };
 
 export type CompatibleSpawnHappySessionRpcParams =
@@ -189,6 +194,7 @@ export function buildSpawnHappySessionRpcParams(options: SpawnSessionOptions): S
         environmentVariables,
         profileId,
         resume,
+        spawnNonce,
         permissionMode,
         permissionModeUpdatedAt,
         agentModeId,
@@ -204,6 +210,7 @@ export function buildSpawnHappySessionRpcParams(options: SpawnSessionOptions): S
         windowsRemoteSessionConsole,
         windowsTerminalWindowName,
         connectedServices,
+        connectedServicesUpdatedAt,
         mcpSelection,
         accountSettingsVersionHint,
     } = options;
@@ -226,6 +233,9 @@ export function buildSpawnHappySessionRpcParams(options: SpawnSessionOptions): S
         profileId,
         environmentVariables,
         resume,
+        ...(typeof spawnNonce === 'string' && spawnNonce.trim().length > 0
+            ? { spawnNonce: spawnNonce.trim() }
+            : {}),
         permissionMode,
         permissionModeUpdatedAt,
         ...(typeof agentModeId === 'string' && agentModeId.trim().length > 0
@@ -256,6 +266,9 @@ export function buildSpawnHappySessionRpcParams(options: SpawnSessionOptions): S
             return {};
         })(),
         connectedServices,
+        ...(typeof connectedServicesUpdatedAt === 'number' && Number.isFinite(connectedServicesUpdatedAt)
+            ? { connectedServicesUpdatedAt }
+            : {}),
         ...(mcpSelection ? { mcpSelection } : {}),
         ...(typeof accountSettingsVersionHint === 'number' && Number.isInteger(accountSettingsVersionHint) && accountSettingsVersionHint >= 0
             ? { accountSettingsVersionHint }

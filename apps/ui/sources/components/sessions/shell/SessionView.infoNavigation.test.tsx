@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
@@ -23,40 +24,16 @@ const routerBackSpy = vi.hoisted(() => vi.fn(() => {
 }));
 const chatHeaderPropsSpy = vi.hoisted(() => vi.fn());
 const capturedOpenSessionSpy = vi.hoisted(() => vi.fn<(sid: string) => void>());
+const ensureSidechainMessagesLoadedSpy = vi.hoisted(() => vi.fn(async () => 'loaded'));
+const ensureSidechainsLoadedCalls = vi.hoisted(() => [] as any[]);
 const resolveServerIdForSessionIdFromLocalCacheSpy = vi.hoisted(() =>
     vi.fn<(sessionId: string) => string | null>((sessionId: string) =>
         sessionId === 's1' ? 'server-cache' : null
     ),
 );
 
-const themeColors = {
-    text: '#000',
-    textSecondary: '#666',
-    textLink: '#00f',
-    surface: '#fff',
-    surfaceHigh: '#f5f5f5',
-    surfaceSelected: '#eef4ff',
-    divider: '#ddd',
-    border: '#ddd',
-    indigo: '#5856D6',
-    radio: { active: '#007AFF' },
-    accent: {
-        blue: '#007AFF',
-        green: '#34C759',
-        orange: '#FF9500',
-        yellow: '#FFCC00',
-        red: '#FF3B30',
-        indigo: '#5856D6',
-        purple: '#AF52DE',
-    },
-    modal: { border: '#ddd' },
-    input: { background: '#f5f5f5' },
-    header: { tint: '#000', background: '#fff' },
-    status: { error: '#f00' },
-    shadow: { color: '#000', opacity: 0.2 },
-} as const;
-
 let workspaceLabelsV1: Record<string, string> = {};
+let subagentSourceMessages: readonly any[] = [];
 
 installSessionShellCommonModuleMocks({
     reactNative: async () =>
@@ -76,7 +53,7 @@ installSessionShellCommonModuleMocks({
         }),
     unistyles: async () =>
         createUnistylesMock({
-            theme: themeColors,
+            theme: createThemeFixture(),
             runtime: {
                 hairlineWidth: 1,
             },
@@ -127,6 +104,8 @@ installSessionShellCommonModuleMocks({
             useSessionMessages: () => ({ messages: [], isLoaded: true }),
             useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
+            useSessionSubagentSourceMessages: () => subagentSourceMessages,
+            useSessionConnectedServiceAccountSwitchEvents: () => [],
             useSessionReviewCommentsDrafts: () => [],
             useWorkspaceReviewCommentsDrafts: () => [],
             useSessionUsage: () => null,
@@ -158,15 +137,33 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionI
     };
 });
 
-vi.mock('react-native-reanimated', () => ({ __esModule: true, default: {} }));
-vi.mock('react-native-reanimated/lib/module', () => ({ __esModule: true, default: {} }));
-vi.mock('react-native-reanimated/lib/module/index.js', () => ({ __esModule: true, default: {} }));
-vi.mock('react-native-reanimated/lib/module/index', () => ({ __esModule: true, default: {} }));
+const createReanimatedMock = () => {
+    const Animated = {
+        View: 'Animated.View',
+        createAnimatedComponent: (component: unknown) => component,
+    };
+    return {
+        __esModule: true,
+        default: Animated,
+        ...Animated,
+        useAnimatedProps: (factory: () => unknown) => factory(),
+        useAnimatedStyle: (factory: () => unknown) => factory(),
+        useSharedValue: (initial: unknown) => ({ value: initial }),
+    };
+};
+
+vi.mock('react-native-reanimated', () => createReanimatedMock());
+vi.mock('react-native-reanimated/lib/module', () => createReanimatedMock());
+vi.mock('react-native-reanimated/lib/module/index.js', () => createReanimatedMock());
+vi.mock('react-native-reanimated/lib/module/index', () => createReanimatedMock());
 vi.mock('expo-linear-gradient', () => ({
     LinearGradient: 'LinearGradient',
 }));
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
+}));
+vi.mock('@/components/ui/icons/DependabotIcon', () => ({
+    DependabotIcon: 'DependabotIcon',
 }));
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -222,7 +219,7 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsTablet: () => true,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-    useDraft: () => ({ clearDraft: vi.fn() }),
+    useDraft: () => ({ clearDraft: vi.fn(), setDraftValue: vi.fn() }),
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
     getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -259,6 +256,8 @@ vi.mock('@/components/sessions/panes/url/useSessionPaneUrlSync', () => ({
 vi.mock('@/sync/domains/session/activeViewingSession', () => ({
     setActiveViewingSessionId: () => {},
     clearActiveViewingSessionId: () => {},
+    markSessionVisible: () => {},
+    markSessionHidden: () => {},
 }));
 vi.mock('@/sync/sync', () => ({
     sync: {
@@ -267,20 +266,32 @@ vi.mock('@/sync/sync', () => ({
         publishSessionPermissionModeToMetadata: async () => {},
         refreshSessions: async () => {},
         onSessionVisible: () => () => {},
-        ensureSidechainMessagesLoaded: async () => {},
+        markSessionLiveTailIntent: () => {},
+        ensureSidechainMessagesLoaded: ensureSidechainMessagesLoadedSpy,
         sendMessage: async () => {},
         enqueuePendingMessage: async () => {},
         submitMessage: async () => {},
         encryption: { getMachineEncryption: () => null },
     },
 }));
-vi.mock('@/sync/ops', () => ({
-    continueSessionWithReplay: vi.fn(),
-    sessionAbort: vi.fn(),
-    resumeSession: vi.fn(),
-    sessionAttachmentsUploadFile: vi.fn(),
-    sessionSwitch: vi.fn(),
+vi.mock('@/hooks/session/useEnsureSidechainsLoaded', () => ({
+    useEnsureSidechainsLoaded: (params: any) => {
+        ensureSidechainsLoadedCalls.push(params);
+    },
 }));
+vi.mock('@/sync/ops', async (importOriginal) => {
+    const { createSyncOpsModuleMock } = await import('@/dev/testkit/mocks/syncOps');
+    return createSyncOpsModuleMock({
+        importOriginal,
+        overrides: {
+            continueSessionWithReplay: vi.fn(),
+            sessionAbort: vi.fn(),
+            resumeSession: vi.fn(),
+            sessionAttachmentsUploadFile: vi.fn(),
+            sessionSwitch: vi.fn(),
+        },
+    });
+});
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
     createDefaultActionExecutor: (params: any) => {
         capturedOpenSessionSpy.mockImplementation((sid: string) => params.openSession(sid));
@@ -344,7 +355,10 @@ describe('SessionView info navigation', () => {
         routerBackSpy.mockClear();
         chatHeaderPropsSpy.mockReset();
         capturedOpenSessionSpy.mockReset();
+        ensureSidechainMessagesLoadedSpy.mockClear();
+        ensureSidechainsLoadedCalls.length = 0;
         workspaceLabelsV1 = {};
+        subagentSourceMessages = [];
         resolveServerIdForSessionIdFromLocalCacheSpy.mockReset();
         resolveServerIdForSessionIdFromLocalCacheSpy.mockImplementation((sessionId: string) =>
             sessionId === 's1' ? 'server-cache' : null
@@ -450,7 +464,7 @@ describe('SessionView info navigation', () => {
         );
 
         expect(chatHeaderPropsSpy).toHaveBeenCalledWith(expect.objectContaining({
-            subtitle: '/tmp',
+            subtitle: 'tmp',
             subtitleEllipsizeMode: 'head',
         }));
     });
@@ -495,5 +509,37 @@ describe('SessionView info navigation', () => {
         capturedOpenSessionSpy('child-session-1');
 
         expect(routerPushSpy).toHaveBeenCalledWith('/session/child-session-1?serverId=server-cache');
+    });
+
+    it('does not eagerly hydrate discovered subagent sidechains from the session shell or header', async () => {
+        subagentSourceMessages = [{
+            kind: 'tool-call',
+            id: 'tool-call-1',
+            localId: null,
+            createdAt: 1,
+            tool: {
+                id: 'toolu_sidechain_1',
+                name: 'Task',
+                state: 'running',
+                input: { description: 'Inspect this workspace' },
+                createdAt: 1,
+                startedAt: 1,
+                completedAt: null,
+                description: 'Inspect this workspace',
+                result: null,
+            },
+            children: [],
+        }];
+        const { SessionView } = await import('./SessionView');
+
+        await renderScreen(
+            <SessionView id="s1" />,
+            { wrapper: AppPaneProviderWrapper },
+        );
+        expect(ensureSidechainsLoadedCalls).not.toContainEqual(expect.objectContaining({
+            enabled: true,
+            sessionId: 's1',
+            sidechainIds: ['toolu_sidechain_1'],
+        }));
     });
 });

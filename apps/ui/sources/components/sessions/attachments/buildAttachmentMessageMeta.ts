@@ -1,3 +1,5 @@
+import { SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND } from '@happier-dev/protocol';
+
 import {
     buildStructuredInputMetaOverrides,
     type StructuredInputImageInput,
@@ -15,6 +17,15 @@ function toAttachmentPayload(attachment: UploadedAttachment): Record<string, unk
     };
 }
 
+function markUploadedAttachmentInput(input: StructuredInputImageInput): StructuredInputImageInput {
+    return input.type === 'localImage'
+        ? {
+            ...input,
+            provenance: { kind: SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND },
+        }
+        : input;
+}
+
 export function buildAttachmentMessageMeta(uploaded: readonly UploadedAttachment[]): Record<string, unknown> {
     const structuredAttachments = uploaded
         .map((attachment) => attachment.structuredInput)
@@ -26,6 +37,6 @@ export function buildAttachmentMessageMeta(uploaded: readonly UploadedAttachment
                 attachments: uploaded.map(toAttachmentPayload),
             },
         },
-        ...buildStructuredInputMetaOverrides({ attachments: structuredAttachments }),
+        ...buildStructuredInputMetaOverrides({ attachments: structuredAttachments.map(markUploadedAttachmentInput) }),
     };
 }

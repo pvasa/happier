@@ -21,6 +21,16 @@ vi.mock('react-native-mmkv', () => {
 
 import { createSessionsDomain } from './sessions';
 import { clearPersistence, loadSessionDrafts } from '@/sync/domains/state/persistence';
+import {
+  readSessionDraftValue,
+  resetSessionDraftValuesCachesForTests,
+  writeSessionDraftValue,
+} from '@/sync/domains/input/draftValues/sessionDraftValueStore';
+import {
+  patchAgentInputLocalUiState,
+  readAgentInputLocalUiState,
+  resetAgentInputLocalUiStateCachesForTests,
+} from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
 
 function createHarness() {
   let state: any = {
@@ -38,6 +48,7 @@ function createHarness() {
     machines: {},
     sessionMessages: {},
     settings: { groupInactiveSessionsByProject: false },
+    machineDisplayById: {},
   };
 
   const get = () => state;
@@ -54,6 +65,8 @@ function createHarness() {
 describe('sessions domain: drafts', () => {
   beforeEach(() => {
     clearPersistence();
+    resetSessionDraftValuesCachesForTests();
+    resetAgentInputLocalUiStateCachesForTests();
   });
 
   it('persists drafts even when the session is not yet loaded', () => {
@@ -138,5 +151,48 @@ describe('sessions domain: drafts', () => {
     ]);
 
     expect(get().sessions.s_new?.draft).toBe('hello');
+  });
+
+  it('deletes semantic draft values and local composer UI state with the session', () => {
+    const { domain } = createHarness();
+    domain.applySessions([
+      {
+        id: 's_delete',
+        seq: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        active: true,
+        activeAt: 1,
+        metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+        metadataVersion: 1,
+        agentState: null,
+        agentStateVersion: 0,
+        thinking: false,
+        thinkingAt: 0,
+        presence: 1,
+      } as any,
+    ]);
+
+    writeSessionDraftValue(null, 's_delete', 'routing.executionRunDelivery', 'interrupt');
+    patchAgentInputLocalUiState(null, { kind: 'session', sessionId: 's_delete' }, {
+      expanded: true,
+      scrollY: 12,
+      textLength: 20,
+      fontScale: 1,
+    });
+
+    expect(readSessionDraftValue(null, 's_delete', 'routing.executionRunDelivery')).toBe('interrupt');
+    expect(readAgentInputLocalUiState(null, {
+      kind: 'session',
+      sessionId: 's_delete',
+    })?.expanded).toBe(true);
+
+    domain.deleteSession('s_delete');
+
+    expect(readSessionDraftValue(null, 's_delete', 'routing.executionRunDelivery')).toBeUndefined();
+    expect(readAgentInputLocalUiState(null, {
+      kind: 'session',
+      sessionId: 's_delete',
+    })).toBeNull();
   });
 });

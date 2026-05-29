@@ -8,9 +8,9 @@ import { DetectedClisModal } from '@/components/machines/DetectedClisModal';
 import { CAPABILITIES_REQUEST_NEW_SESSION } from '@/capabilities/requests';
 import { getAgentCore, getAgentCliGlyph } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
-import type { CapabilityId } from '@/sync/api/capabilities/capabilitiesProtocol';
 import { useMachine } from '@/sync/domains/state/storage';
 import { Text } from '@/components/ui/text/Text';
+import { buildAgentCliCapabilityId } from '@/capabilities/agentCliCapabilityId';
 
 
 type Props = {
@@ -41,6 +41,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         opacity: 0.35,
     },
 }));
+
+function readCliAvailable(data: unknown): boolean {
+    return Boolean(data && typeof data === 'object' && !Array.isArray(data) && (data as { available?: unknown }).available === true);
+}
 
 // iOS can render some dingbat glyphs as emoji; force text presentation (U+FE0E).
 export const MachineCliGlyphs = React.memo(({ machineId, isOnline, serverId, autoDetect = true }: Props) => {
@@ -78,8 +82,9 @@ export const MachineCliGlyphs = React.memo(({ machineId, isOnline, serverId, aut
         const items: Array<{ key: string; glyph: string; factor: number; muted: boolean }> = [];
         const results = state.snapshot.response.results;
         for (const agentId of enabledAgents) {
-            const capId = `cli.${getAgentCore(agentId).cli.detectKey}` as CapabilityId;
-            const available = (results[capId]?.ok && (results[capId].data as any)?.available === true) ?? false;
+            const capId = buildAgentCliCapabilityId(agentId);
+            const result = results[capId];
+            const available = result?.ok === true && readCliAvailable(result.data);
             if (!available) continue;
             const core = getAgentCore(agentId);
             items.push({

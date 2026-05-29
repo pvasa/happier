@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import {
     installFilesContentCommonModuleMocks,
 } from './filesContentTestHelpers';
@@ -52,11 +53,16 @@ vi.mock('@/components/ui/media/FileIcon', () => ({
     FileIcon: 'FileIcon',
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: {
-        default: () => ({}),
-    },
-}));
+vi.mock('@/constants/Typography', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/constants/Typography')>();
+    return {
+        ...actual,
+        Typography: {
+            ...actual.Typography,
+            default: () => ({}),
+        },
+    };
+});
 
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement('Item', props),
@@ -75,6 +81,7 @@ vi.mock('@/components/sessions/sourceControl/changes/ScmChangeRow', () => ({
 }));
 
 describe('ChangedFilesList', () => {
+    const changedFilesListTheme = createThemeFixture();
     const file = {
         fileName: 'a.ts',
         filePath: 'src',
@@ -97,7 +104,7 @@ describe('ChangedFilesList', () => {
     it('renders repository view heading and rows', async () => {
         const { ChangedFilesList } = await import('./ChangedFilesList');
         const screen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="repository"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[file as any, directoryLike as any]}
@@ -126,7 +133,7 @@ describe('ChangedFilesList', () => {
         } as const;
 
         const smallScreen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="repository"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[file as any]}
@@ -136,7 +143,7 @@ describe('ChangedFilesList', () => {
                     onFilePress={vi.fn()}
                 />);
         const mixedScreen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="repository"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[file as any, largeStatsFile as any]}
@@ -157,7 +164,7 @@ describe('ChangedFilesList', () => {
         const { ChangedFilesList } = await import('./ChangedFilesList');
 
         const screen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="repository"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[file as any]}
@@ -181,7 +188,7 @@ describe('ChangedFilesList', () => {
         const onFilePressPinned = vi.fn();
 
         const screen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="repository"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[file as any]}
@@ -206,7 +213,7 @@ describe('ChangedFilesList', () => {
     it('renders session reliability warning when attribution is limited', async () => {
         const { ChangedFilesList } = await import('./ChangedFilesList');
         const screen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="session"
                     attributionReliability="limited"
                     allRepositoryChangedFiles={[file as any]}
@@ -227,7 +234,7 @@ describe('ChangedFilesList', () => {
             fullPath: 'src/b.ts',
         } as const;
         const screen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="turn"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[file as any, repositoryOnlyFile as any]}
@@ -262,7 +269,7 @@ describe('ChangedFilesList', () => {
             fileName: 'repo-only.ts',
         } as const;
         const screen = await renderScreen(<ChangedFilesList
-                    theme={{ colors: { surfaceHigh: '#111', divider: '#222', textLink: '#09f', textSecondary: '#999', text: '#fff', dark: false } } as any}
+                    theme={changedFilesListTheme as any}
                     changedFilesViewMode="session"
                     attributionReliability="high"
                     allRepositoryChangedFiles={[sessionFile as any, repositoryOnlyFile as any]}

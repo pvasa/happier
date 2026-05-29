@@ -1,8 +1,9 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createReducer } from '@/sync/reducer/reducer';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
+import type { ConnectedServiceQuotaGaugeViewModel } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
 import { renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
@@ -17,6 +18,11 @@ const storageSettings: Settings = {
     agentInputChipDensity: 'labels',
     sessionPermissionModeApplyTiming: 'immediate',
     alwaysShowContextSize: true,
+};
+
+const windowDimensionsState = {
+    width: 800,
+    height: 600,
 };
 
 installAgentInputCommonModuleMocks({
@@ -37,9 +43,9 @@ installAgentInputCommonModuleMocks({
                 OS: 'web',
                 select: (v: any) => v.web ?? v.default,
             },
-            useWindowDimensions: () => ({ width: 800, height: 600 }),
+            useWindowDimensions: () => ({ width: windowDimensionsState.width, height: windowDimensionsState.height }),
             Dimensions: {
-                get: () => ({ width: 800, height: 600, scale: 1, fontScale: 1 }),
+                get: () => ({ width: windowDimensionsState.width, height: windowDimensionsState.height, scale: 1, fontScale: 1 }),
             },
         });
     },
@@ -56,6 +62,8 @@ installAgentInputCommonModuleMocks({
                 }
                 if (key === 'agentInput.context.windowTitle') return 'Context Window';
                 if (key === 'agentInput.context.description') return 'Automatically compacts its context when needed.';
+                if (key === 'agentInput.providerUsage.titleForProvider') return `${params?.provider} usage`;
+                if (key === 'agentInput.providerUsage.activeAccount') return `Account: ${params?.account}`;
                 return key;
             },
         });
@@ -259,6 +267,12 @@ vi.mock('@/sync/acp/configOptionsControl', () => ({
 }));
 
 describe('AgentInput (context usage badge)', () => {
+    beforeEach(() => {
+        captured.last = null;
+        windowDimensionsState.width = 800;
+        windowDimensionsState.height = 600;
+    });
+
     it('does not render a context usage badge for codex sessions even when telemetry is present', async () => {
         captured.last = null;
         const { AgentInput } = await import('./AgentInput');
@@ -461,6 +475,176 @@ describe('AgentInput (context usage badge)', () => {
             badge?.props.onPress?.({} as never);
         });
         expect(onPress).toHaveBeenCalledTimes(1);
+
+        act(() => screen.tree.unmount());
+    });
+
+    it('renders the provider quota gauge beside the context gauge when reliable usage exists', async () => {
+        captured.last = null;
+        const { AgentInput } = await import('./AgentInput');
+
+        const providerUsageGauge: ConnectedServiceQuotaGaugeViewModel = {
+            serviceId: 'claude-subscription',
+            providerDisplayName: 'Claude',
+            activeAccountDisplayLabel: 'Work account',
+            remainingPct: 18,
+            usedPct: 82,
+            valueLabel: '18% left',
+            ringValueLabel: '18',
+            badgeLabel: 'w. 18% left',
+            scopePrefix: 'w.',
+            primaryValueSemantics: 'remaining',
+            detailRightLabel: '18% left · resets in 2h',
+            usedLimitLabel: '82/100 used',
+            resetLabel: '2h',
+            tone: 'warning',
+            isStale: false,
+            effectiveMeter: {
+                meterId: 'weekly',
+                label: 'Weekly',
+                used: 82,
+                limit: 100,
+                unit: 'count',
+                utilizationPct: null,
+                resetsAt: 0,
+                status: 'ok',
+                details: {},
+            },
+            allMeterRows: [
+                {
+                    meterId: 'weekly',
+                    label: 'Weekly',
+                    remainingPct: 18,
+                    usedPct: 82,
+                    detailRightSemantics: 'remaining',
+                    detailRightLabel: '18% left · resets in 2h',
+                    usedLimitSemantics: 'used',
+                    usedLimitLabel: '82/100 used',
+                    resetLabel: '2h',
+                    tone: 'warning',
+                },
+            ],
+        };
+
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                agentType={"claude" as any}
+                usageData={{
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheCreation: 0,
+                    cacheRead: 0,
+                    contextSize: 38_691,
+                }}
+                alwaysShowContextSize={true}
+                {...{ providerUsageGauge }}
+            />,
+        );
+
+        expect(screen.findByTestId('agent-input-context-usage-badge')).toBeTruthy();
+        expect(screen.findByTestId('agent-input-provider-usage-badge')).toBeTruthy();
+        expect(screen.findByTestId('agent-input-provider-quota-badge')).toBeTruthy();
+        expect(screen.findByTestId('agent-input-provider-usage-value')?.props.children).toBe('18');
+
+        act(() => {
+            screen.findByTestId('agent-input-provider-usage-badge')?.props.onPress();
+        });
+
+        expect(screen.findByTestId('agent-input-provider-usage-popover')).toBeTruthy();
+        expect(screen.findByTestId('agent-input-provider-usage-meter:weekly')).toBeTruthy();
+        expect(screen.getTextContent()).toContain('Claude usage');
+        expect(screen.getTextContent()).toContain('Work account');
+        expect(screen.getTextContent()).toContain('18% left · resets in 2h');
+        expect(screen.getTextContent()).toContain('82/100 used');
+
+        act(() => screen.tree.unmount());
+    });
+
+    it('keeps the hidden gauge reachable through overflow on very narrow screens', async () => {
+        windowDimensionsState.width = 360;
+        const { AgentInput } = await import('./AgentInput');
+
+        const providerUsageGauge: ConnectedServiceQuotaGaugeViewModel = {
+            serviceId: 'claude-subscription',
+            providerDisplayName: 'Claude',
+            activeAccountDisplayLabel: null,
+            remainingPct: 18,
+            usedPct: 82,
+            primaryValueSemantics: 'remaining',
+            valueLabel: '18% left',
+            ringValueLabel: '18',
+            badgeLabel: '18% left',
+            scopePrefix: null,
+            detailRightLabel: '18% left · resets in 2h',
+            usedLimitLabel: '82/100 used',
+            resetLabel: '2h',
+            tone: 'warning',
+            isStale: false,
+            effectiveMeter: {
+                meterId: 'weekly',
+                label: 'Weekly',
+                used: 82,
+                limit: 100,
+                unit: 'count',
+                utilizationPct: null,
+                resetsAt: 0,
+                status: 'ok',
+                details: {},
+            },
+            allMeterRows: [
+                {
+                    meterId: 'weekly',
+                    label: 'Weekly',
+                    remainingPct: 18,
+                    usedPct: 82,
+                    detailRightSemantics: 'remaining',
+                    detailRightLabel: '18% left · resets in 2h',
+                    usedLimitSemantics: 'used',
+                    usedLimitLabel: '82/100 used',
+                    resetLabel: '2h',
+                    tone: 'warning',
+                },
+            ],
+        };
+
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompletePrefixes={[]}
+                autocompleteSuggestions={async () => []}
+                agentType={"claude" as any}
+                usageData={{
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheCreation: 0,
+                    cacheRead: 0,
+                    contextSize: 38_691,
+                }}
+                alwaysShowContextSize={true}
+                {...{ providerUsageGauge }}
+            />,
+        );
+
+        expect(screen.findByTestId('agent-input-context-usage-badge')).toBeNull();
+        expect(screen.findByTestId('agent-input-provider-usage-badge')).toBeTruthy();
+        const overflow = screen.findByTestId('agent-input-hidden-usage-overflow');
+        expect(overflow).toBeTruthy();
+
+        act(() => {
+            overflow?.props.onPress?.();
+        });
+
+        expect(screen.findByTestId('agent-input-hidden-usage-overflow-popover')).toBeTruthy();
+        expect(screen.getTextContent()).toContain('38.7k/200k context used');
 
         act(() => screen.tree.unmount());
     });

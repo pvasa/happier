@@ -3,8 +3,11 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 
+import { useEnsureSidechainsLoaded, type SidechainHydrationStatus } from '@/hooks/session/useEnsureSidechainsLoaded';
 import { useSessionSubagents } from '@/hooks/session/useSessionSubagents';
 import { useSession } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { resolveTranscriptToolCallsCollapsedPreviewCount } from '@/sync/domains/settings/transcriptToolCallsCollapsedPreviewCount';
 import { useSessionMessages, useSessionMessagesReducerState } from '@/sync/store/hooks';
 import { deriveSessionActiveSubagents } from '@/sync/domains/session/subagents/deriveSessionActiveSubagents';
 import { deriveSessionRecentSubagents } from '@/sync/domains/session/subagents/deriveSessionRecentSubagents';
@@ -43,6 +46,32 @@ const stylesheet = StyleSheet.create(() => ({
     },
 }));
 
+function deriveRightPanelPreviewSidechainIds(params: Readonly<{
+    activeSubagents: readonly SessionSubagent[];
+    recentSubagents: readonly SessionSubagent[];
+    previewLimit: number;
+}>): readonly string[] {
+    const limit = Math.max(0, Math.floor(params.previewLimit));
+    if (limit <= 0) return [];
+
+    const sidechainIds: string[] = [];
+    const seen = new Set<string>();
+    for (const subagent of [...params.activeSubagents, ...params.recentSubagents]) {
+        const sidechainId = subagent.transcript.sidechainId?.trim();
+        if (!sidechainId || seen.has(sidechainId)) continue;
+        seen.add(sidechainId);
+        sidechainIds.push(sidechainId);
+        if (sidechainIds.length >= limit) break;
+    }
+    return sidechainIds;
+}
+
+function resolveRightPanelPreviewFallback(status: SidechainHydrationStatus | undefined): string | null {
+    if (status === 'loaded') return null;
+    if (status === 'error' || status === 'not_ready') return t('common.unavailable');
+    return t('common.loading');
+}
+
 export const SessionRightPanelAgentsView = React.memo((props: Readonly<{ sessionId: string; scopeId: string }>) => {
     const styles = stylesheet;
     const router = useRouter();
@@ -51,6 +80,7 @@ export const SessionRightPanelAgentsView = React.memo((props: Readonly<{ session
     const session = useSession(props.sessionId);
     const { messages } = useSessionMessages(props.sessionId);
     const reducerState = useSessionMessagesReducerState(props.sessionId);
+    const collapsedPreviewCountSetting = useSetting('transcriptToolCallsCollapsedPreviewCount');
     const { subagents } = useSessionSubagents({
         sessionId: props.sessionId,
         session,
@@ -59,6 +89,19 @@ export const SessionRightPanelAgentsView = React.memo((props: Readonly<{ session
 
     const activeSubagents = React.useMemo(() => deriveSessionActiveSubagents(subagents), [subagents]);
     const recentSubagents = React.useMemo(() => deriveSessionRecentSubagents(subagents), [subagents]);
+    const previewSidechainIds = React.useMemo(() => {
+        return deriveRightPanelPreviewSidechainIds({
+            activeSubagents,
+            recentSubagents,
+            previewLimit: resolveTranscriptToolCallsCollapsedPreviewCount(collapsedPreviewCountSetting),
+        });
+    }, [activeSubagents, collapsedPreviewCountSetting, recentSubagents]);
+    const previewSidechainIdSet = React.useMemo(() => new Set(previewSidechainIds), [previewSidechainIds]);
+    const sidechainHydrationStatus = useEnsureSidechainsLoaded({
+        enabled: previewSidechainIds.length > 0,
+        sessionId: props.sessionId,
+        sidechainIds: previewSidechainIds,
+    });
     const activityPreviewById = React.useMemo(() => {
         const previews = new Map<string, string>();
         for (const subagent of subagents) {
@@ -66,11 +109,18 @@ export const SessionRightPanelAgentsView = React.memo((props: Readonly<{ session
                 subagent,
                 reducerState,
             });
-            if (!preview) continue;
-            previews.set(subagent.id, preview);
+            if (preview) {
+                previews.set(subagent.id, preview);
+                continue;
+            }
+            const sidechainId = subagent.transcript.sidechainId?.trim();
+            if (!sidechainId || !previewSidechainIdSet.has(sidechainId)) continue;
+            const fallback = resolveRightPanelPreviewFallback(sidechainHydrationStatus.bySidechainId[sidechainId]?.status);
+            if (!fallback) continue;
+            previews.set(subagent.id, fallback);
         }
         return previews;
-    }, [reducerState, subagents]);
+    }, [previewSidechainIdSet, reducerState, sidechainHydrationStatus.bySidechainId, subagents]);
     const pendingPermissionById = React.useMemo(() => {
         const pending = new Map<string, boolean>();
         for (const subagent of subagents) {

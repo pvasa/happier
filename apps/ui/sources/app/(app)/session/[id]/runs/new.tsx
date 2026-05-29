@@ -7,9 +7,11 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
 import { Text } from '@/components/ui/text/Text';
 import { SessionExecutionRunLauncherView } from '@/components/sessions/runs/launcher/SessionExecutionRunLauncherView';
+import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';
 import { resolveExecutionRunLauncherIntent } from '@/components/sessions/runs/launcher/executionRunLauncherModel';
-import { createSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
+import { useSessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
+import { isSessionRouteHydrationAvailable, isSessionRouteHydrationMissing } from '@/sync/domains/session/sessionRouteHydrationState';
 import { t } from '@/text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
@@ -24,13 +26,15 @@ export default function SessionNewRunScreen() {
     const router = useRouter();
     const navigation = useNavigation();
     const params = useLocalSearchParams();
-    const routeScope = React.useMemo(() => createSessionRouteServerScope(params as Record<string, unknown>), [params]);
+    const routeScope = useSessionRouteServerScope(params as Record<string, unknown>);
     const sessionId = normalizeSessionId((params as any)?.id);
-    const hydrateReady = useHydrateSessionForRoute(
+    const routeHydrationState = useHydrateSessionForRoute(
         sessionId ?? '',
         'SessionNewRunScreen.hydrate',
         routeScope.hydrationOptions,
     );
+    const hydrateReady = isSessionRouteHydrationAvailable(routeHydrationState);
+    const hydrateMissing = isSessionRouteHydrationMissing(routeHydrationState);
     const rawIntent = (params as any)?.intent;
     const hasIntentParam = rawIntent !== undefined;
     const initialIntent = resolveExecutionRunLauncherIntent(rawIntent);
@@ -79,13 +83,14 @@ export default function SessionNewRunScreen() {
                     gap: 16,
                 }}
             >
-                {!sessionId ? (
-                    <Text style={{ color: theme.colors.text.primary }}>{t('errors.sessionDeleted')}</Text>
+                {!sessionId || hydrateMissing ? (
+                    <SessionInvalidLinkFallback />
                 ) : !hydrateReady ? (
                     <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 ) : (
                     <SessionExecutionRunLauncherView
                         sessionId={sessionId}
+                        routeHydrationState={routeHydrationState}
                         initialIntent={launcherIntent}
                         presentation="screen"
                         onRequestClose={handleRequestClose}

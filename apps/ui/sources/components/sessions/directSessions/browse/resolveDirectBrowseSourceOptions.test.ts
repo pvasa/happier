@@ -22,6 +22,7 @@ describe('resolveDirectBrowseSourceOptions', () => {
                 connectedServicesV2: [
                     {
                         serviceId: 'openai-codex',
+                        groups: [],
                         profiles: [
                             {
                                 profileId: 'work',
@@ -31,6 +32,7 @@ describe('resolveDirectBrowseSourceOptions', () => {
                                 providerAccountId: null,
                                 expiresAt: null,
                                 lastUsedAt: null,
+                                health: null,
                             },
                             {
                                 profileId: 'personal',
@@ -40,6 +42,7 @@ describe('resolveDirectBrowseSourceOptions', () => {
                                 providerAccountId: null,
                                 expiresAt: null,
                                 lastUsedAt: null,
+                                health: null,
                             },
                         ],
                     },
@@ -118,6 +121,7 @@ describe('resolveDirectBrowseSourceOptions', () => {
             home: 'user',
             connectedServiceId: null,
             connectedServiceProfileId: null,
+            connectedServiceGroupId: null,
             homePath: '/tmp/custom-home',
         });
 

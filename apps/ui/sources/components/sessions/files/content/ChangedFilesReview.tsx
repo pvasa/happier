@@ -37,6 +37,8 @@ const ViewWithClick = View as unknown as React.ComponentType<
     React.ComponentPropsWithRef<typeof View> & { onClick?: any; onKeyDown?: any; tabIndex?: number }
 >;
 
+const REVIEW_DIFF_LIST_DRAW_DISTANCE_MULTIPLIER = 0.75;
+
 type ChangedFilesReviewTheme = Readonly<{
     colors: Readonly<{
         surface: Readonly<{
@@ -151,8 +153,8 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         rowDensity = 'comfortable',
     } = props;
 
-    const plugin = scmUiBackendRegistry.getPluginForSnapshot(snapshot);
-    const diffConfig = plugin.diffModeConfig(snapshot);
+    const plugin = React.useMemo(() => scmUiBackendRegistry.getPluginForSnapshot(snapshot), [snapshot]);
+    const diffConfig = React.useMemo(() => plugin.diffModeConfig(snapshot), [plugin, snapshot]);
     const scmDefaultDiffModeByBackend = useSetting('scmDefaultDiffModeByBackend');
     const reviewCommentsEnabled = props.reviewCommentsEnabled === true;
     const reviewCommentDrafts = props.reviewCommentDrafts ?? [];
@@ -385,6 +387,9 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
 
     const listRef = React.useRef<DiffFilesListViewHandle | null>(null);
     const lastScrollTopRef = React.useRef<number>(typeof props.initialScrollTop === 'number' ? props.initialScrollTop : 0);
+    const [viewableExpansionEnabled, setViewableExpansionEnabled] = React.useState(() => {
+        return typeof props.initialScrollTop === 'number' && props.initialScrollTop > 2;
+    });
 
     const snapshotSignature = React.useMemo(() => {
         if (!snapshot) return null;
@@ -395,15 +400,22 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const isCollapsed = React.useCallback((path: string) => collapsedKeysRef.current.has(path), []);
 
     const fallbackError = t('files.reviewDiffRequestFailed');
+    const viewabilityConfig = useScmReviewViewabilityConfig();
+    const tooLargeForExpansion = tooLarge && viewabilityConfig.enabled;
 
     const initialRequestedPaths = React.useMemo(() => {
-        const count = Math.max(1, Math.min(maxFiles, reviewListFiles.length));
+        const count = tooLargeForExpansion
+            ? Math.max(1, Math.min(
+                reviewListFiles.length,
+                viewabilityConfig.aheadCount + viewabilityConfig.behindCount + 1,
+            ))
+            : (tooLarge ? 1 : Math.max(1, Math.min(maxFiles, reviewListFiles.length)));
         const out: string[] = [];
         for (const file of reviewListFiles.slice(0, count)) {
             if (file?.fullPath) out.push(file.fullPath);
         }
         return out;
-    }, [maxFiles, reviewListFiles]);
+    }, [maxFiles, reviewListFiles, tooLarge, tooLargeForExpansion, viewabilityConfig.aheadCount, viewabilityConfig.behindCount]);
 
     const prefetchRows = React.useMemo(() => {
         return reviewFileEntries.map((entry) => ({
@@ -428,8 +440,6 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         initialRequestedPaths,
     });
 
-    const viewabilityConfig = useScmReviewViewabilityConfig();
-    const tooLargeForExpansion = tooLarge && viewabilityConfig.enabled;
     const { expandedKeys, collapsedKeys, toggleCollapsed } = useScmDiffExpandedKeys({
         allKeys,
         viewableIndices: prefetch.viewableRowIndices,
@@ -439,6 +449,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         resetKey: `${sessionId}:${snapshotSignature ?? 'nosig'}:${diffArea}`,
         initialCollapsedKeys: props.initialCollapsedPaths ?? null,
         onCollapsedKeysChange: props.onCollapsedPathsChange,
+        viewableExpansionEnabled,
     });
 
     React.useEffect(() => {
@@ -453,6 +464,9 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
     const reportScrollTop = React.useCallback((nextTop: number) => {
         if (!Number.isFinite(nextTop)) return;
         lastScrollTopRef.current = nextTop;
+        if (nextTop > 2) {
+            setViewableExpansionEnabled((prev) => (prev ? prev : true));
+        }
         props.onScrollTopChange?.(nextTop);
     }, [props.onScrollTopChange]);
 
@@ -589,6 +603,36 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         };
     }, [props.onScrollTopChange]);
 
+    const requestedDiffPaths = React.useMemo(() => {
+        if (!tooLargeForExpansion) return prefetch.requestedPaths;
+
+        const requested = new Set<string>();
+        for (const path of prefetch.requestedPaths ?? []) {
+            if (typeof path === 'string' && path.trim().length > 0) requested.add(path);
+        }
+        for (const path of prefetch.prefetchWindowPaths ?? []) {
+            if (typeof path === 'string' && path.trim().length > 0) requested.add(path);
+        }
+        for (const path of expandedKeys) {
+            if (typeof path === 'string' && path.trim().length > 0) requested.add(path);
+        }
+
+        const out: string[] = [];
+        const seen = new Set<string>();
+        for (const file of reviewListFiles) {
+            const path = file?.fullPath;
+            if (!path || seen.has(path) || !requested.has(path)) continue;
+            seen.add(path);
+            out.push(path);
+        }
+        if (out.length > 0) return out;
+
+        const fallbackPath = prefetch.requestedPaths?.find((path) => (
+            typeof path === 'string' && path.trim().length > 0
+        ));
+        return fallbackPath ? [fallbackPath] : prefetch.requestedPaths;
+    }, [expandedKeys, prefetch.prefetchWindowPaths, prefetch.requestedPaths, reviewListFiles, tooLargeForExpansion]);
+
     const { diffStateSource } = useChangedFilesReviewDiffLoading({
         sessionId,
         isRepo: Boolean(snapshot?.repo.isRepo),
@@ -598,7 +642,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         selectedPath: '',
         snapshotSignature,
         diffCache: prefetch.prefetchEnabled ? scmDiffCache : null,
-        requestedPaths: prefetch.requestedPaths ?? undefined,
+        requestedPaths: requestedDiffPaths ?? undefined,
         maxConcurrency: prefetch.maxDiffLoadConcurrency,
         minRefetchMs: diffAutoRefreshIntervalMs,
         refreshToken: diffRefreshToken,
@@ -714,7 +758,6 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         diffArea,
         diffConfig.availableModes,
         diffConfig.labels,
-        diffConfig.defaultMode,
         reviewFiles.length,
         setDiffArea,
         suppressedInferredCount,
@@ -837,6 +880,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 showLineNumbers={true}
                 showPrefix={true}
                 virtualizeFileList
+                drawDistanceMultiplier={REVIEW_DIFF_LIST_DRAW_DISTANCE_MULTIPLIER}
                 inlineDiffContainerVariant="none"
                 renderBeforeFileRow={renderBeforeFileRow as any}
                 renderFileRow={renderFileRow as any}

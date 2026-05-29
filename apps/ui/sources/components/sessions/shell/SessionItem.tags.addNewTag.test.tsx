@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { invokeTestInstanceHandler, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -90,8 +90,6 @@ installSessionShellCommonModuleMocks({
                 connectedServicesV2: [],
             }),
             useSession: () => null,
-            useSessionListRowRenderable: () => null,
-            useSessionListMeaningfulActivityAt: () => null,
         });
     },
 });
@@ -126,6 +124,18 @@ describe('SessionItem tags (new tag)', () => {
         const screen = await renderScreen(
             <SessionItem
                 session={session}
+                rowModel={createSessionItemTestRowModel({
+                    session,
+                    serverId: 'server_a',
+                    serverName: 'Server A',
+                    showServerBadge: true,
+                    isFirst: true,
+                    isLast: true,
+                    isSingle: true,
+                    tagsEnabled: true,
+                    tags: [],
+                    allKnownTags: [],
+                })}
                 serverId="server_a"
                 serverName="Server A"
                 showServerBadge={true}

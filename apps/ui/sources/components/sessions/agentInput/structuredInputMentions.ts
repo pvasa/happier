@@ -36,6 +36,7 @@ export type StructuredInputImageInput = Readonly<{
     mimeType?: string;
     sizeBytes?: number;
     sha256?: string;
+    provenance?: Readonly<{ kind: 'sessionAttachmentUpload' }>;
 }>;
 
 type StructuredInputEnvelope = Readonly<{

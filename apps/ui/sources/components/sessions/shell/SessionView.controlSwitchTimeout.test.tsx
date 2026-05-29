@@ -27,7 +27,9 @@ const sessionState = vi.hoisted(() => ({
   } as any,
 }));
 
-vi.mock('react-native-reanimated', () => ({}));
+vi.mock('react-native-reanimated', async () =>
+  (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock()
+);
 vi.mock('expo-linear-gradient', () => ({
   LinearGradient: 'LinearGradient',
 }));
@@ -97,13 +99,17 @@ installSessionShellCommonModuleMocks({
     return modalMock.module;
   },
   storage: async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
-      storage: { getState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }) },
+      storage: createStorageStoreMock({
+        sessions: { s1: sessionState.session },
+        sessionListViewDataByServerId: {},
+      }),
       useSession: () => sessionState.session,
       useIsDataReady: () => true,
       useRealtimeStatus: () => ({ current: { status: 'connected' } as any }),
       useSessionMessages: () => ({ messages: [], isLoaded: true }),
+      useSessionSubagentSourceMessages: () => [],
       useSessionTranscriptIds: () => ({ ids: ['m1'], isLoaded: true }),
       useSessionPendingMessages: () => ({ messages: [] }),
       useSessionReviewCommentsDrafts: () => [],
@@ -216,7 +222,7 @@ vi.mock('@/utils/platform/responsive', () => ({
   useIsTablet: () => true,
 }));
 vi.mock('@/hooks/session/useDraft', () => ({
-  useDraft: () => ({ clearDraft: vi.fn() }),
+  useDraft: () => ({ clearDraft: vi.fn(), setDraftValue: vi.fn() }),
 }));
 vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
   getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
@@ -249,6 +255,7 @@ vi.mock('@/sync/sync', () => ({
     publishSessionModelOverrideToMetadata: async () => {},
     refreshSessions: async () => {},
     onSessionVisible: () => () => {},
+    markSessionLiveTailIntent: () => {},
     sendMessage: async () => {},
     enqueuePendingMessage: async () => {},
     submitMessage: async () => {},
@@ -256,13 +263,19 @@ vi.mock('@/sync/sync', () => ({
     onSessionViewportChange: () => {},
   },
 }));
-vi.mock('@/sync/ops', () => ({
-  continueSessionWithReplay: vi.fn(),
-  sessionAbort: vi.fn(),
-  resumeSession: vi.fn(),
-  sessionAttachmentsUploadFile: vi.fn(),
-  sessionSwitch: sessionSwitchSpy,
-}));
+vi.mock('@/sync/ops', async (importOriginal) => {
+  const { createSyncOpsModuleMock } = await import('@/dev/testkit/mocks/syncOps');
+  return createSyncOpsModuleMock({
+    importOriginal,
+    overrides: {
+      continueSessionWithReplay: vi.fn(),
+      sessionAbort: vi.fn(),
+      resumeSession: vi.fn(),
+      sessionAttachmentsUploadFile: vi.fn(),
+      sessionSwitch: sessionSwitchSpy,
+    },
+  });
+});
 vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
   createDefaultActionExecutor: () => ({ execute: vi.fn() }),
 }));

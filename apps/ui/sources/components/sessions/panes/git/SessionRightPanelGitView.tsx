@@ -34,6 +34,7 @@ import {
     useSessionProjectScmSnapshot,
     useSessionProjectScmSnapshotError,
     useSessionProjectScmTouchedPaths,
+    useSessionRealtimeScmTranscriptConsumer,
     useSetting,
     useSettingMutable,
 } from '@/sync/domains/state/storage';
@@ -48,6 +49,7 @@ import { useSessionRightPanelGitTabState } from './useSessionRightPanelGitTabSta
 import { useSessionRightPanelGitOpenDetails } from './useSessionRightPanelGitOpenDetails';
 import type { SourceControlRemoteAction } from '@/components/sessions/sourceControl/remoteActions/SourceControlRemoteActionsRail';
 import type { ScmCommitAdjacentPushAction } from '@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard';
+import type { Theme } from '@/theme';
 import {
     createSessionScmReviewDetailsTab,
     createSessionScmStashDetailsTab,
@@ -63,8 +65,38 @@ export type SessionRightPanelGitViewProps = Readonly<{
     onOpenStashDetails?: () => void;
 }>;
 
+function resolveGitThemeSignature(theme: Theme): string {
+    const colors = theme.colors;
+    const text = colors.text;
+    const surface = colors.surface;
+    const border = colors.border;
+    const button = colors.button;
+    const state = colors.state;
+    const input = colors.input;
+    return [
+        border.default,
+        surface.base,
+        surface.inset,
+        text.primary,
+        text.secondary,
+        input?.placeholder ?? '',
+        button?.primary?.tint ?? '',
+        state?.success?.foreground ?? '',
+    ].join('\u0000');
+}
+
+function useStableGitTheme(theme: Theme): Theme {
+    const signature = resolveGitThemeSignature(theme);
+    const stableThemeRef = React.useRef({ signature, theme });
+    if (stableThemeRef.current.signature !== signature) {
+        stableThemeRef.current = { signature, theme };
+    }
+    return stableThemeRef.current.theme;
+}
+
 export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitViewProps) => {
     const { theme } = useUnistyles();
+    const gitTheme = useStableGitTheme(theme);
     const pane = useAppPaneScope(props.scopeId);
     const resumeSession = useSessionResumeAction();
     const { activeGitSubTab, commitDraftMessage, setCommitDraftMessage, setActiveGitSubTab } = useSessionRightPanelGitTabState(pane);
@@ -95,6 +127,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 
     const session = useSession(props.sessionId);
     const scmSnapshot = useSessionProjectScmSnapshot(props.sessionId);
+    useSessionRealtimeScmTranscriptConsumer(props.sessionId, scmSnapshot);
     const lastGoodScmSnapshot = useLastNonNullValue(scmSnapshot, { resetKey: props.sessionId });
     const effectiveScmSnapshot = scmSnapshot ?? lastGoodScmSnapshot;
     const scmSnapshotError = useSessionProjectScmSnapshotError(props.sessionId);
@@ -150,6 +183,9 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     const refreshScmData = React.useCallback(async () => {
         await scmStatusSync.invalidateFromUserAndAwait(props.sessionId);
     }, [props.sessionId]);
+    const refreshScmDataFromAutoRefresh = React.useCallback(async () => {
+        await scmStatusSync.invalidateFromAutoRefreshAndAwait(props.sessionId);
+    }, [props.sessionId]);
 
     const initialRefreshKey = `${props.sessionId}:${sessionPath ?? ''}`;
     const didInitialRefreshKeyRef = React.useRef<string | null>(null);
@@ -158,13 +194,8 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
     React.useEffect(() => {
         if (didInitialRefreshKeyRef.current === initialRefreshKey) return;
         didInitialRefreshKeyRef.current = initialRefreshKey;
-        void refreshScmData();
-
-        if (!sessionPath) return;
-        if (didInitCommitHistoryKeyRef.current === commitHistoryInitKey) return;
-        didInitCommitHistoryKeyRef.current = commitHistoryInitKey;
-        void loadCommitHistory({ reset: true });
-    }, [commitHistoryInitKey, initialRefreshKey, loadCommitHistory, refreshScmData, sessionPath]);
+        void refreshScmDataFromAutoRefresh();
+    }, [initialRefreshKey, refreshScmDataFromAutoRefresh]);
 
     useScmAdaptivePolling({
         enabled: Boolean(props.sessionId) && Boolean(sessionPath),
@@ -172,9 +203,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         stepIntervalMs: baseIntervalMs,
         maxIntervalMs,
         getSignature: getSnapshotSignature,
-        invalidateAndAwait: React.useCallback(async () => {
-            await scmStatusSync.invalidateFromAutoRefreshAndAwait(props.sessionId);
-        }, [props.sessionId]),
+        invalidateAndAwait: refreshScmDataFromAutoRefresh,
     });
 
     const {
@@ -261,18 +290,27 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         void runRemoteOperation('push');
     }, [runRemoteOperation]);
 
+    const createCommitFromMessageRef = React.useRef(createCommitFromMessage);
+    createCommitFromMessageRef.current = createCommitFromMessage;
+    const setCommitDraftMessageRef = React.useRef(setCommitDraftMessage);
+    setCommitDraftMessageRef.current = setCommitDraftMessage;
+    const onCommitDraftMessageChange = React.useCallback((value: string) => {
+        setCommitDraftMessageRef.current(value);
+    }, []);
     const onCommitFromMessage = React.useCallback((message: string) => {
         void (async () => {
-            const result = await createCommitFromMessage(message);
+            const result = await createCommitFromMessageRef.current(message);
             if (result.ok) {
-                setCommitDraftMessage('');
+                setCommitDraftMessageRef.current('');
             }
         })();
-    }, [createCommitFromMessage, setCommitDraftMessage]);
+    }, []);
 
+    const generateCommitMessageSuggestionRef = React.useRef(generateCommitMessageSuggestion);
+    generateCommitMessageSuggestionRef.current = generateCommitMessageSuggestion;
     const onGenerateCommitMessageSuggestion = React.useCallback(async () => {
-        return await generateCommitMessageSuggestion();
-    }, [generateCommitMessageSuggestion]);
+        return await generateCommitMessageSuggestionRef.current();
+    }, []);
 
     const onOpenFilesSidebar = React.useCallback(() => {
         pane.openRight({ tabId: 'files' });
@@ -546,7 +584,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 
     const commitTab = (
         <SessionRightPanelGitCommitTabContent
-            theme={theme}
+            theme={gitTheme}
             sessionId={props.sessionId}
             sessionPath={sessionPath}
             scmSnapshot={effectiveScmSnapshot}
@@ -569,7 +607,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
             commitWriteEnabled={commitWriteEnabled}
             commitSelectionUiEnabled={commitSelectionUiEnabled}
             commitDraftMessage={commitDraftMessage}
-            onCommitDraftMessageChange={setCommitDraftMessage}
+            onCommitDraftMessageChange={onCommitDraftMessageChange}
             onCommitFromMessage={onCommitFromMessage}
             commitMessageGeneratorEnabled={commitMessageGeneratorEnabled}
             onGenerateCommitMessageSuggestion={onGenerateCommitMessageSuggestion}
@@ -585,7 +623,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 
     const updateTab = (
         <SessionRightPanelGitUpdateTab
-            theme={theme}
+            theme={gitTheme}
             sessionId={props.sessionId}
             scmSnapshot={effectiveScmSnapshot}
             scmWriteEnabled={scmWriteEnabled}
@@ -599,7 +637,7 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
 
     const historyTab = (
         <SessionRightPanelGitHistoryTab
-            theme={theme}
+            theme={gitTheme}
             historyLoading={historyLoading}
             historyEntries={historyEntries}
             historyHasMore={historyHasMore}

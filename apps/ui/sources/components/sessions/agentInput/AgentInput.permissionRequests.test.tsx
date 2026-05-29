@@ -179,10 +179,6 @@ vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
     useActiveSuggestions: () => [[], null, () => {}, () => {}],
 }));
 
-vi.mock('./components/AgentInputAutocomplete', () => ({
-    AgentInputAutocomplete: () => null,
-}));
-
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
     FloatingOverlay: ({ children }: { children?: React.ReactNode }) => React.createElement('FloatingOverlay', null, children),
 }));

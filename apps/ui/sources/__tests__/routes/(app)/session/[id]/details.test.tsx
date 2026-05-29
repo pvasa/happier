@@ -14,7 +14,7 @@ import { getStyleValue, installSessionRouteCommonModuleMocks } from './sessionRo
 let mockSessionId = 'session-1';
 let mockServerId: string | undefined;
 let isFocused = true;
-let sessionHydrated = true;
+let routeHydrationState: 'available' | 'loading' | 'missing' = 'available';
 let mockDetailsParam: string | undefined;
 let mockPathParam: string | undefined;
 let mockShaParam: string | undefined;
@@ -187,7 +187,13 @@ vi.mock('@/components/sessions/panes/url/sessionPaneUrlState', () => ({
 vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
     useHydrateSessionForRoute: (sessionId: string, _tag: string, options?: { serverId?: string }) => {
         ensureSessionVisibleSpy(sessionId, options);
-        return sessionHydrated;
+        if (routeHydrationState === 'available') {
+            return { kind: 'available', sessionId, serverId: options?.serverId };
+        }
+        if (routeHydrationState === 'missing') {
+            return { kind: 'missing', sessionId, serverId: options?.serverId, cause: 'not_found' };
+        }
+        return { kind: 'loading', sessionId, serverId: options?.serverId, reason: 'cold' };
     },
 }));
 
@@ -212,7 +218,7 @@ describe('/session/[id]/details', () => {
         mockSessionId = 'session-1';
         mockServerId = undefined;
         isFocused = true;
-        sessionHydrated = true;
+        routeHydrationState = 'available';
         mockDetailsParam = undefined;
         mockPathParam = undefined;
         mockShaParam = undefined;
@@ -286,9 +292,19 @@ describe('/session/[id]/details', () => {
     });
 
     it('does not redirect away before the session has hydrated', async () => {
-        sessionHydrated = false;
+        routeHydrationState = 'loading';
         await renderScreen(<Screen />);
 
+        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
+    it('renders the unavailable fallback when route hydration resolves missing', async () => {
+        routeHydrationState = 'missing';
+
+        const screen = await renderScreen(<Screen />);
+
+        expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
         expect(routerBackSpy).not.toHaveBeenCalled();
         expect(routerReplaceSpy).not.toHaveBeenCalled();
     });

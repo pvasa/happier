@@ -15,21 +15,18 @@ type CapturedRoutingProps = Record<string, unknown> & {
     anchorRef?: unknown;
     rootStep?: SelectionListStep;
     selectedOptionId?: string | null;
+    options?: ReadonlyArray<{ id: string }>;
 };
 
 type State = {
     selectionList: CapturedRoutingProps | null;
     chipPicker: CapturedRoutingProps | null;
-    autocompleteSelectionPopover: CapturedRoutingProps | null;
-    autocomplete: CapturedRoutingProps | null;
     contentPopovers: CapturedRoutingProps[];
 };
 
 const state: State = {
     selectionList: null,
     chipPicker: null,
-    autocompleteSelectionPopover: null,
-    autocomplete: null,
     contentPopovers: [],
 };
 
@@ -43,8 +40,6 @@ function snap(): State {
 function resetCaptures(): void {
     state.selectionList = null;
     state.chipPicker = null;
-    state.autocompleteSelectionPopover = null;
-    state.autocomplete = null;
     state.contentPopovers = [];
 }
 
@@ -74,18 +69,6 @@ vi.mock('./AgentInputSelectionListPopover', () => ({
     },
 }));
 
-vi.mock('../selection/AgentInputSelectionPopover', () => ({
-    AgentInputSelectionPopover: (props: CapturedRoutingProps & {
-        children?: React.ReactNode | ((args: { maxHeight: number }) => React.ReactNode);
-    }) => {
-        state.autocompleteSelectionPopover = props;
-        const child = typeof props.children === 'function'
-            ? props.children({ maxHeight: 240 })
-            : props.children ?? null;
-        return React.createElement('AgentInputSelectionPopover', props, props.open ? child : null);
-    },
-}));
-
 vi.mock('./AgentInputChipPickerPopover', () => ({
     AgentInputChipPickerPopover: (props: CapturedRoutingProps) => {
         state.chipPicker = props;
@@ -95,13 +78,6 @@ vi.mock('./AgentInputChipPickerPopover', () => ({
 
 vi.mock('./AgentInputChipPickerLayout', () => ({
     shouldShowAgentInputChipPickerRail: () => true,
-}));
-
-vi.mock('./AgentInputAutocomplete', () => ({
-    AgentInputAutocomplete: (props: CapturedRoutingProps) => {
-        state.autocomplete = props;
-        return React.createElement('AgentInputAutocomplete', props, null);
-    },
 }));
 
 vi.mock('./AgentInputContentPopover', () => ({
@@ -176,35 +152,6 @@ const baseRootStep: SelectionListStep = {
 const baseOverlayProps = buildOverlayLayerFixture();
 
 describe('AgentInputOverlayLayer presentation routing', () => {
-    it('routes autocomplete suggestions through the shared selection popover shell', async () => {
-        resetCaptures();
-
-        const { AgentInputOverlayLayer } = await import('./AgentInputOverlayLayer');
-        const overlayAnchorRef = { current: null } as React.RefObject<View | null>;
-
-        await renderScreen(
-            <AgentInputOverlayLayer
-                {...baseOverlayProps}
-                overlayAnchorRef={overlayAnchorRef}
-                suggestions={[{ key: 'goal', text: '/goal', component: () => React.createElement('View'), rowHeight: 52 }]}
-                autocompleteSelectedIndex={0}
-                maxWidthCap={640}
-            />,
-        );
-
-        expect(snap().autocompleteSelectionPopover).not.toBeNull();
-        expect(snap().autocompleteSelectionPopover?.open).toBe(true);
-        expect(snap().autocompleteSelectionPopover?.anchorRef).toBe(overlayAnchorRef);
-        expect(snap().autocompleteSelectionPopover?.maxHeightCap).toBe(240);
-        expect(snap().autocompleteSelectionPopover?.maxWidthCap).toBe(640);
-        expect(snap().autocomplete?.items).toEqual([
-            expect.objectContaining({
-                id: 'goal',
-                minHeight: 52,
-            }),
-        ]);
-    });
-
     it('forwards machine content-popover scroll ownership props to the shared content popover', async () => {
         resetCaptures();
 
@@ -237,6 +184,28 @@ describe('AgentInputOverlayLayer presentation routing', () => {
             edgeIndicators: true,
             initialVisibility: { top: true, bottom: true },
         }));
+        expect(snap().contentPopovers[0]?.boundaryRef).toBeUndefined();
+    });
+
+    it('preserves an explicit content-popover boundary override', async () => {
+        resetCaptures();
+
+        const { AgentInputOverlayLayer } = await import('./AgentInputOverlayLayer');
+        const explicitBoundaryRef = React.createRef<View>();
+
+        await renderScreen(
+            <AgentInputOverlayLayer
+                {...baseOverlayProps}
+                showMachinePopover
+                machinePopover={{
+                    boundaryRef: explicitBoundaryRef,
+                    renderContent: () => null,
+                }}
+            />,
+        );
+
+        expect(snap().contentPopovers).toHaveLength(1);
+        expect(snap().contentPopovers[0]?.boundaryRef).toBe(explicitBoundaryRef);
     });
 
     it("routes presentation: 'list' through AgentInputSelectionListPopover and forwards the rootStep + selectedOptionId + anchor", async () => {
@@ -255,6 +224,7 @@ describe('AgentInputOverlayLayer presentation routing', () => {
 
         expect(snap().selectionList).not.toBeNull();
         expect(snap().selectionList?.open).toBe(true);
+        expect(snap().selectionList?.boundaryRef).toBeUndefined();
         expect(snap().selectionList?.rootStep).toBe(baseRootStep);
         expect(snap().selectionList?.selectedOptionId).toBe('one');
         // The 'list' presentation must NOT mount the legacy chip-picker.
@@ -277,7 +247,79 @@ describe('AgentInputOverlayLayer presentation routing', () => {
 
         expect(snap().chipPicker).not.toBeNull();
         expect(snap().chipPicker?.open).toBe(true);
+        expect(snap().chipPicker?.boundaryRef).toBeUndefined();
         expect(snap().selectionList).toBeNull();
+    });
+
+    it('keeps the agent picker option order stable while the popover is open', async () => {
+        resetCaptures();
+
+        const { AgentInputOverlayLayer } = await import('./AgentInputOverlayLayer');
+        const initialOptions = [
+            { id: 'agent:claude', label: 'Claude' },
+            { id: 'agent:codex', label: 'Codex' },
+        ];
+        const favoriteSortedOptions = [
+            { id: 'agent:codex', label: 'Codex' },
+            { id: 'agent:claude', label: 'Claude' },
+        ];
+
+        const screen = await renderScreen(
+            <AgentInputOverlayLayer
+                {...baseOverlayProps}
+                showAgentPicker
+                hasAgentPickerOptions
+                agentPickerOptions={initialOptions}
+                effectiveAgentPickerSelectedOptionId="agent:claude"
+            />,
+        );
+
+        expect(snap().chipPicker?.options?.map((option) => option.id)).toEqual([
+            'agent:claude',
+            'agent:codex',
+        ]);
+
+        await screen.update(
+            <AgentInputOverlayLayer
+                {...baseOverlayProps}
+                showAgentPicker
+                hasAgentPickerOptions
+                agentPickerOptions={favoriteSortedOptions}
+                effectiveAgentPickerSelectedOptionId="agent:claude"
+            />,
+        );
+
+        expect(snap().chipPicker?.options?.map((option) => option.id)).toEqual([
+            'agent:claude',
+            'agent:codex',
+        ]);
+
+        await screen.update(
+            <AgentInputOverlayLayer
+                {...baseOverlayProps}
+                showAgentPicker={false}
+                hasAgentPickerOptions
+                agentPickerOptions={favoriteSortedOptions}
+                effectiveAgentPickerSelectedOptionId="agent:claude"
+            />,
+        );
+
+        resetCaptures();
+
+        await screen.update(
+            <AgentInputOverlayLayer
+                {...baseOverlayProps}
+                showAgentPicker
+                hasAgentPickerOptions
+                agentPickerOptions={favoriteSortedOptions}
+                effectiveAgentPickerSelectedOptionId="agent:claude"
+            />,
+        );
+
+        expect(snap().chipPicker?.options?.map((option) => option.id)).toEqual([
+            'agent:codex',
+            'agent:claude',
+        ]);
     });
 
     it("dev-warns and renders null when a 'list' descriptor is missing rootStep (R16d Fix 4 — runtime defense against type erasure)", async () => {

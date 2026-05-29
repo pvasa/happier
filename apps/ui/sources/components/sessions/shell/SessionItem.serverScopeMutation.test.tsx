@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { createSessionItemTestRowModel, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -120,7 +120,6 @@ installSessionShellCommonModuleMocks({
                     connectedServicesV2: [],
                 }),
                 useSession: () => null,
-                useSessionListMeaningfulActivityAt: () => null,
                 useSetting: (key: string) => {
                     if (key === 'hideInactiveSessions') return hideInactiveSessions;
                     return false;
@@ -130,16 +129,89 @@ installSessionShellCommonModuleMocks({
     },
 });
 
-let SessionItem: (typeof import('./SessionItem'))['SessionItem'];
+type SessionItemForTestProps = Omit<
+    React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>,
+    'rowModel'
+> & {
+    rowModel?: React.ComponentProps<(typeof import('./SessionItem'))['SessionItem']>['rowModel'];
+};
+
+let SessionItem: React.ComponentType<SessionItemForTestProps>;
 
 describe('SessionItem server-scoped mutations', () => {
     beforeAll(async () => {
-        ({ SessionItem } = await import('./SessionItem'));
+        const { SessionItem: ProductionSessionItem } = await import('./SessionItem');
+        SessionItem = (props) => (
+            <ProductionSessionItem
+                {...props}
+                rowModel={props.rowModel ?? createSessionItemTestRowModel(props)}
+            />
+        );
     }, 120_000);
 
     afterEach(() => {
         standardCleanup();
         hideInactiveSessions = false;
+    });
+
+    it('does not mount closed native ContextMenu shells until the row menu opens', async () => {
+        const session = {
+            id: 'sess_lazy_context_menu',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                nativeContextMenuOpen={false}
+                onNativeContextMenuOpenChange={vi.fn()}
+            />,
+        );
+
+        expect(screen.root.findAll((node: any) => node.type === 'ContextMenu')).toHaveLength(0);
+
+        await act(async () => {
+            screen.tree.update(
+                <SessionItem
+                    session={session}
+                    serverId="server_d"
+                    serverName="Server D"
+                    showServerBadge={true}
+                    selected={false}
+                    isFirst={true}
+                    isLast={true}
+                    isSingle={true}
+                    variant="default"
+                    compact={false}
+                    nativeContextMenuOpen={true}
+                    onNativeContextMenuOpenChange={vi.fn()}
+                />,
+            );
+        });
+
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+        expect(contextMenus).toHaveLength(1);
+        expect(contextMenus[0].props.items.some((item: any) => item?.id === 'rename')).toBe(true);
     });
 
     it('archives active sessions from the swipe action using server scope when serverId is provided', async () => {
@@ -175,6 +247,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -235,6 +309,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -302,6 +378,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -364,6 +442,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -425,6 +505,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -490,6 +572,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -511,6 +595,7 @@ describe('SessionItem server-scoped mutations', () => {
             id: 'sess_read',
             seq: 2,
             lastViewedSessionSeq: 2,
+            latestTurnStatus: 'completed',
             createdAt: 1,
             updatedAt: 1,
             active: false,
@@ -537,6 +622,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -559,6 +646,7 @@ describe('SessionItem server-scoped mutations', () => {
             id: 'sess_unread',
             seq: 2,
             lastViewedSessionSeq: 1,
+            latestTurnStatus: 'completed',
             createdAt: 1,
             updatedAt: 1,
             active: false,
@@ -585,6 +673,8 @@ describe('SessionItem server-scoped mutations', () => {
                 isSingle={true}
                 variant="default"
                 compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -599,6 +689,52 @@ describe('SessionItem server-scoped mutations', () => {
         });
 
         expect(readStateSpy).toHaveBeenCalledWith('sess_unread', 'read', { serverId: 'server_d' });
+    });
+
+    it('does not offer mark-read for non-terminal raw session seq in the more menu', async () => {
+        readStateSpy.mockClear();
+        const session = {
+            id: 'sess_non_terminal_raw',
+            seq: 2,
+            lastViewedSessionSeq: 1,
+            latestTurnStatus: 'in_progress',
+            createdAt: 1,
+            updatedAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            metadata: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 1,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 1,
+        } as any;
+
+        const screen = await renderScreen(
+            <SessionItem
+                session={session}
+                serverId="server_d"
+                serverName="Server D"
+                showServerBadge={true}
+                selected={false}
+                isFirst={true}
+                isLast={true}
+                isSingle={true}
+                variant="default"
+                compact={false}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
+            />,
+        );
+
+        const contextMenus = screen.root.findAll((node: any) => node.type === 'ContextMenu');
+        expect(contextMenus.some((node: any) =>
+            Array.isArray(node.props?.items)
+            && node.props.items.some((item: any) => item?.id === 'session.mark-read' || item?.id === 'session.mark-unread'),
+        )).toBe(false);
+        expect(readStateSpy).not.toHaveBeenCalled();
     });
 
     it('does not offer read-state actions for archived sessions', async () => {
@@ -720,6 +856,8 @@ describe('SessionItem server-scoped mutations', () => {
                     { id: 'move-to-folder:folder_a', title: 'Folder A' },
                 ]}
                 onSelectFolderMoveMenuItem={vi.fn()}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 
@@ -777,6 +915,8 @@ describe('SessionItem server-scoped mutations', () => {
                 ]}
                 onMoveToFolder={onMoveToFolder}
                 onMoveToWorkspaceRoot={onMoveToWorkspaceRoot}
+                nativeContextMenuOpen={true}
+                onNativeContextMenuOpenChange={vi.fn()}
             />,
         );
 

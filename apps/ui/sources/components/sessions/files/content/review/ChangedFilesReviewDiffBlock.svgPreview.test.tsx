@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ChangedFilesReviewDiffBlock } from './ChangedFilesReviewDiffBlock';
 import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { installFilesContentCommonModuleMocks } from '../filesContentTestHelpers';
 
 
@@ -80,7 +81,7 @@ describe('ChangedFilesReviewDiffBlock (svg previews)', () => {
             subscribe: () => () => {},
         } as any;
 
-        const theme = { colors: { textSecondary: '#999', divider: '#333', surfaceHigh: '#111', surface: '#000' } } as any;
+        const theme = createThemeFixture();
 
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(<ChangedFilesReviewDiffBlock

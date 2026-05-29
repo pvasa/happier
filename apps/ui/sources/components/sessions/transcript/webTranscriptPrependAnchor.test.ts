@@ -1,11 +1,41 @@
 import { describe, expect, it } from 'vitest';
 
+import * as webTranscriptPrependAnchorModule from '@/components/sessions/transcript/webTranscriptPrependAnchor';
 import {
     captureWebTranscriptPrependAnchor,
     refreshWebTranscriptPrependAnchor,
     restoreWebTranscriptPrependAnchor,
 } from '@/components/sessions/transcript/webTranscriptPrependAnchor';
 import type { WebTranscriptScrollMetrics } from '@/components/sessions/transcript/webTranscriptScrollMetrics';
+
+type CaptureWebTranscriptViewportAnchor = (params: Readonly<{
+    container: HTMLElement;
+}>) => {
+    kind: 'message' | 'toolGroup' | 'item';
+    messageId: string | null;
+    itemId: string;
+    itemOffsetPx: number;
+} | null;
+
+type RestoreWebTranscriptViewportAnchor = (params: Readonly<{
+    container: HTMLElement;
+    anchor: Readonly<{
+        kind: 'message' | 'toolGroup' | 'item';
+        messageId?: string | null;
+        itemId: string;
+        itemOffsetPx: number;
+    }>;
+}>) => {
+    didAdjustScroll: boolean;
+    status: 'restored' | 'already_aligned' | 'not_found';
+};
+
+function resolveModuleFunction<TFunction extends (...args: never[]) => unknown>(name: string): TFunction | null {
+    const moduleExports = webTranscriptPrependAnchorModule as unknown as Record<string, unknown>;
+    const exported = moduleExports[name];
+    expect(exported).toEqual(expect.any(Function));
+    return typeof exported === 'function' ? exported as TFunction : null;
+}
 
 class FakeElement {
     public scrollTop = 0;
@@ -71,7 +101,205 @@ function createContainer(params: Readonly<{
     return container;
 }
 
+function installFakeHTMLElement() {
+    const globalWithHTMLElement = globalThis as unknown as Record<'HTMLElement', unknown>;
+    const originalHTMLElement = globalWithHTMLElement.HTMLElement;
+    globalWithHTMLElement.HTMLElement = FakeElement;
+    return () => {
+        globalWithHTMLElement.HTMLElement = originalHTMLElement;
+    };
+}
+
 describe('webTranscriptPrependAnchor', () => {
+    it('captures the focused message viewport anchor with its containing item and saved item offset', () => {
+        const captureWebTranscriptViewportAnchor =
+            resolveModuleFunction<CaptureWebTranscriptViewportAnchor>('captureWebTranscriptViewportAnchor');
+        if (!captureWebTranscriptViewportAnchor) return;
+        const restoreHTMLElement = installFakeHTMLElement();
+
+        try {
+            const itemAnchor = new FakeElement('transcript-item-turn:1', { top: -180, bottom: 420 });
+            const messageAnchor = new FakeElement('transcript-anchor-message-m1', { top: 78, bottom: 148 });
+            messageAnchor.parentElement = itemAnchor;
+            const container = createContainer({
+                scrollTop: 320,
+                scrollHeight: 1600,
+                clientHeight: 600,
+                anchors: [itemAnchor, messageAnchor],
+            });
+            itemAnchor.parentElement = container;
+
+            expect(captureWebTranscriptViewportAnchor({ container: container as unknown as HTMLElement })).toEqual({
+                kind: 'message',
+                messageId: 'm1',
+                itemId: 'turn:1',
+                itemOffsetPx: -180,
+            });
+        } finally {
+            restoreHTMLElement();
+        }
+    });
+
+    it('captures the focused tool group viewport anchor when no message anchor is available', () => {
+        const captureWebTranscriptViewportAnchor =
+            resolveModuleFunction<CaptureWebTranscriptViewportAnchor>('captureWebTranscriptViewportAnchor');
+        if (!captureWebTranscriptViewportAnchor) return;
+        const restoreHTMLElement = installFakeHTMLElement();
+
+        try {
+            const itemAnchor = new FakeElement('transcript-item-turn:1', { top: -120, bottom: 380 });
+            const toolGroupAnchor = new FakeElement('transcript-anchor-tool-group-tool-1', { top: 92, bottom: 190 });
+            toolGroupAnchor.parentElement = itemAnchor;
+            const container = createContainer({
+                scrollTop: 320,
+                scrollHeight: 1600,
+                clientHeight: 600,
+                anchors: [itemAnchor, toolGroupAnchor],
+            });
+            itemAnchor.parentElement = container;
+
+            expect(captureWebTranscriptViewportAnchor({ container: container as unknown as HTMLElement })).toEqual({
+                kind: 'toolGroup',
+                messageId: 'tool-1',
+                itemId: 'turn:1',
+                itemOffsetPx: -120,
+            });
+        } finally {
+            restoreHTMLElement();
+        }
+    });
+
+    it('captures the focused generic item viewport anchor when no finer anchor is available', () => {
+        const captureWebTranscriptViewportAnchor =
+            resolveModuleFunction<CaptureWebTranscriptViewportAnchor>('captureWebTranscriptViewportAnchor');
+        if (!captureWebTranscriptViewportAnchor) return;
+        const restoreHTMLElement = installFakeHTMLElement();
+
+        try {
+            const itemAnchor = new FakeElement('transcript-item-system:1', { top: 54, bottom: 190 });
+            const container = createContainer({
+                scrollTop: 320,
+                scrollHeight: 1600,
+                clientHeight: 600,
+                anchors: [itemAnchor],
+            });
+            itemAnchor.parentElement = container;
+
+            expect(captureWebTranscriptViewportAnchor({ container: container as unknown as HTMLElement })).toEqual({
+                kind: 'item',
+                messageId: null,
+                itemId: 'system:1',
+                itemOffsetPx: 54,
+            });
+        } finally {
+            restoreHTMLElement();
+        }
+    });
+
+    it('restores a saved viewport anchor to its item offset when the DOM node exists', () => {
+        const restoreWebTranscriptViewportAnchor =
+            resolveModuleFunction<RestoreWebTranscriptViewportAnchor>('restoreWebTranscriptViewportAnchor');
+        if (!restoreWebTranscriptViewportAnchor) return;
+        const restoreHTMLElement = installFakeHTMLElement();
+
+        try {
+            const itemAnchor = new FakeElement('transcript-item-turn:1', { top: 180, bottom: 640 });
+            const messageAnchor = new FakeElement('transcript-anchor-message-m1', { top: 240, bottom: 320 });
+            messageAnchor.parentElement = itemAnchor;
+            const container = createContainer({
+                scrollTop: 500,
+                scrollHeight: 1600,
+                clientHeight: 600,
+                anchors: [itemAnchor, messageAnchor],
+            });
+            itemAnchor.parentElement = container;
+
+            expect(restoreWebTranscriptViewportAnchor({
+                container: container as unknown as HTMLElement,
+                anchor: {
+                    kind: 'message',
+                    messageId: 'm1',
+                    itemId: 'turn:1',
+                    itemOffsetPx: 72,
+                },
+            })).toEqual({
+                didAdjustScroll: true,
+                status: 'restored',
+            });
+            expect(container.scrollTop).toBe(608);
+        } finally {
+            restoreHTMLElement();
+        }
+    });
+
+    it('restores through the saved message anchor when its containing item id changed', () => {
+        const restoreWebTranscriptViewportAnchor =
+            resolveModuleFunction<RestoreWebTranscriptViewportAnchor>('restoreWebTranscriptViewportAnchor');
+        if (!restoreWebTranscriptViewportAnchor) return;
+        const restoreHTMLElement = installFakeHTMLElement();
+
+        try {
+            const currentItemAnchor = new FakeElement('transcript-item-turn:current', { top: 180, bottom: 640 });
+            const messageAnchor = new FakeElement('transcript-anchor-message-m1', { top: 240, bottom: 320 });
+            messageAnchor.parentElement = currentItemAnchor;
+            const container = createContainer({
+                scrollTop: 500,
+                scrollHeight: 1600,
+                clientHeight: 600,
+                anchors: [currentItemAnchor, messageAnchor],
+            });
+            currentItemAnchor.parentElement = container;
+
+            expect(restoreWebTranscriptViewportAnchor({
+                container: container as unknown as HTMLElement,
+                anchor: {
+                    kind: 'message',
+                    messageId: 'm1',
+                    itemId: 'turn:stale',
+                    itemOffsetPx: 72,
+                },
+            })).toEqual({
+                didAdjustScroll: true,
+                status: 'restored',
+            });
+            expect(container.scrollTop).toBe(608);
+        } finally {
+            restoreHTMLElement();
+        }
+    });
+
+    it('reports not found without paging when a saved viewport anchor is not mounted in the DOM', () => {
+        const restoreWebTranscriptViewportAnchor =
+            resolveModuleFunction<RestoreWebTranscriptViewportAnchor>('restoreWebTranscriptViewportAnchor');
+        if (!restoreWebTranscriptViewportAnchor) return;
+        const restoreHTMLElement = installFakeHTMLElement();
+
+        try {
+            const container = createContainer({
+                scrollTop: 500,
+                scrollHeight: 1600,
+                clientHeight: 600,
+                anchors: [],
+            });
+
+            expect(restoreWebTranscriptViewportAnchor({
+                container: container as unknown as HTMLElement,
+                anchor: {
+                    kind: 'message',
+                    messageId: 'm1',
+                    itemId: 'turn:1',
+                    itemOffsetPx: 72,
+                },
+            })).toEqual({
+                didAdjustScroll: false,
+                status: 'not_found',
+            });
+            expect(container.scrollTop).toBe(500);
+        } finally {
+            restoreHTMLElement();
+        }
+    });
+
     it('captures a message anchor instead of a coarse turn wrapper when the message is closest to the upper viewport focus', () => {
         const originalHTMLElement = (globalThis as any).HTMLElement;
         (globalThis as any).HTMLElement = FakeElement;

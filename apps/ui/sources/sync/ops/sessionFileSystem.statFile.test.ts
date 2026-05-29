@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRpcCallError } from '../runtime/rpcErrors';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { FeaturesResponse } from '@happier-dev/protocol';
+import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 
 type StatFileRpcResponse =
     | Readonly<{ success: true; exists: boolean; kind?: string; sizeBytes?: number; modifiedMs?: number }>
@@ -76,10 +77,43 @@ vi.mock('../runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSes
 }));
 
 vi.mock('../domains/state/storage', () => ({
-    storage: {
-        getState: () => getStateSpy(),
-    },
+    ...createStorageModuleStub({
+        storage: Object.assign(
+            ((selector?: (value: ReturnType<typeof getStateSpy>) => unknown) => {
+                const snapshot = getStateSpy();
+                return typeof selector === 'function' ? selector(snapshot) : snapshot;
+            }),
+            {
+                getState: () => getStateSpy(),
+                getInitialState: () => getStateSpy(),
+                setState: () => undefined,
+                subscribe: () => () => undefined,
+                destroy: () => undefined,
+            },
+        ),
+    }),
 }));
+
+function setActiveSessionMachineState() {
+    getStateSpy.mockReturnValue({
+        sessions: {
+            s1: {
+                active: true,
+                metadata: {
+                    path: '~/repo',
+                    machineId: 'm1',
+                },
+            },
+        },
+        machines: {
+            m1: {
+                id: 'm1',
+                active: true,
+                metadata: {},
+            },
+        },
+    });
+}
 
 describe('sessionStatFile', () => {
     it('prefers machine RPC and resolves relative paths against the session cwd', async () => {
@@ -87,16 +121,7 @@ describe('sessionStatFile', () => {
 
         enforcePolicyConsultedBeforeMachineRpc = true;
         policyConsulted = false;
-        getStateSpy.mockReturnValue({
-            sessions: {
-                s1: {
-                    metadata: {
-                        path: '~/repo',
-                        machineId: 'm1',
-                    },
-                },
-            },
-        });
+        setActiveSessionMachineState();
 
         sessionRPCSpy.mockClear();
         machineRPCSpy.mockClear();
@@ -112,16 +137,7 @@ describe('sessionStatFile', () => {
     it('returns a stable failure response when the RPC returns an unsupported shape', async () => {
         const { sessionStatFile } = await import('./sessionFileSystem');
 
-        getStateSpy.mockReturnValue({
-            sessions: {
-                s1: {
-                    metadata: {
-                        path: '~/repo',
-                        machineId: 'm1',
-                    },
-                },
-            },
-        });
+        setActiveSessionMachineState();
 
         machineRPCSpy.mockResolvedValueOnce(null);
         sessionRPCSpy.mockResolvedValueOnce(null);
@@ -145,6 +161,13 @@ describe('sessionStatFile', () => {
                         path: '~/repo',
                         machineId: 'm1',
                     },
+                },
+            },
+            machines: {
+                m1: {
+                    id: 'm1',
+                    active: true,
+                    metadata: {},
                 },
             },
         });

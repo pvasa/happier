@@ -9,7 +9,7 @@ export type SessionListIndexItem =
     | Readonly<{
         type: 'header';
         title: string;
-        headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'project' | 'pinned' | 'attention' | 'shared' | 'folder';
+        headerKind?: 'date' | 'server' | 'active' | 'inactive' | 'sessions' | 'project' | 'pinned' | 'attention' | 'working' | 'shared' | 'folder';
         groupKey?: string;
         workspaceKey?: string;
         seedSessionId?: string | null;
@@ -28,12 +28,13 @@ export type SessionListIndexItem =
         storageKind?: SessionStorageKind;
         section?: 'active' | 'inactive';
         groupKey?: string;
-        groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'attention' | 'shared' | 'folder';
+        groupKind?: 'active' | 'date' | 'project' | 'pinned' | 'attention' | 'working' | 'shared' | 'folder';
         pinned?: boolean;
         variant?: 'default' | 'no-path';
         archivedAt?: number | null;
         keepVisibleWhenInactive?: boolean;
         attentionPromotionReason?: SessionListAttentionPromotionReason;
+        workingPlacementReason?: 'working';
         serverId?: string;
         serverName?: string;
         folderId?: string | null;
@@ -112,6 +113,7 @@ function areSessionListIndexItemsEqual(
             && (previous.archivedAt ?? null) === (next.archivedAt ?? null)
             && (previous.keepVisibleWhenInactive === true) === (next.keepVisibleWhenInactive === true)
             && (previous.attentionPromotionReason ?? null) === (next.attentionPromotionReason ?? null)
+            && (previous.workingPlacementReason ?? null) === (next.workingPlacementReason ?? null)
             && previous.serverId === next.serverId
             && previous.serverName === next.serverName
             && (previous.folderId ?? null) === (next.folderId ?? null)
@@ -240,6 +242,7 @@ export function buildSessionListIndexFromViewData(
             archivedAt: item.session.archivedAt ?? null,
             keepVisibleWhenInactive: item.session.keepVisibleWhenInactive === true,
             attentionPromotionReason: item.attentionPromotionReason,
+            workingPlacementReason: item.workingPlacementReason,
             serverId: item.serverId,
             serverName: item.serverName,
             folderId: item.folderId,

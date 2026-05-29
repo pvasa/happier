@@ -35,6 +35,15 @@ vi.mock('@/components/ui/lists/flashListCompat/FlashListCompat', () => ({
             footer,
         );
     }),
+    LayoutCommitObserver: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+    flashListRuntime: {
+        prepareForLayoutAnimationRender: vi.fn(),
+    },
+    useLayoutState: <T,>(initialValue: T) => React.useState(initialValue),
+    useMappingHelper: () => ({
+        getMappingKey: (key: string) => key,
+    }),
+    useRecyclingState: <T,>(initialValue: T) => React.useState(initialValue),
 }));
 
 installTranscriptCommonModuleMocks({
@@ -58,11 +67,21 @@ installTranscriptCommonModuleMocks({
             useMessage: (_sessionId: string, messageId: string) =>
                 sessionMessagesState.messages.find((message) => message.id === messageId) ?? null,
             useSession: () => sessionState,
+            useSessionChatFooterState: () => sessionState
+                ? {
+                    controlledByUser: sessionState.agentState?.controlledByUser === true,
+                    localControl: null,
+                    permissionsInUiWhileLocal: false,
+                }
+                : null,
             useSessionActionDrafts: () => [],
             useSessionLatestThinkingMessageId: () => null,
             useSessionLatestThinkingMessageActivityAtMs: () => null,
             useSessionMessagesById: () =>
                 Object.fromEntries(sessionMessagesState.messages.map((message) => [message.id, message])),
+            useSessionMessagesReducerState: () => null,
+            useSessionForkSupportSource: () => null,
+            useSessionWorkspacePath: () => null,
             useSessionPendingMessages: () => ({ messages: [], discarded: [], isLoaded: true }),
             useSessionTranscriptIds: () => ({
                 ids: sessionMessagesState.messages.map((message) => message.id),
@@ -115,6 +134,11 @@ vi.mock('@/components/sessions/chatListItems', () => ({
 
 vi.mock('./MessageView', () => ({
     MessageView: ({ message }: any) => React.createElement('MessageView', { messageId: message?.id }),
+    MessageViewWithSessionCommon: ({ message }: any) => React.createElement('MessageViewWithSessionCommon', { messageId: message?.id }),
+}));
+
+vi.mock('@/hooks/server/useFeatureEnabled', () => ({
+    useFeatureEnabled: () => false,
 }));
 
 vi.mock('./ChatFooter', () => ({
@@ -168,10 +192,12 @@ vi.mock('@/components/sessions/transcript/turnGrouping/buildTranscriptTurns', ()
 
 vi.mock('@/components/sessions/transcript/turns/TurnView', () => ({
     TurnView: () => React.createElement('TurnView'),
+    TurnViewWithSessionCommon: () => React.createElement('TurnViewWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
     ToolCallsGroupRow: () => React.createElement('ToolCallsGroupRow'),
+    ToolCallsGroupRowWithSessionCommon: () => React.createElement('ToolCallsGroupRowWithSessionCommon'),
 }));
 
 vi.mock('@/components/sessions/transcript/motion/TranscriptMotionProvider', () => ({

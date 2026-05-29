@@ -73,6 +73,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
     const initialDraftsRef = React.useRef<readonly AttachmentDraft[]>(
         normalizedFlowId ? readNewSessionAttachmentDrafts(normalizedFlowId) : [],
     );
+    const draftsSnapshotRef = React.useRef<readonly AttachmentDraft[]>(initialDraftsRef.current);
 
     const attachmentDraftManager = useAttachmentDraftManager({
         enabled: attachmentsUploadsEnabled,
@@ -88,7 +89,6 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         addPickedAttachments,
         applyDraftPatch,
         clearDrafts,
-        getDraftsSnapshot,
     } = attachmentDraftManager;
     const discoverableReviewCommentsScope = React.useMemo<WorkspaceScopeBase | null>(() => {
         return resolveNewSessionReviewCommentsScope({
@@ -108,15 +108,27 @@ export function useNewSessionAttachmentsController(params: Readonly<{
     const hasReviewCommentDrafts = hasDiscoverableReviewCommentDrafts && includedReviewCommentDrafts.length > 0;
 
     React.useEffect(() => {
+        draftsSnapshotRef.current = drafts;
         if (!normalizedFlowId) return;
-        if (!attachmentsUploadsEnabled) {
-            clearNewSessionAttachmentDrafts(normalizedFlowId);
-            return;
-        }
         writeNewSessionAttachmentDrafts(normalizedFlowId, drafts);
-    }, [attachmentsUploadsEnabled, drafts, normalizedFlowId]);
+    }, [drafts, normalizedFlowId]);
+
+    const applyNewSessionDraftPatch = React.useCallback((
+        id: string,
+        patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>,
+    ) => {
+        applyDraftPatch(id, patch);
+        const nextDrafts = draftsSnapshotRef.current.map((draft) => (
+            draft.id === id ? ({ ...draft, ...patch } as AttachmentDraft) : draft
+        ));
+        draftsSnapshotRef.current = nextDrafts;
+        if (normalizedFlowId) {
+            writeNewSessionAttachmentDrafts(normalizedFlowId, nextDrafts);
+        }
+    }, [applyDraftPatch, normalizedFlowId]);
 
     const clearDraftsForFlow = React.useCallback(() => {
+        draftsSnapshotRef.current = [];
         clearDrafts();
         if (normalizedFlowId) {
             clearNewSessionAttachmentDrafts(normalizedFlowId);
@@ -214,7 +226,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
             });
         };
 
-        const hasAttachments = attachmentsUploadsEnabled && drafts.length > 0;
+        const hasAttachments = attachmentsUploadsEnabled && draftsSnapshotRef.current.length > 0;
         if (!hasAttachments && !hasReviewCommentDrafts) {
             submit();
             return;
@@ -223,64 +235,72 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         const initialPrompt = String(params.sessionPrompt ?? '');
         submit({
             initialMessage: 'skip',
-            afterCreated: async ({ sessionId, effectiveSpawnServerId }) => {
+            afterCreated: async ({ sessionId, effectiveSpawnServerId, launchAttempt }) => {
                 const trimmed = initialPrompt.trim();
                 let attachmentsBlock = '';
                 let attachmentsMetaOverrides: Record<string, unknown> | undefined;
-
-                if (hasAttachments) {
-                    const { uploaded } = await uploadAttachmentDraftsToSession({
-                        sessionId,
-                        drafts,
-                        config: attachmentsUploadConfig,
-                        applyDraftPatch,
-                    });
-                    attachmentsBlock = formatAttachmentsBlock(uploaded);
-                    attachmentsMetaOverrides = {
-                        happier: {
-                            kind: 'attachments.v1',
-                            payload: {
-                                attachments: uploaded.map((attachment) => ({
-                                    name: attachment.name,
-                                    path: attachment.path,
-                                    mimeType: attachment.mimeType,
-                                    sizeBytes: attachment.sizeBytes,
-                                    sha256: attachment.sha256,
-                                })),
-                            },
-                        },
-                    };
-                }
-
-                const reviewCommentDraftsForPrompt = hasReviewCommentDrafts
-                    ? await resolveReviewCommentDraftAnchorsForPrompt({
-                        drafts: includedReviewCommentDrafts,
-                        reviewScope: discoverableReviewCommentsScope,
-                    })
-                    : [];
-
-                const outbound = hasReviewCommentDrafts
-                    ? buildReviewCommentsOutboundMessage({
-                        sessionId,
-                        drafts: reviewCommentDraftsForPrompt,
-                        additionalMessage: attachmentsBlock
-                            ? (trimmed.length > 0 ? `${trimmed}\n\n${attachmentsBlock}` : attachmentsBlock)
-                            : trimmed,
-                        displayTextSuffix: attachmentsBlock || null,
-                        metaOverrides: attachmentsMetaOverrides,
-                    })
-                    : {
-                        text: trimmed.length > 0 ? `${trimmed}\n\n${attachmentsBlock}` : attachmentsBlock,
-                        displayText: trimmed || undefined,
-                        metaOverrides: attachmentsMetaOverrides,
-                    };
+                const messageLocalId = launchAttempt.attachmentMessageLocalId;
+                let outbound: {
+                    text: string;
+                    displayText?: string;
+                    metaOverrides?: Record<string, unknown>;
+                } | null = null;
 
                 try {
+                    if (hasAttachments) {
+                        const { uploaded } = await uploadAttachmentDraftsToSession({
+                            sessionId,
+                            drafts: draftsSnapshotRef.current,
+                            messageLocalId,
+                            config: attachmentsUploadConfig,
+                            applyDraftPatch: applyNewSessionDraftPatch,
+                        });
+                        attachmentsBlock = formatAttachmentsBlock(uploaded);
+                        attachmentsMetaOverrides = {
+                            happier: {
+                                kind: 'attachments.v1',
+                                payload: {
+                                    attachments: uploaded.map((attachment) => ({
+                                        name: attachment.name,
+                                        path: attachment.path,
+                                        mimeType: attachment.mimeType,
+                                        sizeBytes: attachment.sizeBytes,
+                                        sha256: attachment.sha256,
+                                    })),
+                                },
+                            },
+                        };
+                    }
+
+                    const reviewCommentDraftsForPrompt = hasReviewCommentDrafts
+                        ? await resolveReviewCommentDraftAnchorsForPrompt({
+                            drafts: includedReviewCommentDrafts,
+                            reviewScope: discoverableReviewCommentsScope,
+                        })
+                        : [];
+
+                    outbound = hasReviewCommentDrafts
+                        ? buildReviewCommentsOutboundMessage({
+                            sessionId,
+                            drafts: reviewCommentDraftsForPrompt,
+                            additionalMessage: attachmentsBlock
+                                ? (trimmed.length > 0 ? `${trimmed}\n\n${attachmentsBlock}` : attachmentsBlock)
+                                : trimmed,
+                            displayTextSuffix: attachmentsBlock || null,
+                            metaOverrides: attachmentsMetaOverrides,
+                        })
+                        : {
+                            text: trimmed.length > 0 ? `${trimmed}\n\n${attachmentsBlock}` : attachmentsBlock,
+                            displayText: trimmed || undefined,
+                            metaOverrides: attachmentsMetaOverrides,
+                        };
+
                     await followUpSpawnedSessionWithServerScope({
                         sessionId,
                         targetServerId: effectiveSpawnServerId ?? params.targetServerId,
                         initialMessageText: outbound.text,
                         displayText: outbound.displayText,
+                        messageLocalId,
                         profileId: params.selectedProfileId,
                         metaOverrides: outbound.metaOverrides,
                     });
@@ -292,25 +312,22 @@ export function useNewSessionAttachmentsController(params: Readonly<{
                     }
                 } catch (error) {
                     throw attachRecoverableAttachmentDrafts(error, {
-                        draftText: outbound.text,
-                        displayText: outbound.displayText,
+                        draftText: outbound?.text ?? trimmed,
+                        displayText: outbound?.displayText ?? (trimmed || undefined),
                         profileId: params.selectedProfileId,
-                        metaOverrides: outbound.metaOverrides,
-                        attachmentDrafts: getDraftsSnapshot(),
+                        metaOverrides: outbound?.metaOverrides ?? attachmentsMetaOverrides,
+                        attachmentDrafts: draftsSnapshotRef.current,
                     });
                 }
             },
         });
     }, [
-        applyDraftPatch,
+        applyNewSessionDraftPatch,
         attachmentsUploadConfig,
         attachmentsUploadsEnabled,
         clearDraftsForFlow,
         clearReviewCommentsForFlow,
         discoverableReviewCommentsScope,
-        discoverableReviewCommentDrafts,
-        drafts,
-        getDraftsSnapshot,
         hasReviewCommentDrafts,
         includedReviewCommentDrafts,
         params.handleCreateSession,

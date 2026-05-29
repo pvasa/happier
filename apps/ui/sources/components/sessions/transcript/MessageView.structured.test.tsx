@@ -1,4 +1,5 @@
 import React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPartialStorageModuleMock, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createReducer } from '@/sync/reducer/reducer';
@@ -82,7 +83,10 @@ installMessageViewCommonModuleMocks({
             pathname: () => pathnameState.pathname,
             router: { push: routerPushSpy },
         });
-        return routerMock.module;
+        return {
+            ...routerMock.module,
+            useRouter: () => ({ ...routerMock.state.router }),
+        };
     },
     storage: async (importOriginal) =>
         createPartialStorageModuleMock(importOriginal, {
@@ -224,6 +228,55 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
 
         // This should fail until MessageView wires StructuredMessageBlock into its rendering.
         expect(screen.findAllByType(ReviewCommentsMessageCard as any)).toHaveLength(1);
+    });
+
+    it('keeps structured review jump handlers stable across equivalent rerenders', async () => {
+        const { MessageView } = await import('./MessageView');
+        const { ReviewCommentsMessageCard } = await import('../reviews/messages/ReviewCommentsMessageCard');
+
+        const message: any = {
+            kind: 'user-text',
+            id: 'm-review-comments',
+            localId: 'local-1',
+            text: 'review prompt',
+            displayText: 'Review comments (1)',
+            meta: {
+                happier: {
+                    kind: 'review_comments.v1',
+                    payload: {
+                        sessionId: 's1',
+                        comments: [
+                            {
+                                id: 'c1',
+                                filePath: 'src/foo.ts',
+                                source: 'file',
+                                body: 'Please refactor',
+                                createdAt: 1,
+                                anchor: { kind: 'fileLine', startLine: 12 },
+                                snapshot: { selectedLines: ['const x = 1;'], beforeContext: [], afterContext: [] },
+                            },
+                        ],
+                    },
+                },
+            },
+        };
+
+        const renderMessage = () => (
+            <MessageView
+                message={message}
+                metadata={null}
+                sessionId="s1"
+            />
+        );
+        const screen = await renderScreen(renderMessage());
+        const firstJumpHandler = screen.tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor;
+
+        await act(async () => {
+            screen.tree.update(renderMessage());
+        });
+
+        const secondJumpHandler = screen.tree.root.findByType(ReviewCommentsMessageCard as any).props.onJumpToAnchor;
+        expect(secondJumpHandler).toBe(firstJumpHandler);
     });
 
     it('does not render the MarkdownView for structured user messages', async () => {

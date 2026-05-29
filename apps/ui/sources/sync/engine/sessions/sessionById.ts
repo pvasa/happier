@@ -1,4 +1,9 @@
-import type { V2SessionByIdResponse } from '@happier-dev/protocol';
+import {
+  listCompletedSessionTurns,
+  SessionTurnsProjectionV1Schema,
+  type SessionTurnsProjectionV1,
+  type V2SessionByIdResponse,
+} from '@happier-dev/protocol';
 
 import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
@@ -29,6 +34,58 @@ export type SessionByIdEncryption = {
 };
 
 type SessionDataKeyEnvelopeCache = Map<string, string>;
+
+function listRollbackEligibleTurnStarts(projection: SessionTurnsProjectionV1 | null): readonly number[] | null {
+  if (!projection) return null;
+
+  const starts: number[] = [];
+  for (const turn of listCompletedSessionTurns(projection.turns)) {
+    if (turn.rollback?.state !== 'eligible') continue;
+    const seq = turn.transcriptAnchors?.startUserMessageSeq;
+    if (typeof seq !== 'number' || starts.includes(seq)) continue;
+    starts.push(seq);
+  }
+  return starts;
+}
+
+async function fetchSessionTurnsProjection(params: Readonly<{
+  sessionId: string;
+  credentials: AuthCredentials;
+  request: (path: string, init: RequestInit) => Promise<Response>;
+  log: { log: (message: string) => void };
+}>): Promise<SessionTurnsProjectionV1 | null> {
+  let response: Response;
+  try {
+    response = await params.request(`/v1/sessions/${encodeURIComponent(params.sessionId)}/turns`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${params.credentials.token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  } catch (err) {
+    if (isTerminalAuthError(err)) {
+      throw err;
+    }
+    params.log.log(`[sessionById] Failed to fetch session turns ${params.sessionId}: ${err instanceof Error ? err.message : 'unknown error'}`);
+    return null;
+  }
+
+  if (!response.ok) {
+    if (isAuthenticationResponseStatus(response.status)) {
+      throw createNotAuthenticatedError();
+    }
+    return null;
+  }
+
+  const body = await response.json().catch(() => null);
+  const parsed = SessionTurnsProjectionV1Schema.safeParse(body);
+  if (!parsed.success || parsed.data.sessionId !== params.sessionId) {
+    params.log.log(`[sessionById] Ignoring invalid session turns projection for ${params.sessionId}`);
+    return null;
+  }
+  return parsed.data;
+}
 
 export async function fetchAndApplySessionById(params: Readonly<{
   sessionId: string;
@@ -185,6 +242,13 @@ export async function fetchAndApplySessionById(params: Readonly<{
 
   const accessLevel = row.share?.accessLevel;
   const normalizedAccessLevel = accessLevel === 'view' || accessLevel === 'edit' || accessLevel === 'admin' ? accessLevel : undefined;
+  const sessionTurns = await fetchSessionTurnsProjection({
+    sessionId,
+    credentials: params.credentials,
+    request: params.request,
+    log: params.log,
+  });
+  const rollbackEligibleTurnStarts = listRollbackEligibleTurnStarts(sessionTurns);
 
   const nextSession = {
     ...row,
@@ -196,6 +260,12 @@ export async function fetchAndApplySessionById(params: Readonly<{
     agentState,
     accessLevel: normalizedAccessLevel,
     canApprovePermissions: row.share?.canApprovePermissions ?? undefined,
+    ...(sessionTurns
+      ? {
+        sessionTurns,
+        rollbackEligibleTurnStarts,
+      }
+      : {}),
   };
 
   const previousSession = params.getExistingSession?.(sessionId);
@@ -208,6 +278,12 @@ export async function fetchAndApplySessionById(params: Readonly<{
       ...row,
       serverId: typeof params.serverId === 'string' && params.serverId.trim().length > 0 ? params.serverId.trim() : undefined,
       metadata,
+      ...(sessionTurns
+        ? {
+          sessionTurns,
+          rollbackEligibleTurnStarts,
+        }
+        : {}),
     },
   };
 }

@@ -50,7 +50,7 @@ export function resolveTranscriptBottomFollowIntent(params: Readonly<{
     } else if (params.recentUserIntent && movedAwayFromBottom) {
         released = wantsPinned !== false;
         wantsPinned = false;
-    } else if (params.recentUserIntent && movedTowardBottom && distanceFromBottom <= pinThresholdPx) {
+    } else if (movedTowardBottom && distanceFromBottom <= pinThresholdPx) {
         rearmed = wantsPinned !== true;
         wantsPinned = true;
     }

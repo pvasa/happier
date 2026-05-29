@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderHook } from '@/dev/testkit';
-import type { TreeDropResult } from '@/components/ui/treeDragDrop';
+import type { SessionListTreeDropResult } from '../drop-resolution/sessionListTreeTypes';
 
 import { useSessionListA11yAnnouncements } from './useSessionListA11yAnnouncements';
 
@@ -61,7 +61,7 @@ describe('useSessionListA11yAnnouncements', () => {
     it('announces blocked reasons using the session-list blocked translation branch', async () => {
         announceForAccessibilitySpy.mockClear();
         const hook = await renderHook(() => useSessionListA11yAnnouncements());
-        const blockedResult: TreeDropResult = {
+        const blockedResult: SessionListTreeDropResult = {
             instruction: { kind: 'blocked', reason: 'descendant-cycle' },
             visual: { kind: 'none' },
         };
@@ -98,6 +98,27 @@ describe('useSessionListA11yAnnouncements', () => {
         );
         expect(announceForAccessibilitySpy).not.toHaveBeenCalledWith(
             expect.stringContaining('sessionsList.dragA11yBlockedWorkspaceScope'),
+        );
+    });
+
+    it('announces the date-ordering block reason for disabled manual reorders', async () => {
+        announceForAccessibilitySpy.mockClear();
+        const hook = await renderHook(() => useSessionListA11yAnnouncements());
+
+        hook.getCurrent().announceDropResult({
+            label: 'Session A',
+            result: {
+                instruction: { kind: 'blocked', reason: 'same-position' },
+                visual: { kind: 'none' },
+                sessionListBlockReason: 'date-ordering-mode',
+            },
+        });
+
+        expect(announceForAccessibilitySpy).toHaveBeenCalledWith(
+            expect.stringContaining('sessionsList.dragA11yBlockedDateOrderingMode'),
+        );
+        expect(announceForAccessibilitySpy).not.toHaveBeenCalledWith(
+            expect.stringContaining('sessionsList.dragA11yBlockedSamePosition'),
         );
     });
 });

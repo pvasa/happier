@@ -783,11 +783,18 @@ describe('NewSessionWizard (attachments.uploads)', () => {
 
         const afterCreated = handleCreateSession.mock.calls[0]?.[0]?.afterCreated;
         expect(typeof afterCreated).toBe('function');
+        const { createNewSessionLaunchAttempt } = await import('@/components/sessions/new/modules/newSessionLaunchAttempt');
 
         await act(async () => {
             await afterCreated({
                 sessionId: 'sess_target',
                 effectiveSpawnServerId: 'server-a',
+                launchAttempt: createNewSessionLaunchAttempt({
+                    prompt: 'Investigate this bug',
+                    displayText: 'Investigate this bug',
+                    scopeKey: 'test-scope',
+                    createId: (prefix) => `${prefix}-test`,
+                }),
             });
         });
 
@@ -796,6 +803,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
             targetServerId: 'server-a',
             initialMessageText: 'Investigate this bug\n\n[attachments block]',
             displayText: 'Investigate this bug',
+            messageLocalId: expect.any(String),
             profileId: 'profile-work',
             metaOverrides: {
                 happier: {

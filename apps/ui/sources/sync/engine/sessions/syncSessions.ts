@@ -13,10 +13,25 @@ import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetr
 import { nowServerMs } from '@/sync/runtime/time';
 import { getTaskLifecycleEventFromRawContent, type TaskLifecycleEvent } from './taskLifecycle';
 import { parsePlainSessionAgentState, parsePlainSessionMetadata } from './parsePlainSessionPayload';
+import { isLegacyMemoryArtifactTranscriptRow } from './legacyMemoryArtifactTranscriptRows';
 export { handleNewMessageSocketUpdate } from './sessionSocketUpdate';
 export { handleMessageUpdatedSocketUpdate } from './sessionSocketUpdate';
 export { fetchAndApplySessions } from './sessionSnapshot';
 export type { SessionListEncryption } from './sessionSnapshot';
+
+function readRollbackEligibleTurnStarts(value: unknown): readonly number[] | null | undefined {
+    if (value === null) return null;
+    if (!Array.isArray(value)) return undefined;
+
+    const starts: number[] = [];
+    for (const entry of value) {
+        if (typeof entry !== 'number' || !Number.isFinite(entry)) continue;
+        const seq = Math.trunc(entry);
+        if (seq < 0 || starts.includes(seq)) continue;
+        starts.push(seq);
+    }
+    return starts;
+}
 
 function applySidechainScopeMetadata(params: Readonly<{
     normalizedMessage: NormalizedMessage;
@@ -72,12 +87,130 @@ export function handleDeleteSessionSocketUpdate(params: {
     log.log(`🗑️ Session ${sessionId} deleted from local storage`);
 }
 
+// Session `metadata.version` is strictly monotonic per session on the server: every metadata write
+// uses optimistic concurrency (`metadataVersion = expectedVersion + 1` guarded by a CAS update) and
+// no flow (re-key/reset/re-create by tag) ever decreases it. So an incoming metadata version that is
+// not strictly greater than the stored version is stale/out-of-order and must not overwrite a newer
+// title. Equal versions are a no-op. Mirrors the machine metadata guard in syncMachines.ts.
+export function isStrictlyNewerSessionMetadataVersion(
+    incomingVersion: unknown,
+    storedVersion: number | null | undefined,
+): boolean {
+    if (typeof incomingVersion !== 'number' || !Number.isFinite(incomingVersion)) {
+        return false;
+    }
+    const normalizedStored = typeof storedVersion === 'number' && Number.isFinite(storedVersion)
+        ? storedVersion
+        : 0;
+    return incomingVersion > normalizedStored;
+}
+
+export function buildUpdatedSessionProjectionFromSocketUpdate(params: {
+    session: Session;
+    updateBody: any;
+    updateSeq: number;
+    updateCreatedAt: number;
+}): Session {
+    const { session, updateBody, updateSeq, updateCreatedAt } = params;
+    const encryptionMode: 'e2ee' | 'plain' = session.encryptionMode === 'plain' ? 'plain' : 'e2ee';
+    const rollbackEligibleTurnStarts = readRollbackEligibleTurnStarts(updateBody.rollbackEligibleTurnStarts);
+
+    return {
+        ...session,
+        encryptionMode,
+        lastViewedSessionSeq:
+            typeof updateBody.lastViewedSessionSeq === 'number'
+                ? updateBody.lastViewedSessionSeq
+                : session.lastViewedSessionSeq,
+        pendingPermissionRequestCount:
+            typeof updateBody.pendingPermissionRequestCount === 'number'
+                ? updateBody.pendingPermissionRequestCount
+                : session.pendingPermissionRequestCount,
+        pendingUserActionRequestCount:
+            typeof updateBody.pendingUserActionRequestCount === 'number'
+                ? updateBody.pendingUserActionRequestCount
+                : session.pendingUserActionRequestCount,
+        pendingRequestObservedAt:
+            typeof updateBody.pendingRequestObservedAt === 'number'
+            && Number.isFinite(updateBody.pendingRequestObservedAt)
+                ? Math.trunc(updateBody.pendingRequestObservedAt)
+                : updateBody.pendingRequestObservedAt === null
+                    ? null
+                    : session.pendingRequestObservedAt,
+        latestReadyEventSeq:
+            typeof updateBody.latestReadyEventSeq === 'number'
+            && Number.isFinite(updateBody.latestReadyEventSeq)
+                ? Math.trunc(updateBody.latestReadyEventSeq)
+                : updateBody.latestReadyEventSeq === null
+                    ? null
+                    : session.latestReadyEventSeq,
+        latestReadyEventAt:
+            typeof updateBody.latestReadyEventAt === 'number'
+            && Number.isFinite(updateBody.latestReadyEventAt)
+                ? Math.trunc(updateBody.latestReadyEventAt)
+                : updateBody.latestReadyEventAt === null
+                    ? null
+                    : session.latestReadyEventAt,
+        latestTurnId:
+            typeof updateBody.latestTurnId === 'string'
+            && updateBody.latestTurnId.trim().length > 0
+                ? updateBody.latestTurnId
+                : updateBody.latestTurnId === null
+                    ? null
+                    : session.latestTurnId,
+        latestTurnStatus:
+            updateBody.latestTurnStatus === 'in_progress'
+            || updateBody.latestTurnStatus === 'completed'
+            || updateBody.latestTurnStatus === 'cancelled'
+            || updateBody.latestTurnStatus === 'failed'
+                ? updateBody.latestTurnStatus
+                : updateBody.latestTurnStatus === null
+                    ? null
+                    : session.latestTurnStatus,
+        latestTurnStatusObservedAt:
+            typeof updateBody.latestTurnStatusObservedAt === 'number'
+            && Number.isFinite(updateBody.latestTurnStatusObservedAt)
+                ? Math.trunc(updateBody.latestTurnStatusObservedAt)
+                : updateBody.latestTurnStatusObservedAt === null
+                    ? null
+                    : session.latestTurnStatusObservedAt,
+        lastRuntimeIssue:
+            updateBody.lastRuntimeIssue === null
+            || (updateBody.lastRuntimeIssue && typeof updateBody.lastRuntimeIssue === 'object')
+                ? updateBody.lastRuntimeIssue
+                : session.lastRuntimeIssue,
+        rollbackEligibleTurnStarts:
+            rollbackEligibleTurnStarts !== undefined
+                ? rollbackEligibleTurnStarts
+                : session.rollbackEligibleTurnStarts,
+        archivedAt:
+            typeof updateBody.archivedAt === 'number' || updateBody.archivedAt === null
+                ? updateBody.archivedAt
+                : session.archivedAt,
+        meaningfulActivityAt:
+            typeof updateBody.meaningfulActivityAt === 'number' && Number.isFinite(updateBody.meaningfulActivityAt)
+                ? updateBody.meaningfulActivityAt
+                : session.meaningfulActivityAt,
+        updatedAt: updateCreatedAt,
+        seq: computeNextSessionSeqFromUpdate({
+            currentSessionSeq: session.seq ?? 0,
+            updateType: 'update-session',
+            containerSeq: updateSeq,
+            messageSeq: undefined,
+        }),
+    };
+}
+
 export async function buildUpdatedSessionFromSocketUpdate(params: {
     session: Session;
     updateBody: any;
     updateSeq: number;
     updateCreatedAt: number;
     sessionEncryption: SessionEncryption | null;
+    hydrateState?: Readonly<{
+        agentState?: boolean;
+        metadata?: boolean;
+    }>;
 }): Promise<{ nextSession: Session; agentState: any }> {
     const { session, updateBody, updateSeq, updateCreatedAt, sessionEncryption } = params;
 
@@ -85,11 +218,24 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
     if (encryptionMode === 'e2ee' && !sessionEncryption) {
         throw new Error(`Session encryption not found for ${session.id}`);
     }
+    const projectionSession = buildUpdatedSessionProjectionFromSocketUpdate({
+        session,
+        updateBody,
+        updateSeq,
+        updateCreatedAt,
+    });
 
-    const hasStatePayload = Boolean(updateBody.metadata || updateBody.agentState);
+    const hydrateAgentState = updateBody.agentState
+        ? params.hydrateState?.agentState !== false
+        : false;
+    const hydrateMetadata = updateBody.metadata
+        ? params.hydrateState?.metadata !== false
+            && isStrictlyNewerSessionMetadataVersion(updateBody.metadata.version, session.metadataVersion)
+        : false;
+    const hasStatePayload = hydrateMetadata || hydrateAgentState;
     const shouldBatchDecryptState = Boolean(
-        updateBody.metadata
-        && updateBody.agentState
+        hydrateMetadata
+        && hydrateAgentState
         && encryptionMode === 'e2ee'
         && sessionEncryption?.decryptSessionSnapshotState,
     );
@@ -110,13 +256,13 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             };
         }
 
-        const agentStatePromise = updateBody.agentState
+        const agentStatePromise = updateBody.agentState && hydrateAgentState
             ? encryptionMode === 'plain'
                 ? Promise.resolve(parsePlainSessionAgentState(updateBody.agentState.value))
                 : sessionEncryption!.decryptAgentState(updateBody.agentState.version, updateBody.agentState.value)
             : Promise.resolve(session.agentState);
 
-        const metadataPromise = updateBody.metadata
+        const metadataPromise = updateBody.metadata && hydrateMetadata
             ? encryptionMode === 'plain'
                 ? Promise.resolve(parsePlainSessionMetadata(updateBody.metadata.value))
                 : sessionEncryption!.decryptMetadata(updateBody.metadata.version, updateBody.metadata.value)
@@ -131,8 +277,8 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
             {
                 encrypted: encryptionMode === 'e2ee' ? 1 : 0,
                 plain: encryptionMode === 'plain' ? 1 : 0,
-                metadata: updateBody.metadata ? 1 : 0,
-                agentState: updateBody.agentState ? 1 : 0,
+                metadata: hydrateMetadata ? 1 : 0,
+                agentState: hydrateAgentState ? 1 : 0,
                 batched: shouldBatchDecryptState ? 1 : 0,
             },
             resolveUpdatedState,
@@ -140,49 +286,11 @@ export async function buildUpdatedSessionFromSocketUpdate(params: {
         : await resolveUpdatedState();
 
     const nextSession: Session = {
-        ...session,
-        encryptionMode,
+        ...projectionSession,
         agentState,
-        agentStateVersion: updateBody.agentState ? updateBody.agentState.version : session.agentStateVersion,
-        lastViewedSessionSeq:
-            typeof updateBody.lastViewedSessionSeq === 'number'
-                ? updateBody.lastViewedSessionSeq
-                : session.lastViewedSessionSeq,
-        pendingPermissionRequestCount:
-            typeof updateBody.pendingPermissionRequestCount === 'number'
-                ? updateBody.pendingPermissionRequestCount
-                : session.pendingPermissionRequestCount,
-        pendingUserActionRequestCount:
-            typeof updateBody.pendingUserActionRequestCount === 'number'
-                ? updateBody.pendingUserActionRequestCount
-                : session.pendingUserActionRequestCount,
-        latestTurnStatus:
-            updateBody.latestTurnStatus === 'in_progress'
-            || updateBody.latestTurnStatus === 'completed'
-            || updateBody.latestTurnStatus === 'cancelled'
-            || updateBody.latestTurnStatus === 'failed'
-                ? updateBody.latestTurnStatus
-                : updateBody.latestTurnStatus === null
-                    ? null
-                    : session.latestTurnStatus,
-        lastRuntimeIssue:
-            updateBody.lastRuntimeIssue === null
-            || (updateBody.lastRuntimeIssue && typeof updateBody.lastRuntimeIssue === 'object')
-                ? updateBody.lastRuntimeIssue
-                : session.lastRuntimeIssue,
-        archivedAt:
-            typeof updateBody.archivedAt === 'number' || updateBody.archivedAt === null
-                ? updateBody.archivedAt
-                : session.archivedAt,
+        agentStateVersion: hydrateAgentState ? updateBody.agentState.version : session.agentStateVersion,
         metadata,
-        metadataVersion: updateBody.metadata ? updateBody.metadata.version : session.metadataVersion,
-        updatedAt: updateCreatedAt,
-        seq: computeNextSessionSeqFromUpdate({
-            currentSessionSeq: session.seq ?? 0,
-            updateType: 'update-session',
-            containerSeq: updateSeq,
-            messageSeq: undefined,
-        }),
+        metadataVersion: hydrateMetadata ? updateBody.metadata.version : session.metadataVersion,
     };
 
     return { nextSession, agentState };
@@ -247,6 +355,7 @@ type DecryptedSessionMessage = Readonly<{
 }>;
 
 type MessageDecryptBatchOptions = {
+    initialMessageDecryptBatchSize?: number;
     messageDecryptBatchSize?: number;
     messageDecryptYieldDelayMs?: number;
     yieldToMessageDecryptBatch?: (delayMs: number) => Promise<void>;
@@ -257,6 +366,7 @@ type SessionMessagesPageOptions = MessageDecryptBatchOptions & {
 };
 
 const DEFAULT_MESSAGE_DECRYPT_BATCH_SIZE = 8;
+const DEFAULT_INITIAL_MESSAGE_DECRYPT_BATCH_SIZE = 64;
 
 const plainSessionMessagesEncryption: SessionMessagesEncryption = {
     decryptMessages: async (messages) => Promise.all(
@@ -272,6 +382,16 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 function normalizeNonNegativeInteger(value: number | undefined, fallback: number): number {
     if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
     return Math.max(0, Math.trunc(value));
+}
+
+function resolveMessageDecryptBatchSize(kind: MessagePageTelemetryKind, options: MessageDecryptBatchOptions): number {
+    if (kind === 'initial') {
+        return normalizePositiveInteger(
+            options.initialMessageDecryptBatchSize ?? options.messageDecryptBatchSize,
+            DEFAULT_INITIAL_MESSAGE_DECRYPT_BATCH_SIZE,
+        );
+    }
+    return normalizePositiveInteger(options.messageDecryptBatchSize, DEFAULT_MESSAGE_DECRYPT_BATCH_SIZE);
 }
 
 function yieldToMessageDecryptBatch(delayMs: number): Promise<void> {
@@ -392,14 +512,15 @@ async function decryptMessagesInBatchesWithTelemetry(
     messages: ApiMessage[],
     options: MessageDecryptBatchOptions,
 ): Promise<Array<DecryptedSessionMessage | null>> {
+    const batchSize = resolveMessageDecryptBatchSize(kind, options);
     return syncPerformanceTelemetry.measureAsync(
         'sync.sessions.messages.decrypt',
         messagePageTelemetryFields(kind, {
             messages: messages.length,
-            batchSize: normalizePositiveInteger(options.messageDecryptBatchSize, DEFAULT_MESSAGE_DECRYPT_BATCH_SIZE),
+            batchSize,
             yieldDelayMs: normalizeNonNegativeInteger(options.messageDecryptYieldDelayMs, 0),
         }),
-        () => decryptMessagesInBatches(encryption, messages, options),
+        () => decryptMessagesInBatches(encryption, messages, options, batchSize),
     );
 }
 
@@ -436,10 +557,10 @@ async function decryptMessagesInBatches(
     encryption: SessionMessagesEncryption,
     messages: ApiMessage[],
     options: MessageDecryptBatchOptions,
+    batchSize: number,
 ): Promise<Array<DecryptedSessionMessage | null>> {
     if (messages.length === 0) return [];
 
-    const batchSize = normalizePositiveInteger(options.messageDecryptBatchSize, DEFAULT_MESSAGE_DECRYPT_BATCH_SIZE);
     if (batchSize >= messages.length) {
         return encryption.decryptMessages(messages);
     }
@@ -581,6 +702,9 @@ export async function fetchAndApplyMessages(params: {
                 if (inputWasEncrypted && decrypted.content === null) {
                     continue;
                 }
+                if (isLegacyMemoryArtifactTranscriptRow(decrypted)) {
+                    continue;
+                }
 
                 const lifecycleEvent = getTaskLifecycleEventFromRawContent(decrypted.content, decrypted.createdAt);
                 if (lifecycleEvent) {
@@ -718,6 +842,9 @@ export async function fetchAndApplyOlderMessages(params: {
                 if (inputWasEncrypted && decrypted.content === null) {
                     continue;
                 }
+                if (isLegacyMemoryArtifactTranscriptRow(decrypted)) {
+                    continue;
+                }
                 // Older pages can include historical lifecycle markers (task_complete/turn_aborted) that
                 // should not clobber current in-flight UI state. Lifecycle handling is reserved for
                 // newer/socket flows.
@@ -830,6 +957,9 @@ export async function fetchAndApplyNewerMessages(params: {
                     existingMessages.set(decrypted.id, inputUpdatedAt);
                 }
                 if (inputWasEncrypted && decrypted.content === null) {
+                    continue;
+                }
+                if (isLegacyMemoryArtifactTranscriptRow(decrypted)) {
                     continue;
                 }
                 const lifecycleEvent = getTaskLifecycleEventFromRawContent(decrypted.content, decrypted.createdAt);

@@ -5,7 +5,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 import { PermissionPromptCard } from '@/components/tools/shell/permissions/PermissionPromptCard';
-import { UserActionPromptCard } from '@/components/tools/shell/userActions/UserActionPromptCard';
 import { ApprovalPromptCard } from '@/components/tools/shell/approvals/ApprovalPromptCard';
 import { Typography } from '@/constants/Typography';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
@@ -44,15 +43,12 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 type AttentionRequest =
     | Readonly<{ kind: 'provider_permission'; id: string; request: PendingPermissionRequest }>
-    | Readonly<{ kind: 'user_action'; id: string; request: PendingPermissionRequest }>
     | Readonly<{ kind: 'action_approval'; id: string; request: OpenApprovalArtifactForSession }>;
 
 function getAttentionRequestKey(request: AttentionRequest): string {
     switch (request.kind) {
         case 'provider_permission':
             return `permission:${request.id}`;
-        case 'user_action':
-            return `userAction:${request.id}`;
         case 'action_approval':
             return `approval:${request.id}`;
     }
@@ -80,16 +76,9 @@ export const AgentInputAttentionRequests = React.memo(function AgentInputAttenti
     const attentionRequests = React.useMemo(() => {
         if (props.disabledReason === 'inactive') return [];
 
-        const userActionRequests = (props.userActionRequests ?? []).filter((request) => request.kind === 'user_action');
-
         return [
             ...props.permissionRequests.map((request): AttentionRequest => ({
                 kind: 'provider_permission',
-                id: request.id,
-                request,
-            })),
-            ...userActionRequests.map((request): AttentionRequest => ({
-                kind: 'user_action',
                 id: request.id,
                 request,
             })),
@@ -99,7 +88,7 @@ export const AgentInputAttentionRequests = React.memo(function AgentInputAttenti
                 request,
             })),
         ];
-    }, [props.approvalRequests, props.disabledReason, props.permissionRequests, props.userActionRequests]);
+    }, [props.approvalRequests, props.disabledReason, props.permissionRequests]);
     const scrollStyle = React.useMemo(() => ({ maxHeight: props.maxHeightPx }), [props.maxHeightPx]);
 
     if (attentionRequests.length === 0) {
@@ -132,16 +121,6 @@ export const AgentInputAttentionRequests = React.memo(function AgentInputAttenti
                                     ) : null}
                                     {entry.kind === 'provider_permission' ? (
                                         <PermissionPromptCard
-                                            chrome="inline"
-                                            request={entry.request}
-                                            location={props.permissionLocationsById.get(entry.request.id) ?? null}
-                                            sessionId={props.sessionId}
-                                            metadata={props.metadata}
-                                            canApprovePermissions={props.canApprovePermissions}
-                                            disabledReason={props.disabledReason}
-                                        />
-                                    ) : entry.kind === 'user_action' ? (
-                                        <UserActionPromptCard
                                             chrome="inline"
                                             request={entry.request}
                                             location={props.permissionLocationsById.get(entry.request.id) ?? null}

@@ -1,9 +1,15 @@
 import React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer from 'react-test-renderer';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+    createUseLocalSettingMock,
+    createStorageStoreMock,
+    createStorageStoreModuleMock,
+    createStoreHooksModuleMock,
+    renderScreen,
+    standardCleanup,
+} from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
-
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -69,14 +75,14 @@ installAgentInputCommonModuleMocks({
                 React.createElement('Pressable', props, props.children),
             ScrollView: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
                 React.createElement('ScrollView', props, props.children),
-	            ActivityIndicator: (props: Record<string, unknown>) => React.createElement('ActivityIndicator', props, null),
-	            Platform: {
-	                OS: 'web',
-	                select: (v: any) => v?.web ?? v?.default,
-	            },
-	            AppState: {
-	                addEventListener: vi.fn(() => ({ remove: vi.fn() })),
-	            },
+            ActivityIndicator: (props: Record<string, unknown>) => React.createElement('ActivityIndicator', props, null),
+            Platform: {
+                OS: 'web',
+                select: (v: any) => v?.web ?? v?.default,
+            },
+            AppState: {
+                addEventListener: vi.fn(() => ({ remove: vi.fn() })),
+            },
             useWindowDimensions: () => ({ width: mockEnv.windowWidth, height: 600 }),
             Dimensions: {
                 get: () => ({ width: mockEnv.windowWidth, height: 600, scale: 1, fontScale: 1 }),
@@ -112,6 +118,26 @@ installAgentInputCommonModuleMocks({
             useSessionMessagesReducerState: () => null,
         });
     },
+    storageStore: (importOriginal) =>
+        createStorageStoreModuleMock({
+            importOriginal,
+            overrides: {
+                getStorage: () => createStorageStoreMock({ sessionMessages: {} }),
+            },
+        }),
+    storeHooks: (importOriginal) =>
+        createStoreHooksModuleMock({
+            importOriginal,
+            overrides: {
+                useLocalSetting: createUseLocalSettingMock({
+                    values: {
+                        uiBackdropBlurEnabled: true,
+                        uiFontScale: 1,
+                    },
+                }),
+                useSessionServerId: () => null,
+            },
+        }),
 });
 
 vi.mock('expo-image', () => ({
@@ -120,14 +146,6 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
     PermissionFooter: () => null,
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
