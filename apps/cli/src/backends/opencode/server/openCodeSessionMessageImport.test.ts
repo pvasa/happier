@@ -41,4 +41,99 @@ describe('extractOpenCodeTextHistoryItems', () => {
       },
     ]);
   });
+
+  it('ignores OpenCode compaction summary assistant messages', () => {
+    expect(extractOpenCodeTextHistoryItems([
+      {
+        info: {
+          id: 'msg_compaction_summary',
+          role: 'assistant',
+          mode: 'compaction',
+          agent: 'compaction',
+          summary: true,
+          time: { created: 4 },
+        },
+        parts: [
+          { type: 'text', text: 'SUMMARY_TEXT_SHOULD_NOT_IMPORT' },
+        ],
+      },
+      {
+        info: { id: 'msg_normal_answer', role: 'assistant', time: { created: 5 } },
+        parts: [
+          { type: 'text', text: 'NORMAL_ANSWER_TEXT' },
+        ],
+      },
+    ])).toEqual([
+      {
+        messageId: 'msg_normal_answer',
+        role: 'assistant',
+        createdAtMs: 5,
+        text: 'NORMAL_ANSWER_TEXT',
+      },
+    ]);
+  });
+
+  it('does not hide visible messages just because user or custom agent metadata says compaction', () => {
+    expect(extractOpenCodeTextHistoryItems([
+      {
+        info: {
+          id: 'msg_user_compaction_named',
+          role: 'user',
+          mode: 'compaction',
+          agent: 'compaction',
+          summary: true,
+          time: { created: 6 },
+        },
+        parts: [
+          { type: 'text', text: 'USER_TEXT_STILL_VISIBLE' },
+        ],
+      },
+      {
+        info: {
+          id: 'msg_assistant_custom_agent',
+          role: 'assistant',
+          mode: 'compaction',
+          agent: 'worker',
+          time: { created: 7 },
+        },
+        parts: [
+          { type: 'text', text: 'CUSTOM_AGENT_TEXT_STILL_VISIBLE' },
+        ],
+      },
+    ])).toEqual([
+      {
+        messageId: 'msg_user_compaction_named',
+        role: 'user',
+        createdAtMs: 6,
+        text: 'USER_TEXT_STILL_VISIBLE',
+      },
+      {
+        messageId: 'msg_assistant_custom_agent',
+        role: 'assistant',
+        createdAtMs: 7,
+        text: 'CUSTOM_AGENT_TEXT_STILL_VISIBLE',
+      },
+    ]);
+  });
+
+  it('filters synthetic ignored and internal text parts from history imports', () => {
+    expect(extractOpenCodeTextHistoryItems([
+      {
+        info: { id: 'msg_assistant_filtered_parts', role: 'assistant', time: { created: 8 } },
+        parts: [
+          { type: 'text', text: 'SYNTHETIC_SHOULD_NOT_IMPORT', synthetic: true },
+          { type: 'text', text: 'IGNORED_SHOULD_NOT_IMPORT', ignored: true },
+          { type: 'step', text: 'INTERNAL_SHOULD_NOT_IMPORT', internal: true },
+          { type: 'text', text: 'VISIBLE_TEXT' },
+        ],
+      },
+    ])).toEqual([
+      {
+        messageId: 'msg_assistant_filtered_parts',
+        role: 'assistant',
+        createdAtMs: 8,
+        text: 'VISIBLE_TEXT',
+      },
+    ]);
+  });
 });

@@ -22,6 +22,28 @@ describe('OpenCode work state normalization', () => {
     expect(snapshot.items.every((item: any) => item.kind === 'todo')).toBe(true);
   });
 
+  it('bounds native todo snapshots and marks omitted items as truncated', async () => {
+    const mod = await import('./workState');
+
+    const snapshot = mod.buildOpenCodeTodoWorkState({
+      backendId: 'opencode',
+      updatedAt: 100,
+      maxItems: 2,
+      todos: [
+        { id: 'todo_1', content: 'First', status: 'pending' },
+        { id: 'todo_2', content: 'Second', status: 'in_progress' },
+        { id: 'todo_3', content: 'Third', status: 'pending' },
+      ],
+    });
+
+    expect(snapshot.items.map((item: any) => item.title)).toEqual(['First', 'Second']);
+    expect(snapshot.truncated).toEqual({
+      reason: 'item_limit',
+      omittedCount: 1,
+    });
+    expect(snapshot.primaryItemId).toBe(snapshot.items[1].id);
+  });
+
   it('scopes owned todo merges to OpenCode items', async () => {
     const mod = await import('./workState');
     expect(mod.OPEN_CODE_TODO_WORK_STATE_OWNED_SOURCE_FAMILIES).toEqual(['todo:opencode']);

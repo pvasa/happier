@@ -1,7 +1,6 @@
 import type { PreflightModelsProbeAdapter } from '@/capabilities/probes/preflightModelsProbeAdapterTypes';
-import { resolveCliPathOverride } from '@/agent/acp/resolveCliPathOverride';
 import { killProcessTree } from '@/agent/acp/killProcessTree';
-import { resolveProviderCliCommand } from '@/runtime/managedTools/providerCliResolution';
+import { resolveProviderCliLaunchSpec } from '@/runtime/managedTools/requireProviderCliLaunchSpec';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 import { spawn } from 'node:child_process';
 
@@ -108,11 +107,9 @@ function parseOpenCodeModelsVerboseOutput(outputRaw: string): OpenCodeVerboseMod
 
 async function probeOpenCodeModelsVerbose(params: Readonly<{ cwd: string; timeoutMs: number }>): Promise<unknown[] | null> {
   const timeoutMs = Math.max(250, params.timeoutMs);
-  const command =
-    resolveCliPathOverride({ agentId: 'opencode' })
-    ?? resolveProviderCliCommand('opencode')?.command
-    ?? 'opencode';
-  const args = ['models', '--verbose'];
+  const launch = resolveProviderCliLaunchSpec('opencode');
+  const command = launch?.command ?? 'opencode';
+  const args = [...(launch?.args ?? []), 'models', '--verbose'];
 
   return await new Promise((resolve) => {
     let stdout = '';

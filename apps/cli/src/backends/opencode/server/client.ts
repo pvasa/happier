@@ -54,6 +54,17 @@ function resolveOpenCodeServerHttpTimeoutMs(env: NodeJS.ProcessEnv): number | nu
   return clamped;
 }
 
+export function resolveOpenCodeSseReadIdleTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+  const raw = env.HAPPIER_OPENCODE_SSE_READ_IDLE_TIMEOUT_MS;
+  const defaultTimeoutMs = 30_000;
+  if (typeof raw !== 'string') return defaultTimeoutMs;
+
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return defaultTimeoutMs;
+  if (parsed === 0) return null;
+  return Math.max(5_000, Math.min(120_000, Math.trunc(parsed)));
+}
+
 async function fetchJson<T>(params: {
   url: string;
   method: 'GET' | 'PATCH' | 'POST';
@@ -118,6 +129,14 @@ function isRetryableManagedServerTransportError(error: unknown): boolean {
   );
 }
 
+function isOpenCodeSseReadIdleTimeoutError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'OPENCODE_SSE_READ_IDLE_TIMEOUT',
+  );
+}
+
 export type OpenCodeServerRuntimeClient = Readonly<{
   setDirectoryOverride: (directory: string) => void;
   sessionList: () => Promise<unknown[]>;
@@ -140,6 +159,7 @@ export type OpenCodeServerRuntimeClient = Readonly<{
     parts: unknown[];
     agent?: string;
     model?: OpenCodeModelRef;
+    variant?: string;
     config?: Record<string, unknown>;
   }) => Promise<void>;
   sessionSummarize: (opts: {
@@ -174,6 +194,26 @@ function resolveSseReconnectDelayMs(attempt: number, env: NodeJS.ProcessEnv): nu
   return Math.min(clampedMax, rawDelay + jitter);
 }
 
+function readOpenCodeProviderList(raw: unknown): ReadonlyArray<{ id: string; env?: readonly string[]; models?: Record<string, unknown> }> {
+  const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+  const all = Array.isArray(record?.all)
+    ? record.all as Array<{ id?: unknown; env?: readonly string[]; models?: Record<string, unknown> }>
+    : [];
+  const connectedRaw = Array.isArray(record?.connected) ? record.connected : null;
+  if (!connectedRaw) return all as Array<{ id: string; env?: readonly string[]; models?: Record<string, unknown> }>;
+
+  const connected = new Set(
+    connectedRaw
+      .map((value) => typeof value === 'string' ? value.trim() : '')
+      .filter((value) => value.length > 0),
+  );
+
+  return all.filter((provider) => {
+    const id = typeof provider?.id === 'string' ? provider.id.trim() : '';
+    return id.length > 0 && connected.has(id);
+  }) as Array<{ id: string; env?: readonly string[]; models?: Record<string, unknown> }>;
+}
+
 async function sleepUntilOrAbort(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return;
   await new Promise<void>((resolve) => {
@@ -205,6 +245,7 @@ async function sleepUntilOrAbort(ms: number, signal: AbortSignal): Promise<void>
 export async function createOpenCodeServerRuntimeClient(params: Readonly<{ directory: string; messageBuffer: MessageBuffer; baseUrlOverride?: string | null; env?: NodeJS.ProcessEnv }>): Promise<OpenCodeServerRuntimeClient> {
   const env = params.env ?? process.env;
   const httpTimeoutMs = resolveOpenCodeServerHttpTimeoutMs(env);
+  const readIdleTimeoutMs = resolveOpenCodeSseReadIdleTimeoutMs(env);
   const baseUrlOverrideRaw = typeof params.baseUrlOverride === 'string' ? params.baseUrlOverride.trim() : '';
   const envUrlRaw = typeof env.HAPPIER_OPENCODE_SERVER_URL === 'string' ? env.HAPPIER_OPENCODE_SERVER_URL.trim() : '';
   const usingManagedServer = baseUrlOverrideRaw.length === 0 && envUrlRaw.length === 0;
@@ -454,8 +495,7 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
         headers,
         timeoutMs: httpTimeoutMs,
       });
-      const all = providers && typeof providers === 'object' && !Array.isArray(providers) ? (providers as any).all : null;
-      return Array.isArray(all) ? all as any : [];
+      return readOpenCodeProviderList(providers);
     },
     mcpAdd: async ({ name, config }) => {
       const serverName = typeof name === 'string' ? name.trim() : '';
@@ -482,7 +522,8 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
         timeoutMs: httpTimeoutMs,
       });
     },
-    sessionPromptAsync: async ({ sessionId, messageId, parts, agent, model, config }) => {
+    sessionPromptAsync: async ({ sessionId, messageId, parts, agent, model, variant, config }) => {
+      const normalizedVariant = typeof variant === 'string' ? variant.trim() : '';
       await fetchJsonWithManagedServerRetry((currentBaseUrl) => fetchJson<void>({
         url: buildUrl(currentBaseUrl, `/session/${encodeURIComponent(sessionId)}/prompt_async`, { directory: resolveDirectory() }),
         method: 'POST',
@@ -491,6 +532,7 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
           ...(messageId ? { messageID: messageId } : {}),
           ...(agent ? { agent } : {}),
           ...(model ? { model } : {}),
+          ...(normalizedVariant ? { variant: normalizedVariant } : {}),
           ...(config ? { config } : {}),
           parts,
         },
@@ -608,6 +650,7 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
               url,
               headers: nextHeaders,
               signal: combinedAbort.signal,
+              readIdleTimeoutMs,
               onMessage: (msg, meta) => {
                 if (meta?.id) lastEventId = meta.id;
                 onEvent(msg);
@@ -617,7 +660,12 @@ export async function createOpenCodeServerRuntimeClient(params: Readonly<{ direc
             attempt = 0;
           } catch (error) {
             if (disposed || signal.aborted || localAbort.signal.aborted) break;
-            logger.debug('[OpenCodeServer] SSE stream ended; reconnecting (best-effort)', error);
+            logger.debug(
+              isOpenCodeSseReadIdleTimeoutError(error)
+                ? '[OpenCodeServer] SSE read idle timeout; reconnecting stream (best-effort)'
+                : '[OpenCodeServer] SSE stream ended; reconnecting (best-effort)',
+              error,
+            );
             await refreshBaseUrlIfManagedBestEffort();
             const delayMs = resolveSseReconnectDelayMs(attempt, env);
             attempt += 1;

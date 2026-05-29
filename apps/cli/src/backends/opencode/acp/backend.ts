@@ -4,7 +4,8 @@
  * This module provides a factory function for creating an OpenCode backend
  * that communicates using the Agent Client Protocol (ACP).
  *
- * OpenCode must be installed and available in PATH.
+ * OpenCode is resolved through Happier's provider CLI launch spec so managed
+ * installs work in packaged/binary environments.
  * ACP mode: `opencode acp`
  */
 

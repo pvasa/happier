@@ -46,6 +46,17 @@ function writeFakeOpenCodeModelsBinary(dir: string, stdoutLines: ReadonlyArray<s
   return writeExecutableShimSync({ dir, fileName, contents });
 }
 
+function writeFakeOpenCodeModelsJavaScriptEntrypoint(dir: string, stdoutLines: ReadonlyArray<string>): string {
+  const output = JSON.stringify(stdoutLines.join('\n'));
+  const contents = [
+    `const { writeFileSync } = require('node:fs');`,
+    `const { join } = require('node:path');`,
+    `writeFileSync(join(${JSON.stringify(dir)}, 'invoked-js.txt'), process.argv.slice(2).join(' '));`,
+    `process.stdout.write(${output});`,
+  ].join('\n');
+  return writeExecutableShimSync({ dir, fileName: 'opencode.js', contents });
+}
+
 describe('openCodePreflightModelsProbeAdapter', () => {
   let tempDir: string | null = null;
 
@@ -161,5 +172,77 @@ describe('openCodePreflightModelsProbeAdapter', () => {
         contextWindowTokens: 400000,
       },
     ]);
+  });
+
+  it('excludes Anthropic models that OpenCode still advertises after provider retirement', async () => {
+    tempDir = makeTempDir('happier-opencode-preflight-models-retired-');
+    const fakeOpenCode = writeFakeOpenCodeModelsBinary(tempDir, [
+      'anthropic/claude-3-5-haiku-20241022',
+      '{',
+      '  "id": "claude-3-5-haiku-20241022",',
+      '  "providerID": "anthropic",',
+      '  "name": "Claude Haiku 3.5",',
+      '  "family": "claude-haiku",',
+      '  "status": "active",',
+      '  "capabilities": { "toolcall": true, "input": { "text": true } }',
+      '}',
+      'anthropic/claude-haiku-4-5-20251001',
+      '{',
+      '  "id": "claude-haiku-4-5-20251001",',
+      '  "providerID": "anthropic",',
+      '  "name": "Claude Haiku 4.5",',
+      '  "family": "claude-haiku",',
+      '  "status": "active",',
+      '  "capabilities": { "toolcall": true, "input": { "text": true } }',
+      '}',
+    ]);
+
+    process.env.PATH = '/usr/bin:/bin';
+    process.env.HAPPIER_OPENCODE_PATH = fakeOpenCode;
+
+    const raw = await openCodePreflightModelsProbeAdapter.probeModelsRaw?.({
+      cwd: tempDir,
+      timeoutMs: 2_000,
+      backendTarget: undefined,
+      accountSettings: null,
+    });
+
+    expect(raw).toEqual([
+      {
+        id: 'anthropic/claude-haiku-4-5-20251001',
+        name: 'Claude Haiku 4.5',
+        description: 'claude-haiku',
+      },
+    ]);
+  });
+
+  it('wraps JavaScript OpenCode CLI entrypoints with the managed JavaScript runtime during probes', async () => {
+    tempDir = makeTempDir('happier-opencode-preflight-models-js-');
+    const fakeOpenCode = writeFakeOpenCodeModelsJavaScriptEntrypoint(tempDir, [
+      'openai/gpt-5.3-codex',
+      '{',
+      '  "id": "gpt-5.3-codex",',
+      '  "providerID": "openai",',
+      '  "name": "GPT-5.3 Codex",',
+      '  "capabilities": { "toolcall": true, "input": { "text": true } }',
+      '}',
+    ]);
+
+    process.env.PATH = '/usr/bin:/bin';
+    process.env.HAPPIER_OPENCODE_PATH = fakeOpenCode;
+
+    const raw = await openCodePreflightModelsProbeAdapter.probeModelsRaw?.({
+      cwd: tempDir,
+      timeoutMs: 2_000,
+      backendTarget: undefined,
+      accountSettings: null,
+    });
+
+    expect(existsSync(join(tempDir, 'invoked-js.txt'))).toBe(true);
+    expect(raw).toEqual([{
+      id: 'openai/gpt-5.3-codex',
+      name: 'GPT-5.3 Codex',
+      description: 'openai',
+    }]);
   });
 });

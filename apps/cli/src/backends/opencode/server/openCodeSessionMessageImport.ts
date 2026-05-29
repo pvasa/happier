@@ -3,21 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 
-import { asRecord, normalizeString } from './openCodeParsing';
-import { extractOpenCodeRenderableTextFromParts } from './openCodeRenderableText';
-
-function normalizeRole(value: unknown): 'user' | 'assistant' | null {
-  const raw = normalizeString(value).trim().toLowerCase();
-  if (raw === 'user') return 'user';
-  if (raw === 'assistant') return 'assistant';
-  return null;
-}
-
-function extractCreatedAtMs(info: Record<string, unknown>): number {
-  const timeRec = asRecord(info.time);
-  const created = timeRec ? timeRec.created : null;
-  return typeof created === 'number' && Number.isFinite(created) ? created : 0;
-}
+import { classifyOpenCodeMessageForProjection, extractOpenCodeProjectedText } from '../transcriptProjection';
+import { asRecord } from './openCodeParsing';
 
 export type OpenCodeTextHistoryItem = Readonly<{
   messageId: string;
@@ -32,19 +19,19 @@ export function extractOpenCodeTextHistoryItems(rawMessages: unknown[]): OpenCod
   for (const msg of rawMessages) {
     const rec = asRecord(msg);
     if (!rec) continue;
-    const info = asRecord(rec.info);
-    if (!info) continue;
-    const role = normalizeRole(info.role);
+    const projection = classifyOpenCodeMessageForProjection(rec);
+    const role = projection.role;
+    if (projection.kind !== 'user_transcript' && projection.kind !== 'assistant_transcript') continue;
     if (!role) continue;
-    const messageId = normalizeString(info.id).trim();
+    const messageId = projection.messageId;
     if (!messageId) continue;
     const parts = Array.isArray(rec.parts) ? rec.parts : [];
-    const text = extractOpenCodeRenderableTextFromParts(parts);
+    const text = extractOpenCodeProjectedText(parts, { context: 'history_import' });
     if (!text) continue;
     items.push({
       messageId,
       role,
-      createdAtMs: extractCreatedAtMs(info),
+      createdAtMs: projection.createdAtMs,
       text,
     });
   }
@@ -62,7 +49,7 @@ export async function importOpenCodeTextHistoryCommitted(params: Readonly<{
   provider: ACPProvider;
   remoteSessionId: string;
   items: ReadonlyArray<OpenCodeTextHistoryItem>;
-  importedFrom: 'acp-history' | 'acp-sidechain' | 'acp-live-sync';
+  importedFrom: 'acp-history' | 'acp-sidechain';
   sidechainId?: string;
 }>): Promise<void> {
   for (const item of params.items) {

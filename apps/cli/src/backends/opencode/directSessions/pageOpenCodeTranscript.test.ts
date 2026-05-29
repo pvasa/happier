@@ -74,6 +74,59 @@ describe('pageOpenCodeTranscript', () => {
     expect(second.nextCursor).toBeNull();
   });
 
+  it('maps current OpenCode server message info envelopes', async () => {
+    const messages = [
+      {
+        info: {
+          id: 'msg-user',
+          role: 'user',
+          sessionID: 'sess-1',
+          time: { created: 1_779_095_233_468 },
+          model: { providerID: 'openai', modelID: 'gpt-5.4' },
+        },
+        parts: [{ type: 'text', text: 'hello from user', id: 'prt-user', sessionID: 'sess-1', messageID: 'msg-user' }],
+      },
+      {
+        info: {
+          id: 'msg-assistant',
+          parentID: 'msg-user',
+          role: 'assistant',
+          sessionID: 'sess-1',
+          time: { created: 1_779_095_233_767, completed: 1_779_095_235_639 },
+          providerID: 'openai',
+          modelID: 'gpt-5.4',
+        },
+        parts: [{ type: 'text', text: 'hello from assistant', id: 'prt-assistant', sessionID: 'sess-1', messageID: 'msg-assistant' }],
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : String((input as any)?.url ?? '');
+      if (url.includes('/global/health')) {
+        return jsonResponse({ healthy: true, version: '1.14.41' });
+      }
+      if (url.includes('/session/sess-1/message')) {
+        return jsonResponse(messages);
+      }
+      return jsonResponse({});
+    }) as any;
+
+    const page = await pageOpenCodeTranscript({
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      remoteSessionId: 'sess-1',
+      direction: 'older',
+      maxBytes: 1024 * 1024,
+      maxItems: 10,
+    });
+
+    expect(page.items.map((item) => item.id)).toEqual(['msg-user', 'msg-assistant']);
+    expect(page.items.map((item) => item.createdAtMs)).toEqual([1_779_095_233_468, 1_779_095_233_767]);
+    expect((page.items[0]?.raw as any)?.role).toBe('user');
+    expect(((page.items[0]?.raw as any)?.content as any)?.text).toBe('hello from user');
+    expect((page.items[1]?.raw as any)?.role).toBe('agent');
+    expect(((page.items[1]?.raw as any)?.content as any)?.data?.message).toBe('hello from assistant');
+  });
+
   it('marks pages truncated when maxBytes prevents returning all available items', async () => {
     const messages = [
       { id: 'm1', role: 'assistant', createdAt: '2026-01-01T00:00:00.000Z', parts: [{ type: 'text', text: '12345678901234567890' }] },
@@ -148,5 +201,69 @@ describe('pageOpenCodeTranscript', () => {
     expect(second.items.map((item) => item.id)).toEqual(['m1', 'm2', 'm3']);
     expect(second.hasMore).toBe(false);
     expect(second.nextCursor).toBeNull();
+  });
+
+  it('omits compaction summaries while advancing backward pagination', async () => {
+    const messages = [
+      { id: 'm1', role: 'assistant', createdAt: '2026-01-01T00:00:00.000Z', parts: [{ type: 'text', text: 'visible' }] },
+      {
+        info: {
+          id: 'm2',
+          role: 'assistant',
+          summary: true,
+          mode: 'compaction',
+          agent: 'compaction',
+          time: { created: 1_779_095_233_000, completed: 1_779_095_234_000 },
+        },
+        parts: [{ type: 'text', text: 'SUMMARY_TWO_SHOULD_NOT_APPEAR' }],
+      },
+      {
+        info: {
+          id: 'm3',
+          role: 'assistant',
+          summary: true,
+          mode: 'compaction',
+          agent: 'compaction',
+          time: { created: 1_779_095_235_000, completed: 1_779_095_236_000 },
+        },
+        parts: [{ type: 'text', text: 'SUMMARY_THREE_SHOULD_NOT_APPEAR' }],
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : String((input as any)?.url ?? '');
+      if (url.includes('/global/health')) {
+        return jsonResponse({ healthy: true, version: '1.14.41' });
+      }
+      if (url.includes('/session/sess-1/message')) {
+        return jsonResponse(messages);
+      }
+      return jsonResponse({});
+    }) as any;
+
+    const first = await pageOpenCodeTranscript({
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      remoteSessionId: 'sess-1',
+      direction: 'older',
+      maxBytes: 1024 * 1024,
+      maxItems: 2,
+    });
+
+    expect(first.items).toEqual([]);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toBeTruthy();
+
+    const second = await pageOpenCodeTranscript({
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      remoteSessionId: 'sess-1',
+      direction: 'older',
+      cursor: first.nextCursor ?? undefined,
+      maxBytes: 1024 * 1024,
+      maxItems: 2,
+    });
+
+    expect(second.items.map((item) => item.id)).toEqual(['m1']);
+    expect(JSON.stringify([...first.items, ...second.items])).not.toContain('SUMMARY_');
+    expect(second.hasMore).toBe(false);
   });
 });

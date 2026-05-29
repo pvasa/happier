@@ -1,10 +1,12 @@
 import {
+  boundSessionWorkStateItemsV1,
   normalizeOpenCodeSessionTodosToWorkStateItems,
   type SessionWorkStateItemV1,
   type SessionWorkStateV1,
 } from '@happier-dev/protocol';
 
 export const OPEN_CODE_TODO_WORK_STATE_OWNED_SOURCE_FAMILIES = ['todo:opencode'] as const;
+export const OPEN_CODE_TODO_WORK_STATE_ITEM_LIMIT = 100;
 
 function choosePrimaryTodoItem(items: readonly SessionWorkStateItemV1[]): string | null {
   return (
@@ -20,12 +22,17 @@ export function buildOpenCodeTodoWorkState(params: Readonly<{
   agentId?: string;
   updatedAt: number;
   todos: unknown;
+  maxItems?: number | null;
 }>): SessionWorkStateV1 {
-  const items = normalizeOpenCodeSessionTodosToWorkStateItems({
+  const normalizedItems = normalizeOpenCodeSessionTodosToWorkStateItems({
     backendId: params.backendId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     updatedAt: params.updatedAt,
     todos: params.todos,
+  });
+  const bounded = boundSessionWorkStateItemsV1({
+    items: normalizedItems,
+    maxItems: params.maxItems ?? OPEN_CODE_TODO_WORK_STATE_ITEM_LIMIT,
   });
 
   return {
@@ -33,7 +40,8 @@ export function buildOpenCodeTodoWorkState(params: Readonly<{
     backendId: params.backendId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     updatedAt: params.updatedAt,
-    items,
-    primaryItemId: choosePrimaryTodoItem(items),
+    items: bounded.items,
+    primaryItemId: choosePrimaryTodoItem(bounded.items),
+    ...(bounded.truncated ? { truncated: bounded.truncated } : {}),
   };
 }

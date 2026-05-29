@@ -11,6 +11,7 @@ import { initialMachineMetadata } from '@/daemon/startDaemon';
 import { formatProviderPromptErrorMessage } from '@/agent/runtime/formatProviderPromptErrorMessage';
 import { runStandardAcpProvider, type StandardAcpProviderConfig, type StandardAcpProviderRunOptions } from '@/agent/runtime/runStandardAcpProvider';
 import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
+import { createSessionProviderPendingDrainAdapter } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 
 import { OpenCodeTerminalDisplay } from '@/backends/opencode/ui/OpenCodeTerminalDisplay';
 
@@ -110,7 +111,7 @@ export async function runOpenCode(opts: StandardAcpProviderRunOptions & {
         onThinkingChange: setThinking,
         getPermissionMode,
         pendingQueue: {
-          popPendingMessage: () => session.popPendingMessage(),
+          ...createSessionProviderPendingDrainAdapter(session),
           drainAfterStartOrLoad: true,
         },
       });

@@ -195,4 +195,72 @@ describe('readAfterOpenCodeTranscript', () => {
     expect(after.items).toHaveLength(1);
     expect(after.truncated).toBe(true);
   });
+
+  it('omits compaction summaries while advancing the follow cursor', async () => {
+    const messages: any[] = [
+      {
+        info: { id: 'm1', role: 'assistant', time: { created: 1, completed: 2 } },
+        parts: [{ type: 'text', text: 'visible before tail' }],
+      },
+    ];
+
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : String((input as any)?.url ?? '');
+      if (url.includes('/global/health')) {
+        return jsonResponse({ healthy: true, version: '1.14.41' });
+      }
+      if (url.includes('/session/sess-1/message')) {
+        return jsonResponse(messages);
+      }
+      return jsonResponse({});
+    }) as any;
+
+    const tail = await readAfterOpenCodeTranscript({
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      remoteSessionId: 'sess-1',
+      cursor: 'tail',
+      maxBytes: 1024 * 1024,
+      maxItems: 100,
+    });
+
+    messages.push(
+      {
+        info: {
+          id: 'm2',
+          role: 'assistant',
+          summary: true,
+          mode: 'compaction',
+          agent: 'compaction',
+          time: { created: 3, completed: 4 },
+        },
+        parts: [{ type: 'text', text: 'SUMMARY_SHOULD_NOT_APPEAR' }],
+      },
+      {
+        info: { id: 'm3', role: 'assistant', time: { created: 5, completed: 6 } },
+        parts: [{ type: 'text', text: 'visible after summary' }],
+      },
+    );
+
+    const after = await readAfterOpenCodeTranscript({
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      remoteSessionId: 'sess-1',
+      cursor: tail.nextCursor ?? 'tail',
+      maxBytes: 1024 * 1024,
+      maxItems: 100,
+    });
+
+    expect(after.items.map((item) => item.id)).toEqual(['m3']);
+    expect(JSON.stringify(after.items)).not.toContain('SUMMARY_SHOULD_NOT_APPEAR');
+
+    const settled = await readAfterOpenCodeTranscript({
+      source: { kind: 'opencodeServer', baseUrl: null, directory: null },
+      remoteSessionId: 'sess-1',
+      cursor: after.nextCursor ?? 'tail',
+      maxBytes: 1024 * 1024,
+      maxItems: 100,
+    });
+
+    expect(settled.items).toHaveLength(0);
+    expect(settled.truncated).toBe(false);
+  });
 });

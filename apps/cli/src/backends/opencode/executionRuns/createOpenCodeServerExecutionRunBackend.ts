@@ -5,6 +5,7 @@ import type { AgentBackend, AgentMessage, AgentMessageHandler, SessionId, StartS
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createOpenCodeServerRuntime } from '@/backends/opencode/server/runtime';
 import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
+import { createExecutionRunTimeoutError, isExecutionRunTimeoutError } from '@/agent/executionRuns/runtime/executionRunErrors';
 
 type ToolMessageBody = Readonly<{
     type: 'tool-call' | 'tool-result';
@@ -13,6 +14,18 @@ type ToolMessageBody = Readonly<{
     input?: unknown;
     output?: unknown;
     isError?: boolean;
+}>;
+
+type PromptTurnState = {
+    promise: Promise<void>;
+    settled: boolean;
+};
+
+type OpenCodeRuntimeTurnLiveness = Readonly<{
+    active: boolean;
+    reason?: string;
+    lastActivityAtMs?: number | null;
+    diagnostics?: Readonly<Record<string, unknown>>;
 }>;
 
 type ExecutionRunSessionAdapter = Pick<ApiSessionClient,
@@ -34,6 +47,34 @@ function isToolMessageBody(body: unknown): body is ToolMessageBody {
     if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
     const type = (body as { type?: unknown }).type;
     return type === 'tool-call' || type === 'tool-result';
+}
+
+function readErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error ?? '');
+}
+
+function isOpenCodeTurnTimeoutError(error: unknown): boolean {
+    return /^OpenCode turn timed out after \d+ms/u.test(readErrorMessage(error));
+}
+
+function readTimeoutMsFromError(error: unknown, fallback: number | null | undefined): number {
+    if (typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0) {
+        return Math.floor(fallback);
+    }
+    const match = readErrorMessage(error).match(/after\s+(\d+)ms/u);
+    const parsed = match ? Number.parseInt(match[1] ?? '', 10) : NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function normalizeDiagnostics(value: unknown): Readonly<Record<string, unknown>> | undefined {
+    if (!value) return undefined;
+    if (typeof value === 'string') {
+        return value.trim() ? { runtimeDiagnostics: value } : undefined;
+    }
+    if (typeof value === 'object' && !Array.isArray(value)) {
+        return value as Readonly<Record<string, unknown>>;
+    }
+    return { runtimeDiagnostics: value };
 }
 
 export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
@@ -60,7 +101,7 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
         happyToolsDir: args.cwd,
     };
     let sessionId: SessionId | null = null;
-    let inFlightPrompt: Promise<void> | null = null;
+    let promptTurn: PromptTurnState | null = null;
     let lastObservedMessageSeq = 0;
 
     const emit = (message: AgentMessage): void => {
@@ -156,6 +197,63 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
         getPermissionMode: () => args.permissionMode,
     });
 
+    const createPromptTurn = (promise: Promise<void>): PromptTurnState => {
+        const turn: PromptTurnState = {
+            promise,
+            settled: false,
+        };
+        promise.then(
+            () => {
+                turn.settled = true;
+            },
+            () => {
+                turn.settled = true;
+            },
+        );
+        return turn;
+    };
+
+    const probeRuntimeTurnLiveness = async (): Promise<OpenCodeRuntimeTurnLiveness> => {
+        const runtimeWithProbe = runtime as unknown as Readonly<{
+            probeTurnLiveness?: () => Promise<Readonly<{
+                active: boolean;
+                reason?: string;
+                lastActivityAtMs?: number | null;
+                diagnostics?: unknown;
+            }>>;
+        }>;
+        if (typeof runtimeWithProbe.probeTurnLiveness !== 'function') {
+            return {
+                active: false,
+                reason: 'opencode_runtime_liveness_probe_unavailable',
+            };
+        }
+        const liveness = await runtimeWithProbe.probeTurnLiveness();
+        return {
+            active: liveness.active,
+            reason: liveness.reason,
+            lastActivityAtMs: liveness.lastActivityAtMs,
+            diagnostics: normalizeDiagnostics(liveness.diagnostics),
+        };
+    };
+
+    const readTurnLiveness = async (): Promise<OpenCodeRuntimeTurnLiveness & Readonly<{
+        promptInFlight: boolean;
+        source: 'opencode-server-runtime';
+        turnInFlight: boolean;
+    }>> => {
+        const runtimeLiveness = await probeRuntimeTurnLiveness();
+        const turnInFlight = runtime.isTurnInFlight();
+        const promptInFlight = promptTurn !== null && !promptTurn.settled;
+        return {
+            ...runtimeLiveness,
+            active: runtimeLiveness.active === true,
+            promptInFlight,
+            source: 'opencode-server-runtime',
+            turnInFlight,
+        };
+    };
+
     const ensureStarted = async (resumeId?: SessionId): Promise<SessionId> => {
         if (sessionId && (!resumeId || resumeId === sessionId)) {
             return sessionId;
@@ -175,6 +273,7 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
             const startedSessionId = await ensureStarted();
             if (typeof initialPrompt === 'string' && initialPrompt.trim()) {
                 await this.sendPrompt(startedSessionId, initialPrompt);
+                await this.waitForResponseComplete?.();
             }
             return { sessionId: startedSessionId };
         },
@@ -205,15 +304,15 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
             }
             const promptWork = runtimePromptWork.finally(() => {
                 runtime.flushTurn();
-                if (inFlightPrompt === promptWork) {
-                    inFlightPrompt = null;
-                }
             });
-            inFlightPrompt = promptWork;
+            promptTurn = createPromptTurn(promptWork);
             void promptWork.catch(() => undefined);
         },
         async cancel(_sessionId: SessionId): Promise<void> {
             await runtime.cancel();
+        },
+        async probeTurnLiveness(_sessionId: SessionId) {
+            return readTurnLiveness();
         },
         onMessage(handler: AgentMessageHandler): void {
             handlers.add(handler);
@@ -221,8 +320,36 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
         offMessage(handler: AgentMessageHandler): void {
             handlers.delete(handler);
         },
-        async waitForResponseComplete(): Promise<void> {
-            await inFlightPrompt;
+        async waitForResponseComplete(timeoutMs?: number | null): Promise<void> {
+            const activePromptTurn = promptTurn;
+            if (!activePromptTurn) return;
+            try {
+                await activePromptTurn.promise;
+            } catch (error) {
+                if (isExecutionRunTimeoutError(error)) {
+                    throw error;
+                }
+                if (!isOpenCodeTurnTimeoutError(error)) {
+                    throw error;
+                }
+                const livenessProbe = await readTurnLiveness();
+                const message = readErrorMessage(error);
+                throw createExecutionRunTimeoutError({
+                    timeoutMs: readTimeoutMsFromError(error, timeoutMs),
+                    errorCode: 'provider_inactivity_timeout',
+                    livenessProbe: {
+                        ...livenessProbe,
+                        diagnostics: {
+                            ...(livenessProbe.diagnostics ?? {}),
+                            runtimeError: message,
+                        },
+                    },
+                });
+            } finally {
+                if (promptTurn === activePromptTurn) {
+                    promptTurn = null;
+                }
+            }
         },
         async dispose(): Promise<void> {
             await runtime.reset();
@@ -236,7 +363,7 @@ export function createOpenCodeServerExecutionRunBackend(args: Readonly<{
                 happyLibDir: args.cwd,
                 happyToolsDir: args.cwd,
             };
-            inFlightPrompt = null;
+            promptTurn = null;
             sessionId = null;
         },
     };

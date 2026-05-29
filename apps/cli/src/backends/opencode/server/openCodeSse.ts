@@ -1,7 +1,20 @@
+import { raceWithTimeout } from './raceWithTimeout';
+
 export type SseJsonSubscription<T> = Readonly<{
   close: () => void;
   done: Promise<void>;
 }>;
+
+export class OpenCodeSseReadIdleTimeoutError extends Error {
+  readonly code = 'OPENCODE_SSE_READ_IDLE_TIMEOUT';
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`OpenCode SSE read idle timeout after ${timeoutMs}ms`);
+    this.name = 'OpenCodeSseReadIdleTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 function concatDataLines(lines: string[]): string {
   if (lines.length === 0) return '';
@@ -36,6 +49,7 @@ export async function subscribeSseJson<T>(params: Readonly<{
   url: string;
   headers?: Record<string, string>;
   signal: AbortSignal;
+  readIdleTimeoutMs?: number | null;
   onMessage: (msg: T, meta: { id?: string }) => void;
 }>): Promise<SseJsonSubscription<T>> {
   const controller = new AbortController();
@@ -43,6 +57,13 @@ export async function subscribeSseJson<T>(params: Readonly<{
   params.signal.addEventListener('abort', onAbort, { once: true });
 
   const close = () => controller.abort('closed');
+  const readIdleTimeoutMs = (
+    typeof params.readIdleTimeoutMs === 'number'
+    && Number.isFinite(params.readIdleTimeoutMs)
+    && params.readIdleTimeoutMs > 0
+  )
+    ? Math.trunc(params.readIdleTimeoutMs)
+    : null;
 
   const done = (async () => {
     try {
@@ -63,7 +84,27 @@ export async function subscribeSseJson<T>(params: Readonly<{
       let buffer = '';
 
       while (true) {
-        const { done: readerDone, value } = await reader.read();
+        const readPromise = reader.read();
+        const readOutcome = readIdleTimeoutMs
+          ? await raceWithTimeout(readPromise, readIdleTimeoutMs).then((outcome) => (
+            outcome.type === 'timeout'
+              ? { type: 'timeout' as const, timeoutMs: readIdleTimeoutMs }
+              : outcome
+          ))
+          : { type: 'resolved' as const, value: await readPromise };
+
+        if (readOutcome.type === 'timeout') {
+          const error = new OpenCodeSseReadIdleTimeoutError(readOutcome.timeoutMs);
+          controller.abort(error);
+          void reader.cancel(error).catch(() => {});
+          throw error;
+        }
+
+        if (readOutcome.type === 'rejected') {
+          throw readOutcome.error;
+        }
+
+        const { done: readerDone, value } = readOutcome.value;
         if (readerDone) break;
         buffer += decoder.decode(value, { stream: true });
 

@@ -79,7 +79,7 @@ export async function pageOpenCodeTranscript(params: Readonly<{
     }
 
     const items = itemsReversed.reverse();
-    const nextEndIndex = firstReturnedIndex ?? endIndex;
+    const nextEndIndex = firstReturnedIndex ?? startIndex;
     const hasMore = nextEndIndex > 0;
     const nextCursor = hasMore ? encodeBackwardCursor({ v: 1, kind: 'opencodeBackward', endIndex: nextEndIndex }) : null;
     return { items, nextCursor, tailCursor, hasMore, ...(truncated ? { truncated } : {}) };

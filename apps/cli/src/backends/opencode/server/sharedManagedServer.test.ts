@@ -7,11 +7,31 @@ import type { ProviderCliLaunchSpec } from '@/backends/opencode/utils/resolveOpe
 
 import {
   readSharedManagedOpenCodeServerStateBestEffort,
+  resolveSharedManagedOpenCodeServerStatePathForEnv,
   resolveSharedManagedOpenCodeServerBaseUrl,
   stopSharedManagedOpenCodeServerFromState,
 } from './sharedManagedServer';
 
 describe('resolveSharedManagedOpenCodeServerBaseUrl', () => {
+  it('scopes the default managed-server state path by launch fingerprint without raw auth content', () => {
+    const envA = {
+      HOME: '/Users/example',
+      OPENCODE_AUTH_CONTENT: JSON.stringify({ openai: { type: 'api', key: 'sk-account-a' } }),
+    };
+    const envB = {
+      HOME: '/Users/example',
+      OPENCODE_AUTH_CONTENT: JSON.stringify({ openai: { type: 'api', key: 'sk-account-b' } }),
+    };
+
+    const statePathA = resolveSharedManagedOpenCodeServerStatePathForEnv(envA);
+    const statePathB = resolveSharedManagedOpenCodeServerStatePathForEnv(envB);
+
+    expect(statePathA).not.toBe(statePathB);
+    expect(statePathA).toContain('managed-servers');
+    expect(statePathA).not.toContain('sk-account-a');
+    expect(statePathA).not.toContain(envA.OPENCODE_AUTH_CONTENT);
+  });
+
   it('expands ~/ state path overrides against HOME when reading shared managed server state', async () => {
     const tempRoot = await mkdtemp(join(os.tmpdir(), 'opencode-managed-state-'));
     const homeDir = join(tempRoot, 'home');

@@ -3,30 +3,37 @@ import type { McpServerConfig } from '@/agent';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/ProviderEnforcedPermissionHandler';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata, PermissionMode } from '@/api/types';
-import type { ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import { configuration } from '@/configuration';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { logger } from '@/ui/logger';
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
-import { isChangeTitleToolNameAlias } from '@happier-dev/protocol';
+import { isChangeTitleToolNameAlias, normalizeOpenCodeAppSkills, type SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import { TurnChangeSetCollector } from '@/agent/tools/diff/turnChangeSetCollector';
 import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiffTool';
-import { drainPendingQueueMessages } from '@/agent/runtime/drainPendingQueueMessages';
 import { isAbortLikeError } from '@/agent/executionRuns/runtime/turnDelivery';
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
+import type { DrainPendingOptions, DrainPendingResult } from '@/agent/runtime/sessionInput/types';
 
 import type { OpenCodeGlobalEvent, OpenCodeModelRef, OpenCodePermissionRequest, OpenCodeQuestionRequest, OpenCodeSession } from './types';
 import { createOpenCodeServerRuntimeClient, type OpenCodeServerRuntimeClient } from './client';
 import { extractOpenCodeTextHistoryItems, importOpenCodeTextHistoryCommitted } from './openCodeSessionMessageImport';
-import { extractOpenCodeRuntimeRenderableTextFromPart } from './openCodeRenderableText';
 import { extractOpenCodeTaskChildSessionId, importOpenCodeTaskSidechainBestEffort } from './openCodeTaskSidechainImport';
 import { createOpenCodeTranscriptStreamBridge } from './openCodeTranscriptStreamBridge';
 import { asRecord, normalizeString, normalizeStringArray } from './openCodeParsing';
 import { extractOpenCodeErrorText } from './openCodeErrorText';
+import {
+  createOpenCodeConnectedServiceRuntimeAuthAdapter,
+  resolveOpenCodeRuntimeAuthSelection,
+} from '../connectedServices/createOpenCodeConnectedServiceRuntimeAuthAdapter';
 import { extractOpenCodeSessionMessageId, parseOpenCodeToolPart } from './openCodeMessageParsing';
 import { canonicalizeOpenCodeConfiguredMcpToolName } from './openCodeMcpToolNames';
-import { parseOpenCodeModelId, resolveOpenCodeDefaultProviderIdFromModelId } from './openCodeModelParsing';
+import {
+  isKnownUnavailableOpenCodeModel,
+  parseOpenCodeModelId,
+  resolveOpenCodeDefaultProviderIdFromModelId,
+} from './openCodeModelParsing';
 import { parsePermissionRequest } from './openCodePermissionParsing';
 import { readOpenCodeUsageTelemetryFromMessageInfo } from './openCodeUsageTelemetry';
 import { mapOpenCodeCompactionEventToAgentMessage, type OpenCodeCompactionAgentMessage } from './openCodeCompactionEvents';
@@ -48,10 +55,28 @@ import { resolvePreferredChangeTitleToolNameForProvider } from '@/agent/promptin
 import { extractOpenCodeFileDiff } from '../utils/extractOpenCodeFileDiff';
 import { readOpenCodeSessionRuntimeHandleFromMetadata } from '../utils/opencodeSessionAffinity';
 import { extractOpenCodeSessionDiffPayload } from './extractOpenCodeSessionDiffPayload';
+import {
+  readOpenCodeBackgroundTaskWakeSource,
+  openCodeToolPartLooksLikeBackgroundOutputContinuation,
+  openCodeToolPartLooksLikeBackgroundTaskLaunch,
+} from './openCodeBackgroundTaskSignals';
 import { buildOpenCodeThinkingModelOptionsFromVariants } from '../modelOptions/openCodeThinkingModelOption';
 import { readContextWindowTokensFromModelRecord } from '@/backends/modelCapabilities/contextWindowTokens';
 import { buildOpenCodeTodoWorkState, OPEN_CODE_TODO_WORK_STATE_OWNED_SOURCE_FAMILIES } from './workState';
 import { mergeSessionWorkStateMetadataV1 } from '@/session/workState/sessionWorkStateMetadata';
+import { readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { raceWithTimeout } from './raceWithTimeout';
+import {
+  buildOpenCodeProviderToolCallKey,
+  createOpenCodeProviderActivityTracker,
+  isTerminalOpenCodeToolPartStatus,
+} from './runtime/createOpenCodeProviderActivityTracker';
+import {
+  classifyOpenCodeAssistantCompletion,
+  classifyOpenCodeMessageForProjection,
+  classifyOpenCodePartForProjection,
+} from '../transcriptProjection';
 
 function mergeSessionWorkStateIntoMetadata(
   metadata: Metadata,
@@ -80,29 +105,41 @@ function isPromiseLike<T>(value: PromiseLike<T> | T | void): value is PromiseLik
   return Boolean(value) && typeof (value as PromiseLike<T>).then === 'function';
 }
 
-async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<
-  | { type: 'resolved'; value: T }
-  | { type: 'rejected'; error: unknown }
-  | { type: 'timeout' }
-> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise.then((value) => ({ type: 'resolved' as const, value })).catch((error) => ({ type: 'rejected' as const, error })),
-      new Promise<{ type: 'timeout' }>((resolve) => {
-        timer = setTimeout(() => resolve({ type: 'timeout' }), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 function normalizeEnvVar(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : null;
+}
+
+function openCodeRetryStatusLooksLikeRateLimit(message: string): boolean {
+  return /\brate\s+limit\b/iu.test(message);
+}
+
+function openCodeRetryStatusLooksLikeUsageLimit(message: string): boolean {
+  return /\b(usage\s+limit|quota|limit\s+reached|insufficient\s+credits|billing)\b/iu.test(message);
+}
+
+function buildOpenCodeRetryStatusError(status: Record<string, unknown>): Error {
+  const message = normalizeString(status.message) || 'OpenCode session is waiting before retrying';
+  const retryNextAt = normalizeNonNegativeInteger(status.next);
+  const retryAfterMs = retryNextAt === null ? null : Math.max(0, retryNextAt - Date.now());
+  const attempt = normalizeNonNegativeInteger(status.attempt);
+  const error = new Error(message);
+  error.name = openCodeRetryStatusLooksLikeRateLimit(message)
+    ? 'GoUsageLimitError'
+    : openCodeRetryStatusLooksLikeUsageLimit(message)
+    ? 'FreeUsageLimitError'
+    : 'OpenCodeRetryStatusError';
+  return Object.assign(error, {
+    code: 'opencode_session_retry',
+    type: 'opencode_session_retry',
+    ...(retryAfterMs === null ? {} : { headers: { 'retry-after-ms': String(retryAfterMs) } }),
+    ...(attempt === null ? {} : { metadata: { attempt } }),
+  });
 }
 
 class OpenCodeControlPlaneRequestListError extends Error {
@@ -119,6 +156,35 @@ class OpenCodeControlPlaneRequestListError extends Error {
   }
 }
 
+const OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE = 'opencode_idle_without_terminal_assistant';
+
+function openCodeErrorLooksLikeContextOverflow(error: unknown): boolean {
+  const text = (extractOpenCodeErrorText(error) ?? '').trim().toLowerCase();
+  if (!text) return false;
+  return (
+    /\bcontext\s+(length|window|limit|overflow)\b/u.test(text)
+    || /\b(maximum|max)\s+(context|token|tokens)\b/u.test(text)
+    || /\btoken\s+(limit|budget|window)\b/u.test(text)
+    || /\btoo\s+many\s+tokens\b/u.test(text)
+  );
+}
+
+function buildOpenCodePromptOptionPayload(configOverrides: Readonly<Record<string, unknown>>): Readonly<{
+  variant?: string;
+  config?: Record<string, unknown>;
+}> {
+  const variant = typeof configOverrides.variant === 'string' ? configOverrides.variant.trim() : '';
+  const config: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(configOverrides)) {
+    if (key === 'variant') continue;
+    config[key] = value;
+  }
+  return {
+    ...(variant ? { variant } : {}),
+    ...(Object.keys(config).length > 0 ? { config } : {}),
+  };
+}
+
 export type OpenCodeServerRuntimeDeps = Readonly<{
   createClient?: typeof createOpenCodeServerRuntimeClient;
 }>;
@@ -133,7 +199,8 @@ export function createOpenCodeServerRuntime(params: {
   onThinkingChange: (thinking: boolean) => void;
   getPermissionMode?: () => PermissionMode | null | undefined;
   pendingQueue?: Readonly<{
-    popPendingMessage: () => Promise<boolean>;
+    drainPending: (opts?: DrainPendingOptions) => Promise<DrainPendingResult>;
+    shouldDrainPendingMessages?: () => boolean;
     maxPopPerWake?: number;
     drainAfterStartOrLoad?: boolean;
   }>;
@@ -141,15 +208,44 @@ export function createOpenCodeServerRuntime(params: {
   const provider: ACPProvider = 'opencode';
   const createClient = deps.createClient ?? createOpenCodeServerRuntimeClient;
   const env = params.env ?? process.env;
+  const runtimeAuthAdapter = createOpenCodeConnectedServiceRuntimeAuthAdapter();
   const shapeLogger = createEventShapeLoggerForLog({ logger, scope: 'opencode-server' });
+  let activeLifecycleMarkerId: string | null = null;
+  const ensureActiveLifecycleMarkerId = (): string => {
+    activeLifecycleMarkerId ??= randomUUID();
+    return activeLifecycleMarkerId;
+  };
   const surfaceOpenCodeRuntimeFailure = (
-    cause: 'session_error' | 'stream_error' | 'permission_blocked',
+    cause: 'status_error' | 'session_error' | 'stream_error' | 'permission_blocked',
     error: unknown,
+    providerTurnId: string | null = activeLifecycleMarkerId,
   ): void => {
+    const runtimeAuthClassification = runtimeAuthAdapter.classifyRuntimeAuthFailure({
+      target: { agentId: provider, targetId: params.session.sessionId },
+      error,
+      selection: resolveOpenCodeRuntimeAuthSelection({
+        selections: readConnectedServiceChildSelectionsFromEnv(env),
+        error,
+      }),
+    });
+    const errorWithClassification = runtimeAuthClassification
+      ? error instanceof Error
+        ? Object.assign(error, { runtimeAuthClassification })
+        : { ...(asRecord(error) ?? {}), runtimeAuthClassification }
+      : error;
+    if (runtimeAuthClassification) {
+      void reportConnectedServiceRuntimeAuthFailureToDaemon({
+        sessionId: params.session.sessionId,
+        switchesThisTurn: 0,
+        classification: runtimeAuthClassification,
+        logPrefix: '[opencode]',
+      });
+    }
     void surfacePrimarySessionRuntimeIssue({
       cause,
       provider,
-      error,
+      providerTurnId,
+      error: errorWithClassification,
       session: params.session,
     }).catch((surfaceError) => {
       logger.debug('[opencode] Failed to persist primary session runtime issue (non-fatal)', surfaceError);
@@ -192,7 +288,14 @@ export function createOpenCodeServerRuntime(params: {
   let turnDeferred: Deferred<void> | null = null;
   let turnInFlight = false;
   let turnPromptActive = false;
+  let pendingProviderAutonomousBackgroundWake: {
+    source: 'native-background-task' | 'oh-my-openagent-background-task';
+    observedAtMs: number;
+    messageId?: string;
+  } | null = null;
   let turnActivitySeen = false;
+  let turnLastActivityAtMs = 0;
+  let watchdogFired = false;
   let turnUserMessageId: string | null = null;
   let turnPromptLocalId: string | null = null;
   let turnPromptTextForBackfill = '';
@@ -202,15 +305,23 @@ export function createOpenCodeServerRuntime(params: {
   const turnUserMessageIds = new Set<string>();
   const turnAssistantMessageIds = new Set<string>();
   const turnStreamedAssistantMessageIds = new Set<string>();
-  const turnBackfilledAssistantMessageIds = new Set<string>();
-  let turnAssistantBackfillAttempts = 0;
-  let turnAssistantBackfillFirstAttemptAtMs: number | null = null;
-  let turnAssistantBackfillIdleAttempted = false;
+  const turnLiveKnownAssistantMessageIds = new Set<string>();
+  const turnLiveKnownToolCallKeys = new Set<string>();
+  let turnAssistantTranscriptActivitySeen = false;
+  let turnTerminalAssistantEvidenceSeen = false;
+  let turnRequiresPostToolAssistantCompletion = false;
+  let idleWithoutTerminalAssistantTimer: ReturnType<typeof setTimeout> | null = null;
   let idleSignalSeen = false;
   let idleSignalSeenViaControlPlane = false;
   let statusPollBusySeen = false;
   let resolveOnIdleInFlight = false;
   let turnControlAbort: AbortController | null = null;
+  const providerActivityTracker = createOpenCodeProviderActivityTracker();
+  let turnAwaitingUserResponseCount = 0;
+  let compactionInProgress = false;
+  let retryBackoffUntilMs: number | null = null;
+  let firstGenericRetryAtMs: number | null = null;
+  let genericRetryNoticeSentForTurn = false;
   let handledPermissionIds: Set<string> | null = null;
   let handledQuestionIds: Set<string> | null = null;
   let inFlightPermissionIds: Set<string> | null = null;
@@ -218,9 +329,8 @@ export function createOpenCodeServerRuntime(params: {
   let userMessageIdLastTimestampMs = 0;
   let userMessageIdCounter = 0;
   const observedRemoteTextMessageIds = new Set<string>();
-  let liveHistorySyncPromise: Promise<void> | null = null;
   let suppressSessionErrorAbortNotificationForSessionId: string | null = null;
-  let queuedLiveHistorySyncAllowAssistantReplies = false;
+  let abortSuppressionGeneration = 0;
   const turnChangeCollector = new TurnChangeSetCollector({
     provider,
     snapshotUnifiedDiff: true,
@@ -242,11 +352,29 @@ export function createOpenCodeServerRuntime(params: {
     buildOpenCodeSessionPermissionRuleset(params.getPermissionMode?.() ?? 'default');
 
   const partTypeByPartKey = new Map<string, string>();
+  const suppressedLivePartKeys = new Set<string>();
+  const suppressedLiveMessageKeys = new Set<string>();
   const toolCallSentByCallId = new Set<string>();
   const toolResultSentByCallId = new Set<string>();
   const observedToolPartByCallKey = new Map<string, NonNullable<ReturnType<typeof parseOpenCodeToolPart>>>();
 
-  const buildOpenCodeToolCallKey = (remoteSessionId: string, callId: string): string => `${remoteSessionId}:${callId}`;
+  const buildOpenCodeToolCallKey = buildOpenCodeProviderToolCallKey;
+  const buildLivePartKey = (remoteSessionId: string, partId: string): string => `${remoteSessionId}:${partId}`;
+  const buildLiveMessageKey = (remoteSessionId: string, messageId: string): string => `${remoteSessionId}:${messageId}`;
+  let discardSuppressedLiveMessageStream: ((remoteSessionId: string, messageId: string) => void) | null = null;
+
+  const suppressLiveMessageProjection = (remoteSessionId: string, messageId: string): void => {
+    if (!remoteSessionId || !messageId) return;
+    suppressedLiveMessageKeys.add(buildLiveMessageKey(remoteSessionId, messageId));
+    pendingInlinePartSnapshotsByMessagePartKey.delete(`${remoteSessionId}:${messageId}:reasoning`);
+    pendingInlinePartSnapshotsByMessagePartKey.delete(`${remoteSessionId}:${messageId}:text`);
+    discardSuppressedLiveMessageStream?.(remoteSessionId, messageId);
+  };
+
+  const suppressLivePartProjection = (remoteSessionId: string, partId: string, messageId: string): void => {
+    if (remoteSessionId && partId) suppressedLivePartKeys.add(buildLivePartKey(remoteSessionId, partId));
+    suppressLiveMessageProjection(remoteSessionId, messageId);
+  };
 
   const resolveOpenCodeToolNameForAcp = (toolRaw: string): string => {
     const normalizedTool = toolRaw.trim();
@@ -314,6 +442,145 @@ export function createOpenCodeServerRuntime(params: {
     }
 
     return null;
+  };
+
+  const observeAssistantCompletionInfoForActiveTurn = (info: Record<string, unknown>): boolean => {
+    if (!turnPromptActive) return false;
+    const projection = classifyOpenCodeMessageForProjection(info);
+    const completion = classifyOpenCodeAssistantCompletion(info);
+    const messageID = completion.messageId || projection.messageId || normalizeString(info.id);
+    if (!messageID) return false;
+
+    if (completion.kind === 'ignored_internal') {
+      suppressLiveMessageProjection(sessionId ?? '', messageID);
+      return false;
+    }
+    if (projection.kind !== 'assistant_transcript') return false;
+
+    noteAssistantMessageIdForActiveTurn(messageID);
+    turnLiveKnownAssistantMessageIds.add(messageID);
+    turnAssistantTranscriptActivitySeen = true;
+    markTurnActivity();
+
+    if (completion.kind === 'continuation') {
+      turnRequiresPostToolAssistantCompletion = true;
+      turnTerminalAssistantEvidenceSeen = false;
+      return false;
+    }
+
+    if (completion.kind === 'terminal_success') {
+      compactionInProgress = false;
+      turnTerminalAssistantEvidenceSeen = true;
+      turnRequiresPostToolAssistantCompletion = false;
+      clearIdleWithoutTerminalAssistantTimer();
+      return true;
+    }
+
+    return false;
+  };
+
+  const refreshLiveKnownOpenCodeStateFromControlPlaneBestEffort = async (): Promise<void> => {
+    if (!turnDeferred) return;
+    if (!turnPromptActive) return;
+    if (!sessionId) return;
+    if (turnLiveKnownAssistantMessageIds.size === 0 && turnLiveKnownToolCallKeys.size === 0) return;
+
+    const c = await ensureClient();
+    const sessionIds = new Set<string>();
+    sessionIds.add(sessionId);
+    for (const callKey of turnLiveKnownToolCallKeys) {
+      const separatorIndex = callKey.indexOf(':');
+      const remoteSessionId = separatorIndex > 0 ? callKey.slice(0, separatorIndex) : '';
+      if (remoteSessionId) sessionIds.add(remoteSessionId);
+    }
+
+    let clearedCount = 0;
+    for (const remoteSessionId of sessionIds) {
+      let rawMessages: unknown;
+      try {
+        rawMessages = await c.sessionMessagesList({ sessionId: remoteSessionId });
+      } catch (error) {
+        logger.debug('[OpenCodeServer] failed to refresh live-known OpenCode state from session history (non-fatal)', {
+          sessionId: remoteSessionId,
+          error,
+        });
+        continue;
+      }
+      if (!Array.isArray(rawMessages)) continue;
+
+      for (const rawMessage of rawMessages) {
+        const message = asRecord(rawMessage);
+        if (!message) continue;
+        const info = asRecord(message.info);
+        const infoMessageId = normalizeString(info?.id);
+        if (remoteSessionId === sessionId && info && infoMessageId && turnLiveKnownAssistantMessageIds.has(infoMessageId)) {
+          observeAssistantCompletionInfoForActiveTurn(info);
+        }
+        const parts = Array.isArray(message.parts) ? message.parts : [];
+        for (const rawPart of parts) {
+          const parsed = parseOpenCodeToolPart(rawPart);
+          if (!parsed) continue;
+          if (parsed.sessionID !== remoteSessionId) continue;
+          const callKey = buildOpenCodeToolCallKey(parsed.sessionID, parsed.callID);
+          if (!turnLiveKnownToolCallKeys.has(callKey)) continue;
+          observedToolPartByCallKey.set(callKey, parsed);
+          const status = normalizeString(parsed.state.status);
+          if (!isTerminalOpenCodeToolPartStatus(status)) continue;
+          if (!toolResultSentByCallId.has(callKey)) {
+            await sendToolFromPart(parsed, null, turnChangeCollectorEpoch);
+          }
+          clearedCount += 1;
+        }
+      }
+    }
+
+    if (clearedCount > 0) {
+      logger.debug('[OpenCodeServer] refreshed terminal live-known OpenCode tool calls from session history', {
+        clearedCount,
+      });
+    }
+  };
+
+  const refreshCurrentTurnProviderActivityFromHistoryBestEffort = async (): Promise<void> => {
+    if (!turnDeferred) return;
+    if (!turnPromptActive) return;
+    if (!sessionId) return;
+
+    let rawMessages: unknown;
+    try {
+      const c = await ensureClient();
+      rawMessages = await c.sessionMessagesList({ sessionId });
+    } catch (error) {
+      logger.debug('[OpenCodeServer] failed to refresh current-turn provider activity from session history (non-fatal)', {
+        sessionId,
+        error,
+      });
+      return;
+    }
+    if (!Array.isArray(rawMessages)) return;
+
+    for (const rawMessage of rawMessages) {
+      const message = asRecord(rawMessage);
+      if (!message) continue;
+      const info = asRecord(message.info);
+      const messageId = normalizeString(info?.id);
+      if (messageId && turnPrePromptMessageIdsAll?.has(messageId)) continue;
+      const messageMatchesLiveTurn = messageId ? turnLiveKnownAssistantMessageIds.has(messageId) : false;
+      const parts = Array.isArray(message.parts) ? message.parts : [];
+      for (const rawPart of parts) {
+        const parsed = parseOpenCodeToolPart(rawPart);
+        if (!parsed) continue;
+        if (parsed.sessionID !== sessionId) continue;
+        const callKey = buildOpenCodeToolCallKey(parsed.sessionID, parsed.callID);
+        if (!messageMatchesLiveTurn && !turnLiveKnownToolCallKeys.has(callKey)) continue;
+        observedToolPartByCallKey.set(callKey, parsed);
+        providerActivityTracker.observeToolPart({
+          part: parsed,
+          source: 'history',
+          partId: normalizeString(asRecord(rawPart)?.id),
+        });
+      }
+    }
   };
 
   const resolvePermissionAskedToolBridge = async (req: OpenCodePermissionRequest): Promise<{
@@ -407,6 +674,7 @@ export function createOpenCodeServerRuntime(params: {
         for (const key of keys) {
           const modelRec = modelsRec[key];
           const modelId = normalizeString(asRecord(modelRec)?.id) || key;
+          if (isKnownUnavailableOpenCodeModel({ providerID: providerId, modelID: modelId })) continue;
           const modelStatus = normalizeString(asRecord(modelRec)?.status);
           if (modelStatus && modelStatus !== 'active') continue;
           const capabilities = asRecord((asRecord(modelRec) as any)?.capabilities);
@@ -437,9 +705,11 @@ export function createOpenCodeServerRuntime(params: {
 
       const currentModeId = selectedAgent
         ?? (availableModes.find((m) => m.id === 'build')?.id ?? availableModes[0]?.id ?? 'build');
+      const availableModelIds = new Set(availableModels.map((model) => model.id));
+      const selectedModelId = selectedModel ? `${selectedModel.providerID}/${selectedModel.modelID}` : '';
       const currentModelId =
-        (selectedModel ? `${selectedModel.providerID}/${selectedModel.modelID}` : '')
-        || defaultModelId
+        (selectedModelId && availableModelIds.has(selectedModelId) ? selectedModelId : '')
+        || (defaultModelId && availableModelIds.has(defaultModelId) ? defaultModelId : '')
         || availableModels[0]?.id
         || '';
       currentContextWindowTokens =
@@ -521,6 +791,8 @@ export function createOpenCodeServerRuntime(params: {
       if (!models) continue;
       for (const [modelKey, modelValue] of Object.entries(models)) {
         const model = asRecord(modelValue);
+        const modelID = normalizeString(model?.id) || modelKey;
+        if (isKnownUnavailableOpenCodeModel({ providerID: providerId, modelID })) continue;
         const status = normalizeString(model?.status);
         if (status && status !== 'active') continue;
         const capabilities = asRecord(model?.capabilities);
@@ -563,10 +835,14 @@ export function createOpenCodeServerRuntime(params: {
         };
 
         const trackPendingEventWork = (work: Promise<void>): Promise<void> => {
-          const tracked = Promise.resolve(work).finally(() => {
-            finalizeEvent();
-            if (pendingEventWork === tracked) pendingEventWork = null;
-          });
+          const tracked = Promise.resolve(work)
+            .catch((error) => {
+              logger.debug('[OpenCodeServer] Failed handling async event (non-fatal)', error);
+            })
+            .finally(() => {
+              finalizeEvent();
+              if (pendingEventWork === tracked) pendingEventWork = null;
+            });
           pendingEventWork = tracked;
           return tracked;
         };
@@ -597,19 +873,98 @@ export function createOpenCodeServerRuntime(params: {
   let nextProviderEventSequence = 0;
   let completedProviderEventSequence = 0;
   let pendingTurnToolForwardingWork = new Set<Promise<void>>();
+  let activeKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  let activeKeepAliveOpen = false;
+
+  const stopActiveKeepAliveTimer = (): void => {
+    if (!activeKeepAliveTimer) return;
+    clearInterval(activeKeepAliveTimer);
+    activeKeepAliveTimer = null;
+  };
+
+  const startActiveKeepAliveTimer = (): void => {
+    if (activeKeepAliveTimer) return;
+    activeKeepAliveTimer = setInterval(() => {
+      params.session.keepAlive(true, 'remote');
+    }, activeKeepAliveIntervalMs);
+    activeKeepAliveTimer.unref?.();
+  };
+
+  const markOpenCodeSessionActive = (): void => {
+    startActiveKeepAliveTimer();
+    if (activeKeepAliveOpen) return;
+    activeKeepAliveOpen = true;
+    params.session.keepAlive(true, 'remote');
+  };
+
+  const markOpenCodeSessionInactive = (): void => {
+    stopActiveKeepAliveTimer();
+    if (!activeKeepAliveOpen) return;
+    activeKeepAliveOpen = false;
+    params.session.keepAlive(false, 'remote');
+  };
+
   const setThinking = (value: boolean) => {
-    if (value === currentThinking) return;
+    if (value === currentThinking) {
+      if (value) {
+        startActiveKeepAliveTimer();
+      } else {
+        markOpenCodeSessionInactive();
+      }
+      return;
+    }
     currentThinking = value;
-    params.session.keepAlive(value, 'remote');
+    if (value) {
+      markOpenCodeSessionActive();
+    } else {
+      markOpenCodeSessionInactive();
+    }
     params.onThinkingChange(value);
   };
 
+  const openCodePrimarySessionHasActiveProviderWork = (): boolean =>
+    providerActivityTracker.hasActiveProviderWork() || compactionInProgress;
+
+  const settleThinkingOnOpenCodeIdleSignal = (): void => {
+    if (
+      openCodePrimarySessionHasActiveProviderWork()
+      || (Boolean(turnDeferred) && (!turnTerminalAssistantEvidenceSeen || turnRequiresPostToolAssistantCompletion))
+    ) {
+      markOpenCodeSessionActive();
+      return;
+    }
+    setThinking(false);
+  };
+
+  const settleThinkingAfterProviderWorkUpdate = (): void => {
+    if (openCodePrimarySessionHasActiveProviderWork()) {
+      markOpenCodeSessionActive();
+      return;
+    }
+    if (turnPromptActive) {
+      if (idleSignalSeen && turnTerminalAssistantEvidenceSeen && !turnRequiresPostToolAssistantCompletion) {
+        setThinking(false);
+      }
+      return;
+    }
+    setThinking(false);
+  };
+
+  const clearIdleWithoutTerminalAssistantTimer = (): void => {
+    if (!idleWithoutTerminalAssistantTimer) return;
+    clearTimeout(idleWithoutTerminalAssistantTimer);
+    idleWithoutTerminalAssistantTimer = null;
+  };
+
   const resetTurnEventState = () => {
+    clearIdleWithoutTerminalAssistantTimer();
     pendingTurnToolForwardingWork = new Set<Promise<void>>();
     clearStreamWriters();
     turnStreamKey = null;
     turnPromptActive = false;
     turnActivitySeen = false;
+    turnLastActivityAtMs = 0;
+    watchdogFired = false;
     turnUserMessageId = null;
     turnPromptLocalId = null;
     turnPromptTextForBackfill = '';
@@ -619,23 +974,31 @@ export function createOpenCodeServerRuntime(params: {
     turnUserMessageIds.clear();
     turnAssistantMessageIds.clear();
     turnStreamedAssistantMessageIds.clear();
-    turnBackfilledAssistantMessageIds.clear();
-    turnAssistantBackfillAttempts = 0;
-    turnAssistantBackfillFirstAttemptAtMs = null;
-    turnAssistantBackfillIdleAttempted = false;
+    turnLiveKnownAssistantMessageIds.clear();
+    turnLiveKnownToolCallKeys.clear();
+    turnAssistantTranscriptActivitySeen = false;
+    turnTerminalAssistantEvidenceSeen = false;
+    turnRequiresPostToolAssistantCompletion = false;
     idleSignalSeen = false;
     idleSignalSeenViaControlPlane = false;
     statusPollBusySeen = false;
     resolveOnIdleInFlight = false;
+    turnAwaitingUserResponseCount = 0;
+    compactionInProgress = false;
+    retryBackoffUntilMs = null;
+    firstGenericRetryAtMs = null;
+    genericRetryNoticeSentForTurn = false;
     sidechainIdByRemoteSessionId.clear();
     sidechainStreamSeenBySidechainId.clear();
     pendingTaskSidechainImportsBySidechainId.clear();
     pendingTaskChildSessionDiscoveryCallKeys.clear();
-      accumulatedTextByPartKey.clear();
-      pendingInlinePartSnapshotsByMessagePartKey.clear();
-      partTypeByPartKey.clear();
-      toolCallSentByCallId.clear();
-      toolResultSentByCallId.clear();
+    accumulatedTextByPartKey.clear();
+    pendingInlinePartSnapshotsByMessagePartKey.clear();
+    partTypeByPartKey.clear();
+    suppressedLivePartKeys.clear();
+    suppressedLiveMessageKeys.clear();
+    toolCallSentByCallId.clear();
+    toolResultSentByCallId.clear();
     if (turnControlAbort) {
       try {
         turnControlAbort.abort();
@@ -648,6 +1011,308 @@ export function createOpenCodeServerRuntime(params: {
     handledQuestionIds = null;
     inFlightPermissionIds = null;
     inFlightQuestionIds = null;
+    activeLifecycleMarkerId = null;
+    pendingProviderAutonomousBackgroundWake = null;
+  };
+
+  const armSessionAbortErrorSuppression = (targetSessionId: string): number => {
+    abortSuppressionGeneration += 1;
+    suppressSessionErrorAbortNotificationForSessionId = targetSessionId;
+    return abortSuppressionGeneration;
+  };
+
+  const clearSessionAbortErrorSuppression = (targetSessionId: string, generation: number): void => {
+    if (
+      abortSuppressionGeneration === generation
+      && suppressSessionErrorAbortNotificationForSessionId === targetSessionId
+    ) {
+      suppressSessionErrorAbortNotificationForSessionId = null;
+    }
+  };
+
+  const abortOpenCodeSessionAfterFailedTurn = (targetSessionId: string): void => {
+    const generation = armSessionAbortErrorSuppression(targetSessionId);
+    const runAbort = (async () => {
+      const c = await ensureClient();
+      const abortPromise = c.sessionAbort({ sessionId: targetSessionId });
+      const outcome = await Promise.race([
+        abortPromise.then(() => 'done' as const),
+        new Promise<'timeout'>((resolve) => {
+          const timer = setTimeout(() => resolve('timeout'), abortTimeoutMs);
+          timer.unref?.();
+        }),
+      ]).catch(() => 'done' as const);
+      if (outcome === 'timeout') {
+        void abortPromise.catch(() => {});
+      }
+    })();
+    void runAbort
+      .catch((error) => {
+        logger.debug('[OpenCodeServer] OpenCode session abort after failed turn failed (non-fatal)', {
+          sessionId: targetSessionId,
+          error,
+        });
+      })
+      .finally(() => {
+        clearSessionAbortErrorSuppression(targetSessionId, generation);
+      });
+  };
+
+  const markTurnActivity = (): void => {
+    clearIdleWithoutTerminalAssistantTimer();
+    turnActivitySeen = true;
+    turnLastActivityAtMs = Date.now();
+    retryBackoffUntilMs = null;
+    firstGenericRetryAtMs = null;
+  };
+
+  const sleepUntilAbort = async (signal: AbortSignal, delayMs: number): Promise<void> => {
+    if (signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      const onAbort = () => {
+        cleanup();
+        clearTimeout(timer);
+        resolve();
+      };
+      const cleanup = () => {
+        signal.removeEventListener('abort', onAbort);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, delayMs);
+      timer.unref?.();
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  };
+
+  const fireTurnDeadlockGuard = (input?: {
+    error?: Error;
+    cause?: 'stream_error' | 'status_error';
+    interruptedReason?: string;
+    diagnostics?: string;
+  }): void => {
+    if (watchdogFired || !turnDeferred || !turnPromptActive) return;
+    watchdogFired = true;
+    const diagnostics = input?.diagnostics ? ` (${input.diagnostics})` : '';
+    const error = input?.error ?? new Error(`OpenCode turn timed out after ${turnInactivityTimeoutMs}ms without provider activity${diagnostics}`);
+    const cause = input?.cause ?? 'stream_error';
+    const interruptedReason = input?.interruptedReason ?? 'turn_deadlock_guard';
+    if (sessionId) abortOpenCodeSessionAfterFailedTurn(sessionId);
+    try {
+      turnControlAbort?.abort();
+    } catch {
+      // ignore
+    }
+    setThinking(false);
+    void flushAndClearStreamWriters({ reason: 'abort', interruptedReason });
+    surfaceOpenCodeRuntimeFailure(cause, error);
+    rejectTurn(error);
+  };
+
+  type FinalTurnLivenessProbeResult = {
+    active: boolean;
+    diagnostics: string;
+  };
+
+  const refreshActivityFromFinalTurnLivenessProbe = (): void => {
+    markTurnActivity();
+    markOpenCodeSessionActive();
+  };
+
+  const buildFinalTurnLivenessProbeDiagnostics = (input: {
+    status: string;
+    statusError?: string;
+    pendingPermissions: number | null;
+    pendingQuestions: number | null;
+    permissionError?: string;
+    questionError?: string;
+    providerWork: boolean;
+    userWaits: number;
+    toolForwarding: number;
+    taskDiscovery: number;
+    taskImports: number;
+    compaction: boolean;
+  }): string => {
+    const parts = [
+      `final liveness probe: status=${input.status}`,
+      `pendingPermissions=${input.pendingPermissions ?? 'unknown'}`,
+      `pendingQuestions=${input.pendingQuestions ?? 'unknown'}`,
+      `providerWork=${input.providerWork ? 'yes' : 'no'}`,
+      `userWaits=${input.userWaits}`,
+      `toolForwarding=${input.toolForwarding}`,
+      `taskDiscovery=${input.taskDiscovery}`,
+      `taskImports=${input.taskImports}`,
+      `compaction=${input.compaction ? 'yes' : 'no'}`,
+    ];
+    if (input.statusError) parts.push(`statusError=${input.statusError}`);
+    if (input.permissionError) parts.push(`permissionError=${input.permissionError}`);
+    if (input.questionError) parts.push(`questionError=${input.questionError}`);
+    return parts.join(', ');
+  };
+
+  const probeFinalTurnLivenessBeforeDeadlockAbort = async (): Promise<FinalTurnLivenessProbeResult> => {
+    const providerWork = providerActivityTracker.hasActiveProviderWork();
+    const userWaits = turnAwaitingUserResponseCount;
+    const toolForwarding = pendingTurnToolForwardingWork.size;
+    const taskDiscovery = pendingTaskChildSessionDiscoveryCallKeys.size;
+    const taskImports = pendingTaskSidechainImportsBySidechainId.size;
+    const compaction = compactionInProgress || Boolean(activeManualCompaction);
+
+    if (providerWork || userWaits > 0 || toolForwarding > 0 || taskDiscovery > 0 || taskImports > 0 || compaction) {
+      refreshActivityFromFinalTurnLivenessProbe();
+      return {
+        active: true,
+        diagnostics: buildFinalTurnLivenessProbeDiagnostics({
+          status: 'not_checked_local_activity',
+          pendingPermissions: null,
+          pendingQuestions: null,
+          providerWork,
+          userWaits,
+          toolForwarding,
+          taskDiscovery,
+          taskImports,
+          compaction,
+        }),
+      };
+    }
+
+    let status = 'not_checked';
+    let statusError: string | undefined;
+    if (sessionId) {
+      try {
+        const c = await ensureClient();
+        const statuses = await c.sessionStatusList();
+        resetControlPlaneFailures('status');
+        const map = statuses && typeof statuses === 'object' && !Array.isArray(statuses)
+          ? (statuses as Record<string, unknown>)
+          : null;
+        const rec = map ? map[sessionId] : null;
+        const statusType = normalizeString(asRecord(rec)?.type);
+        status = statusType || (rec == null ? 'missing' : 'unknown');
+        if (statusType === 'busy') {
+          statusPollBusySeen = true;
+          refreshActivityFromFinalTurnLivenessProbe();
+          return {
+            active: true,
+            diagnostics: buildFinalTurnLivenessProbeDiagnostics({
+              status,
+              pendingPermissions: null,
+              pendingQuestions: null,
+              providerWork,
+              userWaits,
+              toolForwarding,
+              taskDiscovery,
+              taskImports,
+              compaction,
+            }),
+          };
+        }
+        if (statusType === 'retry' && rec && typeof rec === 'object' && !Array.isArray(rec)) {
+          failActiveTurnOnRetryStatus(rec as Record<string, unknown>);
+          return {
+            active: true,
+            diagnostics: buildFinalTurnLivenessProbeDiagnostics({
+              status,
+              pendingPermissions: null,
+              pendingQuestions: null,
+              providerWork,
+              userWaits,
+              toolForwarding,
+              taskDiscovery,
+              taskImports,
+              compaction,
+            }),
+          };
+        }
+      } catch (error) {
+        maybeAbortTurnOnControlPlaneFailure('status', error);
+        status = 'error';
+        statusError = extractOpenCodeErrorText(error) ?? String(error);
+      }
+    }
+
+    let pendingPermissions: number | null = null;
+    let pendingQuestions: number | null = null;
+    let permissionError: string | undefined;
+    let questionError: string | undefined;
+    try {
+      const handledPerms = handledPermissionIds ?? new Set<string>();
+      const inFlightPerms = inFlightPermissionIds ?? new Set<string>();
+      const permissions = await listPendingPermissionRequests();
+      pendingPermissions = permissions.filter((permission) => !handledPerms.has(permission.id) || inFlightPerms.has(permission.id)).length;
+    } catch (error) {
+      permissionError = extractOpenCodeErrorText(error) ?? String(error);
+    }
+    try {
+      const handledQs = handledQuestionIds ?? new Set<string>();
+      const inFlightQs = inFlightQuestionIds ?? new Set<string>();
+      const questions = await listPendingQuestionRequests();
+      pendingQuestions = questions.filter((question) => !handledQs.has(question.id) || inFlightQs.has(question.id)).length;
+    } catch (error) {
+      questionError = extractOpenCodeErrorText(error) ?? String(error);
+    }
+
+    const active = (pendingPermissions ?? 0) > 0 || (pendingQuestions ?? 0) > 0;
+    if (active) refreshActivityFromFinalTurnLivenessProbe();
+    return {
+      active,
+      diagnostics: buildFinalTurnLivenessProbeDiagnostics({
+        status,
+        statusError,
+        pendingPermissions,
+        pendingQuestions,
+        permissionError,
+        questionError,
+        providerWork,
+        userWaits,
+        toolForwarding,
+        taskDiscovery,
+        taskImports,
+        compaction,
+      }),
+    };
+  };
+
+  const runTurnDeadlockGuard = async (signal: AbortSignal): Promise<void> => {
+    const checkEveryMs = Math.max(250, Math.min(1_000, Math.floor(turnInactivityTimeoutMs / 4)));
+    while (!signal.aborted) {
+      await sleepUntilAbort(signal, checkEveryMs);
+      if (signal.aborted) return;
+      if (!turnDeferred || !turnPromptActive || watchdogFired) continue;
+
+      const nowMs = Date.now();
+      if (providerActivityTracker.hasActiveProviderWork() || turnAwaitingUserResponseCount > 0 || compactionInProgress || activeManualCompaction) {
+        turnLastActivityAtMs = nowMs;
+        continue;
+      }
+
+      if (firstGenericRetryAtMs !== null) {
+        if (nowMs - firstGenericRetryAtMs > retryMaxWaitMs) {
+          fireTurnDeadlockGuard({
+            error: new Error(`OpenCode retry did not recover within ${retryMaxWaitMs}ms`),
+            cause: 'status_error',
+            interruptedReason: 'retry_timeout',
+          });
+          continue;
+        }
+      }
+
+      if (retryBackoffUntilMs !== null && nowMs < retryBackoffUntilMs) {
+        turnLastActivityAtMs = nowMs;
+        continue;
+      }
+      if (retryBackoffUntilMs !== null) {
+        retryBackoffUntilMs = null;
+      }
+
+      if (nowMs - turnLastActivityAtMs >= turnInactivityTimeoutMs) {
+        const finalLiveness = await probeFinalTurnLivenessBeforeDeadlockAbort();
+        if (finalLiveness.active) continue;
+        fireTurnDeadlockGuard({ diagnostics: finalLiveness.diagnostics });
+      }
+    }
   };
 
   const beginFreshTurnChangeCollection = (): void => {
@@ -660,6 +1325,7 @@ export function createOpenCodeServerRuntime(params: {
     if (!turnDeferred) return;
     const d = turnDeferred;
     turnDeferred = null;
+    turnInFlight = false;
     resetTurnEventState();
     beginFreshTurnChangeCollection();
     d.resolve();
@@ -669,11 +1335,78 @@ export function createOpenCodeServerRuntime(params: {
     if (!turnDeferred) return;
     const d = turnDeferred;
     turnDeferred = null;
+    turnInFlight = false;
     // Turns can be rejected from background callbacks; attach a handler to avoid unhandledRejection warnings.
     void d.promise.catch(() => undefined);
     resetTurnEventState();
     beginFreshTurnChangeCollection();
     d.reject(error);
+  };
+
+  const recordProviderAutonomousBackgroundWake = (input: Readonly<{
+    source: 'native-background-task' | 'oh-my-openagent-background-task';
+    messageId?: string | null;
+  }>): void => {
+    if (!sessionId || turnPromptActive) return;
+    pendingProviderAutonomousBackgroundWake = {
+      source: input.source,
+      observedAtMs: Date.now(),
+      ...(input.messageId ? { messageId: input.messageId } : null),
+    };
+  };
+
+  const beginProviderAutonomousBackgroundTurnIfNeeded = (input: Readonly<{
+    reason: 'background-wake' | 'background-output-tool';
+  }>): boolean => {
+    if (turnPromptActive) return false;
+    if (!sessionId) return false;
+    if (!pendingProviderAutonomousBackgroundWake && input.reason !== 'background-output-tool') return false;
+
+    resetTurnEventState();
+    turnDeferred = createDeferred<void>();
+    void turnDeferred.promise.catch(() => undefined);
+    turnInFlight = true;
+    turnPromptActive = true;
+    turnActivitySeen = true;
+    turnLastActivityAtMs = Date.now();
+    handledPermissionIds = new Set<string>();
+    handledQuestionIds = new Set<string>();
+    inFlightPermissionIds = new Set<string>();
+    inFlightQuestionIds = new Set<string>();
+    const controlAbort = new AbortController();
+    turnControlAbort = controlAbort;
+    void runTurnDeadlockGuard(controlAbort.signal).catch((error) => {
+      logger.debug('[OpenCodeServer] provider-autonomous turn deadlock guard failed (non-fatal)', error);
+    });
+    beginFreshTurnChangeCollection();
+    activeLifecycleMarkerId = randomUUID();
+    pendingProviderAutonomousBackgroundWake = null;
+    params.session.sendAgentMessage(provider, { type: 'task_started', id: activeLifecycleMarkerId });
+    setThinking(true);
+    return true;
+  };
+
+  const failActiveTurnOnRetryStatus = (statusRec: Record<string, unknown>): void => {
+    if (!turnDeferred || !turnPromptActive) return;
+    const error = buildOpenCodeRetryStatusError(statusRec);
+    if (error.name === 'OpenCodeRetryStatusError') {
+      const nextRetryAtMs = normalizeNonNegativeInteger(statusRec.next);
+      retryBackoffUntilMs = nextRetryAtMs;
+      firstGenericRetryAtMs ??= Date.now();
+      if (!genericRetryNoticeSentForTurn) {
+        genericRetryNoticeSentForTurn = true;
+        params.session.sendAgentMessage(provider, {
+          type: 'message',
+          message: 'OpenCode hit a transient provider error and is retrying.',
+        });
+      }
+      return;
+    }
+    if (sessionId) abortOpenCodeSessionAfterFailedTurn(sessionId);
+    setThinking(false);
+    void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'session_error' });
+    surfaceOpenCodeRuntimeFailure('status_error', error);
+    rejectTurn(error);
   };
 
   const collectNativeTurnDiffBestEffort = async (): Promise<void> => {
@@ -790,16 +1523,22 @@ export function createOpenCodeServerRuntime(params: {
     return Math.max(25, Math.min(30_000, configured));
   })();
 
+  const turnInactivityTimeoutMs = (() => {
+    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_TURN_INACTIVITY_TIMEOUT_MS ?? ''), 10);
+    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 240_000;
+    return Math.max(10_000, Math.min(1_800_000, configured));
+  })();
+
+  const retryMaxWaitMs = (() => {
+    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_RETRY_MAX_WAIT_MS ?? ''), 10);
+    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 600_000;
+    return Math.max(60_000, Math.min(3_600_000, configured));
+  })();
+
   const prePromptIdleWaitMs = (() => {
     const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_PREPROMPT_IDLE_WAIT_MS ?? ''), 10);
     const configured = Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : 30_000;
     return Math.max(0, Math.min(300_000, configured));
-  })();
-
-  const streamDeltaMaxChars = (() => {
-    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_STREAM_DELTA_MAX_CHARS ?? ''), 10);
-    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 8_000;
-    return Math.max(256, Math.min(200_000, configured));
   })();
 
   const controlPlaneMaxConsecutiveFailures = (() => {
@@ -819,6 +1558,12 @@ export function createOpenCodeServerRuntime(params: {
     if (!raw) return true;
     if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
     return true;
+  })();
+
+  const activeKeepAliveIntervalMs = (() => {
+    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_ACTIVE_KEEPALIVE_INTERVAL_MS ?? ''), 10);
+    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 60_000;
+    return Math.max(25, Math.min(300_000, configured));
   })();
 
   const waitForIdleBeforePromptBestEffort = async (opts: {
@@ -864,26 +1609,19 @@ export function createOpenCodeServerRuntime(params: {
     }
   };
 
-  const assistantBackfillMaxAttempts = (() => {
-    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_ASSISTANT_BACKFILL_MAX_ATTEMPTS ?? ''), 10);
-    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 60;
-    return Math.max(1, Math.min(100, configured));
+  const idleWithoutTerminalAssistantTimeoutMs = (() => {
+    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_IDLE_WITHOUT_TERMINAL_ASSISTANT_TIMEOUT_MS ?? ''), 10);
+    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 15_000;
+    return Math.max(25, Math.min(300_000, configured));
   })();
 
-  const assistantBackfillGraceMs = (() => {
-    const raw = Number.parseInt(String(env.HAPPIER_OPENCODE_SERVER_ASSISTANT_BACKFILL_GRACE_MS ?? ''), 10);
-    const configured = Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 60_000;
-    return Math.max(100, Math.min(300_000, configured));
-  })();
-
-  type ControlPlaneFailureKind = 'status' | 'permission' | 'question' | 'messages';
+  type ControlPlaneFailureKind = 'status' | 'permission' | 'question';
   type ControlPlaneFailureState = { count: number; firstFailureAtMs: number | null };
 
   const controlPlaneFailures: Record<ControlPlaneFailureKind, ControlPlaneFailureState> = {
     status: { count: 0, firstFailureAtMs: null },
     permission: { count: 0, firstFailureAtMs: null },
     question: { count: 0, firstFailureAtMs: null },
-    messages: { count: 0, firstFailureAtMs: null },
   };
 
   const resetControlPlaneFailures = (kind: ControlPlaneFailureKind) => {
@@ -911,8 +1649,9 @@ export function createOpenCodeServerRuntime(params: {
     if (!exceededConsecutive && !exceededGrace) return;
 
     setThinking(false);
+    const terminalMarkerId = ensureActiveLifecycleMarkerId();
     void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'control_plane_failure' }).finally(() => {
-      surfaceOpenCodeRuntimeFailure('stream_error', error);
+      surfaceOpenCodeRuntimeFailure('stream_error', error, terminalMarkerId);
     });
     rejectTurn(error ?? new Error('OpenCode control-plane polling failed'));
   };
@@ -924,7 +1663,6 @@ export function createOpenCodeServerRuntime(params: {
     if (turnUserMessageIds.has(messageID)) return false;
     if (turnUserMessageId && messageID === turnUserMessageId) return false;
     if (turnPreexistingMessageIds && turnPreexistingMessageIds.has(messageID)) return false;
-    if (turnBackfilledAssistantMessageIds.has(messageID)) return false;
     return true;
   };
 
@@ -952,10 +1690,10 @@ export function createOpenCodeServerRuntime(params: {
   const noteAssistantMessageIdForActiveTurn = (messageID: string): void => {
     if (!turnPromptActive) return;
     if (!messageID) return;
-    if (turnBackfilledAssistantMessageIds.has(messageID)) return;
     if (turnStreamedAssistantMessageIds.has(messageID)) return;
     if (turnPreexistingMessageIds?.has(messageID) && messageID !== turnUserMessageId) return;
     turnAssistantMessageIds.add(messageID);
+    turnLiveKnownAssistantMessageIds.add(messageID);
   };
 
   const abortTurnFailClosedDueToPermissionProtocolError = (error: unknown) => {
@@ -1052,27 +1790,32 @@ export function createOpenCodeServerRuntime(params: {
     const missingImpliesIdle = rec == null && (statusPollBusySeen || turnActivitySeen);
     if (statusType === 'busy') {
       statusPollBusySeen = true;
+      clearIdleWithoutTerminalAssistantTimer();
+      markOpenCodeSessionActive();
+      return;
+    }
+    if (statusType === 'retry' && rec && typeof rec === 'object' && !Array.isArray(rec)) {
+      failActiveTurnOnRetryStatus(rec as Record<string, unknown>);
       return;
     }
     if (statusType !== 'idle' && !missingImpliesIdle) return;
-    setThinking(false);
     idleSignalSeen = true;
     idleSignalSeenViaControlPlane = true;
+    settleThinkingOnOpenCodeIdleSignal();
   };
 
   const maybeResolveTurnOnIdleSignal = async () => {
     if (!turnDeferred) return;
     if (!turnPromptActive) return;
     if (!idleSignalSeen) return;
-    if (!turnActivitySeen && !(idleSignalSeenViaControlPlane && statusPollBusySeen)) return;
     if (completedProviderEventSequence < nextProviderEventSequence) return;
     if (resolveOnIdleInFlight) return;
     resolveOnIdleInFlight = true;
     try {
-      // When idle is observed via SSE, the status poll loop may not run again before we resolve.
-      // Backfill assistant text one final time on idle to avoid ending the turn without the final response.
-      if (!turnAssistantBackfillIdleAttempted) {
-        await backfillAssistantTextFromControlPlaneBestEffort();
+      await refreshCurrentTurnProviderActivityFromHistoryBestEffort();
+      if (providerActivityTracker.hasActiveProviderWork()) {
+        clearIdleWithoutTerminalAssistantTimer();
+        return;
       }
       let permissions: OpenCodePermissionRequest[];
       let questions: OpenCodeQuestionRequest[];
@@ -1108,6 +1851,8 @@ export function createOpenCodeServerRuntime(params: {
       }
 
       if (!turnDeferred) return;
+      await refreshCurrentTurnProviderActivityFromHistoryBestEffort();
+      if (providerActivityTracker.hasActiveProviderWork()) return;
       if (completedProviderEventSequence < nextProviderEventSequence) return;
       if (pendingTaskChildSessionDiscoveryCallKeys.size > 0) return;
 
@@ -1116,11 +1861,33 @@ export function createOpenCodeServerRuntime(params: {
       // that assert Task subagent output is present synchronously after task_complete).
       const pendingSidechainImports = Array.from(pendingTaskSidechainImportsBySidechainId.values());
       if (pendingSidechainImports.length > 0) {
-        await Promise.allSettled(pendingSidechainImports);
+        const sidechainOutcome = await raceWithTimeout(
+          Promise.allSettled(pendingSidechainImports).then(() => undefined),
+          idlePendingToolForwardingTimeoutMs,
+        );
+        if (sidechainOutcome.type === 'timeout') {
+          logger.debug('[OpenCodeServer] Pending Task sidechain imports timed out before idle turn completion (non-fatal)', {
+            timeoutMs: idlePendingToolForwardingTimeoutMs,
+            pendingCount: pendingSidechainImports.length,
+            sessionId,
+            turnUserMessageId,
+          });
+        } else if (sidechainOutcome.type === 'rejected') {
+          logger.debug('[OpenCodeServer] Pending Task sidechain imports failed before idle turn completion (non-fatal)', {
+            sessionId,
+            turnUserMessageId,
+            error: sidechainOutcome.error,
+          });
+        }
+      }
+
+      if (!turnTerminalAssistantEvidenceSeen || turnRequiresPostToolAssistantCompletion) {
+        scheduleIdleWithoutTerminalAssistantFallback();
+        return;
       }
 
       const flushOutcome = await raceWithTimeout(
-        flushAndClearStreamWriters({ reason: 'tool-call-boundary' }),
+        flushStreamWritersForSidechainBoundary(null),
         idlePendingToolForwardingTimeoutMs,
       );
       if (flushOutcome.type === 'timeout') {
@@ -1146,7 +1913,8 @@ export function createOpenCodeServerRuntime(params: {
       }
       await collectNativeTurnDiffBestEffort();
       await emitTurnDiffToolIfPresent();
-      params.session.sendAgentMessage(provider, { type: 'task_complete', id: randomUUID() });
+      setThinking(false);
+      params.session.sendAgentMessage(provider, { type: 'task_complete', id: ensureActiveLifecycleMarkerId() });
       resolveTurn();
     } finally {
       resolveOnIdleInFlight = false;
@@ -1282,160 +2050,6 @@ export function createOpenCodeServerRuntime(params: {
     return `${ensureTurnStreamKey()}${sessionPart}:msg:${normalized}`;
   };
 
-  const splitBackfilledTextIntoChunks = (text: string): string[] => {
-    if (!text) return [];
-    if (text.length === 1) return [text];
-
-    const maxChunkChars = Math.max(256, Math.min(32_000, Math.floor(streamDeltaMaxChars / 2)));
-    if (text.length > maxChunkChars) {
-      const chunks: string[] = [];
-      for (let idx = 0; idx < text.length; idx += maxChunkChars) {
-        chunks.push(text.slice(idx, idx + maxChunkChars));
-      }
-      if (chunks.length >= 2) return chunks;
-      if (chunks.length === 1 && chunks[0]!.length > 1) {
-        const mid = Math.floor(chunks[0]!.length / 2);
-        return [chunks[0]!.slice(0, mid), chunks[0]!.slice(mid)];
-      }
-      return chunks;
-    }
-
-    const mid = Math.floor(text.length / 2);
-    const windowSize = 256;
-    const windowStart = Math.max(0, mid - windowSize);
-    const windowEnd = Math.min(text.length - 1, mid + windowSize);
-    const window = text.slice(windowStart, windowEnd);
-    const newlineIndex = window.lastIndexOf('\n');
-    const splitIndex = newlineIndex >= 0 ? windowStart + newlineIndex + 1 : mid;
-    const first = text.slice(0, splitIndex);
-    const second = text.slice(splitIndex);
-    if (!second) return [text.slice(0, mid), text.slice(mid)];
-    return [first, second];
-  };
-
-  const backfillAssistantTextFromControlPlaneBestEffort = async (): Promise<void> => {
-    if (!turnDeferred) return;
-    if (!turnPromptActive) return;
-    if (!sessionId) return;
-    if (turnStreamedAssistantMessageIds.size > 0 && !idleSignalSeen) return;
-
-    const nowMs = Date.now();
-    if (turnAssistantBackfillFirstAttemptAtMs == null) {
-      turnAssistantBackfillFirstAttemptAtMs = nowMs;
-    }
-    const isIdleFinalAttempt = idleSignalSeen && !turnAssistantBackfillIdleAttempted;
-    if (isIdleFinalAttempt) {
-      turnAssistantBackfillIdleAttempted = true;
-    } else {
-      if (turnAssistantBackfillAttempts >= assistantBackfillMaxAttempts) return;
-      if (nowMs - turnAssistantBackfillFirstAttemptAtMs > assistantBackfillGraceMs) return;
-      turnAssistantBackfillAttempts += 1;
-    }
-
-    const c = await ensureClient();
-    let raw: unknown;
-    try {
-      raw = await c.sessionMessagesList({ sessionId });
-    } catch (error) {
-      maybeAbortTurnOnControlPlaneFailure('messages', error);
-      return;
-    }
-
-    const items = extractOpenCodeTextHistoryItems(Array.isArray(raw) ? raw : []);
-    if (items.length === 0) return;
-
-    const prePrompt = turnPrePromptMessageIdsAll;
-    const unseenAssistants = items.filter((item) => {
-      if (item.role !== 'assistant') return false;
-      if (turnBackfilledAssistantMessageIds.has(item.messageId)) return false;
-      if (turnStreamedAssistantMessageIds.has(item.messageId)) return false;
-      if (prePrompt && prePrompt.has(item.messageId)) return false;
-      if (turnPreexistingMessageIds && turnPreexistingMessageIds.has(item.messageId)) return false;
-      return true;
-    });
-    if (unseenAssistants.length === 0) return;
-
-    for (const item of unseenAssistants) {
-      const messageID = item.messageId;
-      if (!messageID) continue;
-      const text = item.text ?? '';
-      if (!text) continue;
-      const chunks = splitBackfilledTextIntoChunks(text);
-      if (chunks.length === 0) continue;
-
-      turnBackfilledAssistantMessageIds.add(messageID);
-      turnStreamedAssistantMessageIds.add(messageID);
-      observedRemoteTextMessageIds.add(messageID);
-      for (const chunk of chunks) {
-        if (!chunk) continue;
-        transcriptStreamBridge.appendAssistantDelta({
-          deltaText: chunk,
-          streamKey: getStreamKeyForMessage(sessionId, messageID),
-          remoteSessionId: sessionId,
-          messageId: messageID,
-          sidechainId: null,
-        });
-      }
-      turnActivitySeen = true;
-    }
-  };
-
-  const importLiveCommittedTextHistoryBestEffort = async (opts?: { allowAssistantReplies?: boolean }): Promise<void> => {
-    if (opts?.allowAssistantReplies === true) {
-      queuedLiveHistorySyncAllowAssistantReplies = true;
-    }
-    if (liveHistorySyncPromise) {
-      await liveHistorySyncPromise;
-      return;
-    }
-
-    const runSync = (async () => {
-      while (true) {
-        const allowAssistantReplies = queuedLiveHistorySyncAllowAssistantReplies;
-        queuedLiveHistorySyncAllowAssistantReplies = false;
-
-        if (turnPromptActive) return;
-        if (!sessionId) return;
-        const c = await ensureClient();
-        let raw: unknown;
-        try {
-          raw = await c.sessionMessagesList({ sessionId });
-        } catch {
-          return;
-        }
-
-        const items = extractOpenCodeTextHistoryItems(Array.isArray(raw) ? raw : []);
-        if (items.length > 0) {
-          const unseen = items.filter((item) => {
-            if (observedRemoteTextMessageIds.has(item.messageId)) return false;
-            if (item.role === 'assistant' && !allowAssistantReplies) return false;
-            return true;
-          });
-          if (unseen.length > 0) {
-            await importOpenCodeTextHistoryCommitted({
-              session: params.session,
-              provider,
-              remoteSessionId: sessionId,
-              items: unseen,
-              importedFrom: 'acp-live-sync',
-            });
-            markObservedTextHistoryItems(unseen);
-          }
-        }
-
-        if (!queuedLiveHistorySyncAllowAssistantReplies) return;
-      }
-    })();
-
-    const currentPromise = runSync.finally(() => {
-      if (liveHistorySyncPromise === currentPromise) {
-        liveHistorySyncPromise = null;
-      }
-    });
-    liveHistorySyncPromise = currentPromise;
-    await currentPromise;
-  };
-
   const buildSidechainMeta = (
     meta: Record<string, unknown>,
     remoteSessionId: string,
@@ -1457,6 +2071,22 @@ export function createOpenCodeServerRuntime(params: {
     session: params.session,
   });
 
+  const buildTranscriptStreamArgsForMessage = (remoteSessionId: string, messageID: string) => ({
+    streamKey: getStreamKeyForMessage(remoteSessionId, messageID),
+    remoteSessionId,
+    messageId: messageID,
+    sidechainId: resolveSidechainIdForRemoteSession(remoteSessionId),
+  });
+
+  discardSuppressedLiveMessageStream = (remoteSessionId, messageID) => {
+    transcriptStreamBridge.discardStream(buildTranscriptStreamArgsForMessage(remoteSessionId, messageID));
+  };
+
+  const enableDurableCommitsForLiveMessageProjection = (remoteSessionId: string, messageID: string): void => {
+    if (!remoteSessionId || !messageID) return;
+    transcriptStreamBridge.enableDurableCommitsForStream(buildTranscriptStreamArgsForMessage(remoteSessionId, messageID));
+  };
+
   const clearStreamWriters = () => {
     transcriptStreamBridge.clear();
   };
@@ -1468,11 +2098,79 @@ export function createOpenCodeServerRuntime(params: {
     await transcriptStreamBridge.flushAll(opts);
   };
 
+  const flushStreamWritersForSidechainBoundary = async (sidechainId: string | null): Promise<void> => {
+    await transcriptStreamBridge.flushStreamsMatching({
+      reason: 'tool-call-boundary',
+      matches: (stream) => stream.sidechainId === sidechainId,
+    });
+  };
+
+  const buildIdleWithoutTerminalAssistantIssue = (providerTurnId: string): SessionRuntimeIssueV1 => ({
+    v: 1,
+    scope: 'primary_session',
+    status: 'failed',
+    code: OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE,
+    source: 'stream_error',
+    occurredAt: Date.now(),
+    provider,
+    providerTurnId,
+    sanitizedPreview: turnRequiresPostToolAssistantCompletion
+      ? 'OpenCode became idle after tool calls without producing a final assistant response.'
+      : turnAssistantTranscriptActivitySeen
+        ? 'OpenCode became idle after assistant text without producing a completed assistant message.'
+        : 'OpenCode became idle before producing assistant activity.',
+  });
+
+  const failTurnAfterIdleWithoutTerminalAssistant = (): void => {
+    if (!turnDeferred || !turnPromptActive) return;
+    idleWithoutTerminalAssistantTimer = null;
+    const providerTurnId = ensureActiveLifecycleMarkerId();
+    const issue = buildIdleWithoutTerminalAssistantIssue(providerTurnId);
+    const error = Object.assign(new Error(issue.sanitizedPreview), {
+      code: OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE,
+      issue,
+    });
+    const failureMarker = {
+      type: 'turn_failed',
+      id: providerTurnId,
+      code: OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE,
+      reason: OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE,
+      issue,
+    } satisfies ACPMessageData & {
+      type: 'turn_failed';
+      code: typeof OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE;
+      reason: typeof OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE;
+    };
+    setThinking(false);
+    void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: OPENCODE_IDLE_WITHOUT_TERMINAL_ASSISTANT_CODE }).finally(() => {
+      params.session.sendAgentMessage(provider, failureMarker);
+      void params.session.sessionTurnLifecycle?.failTurn({
+        provider,
+        providerTurnId,
+        issue,
+      }).catch((failError: unknown) => {
+        logger.debug('[OpenCodeServer] failed to persist idle-without-terminal-assistant turn failure (non-fatal)', failError);
+      });
+    });
+    rejectTurn(error);
+  };
+
+  const scheduleIdleWithoutTerminalAssistantFallback = (): void => {
+    if (idleWithoutTerminalAssistantTimer) return;
+    idleWithoutTerminalAssistantTimer = setTimeout(
+      failTurnAfterIdleWithoutTerminalAssistant,
+      idleWithoutTerminalAssistantTimeoutMs,
+    );
+    idleWithoutTerminalAssistantTimer.unref?.();
+  };
+
   const sendDelta = (delta: string, remoteSessionId: string, messageID: string, sidechainId: string | null) => {
-    turnActivitySeen = true;
+    markTurnActivity();
     if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
     if (!sidechainId && sessionId && remoteSessionId === sessionId) {
       turnStreamedAssistantMessageIds.add(messageID);
+      turnLiveKnownAssistantMessageIds.add(messageID);
+      turnAssistantTranscriptActivitySeen = true;
       observedRemoteTextMessageIds.add(messageID);
     }
     transcriptStreamBridge.appendAssistantDelta({
@@ -1486,7 +2184,7 @@ export function createOpenCodeServerRuntime(params: {
 
   const sendThinkingDelta = (delta: string, remoteSessionId: string, messageID: string, sidechainId: string | null) => {
     if (!delta) return;
-    turnActivitySeen = true;
+    markTurnActivity();
     if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
     transcriptStreamBridge.appendThinkingDelta({
       deltaText: delta,
@@ -1531,7 +2229,7 @@ export function createOpenCodeServerRuntime(params: {
         messageId: messageID,
         sidechainId,
       });
-      turnActivitySeen = true;
+      markTurnActivity();
       if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
       return;
     }
@@ -1546,7 +2244,7 @@ export function createOpenCodeServerRuntime(params: {
       sendDelta(deltaOut, remoteSessionId, messageID, sidechainId);
       return;
     }
-    turnActivitySeen = true;
+    markTurnActivity();
     if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
     if (!sidechainId && sessionId && remoteSessionId === sessionId) {
       turnStreamedAssistantMessageIds.add(messageID);
@@ -1603,70 +2301,82 @@ export function createOpenCodeServerRuntime(params: {
     observedTurnChangeCollectorEpoch: number,
   ) => {
     if (!part) return;
-    turnActivitySeen = true;
+    markTurnActivity();
     if (sidechainId) sidechainStreamSeenBySidechainId.add(sidechainId);
 
-      const status = normalizeString(part.state.status);
-      const callId = part.callID;
-      const callKey = buildOpenCodeToolCallKey(part.sessionID, callId);
-      const messageID = part.messageID;
-      const toolRaw = normalizeString(part.tool).trim();
-      const toolLower = toolRaw.toLowerCase();
-      observedToolPartByCallKey.set(callKey, part);
-      const isChangeTitleTool =
-        toolLower === preferredOpenCodeChangeTitleToolName.toLowerCase() || isChangeTitleToolNameAlias(toolLower);
-      if (isChangeTitleTool) return;
+    const status = normalizeString(part.state.status);
+    const isTerminalStatus = isTerminalOpenCodeToolPartStatus(status);
+    const callId = part.callID;
+    const callKey = buildOpenCodeToolCallKey(part.sessionID, callId);
+    if (turnPromptActive) {
+      turnLiveKnownToolCallKeys.add(callKey);
+    }
+    providerActivityTracker.observeToolPart({ part, source: 'live' });
+    if (!isTerminalStatus) {
+      markOpenCodeSessionActive();
+    }
+    const messageID = part.messageID;
+    const toolRaw = normalizeString(part.tool).trim();
+    const toolLower = toolRaw.toLowerCase();
+    const isBackgroundTaskLaunch = openCodeToolPartLooksLikeBackgroundTaskLaunch(part);
+    observedToolPartByCallKey.set(callKey, part);
+    const isChangeTitleTool =
+      toolLower === preferredOpenCodeChangeTitleToolName.toLowerCase() || isChangeTitleToolNameAlias(toolLower);
+    if (isChangeTitleTool) {
+      if (isTerminalStatus) settleThinkingAfterProviderWorkUpdate();
+      return;
+    }
 
-      // Task sidechains must be registered without awaiting, because SSE consumers do not await
-      // event handlers and related child-session events (questions/deltas) can arrive immediately.
-      if (toolLower === 'task') {
-        const metadata = asRecord(part.state.metadata) ?? {};
-        const outputText = normalizeString(part.state.output);
-        const remoteSessionId = extractOpenCodeTaskChildSessionId({ output: outputText, metadata });
-        if (remoteSessionId && remoteSessionId !== sessionId) {
-          sidechainIdByRemoteSessionId.set(remoteSessionId, callId);
-          pendingTaskChildSessionDiscoveryCallKeys.delete(callKey);
-        } else if (status === 'completed' || status === 'error') {
-          pendingTaskChildSessionDiscoveryCallKeys.delete(callKey);
-        } else {
-          pendingTaskChildSessionDiscoveryCallKeys.add(callKey);
-        }
+    // Task sidechains must be registered without awaiting, because SSE consumers do not await
+    // event handlers and related child-session events (questions/deltas) can arrive immediately.
+    if (toolLower === 'task') {
+      const metadata = asRecord(part.state.metadata) ?? {};
+      const outputText = normalizeString(part.state.output);
+      const remoteSessionId = extractOpenCodeTaskChildSessionId({ output: outputText, metadata });
+      if (remoteSessionId && remoteSessionId !== sessionId) {
+        sidechainIdByRemoteSessionId.set(remoteSessionId, callId);
+        pendingTaskChildSessionDiscoveryCallKeys.delete(callKey);
+      } else if (isTerminalStatus || isBackgroundTaskLaunch) {
+        pendingTaskChildSessionDiscoveryCallKeys.delete(callKey);
+      } else {
+        pendingTaskChildSessionDiscoveryCallKeys.add(callKey);
       }
+    }
 
-      const toolNameForAcp = resolveOpenCodeToolNameForAcp(toolRaw);
-      const meta = buildSidechainMeta(
-        { opencodeMessageId: messageID, opencodeRemoteSessionId: part.sessionID },
-        part.sessionID,
-        sidechainId,
+    const toolNameForAcp = resolveOpenCodeToolNameForAcp(toolRaw);
+    const meta = buildSidechainMeta(
+      { opencodeMessageId: messageID, opencodeRemoteSessionId: part.sessionID },
+      part.sessionID,
+      sidechainId,
+    );
+    const rawInput = (part.state as any).input ?? {};
+    const hasMeaningfulInput = hasAnyMeaningfulInputFields(rawInput);
+    const isBashLike = part.tool === 'bash' || part.tool === 'Bash' || part.tool === 'execute' || part.tool === 'Terminal';
+    const commandHint = isBashLike ? extractBashCommandHint(rawInput) : '';
+    const shouldEmitToolCallNow =
+      !toolCallSentByCallId.has(callKey) &&
+      (hasMeaningfulInput || Boolean(commandHint) || isTerminalStatus);
+
+    if (shouldEmitToolCallNow) {
+      try {
+        await flushStreamWritersForSidechainBoundary(sidechainId);
+      } catch (error) {
+        logger.debug('[OpenCodeServer] tool-call boundary transcript flush failed (non-fatal)', {
+          error,
+          sessionId: part.sessionID,
+          messageId: messageID,
+          callId,
+        });
+      }
+      toolCallSentByCallId.add(callKey);
+      params.session.sendAgentMessage(
+        provider,
+        { type: 'tool-call', callId, name: toolNameForAcp, input: rawInput, id: randomUUID(), ...(sidechainId ? { sidechainId } : null) },
+        { meta },
       );
-      const rawInput = (part.state as any).input ?? {};
-      const hasMeaningfulInput = hasAnyMeaningfulInputFields(rawInput);
-      const isBashLike = part.tool === 'bash' || part.tool === 'Bash' || part.tool === 'execute' || part.tool === 'Terminal';
-      const commandHint = isBashLike ? extractBashCommandHint(rawInput) : '';
-      const shouldEmitToolCallNow =
-        !toolCallSentByCallId.has(callKey) &&
-        (hasMeaningfulInput || Boolean(commandHint) || status === 'completed' || status === 'error');
+    }
 
-      if (shouldEmitToolCallNow) {
-        try {
-          await flushAndClearStreamWriters({ reason: 'tool-call-boundary' });
-        } catch (error) {
-          logger.debug('[OpenCodeServer] tool-call boundary transcript flush failed (non-fatal)', {
-            error,
-            sessionId: part.sessionID,
-            messageId: messageID,
-            callId,
-          });
-        }
-        toolCallSentByCallId.add(callKey);
-        params.session.sendAgentMessage(
-          provider,
-          { type: 'tool-call', callId, name: toolNameForAcp, input: rawInput, id: randomUUID(), ...(sidechainId ? { sidechainId } : null) },
-          { meta },
-        );
-      }
-
-    if ((status === 'completed' || status === 'error') && !toolResultSentByCallId.has(callKey)) {
+    if (isTerminalStatus && !toolResultSentByCallId.has(callKey)) {
       toolResultSentByCallId.add(callKey);
       if (status === 'completed') {
         const output = {
@@ -1696,7 +2406,7 @@ export function createOpenCodeServerRuntime(params: {
           { meta },
         );
 
-        if (toolLower === 'task') {
+        if (toolLower === 'task' && !isBackgroundTaskLaunch) {
           const remoteSessionId = extractOpenCodeTaskChildSessionId({ output: output.output, metadata: output.metadata });
           if (remoteSessionId) {
             if (!pendingTaskSidechainImportsBySidechainId.has(callId)) {
@@ -1733,9 +2443,10 @@ export function createOpenCodeServerRuntime(params: {
         }
       } else {
         const metadata = asRecord(part.state.metadata);
+        const error = normalizeString(part.state.error) || `${status || 'tool'} failed`;
         const output = {
           status: 'failed',
-          error: normalizeString(part.state.error),
+          error,
           ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : null),
         };
         params.session.sendAgentMessage(
@@ -1745,6 +2456,7 @@ export function createOpenCodeServerRuntime(params: {
         );
       }
     }
+    if (isTerminalStatus) settleThinkingAfterProviderWorkUpdate();
   };
 
   const trackPendingTurnToolForwardingWork = (work: Promise<void>): Promise<void> => {
@@ -1761,7 +2473,7 @@ export function createOpenCodeServerRuntime(params: {
     setThinking(false);
     idleSignalSeen = false;
     idleSignalSeenViaControlPlane = false;
-    if (turnPromptActive) turnActivitySeen = true;
+    if (turnPromptActive) markTurnActivity();
 
     const questions = req.questions
       .map((q) => (asRecord(q) ?? null))
@@ -1773,7 +2485,7 @@ export function createOpenCodeServerRuntime(params: {
       return;
     }
 
-    params.session.sendAgentMessage(provider, { type: 'task_started', id: randomUUID() });
+    params.session.sendAgentMessage(provider, { type: 'task_started', id: ensureActiveLifecycleMarkerId() });
 
     const askUserQuestionInput = {
       questions: questions.map((q) => ({
@@ -1826,7 +2538,13 @@ export function createOpenCodeServerRuntime(params: {
       })),
     };
 
-    const decision = await params.permissionHandler.handleToolCall(req.id, 'AskUserQuestion', askUserQuestionInput);
+    turnAwaitingUserResponseCount += 1;
+    let decision: Awaited<ReturnType<typeof params.permissionHandler.handleToolCall>>;
+    try {
+      decision = await params.permissionHandler.handleToolCall(req.id, 'AskUserQuestion', askUserQuestionInput);
+    } finally {
+      turnAwaitingUserResponseCount = Math.max(0, turnAwaitingUserResponseCount - 1);
+    }
     const c = await ensureClient();
 
     if (decision.decision === 'approved' || decision.decision === 'approved_for_session' || decision.decision === 'approved_execpolicy_amendment') {
@@ -1856,7 +2574,7 @@ export function createOpenCodeServerRuntime(params: {
     setThinking(false);
     idleSignalSeen = false;
     idleSignalSeenViaControlPlane = false;
-    if (turnPromptActive) turnActivitySeen = true;
+    if (turnPromptActive) markTurnActivity();
 
     const mode = params.getPermissionMode?.() ?? 'default';
     const c = await ensureClient();
@@ -1874,11 +2592,16 @@ export function createOpenCodeServerRuntime(params: {
     let decision: Awaited<ReturnType<typeof params.permissionHandler.handleToolCall>>;
     try {
       const resolved = await resolvePermissionAskedToolBridge(req);
-      decision = await params.permissionHandler.handleToolCall(
-        resolved.localRequestId,
-        resolved.toolName,
-        resolved.toolInput,
-      );
+      turnAwaitingUserResponseCount += 1;
+      try {
+        decision = await params.permissionHandler.handleToolCall(
+          resolved.localRequestId,
+          resolved.toolName,
+          resolved.toolInput,
+        );
+      } finally {
+        turnAwaitingUserResponseCount = Math.max(0, turnAwaitingUserResponseCount - 1);
+      }
     } catch (error) {
       logger.debug('[OpenCodeServer] permission handler threw; rejecting permission request (fail-closed)', {
         requestId: req.id,
@@ -1969,14 +2692,89 @@ export function createOpenCodeServerRuntime(params: {
       });
   };
 
+  const handleSessionNextGuardEvent = (type: string, propsRaw: unknown): boolean => {
+    if (!type.startsWith('session.next.')) return false;
+    const rec = asRecord(propsRaw);
+    if (!rec) return false;
+    const eventSessionId = normalizeString(rec.sessionID)
+      || normalizeString(rec.sessionId)
+      || normalizeString(asRecord(rec.session)?.id);
+    if (!eventSessionId || eventSessionId !== sessionId) return true;
+
+    if (type === 'session.next.retried') {
+      const errorRecord = asRecord(rec.error);
+      const message = normalizeString(rec.message)
+        || extractOpenCodeErrorText(rec.error)
+        || normalizeString(errorRecord?.message)
+        || 'OpenCode session is waiting before retrying';
+      failActiveTurnOnRetryStatus({
+        type: 'retry',
+        attempt: rec.attempt ?? errorRecord?.attempt,
+        message,
+        next: rec.next ?? errorRecord?.next,
+      });
+      return true;
+    }
+
+    if (type.startsWith('session.next.tool.')) {
+      const callId = normalizeString(rec.callID)
+        || normalizeString(rec.callId)
+        || normalizeString(rec.toolCallID)
+        || normalizeString(rec.toolCallId)
+        || normalizeString(rec.id);
+      if (callId) {
+        const terminal = (
+          type === 'session.next.tool.success'
+          || type === 'session.next.tool.completed'
+          || type === 'session.next.tool.failed'
+          || type === 'session.next.tool.cancelled'
+          || type === 'session.next.tool.canceled'
+          || type === 'session.next.tool.aborted'
+        );
+        providerActivityTracker.observeSessionNextTool({
+          sessionId: eventSessionId,
+          callId,
+          terminal,
+          source: 'session-next',
+        });
+        if (!terminal) {
+          markOpenCodeSessionActive();
+        } else {
+          settleThinkingAfterProviderWorkUpdate();
+        }
+      }
+      if (!turnPromptActive) return true;
+      markTurnActivity();
+      return true;
+    }
+
+    if (!turnPromptActive) return true;
+
+    if (
+      type.startsWith('session.next.text.')
+      || type.startsWith('session.next.reasoning.')
+      || type.startsWith('session.next.step.')
+    ) {
+      markTurnActivity();
+      return true;
+    }
+
+    return false;
+  };
+
   const handleEvent = (evt: OpenCodeGlobalEvent): Promise<void> | void => {
     const payload = evt.payload;
     const type = normalizeString(payload.type);
     const props = payload.properties;
     shapeLogger.log(`event:${type || 'unknown'}`, payload);
 
+    if (type === 'server.connected') {
+      return refreshLiveKnownOpenCodeStateFromControlPlaneBestEffort();
+    }
+
     const compactionEvent = mapOpenCodeCompactionEventToAgentMessage(evt, sessionId);
     if (compactionEvent) {
+      compactionInProgress = !isTerminalCompactionPhase(compactionEvent.phase);
       const manualCompaction = activeManualCompaction;
       if (manualCompaction && compactionEvent.providerSessionId === sessionId) {
         if (isTerminalCompactionPhase(compactionEvent.phase)) {
@@ -1993,6 +2791,8 @@ export function createOpenCodeServerRuntime(params: {
       return;
     }
 
+    if (handleSessionNextGuardEvent(type, props)) return;
+
     if (type === 'todo.updated') {
       const eventSessionId = normalizeString(asRecord(props)?.sessionID)
         || normalizeString(asRecord(asRecord(props)?.session)?.id);
@@ -2007,14 +2807,32 @@ export function createOpenCodeServerRuntime(params: {
       if (!info) return;
       const infoSessionId = normalizeString(info.sessionID);
       if (!infoSessionId || infoSessionId !== sessionId) return;
-      const infoRole = normalizeString(info.role).trim().toLowerCase();
-      const infoMessageId = normalizeString(info.id);
-      if (infoRole === 'user' && infoMessageId) {
+      const projection = classifyOpenCodeMessageForProjection(info);
+      const infoMessageId = projection.messageId || normalizeString(info.id);
+      if (!turnPromptActive && projection.kind === 'assistant_transcript' && pendingProviderAutonomousBackgroundWake) {
+        beginProviderAutonomousBackgroundTurnIfNeeded({ reason: 'background-wake' });
+      }
+      if (projection.kind === 'user_transcript' && infoMessageId) {
         noteUserMessageIdForActiveTurn(infoMessageId);
       }
-      if (infoRole === 'assistant' && infoMessageId) {
-        noteAssistantMessageIdForActiveTurn(infoMessageId);
-        if (flushPendingInlineSnapshotsForMessage({ remoteSessionId: infoSessionId, messageID: infoMessageId }) && idleSignalSeen) {
+      if (infoMessageId && (projection.kind === 'compaction_internal' || projection.kind === 'ignored_internal')) {
+        suppressLiveMessageProjection(infoSessionId, infoMessageId);
+      } else if (infoMessageId && projection.kind === 'assistant_transcript') {
+        enableDurableCommitsForLiveMessageProjection(infoSessionId, infoMessageId);
+      }
+      if (infoMessageId && (
+        projection.kind === 'assistant_transcript'
+        || projection.kind === 'compaction_internal'
+        || projection.kind === 'ignored_internal'
+      )) {
+        const terminalEvidenceSeen = observeAssistantCompletionInfoForActiveTurn(info);
+        if (projection.kind === 'assistant_transcript') {
+          if (flushPendingInlineSnapshotsForMessage({ remoteSessionId: infoSessionId, messageID: infoMessageId }) && idleSignalSeen) {
+            void maybeResolveTurnOnIdleSignal();
+          } else if (terminalEvidenceSeen && idleSignalSeen) {
+            void maybeResolveTurnOnIdleSignal();
+          }
+        } else if (idleSignalSeen) {
           void maybeResolveTurnOnIdleSignal();
         }
       }
@@ -2045,11 +2863,32 @@ export function createOpenCodeServerRuntime(params: {
       const sidechainId = sessionID === sessionId ? null : resolveSidechainIdForRemoteSession(sessionID);
       if (sessionID !== sessionId && !sidechainId) return;
       const partID = normalizeString(part.id);
-      const partType = normalizeString(part.type);
+      const projection = classifyOpenCodePartForProjection(part, { context: 'live_transcript' });
+      const partType = projection.partType || normalizeString(part.type);
       if (partID && partType) partTypeByPartKey.set(`${sessionID}:${partID}`, partType);
+      const rawPartText = normalizeString(part.text);
+      const backgroundWakeSource = sessionID === sessionId && rawPartText
+        ? readOpenCodeBackgroundTaskWakeSource(rawPartText)
+        : null;
+      if (backgroundWakeSource) {
+        recordProviderAutonomousBackgroundWake({
+          source: backgroundWakeSource,
+          messageId: normalizeString(part.messageID),
+        });
+        if (partID) suppressLivePartProjection(sessionID, partID, normalizeString(part.messageID));
+        return;
+      }
 
       const maybeTool = parseOpenCodeToolPart(part);
       if (maybeTool) {
+        const isBackgroundOutputContinuation = openCodeToolPartLooksLikeBackgroundOutputContinuation(maybeTool);
+        if (
+          !turnPromptActive
+          && sessionID === sessionId
+          && (pendingProviderAutonomousBackgroundWake || isBackgroundOutputContinuation)
+        ) {
+          beginProviderAutonomousBackgroundTurnIfNeeded({ reason: isBackgroundOutputContinuation ? 'background-output-tool' : 'background-wake' });
+        }
         if (turnPromptActive) {
           idleSignalSeen = false;
           idleSignalSeenViaControlPlane = false;
@@ -2065,8 +2904,19 @@ export function createOpenCodeServerRuntime(params: {
         });
         return toolWork;
       }
-      const inlineText = extractOpenCodeRuntimeRenderableTextFromPart(part);
       const messageID = normalizeString(part.messageID);
+      if (projection.kind === 'ignored_internal' || (sessionID === sessionId && compactionInProgress && !sidechainId)) {
+        suppressLivePartProjection(sessionID, partID, messageID);
+        return;
+      }
+      const inlineText = (
+        projection.kind === 'transcript_text' || projection.kind === 'reasoning_text'
+          ? projection.text
+          : ''
+      );
+      if (!turnPromptActive && sessionID === sessionId && inlineText && pendingProviderAutonomousBackgroundWake) {
+        beginProviderAutonomousBackgroundTurnIfNeeded({ reason: 'background-wake' });
+      }
       if (
         turnPromptActive
         && inlineText
@@ -2105,9 +2955,6 @@ export function createOpenCodeServerRuntime(params: {
         });
         return;
       }
-      if (!turnPromptActive && sessionID === sessionId) {
-        void importLiveCommittedTextHistoryBestEffort({ allowAssistantReplies: false });
-      }
       return;
     }
 
@@ -2122,7 +2969,34 @@ export function createOpenCodeServerRuntime(params: {
       const partID = normalizeString(rec.partID);
       const delta = normalizeString(rec.delta);
       if (!messageID || !partID || !delta) return;
+      const partType = partTypeByPartKey.get(`${sessionID}:${partID}`) ?? '';
+      const accumulationKey = `${sessionID}:${messageID}:${partType === 'reasoning' ? 'reasoning' : 'text'}`;
+      const accumulated = accumulatedTextByPartKey.get(accumulationKey) ?? '';
+      const nextAccumulated = delta.startsWith(accumulated) ? delta : accumulated + delta;
+      accumulatedTextByPartKey.set(accumulationKey, nextAccumulated);
+      if (
+        suppressedLivePartKeys.has(buildLivePartKey(sessionID, partID))
+        || suppressedLiveMessageKeys.has(buildLiveMessageKey(sessionID, messageID))
+        || (sessionID === sessionId && compactionInProgress && !sidechainId)
+      ) {
+        suppressLivePartProjection(sessionID, partID, messageID);
+        return;
+      }
+      const backgroundWakeSource = sessionID === sessionId && !sidechainId
+        ? readOpenCodeBackgroundTaskWakeSource(nextAccumulated)
+        : null;
+      if (backgroundWakeSource) {
+        recordProviderAutonomousBackgroundWake({
+          source: backgroundWakeSource,
+          messageId: messageID,
+        });
+        suppressLivePartProjection(sessionID, partID, messageID);
+        return;
+      }
       if (sessionID === sessionId) {
+        if (!turnPromptActive && pendingProviderAutonomousBackgroundWake) {
+          beginProviderAutonomousBackgroundTurnIfNeeded({ reason: 'background-wake' });
+        }
         if (!shouldTreatMessageIdAsTurnActivity(messageID)) return;
       } else {
         if (!turnPromptActive) return;
@@ -2131,14 +3005,8 @@ export function createOpenCodeServerRuntime(params: {
         idleSignalSeen = false;
         idleSignalSeenViaControlPlane = false;
       }
-      const partType = partTypeByPartKey.get(`${sessionID}:${partID}`) ?? '';
-      const accumulationKey = `${sessionID}:${messageID}:${partType === 'reasoning' ? 'reasoning' : 'text'}`;
-      const accumulated = accumulatedTextByPartKey.get(accumulationKey) ?? '';
-        const nextAccumulated = delta.startsWith(accumulated) ? delta : accumulated + delta;
-        accumulatedTextByPartKey.set(accumulationKey, nextAccumulated);
-
-        const deltaOut = delta.startsWith(accumulated) ? delta.slice(accumulated.length) : delta;
-        if (!deltaOut) return;
+      const deltaOut = delta.startsWith(accumulated) ? delta.slice(accumulated.length) : delta;
+      if (!deltaOut) return;
       if (partType === 'reasoning') {
         sendThinkingDelta(deltaOut, sessionID, messageID, sidechainId);
       } else {
@@ -2197,19 +3065,25 @@ export function createOpenCodeServerRuntime(params: {
       if (!sessionID || sessionID !== sessionId) return;
       const statusRec = asRecord(rec.status);
       const statusType = normalizeString(statusRec?.type);
-      if (!turnPromptActive && (statusType === 'busy' || statusType === 'idle')) {
-        void importLiveCommittedTextHistoryBestEffort({ allowAssistantReplies: statusType === 'idle' });
-      }
       if (statusType === 'busy') {
+        if (pendingProviderAutonomousBackgroundWake) {
+          beginProviderAutonomousBackgroundTurnIfNeeded({ reason: 'background-wake' });
+        }
+        clearIdleWithoutTerminalAssistantTimer();
         setThinking(true);
+        markOpenCodeSessionActive();
+      }
+      if (statusType === 'retry' && statusRec) {
+        failActiveTurnOnRetryStatus(statusRec);
+        return;
       }
       if (statusType === 'idle') {
-        setThinking(false);
         if (turnPromptActive) {
           idleSignalSeen = true;
           idleSignalSeenViaControlPlane = false;
           void maybeResolveTurnOnIdleSignal();
         }
+        settleThinkingOnOpenCodeIdleSignal();
       }
       return;
     }
@@ -2219,15 +3093,12 @@ export function createOpenCodeServerRuntime(params: {
       if (!rec) return;
       const sessionID = normalizeString(rec.sessionID);
       if (!sessionID || sessionID !== sessionId) return;
-      if (!turnPromptActive) {
-        void importLiveCommittedTextHistoryBestEffort({ allowAssistantReplies: true });
-      }
-      setThinking(false);
       if (turnPromptActive) {
         idleSignalSeen = true;
         idleSignalSeenViaControlPlane = false;
         void maybeResolveTurnOnIdleSignal();
       }
+      settleThinkingOnOpenCodeIdleSignal();
       return;
     }
 
@@ -2238,18 +3109,43 @@ export function createOpenCodeServerRuntime(params: {
       if (!sessionID || sessionID !== sessionId) return;
       const isExpectedExplicitCancelError = suppressSessionErrorAbortNotificationForSessionId === sessionID;
       const detail = extractOpenCodeErrorText(rec.error);
+      if (!isExpectedExplicitCancelError && openCodeErrorLooksLikeContextOverflow(rec.error ?? rec)) {
+        compactionInProgress = true;
+        setThinking(false);
+        void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'context_overflow_compaction' }).catch(() => {});
+        const sanitizedErrorPreview = formatErrorForUi(rec.error ?? rec, { maxChars: 1_000 }).trim();
+        sendContextCompactionEvent({
+          type: 'context-compaction',
+          phase: 'started',
+          provider: 'opencode',
+          source: 'provider-status',
+          trigger: 'overflow',
+          lifecycleId: `opencode:context-compaction:${sessionID}:context-overflow`,
+          providerSessionId: sessionID,
+          ...(sanitizedErrorPreview ? { sanitizedErrorPreview } : {}),
+        });
+        return;
+      }
       const failureError = detail ? new Error(detail) : rec.error ?? new Error('OpenCode session error');
       const isAbortLikeSessionError = isAbortLikeError(failureError);
+      const terminalMarkerId = ensureActiveLifecycleMarkerId();
       setThinking(false);
-      void flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'session_error' }).finally(() => {
+      const surfaceSessionError = (): void => {
         if (!isExpectedExplicitCancelError) {
           if (isAbortLikeSessionError) {
-            params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+            params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: terminalMarkerId });
           } else {
-            surfaceOpenCodeRuntimeFailure('session_error', failureError);
+            surfaceOpenCodeRuntimeFailure('session_error', rec.error ?? failureError, terminalMarkerId);
           }
         }
-      });
+      };
+      const flushPromise = flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'session_error' });
+      if (turnPromptActive) {
+        void flushPromise.finally(surfaceSessionError);
+      } else {
+        void flushPromise.catch(() => {});
+        surfaceSessionError();
+      }
       rejectTurn(failureError);
       return;
     }
@@ -2260,6 +3156,7 @@ export function createOpenCodeServerRuntime(params: {
   const resetRuntimeState = () => {
     turnDeferred = null;
     turnInFlight = false;
+    pendingProviderAutonomousBackgroundWake = null;
     resetTurnEventState();
   };
 
@@ -2299,15 +3196,36 @@ export function createOpenCodeServerRuntime(params: {
     ensuredMcpServersForDirectory = hadFailures !== true;
   };
 
+  const drainPendingAfterStartOrLoad = async (): Promise<void> => {
+    const pendingQueue = params.pendingQueue;
+    if (pendingQueue?.drainAfterStartOrLoad !== true) return;
+
+    const drainOptions: DrainPendingOptions = {
+      logPrefix: '[OpenCodeServer]',
+      reason: 'opencode_server_start_or_load',
+    };
+    if (pendingQueue.maxPopPerWake !== undefined) {
+      drainOptions.maxPopPerWake = pendingQueue.maxPopPerWake;
+    }
+    if (pendingQueue.shouldDrainPendingMessages) {
+      drainOptions.shouldContinue = pendingQueue.shouldDrainPendingMessages;
+    }
+
+    await pendingQueue.drainPending(drainOptions);
+  };
+
   const preferredOpenCodeChangeTitleToolName = resolvePreferredChangeTitleToolNameForProvider('opencode');
   return {
     getSessionId: () => sessionId,
     shouldResumeAfterPermissionModeChange: () => true,
     supportsInFlightSteer: () => false,
     isTurnInFlight: () => turnInFlight,
+    probeTurnLiveness: probeFinalTurnLivenessBeforeDeadlockAbort,
 
     beginTurn(): void {
+      abortSuppressionGeneration += 1;
       suppressSessionErrorAbortNotificationForSessionId = null;
+      pendingProviderAutonomousBackgroundWake = null;
       turnInFlight = true;
       pendingTurnToolForwardingWork = new Set<Promise<void>>();
       turnPromptActive = false;
@@ -2315,8 +3233,17 @@ export function createOpenCodeServerRuntime(params: {
       idleSignalSeen = false;
       idleSignalSeenViaControlPlane = false;
       beginFreshTurnChangeCollection();
-      params.session.sendAgentMessage(provider, { type: 'task_started', id: randomUUID() });
+      activeLifecycleMarkerId = randomUUID();
+      params.session.sendAgentMessage(provider, { type: 'task_started', id: activeLifecycleMarkerId });
       setThinking(true);
+    },
+
+    async listSkills(): Promise<unknown> {
+      const c = await ensureClient();
+      return {
+        supported: true,
+        skills: normalizeOpenCodeAppSkills(await c.appSkills()),
+      };
     },
 
     async startOrLoad(opts: { resumeId?: string | null } = {}): Promise<string> {
@@ -2330,6 +3257,7 @@ export function createOpenCodeServerRuntime(params: {
       if (resumeId) {
         const existing = await c.sessionGet({ sessionId: resumeId });
         sessionId = existing.id ?? resumeId;
+        providerActivityTracker.resetForProviderSession(sessionId);
         omitCustomMessageIdForResumedSession = true;
         const sessionDirectory = normalizeString((existing as any)?.directory).trim();
         if (sessionDirectory) {
@@ -2388,17 +3316,13 @@ export function createOpenCodeServerRuntime(params: {
           }
         })();
 
-        if (params.pendingQueue?.drainAfterStartOrLoad === true) {
-          await drainPendingQueueMessages({
-            pendingQueue: params.pendingQueue,
-            logPrefix: '[OpenCodeServer]',
-          });
-        }
+        await drainPendingAfterStartOrLoad();
         return sessionId!;
       }
 
       const created: OpenCodeSession = await c.sessionCreate({ permission: [...resolveSessionPermissionRuleset()] as unknown[] });
       sessionId = created.id;
+      providerActivityTracker.resetForProviderSession(sessionId);
       omitCustomMessageIdForResumedSession = false;
       const createdDirectory = normalizeString((created as any)?.directory).trim();
       if (createdDirectory) {
@@ -2412,12 +3336,7 @@ export function createOpenCodeServerRuntime(params: {
       }
       publishDynamicSessionOptionsBestEffort();
       publishNativeTodosWorkStateBestEffort();
-      if (params.pendingQueue?.drainAfterStartOrLoad === true) {
-        await drainPendingQueueMessages({
-          pendingQueue: params.pendingQueue,
-          logPrefix: '[OpenCodeServer]',
-        });
-      }
+      await drainPendingAfterStartOrLoad();
       return sessionId!;
     },
 
@@ -2431,6 +3350,7 @@ export function createOpenCodeServerRuntime(params: {
     async sendPromptWithMeta(paramsWithMeta: { text: string; localId?: string | null }): Promise<void> {
       if (!sessionId) throw new Error('OpenCode server session was not started');
       const c = await ensureClient();
+      pendingProviderAutonomousBackgroundWake = null;
 
       const effectiveText = typeof paramsWithMeta.text === 'string' ? paramsWithMeta.text : '';
 
@@ -2441,7 +3361,7 @@ export function createOpenCodeServerRuntime(params: {
       if (messageID) observedRemoteTextMessageIds.add(messageID);
       const agent = selectedAgent ?? undefined;
       const model = selectedModel ?? undefined;
-      const config = Object.keys(configOverrides).length > 0 ? { ...configOverrides } : undefined;
+      const promptOptions = buildOpenCodePromptOptionPayload(configOverrides);
       turnDeferred = createDeferred<void>();
       // A turn can be aborted from a background poll/SSE callback before sendPromptWithMeta reaches its await.
       // Attach a handler immediately so Node does not treat the rejection as unhandled.
@@ -2449,6 +3369,8 @@ export function createOpenCodeServerRuntime(params: {
       const thisTurnDeferred = turnDeferred;
       turnPromptActive = true;
       turnActivitySeen = false;
+      turnLastActivityAtMs = Date.now();
+      watchdogFired = false;
       idleSignalSeen = false;
       idleSignalSeenViaControlPlane = false;
       turnUserMessageId = messageID ?? null;
@@ -2463,6 +3385,9 @@ export function createOpenCodeServerRuntime(params: {
       inFlightQuestionIds = new Set<string>();
       const controlAbort = new AbortController();
       turnControlAbort = controlAbort;
+      const deadlockGuardLoop = runTurnDeadlockGuard(controlAbort.signal).catch((error) => {
+        logger.debug('[OpenCodeServer] turn deadlock guard failed (non-fatal)', error);
+      });
       let prePromptMessageIdsForBackfill: Set<string> | null = null;
 
       if (!shouldOmitCustomMessageId) {
@@ -2495,19 +3420,43 @@ export function createOpenCodeServerRuntime(params: {
       }
 
       try {
-        await c.sessionPromptAsync({
+        const promptAsyncPromise = c.sessionPromptAsync({
           sessionId,
           messageId: messageID,
           agent,
           model,
-          config,
+          ...promptOptions,
           parts: [{ type: 'text', text: effectiveText }],
         });
+        const promptAsyncOutcome = await Promise.race([
+          promptAsyncPromise.then(
+            () => ({ type: 'prompt_resolved' as const }),
+            (error: unknown) => ({ type: 'prompt_rejected' as const, error }),
+          ),
+          thisTurnDeferred.promise.then(
+            () => ({ type: 'turn_resolved' as const }),
+            (error: unknown) => ({ type: 'turn_rejected' as const, error }),
+          ),
+        ]);
+        if (promptAsyncOutcome.type === 'turn_rejected') {
+          await deadlockGuardLoop.catch(() => {});
+          throw promptAsyncOutcome.error;
+        }
+        if (promptAsyncOutcome.type === 'turn_resolved') {
+          await deadlockGuardLoop.catch(() => {});
+          return;
+        }
+        if (promptAsyncOutcome.type === 'prompt_rejected') {
+          throw promptAsyncOutcome.error;
+        }
       } catch (error) {
+        if (!turnDeferred) {
+          throw error;
+        }
         setThinking(false);
         await flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'prompt_async_error' });
         if (isAbortLikeError(error)) {
-          params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: randomUUID() });
+          params.session.sendAgentMessage(provider, { type: 'turn_aborted', id: ensureActiveLifecycleMarkerId() });
         } else {
           surfaceOpenCodeRuntimeFailure('stream_error', error);
         }
@@ -2525,8 +3474,14 @@ export function createOpenCodeServerRuntime(params: {
         } catch (error) {
           return;
         }
-        await pollIdleStatusFromControlPlaneBestEffort();
-        await backfillAssistantTextFromControlPlaneBestEffort();
+        try {
+          await pollIdleStatusFromControlPlaneBestEffort();
+        } catch (error) {
+          logger.debug('[OpenCodeServer] status polling step failed (non-fatal)', {
+            sessionId,
+            error,
+          });
+        }
         const permIds = handledPermissionIds ?? new Set<string>();
         const qIds = handledQuestionIds ?? new Set<string>();
         const permInFlight = inFlightPermissionIds ?? new Set<string>();
@@ -2607,6 +3562,7 @@ export function createOpenCodeServerRuntime(params: {
           // ignore
         }
         await pollLoop.catch(() => {});
+        await deadlockGuardLoop.catch(() => {});
       }
     },
 
@@ -2620,6 +3576,7 @@ export function createOpenCodeServerRuntime(params: {
         terminalObserved: false,
       };
       activeManualCompaction = manualCompaction;
+      compactionInProgress = true;
       turnPromptActive = true;
       turnActivitySeen = false;
       idleSignalSeen = false;
@@ -2676,6 +3633,7 @@ export function createOpenCodeServerRuntime(params: {
         if (activeManualCompaction === manualCompaction) {
           activeManualCompaction = null;
         }
+        compactionInProgress = false;
       }
     },
 
@@ -2686,32 +3644,53 @@ export function createOpenCodeServerRuntime(params: {
 
     async cancel(): Promise<void> {
       if (!sessionId) return;
+      const cancelledSessionId = sessionId;
+      const cancelledProviderTurnId =
+        turnInFlight || turnDeferred || turnPromptActive || activeLifecycleMarkerId
+          ? ensureActiveLifecycleMarkerId()
+          : null;
       const c = await ensureClient();
-      suppressSessionErrorAbortNotificationForSessionId = sessionId;
-      const abortPromise = c.sessionAbort({ sessionId });
+      const suppressionGeneration = armSessionAbortErrorSuppression(cancelledSessionId);
+      const abortPromise = c.sessionAbort({ sessionId: cancelledSessionId });
 
-      const outcome = await Promise.race([
-        abortPromise.then(() => 'done' as const),
-        new Promise<'timeout'>((resolve) => {
-          const timer = setTimeout(() => resolve('timeout'), abortTimeoutMs);
-          timer.unref?.();
-        }),
-      ]).catch(() => 'done' as const);
+      try {
+        const outcome = await Promise.race([
+          abortPromise.then(() => 'done' as const),
+          new Promise<'timeout'>((resolve) => {
+            const timer = setTimeout(() => resolve('timeout'), abortTimeoutMs);
+            timer.unref?.();
+          }),
+        ]).catch(() => 'done' as const);
 
-      if (outcome === 'timeout') {
-        void abortPromise.catch(() => {});
+        if (outcome === 'timeout') {
+          void abortPromise.catch(() => {});
+        }
+      } finally {
+        clearSessionAbortErrorSuppression(cancelledSessionId, suppressionGeneration);
       }
 
       setThinking(false);
       await flushAndClearStreamWriters({ reason: 'abort', interruptedReason: 'cancelled' });
+      if (cancelledProviderTurnId) {
+        await surfacePrimarySessionRuntimeIssue({
+          cause: 'cancelled',
+          provider,
+          providerTurnId: cancelledProviderTurnId,
+          session: params.session,
+        }).catch((error) => {
+          logger.debug('[opencode] Failed to persist explicit turn cancellation (non-fatal)', error);
+        });
+      }
       rejectTurn(new Error('OpenCode session aborted'));
       resetRuntimeState();
+      providerActivityTracker.resetForProviderSession(cancelledSessionId);
     },
 
     async reset(): Promise<void> {
       resetRuntimeState();
       setThinking(false);
       sessionId = null;
+      providerActivityTracker.resetForProviderSession(null);
       selectedAgent = null;
       selectedModel = null;
       currentContextWindowTokens = null;
@@ -2785,6 +3764,11 @@ export function createOpenCodeServerRuntime(params: {
       }
       const parsed = parseOpenCodeModelId(trimmed);
       if (!parsed) throw new Error(`Invalid OpenCode model id: ${modelId}`);
+      if (isKnownUnavailableOpenCodeModel(parsed)) {
+        selectedModel = null;
+        publishDynamicSessionOptionsBestEffort();
+        return;
+      }
       selectedModel = parsed;
       publishDynamicSessionOptionsBestEffort();
     },

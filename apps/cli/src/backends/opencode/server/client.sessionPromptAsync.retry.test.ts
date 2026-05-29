@@ -104,4 +104,56 @@ describe('createOpenCodeServerRuntimeClient sessionPromptAsync managed retry', (
             expect.stringContaining('127.0.0.1:10000/session/ses_1/prompt_async'),
         ]);
     });
+
+    it('sends OpenCode prompt variants as top-level prompt_async fields', async () => {
+        const promptBodies: unknown[] = [];
+        globalThis.fetch = vi.fn(async (input, init) => {
+            const url = typeof input === 'string' ? input : String((input as Request)?.url ?? '');
+
+            if (url.includes('/global/health')) {
+                return new Response(JSON.stringify({ healthy: true, version: '1.2.15' }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                });
+            }
+
+            if (url.includes('/prompt_async')) {
+                promptBodies.push(JSON.parse(String(init?.body ?? '{}')));
+                return new Response(null, { status: 204 });
+            }
+
+            return new Response(JSON.stringify({}), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            });
+        }) as typeof fetch;
+
+        const client = await createOpenCodeServerRuntimeClient({
+            directory: '/tmp',
+            messageBuffer: new MessageBuffer(),
+            baseUrlOverride: 'http://127.0.0.1:9999',
+        });
+
+        await expect((client.sessionPromptAsync as unknown as (opts: {
+            sessionId: string;
+            parts: unknown[];
+            variant?: string;
+            config?: Record<string, unknown>;
+        }) => Promise<void>)({
+            sessionId: 'ses_1',
+            parts: [{ type: 'text', text: 'hello' }],
+            variant: 'high',
+            config: { telemetry: true },
+        })).resolves.toBeUndefined();
+
+        expect(promptBodies).toEqual([
+            expect.objectContaining({
+                variant: 'high',
+                config: { telemetry: true },
+            }),
+        ]);
+        expect(promptBodies[0]).not.toMatchObject({
+            config: expect.objectContaining({ variant: expect.anything() }),
+        });
+    });
 });

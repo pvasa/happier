@@ -32,7 +32,7 @@ describe('createOpenCodeTranscriptStreamBridge', () => {
     vi.restoreAllMocks();
   });
 
-  it('streams assistant deltas via durable checkpoints that reuse the segment localId', async () => {
+  it('streams assistant deltas via durable checkpoints that reuse the segment localId after projection is confirmed', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
 
@@ -56,10 +56,24 @@ describe('createOpenCodeTranscriptStreamBridge', () => {
       messageId: 'msg_1',
       sidechainId: null,
     });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushTranscriptCommitMicrotasks();
+
+    expect(durableCalls).toHaveLength(0);
+
+    bridge.enableDurableCommitsForStream({
+      streamKey: 'stream-1',
+      remoteSessionId: 'ses_1',
+      messageId: 'msg_1',
+      sidechainId: null,
+    });
+    await flushTranscriptCommitMicrotasks();
+
     await bridge.flushAll({ reason: 'turn-end' });
     await flushTranscriptCommitMicrotasks();
 
-    expect(durableCalls.map((row) => (row.body as any)?.message)).toEqual(['Hello', 'Hello.']);
+    expect(durableCalls.map((row) => (row.body as any)?.message)).toEqual(['Hello.', 'Hello.']);
     expect(durableCalls[0]?.localId).toBeTruthy();
     expect(durableCalls[1]?.localId).toBe(durableCalls[0]?.localId);
     expect((durableCalls[0]?.meta as any)?.happierStreamKey).toBe('stream-1');
@@ -68,6 +82,40 @@ describe('createOpenCodeTranscriptStreamBridge', () => {
       segmentLocalId: durableCalls[0]?.localId,
       segmentState: 'complete',
     });
+  });
+
+  it('drops a streamed compaction summary before any durable transcript checkpoint can persist it', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const { session, durableCalls } = createSessionStub();
+    const bridge = createOpenCodeTranscriptStreamBridge({
+      provider: 'opencode' as any,
+      session: session as any,
+    });
+
+    bridge.appendAssistantDelta({
+      deltaText: '## Goal\n- Internal compaction summary',
+      streamKey: 'stream-summary',
+      remoteSessionId: 'ses_1',
+      messageId: 'msg_compaction',
+      sidechainId: null,
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushTranscriptCommitMicrotasks();
+
+    bridge.discardStream({
+      streamKey: 'stream-summary',
+      remoteSessionId: 'ses_1',
+      messageId: 'msg_compaction',
+      sidechainId: null,
+    });
+
+    await bridge.flushAll({ reason: 'turn-end' });
+    await flushTranscriptCommitMicrotasks();
+
+    expect(durableCalls).toHaveLength(0);
   });
 
   it('preserves sidechain metadata and completion state on sidechain assistant streams', async () => {
@@ -87,6 +135,10 @@ describe('createOpenCodeTranscriptStreamBridge', () => {
       messageId: 'msg_child_1',
       sidechainId: 'call_task_1',
     });
+    await flushTranscriptCommitMicrotasks();
+
+    expect(durableCalls.map((row) => (row.body as any)?.message)).toEqual(['CHILD_OK']);
+
     await bridge.flushAll({ reason: 'turn-end' });
     await flushTranscriptCommitMicrotasks();
 
@@ -98,6 +150,72 @@ describe('createOpenCodeTranscriptStreamBridge', () => {
       remoteSessionId: 'ses_child_1',
       sidechainId: 'call_task_1',
       happierSidechainStreamKey: 'stream-child',
+      happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }),
+    });
+  });
+
+  it('flushes only matching sidechain streams at tool-call boundaries', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const { session, durableCalls } = createSessionStub();
+    const bridge = createOpenCodeTranscriptStreamBridge({
+      provider: 'opencode' as any,
+      session: session as any,
+      checkpointIntervalMs: 0,
+      checkpointMinChars: 1,
+    });
+
+    bridge.appendAssistantDelta({
+      deltaText: 'Root before',
+      streamKey: 'stream-root',
+      remoteSessionId: 'ses_root',
+      messageId: 'msg_root',
+      sidechainId: null,
+    });
+    bridge.enableDurableCommitsForStream({
+      streamKey: 'stream-root',
+      remoteSessionId: 'ses_root',
+      messageId: 'msg_root',
+      sidechainId: null,
+    });
+    await flushTranscriptCommitMicrotasks();
+
+    bridge.appendAssistantDelta({
+      deltaText: 'Child text',
+      streamKey: 'stream-child',
+      remoteSessionId: 'ses_child',
+      messageId: 'msg_child',
+      sidechainId: 'task-call-1',
+    });
+    await flushTranscriptCommitMicrotasks();
+
+    const initialRootLocalId = durableCalls.find((row) => (row.body as any)?.sidechainId === undefined)?.localId;
+    expect(initialRootLocalId).toEqual(expect.any(String));
+
+    await bridge.flushStreamsMatching({
+      reason: 'tool-call-boundary',
+      matches: (stream) => stream.sidechainId === 'task-call-1',
+    });
+    await flushTranscriptCommitMicrotasks();
+
+    bridge.appendAssistantDelta({
+      deltaText: ' and after',
+      streamKey: 'stream-root',
+      remoteSessionId: 'ses_root',
+      messageId: 'msg_root',
+      sidechainId: null,
+    });
+    await flushTranscriptCommitMicrotasks();
+
+    const rootCalls = durableCalls.filter((row) => (row.body as any)?.sidechainId === undefined);
+    const childCalls = durableCalls.filter((row) => (row.body as any)?.sidechainId === 'task-call-1');
+
+    expect(rootCalls.map((row) => row.localId)).toEqual([initialRootLocalId, initialRootLocalId]);
+    expect((rootCalls.at(-1)?.body as any)?.message).toBe('Root before and after');
+    expect(childCalls.at(-1)?.meta).toMatchObject({
+      importedFrom: 'acp-sidechain',
+      sidechainId: 'task-call-1',
       happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }),
     });
   });

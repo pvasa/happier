@@ -47,6 +47,7 @@ export function createOpenCodeTranscriptStreamBridge(params: {
     provider: params.provider,
     checkpointIntervalMs: params.checkpointIntervalMs,
     checkpointMinChars: params.checkpointMinChars,
+    durableCommitsRequireExplicitEnable: (args) => args.sidechainId === null,
     createSessionForStream: (args) => {
       const baseMeta = buildSidechainMeta(args);
       return createOpenCodeTranscriptStreamSession({

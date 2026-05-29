@@ -1,8 +1,23 @@
 import { AGENTS_CORE } from '@happier-dev/agents';
 
 import { checklists } from './cli/checklists';
+import { createOpenCodeConnectedServiceRuntimeAuthAdapter } from '@/backends/opencode/connectedServices/createOpenCodeConnectedServiceRuntimeAuthAdapter';
+import { createOpenCodeConnectedServicesMaterializer } from '@/backends/opencode/connectedServices/createOpenCodeConnectedServicesMaterializer';
+import { materializeOpenCodeConnectedServiceRuntimeAuthSelection } from '@/backends/opencode/connectedServices/materializeOpenCodeConnectedServiceRuntimeAuthSelection';
+import { openCodeConnectedServiceStateSharingDescriptor } from '@/backends/opencode/connectedServices/openCodeConnectedServiceStateSharingDescriptor';
+import { openCodeUsageLimitRecoveryControlAdapter } from '@/backends/opencode/connectedServices/openCodeUsageLimitRecoveryControlAdapter';
+import { resolveOpenCodeConnectedServiceSwitchContinuity } from '@/backends/opencode/connectedServices/resolveOpenCodeConnectedServiceSwitchContinuity';
 import { opencodeDaemonSpawnHooks } from '@/backends/opencode/daemon/spawnHooks';
 import type { AgentCatalogEntry } from '../types';
+import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
+
+const openCodeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCredentialLifecycleDescriptor = {
+  providerId: 'opencode',
+  serviceIds: AGENTS_CORE.opencode.connectedServices.supportedServiceIds,
+  refreshTokenRuntimeHandling: 'daemon_only',
+  refreshedCredentialApplication: { mode: 'restart_required' },
+  runtimeAuthFailureClassifier: { available: true },
+};
 
 export const agent = {
   id: AGENTS_CORE.opencode.id,
@@ -12,6 +27,15 @@ export const agent = {
   getCliDetect: async () => (await import('@/backends/opencode/cli/detect')).cliDetect,
   getCliAuthSpec: async () => (await import('@/backends/opencode/cli/auth/opencodeCliAuthSpec')).opencodeCliAuthSpec,
   getDaemonSpawnHooks: async () => opencodeDaemonSpawnHooks,
+  getConnectedServiceMaterializer: async () => createOpenCodeConnectedServicesMaterializer(),
+  getConnectedServiceRuntimeAuthAdapter: async () => createOpenCodeConnectedServiceRuntimeAuthAdapter(),
+  materializeConnectedServiceRuntimeAuthSelection: materializeOpenCodeConnectedServiceRuntimeAuthSelection,
+  getConnectedServiceCredentialLifecycleDescriptor: async () => openCodeConnectedServiceCredentialLifecycleDescriptor,
+  getConnectedServiceStateSharingDescriptor: async () => openCodeConnectedServiceStateSharingDescriptor,
+  resolveConnectedServiceSwitchContinuity: async (params) => await resolveOpenCodeConnectedServiceSwitchContinuity(params),
+  verifyResumeReachable: async (input) =>
+    await (await import('@/backends/opencode/connectedServices/verifyResumeReachableOpenCode')).verifyResumeReachableOpenCode(input),
+  getSessionUsageLimitRecoveryControlAdapter: async () => openCodeUsageLimitRecoveryControlAdapter,
   getDirectSessionProviderOps: async () => (await import('@/backends/opencode/directSessions/providerOps')).openCodeDirectSessionProviderOps,
   getProviderAttachOps: async () => (await import('@/backends/opencode/attach/providerAttachOps')).openCodeProviderAttachOps,
   vendorResumeSupport: AGENTS_CORE.opencode.resume.vendorResume,
@@ -21,6 +45,8 @@ export const agent = {
   },
   getAcpForkContinuationHandler: async () => (await import('@/backends/opencode/acp/forkContinuationHandler')).openCodeAcpForkContinuationHandler,
   getProviderNativeForkHandler: async () => (await import('@/backends/opencode/server/providerNativeForkHandler')).openCodeProviderNativeForkHandler,
+  getSessionCatalogControlAdapter: async () =>
+    (await import('@/backends/opencode/server/catalogControl/openCodeServerCatalogControlAdapter')).openCodeServerCatalogControlAdapter,
   getPreflightSessionControlsProbeAdapter: async () =>
     (await import('@/backends/opencode/preflight/openCodePreflightSessionControlsProbeAdapter')).openCodePreflightSessionControlsProbeAdapter,
   checklists,

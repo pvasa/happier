@@ -179,6 +179,110 @@ describe('createOpenCodeServerExecutionRunBackend', () => {
     expect(flushTurn).toHaveBeenCalledTimes(1);
   });
 
+  it('reports OpenCode runtime turn state through the execution-run liveness probe', async () => {
+    let activeSessionId: string | null = null;
+    let runtimeTurnInFlight = true;
+    let runtimeProbeActive = true;
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn: vi.fn(),
+      flushTurn: vi.fn(),
+      startOrLoad,
+      sendPrompt: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+      isTurnInFlight: () => runtimeTurnInFlight,
+      probeTurnLiveness: vi.fn(async () => ({
+        active: runtimeProbeActive,
+        diagnostics: { status: runtimeProbeActive ? 'busy' : 'idle' },
+      })),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    await expect(backend.startSession()).resolves.toEqual({ sessionId: 'session_server' });
+    await expect(backend.probeTurnLiveness?.('session_server' as any)).resolves.toEqual({
+      active: true,
+      diagnostics: { status: 'busy' },
+      promptInFlight: false,
+      source: 'opencode-server-runtime',
+      turnInFlight: true,
+    });
+
+    runtimeTurnInFlight = false;
+    runtimeProbeActive = false;
+
+    await expect(backend.probeTurnLiveness?.('session_server' as any)).resolves.toEqual({
+      active: false,
+      diagnostics: { status: 'idle' },
+      promptInFlight: false,
+      source: 'opencode-server-runtime',
+      turnInFlight: false,
+    });
+  });
+
+  it('keeps local prompt state out of active liveness when OpenCode reports idle', async () => {
+    let activeSessionId: string | null = null;
+    let resolveRuntimePrompt!: () => void;
+    const runtimePrompt = new Promise<void>((resolve) => {
+      resolveRuntimePrompt = resolve;
+    });
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn: vi.fn(),
+      flushTurn: vi.fn(),
+      startOrLoad,
+      sendPrompt: vi.fn(() => runtimePrompt),
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+      isTurnInFlight: () => true,
+      probeTurnLiveness: vi.fn(async () => ({
+        active: false,
+        diagnostics: { status: 'idle' },
+      })),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('session_server', 'Inspect this repo');
+
+    await expect(backend.probeTurnLiveness?.('session_server' as any)).resolves.toEqual({
+      active: false,
+      diagnostics: { status: 'idle' },
+      promptInFlight: true,
+      source: 'opencode-server-runtime',
+      turnInFlight: true,
+    });
+
+    resolveRuntimePrompt();
+    await backend.waitForResponseComplete?.();
+  });
+
   it('routes /compact to the OpenCode runtime compaction hook', async () => {
     let activeSessionId: string | null = null;
     const beginTurn = vi.fn();
@@ -218,5 +322,141 @@ describe('createOpenCodeServerExecutionRunBackend', () => {
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(beginTurn).toHaveBeenCalledTimes(1);
     expect(flushTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a settled runtime rejection until waitForResponseComplete consumes it', async () => {
+    let activeSessionId: string | null = null;
+    const flushTurn = vi.fn();
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+    const sendPrompt = vi.fn(async () => {
+      throw new Error('opencode rejected before wait');
+    });
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn: vi.fn(),
+      flushTurn,
+      startOrLoad,
+      sendPrompt,
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+      isTurnInFlight: () => false,
+      probeTurnLiveness: vi.fn(async () => ({ active: false })),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('session_server', 'Inspect this repo');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(backend.waitForResponseComplete?.()).rejects.toThrow(/opencode rejected before wait/);
+    expect(flushTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('converts native OpenCode turn timeouts into typed execution-run timeout errors', async () => {
+    let activeSessionId: string | null = null;
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+    const sendPrompt = vi.fn(async () => {
+      throw new Error('OpenCode turn timed out after 250ms; final liveness probe: status=idle');
+    });
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn: vi.fn(),
+      flushTurn: vi.fn(),
+      startOrLoad,
+      sendPrompt,
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+      isTurnInFlight: () => false,
+      probeTurnLiveness: vi.fn(async () => ({
+        active: false,
+        diagnostics: { status: 'idle' },
+      })),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    await backend.startSession();
+    await backend.sendPrompt('session_server', 'Inspect this repo');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(backend.waitForResponseComplete?.()).rejects.toMatchObject({
+      executionRunErrorCode: 'provider_inactivity_timeout',
+      livenessProbe: {
+        active: false,
+        diagnostics: {
+          runtimeError: 'OpenCode turn timed out after 250ms; final liveness probe: status=idle',
+          status: 'idle',
+        },
+        promptInFlight: false,
+        source: 'opencode-server-runtime',
+        turnInFlight: false,
+      },
+    });
+  });
+
+  it('keeps startSession with an initial prompt pending until the prompt completes', async () => {
+    let activeSessionId: string | null = null;
+    let resolveRuntimePrompt!: () => void;
+    const runtimePrompt = new Promise<void>((resolve) => {
+      resolveRuntimePrompt = resolve;
+    });
+    const startOrLoad = vi.fn(async () => {
+      activeSessionId = 'session_server';
+      return activeSessionId;
+    });
+
+    createOpenCodeServerRuntimeMock.mockImplementation(() => ({
+      getSessionId: () => activeSessionId,
+      beginTurn: vi.fn(),
+      flushTurn: vi.fn(),
+      startOrLoad,
+      sendPrompt: vi.fn(() => runtimePrompt),
+      cancel: vi.fn(async () => undefined),
+      reset: vi.fn(async () => undefined),
+      isTurnInFlight: () => true,
+      probeTurnLiveness: vi.fn(async () => ({ active: true })),
+    }));
+
+    const { createOpenCodeServerExecutionRunBackend } = await import('./createOpenCodeServerExecutionRunBackend');
+    const backend = createOpenCodeServerExecutionRunBackend({
+      cwd: '/tmp/opencode-run',
+      permissionHandler: {
+        handleToolCall: vi.fn(async () => ({ decision: 'approved_for_session' as const })),
+      },
+      permissionMode: 'read-only',
+    });
+
+    const start = backend.startSession('Inspect this repo').then(() => 'started' as const);
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(Promise.race([start, Promise.resolve('pending' as const)])).resolves.toBe('pending');
+
+    resolveRuntimePrompt();
+    await expect(start).resolves.toBe('started');
   });
 });

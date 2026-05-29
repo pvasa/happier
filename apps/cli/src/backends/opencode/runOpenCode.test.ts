@@ -20,7 +20,7 @@ vi.mock('@/api/session/sessionWritesBestEffort', () => ({
 
 const { createOpenCodeAcpRuntimeMock, createOpenCodeServerRuntimeMock } = vi.hoisted(() => ({
   createOpenCodeAcpRuntimeMock: vi.fn(() => ({ getSessionId: () => 'ses_acp' })),
-  createOpenCodeServerRuntimeMock: vi.fn(() => ({ getSessionId: () => 'ses_server' })),
+  createOpenCodeServerRuntimeMock: vi.fn((_params: unknown) => ({ getSessionId: () => 'ses_server' })),
 }));
 
 const {
@@ -227,6 +227,46 @@ describe('runOpenCode', () => {
 
     expect(createOpenCodeServerRuntimeMock).toHaveBeenCalledTimes(1);
     expect(createOpenCodeAcpRuntimeMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('wires server runtime pending drains through the session input consumer adapter', async () => {
+    const session = {
+      popPendingMessage: vi.fn(async () => false),
+      materializeNextPendingMessageSafely: vi.fn(async () => ({ type: 'no_pending' as const })),
+      shouldAttemptPendingMaterialization: vi.fn(() => true),
+      reconcilePendingQueueState: vi.fn(async () => true),
+      waitForMetadataUpdate: vi.fn(async () => false),
+    };
+
+    runStandardAcpProviderMock.mockImplementationOnce(async (_opts: unknown, config: unknown) => {
+      if (!config || typeof config !== 'object') {
+        throw new Error('Expected runStandardAcpProvider config to be an object');
+      }
+      const createRuntime = (config as { createRuntime?: unknown }).createRuntime;
+      if (typeof createRuntime !== 'function') {
+        throw new Error('Expected runStandardAcpProvider config to provide createRuntime');
+      }
+
+      createRuntime({
+        directory: '/tmp',
+        metadata: { path: '/tmp' },
+        session,
+        messageBuffer: {},
+        mcpServers: {},
+        permissionHandler: {},
+        getPermissionMode: () => 'default',
+        setThinking: () => {},
+      });
+    });
+
+    await runOpenCode({ credentials });
+
+    const runtimeParams = createOpenCodeServerRuntimeMock.mock.calls[0]?.[0] as {
+      pendingQueue?: Record<string, unknown>;
+    } | undefined;
+    expect(runtimeParams?.pendingQueue?.drainAfterStartOrLoad).toBe(true);
+    expect(runtimeParams?.pendingQueue?.drainPending).toBeTypeOf('function');
+    expect(runtimeParams?.pendingQueue).not.toHaveProperty('popPendingMessage');
   });
 
   it('uses ACP runtime when backend mode is explicitly set to acp', async () => {
