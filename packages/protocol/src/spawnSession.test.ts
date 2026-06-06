@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   SPAWN_SESSION_ERROR_CODES,
   SPAWN_SESSION_ERROR_DETAIL_KINDS,
+  isConnectedServiceUxDiagnosticSpawnErrorDetail,
   isConnectedServiceResumeUnreachableSpawnErrorDetail,
+  isSpawnSessionErrorDetail,
+  normalizeSpawnSessionErrorDetail,
   type SpawnSessionErrorDetail,
   type SpawnSessionResult,
 } from './spawnSession.js';
@@ -30,10 +33,18 @@ describe('spawn-session error detail contract (D2 structured continuity)', () =>
       continuityErrorCode: 'provider_session_state_unavailable_for_resume',
       failurePhase: 'continuity',
       agentId: 'pi',
-      vendorResumeId: 'pi-session-missing',
-      cwd: '/tmp/project',
       reason: 'no_resumable_session_file',
-      targetMaterializedRoot: '/tmp/materialized/pi-agent-dir',
+      uxDiagnostic: {
+        code: 'provider_session_state_unavailable_for_resume',
+        failurePhase: 'continuity',
+        source: 'spawn_resume',
+        agentId: 'pi',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'no_resumable_session_file',
+        },
+      },
     };
 
     const result: SpawnSessionResult = {
@@ -48,10 +59,36 @@ describe('spawn-session error detail contract (D2 structured continuity)', () =>
     // The existing fields are unchanged: code stays SPAWN_VALIDATION_FAILED so legacy consumers work.
     expect(result.errorCode).toBe(SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED);
     expect(result.errorDetail).toBe(detail);
+    expect(result.errorDetail).not.toHaveProperty('vendorResumeId');
+    expect(result.errorDetail).not.toHaveProperty('cwd');
+    expect(result.errorDetail).not.toHaveProperty('targetMaterializedRoot');
   });
 
-  it('recognizes the connected-service resume-unreachable detail via the type guard', () => {
+  it('recognizes the UI-safe connected-service resume-unreachable detail via the type guard', () => {
     const detail: SpawnSessionErrorDetail = {
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_RESUME_UNREACHABLE,
+      continuityErrorCode: 'provider_session_state_unavailable_for_resume',
+      failurePhase: 'continuity',
+      agentId: 'codex',
+      reason: 'native_session_file_missing',
+      uxDiagnostic: {
+        code: 'provider_session_state_unavailable_for_resume',
+        failurePhase: 'continuity',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'native_session_file_missing',
+        },
+      },
+    };
+
+    expect(isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)).toBe(true);
+  });
+
+  it('rejects unsafe daemon-local forensic fields in public resume-unreachable details', () => {
+    const detail = {
       kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_RESUME_UNREACHABLE,
       continuityErrorCode: 'provider_session_state_unavailable_for_resume',
       failurePhase: 'continuity',
@@ -59,10 +96,132 @@ describe('spawn-session error detail contract (D2 structured continuity)', () =>
       vendorResumeId: 'rollout-123',
       cwd: '/work/repo',
       reason: 'native_session_file_missing',
-      targetMaterializedRoot: null,
+      targetMaterializedRoot: '/tmp/materialized/codex',
+      candidatePersistedSessionFile: '/Users/leeroy/.codex/sessions/rollout-123.jsonl',
+      uxDiagnostic: {
+        code: 'provider_session_state_unavailable_for_resume',
+        failurePhase: 'continuity',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'native_session_file_missing',
+        },
+      },
     };
 
+    expect(isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)).toBe(false);
+    expect(isConnectedServiceResumeUnreachableSpawnErrorDetail({
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_RESUME_UNREACHABLE,
+      continuityErrorCode: 'provider_session_state_unavailable_for_resume',
+      failurePhase: 'continuity',
+      agentId: 'codex',
+      reason: 'native_session_file_missing',
+      candidatePersistedSessionFile: '/Users/leeroy/.codex/sessions/rollout-123.jsonl',
+      uxDiagnostic: detail.uxDiagnostic,
+    })).toBe(false);
+  });
+
+  it('projects legacy resume-unreachable details into the UI-safe public shape', () => {
+    const detail = normalizeSpawnSessionErrorDetail({
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_RESUME_UNREACHABLE,
+      continuityErrorCode: 'provider_session_state_unavailable_for_resume',
+      failurePhase: 'continuity',
+      agentId: 'codex',
+      vendorResumeId: 'rollout-123',
+      cwd: '/Users/leeroy/Documents/Development/happier/remote-dev',
+      reason: 'native_session_file_missing',
+      targetMaterializedRoot: '/Users/leeroy/.happier/materialized/codex',
+      candidatePersistedSessionFile: '/Users/leeroy/.codex/sessions/rollout-123.jsonl',
+      uxDiagnostic: {
+        code: 'provider_session_state_unavailable_for_resume',
+        failurePhase: 'continuity',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'native_session_file_missing',
+          cwd: '/Users/leeroy/Documents/Development/happier/remote-dev',
+          targetMaterializedRoot: '/Users/leeroy/.happier/materialized/codex',
+          candidatePersistedSessionFile: '/Users/leeroy/.codex/sessions/rollout-123.jsonl',
+          requestedStateMode: 'shared',
+          effectiveStateMode: 'shared',
+        },
+      },
+    });
+
     expect(isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)).toBe(true);
+    if (!isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)) {
+      throw new Error('expected sanitized resume-unreachable detail');
+    }
+    expect(detail.reason).toBe('native_session_file_missing');
+    expect(detail.agentId).toBe('codex');
+    expect(detail).not.toHaveProperty('vendorResumeId');
+    expect(detail).not.toHaveProperty('cwd');
+    expect(detail).not.toHaveProperty('targetMaterializedRoot');
+    expect(detail).not.toHaveProperty('candidatePersistedSessionFile');
+    expect(detail.uxDiagnostic.diagnostics).toEqual({
+      reason: 'native_session_file_missing',
+      requestedStateMode: 'shared',
+      effectiveStateMode: 'shared',
+    });
+  });
+
+  it('synthesizes a safe diagnostic for legacy resume-unreachable details without uxDiagnostic', () => {
+    const detail = normalizeSpawnSessionErrorDetail({
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_RESUME_UNREACHABLE,
+      continuityErrorCode: 'provider_session_state_unavailable_for_resume',
+      failurePhase: 'continuity',
+      agentId: 'pi',
+      vendorResumeId: 'pi-session-missing',
+      cwd: '/Users/leeroy/Documents/Development/happier/remote-dev',
+      reason: 'no_resumable_session_file',
+      targetMaterializedRoot: '/Users/leeroy/.happier/materialized/pi',
+    });
+
+    expect(isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)).toBe(true);
+    if (!isConnectedServiceResumeUnreachableSpawnErrorDetail(detail)) {
+      throw new Error('expected sanitized resume-unreachable detail');
+    }
+    expect(detail.reason).toBe('no_resumable_session_file');
+    expect(detail.uxDiagnostic).toMatchObject({
+      code: 'provider_session_state_unavailable_for_resume',
+      failurePhase: 'continuity',
+      source: 'spawn_resume',
+      agentId: 'pi',
+      retryable: false,
+      suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+      diagnostics: {
+        reason: 'no_resumable_session_file',
+      },
+    });
+    expect(detail).not.toHaveProperty('vendorResumeId');
+    expect(detail).not.toHaveProperty('cwd');
+    expect(detail).not.toHaveProperty('targetMaterializedRoot');
+  });
+
+  it('rejects unsafe nested diagnostics in public resume-unreachable details', () => {
+    expect(isConnectedServiceResumeUnreachableSpawnErrorDetail({
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_RESUME_UNREACHABLE,
+      continuityErrorCode: 'provider_session_state_unavailable_for_resume',
+      failurePhase: 'continuity',
+      agentId: 'codex',
+      reason: 'native_session_file_missing',
+      uxDiagnostic: {
+        code: 'provider_session_state_unavailable_for_resume',
+        failurePhase: 'continuity',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'native_session_file_missing',
+          candidatePersistedSessionFile: '/Users/leeroy/.codex/sessions/rollout-123.jsonl',
+        },
+      },
+    })).toBe(false);
   });
 
   it('does not recognize unrelated values as a resume-unreachable detail', () => {
@@ -70,6 +229,74 @@ describe('spawn-session error detail contract (D2 structured continuity)', () =>
     expect(isConnectedServiceResumeUnreachableSpawnErrorDetail(undefined)).toBe(false);
     expect(isConnectedServiceResumeUnreachableSpawnErrorDetail({ kind: 'something_else' })).toBe(false);
     expect(isConnectedServiceResumeUnreachableSpawnErrorDetail('provider_session_state_unavailable_for_resume')).toBe(false);
+  });
+
+  it('recognizes generic connected-service diagnostic spawn details', () => {
+    const result: SpawnSessionResult = {
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: 'connected_service_materialization_identity_missing',
+      errorDetail: {
+        kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+        uxDiagnostic: {
+          code: 'connected_service_materialization_identity_missing',
+          failurePhase: 'materialization',
+          source: 'spawn_resume',
+          agentId: 'codex',
+          retryable: false,
+          suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+          diagnostics: {
+            reason: 'missing_identity_and_resume_state',
+          },
+        },
+      },
+    };
+
+    expect(isSpawnSessionErrorDetail(result.errorDetail)).toBe(true);
+    expect(isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)).toBe(true);
+    if (!isConnectedServiceUxDiagnosticSpawnErrorDetail(result.errorDetail)) {
+      throw new Error('expected connected-service diagnostic detail');
+    }
+    expect(result.errorDetail.uxDiagnostic.code).toBe('connected_service_materialization_identity_missing');
+  });
+
+  it('rejects daemon-local forensic fields in public generic UX diagnostic details', () => {
+    expect(isConnectedServiceUxDiagnosticSpawnErrorDetail({
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+      vendorResumeId: 'rollout-123',
+      cwd: '/work/repo',
+      candidatePersistedSessionFile: '/Users/leeroy/.codex/sessions/rollout-123.jsonl',
+      targetMaterializedRoot: '/tmp/materialized/codex',
+      uxDiagnostic: {
+        code: 'connected_service_materialization_identity_missing',
+        failurePhase: 'materialization',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'missing_identity_and_resume_state',
+        },
+      },
+    })).toBe(false);
+  });
+
+  it('rejects unsafe nested diagnostics in public generic UX diagnostic details', () => {
+    expect(isConnectedServiceUxDiagnosticSpawnErrorDetail({
+      kind: SPAWN_SESSION_ERROR_DETAIL_KINDS.CONNECTED_SERVICE_UX_DIAGNOSTIC,
+      uxDiagnostic: {
+        code: 'connected_service_materialization_identity_missing',
+        failurePhase: 'materialization',
+        source: 'spawn_resume',
+        agentId: 'codex',
+        retryable: false,
+        suggestedActions: ['start_fresh_under_selected_account', 'resume_current_account'],
+        diagnostics: {
+          reason: 'missing_identity_and_resume_state',
+          targetMaterializedRoot: '/tmp/materialized/codex',
+        },
+      },
+    })).toBe(false);
   });
 
   it('rejects resume-unreachable details with missing or malformed required fields', () => {
@@ -82,10 +309,7 @@ describe('spawn-session error detail contract (D2 structured continuity)', () =>
       continuityErrorCode: 'some_other_reason',
       failurePhase: 'continuity',
       agentId: 'codex',
-      vendorResumeId: 'rollout-123',
-      cwd: '/work/repo',
       reason: 'native_session_file_missing',
-      targetMaterializedRoot: null,
     })).toBe(false);
 
     expect(isConnectedServiceResumeUnreachableSpawnErrorDetail({
@@ -93,10 +317,7 @@ describe('spawn-session error detail contract (D2 structured continuity)', () =>
       continuityErrorCode: 'provider_session_state_unavailable_for_resume',
       failurePhase: 'continuity',
       agentId: 'codex',
-      vendorResumeId: 'rollout-123',
-      cwd: '/work/repo',
-      reason: 'native_session_file_missing',
-      targetMaterializedRoot: 42,
+      reason: '',
     })).toBe(false);
   });
 });
