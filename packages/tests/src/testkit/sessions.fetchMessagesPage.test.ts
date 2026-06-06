@@ -145,6 +145,8 @@ describe('fetchSessionV2', () => {
         meaningfulActivityAt: 10,
         active: true,
         activeAt: 20,
+        pendingCount: 0,
+        pendingVersion: 4,
       },
     })) as any;
 
@@ -155,6 +157,8 @@ describe('fetchSessionV2', () => {
       meaningfulActivityAt: 10,
       latestTurnStatus: null,
       lastRuntimeIssue: null,
+      pendingCount: 0,
+      pendingVersion: 4,
     }));
   });
 
