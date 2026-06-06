@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildConnectedServiceCredentialRecord } from './buildConnectedServiceCredentialRecord';
+import {
+  buildConnectedServiceCredentialRecord,
+  type ConnectedServiceOauthCredentialRawMetadata,
+} from './buildConnectedServiceCredentialRecord';
+
+function rawFromUntypedCaller(value: unknown): ConnectedServiceOauthCredentialRawMetadata {
+  // Boundary fixture: simulates a JS caller bypassing TypeScript excess-property checks.
+  return value as ConnectedServiceOauthCredentialRawMetadata;
+}
 
 describe('buildConnectedServiceCredentialRecord', () => {
   it('builds an oauth record for codex tokens', () => {
@@ -43,6 +51,117 @@ describe('buildConnectedServiceCredentialRecord', () => {
     });
   });
 
+  it('preserves oauth raw provider metadata when provided', () => {
+    const now = 1700000000000;
+    const rec = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'default',
+      kind: 'oauth',
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+        raw: {
+          claudeAiOauth: {
+            subscriptionType: 'max',
+            rateLimitTier: 'max_20x',
+          },
+        },
+      },
+    });
+
+    expect(rec.oauth?.raw).toEqual({
+      claudeAiOauth: {
+        subscriptionType: 'max',
+        rateLimitTier: 'max_20x',
+      },
+    });
+  });
+
+  it('strips secret-like and arbitrary oauth raw fields before persistence', () => {
+    const now = 1700000000000;
+    const rec = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'default',
+      kind: 'oauth',
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+        raw: rawFromUntypedCaller({
+          access_token: 'raw-access-token',
+          refresh_token: 'raw-refresh-token',
+          id_token: 'raw-id-token',
+          authorization: 'Bearer raw-authorization',
+          arbitrary: { nested: true },
+          claudeAiOauth: {
+            subscriptionType: 'max',
+            rateLimitTier: 'max_20x',
+            access_token: 'nested-access-token',
+            refresh_token: 'nested-refresh-token',
+            id_token: 'nested-id-token',
+            authorization: 'Bearer nested-authorization',
+            arbitrary: { nested: true },
+          },
+        }),
+      },
+    });
+
+    expect(rec.oauth?.raw).toEqual({
+      claudeAiOauth: {
+        subscriptionType: 'max',
+        rateLimitTier: 'max_20x',
+      },
+    });
+    expect(JSON.stringify(rec.oauth?.raw)).not.toContain('access-token');
+    expect(JSON.stringify(rec.oauth?.raw)).not.toContain('refresh-token');
+    expect(JSON.stringify(rec.oauth?.raw)).not.toContain('raw-id-token');
+    expect(JSON.stringify(rec.oauth?.raw)).not.toContain('authorization');
+    expect(JSON.stringify(rec.oauth?.raw)).not.toContain('nested');
+  });
+
+  it('drops oauth raw metadata when only secret-like or arbitrary fields are present', () => {
+    const now = 1700000000000;
+    const rec = buildConnectedServiceCredentialRecord({
+      now,
+      serviceId: 'claude-subscription',
+      profileId: 'default',
+      kind: 'oauth',
+      oauth: {
+        accessToken: 'at',
+        refreshToken: 'rt',
+        idToken: null,
+        scope: 'user:inference user:profile user:sessions:claude_code',
+        tokenType: 'Bearer',
+        providerAccountId: null,
+        providerEmail: null,
+        raw: rawFromUntypedCaller({
+          access_token: 'raw-access-token',
+          refresh_token: 'raw-refresh-token',
+          id_token: 'raw-id-token',
+          authorization: 'Bearer raw-authorization',
+          arbitrary: { nested: true },
+          claudeAiOauth: {
+            access_token: 'nested-access-token',
+            arbitrary: { nested: true },
+          },
+        }),
+      },
+    });
+
+    expect(rec.oauth?.raw).toBeNull();
+  });
+
   it('builds a token record for setup-token credentials', () => {
     const now = 1700000000000;
     const rec = buildConnectedServiceCredentialRecord({
@@ -61,4 +180,3 @@ describe('buildConnectedServiceCredentialRecord', () => {
     expect(rec.expiresAt).toBeNull();
   });
 });
-
