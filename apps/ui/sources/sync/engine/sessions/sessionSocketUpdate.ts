@@ -5,6 +5,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import type { ApiMessage } from '@/sync/api/types/apiTypes';
 import { readStoredSessionMessage } from '@/sync/runtime/readStoredSessionContent';
 import { markStreamingMessagesAppliedForSessionUiTelemetry } from '@/sync/runtime/performance/sessionUiTelemetry';
+import { recordRealtimeFanoutSocketMessageRoute } from '@/sync/runtime/performance/realtimeFanoutTelemetry';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import type {
     SessionRealtimeProjectionCandidate,
@@ -141,14 +142,24 @@ function normalizeMessageSeq(value: unknown): number | null {
 
 function recordDurableRealtimeRouteDecision(params: Readonly<{
     mode: SessionRealtimeProjectionMode;
+    sessionId: string;
     updateType: 'new-message' | 'message-updated';
-    route: string;
+    route: 'fullTranscriptApply' | 'projectionOnly' | 'markTranscriptStale' | 'legacyFallback';
     visible: boolean;
     fullContentConsumerActive: boolean;
     messagesLoaded: boolean;
     messageSeq: number | null;
 }>): void {
-    if (params.mode === 'disabled' && !syncPerformanceTelemetry.isEnabled()) return;
+    if (!syncPerformanceTelemetry.isEnabled()) return;
+    recordRealtimeFanoutSocketMessageRoute({
+        sessionId: params.sessionId,
+        updateType: params.updateType,
+        route: params.route,
+        visible: params.visible,
+        fullContentConsumerActive: params.fullContentConsumerActive,
+        messagesLoaded: params.messagesLoaded,
+        messageSeq: params.messageSeq,
+    });
     syncPerformanceTelemetry.count('sync.sessions.socket.message.routeDecision', {
         newMessage: params.updateType === 'new-message' ? 1 : 0,
         messageUpdated: params.updateType === 'message-updated' ? 1 : 0,
@@ -344,6 +355,7 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
     });
     recordDurableRealtimeRouteDecision({
         mode: realtimeProjectionMode,
+        sessionId,
         updateType,
         route: routeDecision.route,
         visible: sessionActivelyViewed,

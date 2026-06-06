@@ -276,7 +276,7 @@ describe('submitSessionUserMessage', () => {
         expect(calls.map((call) => call.type)).toEqual(['enqueue', 'resume']);
     });
 
-    it('direct-sends once for old CLI fallback without pending enqueue', async () => {
+    it('rejects configured pending on old CLI without direct-sending', async () => {
         const subject = await expectSubject();
         if (!subject) return;
         const { calls, port } = createPort();
@@ -292,16 +292,12 @@ describe('submitSessionUserMessage', () => {
         });
 
         expect(result).toMatchObject({
-            type: 'success',
-            persistence: 'transcript_committed',
+            type: 'rejected',
+            persistence: 'none',
             wake: { attempted: false, state: 'not_needed' },
+            errorCode: 'PENDING_QUEUE_UNSUPPORTED',
         });
-        expect(calls.map((call) => call.type)).toEqual(['send']);
-        expect(calls[0]).toMatchObject({
-            type: 'send',
-            sessionId: 's1',
-            text: 'legacy send',
-        });
+        expect(calls).toEqual([]);
     });
 
     it('does not let forceImmediate bypass inactive-session pending safety', async () => {
@@ -325,6 +321,34 @@ describe('submitSessionUserMessage', () => {
             wake: { attempted: true, state: 'started' },
         });
         expect(calls.map((call) => call.type)).toEqual(['enqueue', 'resume']);
+    });
+
+    it('lets forceImmediate bypass configured pending for active direct-safe sessions', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({ active: true, presence: 'online', agentStateVersion: 1 }),
+            text: 'send now',
+            configuredMode: 'server_pending',
+            forceImmediate: true,
+            resumeCapabilityOptions: { accountSettings: {} },
+            serverId: 'server-cache',
+        });
+
+        expect(result).toMatchObject({
+            type: 'success',
+            persistence: 'transcript_committed',
+            wake: { attempted: false, state: 'not_needed' },
+        });
+        expect(calls.map((call) => call.type)).toEqual(['send']);
+        expect(calls[0]).toMatchObject({
+            type: 'send',
+            sessionId: 's1',
+            text: 'send now',
+        });
     });
 
     it('aborts before sending interrupt messages', async () => {

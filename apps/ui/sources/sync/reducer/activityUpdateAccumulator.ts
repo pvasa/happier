@@ -1,31 +1,60 @@
 import type { ApiEphemeralActivityUpdate } from '../api/types/apiTypes';
 
+export type ActivityUpdateAccumulatorFlushOptions = Readonly<{
+    sourceServerId?: string | null;
+}>;
+
 type ActivityUpdateAccumulatorOptions = Readonly<{
     shouldContinue?: () => boolean;
+    sourceServerId?: string | null;
 }>;
 
 type PendingActivityUpdate = Readonly<{
     update: ApiEphemeralActivityUpdate;
     shouldContinue: () => boolean;
+    sourceServerId: string | null;
 }>;
+
+type LastEmittedActivityState = Readonly<{
+    active: boolean;
+    thinking: boolean;
+    activeAt: number;
+}>;
+
+type GroupedPendingActivityUpdates = {
+    updates: Map<string, ApiEphemeralActivityUpdate>;
+    emittedStates: Map<string, LastEmittedActivityState>;
+};
+
+function normalizeSourceServerId(value: string | null | undefined): string | null {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    return normalized.length > 0 ? normalized : null;
+}
+
+function buildPendingUpdateKey(sessionId: string, sourceServerId: string | null): string {
+    return `${sourceServerId ?? ''}\u0000${sessionId}`;
+}
 
 export class ActivityUpdateAccumulator {
     private pendingUpdates = new Map<string, PendingActivityUpdate>();
-    private lastEmittedStates = new Map<string, { active: boolean; thinking: boolean; activeAt: number }>();
+    private lastEmittedStates = new Map<string, LastEmittedActivityState>();
     private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     constructor(
-        private flushHandler: (updates: Map<string, ApiEphemeralActivityUpdate>) => void,
+        private flushHandler: (updates: Map<string, ApiEphemeralActivityUpdate>, options?: ActivityUpdateAccumulatorFlushOptions) => void,
         private debounceDelay: number = 500
     ) {}
 
     addUpdate(update: ApiEphemeralActivityUpdate, options?: ActivityUpdateAccumulatorOptions): void {
+        const sourceServerId = normalizeSourceServerId(options?.sourceServerId);
         const sessionId = update.id;
-        const lastState = this.lastEmittedStates.get(sessionId);
+        const updateKey = buildPendingUpdateKey(sessionId, sourceServerId);
+        const lastState = this.lastEmittedStates.get(updateKey);
         const thinking = update.thinking ?? false;
         const pendingUpdate: PendingActivityUpdate = {
             update,
             shouldContinue: options?.shouldContinue ?? (() => true),
+            sourceServerId,
         };
 
         // Check if this is a critical timestamp update (more than half of disconnect timeout old)
@@ -33,8 +62,8 @@ export class ActivityUpdateAccumulator {
         const isCriticalTimestamp = timeSinceLastUpdate > 60000; // Half of 120 second timeout
 
         // Check if this is a significant state change that needs immediate emission
-        const isSignificantChange = !lastState || 
-            lastState.active !== update.active || 
+        const isSignificantChange = !lastState ||
+            lastState.active !== update.active ||
             lastState.thinking !== thinking ||
             isCriticalTimestamp;
 
@@ -46,13 +75,13 @@ export class ActivityUpdateAccumulator {
             }
 
             // Add the immediate update to pending updates
-            this.pendingUpdates.set(sessionId, pendingUpdate);
+            this.pendingUpdates.set(updateKey, pendingUpdate);
 
             // Flush all pending updates together (batched)
             this.flushPendingUpdates();
         } else {
             // Accumulate for debounced emission (only timestamp updates)
-            this.pendingUpdates.set(sessionId, pendingUpdate);
+            this.pendingUpdates.set(updateKey, pendingUpdate);
 
             // Only start a new timer if one isn't already running
             if (!this.timeoutId) {
@@ -66,31 +95,43 @@ export class ActivityUpdateAccumulator {
     }
 
     private flushPendingUpdates(): void {
-        if (this.pendingUpdates.size > 0) {
-            const updatesToFlush = new Map<string, ApiEphemeralActivityUpdate>();
-            for (const [sessionId, pending] of this.pendingUpdates) {
-                if (pending.shouldContinue()) {
-                    updatesToFlush.set(sessionId, pending.update);
-                }
+        if (this.pendingUpdates.size === 0) return;
+
+        const grouped = new Map<string, GroupedPendingActivityUpdates>();
+        for (const [updateKey, pending] of this.pendingUpdates) {
+            if (!pending.shouldContinue()) continue;
+            const sourceKey = pending.sourceServerId ?? '';
+            let updatesForSource = grouped.get(sourceKey);
+            if (!updatesForSource) {
+                updatesForSource = {
+                    updates: new Map<string, ApiEphemeralActivityUpdate>(),
+                    emittedStates: new Map<string, LastEmittedActivityState>(),
+                };
+                grouped.set(sourceKey, updatesForSource);
             }
-            
-            // Emit all updates in a single batch
-            if (updatesToFlush.size > 0) {
-                this.flushHandler(updatesToFlush);
-            }
-            
-            // Update last emitted states for all flushed updates
-            for (const [sessionId, update] of updatesToFlush) {
-                this.lastEmittedStates.set(sessionId, {
-                    active: update.active,
-                    thinking: update.thinking ?? false,
-                    activeAt: update.activeAt
-                });
-            }
-            
-            // Clear pending updates
-            this.pendingUpdates.clear();
+            updatesForSource.updates.set(pending.update.id, pending.update);
+            updatesForSource.emittedStates.set(updateKey, {
+                active: pending.update.active,
+                thinking: pending.update.thinking ?? false,
+                activeAt: pending.update.activeAt,
+            });
         }
+
+        for (const [sourceKey, groupedUpdates] of grouped) {
+            if (groupedUpdates.updates.size === 0) continue;
+            const sourceServerId = sourceKey || null;
+            if (sourceServerId) {
+                this.flushHandler(groupedUpdates.updates, { sourceServerId });
+            } else {
+                this.flushHandler(groupedUpdates.updates);
+            }
+            for (const [updateKey, state] of groupedUpdates.emittedStates) {
+                this.lastEmittedStates.set(updateKey, state);
+            }
+        }
+
+        // Clear pending updates
+        this.pendingUpdates.clear();
     }
 
     cancel(): void {

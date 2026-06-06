@@ -305,6 +305,387 @@ describe('sessionMachineTarget', () => {
         expect(readMachineControlTargetForSession('s1')).toBeNull();
     });
 
+    it('recovers a control target for an inactive session when its stale machine is replaced by a unique active same-host home', async () => {
+        const { readMachineControlTargetForSession, readMachineTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machineDisplayById: {
+                'm-current': {
+                    id: 'm-current',
+                    active: true,
+                    activeAt: 2,
+                    updatedAt: 2,
+                    metadataVersion: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineTargetForSession('s1')).toBeNull();
+        expect(readMachineControlTargetForSession('s1')).toEqual({
+            machineId: 'm-current',
+            basePath: '/Users/test/workspace/repo',
+            confidence: 'reachable',
+        });
+    });
+
+    it('recovers a stale control target from host and home when the old machine record is absent', async () => {
+        const { readMachineControlTargetForSession, readMachineTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machines: {},
+            machineDisplayById: {
+                'm-current': {
+                    id: 'm-current',
+                    active: true,
+                    activeAt: 2,
+                    updatedAt: 2,
+                    metadataVersion: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineTargetForSession('s1')).toBeNull();
+        expect(readMachineControlTargetForSession('s1')).toEqual({
+            machineId: 'm-current',
+            basePath: '/Users/test/workspace/repo',
+            confidence: 'reachable',
+        });
+    });
+
+    it('recovers a stale control target when host and Windows home path formatting drift', async () => {
+        const { readMachineControlTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: 'C:\\Users\\Leeroy\\workspace\\repo',
+                        host: 'LEEROY-MBP.local',
+                        homeDir: 'C:\\Users\\Leeroy\\',
+                    },
+                },
+            },
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'leeroy-mbp',
+                        homeDir: 'c:/users/leeroy',
+                    },
+                },
+            },
+            machineDisplayById: {
+                'm-current': {
+                    id: 'm-current',
+                    active: true,
+                    activeAt: 2,
+                    updatedAt: 2,
+                    metadataVersion: 1,
+                    metadata: {
+                        host: 'leeroy-mbp',
+                        homeDir: 'c:/users/leeroy',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineControlTargetForSession('s1')).toEqual({
+            machineId: 'm-current',
+            basePath: 'C:\\Users\\Leeroy\\workspace\\repo',
+            confidence: 'reachable',
+        });
+    });
+
+    it('does not recover a stale control target when active same-host homes are ambiguous', async () => {
+        const { readMachineControlTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+                'm-current-a': {
+                    id: 'm-current-a',
+                    active: true,
+                    activeAt: 2,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+                'm-current-b': {
+                    id: 'm-current-b',
+                    active: true,
+                    activeAt: 3,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineControlTargetForSession('s1')).toBeNull();
+    });
+
+    it('does not recover a stale control target through revoked or replaced active candidates', async () => {
+        const { readMachineControlTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+                'm-revoked': {
+                    id: 'm-revoked',
+                    active: true,
+                    activeAt: 2,
+                    revokedAt: 3,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+                'm-replaced': {
+                    id: 'm-replaced',
+                    active: true,
+                    activeAt: 4,
+                    replacedByMachineId: 'm-current',
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineControlTargetForSession('s1')).toBeNull();
+    });
+
+    it('does not recover a stale control target when the recorded stale machine was revoked or replaced', async () => {
+        const { readMachineControlTargetForSession } = await import('./sessionMachineTarget');
+        const baseState = {
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machineDisplayById: {
+                'm-current': {
+                    id: 'm-current',
+                    active: true,
+                    activeAt: 2,
+                    updatedAt: 2,
+                    metadataVersion: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        };
+
+        getStateSpy.mockReturnValue({
+            ...baseState,
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    revokedAt: 3,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+        });
+        expect(readMachineControlTargetForSession('s1')).toBeNull();
+
+        getStateSpy.mockReturnValue({
+            ...baseState,
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    replacedByMachineId: 'm-other',
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+        });
+        expect(readMachineControlTargetForSession('s1')).toBeNull();
+    });
+
+    it('does not recover a stale control target without same-home proof', async () => {
+        const { readMachineControlTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: null,
+                    },
+                },
+            },
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: null,
+                    },
+                },
+                'm-current': {
+                    id: 'm-current',
+                    active: true,
+                    activeAt: 2,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineControlTargetForSession('s1')).toBeNull();
+    });
+
+    it('does not recover a stale control target across different homes on the same host', async () => {
+        const { readMachineControlTargetForSession } = await import('./sessionMachineTarget');
+        getStateSpy.mockReturnValue({
+            sessions: {
+                s1: {
+                    active: false,
+                    metadata: {
+                        machineId: 'm-stale',
+                        path: '/Users/test/workspace/repo',
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+            },
+            machines: {
+                'm-stale': {
+                    id: 'm-stale',
+                    active: false,
+                    activeAt: 1,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/test',
+                    },
+                },
+                'm-other-home': {
+                    id: 'm-other-home',
+                    active: true,
+                    activeAt: 2,
+                    metadata: {
+                        host: 'mbp-host',
+                        homeDir: '/Users/other',
+                    },
+                },
+            },
+            getProjectForSession: () => null,
+        });
+
+        expect(readMachineControlTargetForSession('s1')).toBeNull();
+    });
+
     it('does not resolve machine target from sibling sessions that share the same path', async () => {
         const { readMachineTargetForSession } = await import('./sessionMachineTarget');
         getStateSpy.mockReturnValue({

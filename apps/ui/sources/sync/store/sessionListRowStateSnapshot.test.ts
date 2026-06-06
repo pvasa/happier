@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { createReducer } from '@/sync/reducer/reducer';
@@ -10,6 +11,20 @@ import {
     selectSessionListRowStateSnapshot,
 } from './sessionListRowStateSnapshot';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+
+const serverProfileMockState = vi.hoisted(() => ({
+    profiles: [] as ServerProfile[],
+}));
+
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            listServerProfiles: () => serverProfileMockState.profiles,
+        },
+    });
+});
 
 function createSession(id: string): Session {
     return {
@@ -67,6 +82,8 @@ const pending = {
 
 describe('selectSessionListRowStateSnapshot', () => {
     afterEach(() => {
+        serverProfileMockState.profiles = [];
+        vi.useRealTimers();
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
     });
@@ -151,6 +168,153 @@ describe('selectSessionListRowStateSnapshot', () => {
         expect(secondWithoutRenderable.sessionMessages?.s1).toBe(changedMessages);
     });
 
+    it('keeps focused row store state stable for fresh progress-only renderable timestamp advances', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-30T12:00:00.000Z'));
+        const firstRenderable = {
+            ...createRenderable('s1'),
+            seq: 10,
+            updatedAt: Date.now() - 5_000,
+            meaningfulActivityAt: Date.now() - 5_000,
+            active: true,
+            activeAt: Date.now() - 5_000,
+            presence: 'online' as const,
+            latestTurnStatus: 'in_progress' as const,
+            hasUnreadMessages: true,
+            metadata: { path: '/tmp', host: 'localhost' },
+        } satisfies SessionListRenderableSession;
+        const selector = createSessionListRowStoreStateSelector([{
+            sessionId: 's1',
+            serverId: 'server-a',
+        }], 'server-a');
+
+        const first = selector({
+            sessions: {},
+            sessionListRenderables: { s1: firstRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+        const freshProgressRenderable = {
+            ...firstRenderable,
+            seq: 11,
+            updatedAt: firstRenderable.updatedAt + 5_000,
+            meaningfulActivityAt: (firstRenderable.meaningfulActivityAt ?? firstRenderable.updatedAt) + 5_000,
+        } satisfies SessionListRenderableSession;
+        const second = selector({
+            sessions: {},
+            sessionListRenderables: { s1: freshProgressRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+
+        expect(second).toBe(first);
+        expect(second.sessionListRenderables?.s1).toBe(firstRenderable);
+
+        const laterProgressRenderable = {
+            ...firstRenderable,
+            seq: 12,
+            updatedAt: firstRenderable.updatedAt + 31_000,
+            meaningfulActivityAt: (firstRenderable.meaningfulActivityAt ?? firstRenderable.updatedAt) + 31_000,
+        } satisfies SessionListRenderableSession;
+        const third = selector({
+            sessions: {},
+            sessionListRenderables: { s1: laterProgressRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+
+        expect(third).not.toBe(first);
+        expect(third.sessionListRenderables?.s1).toBe(laterProgressRenderable);
+    });
+
+    it('does not suppress row store updates when a fresh activity patch starts thinking', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-30T12:00:00.000Z'));
+        const firstRenderable = {
+            ...createRenderable('s1'),
+            seq: 10,
+            updatedAt: Date.now() - 5_000,
+            meaningfulActivityAt: Date.now() - 5_000,
+            active: true,
+            activeAt: Date.now() - 5_000,
+            presence: 'online' as const,
+            thinking: false,
+            thinkingAt: 0,
+            hasUnreadMessages: true,
+            metadata: { path: '/tmp', host: 'localhost' },
+        } satisfies SessionListRenderableSession;
+        const selector = createSessionListRowStoreStateSelector([{
+            sessionId: 's1',
+            serverId: 'server-a',
+        }], 'server-a');
+
+        const first = selector({
+            sessions: {},
+            sessionListRenderables: { s1: firstRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+        const thinkingRenderable = {
+            ...firstRenderable,
+            seq: 11,
+            updatedAt: firstRenderable.updatedAt + 5_000,
+            meaningfulActivityAt: (firstRenderable.meaningfulActivityAt ?? firstRenderable.updatedAt) + 5_000,
+            thinking: true,
+            thinkingAt: Date.now(),
+        } satisfies SessionListRenderableSession;
+        const second = selector({
+            sessions: {},
+            sessionListRenderables: { s1: thinkingRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+
+        expect(second).not.toBe(first);
+        expect(second.sessionListRenderables?.s1).toBe(thinkingRenderable);
+    });
+
+    it('does not suppress row store updates when progress changes make a renderable unread', () => {
+        const firstRenderable = {
+            ...createRenderable('s1'),
+            seq: 10,
+            updatedAt: 1_000,
+            meaningfulActivityAt: 1_000,
+            active: true,
+            activeAt: 1_000,
+            presence: 'online' as const,
+            latestTurnStatus: 'in_progress' as const,
+            hasUnreadMessages: false,
+            metadata: { path: '/tmp', host: 'localhost' },
+        } satisfies SessionListRenderableSession;
+        const selector = createSessionListRowStoreStateSelector([{
+            sessionId: 's1',
+            serverId: 'server-a',
+        }], 'server-a');
+
+        const first = selector({
+            sessions: {},
+            sessionListRenderables: { s1: firstRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+        const unreadRenderable = {
+            ...firstRenderable,
+            seq: 11,
+            updatedAt: 2_000,
+            meaningfulActivityAt: 2_000,
+            hasUnreadMessages: true,
+        } satisfies SessionListRenderableSession;
+        const second = selector({
+            sessions: {},
+            sessionListRenderables: { s1: unreadRenderable },
+            sessionMessages: {},
+            sessionPending: { s1: pending },
+        });
+
+        expect(second).not.toBe(first);
+        expect(second.sessionListRenderables?.s1).toBe(unreadRenderable);
+    });
+
     it('records why the row-store selector output changed when telemetry is enabled', () => {
         syncPerformanceTelemetry.configure({
             enabled: true,
@@ -215,6 +379,45 @@ describe('selectSessionListRowStateSnapshot', () => {
         expect(activeServerSnapshot.renderable).toBe(renderable);
         expect(activeServerSnapshot.messages).toBe(messages);
         expect(activeServerSnapshot.pending).toBe(pending);
+        expect(otherServerSnapshot.session).toBeUndefined();
+        expect(otherServerSnapshot.renderable).toBeUndefined();
+        expect(otherServerSnapshot.messages).toBeUndefined();
+        expect(otherServerSnapshot.pending).toBeUndefined();
+    });
+
+    it('applies active-server overlays when row server id is the selected server identity id', () => {
+        serverProfileMockState.profiles = [{
+            id: 'localhost-52753',
+            name: 'Local dev',
+            serverUrl: 'http://127.0.0.1:52753',
+            serverIdentityId: 'srv_remote_identity',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+        }];
+        const session = createSession('shared');
+        const renderable = createRenderable('shared');
+        const state = {
+            activeServerId: 'localhost-52753',
+            sessions: { shared: session },
+            sessionListRenderables: { shared: renderable },
+            sessionMessages: { shared: messages },
+            sessionPending: { shared: pending },
+        };
+
+        const identityServerSnapshot = selectSessionListRowStateSnapshot(state, {
+            sessionId: 'shared',
+            serverId: 'srv_remote_identity',
+        });
+        const otherServerSnapshot = selectSessionListRowStateSnapshot(state, {
+            sessionId: 'shared',
+            serverId: 'srv_other_identity',
+        });
+
+        expect(identityServerSnapshot.session).toBe(session);
+        expect(identityServerSnapshot.renderable).toBe(renderable);
+        expect(identityServerSnapshot.messages).toBe(messages);
+        expect(identityServerSnapshot.pending).toBe(pending);
         expect(otherServerSnapshot.session).toBeUndefined();
         expect(otherServerSnapshot.renderable).toBeUndefined();
         expect(otherServerSnapshot.messages).toBeUndefined();

@@ -621,7 +621,7 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
         expect(applyMessages).toHaveBeenCalledTimes(2);
     });
 
-    it('preserves pending durable apply handler when queued hidden stream segments are applied on reveal', async () => {
+    it('keeps hidden durable message projection deferred when queued hidden stream segments are applied on reveal', async () => {
         vi.useFakeTimers();
         const sessionId = 'durable_stream_handler_session';
         enableTranscriptStreamingCoalescingForTest();
@@ -675,11 +675,7 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
             ),
         });
 
-        expect(durableApplyMessages).toHaveBeenCalledTimes(1);
-        expect(durableApplyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
-            id: 'durable-message',
-            content: { type: 'text', text: 'durable queued' },
-        });
+        expect(durableApplyMessages).not.toHaveBeenCalled();
         expect(streamApplyMessages).toHaveBeenCalledTimes(2);
         expect(streamApplyMessages.mock.calls[0]?.[1]?.[0]).toMatchObject({
             localId: 'hidden-segment',
@@ -753,6 +749,54 @@ describe('socket update handling: transcript stream segment ephemerals', () => {
             role: 'agent',
             content: [{ type: 'text', text: 'Encrypted live' }],
         });
+    });
+
+    it('applies visible scoped stream segments using the source server when the local session cache has a stale alias', async () => {
+        const sessionId = 'source_scoped_visible_stream_session';
+        const sourceServerId = 'srv_actual_visible_scope';
+        const staleLocalServerId = 'stack_route_alias_for_same_server';
+        markSessionVisible(sessionId, sourceServerId);
+        storage.getState().applySessions([{
+            ...buildSession(sessionId, 'e2ee'),
+            serverId: staleLocalServerId,
+        }]);
+        const decryptMessage = vi.fn(async () => ({
+            id: 'segment-1',
+            seq: 0,
+            localId: 'segment-1',
+            createdAt: 1_000,
+            content: {
+                role: 'agent',
+                content: {
+                    type: 'acp',
+                    provider: 'codex',
+                    data: { type: 'message', message: 'Visible scoped live' },
+                },
+                meta: {
+                    happierStreamSegmentV1: {
+                        v: 1,
+                        segmentKind: 'assistant',
+                        segmentLocalId: 'segment-1',
+                        segmentState: 'streaming',
+                        startedAtMs: 1_000,
+                        updatedAtMs: 1_010,
+                    },
+                },
+            },
+        }));
+        const applyMessages = vi.fn();
+        await handleEphemeralSocketUpdate({
+            update: buildTranscriptStreamSegmentUpdate(sessionId, { t: 'encrypted', c: 'ciphertext' }),
+            sourceServerId,
+            addActivityUpdate: vi.fn(),
+            addMachineActivityUpdate: vi.fn(),
+            getSessionEncryption: vi.fn(() => ({ decryptMessage })),
+            getSession: (id: string) => storage.getState().sessions[id],
+            applyMessages,
+        });
+
+        expect(decryptMessage).toHaveBeenCalledTimes(1);
+        expect(applyMessages).toHaveBeenCalledTimes(1);
     });
 
     it('drops hidden encrypted transcript stream segments at flush time without decrypting', async () => {

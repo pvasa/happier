@@ -63,10 +63,11 @@ function didPreservePendingFlags(
         );
 }
 
-export function planSessionListRenderableReplacement(input: Readonly<{
+function planSessionListRenderableIncomingRows(input: Readonly<{
     previousRenderables: Record<string, SessionListRenderableSession>;
     incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
     isSessionListViewDataUninitialized: boolean;
+    removeOmittedPreviousRenderables: boolean;
     rebuildOnAttentionPromotionFieldsChange?: boolean;
     didListViewFieldsChange?: DidListViewFieldsChange;
 }>): SessionListRenderableStoreUpdatePlan {
@@ -74,7 +75,9 @@ export function planSessionListRenderableReplacement(input: Readonly<{
     const previousIds = Object.keys(previousRenderables);
     const incomingIds = new Set<string>();
     let nextRenderables = previousRenderables;
-    let didAnyRenderableChange = previousIds.length !== input.incomingRenderables.length;
+    let didAnyRenderableChange = input.removeOmittedPreviousRenderables
+        ? previousIds.length !== input.incomingRenderables.length
+        : false;
     let changedCount = 0;
     let removedCount = 0;
     let listViewFieldChangeCount = 0;
@@ -142,15 +145,17 @@ export function planSessionListRenderableReplacement(input: Readonly<{
         }
     }
 
-    for (const sessionId of previousIds) {
-        if (!incomingIds.has(sessionId)) {
-            if (nextRenderables === previousRenderables) {
-                nextRenderables = { ...previousRenderables };
+    if (input.removeOmittedPreviousRenderables) {
+        for (const sessionId of previousIds) {
+            if (!incomingIds.has(sessionId)) {
+                if (nextRenderables === previousRenderables) {
+                    nextRenderables = { ...previousRenderables };
+                }
+                delete nextRenderables[sessionId];
+                removedCount += 1;
+                didImmediateWarmCacheRelevantRenderableChange = true;
+                needsSessionListViewDataRebuild = true;
             }
-            delete nextRenderables[sessionId];
-            removedCount += 1;
-            didImmediateWarmCacheRelevantRenderableChange = true;
-            needsSessionListViewDataRebuild = true;
         }
     }
 
@@ -170,6 +175,32 @@ export function planSessionListRenderableReplacement(input: Readonly<{
         didImmediateWarmCacheRelevantRenderableChange,
         didDeferredWarmCacheRelevantRenderableChange,
     };
+}
+
+export function planSessionListRenderableReplacement(input: Readonly<{
+    previousRenderables: Record<string, SessionListRenderableSession>;
+    incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
+    isSessionListViewDataUninitialized: boolean;
+    rebuildOnAttentionPromotionFieldsChange?: boolean;
+    didListViewFieldsChange?: DidListViewFieldsChange;
+}>): SessionListRenderableStoreUpdatePlan {
+    return planSessionListRenderableIncomingRows({
+        ...input,
+        removeOmittedPreviousRenderables: true,
+    });
+}
+
+export function planSessionListRenderableMerge(input: Readonly<{
+    previousRenderables: Record<string, SessionListRenderableSession>;
+    incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
+    isSessionListViewDataUninitialized: boolean;
+    rebuildOnAttentionPromotionFieldsChange?: boolean;
+    didListViewFieldsChange?: DidListViewFieldsChange;
+}>): SessionListRenderableStoreUpdatePlan {
+    return planSessionListRenderableIncomingRows({
+        ...input,
+        removeOmittedPreviousRenderables: false,
+    });
 }
 
 export function planSessionListRenderablePatches(input: Readonly<{

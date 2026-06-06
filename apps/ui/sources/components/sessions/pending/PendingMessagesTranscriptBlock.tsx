@@ -11,6 +11,7 @@ import { sessionAbort } from '@/sync/ops';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { layout } from '@/components/ui/layout/layout';
 import { Text } from '@/components/ui/text/Text';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { t } from '@/text';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
@@ -21,8 +22,8 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separators/TranscriptSeparatorRow';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { PendingMessagesDragReorderList } from './PendingMessagesDragReorderList';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { getPendingMessageVisualState } from './pendingMessageVisualState';
 
 function getPendingText(message: PendingMessage | DiscardedPendingMessage): string {
     const raw = (message.displayText ?? message.text) ?? '';
@@ -72,10 +73,18 @@ function supportsInFlightSteerForSession(session: ReturnType<typeof useSession>)
     );
 }
 
+export type PendingMessageEditRequest = Readonly<{
+    id: string;
+    text: string;
+    displayText?: string;
+    message: PendingMessage;
+}>;
+
 export function PendingMessagesTranscriptBlock(props: Readonly<{
     sessionId: string;
     pendingMessages: PendingMessage[];
     discardedMessages: DiscardedPendingMessage[];
+    onEditPendingMessage?: (request: PendingMessageEditRequest) => void | Promise<void>;
 }>) {
     const { theme } = useUnistyles();
     const session = useSession(props.sessionId);
@@ -140,7 +149,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     const [hoveredMessageId, setHoveredMessageId] = React.useState<string | null>(null);
     const [scrollViewportHeightPx, setScrollViewportHeightPx] = React.useState<number | null>(null);
     const [scrollOffsetY, setScrollOffsetY] = React.useState<number | null>(null);
+    const [materializingLocalIdMap, setMaterializingLocalIdMap] = React.useState<Record<string, true>>({});
     const scrollRef = React.useRef<ScrollView | null>(null);
+    const materializingLocalIds = React.useMemo(
+        () => new Set(Object.keys(materializingLocalIdMap)),
+        [materializingLocalIdMap],
+    );
 
     React.useEffect(() => {
         if (props.pendingMessages.length <= 0) {
@@ -172,20 +186,14 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         setIsPendingQueueExpanded((value) => !value);
     }, []);
 
-    const handleEdit = React.useCallback(async (pendingId: string, currentText: string) => {
-        const next = await Modal.prompt(
-            t('session.pendingMessages.editPrompt.title'),
-            undefined,
-            { defaultValue: currentText, confirmText: t('common.save') },
-        );
-        if (next === null) return;
-        if (!next.trim()) return;
-        try {
-            await sync.updatePendingMessage(props.sessionId, pendingId, next);
-        } catch (e) {
-            Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.updateFailed'));
-        }
-    }, [props.sessionId]);
+    const handleEdit = React.useCallback(async (message: PendingMessage) => {
+        await props.onEditPendingMessage?.({
+            id: message.id,
+            text: message.text,
+            displayText: message.displayText,
+            message,
+        });
+    }, [props.onEditPendingMessage]);
 
     const handleReorderIds = React.useCallback(async (ids: string[]) => {
         if (ids.length <= 1) return;
@@ -226,6 +234,20 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         }
     }, [props.sessionId]);
 
+    const setPendingMaterializing = React.useCallback((message: PendingMessage, isMaterializing: boolean) => {
+        const key = typeof message.localId === 'string' && message.localId.length > 0 ? message.localId : message.id;
+        setMaterializingLocalIdMap((prev) => {
+            if (isMaterializing) {
+                if (prev[key]) return prev;
+                return { ...prev, [key]: true };
+            }
+            if (!prev[key]) return prev;
+            const next = { ...prev };
+            delete next[key];
+            return next;
+        });
+    }, []);
+
     const handleSteerNow = React.useCallback(async (message: PendingMessage) => {
         const confirmed = await Modal.confirm(
             t('session.pendingMessages.steerConfirm.title'),
@@ -235,6 +257,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         if (!confirmed) return;
 
         try {
+            setPendingMaterializing(message, true);
             const result = await sync.sendPendingMessageNow(props.sessionId, {
                 localId: message.id,
                 createdAt: message.createdAt,
@@ -247,8 +270,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             }
         } catch (e) {
             Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.sendFailed'));
+        } finally {
+            setPendingMaterializing(message, false);
         }
-    }, [deleteOrDiscardAfterSend, props.sessionId]);
+    }, [deleteOrDiscardAfterSend, props.sessionId, setPendingMaterializing]);
 
     const handleSendNow = React.useCallback(async (message: PendingMessage) => {
         if (!canSendNow) return;
@@ -261,6 +286,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         if (!confirmed) return;
 
         try {
+            setPendingMaterializing(message, true);
             await sessionAbort(props.sessionId);
             const result = await sync.sendPendingMessageNow(props.sessionId, {
                 localId: message.id,
@@ -274,8 +300,10 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             }
         } catch (e) {
             Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.sendFailed'));
+        } finally {
+            setPendingMaterializing(message, false);
         }
-    }, [canSendNow, canSteerNow, deleteOrDiscardAfterSend, props.sessionId]);
+    }, [canSendNow, canSteerNow, deleteOrDiscardAfterSend, props.sessionId, setPendingMaterializing]);
 
     const handleRequeueDiscarded = React.useCallback(async (pendingId: string) => {
         try {
@@ -357,7 +385,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
     }) => {
         const { message, index, renderDragHandle } = args;
         const text = getPendingText(message).trim();
-        const isAccepted = message.deliveryStatus === 'accepted';
         const isCollapsible = collapseThresholdChars > 0 && text.length >= collapseThresholdChars;
 	        const isExpanded = expandedMessageIds[message.id] === true || !isCollapsible;
 
@@ -370,6 +397,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                : null;
         const hideChipBecauseNextHovered =
             isWeb && hoveredIndex !== null && hoveredIndex + 1 === index && hoveredMessageId !== message.id;
+        const visualState = getPendingMessageVisualState(message, { materializingLocalIds });
 
 	        const menuItems = (() => {
 	            const items: DropdownMenuItem[] = [];
@@ -396,7 +424,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                 items={menuItems}
                 onSelect={async (itemId) => {
                     setOpenMenuKey(null);
-                    if (itemId === 'edit') await handleEdit(message.id, message.text);
+                    if (itemId === 'edit') await handleEdit(message);
                     if (itemId === 'remove') await handleRemove(message.id);
                     if (itemId === 'steerNow') await handleSteerNow(message);
                     if (itemId === 'sendNow') await handleSendNow(message);
@@ -468,23 +496,21 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 hideChipBecauseNextHovered ? { opacity: 0 } : null,
                             ]}
                         >
-                            {isAccepted ? (
+                            {visualState.showSpinner ? (
                                 <ActivitySpinner
-                                    testID={`pendingMessages.acceptedIndicator:${message.id}`}
-                                    size="small"
+                                    testID={`pendingMessages.${visualState.kind}Indicator:${message.id}`}
+                                    size={8}
                                     color={theme.colors.text.secondary}
                                 />
                             ) : (
-                                <>
-                                    <Ionicons name="time-outline" size={8} color={theme.colors.text.secondary} />
-                                    <Text
-                                        testID={`pendingMessages.pendingAffordanceLabel:${message.id}`}
-                                        style={[styles.pendingAffordanceText, { color: theme.colors.text.secondary }]}
-                                    >
-                                        {t('session.pendingMessages.badgeLabel', { count: 0 })}
-                                    </Text>
-                                </>
+                                <Ionicons name={visualState.iconName} size={8} color={theme.colors.text.secondary} />
                             )}
+                            <Text
+                                testID={`pendingMessages.pendingAffordanceLabel:${message.id}`}
+                                style={[styles.pendingAffordanceText, { color: theme.colors.text.secondary }]}
+                            >
+                                {t('session.pendingMessages.badgeLabel', { count: 0 })}
+                            </Text>
                         </View>
 
                         {isWeb ? (
@@ -511,7 +537,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     testID={`pendingMessages.edit:${message.id}`}
                                     accessibilityLabel={t('session.pendingMessages.actions.edit')}
                                     icon="pencil-outline"
-                                    onPress={() => handleEdit(message.id, message.text)}
+                                    onPress={() => handleEdit(message)}
                                 />
                                 <IconAction
                                     testID={`pendingMessages.remove:${message.id}`}
@@ -566,6 +592,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         handleSendNow,
         handleSteerNow,
         isWeb,
+        materializingLocalIds,
         openMenuKey,
         pendingIndexById,
         props.pendingMessages.length,

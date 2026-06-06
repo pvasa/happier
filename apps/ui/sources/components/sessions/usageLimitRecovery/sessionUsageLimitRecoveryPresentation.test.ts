@@ -491,7 +491,60 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
         expect(presentation?.issueFingerprint).toBe('usage-limit:codex:unknown-turn:1:no-reset');
     });
 
-    it('does not render a stale usage-limit issue while the provider is actively working again', () => {
+    it('keeps an unproven recovery visible after a local switch resumes the runtime as working', () => {
+        const issue = usageIssue('claude', null);
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue,
+            recovery: null,
+            runtimeWorking: true,
+            rememberedMode: 'ask',
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+        const badge = buildSessionUsageLimitStatusBadgePresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue,
+            recovery: null,
+            runtimeWorking: true,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.testID).toBe('session-usageLimit-recovery');
+        expect(badge?.key).toBe('session-usage-limit-recovery');
+    });
+
+    it('keeps an active recovery in action-required (switch_account) state visible while working', () => {
+        const issue = usageIssue('codex', null, {
+            recoverability: 'switch_account',
+            connectedService: {
+                serviceId: 'openai-codex',
+                profileId: 'primary',
+                groupId: 'codex-main',
+                groupExhausted: false,
+            },
+        });
+
+        const presentation = buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue,
+            recovery: null,
+            runtimeWorking: true,
+            checkNowSupported: false,
+            rememberedMode: 'ask',
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        });
+
+        expect(presentation?.banner.primaryAction.kind).toBe('switch_account_now');
+    });
+
+    it('hides recovery once the provider produces genuine activity after the issue (proven recovery)', () => {
         const issue = usageIssue('claude', null);
 
         expect(buildSessionUsageLimitRecoveryPresentation({
@@ -500,6 +553,7 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             issue,
             recovery: null,
             runtimeWorking: true,
+            hasActivityAfterRuntimeIssue: true,
             rememberedMode: 'ask',
             translate: (key) => key,
             formatTime: (value) => String(value),
@@ -510,6 +564,44 @@ describe('sessionUsageLimitRecoveryPresentation', () => {
             latestTurnStatus: 'failed',
             issue,
             recovery: null,
+            runtimeWorking: true,
+            hasActivityAfterRuntimeIssue: true,
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        })).toBeNull();
+    });
+
+    it('hides recovery once the durable recovery intent is cancelled, even while working', () => {
+        const issue = usageIssue('codex', null);
+        const recovery: SessionUsageLimitRecoveryV1 = {
+            v: 1,
+            status: 'cancelled',
+            issueFingerprint: 'usage:cancelled',
+            armedAtMs: 1,
+            resetAtMs: null,
+            nextCheckAtMs: null,
+            attemptCount: 1,
+            maxAttempts: 3,
+            lastProbeError: null,
+            selectedAuth: { kind: 'native' },
+        };
+
+        expect(buildSessionUsageLimitRecoveryPresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue,
+            recovery,
+            runtimeWorking: true,
+            rememberedMode: 'ask',
+            translate: (key) => key,
+            formatTime: (value) => String(value),
+        })).toBeNull();
+
+        expect(buildSessionUsageLimitStatusBadgePresentation({
+            featureEnabled: true,
+            latestTurnStatus: 'in_progress',
+            issue,
+            recovery,
             runtimeWorking: true,
             translate: (key) => key,
             formatTime: (value) => String(value),

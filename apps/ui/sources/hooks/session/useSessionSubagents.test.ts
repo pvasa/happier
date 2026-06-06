@@ -234,6 +234,178 @@ describe('useSessionSubagents', () => {
         await hook.unmount();
     });
 
+    it('does not rescan unchanged tool-call payloads when non-subagent text streams', async () => {
+        const now = Date.now();
+        let inputReadCount = 0;
+        const toolCallMessage: any = {
+            kind: 'tool-call',
+            id: 'tool-call-1',
+            localId: null,
+            createdAt: now,
+            tool: {
+                id: 'toolu_run_1',
+                name: 'SubAgentRun',
+                state: 'running',
+                get input() {
+                    inputReadCount += 1;
+                    return { runId: 'run_1' };
+                },
+                createdAt: now,
+                startedAt: now,
+                completedAt: null,
+                description: null,
+            },
+            children: [],
+        };
+        const baseMessages: readonly any[] = [toolCallMessage, {
+            kind: 'agent-text',
+            id: 'agent-text-1',
+            localId: null,
+            createdAt: now + 1,
+            text: 'partial',
+            children: [],
+        }];
+        const hook = await renderHook((messages: readonly any[]) =>
+            useSessionSubagents({
+                sessionId: 'session-1',
+                session: {
+                    id: 'session-1',
+                    metadata: {
+                        flavor: 'claude',
+                    },
+                } as any,
+                messages,
+                directSessionRuntime: directSessionRuntimeState,
+            }), {
+                initialProps: baseMessages,
+            });
+
+        const readsAfterInitialRender = inputReadCount;
+        await hook.rerender([
+            toolCallMessage,
+            {
+                ...baseMessages[1],
+                text: 'partial response is still streaming',
+            },
+        ]);
+
+        expect(inputReadCount).toBe(readsAfterInitialRender);
+        await hook.unmount();
+    });
+
+    it('does not rescan unchanged message prefixes when non-subagent text streams', async () => {
+        const now = Date.now();
+        let kindReadCount = 0;
+        const toolCallMessage: any = {
+            get kind() {
+                kindReadCount += 1;
+                return 'tool-call';
+            },
+            id: 'tool-call-1',
+            localId: null,
+            createdAt: now,
+            tool: {
+                id: 'toolu_run_1',
+                name: 'SubAgentRun',
+                state: 'running',
+                input: { runId: 'run_1' },
+                createdAt: now,
+                startedAt: now,
+                completedAt: null,
+                description: null,
+            },
+            children: [],
+        };
+        const baseMessages: readonly any[] = [toolCallMessage, {
+            kind: 'agent-text',
+            id: 'agent-text-1',
+            localId: null,
+            createdAt: now + 1,
+            text: 'partial',
+            children: [],
+        }];
+        const hook = await renderHook((messages: readonly any[]) =>
+            useSessionSubagents({
+                sessionId: 'session-1',
+                session: {
+                    id: 'session-1',
+                    metadata: {
+                        flavor: 'claude',
+                    },
+                } as any,
+                messages,
+                directSessionRuntime: directSessionRuntimeState,
+            }), {
+                initialProps: baseMessages,
+            });
+
+        const readsAfterInitialRender = kindReadCount;
+        await hook.rerender([
+            toolCallMessage,
+            {
+                ...baseMessages[1],
+                text: 'partial response is still streaming',
+            },
+        ]);
+
+        expect(kindReadCount).toBe(readsAfterInitialRender);
+        await hook.unmount();
+    });
+
+    it('does not rescan subagent messages when equivalent running execution-run polls arrive', async () => {
+        const now = Date.now();
+        let inputReadCount = 0;
+        const messages: readonly any[] = [{
+            kind: 'tool-call',
+            id: 'tool-call-1',
+            localId: null,
+            createdAt: now,
+            tool: {
+                id: 'toolu_run_1',
+                name: 'SubAgentRun',
+                state: 'running',
+                get input() {
+                    inputReadCount += 1;
+                    return { runId: 'run_1' };
+                },
+                createdAt: now,
+                startedAt: now,
+                completedAt: null,
+                description: null,
+            },
+            children: [],
+        }];
+        runningExecutionRunsState.current = [{
+            runId: 'run_1',
+            status: 'running',
+        }];
+
+        const hook = await renderHook((tick: number) =>
+            useSessionSubagents({
+                sessionId: 'session-1',
+                session: {
+                    id: 'session-1',
+                    metadata: {
+                        flavor: 'claude',
+                    },
+                } as any,
+                messages,
+                directSessionRuntime: directSessionRuntimeState,
+            }), {
+                initialProps: 1,
+            });
+
+        const readsAfterInitialRender = inputReadCount;
+        runningExecutionRunsState.current = [{
+            runId: 'run_1',
+            status: 'running',
+        }];
+        await hook.rerender(2);
+
+        expect(inputReadCount).toBe(readsAfterInitialRender);
+        await hook.unmount();
+    });
+
     it('keeps participant target collections stable when equivalent running execution-run polls arrive', async () => {
         const now = Date.now();
         const messages: readonly any[] = [{

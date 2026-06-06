@@ -312,4 +312,50 @@ describe('sync.sendMessage wake-after-send', () => {
             }),
         );
     });
+
+    it('rejects submitMessage pending intent on old CLI without direct delivery', async () => {
+        const sessionId = 's_pending_submit_old_cli';
+        storage.getState().applySettings({
+            ...storage.getState().settings,
+            sessionMessageSendMode: 'server_pending',
+        }, 1);
+        storage.getState().applySessions([{
+            ...createPlainSession({ sessionId }),
+            active: true,
+            pendingVersion: 0,
+            pendingCount: 0,
+            metadata: {
+                machineId: 'm1',
+                path: '/tmp/project',
+                flavor: 'codex',
+                codexSessionId: 'codex-1',
+                version: '0.0.1',
+            } as any,
+        }]);
+
+        const { sync } = await import('./sync');
+        (sync as any).encryption = {
+            getSessionEncryption: () => null,
+            getMachineEncryption: () => ({}),
+        };
+        const emitWithAck = vi.fn(async () => ({
+            ok: true,
+            id: 'm1',
+            seq: 37,
+            localId: null,
+            didWrite: true,
+        })) as any;
+        const send = vi.fn();
+        sync.setMessageTransport({ emitWithAck, send });
+        const requestSpy = vi.spyOn(apiSocket, 'request').mockResolvedValue(new Response(null, { status: 204 }));
+
+        await expect(sync.submitMessage(sessionId, 'legacy pending')).rejects.toThrow(/pending queue/i);
+
+        expect(emitWithAck).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+        expect(requestSpy).not.toHaveBeenCalledWith(
+            `/v2/sessions/${sessionId}/pending`,
+            expect.anything(),
+        );
+    });
 });

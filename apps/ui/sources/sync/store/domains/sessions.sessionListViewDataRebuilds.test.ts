@@ -1193,6 +1193,63 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         }
     });
 
+    it('coalesces warm cache persistence for repeated applySessions cache-entry updates', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_700_000_000_000);
+        try {
+            vi.doMock('../../runtime/orchestration/projectManager', () => ({
+                projectManager: { updateSessions: vi.fn() },
+            }));
+            mockSessionPersistenceBoundaries();
+
+            const warmCache = await import('../../domains/state/warmCachePersistence');
+            const { createSessionsDomain } = await import('./sessions');
+            const { get, domain } = createHarness(createSessionsDomain);
+
+            const buildSession = (version: number, title: string) => ({
+                id: 's1',
+                seq: version,
+                createdAt: 1,
+                updatedAt: version,
+                active: true,
+                activeAt: 1,
+                metadata: {
+                    machineId: 'm1',
+                    path: '/home/u/repo',
+                    homeDir: '/home/u',
+                    name: title,
+                },
+                metadataVersion: version,
+                agentState: null,
+                agentStateVersion: 0,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+            } as any);
+
+            domain.applySessions([buildSession(1, 'Initial title')]);
+
+            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            expect(saveWarmCache).toHaveBeenCalledTimes(1);
+            saveWarmCache.mockClear();
+
+            domain.applySessions([buildSession(2, 'Updated title')]);
+            domain.applySessions([buildSession(3, 'Final title')]);
+
+            expect(get().sessions.s1?.metadata?.name).toBe('Final title');
+            expect(saveWarmCache).not.toHaveBeenCalled();
+
+            await vi.advanceTimersByTimeAsync(1_000);
+
+            expect(saveWarmCache).toHaveBeenCalledTimes(1);
+            const entries = saveWarmCache.mock.calls.at(-1)?.[2] as Record<string, any>;
+            expect(entries?.s1?.name).toBe('Final title');
+        } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+        }
+    });
+
     it('skips warm cache writes for active streaming progress when list rows are stable', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
@@ -1494,6 +1551,91 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
             expect(changedEvent?.fields.listRebuild).toBe(0);
             expect(changedEvent?.fields.projectManagerUpdate).toBe(0);
             expect(changedEvent?.fields.reachablePeerReevaluation).toBe(0);
+        } finally {
+            syncPerformanceTelemetry.configure({ enabled: false });
+        }
+    });
+
+    it('skips reachable peer reevaluation for metadata-version-only updates with stable reachability metadata', async () => {
+        vi.doMock('../../runtime/orchestration/projectManager', () => ({
+            projectManager: { updateSessions: vi.fn() },
+        }));
+        mockSessionPersistenceBoundaries();
+
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain);
+
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+
+        try {
+            domain.applySessions([
+                {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 10,
+                    active: true,
+                    activeAt: 10,
+                    metadata: {
+                        machineId: 'm1',
+                        host: 'host-a',
+                        path: '/home/u/repo',
+                        homeDir: '/home/u',
+                        name: 'Initial title',
+                    },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 10,
+                } as any,
+            ]);
+
+            const initialListViewData = get().sessionListViewData;
+            syncPerformanceTelemetry.reset();
+
+            domain.applySessions([
+                {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 11,
+                    active: true,
+                    activeAt: 10,
+                    metadata: {
+                        machineId: 'm1',
+                        host: 'host-a',
+                        path: '/home/u/repo',
+                        homeDir: '/home/u',
+                        name: 'Updated title',
+                        summaryText: 'Updated non-reachability summary',
+                    },
+                    metadataVersion: 2,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 11,
+                } as any,
+            ]);
+
+            expect(get().sessionListViewData).toBe(initialListViewData);
+
+            const events = syncPerformanceTelemetry.snapshot().events;
+            const changedEvent = events.find((candidate) => candidate.name === 'sync.store.sessions.apply.changed');
+            expect(changedEvent?.fields.changedSessions).toBe(1);
+            expect(changedEvent?.fields.changedRenderables).toBe(1);
+            expect(changedEvent?.fields.listRebuild).toBe(0);
+            expect(changedEvent?.fields.projectManagerUpdate).toBe(0);
+            expect(changedEvent?.fields.reachablePeerReevaluation).toBe(0);
+            expect(events.find((candidate) => candidate.name === 'sync.store.sessions.apply.reachablePeers')).toBeUndefined();
         } finally {
             syncPerformanceTelemetry.configure({ enabled: false });
         }

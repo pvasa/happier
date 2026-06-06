@@ -494,6 +494,85 @@ describe('ActivityUpdateAccumulator Smart Debounce', () => {
             expect(mockFlushHandler).toHaveBeenCalledTimes(1);
         });
 
+        it('should preserve source server ids when debounced updates flush', () => {
+            const sourceAccumulator = new ActivityUpdateAccumulator(mockFlushHandler, 500);
+            const update1: ApiEphemeralActivityUpdate = {
+                type: 'activity',
+                id: 'session1',
+                active: true,
+                activeAt: 1000,
+                thinking: false
+            };
+            const update2: ApiEphemeralActivityUpdate = {
+                type: 'activity',
+                id: 'session1',
+                active: true,
+                activeAt: 1100,
+                thinking: false
+            };
+
+            sourceAccumulator.addUpdate(update1, { sourceServerId: 'server-a' });
+            sourceAccumulator.addUpdate(update2, { sourceServerId: 'server-a' });
+
+            expect(mockFlushHandler).toHaveBeenCalledTimes(1);
+            timeoutCallbacks[0]?.callback();
+
+            expect(mockFlushHandler).toHaveBeenLastCalledWith(
+                new Map([['session1', update2]]),
+                { sourceServerId: 'server-a' },
+            );
+        });
+
+        it('should not let same-id updates from different source servers overwrite each other', () => {
+            const sourceAccumulator = new ActivityUpdateAccumulator(mockFlushHandler, 500);
+            const serverAUpdate1: ApiEphemeralActivityUpdate = {
+                type: 'activity',
+                id: 'session1',
+                active: true,
+                activeAt: 1000,
+                thinking: false
+            };
+            const serverAUpdate2: ApiEphemeralActivityUpdate = {
+                type: 'activity',
+                id: 'session1',
+                active: true,
+                activeAt: 1100,
+                thinking: false
+            };
+            const serverBUpdate1: ApiEphemeralActivityUpdate = {
+                type: 'activity',
+                id: 'session1',
+                active: true,
+                activeAt: 2000,
+                thinking: false
+            };
+            const serverBUpdate2: ApiEphemeralActivityUpdate = {
+                type: 'activity',
+                id: 'session1',
+                active: true,
+                activeAt: 2100,
+                thinking: false
+            };
+
+            sourceAccumulator.addUpdate(serverAUpdate1, { sourceServerId: 'server-a' });
+            sourceAccumulator.addUpdate(serverBUpdate1, { sourceServerId: 'server-b' });
+            sourceAccumulator.addUpdate(serverAUpdate2, { sourceServerId: 'server-a' });
+            sourceAccumulator.addUpdate(serverBUpdate2, { sourceServerId: 'server-b' });
+
+            expect(mockFlushHandler).toHaveBeenCalledTimes(2);
+            expect(timeoutCallbacks).toHaveLength(1);
+            timeoutCallbacks[0]?.callback();
+
+            expect(mockFlushHandler).toHaveBeenCalledWith(
+                new Map([['session1', serverAUpdate2]]),
+                { sourceServerId: 'server-a' },
+            );
+            expect(mockFlushHandler).toHaveBeenCalledWith(
+                new Map([['session1', serverBUpdate2]]),
+                { sourceServerId: 'server-b' },
+            );
+        });
+
         it('should flush pending updates immediately', () => {
             const update1: ApiEphemeralActivityUpdate = {
                 type: 'activity',

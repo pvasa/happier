@@ -141,6 +141,32 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
     expect(nextSession.latestTurnStatusObservedAt).toBe(123_456);
   });
 
+  it('applies runtime activity projection fields from update-session payloads', async () => {
+    const base = {
+      ...createSession({ sessionId: 's1', encryptionMode: 'plain' }),
+      active: true,
+      activeAt: 100,
+      thinking: true,
+      thinkingAt: 100,
+    };
+
+    const { nextSession } = await buildUpdatedSessionFromSocketUpdate({
+      session: base,
+      updateBody: {
+        active: false,
+        activeAt: 123_456,
+      },
+      updateSeq: 10,
+      updateCreatedAt: 456,
+      sessionEncryption: null,
+    });
+
+    expect(nextSession.active).toBe(false);
+    expect(nextSession.activeAt).toBe(123_456);
+    expect(nextSession.thinking).toBe(false);
+    expect(nextSession.thinkingAt).toBe(123_456);
+  });
+
   it('clears latest turn id from update-session payloads', async () => {
     const base = {
       ...createSession({ sessionId: 's1', encryptionMode: 'plain' }),

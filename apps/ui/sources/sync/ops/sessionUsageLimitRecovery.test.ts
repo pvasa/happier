@@ -36,7 +36,7 @@ describe('sessionUsageLimitRecovery', () => {
     it('enables wait-resume through the preferred session RPC scope', async () => {
         resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
         sessionRpcWithServerScopeMock
-            .mockResolvedValueOnce({ ok: true })
+            .mockResolvedValueOnce({ ok: true, recovery: { status: 'waiting' } })
             .mockResolvedValueOnce({ ok: true, status: 'ready' });
 
         const { sessionUsageLimitWaitResumeEnable } = await import('./sessionUsageLimitRecovery');
@@ -56,21 +56,24 @@ describe('sessionUsageLimitRecovery', () => {
                 rememberPreference: true,
             },
         });
-        expect(response).toEqual({ ok: true });
+        expect(response).toEqual({ ok: true, status: 'waiting' });
     });
 
     it('cancels wait-resume and checks current availability through usage-limit RPC methods', async () => {
         resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
         sessionRpcWithServerScopeMock
-            .mockResolvedValueOnce({ ok: true })
-            .mockResolvedValueOnce({ ok: true, status: 'ready' });
+            .mockResolvedValueOnce({ ok: true, recovery: { status: 'cancelled' } })
+            .mockResolvedValueOnce({ ok: true, recovery: { status: 'ready' } });
 
         const {
             sessionUsageLimitCheckNow,
             sessionUsageLimitWaitResumeCancel,
         } = await import('./sessionUsageLimitRecovery');
 
-        await sessionUsageLimitWaitResumeCancel('session-1');
+        await expect(sessionUsageLimitWaitResumeCancel('session-1')).resolves.toEqual({
+            ok: true,
+            status: 'cancelled',
+        });
         await expect(sessionUsageLimitCheckNow('session-1')).resolves.toEqual({
             ok: true,
             status: 'ready',
@@ -123,6 +126,117 @@ describe('sessionUsageLimitRecovery', () => {
         });
     });
 
+    it('refreshes stale inactive machine targets before falling check-now back to session RPC', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: {
+                        host: 'workstation.local',
+                        path: '/repo',
+                    },
+                },
+            },
+            machines: {},
+        };
+        const refreshMachineTargets = vi.fn(async () => {
+            storageState.current = {
+                ...storageState.current,
+                machines: {
+                    'machine-1': {
+                        id: 'machine-1',
+                        active: true,
+                        metadata: { host: 'workstation.local' },
+                    },
+                },
+            };
+        });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'ready' });
+
+        const { sessionUsageLimitCheckNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitCheckNow('session-1', { refreshMachineTargets })).resolves.toEqual({
+            ok: true,
+            status: 'ready',
+        });
+
+        expect(refreshMachineTargets).toHaveBeenCalledTimes(1);
+        expect(sessionRpcWithServerScopeMock).not.toHaveBeenCalled();
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith({
+            machineId: 'machine-1',
+            serverId: 'server-owned',
+            method: RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+            payload: { sessionId: 'session-1' },
+        });
+    });
+
+    it('refreshes stale inactive machine targets for daemon-only usage-limit controls', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        const installStaleInactiveSession = () => {
+            storageState.current = {
+                sessions: {
+                    'session-1': {
+                        active: false,
+                        metadata: {
+                            host: 'workstation.local',
+                            path: '/repo',
+                        },
+                    },
+                },
+                machines: {},
+            };
+        };
+        const refreshMachineTargets = vi.fn(async () => {
+            storageState.current = {
+                ...storageState.current,
+                machines: {
+                    'machine-1': {
+                        id: 'machine-1',
+                        active: true,
+                        metadata: { host: 'workstation.local' },
+                    },
+                },
+            };
+        });
+
+        const {
+            sessionUsageLimitSwitchAccountNow,
+            sessionUsageLimitWaitResumeCancel,
+            sessionUsageLimitWaitResumeEnable,
+        } = await import('./sessionUsageLimitRecovery');
+
+        installStaleInactiveSession();
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'waiting' });
+        await expect(sessionUsageLimitWaitResumeEnable('session-1', {
+            issueFingerprint: 'usage-limit:codex:turn-1:1:no-reset',
+            rememberPreference: false,
+        }, { refreshMachineTargets })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+        });
+
+        installStaleInactiveSession();
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'cancelled' });
+        await expect(sessionUsageLimitWaitResumeCancel('session-1', { refreshMachineTargets })).resolves.toEqual({
+            ok: true,
+            status: 'cancelled',
+        });
+
+        installStaleInactiveSession();
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'waiting' });
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', {
+            provider: 'codex',
+            refreshMachineTargets,
+        })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+        });
+
+        expect(refreshMachineTargets).toHaveBeenCalledTimes(3);
+        expect(sessionRpcWithServerScopeMock).not.toHaveBeenCalled();
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(3);
+    });
+
     it('switches usage-limit account recovery through the daemon-owned machine control', async () => {
         resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
         storageState.current = {
@@ -160,6 +274,155 @@ describe('sessionUsageLimitRecovery', () => {
         });
     });
 
+    it('normalizes daemon-wrapped switch-account recovery success results', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            result: {
+                status: 'switch_attempted',
+                result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
+            },
+        });
+
+        const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: 'codex' })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+        });
+    });
+
+    it('maps protocol switch-applied recovery results to the waiting presentation status', async () => {
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            status: 'switch_applied',
+            sessionId: 'session-1',
+        });
+
+        const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: 'codex' })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+        });
+    });
+
+    it('normalizes daemon-wrapped switch-account no-eligible-member results', async () => {
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            result: {
+                status: 'switch_attempted',
+                result: { status: 'no_eligible_member' },
+            },
+        });
+
+        const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: 'codex' })).resolves.toEqual({
+            ok: false,
+            status: 'exhausted',
+            error: 'session_usage_limit_recovery_control_no_eligible_member',
+            errorCode: 'session_usage_limit_recovery_control_no_eligible_member',
+        });
+    });
+
+    it('preserves daemon-wrapped runtime-auth recovery diagnostics during switch-account recovery', async () => {
+        const uxDiagnostic = {
+            code: 'recovery_retry_scheduled',
+            failurePhase: 'runtime_auth_recovery',
+            source: 'runtime_auth_recovery',
+            retryable: true,
+            diagnostics: { reason: 'generation_apply_failed', nextRetryAtMs: 12_000 },
+            suggestedActions: [],
+        };
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            result: {
+                status: 'recovery_retry_scheduled',
+                uxDiagnostic,
+                recovery: { status: 'scheduled', nextRetryAtMs: 12_000 },
+            },
+        });
+
+        const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: 'codex' })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+            uxDiagnostic,
+        });
+    });
+
+    it('preserves typed malformed protocol recovery results', async () => {
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: false,
+            status: 'malformed_response',
+            sessionId: 'session-1',
+            errorCode: 'malformed_session_usage_limit_recovery_operation_result',
+            diagnostics: { status: 'broken' },
+        });
+
+        const { sessionUsageLimitCheckNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitCheckNow('session-1')).resolves.toEqual({
+            ok: false,
+            status: 'malformed_response',
+            error: 'malformed_session_usage_limit_recovery_operation_result',
+            errorCode: 'malformed_session_usage_limit_recovery_operation_result',
+            diagnostics: { status: 'broken' },
+        });
+    });
+
     it('preserves check-now rate-limit retry metadata from the daemon response', async () => {
         storageState.current = {
             sessions: {
@@ -182,8 +445,37 @@ describe('sessionUsageLimitRecovery', () => {
         const { sessionUsageLimitCheckNow } = await import('./sessionUsageLimitRecovery');
         await expect(sessionUsageLimitCheckNow('session-1')).resolves.toEqual({
             ok: false,
+            status: 'rate_limited',
             error: 'probe_rate_limited',
             errorCode: 'probe_rate_limited',
+            retryAfterMs: 4_000,
+        });
+    });
+
+    it('normalizes successful rate-limited daemon check-now responses', async () => {
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            status: 'rate_limited',
+            retryAfterMs: 4_000,
+        });
+
+        const { sessionUsageLimitCheckNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitCheckNow('session-1')).resolves.toEqual({
+            ok: false,
+            status: 'rate_limited',
+            error: 'session_usage_limit_recovery_rate_limited',
+            errorCode: 'session_usage_limit_recovery_rate_limited',
             retryAfterMs: 4_000,
         });
     });
@@ -313,7 +605,8 @@ describe('sessionUsageLimitRecovery', () => {
         const { sessionUsageLimitCheckNow } = await import('./sessionUsageLimitRecovery');
         await expect(sessionUsageLimitCheckNow('session-1')).resolves.toEqual({
             ok: false,
-            error: 'unsupported_session_runtime_method:session.usageLimit.checkNow',
+            status: 'unsupported',
+            error: 'unsupported_session_runtime_method',
             errorCode: 'unsupported_session_runtime_method',
         });
 
@@ -388,7 +681,12 @@ describe('sessionUsageLimitRecovery', () => {
         machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true });
 
         const { sessionUsageLimitWaitResumeCancel } = await import('./sessionUsageLimitRecovery');
-        await expect(sessionUsageLimitWaitResumeCancel('session-1')).resolves.toEqual({ ok: true });
+        await expect(sessionUsageLimitWaitResumeCancel('session-1')).resolves.toEqual({
+            ok: false,
+            status: 'malformed_response',
+            error: 'malformed_session_usage_limit_recovery_operation_result',
+            errorCode: 'malformed_session_usage_limit_recovery_operation_result',
+        });
 
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith({
             machineId: 'machine-1',

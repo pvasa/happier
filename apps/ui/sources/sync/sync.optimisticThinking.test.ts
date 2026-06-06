@@ -581,6 +581,58 @@ describe('sync.sendMessage optimistic thinking', () => {
         sessionRpcSpy.mockRestore();
     });
 
+    it('keeps a runtime-accepted local pending message when server pending refresh is empty', async () => {
+        const sessionId = 's_active_runtime_rpc_pending_refresh';
+        storage.getState().applySessions([createSession({ sessionId })]);
+
+        const encryption = await Encryption.create(new Uint8Array(32).fill(9));
+        await encryption.initializeSessions(new Map([[sessionId, null]]));
+
+        const sessionRpcSpy = vi.spyOn(apiSocket, 'sessionRPC').mockResolvedValue({ ok: true } as any);
+        const requestSpy = vi.spyOn(apiSocket, 'request').mockResolvedValue(
+            new Response(JSON.stringify({ pending: [] }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            }),
+        );
+
+        const { sync } = await import('./sync');
+        sync.encryption = encryption;
+        sync.setMessageTransport({
+            emitWithAck: vi.fn(),
+            send: vi.fn(),
+        });
+
+        await sync.sendMessage(
+            sessionId,
+            'first prompt remains visible',
+            undefined,
+            undefined,
+            { localId: 'first-turn-local' },
+        );
+        expect(storage.getState().sessionPending[sessionId]?.messages.map((message) => message.id)).toEqual([
+            'first-turn-local',
+        ]);
+
+        await sync.fetchPendingMessages(sessionId);
+
+        expect(requestSpy).toHaveBeenCalledWith(
+            `/v2/sessions/${sessionId}/pending?includeDiscarded=1`,
+            { method: 'GET' },
+        );
+        expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([
+            expect.objectContaining({
+                id: 'first-turn-local',
+                localId: 'first-turn-local',
+                deliveryStatus: 'accepted',
+                text: 'first prompt remains visible',
+            }),
+        ]);
+
+        sessionRpcSpy.mockRestore();
+        requestSpy.mockRestore();
+    });
+
     it.each(createFallbackSafeSessionRpcErrors())(
         'falls back to the socket commit path when active-session runtime RPC fails with %s',
         async (sessionRpcError) => {

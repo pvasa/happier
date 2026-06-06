@@ -18,6 +18,19 @@ const ensureSessionVisibleForMessageRouteSpy = vi.hoisted(() =>
     vi.fn<(sessionId: string, options?: Readonly<{ serverId?: string; forceRefresh?: boolean }>) => Promise<EnsureRouteResult>>(),
 );
 const getSessionEncryptionSpy = vi.hoisted(() => vi.fn<(sessionId: string) => unknown>());
+const activeServerSnapshotMock = vi.hoisted(() => ({
+    current: {
+        serverId: '',
+        serverUrl: '',
+        activeShareableServerUrl: null,
+        activeLocalRelayUrl: null,
+        generation: 0,
+    },
+}));
+
+vi.mock('@/sync/domains/server/serverRuntime', () => ({
+    getActiveServerSnapshot: () => activeServerSnapshotMock.current,
+}));
 
 vi.mock('@/sync/sync', () => ({
     sync: {
@@ -109,6 +122,13 @@ describe('useHydrateSessionForRoute', () => {
         ensureSessionVisibleForMessageRouteSpy.mockReset();
         ensureSessionVisibleForMessageRouteSpy.mockResolvedValue(retryableResult('session-1', 'unknown'));
         getSessionEncryptionSpy.mockReset();
+        activeServerSnapshotMock.current = {
+            serverId: '',
+            serverUrl: '',
+            activeShareableServerUrl: null,
+            activeLocalRelayUrl: null,
+            generation: 0,
+        };
     });
 
     afterEach(() => {
@@ -331,6 +351,21 @@ describe('useHydrateSessionForRoute', () => {
         expect(ensureSessionVisibleForMessageRouteSpy).not.toHaveBeenCalled();
     });
 
+    it('keeps cached available route hydration state referentially stable across parent rerenders', async () => {
+        await storeHydratedSession('session-1');
+
+        const hook = await renderHook(
+            (_props: { parentVersion: number }) => useHydrateSessionForRoute('session-1', 'route.hydrate'),
+            { initialProps: { parentVersion: 1 } },
+        );
+        const initialState = hook.getCurrent();
+
+        await hook.rerender({ parentVersion: 2 });
+
+        expect(hook.getCurrent()).toBe(initialState);
+        expect(ensureSessionVisibleForMessageRouteSpy).not.toHaveBeenCalled();
+    });
+
     it('treats hydrated session metadata with null agent state as available', async () => {
         await storeHydratedSessionWithNullAgentState('session-1');
 
@@ -358,6 +393,49 @@ describe('useHydrateSessionForRoute', () => {
             sessionId: 'session-1',
         });
         expect(ensureSessionVisibleForMessageRouteSpy).not.toHaveBeenCalled();
+    });
+
+    it('keeps an already hydrated active-server session available for an unknown route server alias', async () => {
+        activeServerSnapshotMock.current = {
+            serverId: 'server-actual',
+            serverUrl: 'http://localhost',
+            activeShareableServerUrl: null,
+            activeLocalRelayUrl: null,
+            generation: 0,
+        };
+        await storeHydratedSession('session-1', 'server-actual');
+
+        const hook = await renderHook(() =>
+            useHydrateSessionForRoute('session-1', 'route.hydrate', { serverId: 'stale-route-server' }),
+        );
+
+        expect(hook.getCurrent()).toEqual({
+            kind: 'available',
+            sessionId: 'session-1',
+            serverId: 'server-actual',
+        });
+        expect(ensureSessionVisibleForMessageRouteSpy).not.toHaveBeenCalled();
+    });
+
+    it('accepts the hydrated server id when an unknown route server alias falls back to the active server', async () => {
+        const deferred = createDeferred<EnsureRouteResult>();
+        ensureSessionVisibleForMessageRouteSpy.mockReturnValueOnce(deferred.promise);
+
+        const hook = await renderHook(() =>
+            useHydrateSessionForRoute('session-1', 'route.hydrate', { serverId: 'stale-route-server' }),
+        );
+
+        await storeHydratedSession('session-1', 'server-actual');
+        await act(async () => {
+            deferred.resolve(availableResult('session-1', 'server-actual'));
+        });
+        await flushHookEffects({ cycles: 1, turns: 1 });
+
+        expect(hook.getCurrent()).toEqual({
+            kind: 'available',
+            sessionId: 'session-1',
+            serverId: 'server-actual',
+        });
     });
 
     it('ignores stale in-flight hydration when the server scope changes', async () => {

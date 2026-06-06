@@ -15,6 +15,10 @@
  */
 
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
+import {
+    areServerProfileIdentifiersEquivalent,
+    resolveServerProfileScopeIdForIdentifier,
+} from '@/sync/domains/server/serverProfiles';
 
 let nextConsumerId = 1;
 const mountedTranscriptConsumerIdentitiesByConsumerId = new Map<number, Readonly<{
@@ -35,7 +39,9 @@ function normalizeServerId(value: unknown): string | null {
 }
 
 function resolveRegisteredServerId(sessionId: string, serverId?: string | null): string | null {
-    return normalizeServerId(serverId) ?? resolveServerIdForSessionIdFromLocalCache(sessionId) ?? null;
+    const resolvedServerId = normalizeServerId(serverId) ?? resolveServerIdForSessionIdFromLocalCache(sessionId) ?? null;
+    if (!resolvedServerId) return null;
+    return resolveServerProfileScopeIdForIdentifier(resolvedServerId) || resolvedServerId;
 }
 
 function resolveMountedConsumerServerId(consumerId: number, sessionId: string, serverId: string | null): string | null {
@@ -68,11 +74,17 @@ export function registerSessionRealtimeTranscriptConsumer(sessionId: string, ser
 export function readMountedSessionRealtimeTranscriptConsumerSessionIds(serverId?: string | null): string[] {
     if (mountedTranscriptConsumerIdentitiesByConsumerId.size === 0) return [];
     const normalizedServerId = normalizeServerId(serverId);
+    const resolvedSourceServerId = normalizedServerId
+        ? resolveServerProfileScopeIdForIdentifier(normalizedServerId) || normalizedServerId
+        : null;
     const sessionIds = new Set<string>();
 
     for (const [consumerId, entry] of mountedTranscriptConsumerIdentitiesByConsumerId.entries()) {
         const resolvedServerId = resolveMountedConsumerServerId(consumerId, entry.sessionId, entry.serverId);
-        if (normalizedServerId && resolvedServerId !== normalizedServerId) {
+        if (
+            resolvedSourceServerId
+            && (!resolvedServerId || !areServerProfileIdentifiersEquivalent(resolvedServerId, resolvedSourceServerId))
+        ) {
             continue;
         }
         sessionIds.add(entry.sessionId);

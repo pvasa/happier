@@ -1,8 +1,10 @@
+import { isSameMachineLocality } from '@happier-dev/protocol';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, type RpcErrorCarrier } from '@happier-dev/protocol/rpcErrors';
 import { resolveSessionMachineRpcTarget } from '@/sync/domains/session/resolveSessionReachableMachineId';
 import { resolveSessionDisplayTarget } from '@/sync/domains/machines/identity/resolveSessionMachineTargets';
 import { storage } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { resolveSessionMachineId } from '@/sync/domains/session/directSessions/resolveSessionMachineId';
 
 type SessionTargetMetadataLike = Readonly<{
@@ -25,6 +27,7 @@ type MachineTargetLikeState = Readonly<{
     metadata?: SessionTargetMetadataLike;
   }>;
   machines?: Record<string, Machine>;
+  machineDisplayById?: Record<string, MachineDisplayRenderable>;
   getProjectForSession?: (sessionId: string) => { key?: { machineId?: string; path?: string } } | null;
 }>;
 
@@ -36,6 +39,17 @@ export type SessionMachineControlTarget = Readonly<{
   confidence: 'reachable' | 'metadata_direct';
 }>;
 
+type MachineControlCandidate = Readonly<{
+  id: string;
+  active?: boolean;
+  revokedAt?: number | null;
+  replacedByMachineId?: string | null;
+  metadata?: Readonly<{
+    host?: string | null;
+    homeDir?: string | null;
+  }> | null;
+}>;
+
 function normalizeNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -43,9 +57,9 @@ function normalizeNonEmptyString(value: unknown): string | null {
 }
 
 function resolveUniqueActiveMachineByHost(
-  machines: ReadonlyArray<Machine>,
+  machines: ReadonlyArray<MachineControlCandidate>,
   host: string | null,
-): Machine | null {
+): MachineControlCandidate | null {
   if (!host) return null;
   const matches = machines.filter((machine) => {
     const machineHost = normalizeNonEmptyString(machine.metadata?.host);
@@ -53,6 +67,29 @@ function resolveUniqueActiveMachineByHost(
       && !machine.revokedAt
       && !machine.replacedByMachineId
       && machineHost === host;
+  });
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
+function resolveUniqueActiveMachineByHostAndHome(input: Readonly<{
+  machines: ReadonlyArray<MachineControlCandidate>;
+  host: string | null;
+  homeDir: string | null;
+}>): MachineControlCandidate | null {
+  if (!input.host || !input.homeDir) return null;
+  const matches = input.machines.filter((machine) => {
+    const machineHost = normalizeNonEmptyString(machine.metadata?.host);
+    const machineHomeDir = normalizeNonEmptyString(machine.metadata?.homeDir);
+    return machine.active === true
+      && !machine.revokedAt
+      && !machine.replacedByMachineId
+      && isSameMachineLocality({
+        sessionHost: input.host,
+        sessionHomeDir: input.homeDir,
+        currentHost: machineHost,
+        currentHomeDir: machineHomeDir,
+        homeDir: machineHomeDir,
+      });
   });
   return matches.length === 1 ? matches[0] ?? null : null;
 }
@@ -97,11 +134,57 @@ export function resolveMachineTargetForSessionFromState(
   });
 }
 
-function hasKnownUnavailableMachineState(machine: Machine | undefined): boolean {
+function hasKnownUnavailableMachineState(machine: MachineControlCandidate | undefined): boolean {
   if (!machine) return false;
   if (machine.revokedAt && machine.revokedAt > 0) return true;
   if (machine.replacedByMachineId) return true;
   return machine.active !== true;
+}
+
+function resolveMachineControlCandidates(state: SessionMachineTargetState): ReadonlyArray<MachineControlCandidate> {
+  const byId = new Map<string, MachineControlCandidate>();
+  for (const machine of Object.values(state.machineDisplayById ?? {})) {
+    byId.set(machine.id, machine);
+  }
+  for (const machine of Object.values(state.machines ?? {})) {
+    byId.set(machine.id, machine);
+  }
+  return Array.from(byId.values());
+}
+
+function resolveStaleInactiveMachineControlTarget(input: Readonly<{
+  displayTarget: { machineId: string; basePath: string } | null;
+  metadata: SessionTargetMetadataLike;
+  knownMachine: MachineControlCandidate | undefined;
+  machines: ReadonlyArray<MachineControlCandidate>;
+}>): SessionMachineControlTarget | null {
+  const knownMachine = input.knownMachine;
+  if (knownMachine) {
+    if (knownMachine.revokedAt && knownMachine.revokedAt > 0) return null;
+    if (knownMachine.replacedByMachineId) return null;
+    if (knownMachine.active === true) return null;
+  }
+
+  const basePath = normalizeNonEmptyString(input.displayTarget?.basePath)
+    ?? normalizeNonEmptyString(input.metadata?.path);
+  if (!basePath) return null;
+
+  const host = normalizeNonEmptyString(input.metadata?.host)
+    ?? normalizeNonEmptyString(knownMachine?.metadata?.host);
+  const homeDir = normalizeNonEmptyString(input.metadata?.homeDir)
+    ?? normalizeNonEmptyString(knownMachine?.metadata?.homeDir);
+  const activeMachine = resolveUniqueActiveMachineByHostAndHome({
+    machines: input.machines,
+    host,
+    homeDir,
+  });
+  if (!activeMachine) return null;
+
+  return {
+    machineId: activeMachine.id,
+    basePath,
+    confidence: 'reachable',
+  };
 }
 
 export function resolveMachineControlTargetForSessionFromState(
@@ -119,9 +202,25 @@ export function resolveMachineControlTargetForSessionFromState(
   const displayTarget = resolveDisplayMachineTargetForSessionFromState({ state, sessionId });
   if (!displayTarget) return null;
 
-  const machines = state.machines ?? {};
-  const knownMachine = machines[displayTarget.machineId];
-  if (hasKnownUnavailableMachineState(knownMachine)) return null;
+  const controlMachines = resolveMachineControlCandidates(state);
+  const knownMachine = controlMachines.find((machine) => machine.id === displayTarget.machineId);
+  if (hasKnownUnavailableMachineState(knownMachine)) {
+    return resolveStaleInactiveMachineControlTarget({
+      displayTarget,
+      metadata: state.sessions?.[sessionId]?.metadata ?? null,
+      knownMachine,
+      machines: controlMachines,
+    });
+  }
+  if (!knownMachine) {
+    const replacement = resolveStaleInactiveMachineControlTarget({
+      displayTarget,
+      metadata: state.sessions?.[sessionId]?.metadata ?? null,
+      knownMachine,
+      machines: controlMachines,
+    });
+    if (replacement) return replacement;
+  }
 
   const session = state.sessions?.[sessionId];
   const project = typeof state.getProjectForSession === 'function' ? state.getProjectForSession(sessionId) : null;

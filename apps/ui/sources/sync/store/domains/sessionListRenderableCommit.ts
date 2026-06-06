@@ -20,8 +20,10 @@ import {
     setActiveServerSessionListCache,
     setServerSessionListCache,
 } from '../sessionListCache';
+import { areServerProfileIdentifiersEquivalent } from '../../domains/server/serverProfiles';
 
 import {
+    planSessionListRenderableMerge,
     planSessionListRenderablePatches,
     planSessionListRenderableReplacement,
     type SessionListRenderablePatch,
@@ -141,6 +143,21 @@ export function planSessionListRenderableReplacementCommit(input: Readonly<{
     });
 }
 
+export function planSessionListRenderableMergeCommit(input: Readonly<{
+    state: SessionListRenderableCommitState;
+    incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
+}>): SessionListRenderableStoreUpdatePlan {
+    return planSessionListRenderableMerge({
+        previousRenderables: input.state.sessionListRenderables ?? {},
+        incomingRenderables: input.incomingRenderables,
+        isSessionListViewDataUninitialized: input.state.sessionListViewData === null,
+        rebuildOnAttentionPromotionFieldsChange:
+            shouldRebuildOnSessionPlacementFieldsChange(input.state.settings),
+        didListViewFieldsChange: (previous, next) =>
+            didSessionListRenderableListViewFieldsChangeForSettings(previous, next, input.state.settings),
+    });
+}
+
 export function planSessionListRenderablePatchesCommit(input: Readonly<{
     state: SessionListRenderableCommitState;
     patches: ReadonlyArray<SessionListRenderablePatch>;
@@ -172,7 +189,8 @@ export function applySessionListRenderableCommitPlan<S extends SessionListRender
     };
     const targetServerId = normalizeTargetServerId(input.targetServerId);
     const activeServerId = getActiveServerIdForSessionListCache();
-    const shouldUpdateActiveView = targetServerId === null || targetServerId === activeServerId;
+    const shouldUpdateActiveView = targetServerId === null
+        || areServerProfileIdentifiersEquivalent(targetServerId, activeServerId);
     const build = () => buildSessionListViewDataForRenderableState(nextStateBase, {
         serverId: targetServerId,
     });

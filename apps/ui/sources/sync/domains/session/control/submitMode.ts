@@ -7,6 +7,66 @@ export type MessageSendMode = 'agent_queue' | 'interrupt' | 'server_pending';
 
 export type BusySteerSendPolicy = 'steer_immediately' | 'server_pending';
 
+type SessionSubmitRuntimeState = Readonly<{
+    localControlBlocksDirectSubmit: boolean;
+    isBusy: boolean;
+    isOnline: boolean;
+    agentReady: boolean;
+    inFlightSteerSupported: boolean | undefined;
+    inFlightSteerAvailable: boolean | undefined;
+}>;
+
+function deriveSubmitRuntimeState(session: Session | null, nowMs: number): SessionSubmitRuntimeState {
+    const localControl = getSessionLocalControlState(session);
+    const localControlBlocksDirectSubmit = localControl?.attached === true && localControl.remoteWritable !== true;
+    const runtimeStatus = deriveSessionRuntimePresentationState({
+        active: session?.active,
+        activeAt: session?.activeAt,
+        presence: session?.presence,
+        thinking: session?.thinking,
+        thinkingAt: session?.thinkingAt,
+        latestTurnStatus: session?.latestTurnStatus,
+        latestTurnStatusObservedAt: session?.latestTurnStatusObservedAt,
+        meaningfulActivityAt: session?.meaningfulActivityAt,
+    }, nowMs);
+    const capabilities = session?.agentState?.capabilities;
+    return {
+        localControlBlocksDirectSubmit,
+        isBusy: runtimeStatus.working,
+        isOnline: session?.presence === 'online',
+        agentReady: Boolean(session && session.agentStateVersion > 0),
+        inFlightSteerSupported: capabilities?.inFlightSteerSupported ?? capabilities?.inFlightSteer,
+        inFlightSteerAvailable: capabilities?.inFlightSteerAvailable ?? capabilities?.inFlightSteer,
+    };
+}
+
+export function canDirectSubmitUserMessageNow(opts: {
+    session: Session | null;
+    nowMs?: number;
+}): boolean {
+    if (!opts.session || opts.session.active === false) {
+        return false;
+    }
+
+    const runtimeState = deriveSubmitRuntimeState(opts.session, opts.nowMs ?? Date.now());
+    if (runtimeState.localControlBlocksDirectSubmit || !runtimeState.isOnline || !runtimeState.agentReady) {
+        return false;
+    }
+
+    if (!runtimeState.isBusy) {
+        return true;
+    }
+
+    return runtimeState.inFlightSteerSupported === true && runtimeState.inFlightSteerAvailable === true;
+}
+
+export function isPendingQueueSubmitKnownUnsupported(session: Session | null): boolean {
+    const cliVersion = session?.metadata?.version;
+    const trimmedCliVersion = typeof cliVersion === 'string' ? cliVersion.trim() : '';
+    return Boolean(trimmedCliVersion)
+        && !isVersionSupported(trimmedCliVersion, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION);
+}
+
 export function chooseSubmitMode(opts: {
     configuredMode: MessageSendMode;
     busySteerSendPolicy?: BusySteerSendPolicy;
@@ -23,9 +83,10 @@ export function chooseSubmitMode(opts: {
     // Mixed-version safety: older servers won't include these fields.
     const supportsQueue = typeof session?.pendingVersion === 'number';
     if (!supportsQueue) {
-        // If the user explicitly configured pending but the server doesn't support it,
-        // fall back to agent_queue to avoid "phantom pending" that can never be processed.
-        return requestedMode === 'server_pending' ? 'agent_queue' : requestedMode;
+        // Missing support metadata is an unknown state, not permission to bypass an
+        // explicit queueing intent. Preserve server_pending so callers fail closed
+        // through the queue path instead of steering directly.
+        return requestedMode;
     }
 
     // If we have an explicit CLI version published, gate server_pending on it to avoid
@@ -46,24 +107,7 @@ export function chooseSubmitMode(opts: {
         return 'server_pending';
     }
 
-    const localControl = getSessionLocalControlState(session);
-    const localControlBlocksDirectSubmit = localControl?.attached === true && localControl.remoteWritable !== true;
-    const runtimeStatus = deriveSessionRuntimePresentationState({
-        active: session?.active,
-        activeAt: session?.activeAt,
-        presence: session?.presence,
-        thinking: session?.thinking,
-        thinkingAt: session?.thinkingAt,
-        latestTurnStatus: session?.latestTurnStatus,
-        latestTurnStatusObservedAt: session?.latestTurnStatusObservedAt,
-        meaningfulActivityAt: session?.meaningfulActivityAt,
-    }, opts.nowMs ?? Date.now());
-    const isBusy = runtimeStatus.working;
-    const isOnline = session?.presence === 'online';
-    const agentReady = Boolean(session && session.agentStateVersion > 0);
-    const capabilities = session?.agentState?.capabilities;
-    const inFlightSteerSupported = capabilities?.inFlightSteerSupported ?? capabilities?.inFlightSteer;
-    const inFlightSteerAvailable = capabilities?.inFlightSteerAvailable ?? capabilities?.inFlightSteer;
+    const runtimeState = deriveSubmitRuntimeState(session, opts.nowMs ?? Date.now());
     const busySteerSendPolicy: BusySteerSendPolicy = opts.busySteerSendPolicy ?? 'steer_immediately';
 
     // Prefer the metadata-backed queue when:
@@ -75,20 +119,37 @@ export function chooseSubmitMode(opts: {
     // Exception: if the agent supports in-flight steer and is online+ready, do NOT auto-enqueue while busy.
     // Steering preserves the current turn (Codex-style) and is the more intuitive default.
     if (
-        isBusy
-        && inFlightSteerSupported === true
-        && inFlightSteerAvailable === true
-        && !localControlBlocksDirectSubmit
-        && isOnline
-        && agentReady
+        runtimeState.isBusy
+        && runtimeState.inFlightSteerSupported === true
+        && runtimeState.inFlightSteerAvailable === true
+        && !runtimeState.localControlBlocksDirectSubmit
+        && runtimeState.isOnline
+        && runtimeState.agentReady
         && busySteerSendPolicy === 'steer_immediately'
     ) {
         return 'agent_queue';
     }
 
-    if (localControlBlocksDirectSubmit || isBusy || !isOnline || !agentReady) {
+    if (runtimeState.localControlBlocksDirectSubmit || runtimeState.isBusy || !runtimeState.isOnline || !runtimeState.agentReady) {
         return 'server_pending';
     }
 
     return configuredMode;
+}
+
+export function chooseForceImmediateSubmitMode(opts: {
+    configuredMode: MessageSendMode;
+    busySteerSendPolicy?: BusySteerSendPolicy;
+    explicitMode?: MessageSendMode;
+    session: Session | null;
+    nowMs?: number;
+}): MessageSendMode {
+    const selected = chooseSubmitMode(opts);
+    if (selected !== 'server_pending') {
+        return selected;
+    }
+
+    return canDirectSubmitUserMessageNow({ session: opts.session, nowMs: opts.nowMs })
+        ? 'agent_queue'
+        : 'server_pending';
 }

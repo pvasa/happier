@@ -25,8 +25,13 @@ import {
   deriveSessionListRenderableHasUnreadMessagesFromReadableSeq,
   type SessionListRenderableSession,
 } from '../domains/session/listing/sessionListRenderable';
+import {
+  areServerProfileIdentifiersEquivalent,
+  resolveServerProfileScopeIdForIdentifier,
+} from '../domains/server/serverProfiles';
 import { resolveSessionReadableSeq } from '../domains/session/readCursor/resolveSessionReadableSeq';
 import { resolveSessionWorkspacePath } from '../domains/session/resolveSessionWorkspacePath';
+import { buildSessionMetadataStabilitySignature } from '../domains/session/metadata/sessionMetadataStability';
 import type { ReviewCommentDraft } from '../domains/input/reviewComments/reviewCommentTypes';
 import type { SessionActionDraft } from '../domains/sessionActions/sessionActionDraftTypes';
 import { buildSessionMessageRouteId, resolveSessionMessageRouteId } from '../domains/messages/messageRouteIds';
@@ -148,11 +153,24 @@ export function useSession(id: string): Session | null {
   return getStorage()(useShallow((state) => state.sessions[id] ?? null));
 }
 
+const sessionForkSupportSourceCache = new Map<string, Readonly<{
+  signature: string;
+  value: SessionForkSupportSource;
+}>>();
+
 export function useSessionForkSupportSource(sessionId: string | null): SessionForkSupportSource | null {
   return getStorage()(
     useShallow((state) => {
       const session = sessionId ? state.sessions[sessionId] ?? null : null;
-      return session ? { metadata: session.metadata } : null;
+      if (!session || !sessionId) return null;
+
+      const signature = buildSessionMetadataStabilitySignature(session.metadata);
+      const cached = sessionForkSupportSourceCache.get(sessionId);
+      if (cached?.signature === signature) return cached.value;
+
+      const value: SessionForkSupportSource = { metadata: session.metadata };
+      sessionForkSupportSourceCache.set(sessionId, { signature, value });
+      return value;
     })
   );
 }
@@ -727,13 +745,8 @@ export function useSessionVisibleReadSeq(
     }
     const session = state.sessions[sessionId];
     const renderable = state.sessionListRenderables[sessionId];
-    const messages: Message[] = [];
-    for (const messageId of sessionMessages.messageIdsOldestFirst) {
-      const message = sessionMessages.messagesById[messageId];
-      if (message) messages.push(message);
-    }
     return resolveSessionReadableSeq({
-      messages,
+      latestMessageSeq: resolveLatestCommittedMessageSeqForHooks(sessionMessages),
       sessionSeq,
       latestReadyEventSeq:
         sessionMessages.latestReadyEventSeq
@@ -744,6 +757,18 @@ export function useSessionVisibleReadSeq(
       includeTerminalSessionSeq: true,
     });
   });
+}
+
+function resolveLatestCommittedMessageSeqForHooks(
+  sessionMessages: StorageState['sessionMessages'][string],
+): number | null {
+  let latestSeq: number | null = null;
+  for (const messageId of sessionMessages.messageIdsOldestFirst) {
+    const seq = normalizeHookSeq(sessionMessages.messagesById[messageId]?.seq);
+    if (seq === null) continue;
+    latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
+  }
+  return latestSeq;
 }
 
 function resolveSessionHasUnreadForHooks(
@@ -1207,6 +1232,21 @@ function normalizeSelectedSessionListServerIds(serverIds: ReadonlyArray<string> 
   return out;
 }
 
+function resolveSelectedSessionListServerId(
+  dataByServerId: Readonly<Record<string, SessionListViewItem[] | null>>,
+  requestedServerId: string,
+): string | null {
+  if (Object.prototype.hasOwnProperty.call(dataByServerId, requestedServerId)) return requestedServerId;
+
+  const scopedServerId = resolveServerProfileScopeIdForIdentifier(requestedServerId);
+  if (scopedServerId && Object.prototype.hasOwnProperty.call(dataByServerId, scopedServerId)) return scopedServerId;
+
+  for (const cachedServerId of Object.keys(dataByServerId)) {
+    if (areServerProfileIdentifiersEquivalent(cachedServerId, requestedServerId)) return cachedServerId;
+  }
+  return null;
+}
+
 export function useSessionListViewDataByServerId(
   serverIds?: ReadonlyArray<string>,
 ): Record<string, SessionListViewItem[] | null> {
@@ -1228,8 +1268,9 @@ export function useSessionListViewDataByServerId(
     const selectedDataByServerId: Record<string, SessionListViewItem[] | null> = {};
     let hasSelectedData = false;
     for (const serverId of selectedServerIds) {
-      if (!Object.prototype.hasOwnProperty.call(state.sessionListViewDataByServerId, serverId)) continue;
-      selectedDataByServerId[serverId] = state.sessionListViewDataByServerId[serverId] ?? null;
+      const cachedServerId = resolveSelectedSessionListServerId(state.sessionListViewDataByServerId, serverId);
+      if (!cachedServerId || Object.prototype.hasOwnProperty.call(selectedDataByServerId, cachedServerId)) continue;
+      selectedDataByServerId[cachedServerId] = state.sessionListViewDataByServerId[cachedServerId] ?? null;
       hasSelectedData = true;
     }
 

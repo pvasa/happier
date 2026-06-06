@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { ServerProfile } from '../../domains/server/serverProfiles';
+
 const mmkvStore = new Map<string, string>();
+const serverProfileMockState = vi.hoisted(() => ({
+    profiles: [] as ServerProfile[],
+}));
 
 vi.mock('react-native-mmkv', () => {
     class MMKV {
@@ -24,6 +29,7 @@ afterEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     mmkvStore.clear();
+    serverProfileMockState.profiles = [];
 });
 
 function createHarness(createMachinesDomain: any, initialState: any) {
@@ -39,20 +45,58 @@ function createHarness(createMachinesDomain: any, initialState: any) {
     return { get, domain };
 }
 
+function createServerProfile(params: Readonly<{
+    id: string;
+    serverIdentityId?: string | null;
+    legacyServerIds?: readonly string[];
+}>): ServerProfile {
+    return {
+        id: params.id,
+        name: params.id,
+        serverUrl: `http://${params.id}.local`,
+        serverIdentityId: params.serverIdentityId ?? null,
+        legacyServerIds: params.legacyServerIds ?? [],
+        createdAt: 1,
+        updatedAt: 1,
+        lastUsedAt: 1,
+    };
+}
+
+function mockServerProfiles(profiles: readonly ServerProfile[]): void {
+    serverProfileMockState.profiles = profiles.slice();
+    vi.doMock('../../domains/server/serverProfiles', async (importOriginal) => {
+        const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+        return createServerProfilesModuleMock({
+            importOriginal,
+            overrides: {
+                listServerProfiles: () => serverProfileMockState.profiles,
+            },
+        });
+    });
+}
+
 function mockMachineDomainBoundaries(): void {
     vi.doMock('../../domains/server/serverRuntime', () => ({
         getActiveServerSnapshot: () => ({ serverId: 'server_a', serverUrl: 'http://server.local', generation: 0 }),
     }));
+    mockServerProfiles([createServerProfile({ id: 'server_a' })]);
     vi.doMock('../../domains/state/warmCachePersistence', () => ({
         resolveWarmCacheAccountScope: vi.fn((fallback: string | null | undefined) => fallback ?? null),
         saveMachineDisplayWarmCacheEntries: vi.fn(),
     }));
 }
 
-function mockMachineDomainBoundariesForActiveServer(serverId: string): void {
+function mockMachineDomainBoundariesForActiveServer(
+    serverId: string,
+    profiles: readonly ServerProfile[] = [
+        createServerProfile({ id: 'server_a' }),
+        createServerProfile({ id: 'server_b' }),
+    ],
+): void {
     vi.doMock('../../domains/server/serverRuntime', () => ({
         getActiveServerSnapshot: () => ({ serverId, serverUrl: `http://${serverId}.local`, generation: 0 }),
     }));
+    mockServerProfiles(profiles);
     vi.doMock('../../domains/state/warmCachePersistence', () => ({
         resolveWarmCacheAccountScope: vi.fn((fallback: string | null | undefined) => fallback ?? null),
         saveMachineDisplayWarmCacheEntries: vi.fn(),
@@ -306,6 +350,75 @@ describe('machines domain: sessionListViewData rebuild gating', () => {
         expect(get().machineListByServerId.server_b?.map((machine: any) => machine.id)).toEqual(['m-b']);
         expect(get().machineListByServerId.server_a?.map((machine: any) => machine.id)).toEqual(['m-a']);
         expect(get().machineListStatusByServerId.server_a).toBe('idle');
+    });
+
+    it('updates the active projection for equivalent profile and legacy server identifiers', async () => {
+        mockMachineDomainBoundariesForActiveServer('identity_b', [
+            createServerProfile({
+                id: 'profile_b',
+                serverIdentityId: 'identity_b',
+                legacyServerIds: ['legacy_b'],
+            }),
+        ]);
+
+        const { createMachinesDomain } = await import('./machines');
+
+        const initialState = {
+            sessions: {},
+            settings: {
+                groupInactiveSessionsByProject: false,
+                sessionListActiveGroupingV1: 'date',
+                sessionListInactiveGroupingV1: 'date',
+            },
+            sessionListRenderables: {},
+            sessionListViewData: [],
+            sessionListViewDataByServerId: {},
+            machines: {},
+            machineDisplayById: {},
+            machineListByServerId: {},
+            machineListStatusByServerId: {},
+            profile: { id: 'account_b' },
+        };
+
+        const { get, domain } = createHarness(createMachinesDomain, initialState);
+
+        domain.applyMachines([
+            {
+                id: 'm-profile',
+                seq: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                active: true,
+                activeAt: 1,
+                revokedAt: null,
+                metadata: { displayName: 'Profile Machine' },
+                metadataVersion: 1,
+                daemonState: null,
+                daemonStateVersion: 0,
+            } as any,
+        ], true, { sourceServerId: 'profile_b' });
+
+        expect(Object.keys(get().machines)).toEqual(['m-profile']);
+        expect(get().machineListByServerId.profile_b?.map((machine: any) => machine.id)).toEqual(['m-profile']);
+
+        domain.applyMachines([
+            {
+                id: 'm-legacy',
+                seq: 2,
+                createdAt: 2,
+                updatedAt: 2,
+                active: true,
+                activeAt: 2,
+                revokedAt: null,
+                metadata: { displayName: 'Legacy Machine' },
+                metadataVersion: 1,
+                daemonState: null,
+                daemonStateVersion: 0,
+            } as any,
+        ], true, { sourceServerId: 'legacy_b' });
+
+        expect(Object.keys(get().machines)).toEqual(['m-legacy']);
+        expect(get().machineListByServerId.legacy_b?.map((machine: any) => machine.id)).toEqual(['m-legacy']);
     });
 
     it('rebuilds sessionListViewData when project header machine display changes', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { SessionListRenderableSession } from '../../domains/session/listing/sessionListRenderable';
 import {
+    planSessionListRenderableMerge,
     planSessionListRenderablePatches,
     planSessionListRenderableReplacement,
 } from './sessionListRenderableStoreUpdate';
@@ -29,6 +30,40 @@ function makeRenderable(
 }
 
 describe('sessionListRenderableStoreUpdate', () => {
+    it('merges incoming renderables without removing existing rows omitted from an append page', () => {
+        const previous = makeRenderable('s_existing', { createdAt: 10 });
+        const appended = makeRenderable('s_appended', { createdAt: 5 });
+        const plan = planSessionListRenderableMerge({
+            previousRenderables: { s_existing: previous },
+            incomingRenderables: [appended],
+            isSessionListViewDataUninitialized: false,
+        });
+
+        expect(plan.nextRenderables.s_existing).toBe(previous);
+        expect(plan.nextRenderables.s_appended).toEqual(expect.objectContaining({
+            id: appended.id,
+            createdAt: appended.createdAt,
+        }));
+        expect(plan.changedCount).toBe(1);
+        expect(plan.removedCount).toBe(0);
+        expect(plan.needsSessionListViewDataRebuild).toBe(true);
+    });
+
+    it('keeps merge no-op when an append page only repeats existing equivalent renderables', () => {
+        const previous = makeRenderable('s_existing', { createdAt: 10 });
+        const plan = planSessionListRenderableMerge({
+            previousRenderables: { s_existing: previous },
+            incomingRenderables: [{ ...previous, metadata: previous.metadata ? { ...previous.metadata } : null }],
+            isSessionListViewDataUninitialized: false,
+        });
+
+        expect(plan.nextRenderables.s_existing).toBe(previous);
+        expect(plan.noop).toBe(true);
+        expect(plan.changedCount).toBe(0);
+        expect(plan.removedCount).toBe(0);
+        expect(plan.needsSessionListViewDataRebuild).toBe(false);
+    });
+
     it('does not rebuild list data for attention-only replacement changes when attention promotion is disabled', () => {
         const previous = makeRenderable('s1', { latestReadyEventSeq: null });
         const plan = planSessionListRenderableReplacement({

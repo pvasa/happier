@@ -19,6 +19,9 @@ export type SessionRollbackRangeV1 = Readonly<{
     endSeqInclusive: number;
 }>;
 
+const EMPTY_SESSION_ROLLBACK_RANGES: readonly SessionRollbackRangeV1[] = Object.freeze([]);
+const EMPTY_TRANSCRIPT_ROLLBACK_ACTIONS: Readonly<Record<string, TranscriptRollbackAction>> = Object.freeze({});
+
 function readFiniteSeq(value: unknown): number | null {
     if (typeof value !== 'number' || !Number.isFinite(value)) return null;
     return Math.trunc(value);
@@ -87,6 +90,7 @@ export function canRollbackConversation(params: Readonly<{
 export function readSessionRollbackRangesV1(metadata: Record<string, unknown> | null | undefined): readonly SessionRollbackRangeV1[] {
     const parsed = readSessionRollbackRangesV1FromMetadata(metadata);
     const raw = parsed?.ranges ?? [];
+    if (raw.length === 0) return EMPTY_SESSION_ROLLBACK_RANGES;
     const ranges: SessionRollbackRangeV1[] = [];
     for (const entry of raw) {
         if (!entry || typeof entry !== 'object') continue;
@@ -96,7 +100,7 @@ export function readSessionRollbackRangesV1(metadata: Record<string, unknown> | 
         if (endSeqInclusive < startSeqInclusive) continue;
         ranges.push({ startSeqInclusive, endSeqInclusive });
     }
-    return ranges;
+    return ranges.length > 0 ? ranges : EMPTY_SESSION_ROLLBACK_RANGES;
 }
 
 export function isMessageRolledBack(params: Readonly<{
@@ -144,7 +148,7 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
             : listFlattenedRollbackEligibleTurnStartSeqs(
                 (params.session as { rollbackEligibleTurnStarts?: unknown } | null | undefined)?.rollbackEligibleTurnStarts,
             );
-        if (trustedStartSeqs.size === 0) return {};
+        if (trustedStartSeqs.size === 0) return EMPTY_TRANSCRIPT_ROLLBACK_ACTIONS;
         const actions: Record<string, TranscriptRollbackAction> = {};
         for (const messageId of params.messageIdsOldestFirst) {
             const message = params.messagesById[messageId];
@@ -158,16 +162,16 @@ export function resolveTranscriptRollbackActions(params: Readonly<{
                 restoredDraftText: message.text,
             };
         }
-        return actions;
+        return Object.keys(actions).length > 0 ? actions : EMPTY_TRANSCRIPT_ROLLBACK_ACTIONS;
     }
 
-    if (!support.supportsLatestTurnRollback) return {};
+    if (!support.supportsLatestTurnRollback) return EMPTY_TRANSCRIPT_ROLLBACK_ACTIONS;
     const latestActiveMessageId = resolveLatestActiveMessageId({
         messageIdsOldestFirst: params.messageIdsOldestFirst,
         messagesById: params.messagesById,
         rollbackRanges: params.rollbackRanges,
     });
-    if (!latestActiveMessageId) return {};
+    if (!latestActiveMessageId) return EMPTY_TRANSCRIPT_ROLLBACK_ACTIONS;
     return {
         [latestActiveMessageId]: {
             target: { type: 'latest_turn' },

@@ -1,5 +1,5 @@
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import type { ConnectedServiceBindingsV1, ConnectedServiceId } from '@happier-dev/protocol';
+import type { ConnectedServiceBindingsV1, ConnectedServiceId, ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { prepareAccountSettingsForDaemonSpawnIfNeeded } from '@/sync/ops/accountSettingsDaemonSpawnPreparation';
 
@@ -28,6 +28,8 @@ export type SessionConnectedServiceAuthSwitchErrorCode =
     | 'bindings_rollback_failed'
     | 'post_switch_recovery_failed'
     | 'hot_apply_succeeded_but_recovery_failed'
+    | 'provider_account_adoption_mismatch'
+    | 'post_switch_verification_failed'
     | 'profile_action_required'
     | 'connected_service_required'
     | 'not_group_selection'
@@ -35,8 +37,9 @@ export type SessionConnectedServiceAuthSwitchErrorCode =
 
 export type SessionConnectedServiceAuthSwitchDiagnostics =
     Readonly<{
-        failurePhase?: 'session_lookup' | 'agent_validation' | 'normalization' | 'continuity' | 'metadata' | 'restart' | 'hot_apply' | 'rollback' | 'post_switch_recovery';
+        failurePhase?: 'session_lookup' | 'agent_validation' | 'normalization' | 'continuity' | 'metadata' | 'restart' | 'hot_apply' | 'rollback' | 'post_switch_recovery' | 'post_switch_verification';
         partialState?: 'metadata_may_reference_new_binding' | 'runtime_auth_applied' | 'runtime_auth_partially_applied';
+        retryable?: boolean;
         serviceResultsByServiceId?: Readonly<Record<string, Readonly<{
             status: 'applied' | 'failed' | 'not_attempted';
             errorCode?: string;
@@ -51,6 +54,7 @@ export type SessionConnectedServiceAuthSwitchDiagnostics =
             status: 'succeeded' | 'failed';
             error?: string;
         }>;
+        uxDiagnostic?: ConnectedServiceUxDiagnosticV1;
     }>;
 
 export type SessionConnectedServiceAuthSwitchResult =

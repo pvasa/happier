@@ -5,9 +5,18 @@ import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+const prepareAccountSettingsForDaemonSpawnIfNeededMock = vi.hoisted(() => vi.fn(async (_hint?: unknown) => ({})));
+const registerAccountSettingsDaemonSpawnPreparationMock = vi.hoisted(() => vi.fn((_prepare: unknown) => vi.fn()));
 
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: (params: unknown) => machineRpcWithServerScopeMock(params),
+}));
+
+vi.mock('@/sync/ops/accountSettingsDaemonSpawnPreparation', () => ({
+    prepareAccountSettingsForDaemonSpawnIfNeeded: (hint: unknown) =>
+        prepareAccountSettingsForDaemonSpawnIfNeededMock(hint),
+    registerAccountSettingsDaemonSpawnPreparation: (prepare: unknown) =>
+        registerAccountSettingsDaemonSpawnPreparationMock(prepare),
 }));
 
 function session(overrides: Partial<Session>): Session {
@@ -48,6 +57,8 @@ function session(overrides: Partial<Session>): Session {
 describe('rematerializeActiveSessionsForConnectedServiceProfile', () => {
     beforeEach(() => {
         machineRpcWithServerScopeMock.mockReset();
+        prepareAccountSettingsForDaemonSpawnIfNeededMock.mockReset();
+        prepareAccountSettingsForDaemonSpawnIfNeededMock.mockResolvedValue({});
         machineRpcWithServerScopeMock.mockResolvedValue({
             ok: true,
             action: 'restart_requested',

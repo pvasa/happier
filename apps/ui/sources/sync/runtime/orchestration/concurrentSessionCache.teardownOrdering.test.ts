@@ -68,12 +68,18 @@ describe('concurrentSessionCache teardown ordering', () => {
             isLegacyAuthCredentials: () => true,
         }));
 
-        vi.doMock('@/sync/domains/server/serverProfiles', () => ({
-            listServerProfiles: () => [
-                { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-                { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-            ],
-        }));
+        vi.doMock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+            const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+            return createServerProfilesModuleMock({
+                importOriginal,
+                overrides: {
+                    listServerProfiles: () => [
+                        { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+                        { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B', createdAt: 2, updatedAt: 2, lastUsedAt: 2 },
+                    ],
+                },
+            });
+        });
 
         vi.doMock('@/sync/domains/server/serverRuntime', () => ({
             getActiveServerSnapshot: () => ({ serverId: 'server-a', serverUrl: 'https://stack-a.example.test', kind: 'stack', generation: 1 }),

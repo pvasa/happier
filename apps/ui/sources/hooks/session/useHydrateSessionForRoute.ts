@@ -6,6 +6,8 @@ import {
 } from '@/sync/domains/session/sessionRouteHydrationState';
 import { storage } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
@@ -20,11 +22,23 @@ type SessionRouteHydrationLoadingReason = Extract<
     { kind: 'loading' }
 >['reason'];
 
+type SessionRouteHydrationStateRecord = Readonly<{
+    routeKey: string;
+    state: SessionRouteHydrationState;
+}>;
+
 const routeHydrationRetryBaseDelayMs = 2_000;
 const routeHydrationRetryMaxDelayMs = 30_000;
 
 function normalizeRouteId(value: unknown): string {
     return String(value ?? '').trim();
+}
+
+function areRouteServerIdsEqual(leftRaw: unknown, rightRaw: unknown): boolean {
+    const left = normalizeRouteId(leftRaw);
+    const right = normalizeRouteId(rightRaw);
+    if (!left || !right) return left === right;
+    return areServerProfileIdentifiersEquivalent(left, right);
 }
 
 function withServerId<T extends { sessionId: string }>(state: T, serverId: string): T & { serverId?: string } {
@@ -58,7 +72,7 @@ function createRetryingState(result: Extract<EnsureSessionVisibleForRouteResult,
 function areRouteHydrationStatesEqual(left: SessionRouteHydrationState, right: SessionRouteHydrationState): boolean {
     if (left.kind !== right.kind) return false;
     if (left.sessionId !== right.sessionId) return false;
-    if ((left.serverId ?? '') !== (right.serverId ?? '')) return false;
+    if (!areRouteServerIdsEqual(left.serverId ?? '', right.serverId ?? '')) return false;
     if (left.kind === 'loading' && right.kind === 'loading') return left.reason === right.reason;
     if (left.kind === 'retrying' && right.kind === 'retrying') return left.cause === right.cause;
     if (left.kind === 'missing' && right.kind === 'missing') return left.cause === right.cause;
@@ -72,13 +86,31 @@ function resolveNextRouteHydrationState(
     return areRouteHydrationStatesEqual(current, next) ? current : next;
 }
 
-function stateMatchesCurrentRoute(
-    state: SessionRouteHydrationState,
+function uniqueRouteServerIds(...serverIds: readonly unknown[]): string[] {
+    const result: string[] = [];
+    for (const rawServerId of serverIds) {
+        const serverId = normalizeRouteId(rawServerId);
+        if (!serverId) continue;
+        if (result.some((existing) => areRouteServerIdsEqual(existing, serverId))) continue;
+        result.push(serverId);
+    }
+    return result;
+}
+
+function resolveHydratedServerIdForRouteResult(
     sessionId: string,
-    serverId: string,
-): boolean {
-    if (state.sessionId !== sessionId) return false;
-    return (state.serverId ?? '') === serverId;
+    routeServerId: string,
+    resultServerId: string | null | undefined,
+): string | null {
+    for (const candidateServerId of uniqueRouteServerIds(routeServerId, resultServerId)) {
+        if (readHydratedRouteSnapshot(sessionId, candidateServerId)) {
+            return candidateServerId;
+        }
+    }
+    if (!routeServerId && readHydratedRouteSnapshot(sessionId, '')) {
+        return '';
+    }
+    return null;
 }
 
 export function hasAuthoritativeHydratedSessionForRoute(sessionId: string, serverId?: string | null): boolean {
@@ -86,7 +118,7 @@ export function hasAuthoritativeHydratedSessionForRoute(sessionId: string, serve
     if (!session || session.metadata == null) {
         return false;
     }
-    if (serverId && String(session.serverId ?? '').trim() !== serverId) {
+    if (serverId && !areRouteServerIdsEqual(String(session.serverId ?? '').trim(), serverId)) {
         return false;
     }
     if (session.encryptionMode === 'plain') {
@@ -99,9 +131,22 @@ export function hasAuthoritativeHydratedSessionForRoute(sessionId: string, serve
     }
 }
 
+function readHydratedRouteServerId(sessionId: string, serverId: string): string | null {
+    if (!sessionId) return null;
+    if (hasAuthoritativeHydratedSessionForRoute(sessionId, serverId || null)) {
+        return serverId;
+    }
+
+    if (!serverId) return null;
+    const sessionServerId = normalizeRouteId(storage.getState().sessions[sessionId]?.serverId);
+    const activeServerId = normalizeRouteId(getActiveServerSnapshot().serverId);
+    if (!sessionServerId || !activeServerId) return null;
+    if (!areRouteServerIdsEqual(sessionServerId, activeServerId)) return null;
+    return hasAuthoritativeHydratedSessionForRoute(sessionId, sessionServerId) ? sessionServerId : null;
+}
+
 function readHydratedRouteSnapshot(sessionId: string, serverId: string): boolean {
-    if (!sessionId) return false;
-    return hasAuthoritativeHydratedSessionForRoute(sessionId, serverId || null);
+    return readHydratedRouteServerId(sessionId, serverId) !== null;
 }
 
 function resolveRetryDelayMs(attemptCount: number): number {
@@ -135,12 +180,12 @@ export function useHydrateSessionForRoute(
         () => readHydratedRouteSnapshot(normalizedSessionId, normalizedServerId),
     );
 
-    const [routeState, setRouteState] = React.useState<SessionRouteHydrationState>(() => {
-        if (hasHydratedSession) {
-            return createAvailableState(normalizedSessionId, normalizedServerId);
-        }
-        return createLoadingState(normalizedSessionId, normalizedServerId, 'cold');
-    });
+    const [routeStateRecord, setRouteStateRecord] = React.useState<SessionRouteHydrationStateRecord>(() => ({
+        routeKey,
+        state: hasHydratedSession
+            ? createAvailableState(normalizedSessionId, normalizedServerId)
+            : createLoadingState(normalizedSessionId, normalizedServerId, 'cold'),
+    }));
 
     React.useEffect(() => {
         let canceled = false;
@@ -148,10 +193,13 @@ export function useHydrateSessionForRoute(
         let attemptCount = 0;
 
         if (!normalizedSessionId) {
-            setRouteState((current) => resolveNextRouteHydrationState(
-                current,
-                createLoadingState(normalizedSessionId, normalizedServerId, 'cold'),
-            ));
+            setRouteStateRecord((current) => ({
+                routeKey,
+                state: resolveNextRouteHydrationState(
+                    current.routeKey === routeKey ? current.state : createLoadingState(normalizedSessionId, normalizedServerId, 'cold'),
+                    createLoadingState(normalizedSessionId, normalizedServerId, 'cold'),
+                ),
+            }));
             return;
         }
 
@@ -160,18 +208,24 @@ export function useHydrateSessionForRoute(
         }
 
         if (!hasHydratedSession || forceRefresh) {
-            setRouteState((current) => {
-                if (forceRefresh && current.kind === 'available') {
-                    return current;
+            setRouteStateRecord((current) => {
+                const currentState = current.routeKey === routeKey
+                    ? current.state
+                    : createLoadingState(normalizedSessionId, normalizedServerId, 'store-miss');
+                if (forceRefresh && currentState.kind === 'available') {
+                    return { routeKey, state: currentState };
                 }
-                return resolveNextRouteHydrationState(
-                    current,
-                    createLoadingState(
-                        normalizedSessionId,
-                        normalizedServerId,
-                        forceRefresh ? 'refreshing' : 'store-miss',
+                return {
+                    routeKey,
+                    state: resolveNextRouteHydrationState(
+                        currentState,
+                        createLoadingState(
+                            normalizedSessionId,
+                            normalizedServerId,
+                            forceRefresh ? 'refreshing' : 'store-miss',
+                        ),
                     ),
-                );
+                };
             });
         }
 
@@ -201,37 +255,63 @@ export function useHydrateSessionForRoute(
                 .then((result) => {
                     if (canceled) return;
                     if (result.kind === 'missing') {
-                        setRouteState((current) => resolveNextRouteHydrationState(current, createMissingState(result)));
+                        setRouteStateRecord((current) => ({
+                            routeKey,
+                            state: resolveNextRouteHydrationState(
+                                current.routeKey === routeKey ? current.state : createLoadingState(normalizedSessionId, normalizedServerId, 'store-miss'),
+                                createMissingState(result),
+                            ),
+                        }));
                         return;
                     }
                     if (result.kind === 'retryable_failure') {
-                        setRouteState((current) => resolveNextRouteHydrationState(current, createRetryingState(result)));
+                        setRouteStateRecord((current) => ({
+                            routeKey,
+                            state: resolveNextRouteHydrationState(
+                                current.routeKey === routeKey ? current.state : createLoadingState(normalizedSessionId, normalizedServerId, 'store-miss'),
+                                createRetryingState(result),
+                            ),
+                        }));
                         scheduleRetry();
                         return;
                     }
-                    if (readHydratedRouteSnapshot(normalizedSessionId, normalizedServerId)) {
-                        setRouteState((current) => resolveNextRouteHydrationState(
-                            current,
-                            createAvailableState(normalizedSessionId, normalizedServerId),
-                        ));
+                    const hydratedServerId = resolveHydratedServerIdForRouteResult(
+                        normalizedSessionId,
+                        normalizedServerId,
+                        result.serverId,
+                    );
+                    if (hydratedServerId !== null) {
+                        setRouteStateRecord((current) => ({
+                            routeKey,
+                            state: resolveNextRouteHydrationState(
+                                current.routeKey === routeKey ? current.state : createLoadingState(normalizedSessionId, normalizedServerId, 'store-miss'),
+                                createAvailableState(normalizedSessionId, hydratedServerId),
+                            ),
+                        }));
                         return;
                     }
-                    setRouteState((current) => resolveNextRouteHydrationState(
-                        current,
-                        createLoadingState(normalizedSessionId, normalizedServerId, 'refreshing'),
-                    ));
+                    setRouteStateRecord((current) => ({
+                        routeKey,
+                        state: resolveNextRouteHydrationState(
+                            current.routeKey === routeKey ? current.state : createLoadingState(normalizedSessionId, normalizedServerId, 'store-miss'),
+                            createLoadingState(normalizedSessionId, normalizedServerId, 'refreshing'),
+                        ),
+                    }));
                     scheduleRetry();
                 })
                 .catch(() => {
                     if (canceled) return;
-                    setRouteState((current) => resolveNextRouteHydrationState(
-                        current,
-                        withServerId({
-                            kind: 'retrying',
-                            sessionId: normalizedSessionId,
-                            cause: 'unknown',
-                        }, normalizedServerId),
-                    ));
+                    setRouteStateRecord((current) => ({
+                        routeKey,
+                        state: resolveNextRouteHydrationState(
+                            current.routeKey === routeKey ? current.state : createLoadingState(normalizedSessionId, normalizedServerId, 'store-miss'),
+                            withServerId({
+                                kind: 'retrying',
+                                sessionId: normalizedSessionId,
+                                cause: 'unknown',
+                            }, normalizedServerId),
+                        ),
+                    }));
                     scheduleRetry();
                 });
         };
@@ -246,17 +326,21 @@ export function useHydrateSessionForRoute(
         };
     }, [forceRefresh, hasHydratedSession, normalizedServerId, normalizedSessionId, routeKey, tag]);
 
-    if (hasHydratedSession && routeState.kind !== 'missing') {
-        return createAvailableState(normalizedSessionId, normalizedServerId);
-    }
+    const routeState = routeStateRecord.routeKey === routeKey
+        ? routeStateRecord.state
+        : createLoadingState(
+              normalizedSessionId,
+              normalizedServerId,
+              normalizedSessionId ? 'store-miss' : 'cold',
+          );
 
-    if (!stateMatchesCurrentRoute(routeState, normalizedSessionId, normalizedServerId)) {
-        return createLoadingState(
-            normalizedSessionId,
-            normalizedServerId,
-            normalizedSessionId ? 'store-miss' : 'cold',
-        );
-    }
+    const hydratedAvailableServerId = hasHydratedSession && routeState.kind !== 'missing'
+        ? readHydratedRouteServerId(normalizedSessionId, normalizedServerId) ?? normalizedServerId
+        : null;
+    const hydratedAvailableState = React.useMemo<SessionRouteHydrationState | null>(() => {
+        if (hydratedAvailableServerId === null) return null;
+        return createAvailableState(normalizedSessionId, hydratedAvailableServerId);
+    }, [hydratedAvailableServerId, normalizedSessionId]);
 
-    return routeState;
+    return hydratedAvailableState ?? routeState;
 }

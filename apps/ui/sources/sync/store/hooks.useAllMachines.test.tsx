@@ -280,6 +280,145 @@ describe('useAllMachines', () => {
         }
     });
 
+    it('keeps transcript fork support source stable when only metadata freshness fields change', async () => {
+        const previousState = storage.getState();
+        try {
+            const metadata = {
+                path: '/repo',
+                host: 'mac',
+                codexSessionId: 'codex-session',
+                sessionModesV1: {
+                    v: 1 as const,
+                    provider: 'codex',
+                    updatedAt: 100,
+                    currentModeId: 'default',
+                    availableModes: [{ id: 'default', name: 'Default' }],
+                },
+                summary: { text: 'Summary', updatedAt: 100 },
+            };
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: {
+                    ...state.sessions,
+                    's-active': {
+                        id: 's-active',
+                        seq: 10,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                        active: true,
+                        activeAt: 1000,
+                        metadata,
+                        metadataVersion: 1,
+                        agentState: null,
+                        agentStateVersion: 1,
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionForkSupportSource('s-active'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstSource = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: {
+                        ...state.sessions,
+                        's-active': {
+                            ...state.sessions['s-active']!,
+                            metadataVersion: 2,
+                            metadata: {
+                                ...metadata,
+                                sessionModesV1: {
+                                    ...metadata.sessionModesV1,
+                                    updatedAt: 200,
+                                },
+                                summary: { text: 'Summary', updatedAt: 200 },
+                            },
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).toBe(firstSource);
+            expect(hook.getCurrent()).toEqual({ metadata });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('refreshes transcript fork support source when permission mode timestamp changes', async () => {
+        const previousState = storage.getState();
+        try {
+            const metadata = {
+                path: '/repo',
+                host: 'mac',
+                codexSessionId: 'codex-session',
+                permissionMode: 'yolo' as const,
+                permissionModeUpdatedAt: 100,
+            };
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessions: {
+                    ...state.sessions,
+                    's-active': {
+                        id: 's-active',
+                        seq: 10,
+                        createdAt: 1000,
+                        updatedAt: 1000,
+                        active: true,
+                        activeAt: 1000,
+                        metadata,
+                        metadataVersion: 1,
+                        agentState: null,
+                        agentStateVersion: 1,
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionForkSupportSource('s-active'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const firstSource = hook.getCurrent();
+
+            const refreshedMetadata = {
+                ...metadata,
+                permissionModeUpdatedAt: 200,
+            };
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessions: {
+                        ...state.sessions,
+                        's-active': {
+                            ...state.sessions['s-active']!,
+                            metadataVersion: 2,
+                            metadata: refreshedMetadata,
+                        },
+                    },
+                }));
+            });
+
+            expect(hook.getCurrent()).not.toBe(firstSource);
+            expect(hook.getCurrent()).toEqual({ metadata: refreshedMetadata });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('keeps chat footer state stable when only session activity fields change', async () => {
         const previousState = storage.getState();
         try {

@@ -7,8 +7,9 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
 import type { AgentEvent } from '@/sync/typesRaw';
 import { t } from '@/text';
-import { resolveConnectedServiceShortName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { resolveConnectedServiceUxDiagnosticPresentation } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
+import { useSettings } from '@/sync/store/hooks';
+import { buildConnectedServiceAccountSwitchMessage } from './connectedServiceAccountSwitchMessage';
 
 const EVENT_ICON_SIZE = 18;
 const EVENT_SPINNER_SIZE = 20;
@@ -30,10 +31,6 @@ function formatQuotaResetTime(timestampMs: number): string {
     } catch {
         return t('message.unknownTime');
     }
-}
-
-function formatConnectedServiceAccountSwitchEndpointLabel(profileId: string | null): string {
-    return profileId ?? t('connectedServices.authChip.nativeLabel');
 }
 
 function formatUnknownEventDetails(event: AgentEvent): string {
@@ -113,6 +110,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     event: AgentEvent;
 }) {
     const { theme } = useUnistyles();
+    const settings = useSettings();
     let iconName: React.ComponentProps<typeof Ionicons>['name'] = 'information-circle-outline';
     let text = formatUnknownEventDetails(props.event);
     let isLoading = false;
@@ -149,10 +147,9 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     } else if (props.event.type === 'connected-service-account-switch') {
         testID = 'transcript-event-connected-service-account-switch';
         iconName = 'swap-horizontal-outline';
-        text = t('message.connectedServiceAccountSwitch', {
-            provider: resolveConnectedServiceShortName(props.event.serviceId, t),
-            from: formatConnectedServiceAccountSwitchEndpointLabel(props.event.fromProfileId),
-            to: formatConnectedServiceAccountSwitchEndpointLabel(props.event.toProfileId),
+        text = buildConnectedServiceAccountSwitchMessage({
+            event: props.event,
+            labelsByKey: settings.connectedServicesProfileLabelByKey,
         });
     } else if (props.event.type === 'provider-quota-wait') {
         testID = 'transcript-event-provider-quota-wait';

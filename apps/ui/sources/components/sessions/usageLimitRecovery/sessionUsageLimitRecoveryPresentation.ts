@@ -119,17 +119,25 @@ function isTemporaryThrottleIssue(issue: SessionRuntimeIssueV1 | null | undefine
 function shouldSurfaceRecoveryIssue(params: Readonly<{
     latestTurnStatus?: PrimaryTurnStatusV1 | null;
     issue: SessionRuntimeIssueV1 | null | undefined;
+    recovery?: SessionUsageLimitRecoveryV1 | null;
     runtimeWorking?: boolean;
     hasActivityAfterRuntimeIssue?: boolean;
 }>): params is Readonly<{
     latestTurnStatus?: PrimaryTurnStatusV1 | null;
     issue: SessionRuntimeIssueV1;
+    recovery?: SessionUsageLimitRecoveryV1 | null;
     runtimeWorking?: boolean;
     hasActivityAfterRuntimeIssue?: boolean;
 }> {
     const hasRecoveryIssue = isUsageLimitIssue(params.issue) || isTemporaryThrottleIssue(params.issue);
     if (!hasRecoveryIssue) return false;
-    if (params.runtimeWorking === true) return false;
+    // A cancelled durable recovery intent is a genuine terminal resolution: hide it.
+    if (params.recovery?.status === 'cancelled') return false;
+    // `runtimeWorking` only proves the runtime is live and ticking thinking/in-progress signals; it is
+    // NOT proof that the provider accepted the recovered state or moved to a fresh quota. An unproven,
+    // in-progress recovery (waiting-for-reset / provider-outcome-waiting / action-required / exhausted)
+    // must stay visible even while the runtime resumes "working" after a local switch. Only genuine
+    // provider activity after the issue (`hasActivityAfterRuntimeIssue`) proves the recovery resolved.
     if (params.hasActivityAfterRuntimeIssue === true && params.latestTurnStatus !== 'cancelled') return false;
     if (
         params.latestTurnStatus != null

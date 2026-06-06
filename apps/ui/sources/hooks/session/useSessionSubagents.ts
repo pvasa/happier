@@ -7,31 +7,95 @@ import { deriveSessionSubagentRecipients } from '@/sync/domains/session/subagent
 import { deriveSessionSubagents } from '@/sync/domains/session/subagents/deriveSessionSubagents';
 import { applyExecutionRunControlCapabilities } from '@/sync/domains/session/subagents/executionRuns/applyExecutionRunControlCapabilities';
 import { deriveSessionSubagentSidechainIds } from '@/sync/domains/session/subagents/sidechains/deriveSessionSubagentSidechainIds';
-import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
+import type {
+    SessionSubagent,
+    SessionSubagentActiveExecutionRunState,
+} from '@/sync/domains/session/subagents/types';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useDirectSessionRuntime, type UseDirectSessionRuntimeResult } from '@/components/sessions/model/useDirectSessionRuntime';
 import { useSessionRunningExecutionRuns } from './useSessionRunningExecutionRuns';
 
-function buildSessionSubagentMessagesSignature(messages: readonly Message[]): string {
-    const parts: string[] = [];
-    for (const message of messages) {
-        if (!message || message.kind !== 'tool-call') continue;
-        const tool = message.tool;
-        parts.push(JSON.stringify({
-            id: message.id,
-            createdAt: message.createdAt ?? null,
-            toolId: tool?.id ?? null,
-            toolName: tool?.name ?? null,
-            toolState: tool?.state ?? null,
-            toolCreatedAt: tool?.createdAt ?? null,
-            toolStartedAt: tool?.startedAt ?? null,
-            toolCompletedAt: tool?.completedAt ?? null,
-            input: tool?.input ?? null,
-            result: tool?.result ?? null,
-        }));
+const sessionSubagentToolMessageSignatureCache = new WeakMap<Message, string>();
+
+function buildSessionSubagentToolMessageSignature(message: Message): string {
+    const cached = sessionSubagentToolMessageSignatureCache.get(message);
+    if (cached) return cached;
+
+    const tool = message.kind === 'tool-call' ? message.tool : null;
+    const signature = JSON.stringify({
+        id: message.id,
+        createdAt: message.createdAt ?? null,
+        toolId: tool?.id ?? null,
+        toolName: tool?.name ?? null,
+        toolState: tool?.state ?? null,
+        toolCreatedAt: tool?.createdAt ?? null,
+        toolStartedAt: tool?.startedAt ?? null,
+        toolCompletedAt: tool?.completedAt ?? null,
+        input: tool?.input ?? null,
+        result: tool?.result ?? null,
+    }) ?? 'null';
+    sessionSubagentToolMessageSignatureCache.set(message, signature);
+    return signature;
+}
+
+type SessionSubagentMessageSignatureEntry = Readonly<{
+    index: number;
+    signature: string;
+}>;
+
+type SessionSubagentMessagesSignatureState = Readonly<{
+    messages: readonly Message[];
+    entries: readonly SessionSubagentMessageSignatureEntry[];
+    signature: string;
+}>;
+
+function findSharedMessagePrefixLength(left: readonly Message[], right: readonly Message[]): number {
+    const max = Math.min(left.length, right.length);
+    let index = 0;
+    while (index < max && left[index] === right[index]) index += 1;
+    return index;
+}
+
+function areSignatureEntriesEqual(
+    left: readonly SessionSubagentMessageSignatureEntry[],
+    right: readonly SessionSubagentMessageSignatureEntry[],
+): boolean {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index]?.index !== right[index]?.index) return false;
+        if (left[index]?.signature !== right[index]?.signature) return false;
     }
-    return parts.join('|');
+    return true;
+}
+
+function buildSessionSubagentMessagesSignatureState(
+    messages: readonly Message[],
+    previous: SessionSubagentMessagesSignatureState | null,
+): SessionSubagentMessagesSignatureState {
+    if (previous?.messages === messages) return previous;
+
+    const sharedPrefixLength = previous
+        ? findSharedMessagePrefixLength(previous.messages, messages)
+        : 0;
+    const entries: SessionSubagentMessageSignatureEntry[] = previous
+        ? previous.entries.filter((entry) => entry.index < sharedPrefixLength)
+        : [];
+
+    for (let index = sharedPrefixLength; index < messages.length; index += 1) {
+        const message = messages[index];
+        if (!message || message.kind !== 'tool-call') continue;
+        entries.push({
+            index,
+            signature: buildSessionSubagentToolMessageSignature(message),
+        });
+    }
+
+    const signature = previous && areSignatureEntriesEqual(entries, previous.entries)
+        ? previous.signature
+        : entries.map((entry) => entry.signature).join('|');
+
+    return { messages, entries, signature };
 }
 
 function useStableMessagesBySignature(
@@ -54,6 +118,11 @@ function buildStableJsonSignature(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+function buildExecutionRunStateSignature(runs: readonly SessionSubagentActiveExecutionRunState[]): string {
+    if (runs.length === 0) return '';
+    return runs.map((run) => `${run.runId}\u0000${run.status ?? ''}`).join('\u0001');
 }
 
 function useStableValueBySignature<T>(value: T, signature: string): T {
@@ -81,10 +150,15 @@ export function useSessionSubagents(params: Readonly<{
     const sessionFlavor = typeof (params.session as any)?.metadata?.flavor === 'string'
         ? String((params.session as any).metadata.flavor)
         : null;
-    const subagentMessagesSignature = React.useMemo(
-        () => buildSessionSubagentMessagesSignature(params.messages),
-        [params.messages],
-    );
+    const subagentMessagesSignatureStateRef = React.useRef<SessionSubagentMessagesSignatureState | null>(null);
+    const subagentMessagesSignature = React.useMemo(() => {
+        const signatureState = buildSessionSubagentMessagesSignatureState(
+            params.messages,
+            subagentMessagesSignatureStateRef.current,
+        );
+        subagentMessagesSignatureStateRef.current = signatureState;
+        return signatureState.signature;
+    }, [params.messages]);
     const subagentMessages = useStableMessagesBySignature(params.messages, subagentMessagesSignature);
 
     const executionRunPollingEnabled = React.useMemo(() => {
@@ -103,6 +177,11 @@ export function useSessionSubagents(params: Readonly<{
         enabled: executionRunPollingEnabled,
         refreshKey: executionRunPollingRefreshKey,
     });
+    const runningExecutionRunsSignature = React.useMemo(
+        () => buildExecutionRunStateSignature(runningExecutionRuns),
+        [runningExecutionRuns],
+    );
+    const stableRunningExecutionRuns = useStableValueBySignature(runningExecutionRuns, runningExecutionRunsSignature);
     const internalDirectSessionRuntime = useDirectSessionRuntime({
         sessionId: params.sessionId,
         metadata: params.session?.metadata,
@@ -117,7 +196,7 @@ export function useSessionSubagents(params: Readonly<{
                 metadata: sessionFlavor ? { flavor: sessionFlavor } : {},
             },
             messages: subagentMessages,
-            activeExecutionRuns: runningExecutionRuns,
+            activeExecutionRuns: stableRunningExecutionRuns,
         });
         return applyExecutionRunControlCapabilities(derivedSubagents, {
             canControlExecutionRuns:
@@ -128,7 +207,7 @@ export function useSessionSubagents(params: Readonly<{
         directSessionRuntime.directSessionLink,
         directSessionRuntime.status?.runnerActive,
         params.session != null,
-        runningExecutionRuns,
+        stableRunningExecutionRuns,
         subagentMessages,
         sessionFlavor,
     ]);

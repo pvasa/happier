@@ -84,6 +84,7 @@ import {
     applySessionListRenderableCommitPlan,
     buildSessionListViewDataForRenderableState,
     didSessionListRenderableListViewFieldsChangeForSettings,
+    planSessionListRenderableMergeCommit,
     planSessionListRenderablePatchesCommit,
     planSessionListRenderableReplacementCommit,
     shouldRebuildOnSessionPlacementFieldsChange,
@@ -133,6 +134,7 @@ export type SessionsDomain = {
     getActiveSessions: () => Session[];
     applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: 'online' | number })[]) => void;
     replaceSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
+    mergeSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
     applySessionListRenderablePatches: (
         patches: ReadonlyArray<Readonly<{
             sessionId: string;
@@ -287,6 +289,107 @@ function resolveMergedSessionReadyEvent(params: Readonly<{
         latestReadyEventSeq: incomingSeq,
         latestReadyEventAt: incomingAt ?? previousAt,
     };
+}
+
+type IncomingSessionApply = Omit<Session, 'presence'> & { presence?: 'online' | number };
+
+function normalizeSessionOrderingNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.trunc(value)
+        : null;
+}
+
+function isIncomingOrderingTimestampOlder(incoming: unknown, previous: unknown): boolean {
+    const incomingNumber = normalizeSessionOrderingNumber(incoming);
+    const previousNumber = normalizeSessionOrderingNumber(previous);
+    return incomingNumber !== null && previousNumber !== null && incomingNumber < previousNumber;
+}
+
+function resolveNonRegressingNumber<T>(incoming: T, previous: unknown): T | number {
+    const incomingNumber = normalizeSessionOrderingNumber(incoming);
+    const previousNumber = normalizeSessionOrderingNumber(previous);
+    if (previousNumber === null) return incoming;
+    if (incomingNumber === null || incomingNumber < previousNumber) return previousNumber;
+    return incoming;
+}
+
+function shouldPreservePreviousTurnProjection(
+    previousSession: Session,
+    incomingSession: IncomingSessionApply,
+): boolean {
+    const incomingObservedAt = normalizeSessionOrderingNumber(incomingSession.latestTurnStatusObservedAt);
+    const incomingOrderingAt = incomingObservedAt ?? normalizeSessionOrderingNumber(incomingSession.updatedAt);
+    const previousObservedAt = normalizeSessionOrderingNumber(previousSession.latestTurnStatusObservedAt);
+    if (incomingOrderingAt !== null && previousObservedAt !== null && incomingOrderingAt < previousObservedAt) {
+        return true;
+    }
+    return incomingOrderingAt !== null
+        && previousObservedAt !== null
+        && incomingOrderingAt === previousObservedAt
+        && isTerminalPrimaryTurnStatus(previousSession.latestTurnStatus ?? null)
+        && incomingSession.latestTurnStatus === 'in_progress';
+}
+
+function resolveOrderedSessionApply(
+    previousSession: Session | undefined,
+    incomingSession: IncomingSessionApply,
+): IncomingSessionApply {
+    if (!previousSession) return incomingSession;
+
+    let nextSession: IncomingSessionApply = incomingSession;
+    const applyPatch = (patch: Partial<IncomingSessionApply>): void => {
+        nextSession = { ...nextSession, ...patch };
+    };
+
+    const mergedSeq = resolveNonRegressingNumber(incomingSession.seq, previousSession.seq);
+    if (mergedSeq !== incomingSession.seq) {
+        applyPatch({ seq: mergedSeq as number });
+    }
+
+    const mergedUpdatedAt = resolveNonRegressingNumber(incomingSession.updatedAt, previousSession.updatedAt);
+    if (mergedUpdatedAt !== incomingSession.updatedAt) {
+        applyPatch({ updatedAt: mergedUpdatedAt as number });
+    }
+
+    const mergedMeaningfulActivityAt = resolveNonRegressingNumber(
+        incomingSession.meaningfulActivityAt,
+        previousSession.meaningfulActivityAt,
+    );
+    if (mergedMeaningfulActivityAt !== incomingSession.meaningfulActivityAt) {
+        applyPatch({ meaningfulActivityAt: mergedMeaningfulActivityAt as Session['meaningfulActivityAt'] });
+    }
+
+    if (isIncomingOrderingTimestampOlder(incomingSession.activeAt, previousSession.activeAt)) {
+        applyPatch({
+            active: previousSession.active,
+            activeAt: previousSession.activeAt,
+        });
+    }
+
+    if (isIncomingOrderingTimestampOlder(incomingSession.thinkingAt, previousSession.thinkingAt)) {
+        applyPatch({
+            thinking: previousSession.thinking,
+            thinkingAt: previousSession.thinkingAt,
+        });
+    }
+
+    if (shouldPreservePreviousTurnProjection(previousSession, incomingSession)) {
+        applyPatch({
+            latestTurnId: previousSession.latestTurnId,
+            latestTurnStatus: previousSession.latestTurnStatus,
+            latestTurnStatusObservedAt: previousSession.latestTurnStatusObservedAt,
+        });
+    }
+
+    if (isIncomingOrderingTimestampOlder(incomingSession.pendingRequestObservedAt, previousSession.pendingRequestObservedAt)) {
+        applyPatch({
+            pendingPermissionRequestCount: previousSession.pendingPermissionRequestCount,
+            pendingUserActionRequestCount: previousSession.pendingUserActionRequestCount,
+            pendingRequestObservedAt: previousSession.pendingRequestObservedAt,
+        });
+    }
+
+    return nextSession;
 }
 
 function measureSessionApplyPhase<T>(
@@ -548,25 +651,26 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 () => ({ sessions: sessions.length }),
                 () => {
             // Update sessions with calculated presence using centralized resolver
-            sessions.forEach(session => {
+            sessions.forEach(incomingSession => {
+                const previousSession = state.sessions[incomingSession.id];
+                const session = resolveOrderedSessionApply(previousSession, incomingSession);
                 // Use centralized resolver for consistent state management
                 const presence = resolveSessionOnlineState(session);
 
                 // Preserve existing draft and permission mode if they exist, or load from saved data
-                const hasLoadedSession = state.sessions[session.id] !== undefined;
-                const existingDraft = state.sessions[session.id]?.draft;
+                const hasLoadedSession = previousSession !== undefined;
+                const existingDraft = previousSession?.draft;
                 const savedDraft = sessionDrafts[session.id];
-                const existingPermissionMode = state.sessions[session.id]?.permissionMode;
+                const existingPermissionMode = previousSession?.permissionMode;
                 const savedPermissionMode = savedPermissionModes[session.id];
-                const existingModelMode = state.sessions[session.id]?.modelMode;
+                const existingModelMode = previousSession?.modelMode;
                 const savedModelMode = savedModelModes[session.id];
-                const existingPermissionModeUpdatedAt = state.sessions[session.id]?.permissionModeUpdatedAt;
+                const existingPermissionModeUpdatedAt = previousSession?.permissionModeUpdatedAt;
                 const savedPermissionModeUpdatedAt = savedPermissionModeUpdatedAts[session.id];
-                const existingModelModeUpdatedAt = state.sessions[session.id]?.modelModeUpdatedAt;
+                const existingModelModeUpdatedAt = previousSession?.modelModeUpdatedAt;
                 const savedModelModeUpdatedAt = savedModelModeUpdatedAts[session.id];
-                const existingOptimisticThinkingAt = state.sessions[session.id]?.optimisticThinkingAt ?? null;
-                const existingThinkingGraceUntil = state.sessions[session.id]?.thinkingGraceUntil ?? null;
-                const previousSession = state.sessions[session.id];
+                const existingOptimisticThinkingAt = previousSession?.optimisticThinkingAt ?? null;
+                const existingThinkingGraceUntil = previousSession?.thinkingGraceUntil ?? null;
                 const runtimePresence = resolveSessionRuntimePresenceFields({
                     thinking: session.thinking,
                     thinkingAt: session.thinkingAt,
@@ -1014,11 +1118,20 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     : state.sessionListViewDataByServerId,
             };
             if (didImmediateWarmCacheRelevantRenderableChange) {
-                measureSessionApplyPhase(
-                    'sync.store.sessions.apply.warmCache',
-                    () => ({ renderables: Object.keys(nextState.sessionListRenderables ?? {}).length }),
-                    () => saveWarmSessionCacheImmediately(nextState as SessionsDomain & SessionsDomainDependencies),
-                );
+                const previousRenderableCount = Object.keys(state.sessionListRenderables ?? {}).length;
+                if (previousRenderableCount === 0) {
+                    measureSessionApplyPhase(
+                        'sync.store.sessions.apply.warmCache',
+                        () => ({ renderables: Object.keys(nextState.sessionListRenderables ?? {}).length }),
+                        () => saveWarmSessionCacheImmediately(nextState as SessionsDomain & SessionsDomainDependencies),
+                    );
+                } else {
+                    syncPerformanceTelemetry.count('sync.store.sessions.apply.warmCache.deferred', {
+                        renderables: Object.keys(nextState.sessionListRenderables ?? {}).length,
+                        immediate: 1,
+                    });
+                    scheduleWarmSessionCacheSave();
+                }
             } else if (didDeferredWarmCacheRelevantRenderableChange) {
                 syncPerformanceTelemetry.count('sync.store.sessions.apply.warmCache.deferred', {
                     renderables: Object.keys(nextState.sessionListRenderables ?? {}).length,
@@ -1087,6 +1200,70 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     incoming: sessions.length,
                     changed: plan.changedCount,
                     removed: plan.removedCount,
+                });
+                scheduleWarmSessionCacheSave();
+            }
+            return next;
+        }),
+        mergeSessionListRenderables: (sessions) => set((state) => {
+            if (sessions.length === 0) {
+                return state;
+            }
+            const plan = planSessionListRenderableMergeCommit({
+                state,
+                incomingRenderables: sessions,
+            });
+            syncPerformanceTelemetry.count('sync.store.sessions.renderables.merge', {
+                incoming: sessions.length,
+                previous: Object.keys(state.sessionListRenderables ?? {}).length,
+                changed: plan.changedCount,
+                removed: plan.removedCount,
+                noop: plan.noop ? 1 : 0,
+                listRebuild: plan.needsSessionListViewDataRebuild ? 1 : 0,
+                listViewFieldChanges: plan.listViewFieldChangeCount,
+                attentionPromotionFieldChanges: plan.attentionPromotionFieldChangeCount,
+                staleMetadataPreserved: plan.staleMetadataPreservedCount,
+                stalePendingFlagsPreserved: plan.stalePendingFlagsPreservedCount,
+                warmCacheRelevant: plan.didWarmCacheRelevantRenderableChange ? 1 : 0,
+            });
+
+            if (plan.noop) {
+                return state;
+            }
+
+            const next = applySessionListRenderableCommitPlan({
+                state,
+                plan,
+                measureListRebuild: (compute) => measureSessionApplyPhase(
+                    'sync.store.sessions.renderables.merge.listRebuild',
+                    () => ({
+                        renderables: Object.keys(plan.nextRenderables).length,
+                        incoming: sessions.length,
+                        changed: plan.changedCount,
+                        listViewFieldChanges: plan.listViewFieldChangeCount,
+                        attentionPromotionFieldChanges: plan.attentionPromotionFieldChangeCount,
+                    }),
+                    compute,
+                ),
+            });
+            if (plan.didImmediateWarmCacheRelevantRenderableChange) {
+                measureSessionApplyPhase(
+                    'sync.store.sessions.renderables.merge.warmCache',
+                    () => ({
+                        renderables: Object.keys(next.sessionListRenderables ?? {}).length,
+                        incoming: sessions.length,
+                        changed: plan.changedCount,
+                    }),
+                    () => {
+                        const previousEntries = buildSessionListCacheEntriesFromRenderables(state.sessionListRenderables ?? {});
+                        saveWarmSessionCacheImmediately(next as SessionsDomain & SessionsDomainDependencies, previousEntries);
+                    },
+                );
+            } else if (plan.didDeferredWarmCacheRelevantRenderableChange) {
+                syncPerformanceTelemetry.count('sync.store.sessions.renderables.merge.warmCache.deferred', {
+                    renderables: Object.keys(next.sessionListRenderables ?? {}).length,
+                    incoming: sessions.length,
+                    changed: plan.changedCount,
                 });
                 scheduleWarmSessionCacheSave();
             }

@@ -1,5 +1,11 @@
 import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
-import { chooseSubmitMode, type MessageSendMode } from '@/sync/domains/session/control/submitMode';
+import {
+    canDirectSubmitUserMessageNow,
+    chooseForceImmediateSubmitMode,
+    chooseSubmitMode,
+    isPendingQueueSubmitKnownUnsupported,
+    type MessageSendMode,
+} from '@/sync/domains/session/control/submitMode';
 
 import type {
     DirectMessageSubmitResult,
@@ -20,6 +26,16 @@ function readLocalId(result: PendingMessageSubmitResult | DirectMessageSubmitRes
 }
 
 function resolveSubmitMode(opts: SubmitSessionUserMessageOptions): MessageSendMode {
+    if (opts.forceImmediate === true) {
+        return chooseForceImmediateSubmitMode({
+            configuredMode: opts.configuredMode,
+            busySteerSendPolicy: opts.busySteerSendPolicy,
+            explicitMode: opts.explicitMode,
+            session: opts.session,
+            nowMs: opts.nowMs,
+        });
+    }
+
     return chooseSubmitMode({
         configuredMode: opts.configuredMode,
         busySteerSendPolicy: opts.busySteerSendPolicy,
@@ -27,6 +43,39 @@ function resolveSubmitMode(opts: SubmitSessionUserMessageOptions): MessageSendMo
         session: opts.session,
         nowMs: opts.nowMs,
     });
+}
+
+function requestedPendingQueue(opts: SubmitSessionUserMessageOptions): boolean {
+    return (opts.explicitMode ?? opts.configuredMode) === 'server_pending';
+}
+
+function shouldRejectUnsupportedPendingQueue(
+    opts: SubmitSessionUserMessageOptions,
+    mode: MessageSendMode,
+): boolean {
+    if (!requestedPendingQueue(opts) || !isPendingQueueSubmitKnownUnsupported(opts.session)) {
+        return false;
+    }
+
+    if (
+        opts.forceImmediate === true
+        && mode === 'agent_queue'
+        && canDirectSubmitUserMessageNow({ session: opts.session, nowMs: opts.nowMs })
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+function rejectUnsupportedPendingQueue(): SubmitSessionUserMessageResult {
+    return {
+        type: 'rejected',
+        persistence: 'none',
+        wake: { attempted: false, state: 'not_needed' },
+        errorCode: 'PENDING_QUEUE_UNSUPPORTED',
+        errorMessage: 'The pending queue is unavailable for this session. Update the agent runtime or send this message immediately.',
+    };
 }
 
 async function switchRemoteAfterPendingEnqueueIfNeeded(
@@ -195,6 +244,10 @@ export async function submitSessionUserMessage(
     opts: SubmitSessionUserMessageOptions,
 ): Promise<SubmitSessionUserMessageResult> {
     const mode = resolveSubmitMode(opts);
+
+    if (shouldRejectUnsupportedPendingQueue(opts, mode)) {
+        return rejectUnsupportedPendingQueue();
+    }
 
     if (mode === 'server_pending') {
         return enqueuePending(port, opts);

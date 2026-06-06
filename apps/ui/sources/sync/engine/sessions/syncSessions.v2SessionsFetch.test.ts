@@ -1953,6 +1953,92 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
         }));
     });
 
+    it('waits for the background hydration gate before eager rows while allowing required route active and priority rows', async () => {
+        const requestSpy = vi.fn(async () =>
+            jsonResponse({
+                sessions: [
+                    buildSessionRow({ id: 's_eager', active: false, activeAt: 5, dataEncryptionKey: 'k-eager', metadata: 'meta-eager', metadataVersion: 2 }),
+                    buildSessionRow({ id: 's_priority', active: false, activeAt: 4, dataEncryptionKey: 'k-priority', metadata: 'meta-priority', metadataVersion: 2, pendingUserActionRequestCount: 1 }),
+                    buildSessionRow({ id: 's_background', active: false, activeAt: 3, dataEncryptionKey: 'k-background', metadata: 'meta-background', metadataVersion: 2 }),
+                    buildSessionRow({ id: 's_required', active: false, activeAt: 2, dataEncryptionKey: 'k-required', metadata: 'meta-required', metadataVersion: 2 }),
+                    buildSessionRow({ id: 's_route', active: false, activeAt: 1, dataEncryptionKey: 'k-route', metadata: 'meta-route', metadataVersion: 2 }),
+                    buildSessionRow({ id: 's_active_surface', active: false, activeAt: 6, dataEncryptionKey: 'k-active-surface', metadata: 'meta-active-surface', metadataVersion: 2 }),
+                ],
+                nextCursor: null,
+                hasNext: false,
+            }),
+        );
+        const staleCacheEntry = (sessionId: string, path: string) => ({
+            sessionId,
+            metadataVersion: 1,
+            agentStateVersion: 0,
+            updatedAt: 1,
+            createdAt: 1,
+            active: false,
+            activeAt: 1,
+            archivedAt: null,
+            path,
+        });
+
+        const { encryption, decryptMetadata } = createEncryptionHarness();
+        const applySessions = vi.fn();
+        const gate = createDeferred<void>();
+        let gateOpen = false;
+        const sessionListBackgroundHydrationGate = vi.fn(() => (gateOpen ? Promise.resolve() : gate.promise));
+        const params: FetchAndApplySessionsParams = {
+            credentials: { token: 't', secret: 's' },
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions,
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+            prioritizeSessionIds: ['s_route'],
+            activeSessionIds: ['s_active_surface'],
+            requiredHydrationSessionIds: ['s_required'],
+            sessionListEagerHydrationCount: 1,
+            sessionListBackgroundHydrationConcurrencyLimit: 1,
+            sessionListBackgroundHydrationYield: async () => {},
+            sessionListBackgroundHydrationGate,
+            cachedSessionListEntries: {
+                s_eager: staleCacheEntry('s_eager', '/eager'),
+                s_priority: staleCacheEntry('s_priority', '/priority'),
+                s_background: staleCacheEntry('s_background', '/background'),
+                s_required: staleCacheEntry('s_required', '/required'),
+                s_route: staleCacheEntry('s_route', '/route'),
+                s_active_surface: staleCacheEntry('s_active_surface', '/active-surface'),
+            } satisfies NonNullable<FetchAndApplySessionsParams['cachedSessionListEntries']>,
+            applySessionListRenderables: vi.fn(),
+        };
+
+        await fetchAndApplySessions(params);
+
+        await expect.poll(() => decryptMetadata.mock.calls.map((call) => call[1])).toEqual([
+            'meta-required',
+            'meta-route',
+            'meta-active-surface',
+            'meta-priority',
+        ]);
+        expect(sessionListBackgroundHydrationGate).toHaveBeenCalledTimes(1);
+        expect(applySessions.mock.calls.flatMap((call) => call[0].map((session: { id: string }) => session.id))).toEqual([
+            's_required',
+            's_route',
+            's_active_surface',
+            's_priority',
+        ]);
+
+        gateOpen = true;
+        gate.resolve();
+        await expect.poll(() => decryptMetadata.mock.calls.map((call) => call[1])).toEqual([
+            'meta-required',
+            'meta-route',
+            'meta-active-surface',
+            'meta-priority',
+            'meta-eager',
+            'meta-background',
+        ]);
+    });
+
     it('renders placeholder rows immediately on empty cache and hydrates in the background', async () => {
         const requestSpy = vi.fn(async () =>
             jsonResponse({
@@ -2186,6 +2272,85 @@ describe('fetchAndApplySessions (/v2/sessions snapshot)', () => {
             failedRows: 0,
             staleSkippedRows: 0,
         }));
+    });
+
+    it('amortizes background hydration yields over configured row intervals', async () => {
+        const requestSpy = vi.fn(async () =>
+            jsonResponse({
+                sessions: [
+                    buildSessionRow({ id: 's_yield_1', active: false, dataEncryptionKey: 'k-yield-1', metadata: 'meta-yield-1' }),
+                    buildSessionRow({ id: 's_yield_2', active: false, dataEncryptionKey: 'k-yield-2', metadata: 'meta-yield-2' }),
+                    buildSessionRow({ id: 's_yield_3', active: false, dataEncryptionKey: 'k-yield-3', metadata: 'meta-yield-3' }),
+                    buildSessionRow({ id: 's_yield_4', active: false, dataEncryptionKey: 'k-yield-4', metadata: 'meta-yield-4' }),
+                ],
+                nextCursor: null,
+                hasNext: false,
+            }),
+        );
+
+        const { encryption, decryptMetadata } = createEncryptionHarness();
+        const applySessions = vi.fn();
+        const applySessionListRenderables = vi.fn();
+        const sessionListBackgroundHydrationYield = vi.fn(async () => {});
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+
+        const params = {
+            serverId: 'server-a',
+            credentials: { token: 't', secret: 's' },
+            encryption,
+            sessionDataKeys: new Map<string, Uint8Array>(),
+            request: requestSpy,
+            applySessions,
+            applySessionListRenderables,
+            cachedSessionListEntries: {},
+            sessionListBackgroundHydrationConcurrencyLimit: 1,
+            sessionListBackgroundHydrationApplyBatchSize: 4,
+            sessionListBackgroundHydrationApplyFlushDelayMs: 1_000,
+            sessionListBackgroundHydrationYieldEveryRows: 2,
+            sessionListBackgroundHydrationYield,
+            repairInvalidReadStateV1: async () => {},
+            log: { log: () => {} },
+        } satisfies FetchAndApplySessionsParams & { sessionListBackgroundHydrationYieldEveryRows: number };
+
+        await fetchAndApplySessions(params);
+
+        await expect.poll(() => decryptMetadata.mock.calls.map((call) => call[1])).toEqual([
+            'meta-yield-1',
+            'meta-yield-2',
+            'meta-yield-3',
+            'meta-yield-4',
+        ]);
+        await expect.poll(() => applySessions.mock.calls.length).toBe(1);
+        expect(applySessions).toHaveBeenCalledWith([
+            expect.objectContaining({ id: 's_yield_1' }),
+            expect.objectContaining({ id: 's_yield_2' }),
+            expect.objectContaining({ id: 's_yield_3' }),
+            expect.objectContaining({ id: 's_yield_4' }),
+        ]);
+        expect(sessionListBackgroundHydrationYield).toHaveBeenCalledTimes(2);
+
+        const telemetryEvents = syncPerformanceTelemetry.snapshot().events;
+        const backgroundHydrationEvent = telemetryEvents.find((event) => event.name === 'sync.sessions.snapshot.backgroundHydration');
+        expect(backgroundHydrationEvent?.fields).toEqual(expect.objectContaining({
+            sessions: 4,
+            backgroundRows: 4,
+            yieldEveryRows: 2,
+        }));
+        const backgroundAttributionEvent = telemetryEvents.find((event) => event.name === 'sync.sessions.snapshot.backgroundHydration.attribution');
+        expect(backgroundAttributionEvent?.fields).toEqual(expect.objectContaining({
+            sessions: 4,
+            backgroundRows: 4,
+            yieldEveryRows: 2,
+        }));
+        const yieldEvent = telemetryEvents.find((event) => event.name === 'sync.sessions.snapshot.hydrationYield');
+        expect(yieldEvent?.count).toBe(2);
+        expect(yieldEvent?.fields.rows).toBe(2);
+        expect(yieldEvent?.fields.backgroundRows).toBe(2);
     });
 
     it('skips queued background hydration for a session deleted before apply flush', async () => {

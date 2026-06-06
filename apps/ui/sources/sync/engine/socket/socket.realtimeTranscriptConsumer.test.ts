@@ -9,6 +9,25 @@ vi.mock('@/sync/runtime/syncTuning', () => ({
     }),
 }));
 
+function resolveTestServerScopeId(raw: unknown): string {
+    const value = String(raw ?? '').trim();
+    if (value === 'profile-a' || value === 'legacy-a') return 'identity-a';
+    return value;
+}
+
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
+    return {
+        ...actual,
+        resolveServerProfileScopeIdForIdentifier: (id: string | null | undefined) => resolveTestServerScopeId(id),
+        areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => {
+            const resolvedLeft = resolveTestServerScopeId(left);
+            const resolvedRight = resolveTestServerScopeId(right);
+            return Boolean(resolvedLeft && resolvedRight && resolvedLeft === resolvedRight);
+        },
+    };
+});
+
 import type { ApiUpdateContainer } from '@/sync/api/types/apiTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { NormalizedMessage } from '@/sync/typesRaw';
@@ -174,6 +193,24 @@ describe('socket realtime explicit transcript consumers', () => {
             role: 'agent',
             content: [{ type: 'text', text: 'streaming detail pane output' }],
         });
+    });
+
+    it('materializes explicit transcript consumers registered with an equivalent server alias', async () => {
+        const hiddenSessionId = 'hidden-detail-producer-alias';
+        storage.getState().applySessions([{ ...buildSession(hiddenSessionId), serverId: 'profile-a' }]);
+        unregisterConsumer = registerSessionRealtimeTranscriptConsumer(hiddenSessionId, 'profile-a');
+
+        const applyMessages = vi.fn();
+        const markSessionTranscriptDeferred = vi.fn();
+
+        await handleUpdateContainer({
+            ...buildBaseParams({ applyMessages, markSessionTranscriptDeferred }),
+            sourceServerId: 'identity-a',
+            updateData: buildPlainNewMessageUpdate(hiddenSessionId),
+        });
+
+        expect(markSessionTranscriptDeferred).not.toHaveBeenCalled();
+        expect(applyMessages).toHaveBeenCalledTimes(1);
     });
 
     it('does not materialize when the explicit transcript consumer belongs to another server with the same session id', async () => {

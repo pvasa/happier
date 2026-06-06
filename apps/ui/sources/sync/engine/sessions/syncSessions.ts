@@ -33,6 +33,12 @@ function readRollbackEligibleTurnStarts(value: unknown): readonly number[] | nul
     return starts;
 }
 
+function readFiniteTimestamp(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.trunc(value)
+        : undefined;
+}
+
 function applySidechainScopeMetadata(params: Readonly<{
     normalizedMessage: NormalizedMessage;
     inputSidechainId: unknown;
@@ -114,10 +120,30 @@ export function buildUpdatedSessionProjectionFromSocketUpdate(params: {
     const { session, updateBody, updateSeq, updateCreatedAt } = params;
     const encryptionMode: 'e2ee' | 'plain' = session.encryptionMode === 'plain' ? 'plain' : 'e2ee';
     const rollbackEligibleTurnStarts = readRollbackEligibleTurnStarts(updateBody.rollbackEligibleTurnStarts);
+    const projectedActive =
+        typeof updateBody.active === 'boolean'
+            ? updateBody.active
+            : session.active;
+    const projectedActiveAt = readFiniteTimestamp(updateBody.activeAt) ?? session.activeAt;
+    const projectedThinking =
+        typeof updateBody.thinking === 'boolean'
+            ? updateBody.thinking
+            : updateBody.active === false
+                ? false
+                : session.thinking;
+    const projectedThinkingAt =
+        readFiniteTimestamp(updateBody.thinkingAt)
+        ?? (typeof updateBody.thinking === 'boolean' || updateBody.active === false
+            ? projectedActiveAt
+            : session.thinkingAt);
 
     return {
         ...session,
         encryptionMode,
+        active: projectedActive,
+        activeAt: projectedActiveAt,
+        thinking: projectedThinking,
+        thinkingAt: projectedThinkingAt,
         lastViewedSessionSeq:
             typeof updateBody.lastViewedSessionSeq === 'number'
                 ? updateBody.lastViewedSessionSeq

@@ -1,7 +1,7 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
+import { createDeferred, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 import { installPendingMessagesCommonModuleMocks } from './pendingMessagesTestHelpers';
 
 
@@ -34,6 +34,7 @@ const discardPendingMessage = vi.fn();
 const sessionAbort = vi.fn();
 const modalConfirm = vi.fn();
 const modalAlert = vi.fn();
+const modalPrompt = vi.fn();
 const reorderPendingMessages = vi.fn();
 
 let sessionValue: any = null;
@@ -54,7 +55,7 @@ installPendingMessagesCommonModuleMocks({
             spies: {
                 confirm: (...args: any[]) => modalConfirm(...args),
                 alert: (...args: any[]) => modalAlert(...args),
-                prompt: vi.fn(),
+                prompt: (...args: any[]) => modalPrompt(...args),
             },
         }).module;
     },
@@ -239,6 +240,29 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(sendOrder).toBeLessThan(deleteOrder);
     });
 
+    it('delegates pending edit to the composer owner instead of opening a prompt modal', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        const onEditPendingMessage = vi.fn();
+        modalPrompt.mockResolvedValueOnce('edited');
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+                sessionId: 's1',
+                pendingMessages: [{ id: 'p1', text: 'hello\nworld', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} }],
+                discardedMessages: [],
+                onEditPendingMessage,
+            }));
+
+        await hoverPendingMessageRow(screen, 'p1');
+        await screen.pressByTestIdAsync('pendingMessages.edit:p1');
+
+        expect(onEditPendingMessage).toHaveBeenCalledTimes(1);
+        expect(onEditPendingMessage).toHaveBeenCalledWith(expect.objectContaining({
+            id: 'p1',
+            text: 'hello\nworld',
+        }));
+        expect(modalPrompt).not.toHaveBeenCalled();
+    });
+
     it('renders a per-message pending affordance label', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
@@ -331,10 +355,10 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(flattenStyle(overlayAfterHover!.props.style).pointerEvents).toBeUndefined();
     });
 
-	    it('offers steer-now while a steer-capable session is thinking and does not abort the turn', async () => {
-	        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
-	        sessionValue = {
-	            thinking: true,
+    it('offers steer-now while a steer-capable session is thinking and does not abort the turn', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: true,
             thinkingAt: Date.now(),
             active: true,
             presence: 'online',
@@ -362,11 +386,56 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(sessionAbort).toHaveBeenCalledTimes(0);
         expect(sendPendingMessageNow).toHaveBeenCalledTimes(1);
 	        expect(sendPendingMessageNow).toHaveBeenCalledWith('s1', expect.objectContaining({ localId: 'p1' }));
-	        expect(deletePendingMessage).toHaveBeenCalledTimes(1);
-	    });
+        expect(deletePendingMessage).toHaveBeenCalledTimes(1);
+    });
 
-	    it('shows the non-steerable turn notice and interrupt action when steering is supported but unavailable', async () => {
-	        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+    it('shows materializing only on the row currently being steered now', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        sessionValue = {
+            thinking: true,
+            thinkingAt: Date.now(),
+            active: true,
+            presence: 'online',
+            agentStateVersion: 1,
+            agentState: { controlledByUser: false, capabilities: { inFlightSteer: true } },
+        };
+
+        const sendStarted = createDeferred<void>();
+        const releaseSend = createDeferred<{ type: 'retry_scheduled' }>();
+        modalConfirm.mockResolvedValueOnce(true);
+        sendPendingMessageNow.mockImplementationOnce(async () => {
+            sendStarted.resolve(undefined);
+            return await releaseSend.promise;
+        });
+
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+                sessionId: 's1',
+                pendingMessages: [
+                    { id: 'p1', text: 'one', displayText: undefined, createdAt: 0, updatedAt: 0, localId: 'p1', rawRecord: {} },
+                    { id: 'p2', text: 'two', displayText: undefined, createdAt: 1, updatedAt: 1, localId: 'p2', rawRecord: {} },
+                ],
+                discardedMessages: [],
+            }));
+
+        await hoverPendingMessageRow(screen, 'p1');
+        const steerNow = screen.findByTestId('pendingMessages.steerNow:p1');
+        let pressPromise: Promise<void> = Promise.resolve();
+        await act(async () => {
+            pressPromise = Promise.resolve(steerNow!.props.onPress());
+            await sendStarted.promise;
+        });
+
+        expect(screen.findByTestId('pendingMessages.materializingIndicator:p1')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.materializingIndicator:p2')).toBeNull();
+
+        await act(async () => {
+            releaseSend.resolve({ type: 'retry_scheduled' });
+            await pressPromise;
+        });
+    });
+
+    it('shows the non-steerable turn notice and interrupt action when steering is supported but unavailable', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
 	        sessionValue = {
 	            thinking: true,
                 thinkingAt: Date.now(),
@@ -716,7 +785,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(80);
     });
 
-    it('shows a loading affordance instead of the pending badge for accepted pending rows', async () => {
+    it('shows the queued affordance instead of a loading spinner for accepted pending rows', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
                 sessionId: 's1',
@@ -724,8 +793,30 @@ describe('PendingMessagesTranscriptBlock', () => {
                 discardedMessages: [],
             }));
 
-        expect(screen.findByTestId('pendingMessages.acceptedIndicator:p1')).toBeTruthy();
-        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.acceptedIndicator:p1')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:p1')).toBeTruthy();
+    });
+
+    it('shows a saving indicator for local outbound rows that are still being persisted', async () => {
+        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+                sessionId: 's1',
+                pendingMessages: [{
+                    id: 'p1',
+                    text: 'hello',
+                    displayText: undefined,
+                    createdAt: 0,
+                    updatedAt: 0,
+                    localId: 'p1',
+                    source: 'local_outbound',
+                    deliveryStatus: 'queued',
+                    rawRecord: {},
+                }],
+                discardedMessages: [],
+            }));
+
+        expect(screen.findByTestId('pendingMessages.savingIndicator:p1')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.acceptedIndicator:p1')).toBeNull();
     });
 
     it('does not show discarded action icons until hover on web', async () => {

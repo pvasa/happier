@@ -133,6 +133,7 @@ import {
 } from '@/sync/runtime/sessionRealtimeScmConsumers';
 import { WEB_SYNC_INSTANCE_ID_SESSION_KEY } from '@/sync/runtime/webSyncClientIdentity';
 import { syncReliabilityTelemetry } from '@/sync/runtime/syncReliabilityTelemetry';
+import { loadSyncTuning } from '@/sync/runtime/syncTuning';
 
 class MemoryWebStorage implements Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   readonly values = new Map<string, string>();
@@ -198,6 +199,7 @@ describe('sync socket offline tracking', () => {
     }
     (sync as any).webSyncClientIdentityHeartbeatTimer = null;
     (sync as any).webSyncClientIdentity = null;
+    (sync as any).syncTuning = loadSyncTuning();
     (sync as any).changesCursor = null;
     (sync as any).directSessionTailCursorBySessionId.clear();
     (sync as any).directSessionOlderCursorBySessionId.clear();
@@ -287,6 +289,69 @@ describe('sync socket offline tracking', () => {
 
     expect(apiSocketRequestMock).toHaveBeenCalledWith(
       '/v1/sessions/s_reconnect_gap/messages?afterSeq=20&limit=150&scope=main',
+      { method: 'GET' },
+    );
+  }, 60_000);
+
+  it('uses configured message page size for loaded transcript catch-up fetches', async () => {
+    (sync as any).syncTuning = {
+      ...loadSyncTuning(),
+      sessionMessagesPageSize: 42,
+    };
+
+    storage.setState((state) => ({
+      ...state,
+      sessions: {
+        ...state.sessions,
+        s_tuned_page_size: {
+          id: 's_tuned_page_size',
+          seq: 20,
+          encryptionMode: 'plain',
+          metadata: {},
+          agentState: null,
+        } as any,
+      },
+    }), true);
+    storage.getState().applyMessagesLoaded('s_tuned_page_size');
+    (sync as any).sessionMaterializedMaxSeqById = { s_tuned_page_size: 20 };
+    (sync as any).isForeground = true;
+
+    await (sync as any).fetchMessages('s_tuned_page_size');
+
+    expect(apiSocketRequestMock).toHaveBeenCalledWith(
+      '/v1/sessions/s_tuned_page_size/messages?afterSeq=20&limit=42&scope=main',
+      { method: 'GET' },
+    );
+  }, 60_000);
+
+  it('uses deferred durable transcript seq for visible catch-up when the stored session seq is stale', async () => {
+    storage.setState((state) => ({
+      ...state,
+      sessions: {
+        ...state.sessions,
+        s_deferred_durable_gap: {
+          id: 's_deferred_durable_gap',
+          seq: 7,
+          encryptionMode: 'plain',
+          metadata: {},
+          agentState: null,
+        } as any,
+      },
+    }), true);
+    storage.getState().applyMessagesLoaded('s_deferred_durable_gap');
+    (sync as any).sessionMaterializedMaxSeqById = { s_deferred_durable_gap: 7 };
+    (sync as any).hasFetchedSessionsSnapshotForActiveServer = false;
+    (sync as any).isForeground = true;
+    (sync as any).markSessionTranscriptDeferred('s_deferred_durable_gap', {
+      updateType: 'new-message',
+      seq: 8,
+      messageId: 'm8',
+    });
+
+    await (sync as any).fetchMessages('s_deferred_durable_gap');
+
+    expect(apiSocketRequestMock).toHaveBeenCalledWith(
+      '/v1/sessions/s_deferred_durable_gap/messages?afterSeq=7&limit=150&scope=main',
       { method: 'GET' },
     );
   }, 60_000);

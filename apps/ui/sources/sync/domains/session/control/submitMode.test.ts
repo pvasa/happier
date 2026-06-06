@@ -12,11 +12,11 @@ describe('chooseSubmitMode', () => {
         })).toBe('interrupt');
     });
 
-    it('falls back to agent_queue when configuredMode=server_pending but the server does not support pending', () => {
+    it('keeps configured server_pending when pending support is not yet represented in the session summary', () => {
         expect(chooseSubmitMode({
             configuredMode: 'server_pending',
             session: { metadata: {} } as any,
-        })).toBe('agent_queue');
+        })).toBe('server_pending');
     });
 
     it('preserves explicit server_pending mode when pending is supported', () => {
@@ -302,7 +302,7 @@ describe('chooseSubmitMode', () => {
         })).toBe('agent_queue');
     });
 
-    it('keeps agent_queue for explicit server_pending on inactive sessions if queue is not supported', () => {
+    it('keeps explicit server_pending when pending support is not yet represented on inactive sessions', () => {
         expect(chooseSubmitMode({
             configuredMode: 'agent_queue',
             explicitMode: 'server_pending',
@@ -313,7 +313,7 @@ describe('chooseSubmitMode', () => {
                 metadata: {},
             } as any,
             nowMs: now,
-        })).toBe('agent_queue');
+        })).toBe('server_pending');
     });
 
     it('keeps agent_queue when pending is supported but the CLI version is too old (prevents stranded pending)', () => {

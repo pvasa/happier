@@ -29,7 +29,7 @@ import { buildForkAwareMessageDescriptors } from '@/components/sessions/transcri
 import { deriveReadOnlyTranscriptInteraction } from '@/components/sessions/transcript/forkContext/deriveReadOnlyTranscriptInteraction';
 import { insertForkDividersIntoTranscriptItems } from '@/components/sessions/transcript/forkContext/insertForkDividersIntoTranscriptItems';
 import { ForkDividerRow } from '@/components/sessions/transcript/forkContext/ForkDividerRow';
-import { PendingMessagesTranscriptBlock } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
+import { PendingMessagesTranscriptBlock, type PendingMessageEditRequest } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { SessionActionDraftCard } from '@/components/sessions/actions/SessionActionDraftCard';
 import { sync, type SessionViewportAnchorSnapshot } from '@/sync/sync';
 import { jumpToTranscriptSeq } from '@/utils/sessions/jumpToTranscriptSeq';
@@ -431,6 +431,7 @@ type ChatListProps = Readonly<{
     jumpToSeq?: number | null;
     followBottomIntentKey?: string | number | null;
     onViewportChange?: (state: TranscriptViewportChangeState) => void;
+    onEditPendingMessage?: (request: PendingMessageEditRequest) => void | Promise<void>;
     isWarmKeepAliveInstance?: boolean;
     routeHydrationPending?: boolean;
 }>;
@@ -449,6 +450,7 @@ function areChatListNonSessionPropsEqual(left: ChatListProps, right: ChatListPro
         && left.jumpToSeq === right.jumpToSeq
         && left.followBottomIntentKey === right.followBottomIntentKey
         && left.onViewportChange === right.onViewportChange
+        && left.onEditPendingMessage === right.onEditPendingMessage
         && left.isWarmKeepAliveInstance === right.isWarmKeepAliveInstance
         && left.routeHydrationPending === right.routeHydrationPending;
 }
@@ -751,6 +753,7 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                 jumpToSeq={props.jumpToSeq ?? null}
                 followBottomIntentKey={props.followBottomIntentKey ?? null}
                 onViewportChange={props.onViewportChange}
+                onEditPendingMessage={props.onEditPendingMessage}
                 isWarmKeepAliveInstance={props.isWarmKeepAliveInstance === true}
                 routeHydrationPending={props.routeHydrationPending === true}
                 forkCommon={transcriptSessionCommon.fork}
@@ -957,6 +960,7 @@ const ChatListInternal = React.memo((props: {
     jumpToSeq?: number | null;
     followBottomIntentKey?: string | number | null;
     onViewportChange?: (state: TranscriptViewportChangeState) => void;
+    onEditPendingMessage?: (request: PendingMessageEditRequest) => void | Promise<void>;
     isWarmKeepAliveInstance?: boolean;
     routeHydrationPending?: boolean;
 } & TranscriptSessionCommonProps) => {
@@ -3070,6 +3074,7 @@ const ChatListInternal = React.memo((props: {
                         sessionId={props.sessionId}
                         pendingMessages={item.pendingMessages}
                         discardedMessages={item.discardedMessages}
+                        onEditPendingMessage={props.onEditPendingMessage}
                     />
                 </TranscriptEnterWrapper>
             ));

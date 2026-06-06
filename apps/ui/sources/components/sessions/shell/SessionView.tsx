@@ -149,7 +149,6 @@ import {
     SESSION_VIEW_AGENT_INPUT_OUTER_BOTTOM_PADDING_PX,
     SESSION_VIEW_DEFAULT_CONTENT_BOTTOM_GAP_PX,
 } from '@/components/sessions/shell/resolveSessionViewContentBottomSpacing';
-import { chooseSubmitMode } from '@/sync/domains/session/control/submitMode';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 import { submitSessionUserMessage } from '@/sync/domains/session/input/submitSessionUserMessage';
 import { createSyncBackedSubmitPort } from '@/sync/domains/session/input/syncBackedSubmitPort';
@@ -1684,6 +1683,7 @@ type SessionTranscriptContentProps = Readonly<{
     jumpToSeq: ChatListProps['jumpToSeq'];
     followBottomIntentKey: ChatListProps['followBottomIntentKey'];
     onViewportChange: ChatListProps['onViewportChange'];
+    onEditPendingMessage: ChatListProps['onEditPendingMessage'];
     routeHydrationPending: ChatListProps['routeHydrationPending'];
 }>;
 
@@ -1704,6 +1704,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
     jumpToSeq,
     followBottomIntentKey,
     onViewportChange,
+    onEditPendingMessage,
     routeHydrationPending,
 }: SessionTranscriptContentProps) {
     const openToTranscriptTelemetryRef = React.useRef<{
@@ -1785,6 +1786,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
                     jumpToSeq={jumpToSeq}
                     followBottomIntentKey={followBottomIntentKey}
                     onViewportChange={onViewportChange}
+                    onEditPendingMessage={onEditPendingMessage}
                     routeHydrationPending={routeHydrationPending}
                 />
             ) : null}
@@ -2835,6 +2837,47 @@ function SessionViewLoaded({
         restoreDraft,
         restoreComposerSnapshot,
     } = useDraft(sessionId, message, setMessage);
+    const messageRef = React.useRef(message);
+    React.useEffect(() => {
+        messageRef.current = message;
+    }, [message]);
+    const [pendingMessageEdit, setPendingMessageEdit] = React.useState<Readonly<{
+        pendingId: string;
+        previousDraftText: string;
+        loadedText: string;
+    }> | null>(null);
+    const pendingMessageEditRef = React.useRef(pendingMessageEdit);
+    React.useEffect(() => {
+        pendingMessageEditRef.current = pendingMessageEdit;
+    }, [pendingMessageEdit]);
+    const cancelPendingMessageEdit = React.useCallback(() => {
+        const edit = pendingMessageEditRef.current;
+        if (!edit) return;
+        setPendingMessageEdit(null);
+        setDraftValue(edit.previousDraftText);
+    }, [setDraftValue]);
+    const handleEditPendingMessage = React.useCallback<NonNullable<ChatListProps['onEditPendingMessage']>>((request) => {
+        const previousDraftText = pendingMessageEditRef.current?.previousDraftText ?? messageRef.current;
+        setPendingMessageEdit({
+            pendingId: request.id,
+            previousDraftText,
+            loadedText: request.text,
+        });
+        setDraftValue(request.text);
+    }, [setDraftValue]);
+    React.useEffect(() => {
+        const edit = pendingMessageEditRef.current;
+        if (!edit) return;
+        const stillQueued = pendingMessages.some((pending) =>
+            pending.id === edit.pendingId || pending.localId === edit.pendingId
+        );
+        if (stillQueued) return;
+
+        setPendingMessageEdit(null);
+        if (messageRef.current === edit.loadedText) {
+            setDraftValue(edit.previousDraftText);
+        }
+    }, [pendingMessages, setDraftValue]);
     const inputComposerClearTransientStateRef = React.useRef<() => void>(noopInputComposerClearTransientState);
     const inputComposerCaptureTransientStateRef = React.useRef<() => AgentInputLocalUiStateV1 | null>(
         noopInputComposerCaptureTransientState,
@@ -3393,6 +3436,7 @@ function SessionViewLoaded({
             jumpToSeq={jumpToSeq}
             followBottomIntentKey={followBottomIntentSeq}
             onViewportChange={handleTranscriptViewportChange}
+            onEditPendingMessage={handleEditPendingMessage}
             routeHydrationPending={routeHydrationPending}
         />
     );
@@ -3502,7 +3546,24 @@ function SessionViewLoaded({
         const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
             ...sessionStatusBadges,
             ...sessionConnectedServicesAuthSwitch.statusBadges,
-        ], [sessionConnectedServicesAuthSwitch.statusBadges, sessionStatusBadges]);
+            ...(pendingMessageEdit
+                ? [{
+                    key: 'pending-message-edit',
+                    label: t('session.pendingMessages.actions.edit'),
+                    accessibilityLabel: t('common.cancel'),
+                    testID: 'session.pendingMessageEdit.badge',
+                    tone: 'active',
+                    emphasis: 'prominent',
+                    icon: (tint: string) => <Ionicons name="pencil-outline" size={13} color={tint} />,
+                    onPress: cancelPendingMessageEdit,
+                } satisfies AgentInputStatusBadge]
+                : []),
+        ], [
+            cancelPendingMessageEdit,
+            pendingMessageEdit,
+            sessionConnectedServicesAuthSwitch.statusBadges,
+            sessionStatusBadges,
+        ]);
         const agentInputExtraActionChips = React.useMemo(() => {
             const chips = [
                 ...(extraActionChips ?? []),
@@ -3562,6 +3623,29 @@ function SessionViewLoaded({
             return;
         }
 
+        const activePendingEdit = pendingMessageEditRef.current;
+        if (activePendingEdit) {
+            const nextText = message;
+            if (nextText.trim().length === 0) {
+                return;
+            }
+            setIsComposerSendPending(true);
+            fireAndForget((async () => {
+                try {
+                    await sync.updatePendingMessage(sessionId, activePendingEdit.pendingId, nextText);
+                    if (pendingMessageEditRef.current?.pendingId === activePendingEdit.pendingId) {
+                        setPendingMessageEdit(null);
+                        setDraftValue(activePendingEdit.previousDraftText);
+                    }
+                } catch (e) {
+                    Modal.alert(t('common.error'), e instanceof Error ? e.message : t('session.pendingMessages.errors.updateFailed'));
+                } finally {
+                    setIsComposerSendPending(false);
+                }
+            })(), { tag: 'SessionView.pendingMessageEdit.save' });
+            return;
+        }
+
         const sendComposerText = async (
             messageToSend: string,
             composerTextBeforeSend: string,
@@ -3574,14 +3658,6 @@ function SessionViewLoaded({
             const configuredMode = storage.getState().settings.sessionMessageSendMode;
             const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
             const forceImmediateSend = sendIntent?.forceImmediate === true;
-            const submitMode = chooseSubmitMode({
-                configuredMode,
-                busySteerSendPolicy,
-                explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
-                    ? 'server_pending'
-                    : undefined,
-                session,
-            });
 
             const additionalMessage = messageToSend;
             const trimmedText = messageToSend.trim();
@@ -3726,9 +3802,6 @@ function SessionViewLoaded({
                             mergeMessageMetaOverrides(outbound.metaOverrides, sendIntent?.structuredInputMetaOverrides),
                         );
 
-                        if (submitMode === 'interrupt') {
-                            try { await sessionAbort(sessionId); } catch { }
-                        }
                         attachmentDraftsForRestore = readSubmittedAttachmentDraftsFromCurrent();
                         let didClearForAttachmentHandoff = false;
                         const removeSubmittedAttachmentDraftsFromCurrent = () => {
@@ -3762,9 +3835,57 @@ function SessionViewLoaded({
                                 removeSubmittedAttachmentDraftsFromCurrent();
                             }
                         };
-                        await sync.sendMessage(sessionId, outbound.text, outbound.displayText, outbound.metaOverrides, {
-                            onLocalPendingProjectionCreated: clearAttachmentsAfterProjectionHandoff,
+                        const submitPortWithUiWakeState: SessionSubmitPort = {
+                            ...sessionSubmitPort,
+                            resumeSession: async (options) => {
+                                setIsPendingQueueWakeResuming(true);
+                                try {
+                                    return await sessionSubmitPort.resumeSession(options);
+                                } finally {
+                                    setIsPendingQueueWakeResuming(false);
+                                }
+                            },
+                        };
+                        const result = await submitSessionUserMessage(submitPortWithUiWakeState, {
+                            sessionId,
+                            session,
+                            text: outbound.text,
+                            displayText: outbound.displayText,
+                            metaOverrides: outbound.metaOverrides,
+                            configuredMode,
+                            busySteerSendPolicy,
+                            explicitMode: !forceImmediateSend && sendIntent?.deliveryIntent === 'server_pending'
+                                ? 'server_pending'
+                                : undefined,
+                            forceImmediate: forceImmediateSend,
+                            profileId: liveComposerState.profileId,
+                            resumeCapabilityOptions,
+                            resumeTargetOverride: reachableMachineTarget
+                                ? {
+                                    machineId: reachableMachineTarget.machineId,
+                                    directory: reachableMachineTarget.basePath,
+                                }
+                                : null,
+                            permissionOverride: getPermissionModeOverrideForSpawn(session),
+                            serverId: capabilityServerId,
+                            requestRemoteControlAfterPendingEnqueue: shouldRequestRemoteControlAfterPendingEnqueue(session, cliAuthStatus?.state ?? null),
+                            onOutboundHandoff: (handoff) => {
+                                clearAttachmentsAfterProjectionHandoff();
+                                if (handoff.persistence === 'pending') {
+                                    recordOutboundAccepted();
+                                }
+                            },
                         });
+                        if (result.type === 'send_failed' || result.type === 'rejected') {
+                            if (result.persistence === 'none' && canRestoreFailedAttachmentHandoffSnapshot()) {
+                                restoreAfterFailedOutboundHandoff(attachmentDraftsForRestore);
+                            }
+                            Modal.alert(t('common.error'), result.errorMessage ?? t('errors.failedToSendMessage'));
+                            return;
+                        }
+                        if ((result.type === 'wake_pending' || result.type === 'wake_failed') && !isSessionActive && isResumable) {
+                            setPendingQueueResumeFailed(true);
+                        }
                         if (shouldSendReviewComments) {
                             clearSentReviewCommentDrafts();
                         }

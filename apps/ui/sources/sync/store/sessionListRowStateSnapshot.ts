@@ -2,7 +2,13 @@ import type {
     SessionListRowStateSnapshot,
     SessionListRowStoreState,
 } from '@/components/sessions/shell/row/sessionListRowModelTypes';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import {
+    isSessionListRenderableWarmCacheProgressOnlyChange,
+    type SessionListRenderableSession,
+} from '@/sync/domains/session/listing/sessionListRenderable';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
 
 type SessionListRowStateSnapshotScope = Readonly<{
     sessionId: string;
@@ -24,6 +30,12 @@ type MutableSessionListRowStoreState = {
     sessionPending: Record<string, ReturnType<typeof selectSessionListRowStateSnapshot>['pending']>;
 };
 
+// Visible rows do not need to rebuild on every unread-stable streaming progress timestamp.
+// Keep the store fully fresh, but let the row selector expose at most ~30s progress
+// steps while relative labels remain equivalent; urgent unread/status/pending changes
+// still flow through immediately via the warm-cache progress-only guard below.
+const ROW_PROGRESS_RENDERABLE_MIN_UPDATE_INTERVAL_MS = 30_000;
+
 function normalizeId(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
 }
@@ -42,7 +54,7 @@ function shouldReadActiveServerOverlay(
     const activeServerId = normalizeId(state.activeServerId);
     const normalizedRowServerId = normalizeId(rowServerId);
     if (!activeServerId || !normalizedRowServerId) return true;
-    return activeServerId === normalizedRowServerId;
+    return areServerProfileIdentifiersEquivalent(activeServerId, normalizedRowServerId);
 }
 
 export function selectSessionListRowStateSnapshot(
@@ -83,6 +95,71 @@ function recordRowStoreSelectorChangeTelemetry(fields: Readonly<Record<string, n
     syncPerformanceTelemetry.count('ui.sessionsList.rowStoreSelector.changed', fields);
 }
 
+function recordRowStoreSelectorSuppressedTelemetry(fields: Readonly<Record<string, number>>): void {
+    if (!syncPerformanceTelemetry.isEnabled()) return;
+    syncPerformanceTelemetry.count('ui.sessionsList.rowStoreSelector.progressOnlySuppressed', fields);
+}
+
+function finiteTimestamp(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.trunc(value)
+        : null;
+}
+
+function resolveProgressTimestamp(renderable: SessionListRenderableSession): number | null {
+    const updatedAt = finiteTimestamp(renderable.updatedAt);
+    const meaningfulActivityAt = finiteTimestamp(renderable.meaningfulActivityAt);
+    if (updatedAt === null) return meaningfulActivityAt;
+    if (meaningfulActivityAt === null) return updatedAt;
+    return Math.max(updatedAt, meaningfulActivityAt);
+}
+
+function hasSameRelativeProgressLabels(
+    previous: SessionListRenderableSession,
+    next: SessionListRenderableSession,
+    nowMs: number,
+): boolean {
+    const previousUpdatedAt = finiteTimestamp(previous.updatedAt);
+    const nextUpdatedAt = finiteTimestamp(next.updatedAt);
+    if (previousUpdatedAt !== null && nextUpdatedAt !== null) {
+        if (formatShortRelativeTimeAt(previousUpdatedAt, nowMs) !== formatShortRelativeTimeAt(nextUpdatedAt, nowMs)) {
+            return false;
+        }
+    }
+
+    const previousMeaningfulActivityAt = finiteTimestamp(previous.meaningfulActivityAt);
+    const nextMeaningfulActivityAt = finiteTimestamp(next.meaningfulActivityAt);
+    if (previousMeaningfulActivityAt !== null && nextMeaningfulActivityAt !== null) {
+        if (
+            formatShortRelativeTimeAt(previousMeaningfulActivityAt, nowMs)
+            !== formatShortRelativeTimeAt(nextMeaningfulActivityAt, nowMs)
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function shouldReusePreviousProgressRenderable(input: Readonly<{
+    previous: SessionListRenderableSession | undefined;
+    next: SessionListRenderableSession | undefined;
+    nowMs: number;
+}>): input is Readonly<{ previous: SessionListRenderableSession; next: SessionListRenderableSession; nowMs: number }> {
+    const { previous, next, nowMs } = input;
+    if (!previous || !next || previous === next) return false;
+    if (!isSessionListRenderableWarmCacheProgressOnlyChange(previous, next)) return false;
+    if (previous.activeAt !== next.activeAt) return false;
+
+    const previousTimestamp = resolveProgressTimestamp(previous);
+    const nextTimestamp = resolveProgressTimestamp(next);
+    if (previousTimestamp === null || nextTimestamp === null) return false;
+    if (nextTimestamp <= previousTimestamp) return false;
+    if (nextTimestamp - previousTimestamp >= ROW_PROGRESS_RENDERABLE_MIN_UPDATE_INTERVAL_MS) return false;
+
+    return hasSameRelativeProgressLabels(previous, next, nowMs);
+}
+
 export function createSessionListRowStoreStateSelector(
     scopes: readonly SessionListRowStateSnapshotScope[],
     activeServerId: string | null | undefined,
@@ -104,9 +181,23 @@ export function createSessionListRowStoreStateSelector(
         const sessionMessages: MutableSessionListRowStoreState['sessionMessages'] = {};
         const sessionPending: MutableSessionListRowStoreState['sessionPending'] = {};
 
-        for (const scope of normalizedScopes) {
+        let suppressedProgressRenderableUpdates = 0;
+        const nowMs = Date.now();
+        for (let index = 0; index < normalizedScopes.length; index += 1) {
+            const scope = normalizedScopes[index];
             const sessionId = scope.sessionId;
-            const renderable = state.sessionListRenderables?.[sessionId];
+            const rawRenderable = state.sessionListRenderables?.[sessionId];
+            const previousRenderable = previousRenderables?.[index] as SessionListRenderableSession | undefined;
+            const renderable = shouldReusePreviousProgressRenderable({
+                previous: previousRenderable,
+                next: rawRenderable,
+                nowMs,
+            })
+                ? previousRenderable
+                : rawRenderable;
+            if (renderable === previousRenderable && rawRenderable !== previousRenderable && rawRenderable !== undefined) {
+                suppressedProgressRenderableUpdates += 1;
+            }
             const session = renderable ? undefined : state.sessions?.[sessionId];
             const messages = renderable ? undefined : state.sessionMessages?.[sessionId];
             const pending = state.sessionPending?.[sessionId];
@@ -118,6 +209,13 @@ export function createSessionListRowStoreStateSelector(
             sessionListRenderables[sessionId] = renderable;
             sessionMessages[sessionId] = messages;
             sessionPending[sessionId] = pending;
+        }
+
+        if (suppressedProgressRenderableUpdates > 0) {
+            recordRowStoreSelectorSuppressedTelemetry({
+                renderables: suppressedProgressRenderableUpdates,
+                scopedRows: normalizedScopes.length,
+            });
         }
 
         if (

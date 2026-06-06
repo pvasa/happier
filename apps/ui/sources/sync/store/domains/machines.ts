@@ -14,6 +14,7 @@ import {
 } from '../buildSessionListViewDataWithServerScope';
 import { setActiveServerSessionListCache } from '../sessionListCache';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '../../domains/server/serverProfiles';
 import { projectManager } from '../../runtime/orchestration/projectManager';
 import {
     resolveWarmCacheAccountScope,
@@ -181,7 +182,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
             set((state) => {
                 const activeServerId = normalizeMachineServerId(getActiveServerSnapshot().serverId);
                 const sourceServerId = normalizeMachineServerId(options?.sourceServerId) || activeServerId;
-                const shouldUpdateActiveProjection = !sourceServerId || sourceServerId === activeServerId;
+                const shouldUpdateActiveProjection = !sourceServerId || areServerProfileIdentifiersEquivalent(sourceServerId, activeServerId);
                 const machineListByServerId = sourceServerId
                     ? {
                         ...state.machineListByServerId,
@@ -305,7 +306,7 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
             set((state) => {
                 const activeServerId = normalizeMachineServerId(getActiveServerSnapshot().serverId);
                 const sourceServerId = normalizeMachineServerId(options?.sourceServerId) || activeServerId;
-                if (sourceServerId && sourceServerId !== activeServerId) {
+                if (sourceServerId && !areServerProfileIdentifiersEquivalent(sourceServerId, activeServerId)) {
                     return state;
                 }
 

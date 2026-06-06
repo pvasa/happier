@@ -1,25 +1,57 @@
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import {
+    type ConnectedServiceUxDiagnosticV1,
+    normalizeSessionUsageLimitRecoveryOperationResultV1,
+    type SessionUsageLimitRecoveryOperationResultErrorStatusV1,
+    type SessionUsageLimitRecoveryOperationResultV1,
+} from '@happier-dev/protocol';
 
 import { storage } from '@/sync/domains/state/storage';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
-import { readMachineControlTargetForSession } from './sessionMachineTarget';
+import { readMachineControlTargetForSession, type SessionMachineControlTarget } from './sessionMachineTarget';
 
 export type SessionUsageLimitRecoveryOperationResult =
     | Readonly<{
         ok: true;
         status?: SessionUsageLimitRecoveryOperationStatus;
+        retryAfterMs?: number;
+        uxDiagnostic?: ConnectedServiceUxDiagnosticV1;
+        diagnostics?: SessionUsageLimitRecoveryOperationDiagnostics;
     }>
-    | Readonly<{ ok: false; error: string; errorCode?: string; retryAfterMs?: number }>;
+    | Readonly<{
+        ok: false;
+        status?: SessionUsageLimitRecoveryOperationResultErrorStatusV1;
+        error: string;
+        errorCode?: string;
+        retryAfterMs?: number;
+        uxDiagnostic?: ConnectedServiceUxDiagnosticV1;
+        diagnostics?: SessionUsageLimitRecoveryOperationDiagnostics;
+    }>;
 
-type SessionUsageLimitRecoveryOperationStatus = 'ready' | 'waiting' | 'resumed' | 'exhausted' | 'inactive';
+type SessionUsageLimitRecoveryOperationDiagnostics =
+    NonNullable<SessionUsageLimitRecoveryOperationResultV1['diagnostics']>;
+
+type SessionUsageLimitRecoveryOperationStatus =
+    | 'ready'
+    | 'waiting'
+    | 'resumed'
+    | 'exhausted'
+    | 'inactive'
+    | 'cancelled'
+    | 'rate_limited';
 
 type UsageLimitRecoveryPayload = Readonly<{
     sessionId: string;
     issueFingerprint?: string | null;
     rememberPreference?: boolean;
+}>;
+
+type UsageLimitRecoveryOperationOptions = Readonly<{
+    serverId?: string | null;
+    refreshMachineTargets?: () => Promise<void>;
 }>;
 
 const STALE_ACTIVE_SESSION_RPC_FALLBACK_ERRORS = new Set<string>([
@@ -30,43 +62,53 @@ const STALE_ACTIVE_SESSION_RPC_FALLBACK_ERRORS = new Set<string>([
     'unsupported_session_runtime_method',
 ]);
 
-function readOperationStatus(value: unknown): SessionUsageLimitRecoveryOperationStatus | undefined {
-    if (
-        value === 'ready'
-        || value === 'waiting'
-        || value === 'resumed'
-        || value === 'exhausted'
-        || value === 'inactive'
-    ) {
-        return value;
+function mapProtocolUsageLimitRecoveryOkStatus(
+    status: SessionUsageLimitRecoveryOperationResultV1['status'],
+): SessionUsageLimitRecoveryOperationStatus | undefined {
+    switch (status) {
+        case 'ready':
+        case 'waiting':
+        case 'resumed':
+        case 'cancelled':
+            return status;
+        case 'already_ready':
+            return 'ready';
+        case 'no_recovery_needed':
+            return 'resumed';
+        case 'switch_attempted':
+        case 'switch_applied':
+        case 'switch_observed':
+            return 'waiting';
+        default:
+            return undefined;
     }
-    return undefined;
 }
 
-function readUsageLimitRecoveryOperationResult(response: unknown): SessionUsageLimitRecoveryOperationResult {
-    if (!response || typeof response !== 'object') {
-        return { ok: false, error: 'Unsupported response from session RPC' };
-    }
-    const raw = response as Record<string, unknown>;
-    if (raw.ok === true) {
-        const status = readOperationStatus(raw.status);
+function readUsageLimitRecoveryOperationResult(
+    response: unknown,
+    sessionId: string,
+): SessionUsageLimitRecoveryOperationResult {
+    const result = normalizeSessionUsageLimitRecoveryOperationResultV1(response, { sessionId });
+    if (result.ok) {
+        const status = mapProtocolUsageLimitRecoveryOkStatus(result.status);
         return {
             ok: true,
             ...(status ? { status } : {}),
+            ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
+            ...(result.uxDiagnostic ? { uxDiagnostic: result.uxDiagnostic } : {}),
+            ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
         };
     }
-    if (typeof raw.error === 'string') {
-        const retryAfterMs = typeof raw.retryAfterMs === 'number' && Number.isFinite(raw.retryAfterMs) && raw.retryAfterMs >= 0
-            ? Math.trunc(raw.retryAfterMs)
-            : null;
-        return {
-            ok: false,
-            error: raw.error,
-            ...(typeof raw.errorCode === 'string' ? { errorCode: raw.errorCode } : {}),
-            ...(retryAfterMs !== null ? { retryAfterMs } : {}),
-        };
-    }
-    return { ok: false, error: 'Unsupported response from session RPC' };
+
+    return {
+        ok: false,
+        status: result.status,
+        error: result.errorCode,
+        errorCode: result.errorCode,
+        ...(result.retryAfterMs !== undefined ? { retryAfterMs: result.retryAfterMs } : {}),
+        ...(result.uxDiagnostic ? { uxDiagnostic: result.uxDiagnostic } : {}),
+        ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
+    };
 }
 
 function readFallbackErrorTokens(value: unknown): ReadonlyArray<string> {
@@ -97,13 +139,32 @@ function isInactiveSession(sessionId: string): boolean {
     return storage.getState().sessions?.[sessionId]?.active === false;
 }
 
+async function resolveUsageLimitRecoveryMachineControlTarget(
+    sessionId: string,
+    opts?: UsageLimitRecoveryOperationOptions,
+): Promise<SessionMachineControlTarget | null> {
+    const target = readMachineControlTargetForSession(sessionId);
+    if (target || !opts?.refreshMachineTargets) {
+        return target;
+    }
+
+    try {
+        await opts.refreshMachineTargets();
+    } catch {
+        return null;
+    }
+
+    return readMachineControlTargetForSession(sessionId);
+}
+
 async function runUsageLimitRecoveryMachineRpc(
     sessionId: string,
     method: string,
     payload: UsageLimitRecoveryPayload,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions,
+    resolvedTarget?: SessionMachineControlTarget | null,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
-    const target = readMachineControlTargetForSession(sessionId);
+    const target = resolvedTarget ?? await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
     if (!target) {
         return {
             ok: false,
@@ -113,13 +174,13 @@ async function runUsageLimitRecoveryMachineRpc(
     }
 
     try {
-        const response = await machineRpcWithServerScope<SessionUsageLimitRecoveryOperationResult, UsageLimitRecoveryPayload>({
+        const response = await machineRpcWithServerScope<unknown, UsageLimitRecoveryPayload>({
             machineId: target.machineId,
             serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
             method,
             payload,
         });
-        return readUsageLimitRecoveryOperationResult(response);
+        return readUsageLimitRecoveryOperationResult(response, sessionId);
     } catch (error) {
         return {
             ok: false,
@@ -133,16 +194,16 @@ async function runUsageLimitRecoveryRpc(
     sessionId: string,
     method: string,
     payload: UsageLimitRecoveryPayload,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     try {
-        const response = await sessionRpcWithServerScope<SessionUsageLimitRecoveryOperationResult, UsageLimitRecoveryPayload>({
+        const response = await sessionRpcWithServerScope<unknown, UsageLimitRecoveryPayload>({
             sessionId,
             serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
             method,
             payload,
         });
-        return readUsageLimitRecoveryOperationResult(response);
+        return readUsageLimitRecoveryOperationResult(response, sessionId);
     } catch (error) {
         return {
             ok: false,
@@ -157,14 +218,15 @@ async function runUsageLimitRecoveryRpcWithMachineFallback(
     sessionMethod: string,
     machineMethod: string,
     payload: UsageLimitRecoveryPayload,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const result = await runUsageLimitRecoveryRpc(sessionId, sessionMethod, payload, opts);
     if (result.ok === false && shouldFallbackFromStaleActiveSessionRpcFailure(result)) {
-        if (!readMachineControlTargetForSession(sessionId)) {
+        const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
+        if (!target) {
             return result;
         }
-        return await runUsageLimitRecoveryMachineRpc(sessionId, machineMethod, payload, opts);
+        return await runUsageLimitRecoveryMachineRpc(sessionId, machineMethod, payload, opts, target);
     }
     return result;
 }
@@ -172,7 +234,7 @@ async function runUsageLimitRecoveryRpcWithMachineFallback(
 export function sessionUsageLimitWaitResumeEnable(
     sessionId: string,
     request?: Readonly<{ issueFingerprint?: string | null; rememberPreference?: boolean }>,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const payload = {
         sessionId,
@@ -202,7 +264,7 @@ export function sessionUsageLimitWaitResumeEnable(
 
 export function sessionUsageLimitWaitResumeCancel(
     sessionId: string,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const payload = { sessionId };
     if (isInactiveSession(sessionId)) {
@@ -224,7 +286,7 @@ export function sessionUsageLimitWaitResumeCancel(
 
 export async function sessionUsageLimitCheckNow(
     sessionId: string,
-    opts?: Readonly<{ provider?: string | null; serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions & Readonly<{ provider?: string | null }>,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const provider = typeof opts?.provider === 'string' ? opts.provider.trim() : '';
     const payload = {
@@ -232,7 +294,8 @@ export async function sessionUsageLimitCheckNow(
         ...(provider.length > 0 ? { provider } : {}),
     };
     if (isInactiveSession(sessionId)) {
-        if (!readMachineControlTargetForSession(sessionId)) {
+        const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
+        if (!target) {
             return await runUsageLimitRecoveryRpc(
                 sessionId,
                 SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
@@ -245,6 +308,7 @@ export async function sessionUsageLimitCheckNow(
             RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
             payload,
             opts,
+            target,
         );
     }
     return runUsageLimitRecoveryRpcWithMachineFallback(
@@ -258,7 +322,7 @@ export async function sessionUsageLimitCheckNow(
 
 export async function sessionUsageLimitSwitchAccountNow(
     sessionId: string,
-    opts?: Readonly<{ provider?: string | null; serverId?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions & Readonly<{ provider?: string | null }>,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const provider = typeof opts?.provider === 'string' ? opts.provider.trim() : '';
     const payload = {

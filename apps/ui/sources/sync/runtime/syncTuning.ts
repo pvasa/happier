@@ -4,6 +4,7 @@ export type SyncTuning = Readonly<{
     messageLargeGapSeq: number;
     messageMaxIncrementalPagesOnResume: number;
     messageForceSnapshotOfflineMs: number;
+    sessionMessagesPageSize: number;
     transcriptForwardPrefetchThresholdPx: number;
     transcriptBackwardPrefetchThresholdPx: number;
     transcriptFlashListEstimatedItemSize: number;
@@ -13,6 +14,7 @@ export type SyncTuning = Readonly<{
     transcriptWebInitialPinRetryIntervalMs: number;
     transcriptWebInitialPinRetryMilestonesMs: readonly number[];
     transcriptOlderLoadSpinnerDelayMs: number;
+    transcriptOlderLoadCooldownMs: number;
     transcriptViewportAnchorCaptureDebounceMs: number;
     transcriptViewportAnchorOlderLookupMaxLoads: number;
     transcriptViewportAnchorRenderRetryMax: number;
@@ -42,6 +44,7 @@ export type SyncTuning = Readonly<{
     sessionListBackgroundHydrationMaxRows: number;
     sessionViewportHydrationPriorityMaxRows: number;
     sessionListBackgroundHydrationYieldDelayMs: number;
+    sessionListBackgroundHydrationYieldEveryRows: number;
     sessionListBackgroundHydrationApplyBatchSize: number;
     sessionListBackgroundHydrationApplyFlushDelayMs: number;
     initialMessageDecryptBatchSize: number;
@@ -200,6 +203,7 @@ export function loadSyncTuning(opts?: {
         messageLargeGapSeq: 500,
         messageMaxIncrementalPagesOnResume: 3,
         messageForceSnapshotOfflineMs: 30 * 60 * 1000,
+        sessionMessagesPageSize: 150,
         transcriptForwardPrefetchThresholdPx: 800,
         transcriptBackwardPrefetchThresholdPx: 800,
         transcriptFlashListEstimatedItemSize: 120,
@@ -209,10 +213,11 @@ export function loadSyncTuning(opts?: {
         transcriptWebInitialPinRetryIntervalMs: 250,
         transcriptWebInitialPinRetryMilestonesMs: [16, 50, 100, 200, 400, 800],
         transcriptOlderLoadSpinnerDelayMs: 300,
+        transcriptOlderLoadCooldownMs: 2000,
         transcriptViewportAnchorCaptureDebounceMs: 200,
         transcriptViewportAnchorOlderLookupMaxLoads: 1,
         transcriptViewportAnchorRenderRetryMax: 4,
-        transcriptDerivedItemsCacheMaxSessions: 8,
+        transcriptDerivedItemsCacheMaxSessions: 16,
         transcriptItemHeightCacheMaxEntries: 1024,
         transcriptForkedSnapshotCacheMaxSessions: 64,
         transcriptFlashListDrawDistance: 0,
@@ -233,13 +238,14 @@ export function loadSyncTuning(opts?: {
         sessionListHydrationConcurrencyLimit: 4,
         machineDisplayHydrationConcurrencyLimit: 4,
         sessionListEagerHydrationCount: 4,
-        sessionListAppendEagerHydrationCount: 0,
+        sessionListAppendEagerHydrationCount: 50,
         sessionListBackgroundHydrationConcurrencyLimit: 1,
         sessionListBackgroundHydrationMaxRows: 0,
         sessionViewportHydrationPriorityMaxRows: 4,
         sessionListBackgroundHydrationYieldDelayMs: 16,
-        sessionListBackgroundHydrationApplyBatchSize: 1,
-        sessionListBackgroundHydrationApplyFlushDelayMs: 16,
+        sessionListBackgroundHydrationYieldEveryRows: 4,
+        sessionListBackgroundHydrationApplyBatchSize: 4,
+        sessionListBackgroundHydrationApplyFlushDelayMs: 64,
         initialMessageDecryptBatchSize: 64,
         messageDecryptBatchSize: 8,
         messageDecryptYieldDelayMs: 0,
@@ -297,6 +303,7 @@ export function loadSyncTuning(opts?: {
         messageLargeGapSeq: readNumber(merged, 'messageLargeGapSeq', { min: 1, max: 1_000_000 }) ?? defaults.messageLargeGapSeq,
         messageMaxIncrementalPagesOnResume: readNumber(merged, 'messageMaxIncrementalPagesOnResume', { min: 1, max: 100 }) ?? defaults.messageMaxIncrementalPagesOnResume,
         messageForceSnapshotOfflineMs: readNumber(merged, 'messageForceSnapshotOfflineMs', { min: 0, max: 365 * 24 * 60 * 60 * 1000 }) ?? defaults.messageForceSnapshotOfflineMs,
+        sessionMessagesPageSize: readNumber(merged, 'sessionMessagesPageSize', { min: 1, max: 1000 }) ?? defaults.sessionMessagesPageSize,
         transcriptForwardPrefetchThresholdPx: readNumber(merged, 'transcriptForwardPrefetchThresholdPx', { min: 0, max: 50_000 }) ?? defaults.transcriptForwardPrefetchThresholdPx,
         transcriptBackwardPrefetchThresholdPx: readNumber(merged, 'transcriptBackwardPrefetchThresholdPx', { min: 0, max: 50_000 }) ?? defaults.transcriptBackwardPrefetchThresholdPx,
         transcriptFlashListEstimatedItemSize: readNumber(merged, 'transcriptFlashListEstimatedItemSize', { min: 20, max: 2000 }) ?? defaults.transcriptFlashListEstimatedItemSize,
@@ -308,6 +315,7 @@ export function loadSyncTuning(opts?: {
             readNumberArray(merged, 'transcriptWebInitialPinRetryMilestonesMs', { min: 0, max: 20_000, maxLength: 32 })
             ?? defaults.transcriptWebInitialPinRetryMilestonesMs,
         transcriptOlderLoadSpinnerDelayMs: readNumber(merged, 'transcriptOlderLoadSpinnerDelayMs', { min: 0, max: 20_000 }) ?? defaults.transcriptOlderLoadSpinnerDelayMs,
+        transcriptOlderLoadCooldownMs: readNumber(merged, 'transcriptOlderLoadCooldownMs', { min: 0, max: 20_000 }) ?? defaults.transcriptOlderLoadCooldownMs,
         transcriptViewportAnchorCaptureDebounceMs: readNumber(merged, 'transcriptViewportAnchorCaptureDebounceMs', { min: 0, max: 20_000 }) ?? defaults.transcriptViewportAnchorCaptureDebounceMs,
         transcriptViewportAnchorOlderLookupMaxLoads: readNumber(merged, 'transcriptViewportAnchorOlderLookupMaxLoads', { min: 0, max: 10 }) ?? defaults.transcriptViewportAnchorOlderLookupMaxLoads,
         transcriptViewportAnchorRenderRetryMax: readNumber(merged, 'transcriptViewportAnchorRenderRetryMax', { min: 0, max: 20 }) ?? defaults.transcriptViewportAnchorRenderRetryMax,
@@ -337,6 +345,7 @@ export function loadSyncTuning(opts?: {
         sessionListBackgroundHydrationMaxRows: readNumber(merged, 'sessionListBackgroundHydrationMaxRows', { min: 0, max: 200 }) ?? defaults.sessionListBackgroundHydrationMaxRows,
         sessionViewportHydrationPriorityMaxRows: readNumber(merged, 'sessionViewportHydrationPriorityMaxRows', { min: 0, max: 100 }) ?? defaults.sessionViewportHydrationPriorityMaxRows,
         sessionListBackgroundHydrationYieldDelayMs: readNumber(merged, 'sessionListBackgroundHydrationYieldDelayMs', { min: 0, max: 1_000 }) ?? defaults.sessionListBackgroundHydrationYieldDelayMs,
+        sessionListBackgroundHydrationYieldEveryRows: readNumber(merged, 'sessionListBackgroundHydrationYieldEveryRows', { min: 1, max: 20 }) ?? defaults.sessionListBackgroundHydrationYieldEveryRows,
         sessionListBackgroundHydrationApplyBatchSize: readNumber(merged, 'sessionListBackgroundHydrationApplyBatchSize', { min: 1, max: 20 }) ?? defaults.sessionListBackgroundHydrationApplyBatchSize,
         sessionListBackgroundHydrationApplyFlushDelayMs: readNumber(merged, 'sessionListBackgroundHydrationApplyFlushDelayMs', { min: 0, max: 1_000 }) ?? defaults.sessionListBackgroundHydrationApplyFlushDelayMs,
         initialMessageDecryptBatchSize: readNumber(merged, 'initialMessageDecryptBatchSize', { min: 1, max: 1_000 }) ?? defaults.initialMessageDecryptBatchSize,

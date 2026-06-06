@@ -172,6 +172,51 @@ function makeRenderable(
 }
 
 describe('sessions domain: renderable patches', () => {
+    it('merges append-page renderables without removing existing list rows omitted from the page', async () => {
+        mockSessionsDomainBoundaries();
+
+        const { syncPerformanceTelemetry: telemetry } = await import('../../runtime/syncPerformanceTelemetry');
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain);
+
+        const existing = makeRenderable({ id: 's_existing', createdAt: 10, active: false });
+        const appended = makeRenderable({ id: 's_appended', createdAt: 5, active: false });
+        domain.replaceSessionListRenderables([existing]);
+        const storedExisting = get().sessionListRenderables.s_existing;
+        const initialViewData = get().sessionListViewData;
+        telemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        telemetry.reset();
+
+        domain.mergeSessionListRenderables([appended]);
+
+        expect(get().sessionListRenderables.s_existing).toBe(storedExisting);
+        expect(get().sessionListRenderables.s_appended).toEqual(expect.objectContaining({
+            id: appended.id,
+            createdAt: appended.createdAt,
+        }));
+        expect(get().sessionListViewData).not.toBe(initialViewData);
+        const sessionItems = (get().sessionListViewData ?? []).filter(
+            (item: SessionListViewItem): item is Extract<SessionListViewItem, { type: 'session' }> => item.type === 'session',
+        );
+        expect(sessionItems.map((item: Extract<SessionListViewItem, { type: 'session' }>) => item.session.id)).toEqual([
+            's_existing',
+            's_appended',
+        ]);
+        const events = telemetry.snapshot().events;
+        expect(events.some((event) => event.name === 'sync.store.sessions.renderables.replace')).toBe(false);
+        expect(events.find((event) => event.name === 'sync.store.sessions.renderables.merge')?.fields).toEqual(expect.objectContaining({
+            incoming: 1,
+            previous: 1,
+            changed: 1,
+            removed: 0,
+            listRebuild: 1,
+        }));
+    });
+
     it('preserves stale decrypted metadata during placeholder replacements', async () => {
         mockSessionsDomainBoundaries();
 

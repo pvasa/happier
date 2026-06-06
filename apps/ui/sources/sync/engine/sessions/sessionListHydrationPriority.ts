@@ -22,6 +22,7 @@ type SessionListHydrationPriorityParams<Row extends SessionListHydrationPriority
 export type OrderedSessionListHydrationRows<Row extends SessionListHydrationPriorityRow> = Readonly<{
     rows: Row[];
     counts: SessionListHydrationPriorityCounts;
+    reasonById: ReadonlyMap<string, SessionListHydrationPriorityReason>;
 }>;
 
 function normalizeSessionIds(values: ReadonlySet<string> | readonly string[] | undefined): string[] {
@@ -40,6 +41,8 @@ function normalizeSessionIds(values: ReadonlySet<string> | readonly string[] | u
 
 function appendRowsById<Row extends SessionListHydrationPriorityRow>(params: Readonly<{
     ids: readonly string[];
+    reason: SessionListHydrationPriorityReason;
+    reasonById: Map<string, SessionListHydrationPriorityReason>;
     rowById: ReadonlyMap<string, Row>;
     assignedIds: Set<string>;
     out: Row[];
@@ -50,6 +53,7 @@ function appendRowsById<Row extends SessionListHydrationPriorityRow>(params: Rea
         const row = params.rowById.get(id);
         if (!row) continue;
         params.assignedIds.add(id);
+        params.reasonById.set(row.id, params.reason);
         params.out.push(row);
         added += 1;
     }
@@ -70,27 +74,36 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
     };
     const rowById = new Map(params.rows.map((row) => [row.id, row]));
     const assignedIds = new Set<string>();
+    const reasonById = new Map<string, SessionListHydrationPriorityReason>();
     const orderedRows: Row[] = [];
     counts.required = appendRowsById({
         ids: normalizeSessionIds(params.requiredSessionIds),
+        reason: 'required',
+        reasonById,
         rowById,
         assignedIds,
         out: orderedRows,
     });
     counts.route = appendRowsById({
         ids: normalizeSessionIds(params.routeSessionIds),
+        reason: 'route',
+        reasonById,
         rowById,
         assignedIds,
         out: orderedRows,
     });
     counts.active = appendRowsById({
         ids: normalizeSessionIds(params.activeSessionIds),
+        reason: 'active',
+        reasonById,
         rowById,
         assignedIds,
         out: orderedRows,
     });
     counts.priority = appendRowsById({
         ids: normalizeSessionIds(params.prioritySessionIds),
+        reason: 'priority',
+        reasonById,
         rowById,
         assignedIds,
         out: orderedRows,
@@ -99,6 +112,7 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
     for (const row of params.rows) {
         if (!row.active || assignedIds.has(row.id)) continue;
         assignedIds.add(row.id);
+        reasonById.set(row.id, 'active');
         orderedRows.push(row);
         counts.active += 1;
     }
@@ -111,12 +125,14 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
         if (assignedIds.has(row.id)) continue;
         if (counts.eager < eagerHydrationCount) {
             assignedIds.add(row.id);
+            reasonById.set(row.id, 'eager');
             orderedRows.push(row);
             counts.eager += 1;
             continue;
         }
         if (counts.background < maxBackgroundHydrationRows) {
             assignedIds.add(row.id);
+            reasonById.set(row.id, 'background');
             orderedRows.push(row);
             counts.background += 1;
         } else {
@@ -124,5 +140,5 @@ export function orderRowsForSessionListHydration<Row extends SessionListHydratio
         }
     }
 
-    return { rows: orderedRows, counts };
+    return { rows: orderedRows, counts, reasonById };
 }

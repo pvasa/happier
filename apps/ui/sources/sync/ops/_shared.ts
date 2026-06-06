@@ -1,6 +1,6 @@
 import {
     SPAWN_SESSION_ERROR_CODES,
-    isConnectedServiceResumeUnreachableSpawnErrorDetail,
+    normalizeSpawnSessionErrorDetail as normalizeProtocolSpawnSessionErrorDetail,
     type SpawnSessionErrorCode,
     type SpawnSessionErrorDetail,
     type SpawnSessionResult,
@@ -21,7 +21,7 @@ function isSpawnSessionErrorCode(value: unknown): value is SpawnSessionErrorCode
  * shapes are dropped so the UI never reacts to a detail it cannot interpret (D2: additive + safe).
  */
 function normalizeSpawnSessionErrorDetail(value: unknown): SpawnSessionErrorDetail | undefined {
-    return isConnectedServiceResumeUnreachableSpawnErrorDetail(value) ? value : undefined;
+    return normalizeProtocolSpawnSessionErrorDetail(value);
 }
 
 function buildSpawnSessionErrorResult(params: Readonly<{

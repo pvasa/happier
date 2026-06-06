@@ -4,7 +4,7 @@ import type { Message } from '@/sync/domains/messages/messageTypes';
 import type { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import type { SessionTurnsProjectionV1 } from '@happier-dev/protocol';
 
-import { resolveTranscriptRollbackActions } from './rollbackUiSupport';
+import { readSessionRollbackRangesV1, resolveTranscriptRollbackActions } from './rollbackUiSupport';
 
 function createActiveSession(params: Readonly<{
     metadata: Metadata;
@@ -52,7 +52,53 @@ function agentTextMessage(id: string, seq: number, text: string): Message {
     };
 }
 
+describe('readSessionRollbackRangesV1', () => {
+    it('reuses the empty rollback range list when no valid ranges are present', () => {
+        const first = readSessionRollbackRangesV1(null);
+        const second = readSessionRollbackRangesV1({});
+        const third = readSessionRollbackRangesV1({
+            sessionRollbackRangesV1: {
+                v: 1,
+                updatedAt: 1,
+                ranges: [{ target: { type: 'latest_turn' }, startSeqInclusive: 4, endSeqInclusive: 3, rolledBackAt: 1 }],
+            },
+        });
+
+        expect(first).toEqual([]);
+        expect(second).toBe(first);
+        expect(third).toBe(first);
+    });
+});
+
 describe('resolveTranscriptRollbackActions', () => {
+    it('reuses the empty rollback action map when rollback is unavailable', () => {
+        const session = createActiveSession({
+            metadata: {
+                path: '/workspace',
+                host: 'localhost',
+                flavor: 'claude',
+            },
+        });
+        const messagesById: Record<string, Message> = {
+            u1: userTextMessage('u1', 1, 'initial prompt'),
+        };
+        const first = resolveTranscriptRollbackActions({
+            session,
+            messageIdsOldestFirst: ['u1'],
+            messagesById,
+            rollbackRanges: [],
+        });
+        const second = resolveTranscriptRollbackActions({
+            session: { ...session, activeAt: 2 },
+            messageIdsOldestFirst: ['u1'],
+            messagesById,
+            rollbackRanges: [],
+        });
+
+        expect(first).toEqual({});
+        expect(second).toBe(first);
+    });
+
     it('exposes rollback-to-point only on completed turn-start user messages', () => {
         const session = createActiveSession({
             metadata: {

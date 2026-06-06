@@ -75,6 +75,7 @@ type BackgroundHydrationAttribution = {
     maxScheduleWaitMs: number;
     rowWorkMs: number;
     yieldMs: number;
+    gateWaitMs: number;
     decryptRowMs: number;
     applyEnqueueMs: number;
     finalFlushMs: number;
@@ -397,6 +398,10 @@ function countBackgroundRows(totalRows: number, requiredRows: number): number {
     return Math.max(0, totalRows - Math.max(0, requiredRows));
 }
 
+function isDeferrableHydrationReason(reason: string | undefined): boolean {
+    return reason === 'eager' || reason === 'background';
+}
+
 function createBackgroundHydrationAttribution(): BackgroundHydrationAttribution {
     return {
         startedRows: 0,
@@ -409,6 +414,7 @@ function createBackgroundHydrationAttribution(): BackgroundHydrationAttribution 
         maxScheduleWaitMs: 0,
         rowWorkMs: 0,
         yieldMs: 0,
+        gateWaitMs: 0,
         decryptRowMs: 0,
         applyEnqueueMs: 0,
         finalFlushMs: 0,
@@ -417,7 +423,7 @@ function createBackgroundHydrationAttribution(): BackgroundHydrationAttribution 
 
 function addBackgroundHydrationDuration(
     attribution: BackgroundHydrationAttribution,
-    key: 'scheduleWaitMs' | 'rowWorkMs' | 'yieldMs' | 'decryptRowMs' | 'applyEnqueueMs' | 'finalFlushMs',
+    key: 'scheduleWaitMs' | 'rowWorkMs' | 'yieldMs' | 'gateWaitMs' | 'decryptRowMs' | 'applyEnqueueMs' | 'finalFlushMs',
     durationMs: number,
 ): void {
     const safeDurationMs = Math.max(0, Number.isFinite(durationMs) ? durationMs : 0);
@@ -433,12 +439,14 @@ function recordBackgroundHydrationAttribution(params: Readonly<{
     requiredRows: number;
     backgroundRows: number;
     concurrencyLimit: number;
+    yieldEveryRows: number;
     applyBatchSize: number;
     applyFlushDelayMs: number;
     attribution: BackgroundHydrationAttribution;
 }>): void {
     const wallMs = Math.max(0, nowMs() - params.startedAtMs);
     const measuredWorkMs = params.attribution.yieldMs
+        + params.attribution.gateWaitMs
         + params.attribution.decryptRowMs
         + params.attribution.applyEnqueueMs
         + params.attribution.finalFlushMs;
@@ -447,6 +455,7 @@ function recordBackgroundHydrationAttribution(params: Readonly<{
         requiredRows: params.requiredRows,
         backgroundRows: params.backgroundRows,
         concurrencyLimit: params.concurrencyLimit,
+        yieldEveryRows: params.yieldEveryRows,
         applyBatchSize: params.applyBatchSize,
         applyFlushDelayMs: params.applyFlushDelayMs,
         startedRows: params.attribution.startedRows,
@@ -459,6 +468,7 @@ function recordBackgroundHydrationAttribution(params: Readonly<{
         maxScheduleWaitMs: params.attribution.maxScheduleWaitMs,
         rowWorkMs: params.attribution.rowWorkMs,
         yieldMs: params.attribution.yieldMs,
+        gateWaitMs: params.attribution.gateWaitMs,
         decryptRowMs: params.attribution.decryptRowMs,
         applyEnqueueMs: params.attribution.applyEnqueueMs,
         finalFlushMs: params.attribution.finalFlushMs,
@@ -1057,6 +1067,8 @@ export async function fetchAndApplySessions(params: {
     sessionListBackgroundHydrationConcurrencyLimit?: number;
     sessionListBackgroundHydrationMaxRows?: number;
     sessionListBackgroundHydrationYieldDelayMs?: number;
+    sessionListBackgroundHydrationYieldEveryRows?: number;
+    sessionListBackgroundHydrationGate?: () => Promise<void>;
     sessionListBackgroundHydrationApplyBatchSize?: number;
     sessionListBackgroundHydrationApplyFlushDelayMs?: number;
     sessionListBackgroundHydrationYield?: () => Promise<void>;
@@ -1077,6 +1089,7 @@ export async function fetchAndApplySessions(params: {
     const seenSessionIds = new Set<string>();
     const concurrencyLimit = Math.max(1, Math.trunc(params.sessionListHydrationConcurrencyLimit ?? 4));
     const backgroundHydrationConcurrencyLimit = Math.max(1, Math.trunc(params.sessionListBackgroundHydrationConcurrencyLimit ?? 1));
+    const backgroundHydrationYieldEveryRows = Math.max(1, Math.trunc(params.sessionListBackgroundHydrationYieldEveryRows ?? 1));
     const backgroundHydrationApplyBatchSize = Math.max(1, Math.trunc(params.sessionListBackgroundHydrationApplyBatchSize ?? 1));
     const backgroundHydrationApplyFlushDelayMs = Math.max(0, Math.trunc(params.sessionListBackgroundHydrationApplyFlushDelayMs ?? 16));
     const backgroundHydrationYield = params.sessionListBackgroundHydrationYield
@@ -1405,6 +1418,7 @@ export async function fetchAndApplySessions(params: {
                     sessions: rowsNeedingHydration.length,
                     concurrencyLimit: backgroundHydrationConcurrencyLimit,
                     yieldDelayMs: params.sessionListBackgroundHydrationYieldDelayMs ?? 0,
+                    yieldEveryRows: backgroundHydrationYieldEveryRows,
                     applyBatchSize: backgroundHydrationApplyBatchSize,
                     applyFlushDelayMs: backgroundHydrationApplyFlushDelayMs,
                     requiredRows: requiredRowsNeedingHydration.length,
@@ -1414,6 +1428,15 @@ export async function fetchAndApplySessions(params: {
                 async () => {
                     const backgroundHydrationStartedAtMs = nowMs();
                     const taskQueuedAtMs = backgroundHydrationStartedAtMs;
+                    let backgroundRowsSinceLastYield = backgroundHydrationYieldEveryRows;
+                    const shouldYieldBeforeBackgroundRow = (): boolean => {
+                        if (backgroundRowsSinceLastYield < backgroundHydrationYieldEveryRows) return false;
+                        backgroundRowsSinceLastYield = 0;
+                        return true;
+                    };
+                    const markBackgroundRowProcessed = (): void => {
+                        backgroundRowsSinceLastYield += 1;
+                    };
                     const results = await runTasksWithLimit(
                         rowsNeedingHydration.map((row) => async () => {
                             const taskStartedAtMs = nowMs();
@@ -1425,6 +1448,8 @@ export async function fetchAndApplySessions(params: {
                             hydrationAttribution.startedRows += 1;
                             const rowStartedAtMs = taskStartedAtMs;
                             const isRequiredHydrationRow = pendingRequiredHydrationIds.has(row.id);
+                            const hydrationReason = hydrationPriority.reasonById.get(row.id);
+                            const shouldGateHydrationRow = !isRequiredHydrationRow && isDeferrableHydrationReason(hydrationReason);
                             return syncPerformanceTelemetry.measureAsync(
                                 'sync.sessions.snapshot.hydrationRow',
                                 {
@@ -1440,7 +1465,29 @@ export async function fetchAndApplySessions(params: {
                                             markRequiredHydrationResult(row, null);
                                             return null;
                                         }
-                                        if (!isRequiredHydrationRow) {
+                                        if (shouldGateHydrationRow && params.sessionListBackgroundHydrationGate) {
+                                            const gateStartedAtMs = nowMs();
+                                            await syncPerformanceTelemetry.measureAsync(
+                                                'sync.sessions.snapshot.hydrationGate',
+                                                {
+                                                    rows: 1,
+                                                    eagerRows: hydrationReason === 'eager' ? 1 : 0,
+                                                    backgroundRows: hydrationReason === 'background' ? 1 : 0,
+                                                },
+                                                params.sessionListBackgroundHydrationGate,
+                                            );
+                                            addBackgroundHydrationDuration(
+                                                hydrationAttribution,
+                                                'gateWaitMs',
+                                                nowMs() - gateStartedAtMs,
+                                            );
+                                        }
+                                        if (!shouldContinue()) {
+                                            hydrationAttribution.cancelledRows += 1;
+                                            markRequiredHydrationResult(row, null);
+                                            return null;
+                                        }
+                                        if (!isRequiredHydrationRow && shouldYieldBeforeBackgroundRow()) {
                                             const yieldStartedAtMs = nowMs();
                                             await syncPerformanceTelemetry.measureAsync(
                                                 'sync.sessions.snapshot.hydrationYield',
@@ -1529,6 +1576,9 @@ export async function fetchAndApplySessions(params: {
                                         }
                                         throw error;
                                     } finally {
+                                        if (!isRequiredHydrationRow) {
+                                            markBackgroundRowProcessed();
+                                        }
                                         hydrationAttribution.completedRows += 1;
                                         addBackgroundHydrationDuration(
                                             hydrationAttribution,
@@ -1568,6 +1618,7 @@ export async function fetchAndApplySessions(params: {
                         requiredRows: requiredRowsNeedingHydration.length,
                         backgroundRows: countBackgroundRows(rowsNeedingHydration.length, requiredRowsNeedingHydration.length),
                         concurrencyLimit: backgroundHydrationConcurrencyLimit,
+                        yieldEveryRows: backgroundHydrationYieldEveryRows,
                         applyBatchSize: backgroundHydrationApplyBatchSize,
                         applyFlushDelayMs: backgroundHydrationApplyFlushDelayMs,
                         attribution: hydrationAttribution,

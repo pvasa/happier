@@ -60,6 +60,20 @@ function createWorkingRenderable(overrides: Partial<SessionListRenderableSession
     };
 }
 
+const serverProfiles = vi.hoisted(() => ({
+    activeServerId: 'server_1',
+    profiles: [] as Array<{
+        id: string;
+        name: string;
+        serverUrl: string;
+        serverIdentityId: string | null;
+        legacyServerIds: string[];
+        createdAt: number;
+        updatedAt: number;
+        lastUsedAt: number;
+    }>,
+}));
+
 function readPromotedSession(data: readonly SessionListViewItem[] | null): Extract<SessionListViewItem, { type: 'session' }> | null {
     return (data ?? []).find((item): item is Extract<SessionListViewItem, { type: 'session' }> =>
         item.type === 'session' && item.session.id === 's1'
@@ -73,6 +87,17 @@ async function createHarness(params: Readonly<{
 }>) {
     const activeServerId = params.activeServerId ?? 'server_1';
     const sessionServerId = params.sessionServerId ?? activeServerId;
+    serverProfiles.activeServerId = activeServerId;
+    serverProfiles.profiles = Array.from(new Set([activeServerId, sessionServerId])).map((serverId) => ({
+        id: serverId,
+        name: serverId === 'server_1' ? 'Server One' : `Server ${serverId}`,
+        serverUrl: 'http://server.test',
+        serverIdentityId: null,
+        legacyServerIds: [],
+        createdAt: 1,
+        updatedAt: 1,
+        lastUsedAt: 1,
+    }));
     vi.doMock('../../domains/server/serverRuntime', () => ({
         getActiveServerSnapshot: vi.fn(() => ({
             serverId: activeServerId,
@@ -80,16 +105,20 @@ async function createHarness(params: Readonly<{
             generation: 1,
         })),
     }));
-    vi.doMock('../../domains/server/serverProfiles', () => ({
-        getServerProfileById: vi.fn((serverId: string) => ({
-            id: serverId,
-            name: serverId === 'server_1' ? 'Server One' : `Server ${serverId}`,
-            serverUrl: 'http://server.test',
-            createdAt: 1,
-            updatedAt: 1,
-            lastUsedAt: 1,
-        })),
-    }));
+    vi.doMock('../../domains/server/serverProfiles', async (importOriginal) => {
+        const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+        return createServerProfilesModuleMock({
+            importOriginal,
+            overrides: {
+                getActiveServerSnapshot: vi.fn(() => ({
+                    serverId: serverProfiles.activeServerId,
+                    serverUrl: 'http://server.test',
+                    generation: 1,
+                })),
+                listServerProfiles: vi.fn(() => serverProfiles.profiles),
+            },
+        });
+    });
 
     const { createMessagesDomain } = await import('./messages');
     const { buildSessionListViewDataWithServerScope } = await import('../buildSessionListViewDataWithServerScope');

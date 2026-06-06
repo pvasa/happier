@@ -84,9 +84,15 @@ function mockConcurrentSessionCacheDeps() {
         isLegacyAuthCredentials: (credentials: unknown) =>
             Boolean(credentials && typeof credentials === 'object' && typeof (credentials as { secret?: unknown }).secret === 'string'),
     }));
-    vi.doMock('@/sync/domains/server/serverProfiles', () => ({
-        listServerProfiles: () => listServerProfilesSpy(),
-    }));
+    vi.doMock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+        const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+        return createServerProfilesModuleMock({
+            importOriginal,
+            overrides: {
+                listServerProfiles: () => listServerProfilesSpy(),
+            },
+        });
+    });
     vi.doMock('@/sync/domains/server/serverRuntime', () => ({
         getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
         subscribeActiveServer: () => () => {},

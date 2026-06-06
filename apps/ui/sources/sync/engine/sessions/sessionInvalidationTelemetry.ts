@@ -3,12 +3,14 @@ import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetr
 export type SessionInvalidationTelemetryReason =
     | 'socketNewSession'
     | 'socketPendingChangedMissingSession'
+    | 'socketUpdateSessionMissingVisible'
     | 'socketUpdateSessionMissingUnpatchable'
     | 'socketSharingChanged';
 
 const REASON_FIELD_BY_REASON: Readonly<Record<SessionInvalidationTelemetryReason, string>> = {
     socketNewSession: 'reason_socketNewSession',
     socketPendingChangedMissingSession: 'reason_socketPendingChangedMissingSession',
+    socketUpdateSessionMissingVisible: 'reason_socketUpdateSessionMissingVisible',
     socketUpdateSessionMissingUnpatchable: 'reason_socketUpdateSessionMissingUnpatchable',
     socketSharingChanged: 'reason_socketSharingChanged',
 };

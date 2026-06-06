@@ -17,7 +17,20 @@ describe('loadSyncTuning', () => {
         expect(tuning.sessionSocketApplyCoalescingWindowMs).toBeLessThanOrEqual(32);
         expect(tuning.sessionSocketApplyCoalescingMaxBatchSize).toBeGreaterThan(1);
         expect(tuning.sessionListEagerHydrationCount).toBeLessThanOrEqual(4);
-        expect(tuning.sessionListAppendEagerHydrationCount).toBe(0);
+        expect(tuning.sessionMessagesPageSize).toBe(150);
+        expect(tuning.transcriptOlderLoadCooldownMs).toBeGreaterThanOrEqual(2000);
+        expect(tuning.transcriptOlderLoadCooldownMs).toBeLessThanOrEqual(2500);
+        expect(tuning.sessionListAppendEagerHydrationCount).toBe(50);
+        expect(tuning.sessionListBackgroundHydrationApplyBatchSize).toBeGreaterThan(1);
+        expect(tuning.sessionListBackgroundHydrationApplyBatchSize).toBeLessThanOrEqual(4);
+        expect(tuning.sessionListBackgroundHydrationApplyFlushDelayMs).toBeGreaterThanOrEqual(
+            tuning.sessionListBackgroundHydrationYieldDelayMs * tuning.sessionListBackgroundHydrationApplyBatchSize,
+        );
+        expect(tuning.sessionListBackgroundHydrationApplyFlushDelayMs).toBeLessThanOrEqual(96);
+        expect(tuning.sessionListBackgroundHydrationYieldEveryRows).toBeGreaterThan(1);
+        expect(tuning.sessionListBackgroundHydrationYieldEveryRows).toBeLessThanOrEqual(
+            tuning.sessionListBackgroundHydrationApplyBatchSize,
+        );
         expect(tuning.sessionRealtimeProjectionMode).toBe('enabled');
         expect(tuning.sidechainDemandHydrationConcurrencyLimit).toBeGreaterThan(0);
         expect(tuning.sidechainDemandHydrationConcurrencyLimit).toBeLessThanOrEqual(4);
@@ -27,8 +40,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptViewportAnchorCaptureDebounceMs).toBe(200);
         expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(1);
         expect(tuning.transcriptViewportAnchorRenderRetryMax).toBe(4);
-        expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBeGreaterThan(0);
-        expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBeLessThanOrEqual(64);
+        expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBe(16);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBeGreaterThan(0);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBeLessThanOrEqual(10_000);
         expect(tuning.transcriptForkedSnapshotCacheMaxSessions).toBe(64);
@@ -60,6 +72,7 @@ describe('loadSyncTuning', () => {
                     transcriptWebInitialPinStabilizeMs: 3000,
                     transcriptWebInitialPinRetryMilestonesMs: [25, 75, 125],
                     transcriptOlderLoadSpinnerDelayMs: 123,
+                    transcriptOlderLoadCooldownMs: 321,
                     transcriptViewportAnchorCaptureDebounceMs: 125,
                     transcriptViewportAnchorOlderLookupMaxLoads: 2,
                     transcriptViewportAnchorRenderRetryMax: 3,
@@ -79,9 +92,11 @@ describe('loadSyncTuning', () => {
                     resumeConcurrencyLimit: 5,
                     sessionListBackgroundHydrationConcurrencyLimit: 2,
                     sessionListAppendEagerHydrationCount: 2,
+                    sessionMessagesPageSize: 42,
                     sessionListBackgroundHydrationMaxRows: 11,
                     sessionViewportHydrationPriorityMaxRows: 6,
                     sessionListBackgroundHydrationYieldDelayMs: 3,
+                    sessionListBackgroundHydrationYieldEveryRows: 3,
                     sessionListBackgroundHydrationApplyBatchSize: 4,
                     sessionListBackgroundHydrationApplyFlushDelayMs: 17,
                     initialMessageDecryptBatchSize: 7,
@@ -131,6 +146,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptWebInitialPinStabilizeMs).toBe(3000);
         expect(tuning.transcriptWebInitialPinRetryMilestonesMs).toEqual([25, 75, 125]);
         expect(tuning.transcriptOlderLoadSpinnerDelayMs).toBe(123);
+        expect(tuning.transcriptOlderLoadCooldownMs).toBe(321);
         expect(tuning.transcriptViewportAnchorCaptureDebounceMs).toBe(125);
         expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(2);
         expect(tuning.transcriptViewportAnchorRenderRetryMax).toBe(3);
@@ -150,9 +166,11 @@ describe('loadSyncTuning', () => {
         expect(tuning.resumeConcurrencyLimit).toBe(5);
         expect(tuning.sessionListBackgroundHydrationConcurrencyLimit).toBe(2);
         expect(tuning.sessionListAppendEagerHydrationCount).toBe(2);
+        expect(tuning.sessionMessagesPageSize).toBe(42);
         expect(tuning).toMatchObject({ sessionListBackgroundHydrationMaxRows: 11 });
         expect(tuning.sessionViewportHydrationPriorityMaxRows).toBe(6);
         expect(tuning.sessionListBackgroundHydrationYieldDelayMs).toBe(3);
+        expect(tuning.sessionListBackgroundHydrationYieldEveryRows).toBe(3);
         expect(tuning.sessionListBackgroundHydrationApplyBatchSize).toBe(4);
         expect(tuning.sessionListBackgroundHydrationApplyFlushDelayMs).toBe(17);
         expect(tuning.initialMessageDecryptBatchSize).toBe(7);
@@ -234,6 +252,7 @@ describe('loadSyncTuning', () => {
                     transcriptWebInitialPinStabilizeMs: -1,
                     transcriptWebInitialPinRetryMilestonesMs: [25, -1, 125],
                     transcriptOlderLoadSpinnerDelayMs: -1,
+                    transcriptOlderLoadCooldownMs: -1,
                     transcriptViewportAnchorCaptureDebounceMs: -1,
                     transcriptViewportAnchorOlderLookupMaxLoads: -1,
                     transcriptViewportAnchorRenderRetryMax: -1,
@@ -252,9 +271,11 @@ describe('loadSyncTuning', () => {
                     resumeConcurrencyLimit: 0,
                     sessionListBackgroundHydrationConcurrencyLimit: 0,
                     sessionListAppendEagerHydrationCount: -1,
+                    sessionMessagesPageSize: 0,
                     sessionListBackgroundHydrationMaxRows: -1,
                     sessionViewportHydrationPriorityMaxRows: -1,
                     sessionListBackgroundHydrationYieldDelayMs: -1,
+                    sessionListBackgroundHydrationYieldEveryRows: 0,
                     sessionListBackgroundHydrationApplyBatchSize: 0,
                     sessionListBackgroundHydrationApplyFlushDelayMs: -1,
                     messageDecryptBatchSize: 0,
@@ -303,7 +324,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptViewportAnchorCaptureDebounceMs).toBe(200);
         expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(1);
         expect(tuning.transcriptViewportAnchorRenderRetryMax).toBe(4);
-        expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBeGreaterThan(0);
+        expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBe(16);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBeGreaterThan(0);
         expect(tuning.transcriptForkedSnapshotCacheMaxSessions).toBe(64);
         expect(tuning.transcriptFlashListDrawDistance).toBe(0);
@@ -315,15 +336,21 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptNativeMvcpOnlyMode).toBe(false);
         expect(tuning.transcriptInitialFillBudgetMs).toBeGreaterThanOrEqual(250);
         expect(tuning.transcriptInitialFillMaxNoProgressLoads).toBeGreaterThan(0);
+        expect(tuning.transcriptOlderLoadCooldownMs).toBeGreaterThanOrEqual(100);
         expect(tuning.resumeConcurrencyLimit).toBeGreaterThan(0);
         expect(tuning.sessionListBackgroundHydrationConcurrencyLimit).toBeGreaterThan(0);
-        expect(tuning.sessionListAppendEagerHydrationCount).toBe(0);
+        expect(tuning.sessionListAppendEagerHydrationCount).toBe(50);
+        expect(tuning.sessionMessagesPageSize).toBe(150);
         expect(tuning).toMatchObject({ sessionListBackgroundHydrationMaxRows: 0 });
         expect(tuning.sessionViewportHydrationPriorityMaxRows).toBeGreaterThan(0);
         expect(tuning.sessionViewportHydrationPriorityMaxRows).toBeLessThanOrEqual(8);
         expect(tuning.sessionListBackgroundHydrationYieldDelayMs).toBeGreaterThanOrEqual(8);
-        expect(tuning.sessionListBackgroundHydrationApplyBatchSize).toBe(1);
-        expect(tuning.sessionListBackgroundHydrationApplyFlushDelayMs).toBeGreaterThanOrEqual(0);
+        expect(tuning.sessionListBackgroundHydrationYieldEveryRows).toBeGreaterThan(1);
+        expect(tuning.sessionListBackgroundHydrationApplyBatchSize).toBeGreaterThan(1);
+        expect(tuning.sessionListBackgroundHydrationApplyBatchSize).toBeLessThanOrEqual(4);
+        expect(tuning.sessionListBackgroundHydrationApplyFlushDelayMs).toBeGreaterThanOrEqual(
+            tuning.sessionListBackgroundHydrationYieldDelayMs * tuning.sessionListBackgroundHydrationApplyBatchSize,
+        );
         expect(tuning.initialMessageDecryptBatchSize).toBeGreaterThan(0);
         expect(tuning.messageDecryptBatchSize).toBeGreaterThan(0);
         expect(tuning.messageDecryptYieldDelayMs).toBeGreaterThanOrEqual(0);

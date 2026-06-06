@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
@@ -7,6 +7,25 @@ import { useSessionListViewData, useSessionListViewDataByServerId, useSessionRec
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListViewItem } from '@/sync/domains/session/listing/sessionListViewData';
+
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
+    const equivalentIds = new Set(['profile-a', 'legacy-a', 'identity-a']);
+    return {
+        ...original,
+        areServerProfileIdentifiersEquivalent: (leftRaw: string | null | undefined, rightRaw: string | null | undefined) => {
+            const left = String(leftRaw ?? '').trim();
+            const right = String(rightRaw ?? '').trim();
+            if (!left || !right) return false;
+            if (left === right) return true;
+            return equivalentIds.has(left) && equivalentIds.has(right);
+        },
+        resolveServerProfileScopeIdForIdentifier: (idRaw: string | null | undefined) => {
+            const id = String(idRaw ?? '').trim();
+            return equivalentIds.has(id) ? 'identity-a' : id;
+        },
+    };
+});
 
 afterEach(() => {
     standardCleanup();
@@ -395,6 +414,55 @@ describe('useSessions', () => {
             expect(hook.getCurrent()).toBe(first);
             expect(Object.keys(hook.getCurrent())).toEqual(['server-a']);
             expect(renderCount).toBe(1);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it('selects session list cache by equivalent server profile identifiers', async () => {
+        const previousState = storage.getState();
+        try {
+            const selectedData: SessionListViewItem[] = [
+                {
+                    type: 'session',
+                    section: 'inactive',
+                    groupKey: 'server:identity-a:day:2026-05-04',
+                    groupKind: 'date',
+                    serverId: 'identity-a',
+                    session: {
+                        id: 's-a',
+                        seq: 1,
+                        createdAt: 10,
+                        updatedAt: 20,
+                        active: false,
+                        activeAt: 0,
+                        archivedAt: null,
+                        metadataVersion: 1,
+                        agentStateVersion: 1,
+                        metadata: { path: '/repo-a', host: 'localhost', machineId: 'm-1' },
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                    },
+                },
+            ];
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessionListViewDataByServerId: {
+                    'identity-a': selectedData,
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionListViewDataByServerId(['profile-a']), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(Object.keys(hook.getCurrent())).toEqual(['identity-a']);
+            expect(hook.getCurrent()['identity-a']).toBe(selectedData);
 
             await hook.unmount();
         } finally {

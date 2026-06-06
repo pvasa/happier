@@ -447,6 +447,25 @@ describe('sync session viewport', () => {
         }
     });
 
+    it('includes route-visible session surfaces in hydration priority before read lifecycle mounts', async () => {
+        const { sync } = await import('./sync');
+        const { clearActiveViewingSessionsForServerScopeReset, markSessionHidden, markSessionVisible } = await import(
+            '@/sync/domains/session/activeViewingSession'
+        );
+
+        clearActiveViewingSessionsForServerScopeReset();
+        markSessionVisible('session-route-visible', 'server-a');
+        try {
+            const priorityIds = (
+                sync as unknown as { getPrioritizedSessionHydrationIds: () => string[] }
+            ).getPrioritizedSessionHydrationIds();
+
+            expect(priorityIds[0]).toBe('session-route-visible');
+        } finally {
+            markSessionHidden('session-route-visible', 'server-a');
+        }
+    });
+
     it('clears active viewing hydration priority when server-scoped runtime state resets', async () => {
         const { sync } = await import('./sync');
         const { getActiveViewingSessionId, setActiveViewingSessionId } = await import(
