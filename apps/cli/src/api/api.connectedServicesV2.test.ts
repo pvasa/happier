@@ -337,4 +337,85 @@ describe('ApiClient connected services v2', () => {
       ],
     });
   });
+
+  it('shares concurrent and fresh connected-service profile list requests', async () => {
+    let resolveProfiles: ((value: unknown) => void) | undefined;
+    mockGet.mockReturnValueOnce(new Promise((resolve) => {
+      resolveProfiles = resolve;
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    const first = api.listConnectedServiceProfiles({ serviceId: 'openai-codex' });
+    const second = api.listConnectedServiceProfiles({ serviceId: 'openai-codex' });
+
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    resolveProfiles?.({
+      status: 200,
+      data: {
+        serviceId: 'openai-codex',
+        profiles: [{ profileId: 'connected', status: 'connected', kind: 'oauth' }],
+      },
+    });
+
+    await expect(first).resolves.toMatchObject({
+      serviceId: 'openai-codex',
+      profiles: [expect.objectContaining({ profileId: 'connected' })],
+    });
+    await expect(second).resolves.toMatchObject({
+      serviceId: 'openai-codex',
+      profiles: [expect.objectContaining({ profileId: 'connected' })],
+    });
+
+    mockGet.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        serviceId: 'openai-codex',
+        profiles: [{ profileId: 'fresh', status: 'connected', kind: 'oauth' }],
+      },
+    });
+
+    await expect(api.listConnectedServiceProfiles({ serviceId: 'openai-codex' })).resolves.toMatchObject({
+      serviceId: 'openai-codex',
+      profiles: [expect.objectContaining({ profileId: 'connected' })],
+    });
+    expect(mockGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates connected-service profile list cache after sealed credential writes', async () => {
+    mockGet
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          serviceId: 'openai-codex',
+          profiles: [{ profileId: 'old', status: 'connected', kind: 'oauth' }],
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          serviceId: 'openai-codex',
+          profiles: [{ profileId: 'new', status: 'connected', kind: 'oauth' }],
+        },
+      });
+    mockPost.mockResolvedValue({ status: 200, data: { success: true } });
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    await expect(api.listConnectedServiceProfiles({ serviceId: 'openai-codex' })).resolves.toMatchObject({
+      profiles: [expect.objectContaining({ profileId: 'old' })],
+    });
+
+    await api.registerConnectedServiceCredentialSealed({
+      serviceId: 'openai-codex',
+      profileId: 'new',
+      sealed: { format: 'account_scoped_v1', ciphertext: 'c2VhbGVk' },
+    });
+
+    await expect(api.listConnectedServiceProfiles({ serviceId: 'openai-codex' })).resolves.toMatchObject({
+      profiles: [expect.objectContaining({ profileId: 'new' })],
+    });
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
 });

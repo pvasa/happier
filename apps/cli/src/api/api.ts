@@ -23,7 +23,7 @@ import { resolveMachineEncryptionContext, resolveSessionEncryptionContext } from
 import { resolveLoopbackHttpUrl } from './client/loopbackUrl';
 import { openSessionDataEncryptionKey } from './client/openSessionDataEncryptionKey';
 import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
-import { HttpStatusError } from './client/httpStatusError';
+import { createHttpStatusError, HttpStatusError } from './client/httpStatusError';
 import {
   ConnectedServiceQuotaApiError,
   createConnectedServiceQuotaApiError,
@@ -63,6 +63,38 @@ import { createScmConnectedAccountCredentialResolver } from './connectedServices
 import { resolveMachineRegistrationIdentity } from '@/daemon/machineIdentity/resolveMachineRegistrationIdentity';
 import { consumeMachineReplacementCandidateAfterRegistration } from '@/daemon/machineIdentity/machineReplacementCandidates';
 
+const CONNECTED_SERVICE_PROFILE_LIST_CACHE_TTL_MS = 10_000;
+const ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS = 10_000;
+
+type ConnectedServiceProfileListResult = Readonly<{
+  serviceId: ConnectedServiceId;
+  profiles: Array<{
+    profileId: string;
+    status: ConnectedServiceCredentialHealthStatusV1;
+    kind?: 'oauth' | 'token' | null;
+    providerEmail?: string | null;
+    providerAccountId?: string | null;
+    expiresAt?: number | null;
+    lastUsedAt?: number | null;
+  }>;
+}>;
+
+type ConnectedServiceProfileListCacheEntry = Readonly<
+  | { kind: 'value'; expiresAtMs: number; value: ConnectedServiceProfileListResult }
+  | { kind: 'in_flight'; promise: Promise<ConnectedServiceProfileListResult> }
+>;
+
+type AccountEncryptionModeCacheEntry = Readonly<
+  | { kind: 'value'; expiresAtMs: number; value: 'e2ee' | 'plain' }
+  | { kind: 'in_flight'; promise: Promise<'e2ee' | 'plain' | 'unknown'> }
+>;
+
+type ConnectedServiceAuthGroupRuntimeStatePatchInput = Readonly<{
+  expectedGeneration?: ConnectedServiceAuthGroupRuntimeStatePatchRequestV1['expectedGeneration'];
+  state?: ConnectedServiceAuthGroupRuntimeStatePatchRequestV1['state'];
+  memberStates?: ReadonlyArray<Readonly<ConnectedServiceAuthGroupRuntimeStatePatchRequestV1['memberStates'][number]>>;
+}>;
+
 export class MachineIdConflictError extends Error {
   readonly machineId: string;
   constructor(machineId: string) {
@@ -78,6 +110,24 @@ export class MachineRevokedError extends Error {
     super(`Machine revoked: ${machineId} is no longer valid on this relay and must be rotated`);
     this.name = 'MachineRevokedError';
     this.machineId = machineId;
+  }
+}
+
+export class MachineReplacedError extends Error {
+  readonly machineId: string;
+  readonly replacementMachineId: string | null;
+  constructor(machineId: string, replacementMachineId?: string | null) {
+    const replacement = typeof replacementMachineId === 'string' && replacementMachineId.trim()
+      ? replacementMachineId.trim()
+      : null;
+    super(
+      replacement
+        ? `Machine replaced: ${machineId} was replaced by ${replacement}`
+        : `Machine replaced: ${machineId} is no longer the current machine identity on this relay`,
+    );
+    this.name = 'MachineReplacedError';
+    this.machineId = machineId;
+    this.replacementMachineId = replacement;
   }
 }
 
@@ -116,19 +166,34 @@ export class ConnectedServiceCredentialUnsupportedFormatError extends Error {
 export function isMachineIdConflictError(error: unknown): error is MachineIdConflictError {
   // Avoid relying on `instanceof`: bundlers / test runners may load multiple module instances.
   if (!error || typeof error !== 'object') return false;
-  const maybe = error as any;
+  const maybe = error as Record<string, unknown>;
   return maybe.name === 'MachineIdConflictError' && typeof maybe.machineId === 'string' && maybe.machineId.length > 0;
 }
 
 export function isMachineRevokedError(error: unknown): error is MachineRevokedError {
   if (!error || typeof error !== 'object') return false;
-  const maybe = error as any;
+  const maybe = error as Record<string, unknown>;
   return maybe.name === 'MachineRevokedError' && typeof maybe.machineId === 'string' && maybe.machineId.length > 0;
+}
+
+export function isMachineReplacedError(error: unknown): error is MachineReplacedError {
+  if (!error || typeof error !== 'object') return false;
+  const maybe = error as Record<string, unknown>;
+  return (
+    maybe.name === 'MachineReplacedError'
+    && typeof maybe.machineId === 'string'
+    && maybe.machineId.length > 0
+    && (
+      maybe.replacementMachineId === null
+      || typeof maybe.replacementMachineId === 'string'
+      || maybe.replacementMachineId === undefined
+    )
+  );
 }
 
 export function isMachineContentPublicKeyMismatchError(error: unknown): error is MachineContentPublicKeyMismatchError {
   if (!error || typeof error !== 'object') return false;
-  const maybe = error as any;
+  const maybe = error as Record<string, unknown>;
   return (
     maybe.name === 'MachineContentPublicKeyMismatchError'
     && typeof maybe.machineId === 'string'
@@ -168,6 +233,30 @@ function doesMachineRowPointAtReplacement(data: unknown, expectedReplacementMach
   return machine?.replacedByMachineId === expectedReplacementMachineId;
 }
 
+function readReplacementMachineId(value: unknown): string | null {
+  const object = readRecord(value);
+  const candidate = object?.replacedByMachineId ?? object?.replacementMachineId;
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
+
+function readResponseErrorCode(value: unknown): string | null {
+  const error = readRecord(value)?.error;
+  return typeof error === 'string' ? error : null;
+}
+
+function isMachineReplacedResponseErrorCode(error: string | null): boolean {
+  return error === 'machine_replaced' || error === 'machine-replaced';
+}
+
+function assertConnectedServiceExpectedGeneration(value: unknown, operation: string): number {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value;
+  throw new Error(`${operation} requires expectedGeneration`);
+}
+
 export class ApiClient {
 
   static async create(credential: Credentials) {
@@ -176,10 +265,20 @@ export class ApiClient {
 
   private readonly credential: Credentials;
   private readonly pushClient: PushNotificationClient;
+  private readonly connectedServiceProfileListCache = new Map<ConnectedServiceId, ConnectedServiceProfileListCacheEntry>();
+  private accountEncryptionModeCache: AccountEncryptionModeCacheEntry | null = null;
 
   private constructor(credential: Credentials) {
     this.credential = credential
     this.pushClient = new PushNotificationClient(credential.token, resolveServerHttpBaseUrl())
+  }
+
+  private invalidateConnectedServiceProfileListCache(serviceId?: ConnectedServiceId): void {
+    if (serviceId) {
+      this.connectedServiceProfileListCache.delete(serviceId);
+      return;
+    }
+    this.connectedServiceProfileListCache.clear();
   }
 
   /**
@@ -408,6 +507,10 @@ export class ApiClient {
 
 
       const raw = response.data.machine;
+      const replacementMachineId = readReplacementMachineId(raw);
+      if (replacementMachineId) {
+        throw new MachineReplacedError(opts.machineId, replacementMachineId);
+      }
       logger.debug(`[API] Machine ${opts.machineId} registered/updated with server`);
       const didAcknowledgeReplacement = registrationIdentity?.replacesMachineId
         ? didServerAcknowledgeMachineReplacement(response.data, registrationIdentity.replacesMachineId)
@@ -444,7 +547,7 @@ export class ApiClient {
       if (
         axios.isAxiosError(error)
         && error.response?.status === 409
-        && (error.response.data as any)?.error === 'machine_id_conflict'
+        && readResponseErrorCode(error.response.data) === 'machine_id_conflict'
       ) {
         throw new MachineIdConflictError(opts.machineId);
       }
@@ -452,13 +555,21 @@ export class ApiClient {
       if (
         axios.isAxiosError(error)
         && error.response?.status === 410
-        && (error.response.data as any)?.error === 'machine_revoked'
+        && readResponseErrorCode(error.response.data) === 'machine_revoked'
       ) {
         throw new MachineRevokedError(opts.machineId);
       }
 
+      if (
+        axios.isAxiosError(error)
+        && error.response?.status === 410
+        && isMachineReplacedResponseErrorCode(readResponseErrorCode(error.response.data))
+      ) {
+        throw new MachineReplacedError(opts.machineId, readReplacementMachineId(error.response.data));
+      }
+
       if (axios.isAxiosError(error) && error.response?.status === 400) {
-        const body = error.response.data as any;
+        const body = readRecord(error.response.data);
         const reason = typeof body?.reason === 'string' ? body.reason : '';
         if (body?.error === 'invalid-params' && reason === 'content_public_key_mismatch') {
           // Do not retry: this indicates a credentials/key mismatch, not a transient network failure.
@@ -622,6 +733,7 @@ export class ApiClient {
         throw new Error(`Server returned status ${response.status}`);
       }
 
+      this.invalidateConnectedServiceProfileListCache(params.serviceId);
       logger.debug(`[API] Connected service credential registered`, {
         serviceId: params.serviceId,
         profileId: params.profileId,
@@ -714,18 +826,34 @@ export class ApiClient {
 
   async listConnectedServiceProfiles(params: {
     serviceId: ConnectedServiceId;
-  }): Promise<{
+  }): Promise<ConnectedServiceProfileListResult> {
+    const cached = this.connectedServiceProfileListCache.get(params.serviceId);
+    const nowMs = Date.now();
+    if (cached?.kind === 'value' && cached.expiresAtMs > nowMs) return cached.value;
+    if (cached?.kind === 'in_flight') return await cached.promise;
+
+    const promise = this.fetchConnectedServiceProfilesFromServer(params);
+    this.connectedServiceProfileListCache.set(params.serviceId, { kind: 'in_flight', promise });
+    try {
+      const value = await promise;
+      this.connectedServiceProfileListCache.set(params.serviceId, {
+        kind: 'value',
+        value,
+        expiresAtMs: Date.now() + CONNECTED_SERVICE_PROFILE_LIST_CACHE_TTL_MS,
+      });
+      return value;
+    } catch (error) {
+      const latest = this.connectedServiceProfileListCache.get(params.serviceId);
+      if (latest?.kind === 'in_flight' && latest.promise === promise) {
+        this.connectedServiceProfileListCache.delete(params.serviceId);
+      }
+      throw error;
+    }
+  }
+
+  private async fetchConnectedServiceProfilesFromServer(params: {
     serviceId: ConnectedServiceId;
-    profiles: Array<{
-      profileId: string;
-      status: ConnectedServiceCredentialHealthStatusV1;
-      kind?: 'oauth' | 'token' | null;
-      providerEmail?: string | null;
-      providerAccountId?: string | null;
-      expiresAt?: number | null;
-      lastUsedAt?: number | null;
-    }>;
-  }> {
+  }): Promise<ConnectedServiceProfileListResult> {
     const serverUrl = resolveServerHttpBaseUrl();
     const serviceId = encodeURIComponent(params.serviceId);
     const response = await axios.get(
@@ -807,6 +935,12 @@ export class ApiClient {
       const status = axios.isAxiosError(error) ? error.response?.status : undefined;
       if (status === 404) return null;
       logger.debug(`[API] [ERROR] Failed to get connected service auth group:`, serializeAxiosErrorForLog(error));
+      if (typeof status === 'number' && Number.isFinite(status)) {
+        throw createHttpStatusError(
+          status,
+          `Failed to get connected service auth group (${status})`,
+        );
+      }
       throw new Error(`Failed to get connected service auth group: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -815,8 +949,12 @@ export class ApiClient {
     serviceId: ConnectedServiceId;
     groupId: string;
     activeProfileId: string;
-    expectedGeneration?: number;
+    expectedGeneration: number;
   }): Promise<ConnectedServiceAuthGroupV1> {
+    const expectedGeneration = assertConnectedServiceExpectedGeneration(
+      params.expectedGeneration,
+      'Connected service auth group active-profile update',
+    );
     const serverUrl = resolveServerHttpBaseUrl();
     const serviceId = encodeURIComponent(params.serviceId);
     const groupId = encodeURIComponent(params.groupId);
@@ -826,7 +964,7 @@ export class ApiClient {
         `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}/active-profile`,
         {
           profileId: params.activeProfileId,
-          ...(params.expectedGeneration === undefined ? {} : { expectedGeneration: params.expectedGeneration }),
+          expectedGeneration,
         },
         {
           headers: {
@@ -859,7 +997,18 @@ export class ApiClient {
   async updateConnectedServiceAuthGroupRuntimeState(params: {
     serviceId: ConnectedServiceId;
     groupId: string;
-  } & ConnectedServiceAuthGroupRuntimeStatePatchRequestV1): Promise<ConnectedServiceAuthGroupV1> {
+  } & ConnectedServiceAuthGroupRuntimeStatePatchInput): Promise<ConnectedServiceAuthGroupV1> {
+    const memberStates = params.memberStates ?? [];
+    const mutatesRuntimeState = params.state !== undefined || memberStates.length > 0;
+    const expectedGeneration = params.expectedGeneration === undefined
+      ? undefined
+      : assertConnectedServiceExpectedGeneration(
+        params.expectedGeneration,
+        'Connected service auth group runtime-state update',
+      );
+    if (mutatesRuntimeState && expectedGeneration === undefined) {
+      throw new Error('Connected service auth group runtime-state update requires expectedGeneration');
+    }
     const serverUrl = resolveServerHttpBaseUrl();
     const serviceId = encodeURIComponent(params.serviceId);
     const groupId = encodeURIComponent(params.groupId);
@@ -868,9 +1017,9 @@ export class ApiClient {
       const response = await axios.patch(
         `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}/runtime-state`,
         {
-          ...(params.expectedGeneration === undefined ? {} : { expectedGeneration: params.expectedGeneration }),
+          ...(expectedGeneration === undefined ? {} : { expectedGeneration }),
           ...(params.state === undefined ? {} : { state: params.state }),
-          memberStates: params.memberStates ?? [],
+          memberStates,
         },
         {
           headers: {
@@ -900,7 +1049,184 @@ export class ApiClient {
     }
   }
 
+  async createConnectedServiceAuthGroupMember(params: {
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    profileId: string;
+    priority?: number;
+    enabled?: boolean;
+    expectedGeneration: number;
+  }): Promise<ConnectedServiceAuthGroupV1> {
+    const expectedGeneration = assertConnectedServiceExpectedGeneration(
+      params.expectedGeneration,
+      'Connected service auth group member create',
+    );
+    const serverUrl = resolveServerHttpBaseUrl();
+    const serviceId = encodeURIComponent(params.serviceId);
+    const groupId = encodeURIComponent(params.groupId);
+
+    try {
+      const response = await axios.post(
+        `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}/members`,
+        {
+          profileId: params.profileId,
+          ...(params.priority === undefined ? {} : { priority: params.priority }),
+          ...(params.enabled === undefined ? {} : { enabled: params.enabled }),
+          expectedGeneration,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        },
+      );
+      if (response.status !== 200) {
+        throw new Error(`Server returned status ${response.status}`);
+      }
+      const parsed = ConnectedServiceAuthGroupResponseV1Schema.safeParse(response.data);
+      if (!parsed.success) {
+        throw new Error('Invalid connected service auth group response');
+      }
+      return parsed.data.group;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
+        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
+          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
+        }
+      }
+      logger.debug(`[API] [ERROR] Failed to create connected service auth group member:`, serializeAxiosErrorForLog(error));
+      throw new Error(`Failed to create connected service auth group member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async updateConnectedServiceAuthGroupMember(params: {
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    profileId: string;
+    priority?: number;
+    enabled?: boolean;
+    expectedGeneration: number;
+  }): Promise<ConnectedServiceAuthGroupV1> {
+    const expectedGeneration = assertConnectedServiceExpectedGeneration(
+      params.expectedGeneration,
+      'Connected service auth group member update',
+    );
+    const serverUrl = resolveServerHttpBaseUrl();
+    const serviceId = encodeURIComponent(params.serviceId);
+    const groupId = encodeURIComponent(params.groupId);
+    const profileId = encodeURIComponent(params.profileId);
+
+    try {
+      const response = await axios.patch(
+        `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}/members/${profileId}`,
+        {
+          ...(params.priority === undefined ? {} : { priority: params.priority }),
+          ...(params.enabled === undefined ? {} : { enabled: params.enabled }),
+          expectedGeneration,
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        },
+      );
+      if (response.status !== 200) {
+        throw new Error(`Server returned status ${response.status}`);
+      }
+      const parsed = ConnectedServiceAuthGroupResponseV1Schema.safeParse(response.data);
+      if (!parsed.success) {
+        throw new Error('Invalid connected service auth group response');
+      }
+      return parsed.data.group;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
+        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
+          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
+        }
+      }
+      logger.debug(`[API] [ERROR] Failed to update connected service auth group member:`, serializeAxiosErrorForLog(error));
+      throw new Error(`Failed to update connected service auth group member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async deleteConnectedServiceAuthGroupMember(params: {
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    profileId: string;
+    expectedGeneration: number;
+  }): Promise<ConnectedServiceAuthGroupV1> {
+    const expectedGeneration = assertConnectedServiceExpectedGeneration(
+      params.expectedGeneration,
+      'Connected service auth group member delete',
+    );
+    const serverUrl = resolveServerHttpBaseUrl();
+    const serviceId = encodeURIComponent(params.serviceId);
+    const groupId = encodeURIComponent(params.groupId);
+    const profileId = encodeURIComponent(params.profileId);
+
+    try {
+      const response = await axios.delete(
+        `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}/members/${profileId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.credential.token}`,
+            'Content-Type': 'application/json',
+          },
+          params: { expectedGeneration },
+          timeout: 5000,
+        },
+      );
+      if (response.status !== 200) {
+        throw new Error(`Server returned status ${response.status}`);
+      }
+      const parsed = ConnectedServiceAuthGroupResponseV1Schema.safeParse(response.data);
+      if (!parsed.success) {
+        throw new Error('Invalid connected service auth group response');
+      }
+      return parsed.data.group;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
+        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
+          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
+        }
+      }
+      logger.debug(`[API] [ERROR] Failed to delete connected service auth group member:`, serializeAxiosErrorForLog(error));
+      throw new Error(`Failed to delete connected service auth group member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   async getAccountEncryptionMode(): Promise<'e2ee' | 'plain' | 'unknown'> {
+    const cached = this.accountEncryptionModeCache;
+    const nowMs = Date.now();
+    if (cached?.kind === 'value' && cached.expiresAtMs > nowMs) return cached.value;
+    if (cached?.kind === 'in_flight') return await cached.promise;
+
+    const promise = this.fetchAccountEncryptionModeFromServer();
+    this.accountEncryptionModeCache = { kind: 'in_flight', promise };
+    try {
+      const value = await promise;
+      if (this.accountEncryptionModeCache?.kind === 'in_flight' && this.accountEncryptionModeCache.promise === promise) {
+        this.accountEncryptionModeCache = value === 'unknown'
+          ? null
+          : { kind: 'value', value, expiresAtMs: Date.now() + ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS };
+      }
+      return value;
+    } catch (error) {
+      if (this.accountEncryptionModeCache?.kind === 'in_flight' && this.accountEncryptionModeCache.promise === promise) {
+        this.accountEncryptionModeCache = null;
+      }
+      throw error;
+    }
+  }
+
+  private async fetchAccountEncryptionModeFromServer(): Promise<'e2ee' | 'plain' | 'unknown'> {
     const serverUrl = resolveServerHttpBaseUrl();
     try {
       const response = await axios.get(
@@ -1026,6 +1352,7 @@ export class ApiClient {
         throw new Error(`Server returned status ${response.status}`);
       }
 
+      this.invalidateConnectedServiceProfileListCache(params.serviceId);
       logger.debug(`[API] Connected service credential registered (v3)`, {
         serviceId: params.serviceId,
         profileId: params.profileId,
@@ -1070,6 +1397,7 @@ export class ApiClient {
       if (response.status !== 200) {
         throw new Error(`Server returned status ${response.status}`);
       }
+      this.invalidateConnectedServiceProfileListCache(params.serviceId);
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);

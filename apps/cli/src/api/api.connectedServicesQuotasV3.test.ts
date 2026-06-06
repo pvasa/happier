@@ -77,6 +77,28 @@ describe('ApiClient connected services quotas v3', () => {
     );
   });
 
+  it('shares concurrent and fresh account encryption mode lookups', async () => {
+    let resolveMode: ((value: unknown) => void) | undefined;
+    mockGet.mockReturnValueOnce(new Promise((resolve) => {
+      resolveMode = resolve;
+    }));
+
+    const api = await ApiClient.create(createTestCredentials());
+
+    const first = api.getAccountEncryptionMode();
+    const second = api.getAccountEncryptionMode();
+
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    resolveMode?.({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
+
+    await expect(first).resolves.toBe('plain');
+    await expect(second).resolves.toBe('plain');
+
+    await expect(api.getAccountEncryptionMode()).resolves.toBe('plain');
+    expect(mockGet).toHaveBeenCalledTimes(1);
+  });
+
   it('returns unknown when account encryption mode lookup fails', async () => {
     mockGet.mockRejectedValue(createAxiosResponseError({
       status: 503,

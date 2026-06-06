@@ -2,16 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import axios from 'axios';
 
+import { readHttpStatus } from './client/httpStatusError';
+import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
 import { ApiClient } from './api';
 
-const { mockGet, mockPatch, mockPost } = vi.hoisted(() => ({
+const { mockDelete, mockGet, mockPatch, mockPost } = vi.hoisted(() => ({
+  mockDelete: vi.fn(),
   mockGet: vi.fn(),
   mockPatch: vi.fn(),
   mockPost: vi.fn(),
 }));
 
 vi.mock('axios', () => ({
-  default: { get: mockGet, isAxiosError: vi.fn(() => true), patch: mockPatch, post: mockPost },
+  default: { delete: mockDelete, get: mockGet, isAxiosError: vi.fn(() => true), patch: mockPatch, post: mockPost },
   isAxiosError: vi.fn(() => true),
 }));
 
@@ -53,6 +56,7 @@ function authGroupResponse(activeProfileId: string, generation: number) {
 
 describe('ApiClient connected service auth groups v3', () => {
   beforeEach(() => {
+    mockDelete.mockReset();
     mockGet.mockReset();
     mockPatch.mockReset();
     mockPost.mockReset();
@@ -145,6 +149,176 @@ describe('ApiClient connected service auth groups v3', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
       }),
     );
+  });
+
+  it('rejects active-profile updates that omit expectedGeneration before sending a request', async () => {
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    await expect(api.updateConnectedServiceAuthGroupActiveProfile({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      activeProfileId: 'backup',
+    } as never)).rejects.toThrow('expectedGeneration');
+
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('allows neutral runtime-state patches without expectedGeneration', async () => {
+    mockPatch.mockResolvedValue({ status: 200, data: authGroupResponse('primary', 1) });
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    const group = await api.updateConnectedServiceAuthGroupRuntimeState({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      memberStates: [],
+    } as never);
+
+    expect(group.activeProfileId).toBe('primary');
+    expect(axios.patch).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/groups/main/runtime-state'),
+      { memberStates: [] },
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+      }),
+    );
+  });
+
+  it('rejects mutating runtime-state updates that omit expectedGeneration before sending a request', async () => {
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    await expect(api.updateConnectedServiceAuthGroupRuntimeState({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      state: { status: 'error' },
+      memberStates: [],
+    } as never)).rejects.toThrow('expectedGeneration');
+    await expect(api.updateConnectedServiceAuthGroupRuntimeState({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      memberStates: [{ profileId: 'primary', state: { lastFailureKind: 'usage_limit' } }],
+    } as never)).rejects.toThrow('expectedGeneration');
+
+    expect(axios.patch).not.toHaveBeenCalled();
+  });
+
+  it('sends auth group member mutations through CAS contracts', async () => {
+    mockPost.mockResolvedValue({ status: 200, data: authGroupResponse('primary', 2) });
+    mockPatch.mockResolvedValue({ status: 200, data: authGroupResponse('primary', 3) });
+    mockDelete.mockResolvedValue({ status: 200, data: authGroupResponse('primary', 4) });
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    await api.createConnectedServiceAuthGroupMember({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+      priority: 50,
+      expectedGeneration: 1,
+    });
+    await api.updateConnectedServiceAuthGroupMember({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+      enabled: false,
+      expectedGeneration: 2,
+    });
+    await api.deleteConnectedServiceAuthGroupMember({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+      expectedGeneration: 3,
+    });
+
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/groups/main/members'),
+      { profileId: 'backup', priority: 50, expectedGeneration: 1 },
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+      }),
+    );
+    expect(axios.patch).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/groups/main/members/backup'),
+      { enabled: false, expectedGeneration: 2 },
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+      }),
+    );
+    expect(axios.delete).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/groups/main/members/backup'),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+        params: { expectedGeneration: 3 },
+      }),
+    );
+  });
+
+  it('rejects auth group member mutations that omit expectedGeneration before sending a request', async () => {
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    await expect(api.createConnectedServiceAuthGroupMember({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+    } as never)).rejects.toThrow('expectedGeneration');
+    await expect(api.updateConnectedServiceAuthGroupMember({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+      enabled: false,
+    } as never)).rejects.toThrow('expectedGeneration');
+    await expect(api.deleteConnectedServiceAuthGroupMember({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+    } as never)).rejects.toThrow('expectedGeneration');
+
+    expect(axios.post).not.toHaveBeenCalled();
+    expect(axios.patch).not.toHaveBeenCalled();
+    expect(axios.delete).not.toHaveBeenCalled();
+  });
+
+  it('preserves transient auth-group HTTP failures so runtime-auth recovery can retry them', async () => {
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 503',
+      response: {
+        status: 503,
+        data: { error: 'temporarily_unavailable' },
+      },
+    });
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    let caught: unknown;
+    try {
+      await api.getConnectedServiceAuthGroup({ serviceId: 'openai-codex', groupId: 'main' });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(readHttpStatus(caught)).toBe(503);
+    expect(classifyDaemonServerWorkError(caught)).toMatchObject({
+      kind: 'server_error',
+      retryable: true,
+      statusCode: 503,
+    });
   });
 });
 

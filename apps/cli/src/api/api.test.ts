@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ApiClient } from './api';
+import { ApiClient, MachineReplacedError } from './api';
 import axios from 'axios';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -679,6 +679,42 @@ describe('Api server error handling', () => {
             expect(connectionState.isOffline()).toBe(false);
             expect(output.text()).not.toContain('server unreachable');
             output.restore();
+        });
+
+        it('throws a stable error when the server returns an already-replaced machine row', async () => {
+            connectionState.reset();
+
+            mockPost.mockResolvedValue({
+                data: {
+                    machine: {
+                        id: 'test-machine',
+                        metadata: testMachineMetadata,
+                        metadataVersion: 1,
+                        daemonState: null,
+                        daemonStateVersion: 0,
+                        replacedByMachineId: 'replacement-machine',
+                    },
+                },
+            });
+
+            await expect(
+                api.getOrCreateMachine({
+                    machineId: 'test-machine',
+                    metadata: testMachineMetadata,
+                }),
+            ).rejects.toMatchObject({
+                name: 'MachineReplacedError',
+                machineId: 'test-machine',
+                replacementMachineId: 'replacement-machine',
+            });
+
+            await expect(
+                api.getOrCreateMachine({
+                    machineId: 'test-machine',
+                    metadata: testMachineMetadata,
+                }),
+            ).rejects.toBeInstanceOf(MachineReplacedError);
+            expect(connectionState.isOffline()).toBe(false);
         });
 
         it('throws a stable error when server rejects machine registration due to content public key mismatch', async () => {
