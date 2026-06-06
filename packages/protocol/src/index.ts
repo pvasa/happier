@@ -170,6 +170,26 @@ export {
 } from './backendSurface/declarationV1.js';
 
 export {
+  CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS,
+  CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES,
+  CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEY_LENGTH,
+  CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_DIAGNOSTIC_KEYS,
+  CONNECTED_SERVICE_UX_DIAGNOSTIC_MAX_STRING_LENGTH,
+  ConnectedServiceUxDiagnosticCodeV1Schema,
+  ConnectedServiceUxDiagnosticFailurePhaseV1Schema,
+  ConnectedServiceUxDiagnosticSourceV1Schema,
+  ConnectedServiceUxDiagnosticSuggestedActionV1Schema,
+  ConnectedServiceUxDiagnosticV1Schema,
+  isConnectedServiceUxDiagnosticV1,
+  normalizeConnectedServiceUxDiagnosticV1,
+  type ConnectedServiceUxDiagnosticCodeV1,
+  type ConnectedServiceUxDiagnosticFailurePhaseV1,
+  type ConnectedServiceUxDiagnosticSourceV1,
+  type ConnectedServiceUxDiagnosticSuggestedActionV1,
+  type ConnectedServiceUxDiagnosticV1,
+} from './connect/connectedServiceUxDiagnostics.js';
+
+export {
   AcpBackendAuthConfigV1Schema,
   AcpBackendCapabilitiesV1Schema,
   AcpBackendDefinitionV1Schema,
@@ -336,7 +356,10 @@ export {
   type ConnectedServiceErrorCode,
 } from './connect/connectedServiceErrors.js';
 
-export { buildConnectedServiceCredentialRecord } from './connect/buildConnectedServiceCredentialRecord.js';
+export {
+  buildConnectedServiceCredentialRecord,
+  type ConnectedServiceOauthCredentialRawMetadata,
+} from './connect/buildConnectedServiceCredentialRecord.js';
 
 export { parseBooleanEnv, parseOptionalBooleanEnv } from './env/parseBooleanEnv.js';
 export type { ServerRetentionCapabilities } from './features/payload/capabilities/serverRetentionCapabilities.js';
@@ -536,12 +559,22 @@ export {
 } from './sessionMedia/index.js';
 export {
   TranscriptRawRecordV1Schema,
+  ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema,
+  ConnectedServiceSwitchAttemptedContinuityModeV1Schema,
+  ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
+  ConnectedServiceSwitchAttemptOutcomeV1Schema,
+  ConnectedServiceSwitchAttemptSessionAdoptionV1Schema,
   TranscriptRawAgentContentV1Schema,
   TranscriptRawAgentEventV1Schema,
   TranscriptRawAgentRecordV1Schema,
   TranscriptRawUsageDataV1Schema,
   createTranscriptRawRecordV1Schema,
   type TranscriptRawRecordV1,
+  type ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1,
+  type ConnectedServiceSwitchAttemptedContinuityModeV1,
+  type ConnectedServiceSwitchAttemptOutcomeActionV1,
+  type ConnectedServiceSwitchAttemptOutcomeV1,
+  type ConnectedServiceSwitchAttemptSessionAdoptionV1,
   type TranscriptRawAgentContentV1,
   type TranscriptRawAgentEventV1,
   type TranscriptRawAgentRecordV1,
@@ -696,9 +729,13 @@ export {
 export {
   SPAWN_SESSION_ERROR_CODES,
   SPAWN_SESSION_ERROR_DETAIL_KINDS,
+  isConnectedServiceUxDiagnosticSpawnErrorDetail,
   isConnectedServiceResumeUnreachableSpawnErrorDetail,
+  isSpawnSessionErrorDetail,
+  normalizeSpawnSessionErrorDetail,
   type ConnectedServiceResumeUnreachableContinuityCode,
   type ConnectedServiceResumeUnreachableSpawnErrorDetail,
+  type ConnectedServiceUxDiagnosticSpawnErrorDetail,
   type SpawnSessionErrorCode,
   type SpawnSessionErrorDetail,
   type SpawnSessionErrorDetailKind,
@@ -802,6 +839,7 @@ export {
   EphemeralUpdateSchema,
   DirectSessionTranscriptDeltaEphemeralSchema,
   MessageAckResponseSchema,
+  SessionEndAckResponseSchema,
   SessionBroadcastBodySchema,
   SessionBroadcastContainerSchema,
   UpdateBodySchema,
@@ -811,6 +849,7 @@ export {
   type EphemeralUpdate,
   type DirectSessionTranscriptDeltaEphemeral,
   type MessageAckResponse,
+  type SessionEndAckResponse,
   type SessionBroadcastBody,
   type SessionBroadcastContainer,
   type UpdateBody,
