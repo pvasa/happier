@@ -44,6 +44,23 @@ describe('transcriptItemHeightCache', () => {
         expect(cache.get(differentWidth)).toBeUndefined();
     });
 
+    it('keeps signature keys unambiguous when fields contain separators', () => {
+        const first = stableSignature({
+            itemId: 'message:1',
+            kind: 'agent|text',
+            structuralKey: 'revision:1|width:400',
+        });
+        const second = stableSignature({
+            itemId: 'message',
+            kind: '1|agent',
+            structuralKey: 'text:revision|1:width:400',
+        });
+
+        expect(buildTranscriptItemHeightSignatureKey(first)).not.toBe(
+            buildTranscriptItemHeightSignatureKey(second),
+        );
+    });
+
     it('ignores stale message structural signatures', () => {
         const cache = createTestTranscriptItemHeightCache();
         const previous = stableSignature({ structuralKey: 'message-1:content-v1' });

@@ -135,6 +135,50 @@ describe('transcript viewport controller', () => {
         expect(controller.getMode()).toBe('jump-to-bottom');
     });
 
+    it('resolves fallback bottom pins through the controller', () => {
+        const controller = createTranscriptViewportController();
+
+        const command = controller.resolve({
+            type: 'pin-bottom',
+            sessionId: 'session-a',
+            reason: 'jump-to-seq',
+            mode: 'jump-to-seq',
+            animated: false,
+        });
+
+        expect(command).toEqual({
+            kind: 'pin-bottom',
+            sessionId: 'session-a',
+            reason: 'jump-to-seq',
+            mode: 'jump-to-seq',
+            animated: false,
+        });
+        expect(controller.getMode()).toBe('jump-to-seq');
+    });
+
+    it('resolves dynamic-height scroll-offset fallbacks through the controller', () => {
+        const controller = createTranscriptViewportController();
+
+        const command = controller.resolve({
+            type: 'scroll-offset',
+            sessionId: 'session-a',
+            reason: 'entry-restore',
+            mode: 'restore-distance',
+            offsetY: 123.8,
+            animated: true,
+        });
+
+        expect(command).toEqual({
+            kind: 'scroll-offset',
+            sessionId: 'session-a',
+            reason: 'entry-restore',
+            mode: 'restore-distance',
+            offsetY: 123,
+            animated: true,
+        });
+        expect(controller.getMode()).toBe('restore-distance');
+    });
+
     it('does not repin passive drift while user unpinned', () => {
         const controller = createTranscriptViewportController();
         controller.resolve({

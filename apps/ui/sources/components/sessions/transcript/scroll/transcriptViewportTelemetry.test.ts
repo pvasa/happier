@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const GLOBAL_KEY = '__HAPPIER_TRANSCRIPT_VIEWPORT_EVENTS__';
+const OVERRIDE_GLOBAL_KEY = '__HAPPIER_TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE__';
 
 type UnknownModule = Record<string, unknown>;
 
@@ -47,6 +48,7 @@ function buildScrollWriteEvent(overrides: Record<string, unknown> = {}) {
 describe('transcript viewport telemetry', () => {
     afterEach(() => {
         delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
+        delete (globalThis as Record<string, unknown>)[OVERRIDE_GLOBAL_KEY];
         vi.unstubAllGlobals();
     });
 
@@ -409,6 +411,64 @@ describe('transcript viewport telemetry', () => {
 
         expect(transcriptViewportTelemetry.snapshot()).toEqual({ events: [], droppedCount: 0 });
         expect((globalThis as Record<string, unknown>)[GLOBAL_KEY]).toBeUndefined();
+    });
+
+    it('keeps a dev runtime override enabled when tuning is disabled for device QA', async () => {
+        const module = await loadTelemetryModule();
+        const configureTranscriptViewportTelemetryDebugOverride = requireFunction(
+            module,
+            'configureTranscriptViewportTelemetryDebugOverride',
+        );
+        const recordTranscriptViewportTelemetryEvent = requireFunction(module, 'recordTranscriptViewportTelemetryEvent');
+        const transcriptViewportTelemetry = module.transcriptViewportTelemetry as {
+            configure: (options: { enabled: boolean; sink?: null }) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+        vi.stubGlobal('__DEV__', true);
+        transcriptViewportTelemetry.configure({ enabled: false, sink: null });
+
+        configureTranscriptViewportTelemetryDebugOverride({
+            enabled: true,
+            capacity: 16,
+        });
+        recordTranscriptViewportTelemetryEvent(buildScrollWriteEvent(), {
+            transcriptViewportTelemetryEnabled: false,
+            transcriptViewportTelemetryMaxEvents: 16,
+        });
+
+        const snapshot = transcriptViewportTelemetry.snapshot();
+        expect(snapshot.events).toHaveLength(1);
+        expect(snapshot.events[0]).toMatchObject({
+            type: 'scroll-write',
+            writer: 'web-dom-bottom',
+            reason: 'initial-open',
+        });
+        expect(typeof (globalThis as Record<string, unknown>)[GLOBAL_KEY]).toBe('function');
+
+        configureTranscriptViewportTelemetryDebugOverride(null);
+    });
+
+    it('honors a dev global override when the runtime module registry is not inspectable', async () => {
+        const module = await loadTelemetryModule();
+        const recordTranscriptViewportTelemetryEvent = requireFunction(module, 'recordTranscriptViewportTelemetryEvent');
+        const transcriptViewportTelemetry = module.transcriptViewportTelemetry as {
+            configure: (options: { enabled: boolean; sink?: null }) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+        vi.stubGlobal('__DEV__', true);
+        transcriptViewportTelemetry.configure({ enabled: false, sink: null });
+
+        (globalThis as Record<string, unknown>)[OVERRIDE_GLOBAL_KEY] = {
+            enabled: true,
+            capacity: 16,
+        };
+        recordTranscriptViewportTelemetryEvent(buildScrollWriteEvent(), {
+            transcriptViewportTelemetryEnabled: false,
+            transcriptViewportTelemetryMaxEvents: 16,
+        });
+
+        expect(transcriptViewportTelemetry.snapshot().events).toHaveLength(1);
+        expect(typeof (globalThis as Record<string, unknown>)[GLOBAL_KEY]).toBe('function');
     });
 
     it('exposes a dev getter with events and dropped count when enabled', async () => {

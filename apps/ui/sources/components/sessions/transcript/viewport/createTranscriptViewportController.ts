@@ -43,6 +43,26 @@ export function createTranscriptViewportController(): TranscriptViewportControll
                         force: true,
                         animated: true,
                     };
+                case 'pin-bottom':
+                    mode = input.mode;
+                    return {
+                        kind: 'pin-bottom',
+                        sessionId: input.sessionId,
+                        reason: input.reason,
+                        mode,
+                        ...(typeof input.force === 'boolean' ? { force: input.force } : {}),
+                        ...(typeof input.animated === 'boolean' ? { animated: input.animated } : {}),
+                    };
+                case 'scroll-offset':
+                    mode = input.mode;
+                    return {
+                        kind: 'scroll-offset',
+                        sessionId: input.sessionId,
+                        reason: input.reason,
+                        mode,
+                        offsetY: normalizeNonNegative(input.offsetY),
+                        ...(typeof input.animated === 'boolean' ? { animated: input.animated } : {}),
+                    };
                 case 'jump-to-seq':
                     mode = 'jump-to-seq';
                     return {

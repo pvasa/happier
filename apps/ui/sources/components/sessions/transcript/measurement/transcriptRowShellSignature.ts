@@ -18,6 +18,20 @@ export type TranscriptRowShellItem =
         turn: TranscriptTurn;
     };
 
+export function resolveTranscriptItemActiveThinkingMessageId(
+    item: TranscriptRowShellItem,
+    activeThinkingMessageId: string | null,
+): string | null {
+    if (!activeThinkingMessageId) return null;
+    if (item.kind === 'message') {
+        return item.messageId === activeThinkingMessageId ? activeThinkingMessageId : null;
+    }
+    if (item.kind === 'turn') {
+        return turnContainsMessageId(item.turn, activeThinkingMessageId) ? activeThinkingMessageId : null;
+    }
+    return null;
+}
+
 export function resolveTranscriptRowItemType(params: Readonly<{
     activeThinkingMessageId: string | null;
     getMessageById: (messageId: string) => Message | null;
@@ -184,6 +198,18 @@ function resolveForkContextKeyForItem(
         }
     }
     return 'fork:root';
+}
+
+function turnContainsMessageId(turn: TranscriptTurn, messageId: string): boolean {
+    if (turn.userMessageId === messageId) return true;
+    for (const content of turn.content) {
+        if (content.kind === 'message') {
+            if (content.messageId === messageId) return true;
+            continue;
+        }
+        if (content.toolMessageIds.includes(messageId)) return true;
+    }
+    return false;
 }
 
 function collectMessageIdsFromTurn(turn: TranscriptTurn): string[] {

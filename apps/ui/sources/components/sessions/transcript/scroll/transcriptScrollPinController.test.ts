@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { reduceTranscriptScrollPinState, type TranscriptScrollPinState } from './transcriptScrollPinController';
+import {
+    reduceTranscriptScrollPinState,
+    resolveTranscriptScrollPinStateUpdate,
+    type TranscriptScrollPinState,
+} from './transcriptScrollPinController';
 
 describe('reduceTranscriptScrollPinState', () => {
     it('tracks pinned/unpinned based on offset threshold', () => {
@@ -62,6 +66,30 @@ describe('reduceTranscriptScrollPinState', () => {
             enabled: true,
         });
         expect(s1.newActivityCount).toBe(1);
+    });
+
+    it('reports no update for repeated scroll events that keep the same pin state', () => {
+        const initial: TranscriptScrollPinState = {
+            isPinned: false,
+            newActivityCount: 0,
+            lastActivityKey: null,
+        };
+
+        expect(resolveTranscriptScrollPinStateUpdate(initial, {
+            type: 'scroll',
+            offsetY: 240,
+            pinnedOffsetThresholdPx: 72,
+            enabled: true,
+        })).toBeNull();
+
+        const next = resolveTranscriptScrollPinStateUpdate(initial, {
+            type: 'scroll',
+            offsetY: 0,
+            pinnedOffsetThresholdPx: 72,
+            enabled: true,
+        });
+        expect(next).not.toBeNull();
+        expect(next?.isPinned).toBe(true);
     });
 
     it('resets newActivityCount when pinned again', () => {

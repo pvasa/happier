@@ -20,6 +20,14 @@ export type TranscriptScrollPinEvent =
         type: 'resetNewActivity';
     };
 
+export function resolveTranscriptScrollPinStateUpdate(
+    state: TranscriptScrollPinState,
+    event: TranscriptScrollPinEvent,
+): TranscriptScrollPinState | null {
+    const next = reduceTranscriptScrollPinState(state, event);
+    return next === state ? null : next;
+}
+
 export function reduceTranscriptScrollPinState(
     state: TranscriptScrollPinState,
     event: TranscriptScrollPinEvent,

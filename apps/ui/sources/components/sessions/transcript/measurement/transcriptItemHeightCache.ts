@@ -38,17 +38,15 @@ export type TranscriptItemHeightCacheOptions = Readonly<{
 export function buildTranscriptItemHeightSignatureKey(
     signature: TranscriptItemHeightValiditySignature,
 ): string {
-    return JSON.stringify([
-        signature.itemId,
-        signature.kind,
-        signature.structuralKey,
-        signature.widthBucket,
-        signature.fontScaleKey,
-        signature.groupingMode,
-        signature.forkContextKey,
-        signature.expansionKey,
-        signature.rowState,
-    ]);
+    return `${signature.itemId.length}:${signature.itemId}|` +
+        `${signature.kind.length}:${signature.kind}|` +
+        `${signature.structuralKey.length}:${signature.structuralKey}|` +
+        `${signature.widthBucket.length}:${signature.widthBucket}|` +
+        `${signature.fontScaleKey.length}:${signature.fontScaleKey}|` +
+        `${signature.groupingMode.length}:${signature.groupingMode}|` +
+        `${signature.forkContextKey.length}:${signature.forkContextKey}|` +
+        `${signature.expansionKey.length}:${signature.expansionKey}|` +
+        `${signature.rowState.length}:${signature.rowState}|`;
 }
 
 export function isTranscriptItemHeightSignatureStable(

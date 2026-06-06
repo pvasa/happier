@@ -75,6 +75,22 @@ export type TranscriptViewportControllerInput =
         sessionId: string;
     }>
     | Readonly<{
+        type: 'pin-bottom';
+        sessionId: string;
+        reason: TranscriptViewportScrollReason;
+        mode: TranscriptViewportMode;
+        force?: boolean;
+        animated?: boolean;
+    }>
+    | Readonly<{
+        type: 'scroll-offset';
+        sessionId: string;
+        reason: TranscriptViewportScrollReason;
+        mode: TranscriptViewportMode;
+        offsetY: number;
+        animated?: boolean;
+    }>
+    | Readonly<{
         type: 'jump-to-seq';
         sessionId: string;
         seq: number;

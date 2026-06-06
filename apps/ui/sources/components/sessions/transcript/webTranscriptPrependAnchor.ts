@@ -109,64 +109,86 @@ function resolveTranscriptItemIdFromTestId(testId: string | null): string | null
     return itemId.length > 0 ? itemId : null;
 }
 
-function resolveClosestVisibleTestId(container: HTMLElement, matcher?: (testId: string) => boolean): string | null {
+type VisibleAnchorCandidate = Readonly<{
+    element: HTMLElement;
+    height: number;
+    testId: string;
+    top: number;
+}>;
+
+type RankedVisibleAnchorCandidate = VisibleAnchorCandidate & Readonly<{
+    distance: number;
+}>;
+
+type TrackedAnchorScan = Readonly<{
+    bestAny: RankedVisibleAnchorCandidate | null;
+    bestItem: RankedVisibleAnchorCandidate | null;
+    bestStable: RankedVisibleAnchorCandidate | null;
+    byTestId: Map<string, VisibleAnchorCandidate>;
+}>;
+
+function isStableTranscriptAnchorTestId(testId: string): boolean {
+    return testId.startsWith(TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX) ||
+        testId.startsWith(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX);
+}
+
+function isTranscriptItemAnchorTestId(testId: string): boolean {
+    return testId.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX);
+}
+
+function chooseCloserVisibleAnchor(
+    current: RankedVisibleAnchorCandidate | null,
+    candidate: RankedVisibleAnchorCandidate,
+): RankedVisibleAnchorCandidate {
+    if (current == null) return candidate;
+    if (candidate.distance < current.distance) return candidate;
+    if (candidate.distance > current.distance) return current;
+    if (candidate.height < current.height) return candidate;
+    if (candidate.height > current.height) return current;
+    return candidate.top < current.top ? candidate : current;
+}
+
+function createTrackedAnchorScan(container: HTMLElement): TrackedAnchorScan | null {
     if (typeof container.getBoundingClientRect !== 'function') return null;
     const containerRect = container.getBoundingClientRect();
     const focusOffset = resolveAnchorFocusOffsetPx(containerRect.height);
-    const nodes = container.querySelectorAll('[data-testid]');
-    let best: {
-        testId: string;
-        distance: number;
-        height: number;
-        top: number;
-    } | null = null;
+    const byTestId = new Map<string, VisibleAnchorCandidate>();
+    let bestAny: RankedVisibleAnchorCandidate | null = null;
+    let bestItem: RankedVisibleAnchorCandidate | null = null;
+    let bestStable: RankedVisibleAnchorCandidate | null = null;
 
+    const nodes = container.querySelectorAll('[data-testid]');
     for (const node of nodes) {
         if (!(node instanceof HTMLElement)) continue;
         const testId = node.getAttribute('data-testid');
         if (!testId || !resolveTrackedAnchorPrefix(testId)) continue;
-        if (matcher && !matcher(testId)) continue;
 
         const rect = node.getBoundingClientRect();
+        const top = rect.top - containerRect.top;
+        const bottom = rect.bottom - containerRect.top;
+        const height = Math.max(0, rect.height);
+        const candidate: VisibleAnchorCandidate = { element: node, height, testId, top };
+        byTestId.set(testId, candidate);
+
         const overlapTop = Math.max(rect.top, containerRect.top);
         const overlapBottom = Math.min(rect.bottom, containerRect.bottom);
         if (overlapBottom - overlapTop <= 0) continue;
 
-        const top = rect.top - containerRect.top;
-        const bottom = rect.bottom - containerRect.top;
-        const height = Math.max(0, rect.height);
         const distance =
             top <= focusOffset && bottom >= focusOffset
                 ? 0
                 : Math.min(Math.abs(focusOffset - top), Math.abs(focusOffset - bottom));
-
-        if (
-            best == null
-            || distance < best.distance
-            || (distance === best.distance && height < best.height)
-            || (distance === best.distance && height === best.height && top < best.top)
-        ) {
-            best = { testId, distance, height, top };
+        const rankedCandidate = { ...candidate, distance };
+        bestAny = chooseCloserVisibleAnchor(bestAny, rankedCandidate);
+        if (isStableTranscriptAnchorTestId(testId)) {
+            bestStable = chooseCloserVisibleAnchor(bestStable, rankedCandidate);
+        }
+        if (isTranscriptItemAnchorTestId(testId)) {
+            bestItem = chooseCloserVisibleAnchor(bestItem, rankedCandidate);
         }
     }
 
-    return best?.testId ?? null;
-}
-
-function resolveFirstVisibleAnchorTestId(container: HTMLElement): string | null {
-    return resolveClosestVisibleTestId(
-        container,
-        (testId) =>
-            testId.startsWith(TRANSCRIPT_WEB_MESSAGE_PREPEND_ANCHOR_TEST_ID_PREFIX) ||
-            testId.startsWith(TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX),
-    ) ?? resolveClosestVisibleTestId(container);
-}
-
-function resolveFirstVisibleItemAnchorTestId(container: HTMLElement): string | null {
-    return resolveClosestVisibleTestId(
-        container,
-        (testId) => testId.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX),
-    );
+    return { bestAny, bestItem, bestStable, byTestId };
 }
 
 function resolveContainingItemAnchorTestId(
@@ -186,10 +208,6 @@ function resolveContainingItemAnchorTestId(
     return null;
 }
 
-function resolvePreferredItemAnchorTestId(container: HTMLElement, anchorTestId: string | null): string | null {
-    return resolveContainingItemAnchorTestId(container, anchorTestId) ?? resolveFirstVisibleItemAnchorTestId(container);
-}
-
 function resolveViewportRestoreItemAnchorTestId(
     container: HTMLElement,
     anchor: WebTranscriptViewportAnchor,
@@ -207,29 +225,73 @@ function resolveViewportRestoreItemAnchorTestId(
     return `${TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.itemId}`;
 }
 
+function resolveContainingItemAnchorTestIdFromScan(
+    container: HTMLElement,
+    scan: TrackedAnchorScan,
+    anchorTestId: string | null,
+): string | null {
+    if (!anchorTestId) return null;
+    let current: HTMLElement | null = scan.byTestId.get(anchorTestId)?.element.parentElement ?? null;
+    while (current && current !== container) {
+        const testId = current.getAttribute('data-testid');
+        if (testId?.startsWith(TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX)) {
+            return testId;
+        }
+        current = current.parentElement;
+    }
+    return null;
+}
+
+function resolvePreferredItemAnchorTestIdFromScan(
+    container: HTMLElement,
+    scan: TrackedAnchorScan,
+    anchorTestId: string | null,
+): string | null {
+    return resolveContainingItemAnchorTestIdFromScan(container, scan, anchorTestId) ?? scan.bestItem?.testId ?? null;
+}
+
+function resolveScannedAnchorTop(scan: TrackedAnchorScan, testId: string | null): number | null {
+    if (!testId) return null;
+    const candidate = scan.byTestId.get(testId);
+    return candidate ? candidate.top : null;
+}
+
+function captureWebTranscriptAnchorSelection(container: HTMLElement): Readonly<{
+    anchorTestId: string | null;
+    anchorTop: number | null;
+    itemTestId: string | null;
+    itemTop: number | null;
+}> {
+    const scan = createTrackedAnchorScan(container);
+    if (!scan) return { anchorTestId: null, anchorTop: null, itemTestId: null, itemTop: null };
+    const anchorTestId = (scan.bestStable ?? scan.bestAny)?.testId ?? null;
+    const itemTestId = resolvePreferredItemAnchorTestIdFromScan(container, scan, anchorTestId);
+    return {
+        anchorTestId,
+        anchorTop: resolveScannedAnchorTop(scan, anchorTestId),
+        itemTestId,
+        itemTop: resolveScannedAnchorTop(scan, itemTestId),
+    };
+}
+
 export function captureWebTranscriptViewportAnchor(params: Readonly<{
     container: HTMLElement;
 }>): WebTranscriptViewportAnchor | null {
-    const anchorTestId = resolveFirstVisibleAnchorTestId(params.container);
-    if (!anchorTestId) return null;
+    const captured = captureWebTranscriptAnchorSelection(params.container);
+    if (!captured.anchorTestId) return null;
 
-    const anchorIdentity = resolveViewportAnchorKindAndMessageId(anchorTestId);
+    const anchorIdentity = resolveViewportAnchorKindAndMessageId(captured.anchorTestId);
     if (!anchorIdentity) return null;
 
-    const itemTestId = resolvePreferredItemAnchorTestId(params.container, anchorTestId);
-    const itemId = resolveTranscriptItemIdFromTestId(itemTestId);
-    if (!itemId || !itemTestId) return null;
+    const itemId = resolveTranscriptItemIdFromTestId(captured.itemTestId);
+    if (!itemId || !captured.itemTestId) return null;
 
-    const itemTop = resolveVisibleAnchorTop({
-        container: params.container,
-        anchorTestId: itemTestId,
-    });
-    if (typeof itemTop !== 'number' || !Number.isFinite(itemTop)) return null;
+    if (typeof captured.itemTop !== 'number' || !Number.isFinite(captured.itemTop)) return null;
 
     return {
         ...anchorIdentity,
         itemId,
-        itemOffsetPx: itemTop,
+        itemOffsetPx: captured.itemTop,
     };
 }
 
@@ -263,23 +325,14 @@ export function captureWebTranscriptPrependAnchor(params: Readonly<{
     userIntentAtMs: number;
     stabilizeForMs: number;
 }>): WebTranscriptPrependAnchor {
-    const anchorTestId = resolveFirstVisibleAnchorTestId(params.metrics.element);
-    const anchorTop =
-        anchorTestId != null
-            ? resolveVisibleAnchorTop({ container: params.metrics.element, anchorTestId })
-            : null;
-    const itemTestId = resolvePreferredItemAnchorTestId(params.metrics.element, anchorTestId);
-    const itemTop =
-        itemTestId != null
-            ? resolveVisibleAnchorTop({ container: params.metrics.element, anchorTestId: itemTestId })
-            : null;
+    const captured = captureWebTranscriptAnchorSelection(params.metrics.element);
 
     return {
         metrics: params.metrics,
-        anchorTestId,
-        anchorTop,
-        itemTestId,
-        itemTop,
+        anchorTestId: captured.anchorTestId,
+        anchorTop: captured.anchorTop,
+        itemTestId: captured.itemTestId,
+        itemTop: captured.itemTop,
         stabilizeForMs: Math.max(0, Math.trunc(params.stabilizeForMs)),
         userIntentAtMs: params.userIntentAtMs,
         expiresAtMs: Date.now() + Math.max(0, Math.trunc(params.stabilizeForMs)),
@@ -345,18 +398,28 @@ export function refreshWebTranscriptPrependAnchor(
 ): WebTranscriptPrependAnchor {
     const shouldRecaptureAnchor = options?.recaptureAnchor === true;
     const shouldRecaptureItem = options?.recaptureItem === true || shouldRecaptureAnchor;
-    const anchorTestId = shouldRecaptureAnchor ? resolveFirstVisibleAnchorTestId(metrics.element) : anchor.anchorTestId;
-    const anchorTop =
-        shouldRecaptureAnchor && anchorTestId != null
-            ? resolveVisibleAnchorTop({ container: metrics.element, anchorTestId })
-            : (shouldRecaptureAnchor ? null : anchor.anchorTop);
-    const itemTestId = shouldRecaptureItem
-        ? resolvePreferredItemAnchorTestId(metrics.element, anchorTestId)
-        : anchor.itemTestId;
-    const itemTop =
-        shouldRecaptureItem && itemTestId != null
-            ? resolveVisibleAnchorTop({ container: metrics.element, anchorTestId: itemTestId })
-            : (shouldRecaptureItem ? null : anchor.itemTop);
+    let anchorTestId = anchor.anchorTestId;
+    let anchorTop = anchor.anchorTop;
+    let itemTestId = anchor.itemTestId;
+    let itemTop = anchor.itemTop;
+    if (shouldRecaptureItem) {
+        const scan = createTrackedAnchorScan(metrics.element);
+        if (scan) {
+            if (shouldRecaptureAnchor) {
+                anchorTestId = (scan.bestStable ?? scan.bestAny)?.testId ?? null;
+                anchorTop = resolveScannedAnchorTop(scan, anchorTestId);
+            }
+            itemTestId = resolvePreferredItemAnchorTestIdFromScan(metrics.element, scan, anchorTestId);
+            itemTop = resolveScannedAnchorTop(scan, itemTestId);
+        } else {
+            if (shouldRecaptureAnchor) {
+                anchorTestId = null;
+                anchorTop = null;
+            }
+            itemTestId = null;
+            itemTop = null;
+        }
+    }
 
     return {
         ...anchor,

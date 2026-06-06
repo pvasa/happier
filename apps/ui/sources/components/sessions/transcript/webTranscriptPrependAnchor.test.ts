@@ -45,6 +45,7 @@ class FakeElement {
     public clientWidth = 0;
     public isConnected = true;
     public parentElement: FakeElement | null = null;
+    public querySelectorAllCount = 0;
 
     private rect: { top: number; bottom: number };
     private readonly nodesBySelector = new Map<string, FakeElement[]>();
@@ -75,6 +76,7 @@ class FakeElement {
     }
 
     querySelectorAll(selector: string) {
+        this.querySelectorAllCount += 1;
         return this.nodesBySelector.get(selector) ?? [];
     }
 
@@ -470,6 +472,86 @@ describe('webTranscriptPrependAnchor', () => {
             strategy: 'item',
         });
         expect(container.scrollTop).toBe(500);
+
+        (globalThis as any).HTMLElement = originalHTMLElement;
+    });
+
+    it('captures the prepend anchor with a single DOM scan for stable visible anchor and item offsets', () => {
+        const originalHTMLElement = (globalThis as any).HTMLElement;
+        (globalThis as any).HTMLElement = FakeElement;
+
+        const enclosingItemAnchor = new FakeElement('transcript-item-turn:1', { top: -120, bottom: 420 });
+        const stableMessageAnchor = new FakeElement('transcript-anchor-message-m1', { top: 82, bottom: 162 });
+        stableMessageAnchor.parentElement = enclosingItemAnchor;
+        const container = createContainer({
+            scrollTop: 400,
+            scrollHeight: 1800,
+            clientHeight: 600,
+            anchors: [enclosingItemAnchor, stableMessageAnchor],
+        });
+        enclosingItemAnchor.parentElement = container;
+
+        const metrics: WebTranscriptScrollMetrics = {
+            element: container as unknown as HTMLElement,
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight,
+        };
+
+        const anchor = captureWebTranscriptPrependAnchor({
+            metrics,
+            userIntentAtMs: 1,
+            stabilizeForMs: 3000,
+        });
+
+        expect(anchor.anchorTestId).toBe('transcript-anchor-message-m1');
+        expect(anchor.anchorTop).toBe(82);
+        expect(anchor.itemTestId).toBe('transcript-item-turn:1');
+        expect(anchor.itemTop).toBe(-120);
+        expect(container.querySelectorAllCount).toBe(1);
+
+        (globalThis as any).HTMLElement = originalHTMLElement;
+    });
+
+    it('refreshes a recaptured prepend anchor with a single DOM scan', () => {
+        const originalHTMLElement = (globalThis as any).HTMLElement;
+        (globalThis as any).HTMLElement = FakeElement;
+
+        const staleAnchor = new FakeElement('transcript-anchor-message-old', { top: 500, bottom: 580 });
+        const nextItemAnchor = new FakeElement('transcript-item-turn:next', { top: -80, bottom: 460 });
+        const nextMessageAnchor = new FakeElement('transcript-anchor-message-next', { top: 90, bottom: 160 });
+        nextMessageAnchor.parentElement = nextItemAnchor;
+        const container = createContainer({
+            scrollTop: 400,
+            scrollHeight: 1800,
+            clientHeight: 600,
+            anchors: [staleAnchor, nextItemAnchor, nextMessageAnchor],
+        });
+        nextItemAnchor.parentElement = container;
+
+        const metrics: WebTranscriptScrollMetrics = {
+            element: container as unknown as HTMLElement,
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight,
+        };
+        const anchor = captureWebTranscriptPrependAnchor({
+            metrics,
+            userIntentAtMs: 1,
+            stabilizeForMs: 3000,
+        });
+        container.querySelectorAllCount = 0;
+
+        const refreshed = refreshWebTranscriptPrependAnchor(anchor, metrics, {
+            recaptureAnchor: true,
+            recaptureItem: true,
+        });
+
+        expect(refreshed.anchorTestId).toBe('transcript-anchor-message-next');
+        expect(refreshed.anchorTop).toBe(90);
+        expect(refreshed.itemTestId).toBe('transcript-item-turn:next');
+        expect(refreshed.itemTop).toBe(-80);
+        expect(container.querySelectorAllCount).toBe(1);
 
         (globalThis as any).HTMLElement = originalHTMLElement;
     });

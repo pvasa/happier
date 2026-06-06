@@ -82,6 +82,12 @@ type TranscriptViewportTelemetryOptions = Readonly<{
     sink?: ((event: TranscriptViewportTelemetryEvent) => void) | null;
 }>;
 
+type TranscriptViewportTelemetryDebugOverrideOptions = Readonly<{
+    capacity?: unknown;
+    consoleLog?: unknown;
+    enabled?: unknown;
+}>;
+
 type InstallTranscriptViewportTelemetryGlobalOptions = Readonly<{
     isDev?: boolean;
 }>;
@@ -94,6 +100,7 @@ export type TranscriptViewportTelemetryTuning = Readonly<{
 
 const DEFAULT_TRANSCRIPT_VIEWPORT_TELEMETRY_CAPACITY = 512;
 const TRANSCRIPT_VIEWPORT_TELEMETRY_GLOBAL_KEY = '__HAPPIER_TRANSCRIPT_VIEWPORT_EVENTS__';
+const TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE_GLOBAL_KEY = '__HAPPIER_TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE__';
 
 const SCROLL_WRITERS = new Set<TranscriptViewportTelemetryScrollWriter>([
     'web-dom-bottom',
@@ -370,6 +377,55 @@ export function createTranscriptViewportTelemetry(
 
 export const transcriptViewportTelemetry = createTranscriptViewportTelemetry();
 
+let transcriptViewportTelemetryDebugOverride: TranscriptViewportTelemetryOptions | null = null;
+
+function readTranscriptViewportTelemetryGlobalDebugOverride(): TranscriptViewportTelemetryOptions | null {
+    if (!readDevFlag()) return null;
+    const target = globalThis as unknown as {
+        __HAPPIER_TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE__?: TranscriptViewportTelemetryDebugOverrideOptions;
+    };
+    const options = target.__HAPPIER_TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE__;
+    if (!options || typeof options !== 'object') return null;
+    return {
+        consoleLog: options.consoleLog === true,
+        enabled: options.enabled === true,
+        capacity: normalizeCapacity(
+            options.capacity,
+            DEFAULT_TRANSCRIPT_VIEWPORT_TELEMETRY_CAPACITY,
+        ),
+    };
+}
+
+function resolveTranscriptViewportTelemetryOptionsFromTuning(
+    tuning: TranscriptViewportTelemetryTuning,
+): TranscriptViewportTelemetryOptions {
+    return {
+        consoleLog: readDevFlag() && tuning.transcriptViewportTelemetryConsoleLog === true,
+        enabled: readDevFlag() && tuning.transcriptViewportTelemetryEnabled === true,
+        capacity: normalizeCapacity(
+            tuning.transcriptViewportTelemetryMaxEvents,
+            DEFAULT_TRANSCRIPT_VIEWPORT_TELEMETRY_CAPACITY,
+        ),
+    };
+}
+
+function mergeTranscriptViewportTelemetryDebugOverride(
+    options: TranscriptViewportTelemetryOptions,
+): TranscriptViewportTelemetryOptions {
+    if (!readDevFlag()) {
+        return options;
+    }
+    const globalDebugOverride = readTranscriptViewportTelemetryGlobalDebugOverride();
+    if (globalDebugOverride === null && transcriptViewportTelemetryDebugOverride === null) {
+        return options;
+    }
+    return {
+        ...options,
+        ...(globalDebugOverride ?? {}),
+        ...(transcriptViewportTelemetryDebugOverride ?? {}),
+    };
+}
+
 export function installTranscriptViewportTelemetryGlobal(
     telemetry: TranscriptViewportTelemetry = transcriptViewportTelemetry,
     options: InstallTranscriptViewportTelemetryGlobalOptions = {},
@@ -388,14 +444,35 @@ export function installTranscriptViewportTelemetryGlobal(
 export function configureTranscriptViewportTelemetryFromTuning(
     tuning: TranscriptViewportTelemetryTuning,
 ): void {
-    transcriptViewportTelemetry.configure({
-        consoleLog: readDevFlag() && tuning.transcriptViewportTelemetryConsoleLog === true,
-        enabled: readDevFlag() && tuning.transcriptViewportTelemetryEnabled === true,
+    transcriptViewportTelemetry.configure(mergeTranscriptViewportTelemetryDebugOverride(
+        resolveTranscriptViewportTelemetryOptionsFromTuning(tuning),
+    ));
+    installTranscriptViewportTelemetryGlobal(transcriptViewportTelemetry);
+}
+
+export function configureTranscriptViewportTelemetryDebugOverride(
+    options: TranscriptViewportTelemetryDebugOverrideOptions | null,
+): void {
+    if (!readDevFlag() || options === null) {
+        transcriptViewportTelemetryDebugOverride = null;
+        delete (globalThis as Record<string, unknown>)[TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE_GLOBAL_KEY];
+        if (options === null) {
+            transcriptViewportTelemetry.configure({ enabled: false });
+            installTranscriptViewportTelemetryGlobal(transcriptViewportTelemetry);
+        }
+        return;
+    }
+    transcriptViewportTelemetryDebugOverride = {
+        consoleLog: options.consoleLog === true,
+        enabled: options.enabled === true,
         capacity: normalizeCapacity(
-            tuning.transcriptViewportTelemetryMaxEvents,
+            options.capacity,
             DEFAULT_TRANSCRIPT_VIEWPORT_TELEMETRY_CAPACITY,
         ),
-    });
+    };
+    (globalThis as Record<string, unknown>)[TRANSCRIPT_VIEWPORT_TELEMETRY_OVERRIDE_GLOBAL_KEY] =
+        transcriptViewportTelemetryDebugOverride;
+    transcriptViewportTelemetry.configure(transcriptViewportTelemetryDebugOverride);
     installTranscriptViewportTelemetryGlobal(transcriptViewportTelemetry);
 }
 
