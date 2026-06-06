@@ -24,6 +24,7 @@ export function createCursorAcpRuntime(params: {
   getPermissionMode?: () => PermissionMode | null | undefined;
   env?: NodeJS.ProcessEnv;
   startupOverrides?: Parameters<typeof createCatalogProviderAcpRuntime>[0]['startupOverrides'];
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastPublishedCursorSessionId = { value: null as string | null };
 
@@ -43,6 +44,7 @@ export function createCursorAcpRuntime(params: {
     },
     startupOverrides: params.startupOverrides,
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     resolveSessionModelConfigUpdate: resolveCursorSessionModelConfigUpdate,
     deriveSessionModelsFromConfigOptions: buildCursorSessionModelsFromConfigOptions,
     resolveSessionConfigOptionUpdate: resolveCursorSessionConfigOptionUpdate,

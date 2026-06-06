@@ -17,6 +17,7 @@ export function createKiloAcpRuntime(params: {
   onThinkingChange: (thinking: boolean) => void;
   memoryRecallGuidanceEnabled?: boolean;
   getPermissionMode?: () => PermissionMode | null | undefined;
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastPublishedKiloSessionId = { value: null as string | null };
 
@@ -34,6 +35,7 @@ export function createKiloAcpRuntime(params: {
       machineId: params.machineId,
     },
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     onSessionIdChange: (nextSessionId) => {
       maybeUpdateKiloSessionIdMetadata({
         getKiloSessionId: () => nextSessionId,

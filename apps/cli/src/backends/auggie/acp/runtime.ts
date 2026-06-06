@@ -19,6 +19,7 @@ export function createAuggieAcpRuntime(params: {
   memoryRecallGuidanceEnabled?: boolean;
   allowIndexing: boolean;
   getPermissionMode?: () => PermissionMode | null | undefined;
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastPublishedAuggieSessionId = { value: null as string | null };
 
@@ -36,6 +37,7 @@ export function createAuggieAcpRuntime(params: {
       machineId: params.machineId,
     },
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     backendOptions: {
       allowIndexing: params.allowIndexing,
     },

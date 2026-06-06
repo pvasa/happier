@@ -16,6 +16,9 @@ export function createAcpCliCapability(params: {
     resolvedPath: string;
     defaultArgs: readonly string[];
   }>) => Promise<string[]> | string[];
+  resolveAcpProbeEnv?: (params: Readonly<{
+    defaultEnv: NodeJS.ProcessEnv;
+  }>) => NodeJS.ProcessEnv;
 }): Capability {
   return {
     descriptor: { id: `cli.${params.agentId}`, kind: 'cli', title: params.title },
@@ -44,15 +47,20 @@ export function createAcpCliCapability(params: {
         }
       })();
 
+      const defaultEnv: NodeJS.ProcessEnv = {
+        // Keep output clean to avoid ACP stdout pollution.
+        NODE_ENV: 'production',
+        DEBUG: '',
+      };
+      const probeEnv = params.resolveAcpProbeEnv
+        ? params.resolveAcpProbeEnv({ defaultEnv })
+        : defaultEnv;
+
       const probe = await probeAcpAgentCapabilities({
         command: launchSpec?.command ?? base.resolvedPath,
         args: [...(launchSpec?.args ?? []), ...acpProbeArgs],
         cwd: process.cwd(),
-        env: {
-          // Keep output clean to avoid ACP stdout pollution.
-          NODE_ENV: 'production',
-          DEBUG: '',
-        },
+        env: probeEnv,
         transport: params.transport,
         timeoutMs: resolveAcpProbeTimeoutMs(params.agentId, params.transport.getInitTimeout()),
       });

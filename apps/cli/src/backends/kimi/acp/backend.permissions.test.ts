@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { dirname } from 'node:path';
+import { delimiter, dirname } from 'node:path';
 
 import type { PermissionMode } from '@/api/types';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -13,7 +13,15 @@ type AcpBackendLike = {
   };
 };
 
-const envKeys = ['PATH', 'HAPPIER_KIMI_PATH'] as const;
+const envKeys = [
+  'HOME',
+  'PATH',
+  'PYTHONPATH',
+  'HAPPIER_HOME_DIR',
+  'HAPPIER_KIMI_PATH',
+  'HAPPIER_KIMI_ACP_SELECTOR',
+  'HAPPIER_TEST_SECRET',
+] as const;
 const TEMP_DIRS = new Set<string>();
 let envScope = createEnvKeyScope(envKeys);
 
@@ -54,6 +62,10 @@ function readAgentFilePath(args: string[]): string | null {
 
 describe('Kimi ACP backend permissions', () => {
   it('fails closed when the Kimi CLI is unavailable', () => {
+    const homeDir = createTempDirSync('happier-kimi-empty-home-');
+    TEMP_DIRS.add(homeDir);
+    process.env.HOME = homeDir;
+    process.env.HAPPIER_HOME_DIR = homeDir;
     process.env.PATH = '';
     delete process.env.HAPPIER_KIMI_PATH;
 
@@ -97,6 +109,35 @@ describe('Kimi ACP backend permissions', () => {
     }) as unknown as { options: { command: string } };
 
     expect(backend.options.command).toBe(binPath);
+  });
+
+  it('preserves inherited PYTHONPATH when the poll selector shim is enabled', () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    expect(originalPlatformDescriptor).toBeDefined();
+
+    try {
+      Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'linux' });
+      process.env.PATH = '';
+      process.env.PYTHONPATH = '/inherited/pythonpath';
+      process.env.HAPPIER_TEST_SECRET = 'do-not-forward';
+      process.env.HAPPIER_KIMI_PATH = createFakeBin('kimi');
+
+      const backend = createKimiBackend({
+        cwd: '/tmp',
+        env: {},
+        permissionMode: 'default',
+        kimiAcpPythonSelector: 'poll',
+      }) as unknown as { options: { env: NodeJS.ProcessEnv } };
+
+      const pythonPathEntries = backend.options.env.PYTHONPATH?.split(delimiter) ?? [];
+      expect(pythonPathEntries[0]).toContain('kimi-acp-poll-selector');
+      expect(pythonPathEntries).toContain('/inherited/pythonpath');
+      expect(backend.options.env.HAPPIER_TEST_SECRET).toBeUndefined();
+    } finally {
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+      }
+    }
   });
 
   it('does not attach MCP servers (Kimi ACP does not support MCP servers)', () => {

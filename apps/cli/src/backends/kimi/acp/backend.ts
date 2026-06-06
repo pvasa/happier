@@ -14,7 +14,9 @@ import type { AgentBackend, AgentFactoryOptions, McpServerConfig } from '@/agent
 import { normalizePermissionModeToIntent } from '@/agent/runtime/permission/permissionModeCanonical';
 import type { PermissionMode } from '@/api/types';
 import { kimiTransport } from '@/backends/kimi/acp/transport';
+import { resolveKimiAcpPythonSelectorChildEnv } from '@/backends/kimi/acp/pythonSelectorEnv';
 import { requireProviderCliLaunchSpec } from '@/runtime/managedTools/requireProviderCliLaunchSpec';
+import type { KimiAcpPythonSelector } from '@happier-dev/agents';
 
 function buildReadOnlyAgentFilePath(): string {
   return join(tmpdir(), `happier-kimi-${process.pid}-readonly-agent.yaml`);
@@ -39,12 +41,18 @@ export interface KimiBackendOptions extends AgentFactoryOptions {
   mcpServers?: Record<string, McpServerConfig>;
   permissionHandler?: AcpPermissionHandler;
   permissionMode?: PermissionMode;
+  kimiAcpPythonSelector?: KimiAcpPythonSelector;
 }
 
 export function createKimiBackend(options: KimiBackendOptions): AgentBackend {
   const intent = normalizePermissionModeToIntent(options.permissionMode ?? 'default') ?? 'default';
   const processEnv = { ...process.env, ...options.env };
   const launch = requireProviderCliLaunchSpec('kimi', { processEnv });
+  const childEnv = resolveKimiAcpPythonSelectorChildEnv({
+    selector: options.kimiAcpPythonSelector ?? processEnv.HAPPIER_KIMI_ACP_SELECTOR,
+    env: options.env,
+    inheritedEnv: processEnv,
+  });
 
   const args: string[] = ['--work-dir', options.cwd];
 
@@ -64,7 +72,7 @@ export function createKimiBackend(options: KimiBackendOptions): AgentBackend {
     command: launch.command,
     args: [...launch.args, ...args],
     env: {
-      ...options.env,
+      ...childEnv,
       // Keep output clean; ACP must own stdout.
       NODE_ENV: 'production',
       DEBUG: '',

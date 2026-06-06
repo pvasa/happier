@@ -42,7 +42,7 @@ function createParams(
 }
 
 describe('resolveGeminiConnectedServiceSwitchContinuity', () => {
-  it('returns restart_shared_state_required for connected profile switches because shared state is not supported', async () => {
+  it('uses restart/rematerialize continuity for changed connected profile switches', async () => {
     await expect(resolveGeminiConnectedServiceSwitchContinuity(createParams({
       connectedServiceMaterializationIdentityV1: {
         v: 1,
@@ -51,8 +51,8 @@ describe('resolveGeminiConnectedServiceSwitchContinuity', () => {
       },
       vendorResumeId: 'vendor-session-1',
     }))).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'gemini_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'gemini_restart_rematerialize_required',
     });
   });
 
@@ -96,7 +96,7 @@ describe('resolveGeminiConnectedServiceSwitchContinuity', () => {
     });
   });
 
-  it('returns restart_shared_state_required for native to connected switches', async () => {
+  it('uses restart/rematerialize continuity for native to connected switches', async () => {
     await expect(resolveGeminiConnectedServiceSwitchContinuity(createParams({
       previousBinding: {
         source: 'native',
@@ -118,8 +118,8 @@ describe('resolveGeminiConnectedServiceSwitchContinuity', () => {
       },
       vendorResumeId: 'vendor-session-1',
     }))).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'gemini_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'gemini_restart_rematerialize_required',
     });
   });
 });

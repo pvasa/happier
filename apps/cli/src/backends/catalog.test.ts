@@ -294,12 +294,23 @@ describe('AGENTS', () => {
     await expect(getConnectedServiceStateSharingDescriptor('kilo')).resolves.toBeNull();
     await expect(getConnectedServiceStateSharingDescriptor('claude')).resolves.toMatchObject({
       providerId: 'claude',
-      providerSupportStatus: 'unsupported',
+      providerSupportStatus: 'supported',
+      config: {
+        supported: true,
+        modes: ['linked', 'copied', 'isolated'],
+        entries: expect.arrayContaining([
+          expect.objectContaining({ path: 'settings.json', mode: 'linked_or_copied' }),
+        ]),
+      },
       state: {
-        supported: false,
+        supported: true,
+        modes: ['isolated', 'shared'],
+        entries: expect.arrayContaining([
+          expect.objectContaining({ path: 'projects', mode: 'linked' }),
+        ]),
       },
       authIsolation: {
-        mode: 'process_env',
+        mode: 'materialized_home',
         secretEntries: expect.arrayContaining(['CLAUDE_API_KEY']),
       },
     });
@@ -377,8 +388,8 @@ describe('AGENTS', () => {
         },
       },
     })).resolves.toEqual({
-      mode: 'unsupported',
-      reason: 'provider_session_state_unavailable_for_resume',
+      mode: 'restart_shared_state_required',
+      reason: 'claude_session_state_sharing_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('codex', {
       sessionId: 'session-1',
@@ -670,8 +681,8 @@ describe('AGENTS', () => {
       toBindings: { v: 1, bindingsByServiceId: { gemini: { source: 'connected', selection: 'profile', profileId: 'new' } } },
       ...exactContinuityContext,
     })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'gemini_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'gemini_restart_rematerialize_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('opencode', {
       sessionId: 'session-1',
@@ -694,8 +705,8 @@ describe('AGENTS', () => {
       fromBindings: { v: 1, bindingsByServiceId: { openai: { source: 'connected', selection: 'profile', profileId: 'old' } } },
       toBindings: { v: 1, bindingsByServiceId: { openai: { source: 'connected', selection: 'profile', profileId: 'new' } } },
     })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('opencode', {
       sessionId: 'session-1',
@@ -719,8 +730,8 @@ describe('AGENTS', () => {
       toBindings: { v: 1, bindingsByServiceId: { openai: { source: 'connected', selection: 'group', profileId: 'new', groupId: 'team' } } },
       ...exactContinuityContext,
     })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('opencode', {
       sessionId: 'session-1',
@@ -744,8 +755,8 @@ describe('AGENTS', () => {
       toBindings: { v: 1, bindingsByServiceId: { openai: { source: 'connected', selection: 'profile', profileId: 'new' } } },
       ...exactContinuityContext,
     })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('opencode', {
       sessionId: 'session-1',
@@ -769,8 +780,8 @@ describe('AGENTS', () => {
       toBindings: { v: 1, bindingsByServiceId: { openai: { source: 'connected', selection: 'profile', profileId: 'new' } } },
       ...exactContinuityContext,
     })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('opencode', {
       sessionId: 'session-1',
@@ -794,8 +805,8 @@ describe('AGENTS', () => {
       toBindings: { v: 1, bindingsByServiceId: { openai: { source: 'native' } } },
       ...exactContinuityContext,
     })).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
     await expect(resolveConnectedServiceSwitchContinuity('opencode', {
       sessionId: 'session-1',

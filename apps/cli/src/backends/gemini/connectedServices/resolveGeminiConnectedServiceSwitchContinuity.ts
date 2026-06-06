@@ -11,6 +11,10 @@ import {
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
 import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
+import { geminiConnectedServiceStateSharingDescriptor } from './geminiConnectedServiceStateSharingDescriptor';
+
+const GEMINI_RESTART_REMATERIALIZE_REQUIRED_REASON = 'gemini_restart_rematerialize_required';
 
 function supportsService(serviceId: string): boolean {
   return (AGENTS_CORE.gemini.connectedServices.supportedServiceIds as readonly string[]).includes(serviceId);
@@ -30,10 +34,10 @@ export async function resolveGeminiConnectedServiceSwitchContinuity(
   }
   if (isConnectedToConnectedServiceSwitch(params)) {
     if (!isExactSameConnectedServiceSelection(params)) {
-      return {
-        mode: 'restart_shared_state_required',
-        reason: 'gemini_state_sharing_required',
-      };
+      return resolveConnectedServiceRestartContinuityAction({
+        stateSharingDescriptor: geminiConnectedServiceStateSharingDescriptor,
+        restartReason: GEMINI_RESTART_REMATERIALIZE_REQUIRED_REASON,
+      });
     }
     if (!hasExactConnectedServiceRestartContinuityContext(params)) {
       return providerSessionStateUnavailableForResume();
@@ -68,10 +72,12 @@ export async function resolveGeminiConnectedServiceSwitchContinuity(
     });
     return reachability.ok
       ? { mode: 'restart_same_home' }
-      : providerSessionStateUnavailableForResume();
+      : providerSessionStateUnavailableForResume({
+          diagnostics: reachability.continuityDiagnostics,
+        });
   }
-  return {
-    mode: 'restart_shared_state_required',
-    reason: 'gemini_state_sharing_required',
-  };
+  return resolveConnectedServiceRestartContinuityAction({
+    stateSharingDescriptor: geminiConnectedServiceStateSharingDescriptor,
+    restartReason: GEMINI_RESTART_REMATERIALIZE_REQUIRED_REASON,
+  });
 }

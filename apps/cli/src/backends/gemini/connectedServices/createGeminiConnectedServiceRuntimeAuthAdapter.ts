@@ -242,6 +242,12 @@ export function createGeminiConnectedServiceRuntimeAuthAdapter(
     async recoverAfterRuntimeAuthSwitch() {
       return { recovered: false, recovery: 'restart_rematerialize' };
     },
+    async verifyActiveAccount() {
+      return {
+        status: 'verified',
+        reason: 'provider_restart_rematerialization_authoritative',
+      };
+    },
     async probeQuota(input) {
       const record = readCredentialRecord(input);
       if (!record || record.serviceId !== 'gemini' || record.kind !== 'oauth' || !record.oauth?.accessToken) {

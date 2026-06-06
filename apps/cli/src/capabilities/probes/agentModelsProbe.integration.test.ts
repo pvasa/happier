@@ -85,6 +85,44 @@ describe('probeModelsFromAcpBackend', () => {
     }
   }, 20_000);
 
+  it('extracts Kimi-style modelId entries from ACP session/new', async () => {
+    const fixture = await createProbeTempDir('happier-acp-kimi-model-probe');
+    const sdkEntry = resolveAcpSdkEntryFromCwd(process.cwd());
+
+    const agentPath = await writeFakeAcpAgentScript({
+      dir: fixture.dir,
+      sdkEntry,
+      sessionPayloadSource: `{
+      sessionId: randomUUID(),
+      models: {
+        currentModelId: "kimi-code/kimi-for-coding,thinking",
+        availableModels: [
+          { modelId: "kimi-code/kimi-for-coding", name: "kimi-for-coding" },
+          { modelId: "kimi-code/kimi-for-coding,thinking", name: "kimi-for-coding (thinking)" },
+        ],
+      },
+    }`,
+    });
+
+    const backend = new AcpBackend(
+      createProbeBackendOptions({
+        cwd: fixture.dir,
+        agentPath,
+      }),
+    );
+    try {
+      const models = await probeModelsFromAcpBackend({ backend, timeoutMs: 10_000 });
+      expect(models).toEqual([
+        { id: 'default', name: 'Default' },
+        { id: 'kimi-code/kimi-for-coding', name: 'kimi-for-coding' },
+        { id: 'kimi-code/kimi-for-coding,thinking', name: 'kimi-for-coding (thinking)' },
+      ]);
+    } finally {
+      await backend.dispose().catch(() => {});
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
   it('extracts available models from ACP session/new configOptions when models are absent', async () => {
     const fixture = await createProbeTempDir('happier-acp-model-probe-config');
     const sdkEntry = resolveAcpSdkEntryFromCwd(process.cwd());

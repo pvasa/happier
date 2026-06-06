@@ -47,7 +47,7 @@ export async function runCursor(opts: StandardAcpProviderRunOptions & {
     machineMetadata: initialMachineMetadata,
     terminalDisplay: CursorTerminalDisplay,
     resolveRuntimeDirectory: ({ session, metadata }) => session.getMetadataSnapshot()?.path ?? metadata.path,
-    createRuntime: ({ directory, machineId, session, messageBuffer, mcpServers, permissionHandler, setThinking, getPermissionMode, memoryRecallGuidanceEnabled, startupOverrides }) => createCursorAcpRuntime({
+    createRuntime: ({ directory, machineId, session, messageBuffer, mcpServers, permissionHandler, setThinking, getPermissionMode, memoryRecallGuidanceEnabled, startupOverrides, pendingQueueDrainMaxPopPerWake }) => createCursorAcpRuntime({
       directory,
       machineId,
       session,
@@ -59,6 +59,7 @@ export async function runCursor(opts: StandardAcpProviderRunOptions & {
       getPermissionMode,
       env: runtimeEnv,
       startupOverrides,
+      pendingQueueDrainMaxPopPerWake,
     }),
     onAttachMetadataSnapshotMissing: (error) => {
       logger.debug(

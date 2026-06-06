@@ -542,12 +542,17 @@ export async function probeAgentModelsBestEffort(params: {
 
     let backend: AgentBackend | null = null;
     try {
+      const probeBackendOptions = entry.resolveModelsProbeBackendOptions?.({
+        backendTarget: params.backendTarget,
+        accountSettings: params.accountSettings,
+      }) ?? {};
       const created = await createCatalogAcpBackend<any>(params.agentId, {
         cwd,
         env: {},
         mcpServers: {},
         permissionHandler,
         permissionMode: 'default',
+        ...probeBackendOptions,
       });
       backend = created.backend;
 

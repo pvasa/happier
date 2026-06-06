@@ -17,6 +17,7 @@ export function createQwenAcpRuntime(params: {
   onThinkingChange: (thinking: boolean) => void;
   memoryRecallGuidanceEnabled?: boolean;
   getPermissionMode?: () => PermissionMode | null | undefined;
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastPublishedQwenSessionId = { value: null as string | null };
 
@@ -34,6 +35,7 @@ export function createQwenAcpRuntime(params: {
       machineId: params.machineId,
     },
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     onSessionIdChange: (nextSessionId) => {
       maybeUpdateQwenSessionIdMetadata({
         getQwenSessionId: () => nextSessionId,

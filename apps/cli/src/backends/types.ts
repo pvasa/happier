@@ -162,6 +162,18 @@ export type ConnectedServiceSwitchContinuityMode =
 export type ConnectedServiceSwitchContinuityResult = Readonly<{
   mode: ConnectedServiceSwitchContinuityMode;
   reason?: string;
+  diagnostics?: ConnectedServiceResumeContinuityDiagnostics;
+}>;
+
+export type ConnectedServiceResumeContinuityDiagnostics = Readonly<{
+  materializationIdentityId: string | null;
+  targetMaterializedRoot: string | null;
+  vendorResumeId: string | null;
+  cwd: string | null;
+  candidatePersistedSessionFile: string | null;
+  requestedStateMode: 'shared' | 'isolated';
+  effectiveStateMode: 'shared' | 'isolated';
+  reachabilityMissReason: string;
 }>;
 
 export type ConnectedServiceSwitchEffectiveBinding = Readonly<{
@@ -403,6 +415,16 @@ export type AgentCatalogEntry = Readonly<{
     backendTarget?: BackendTargetRefV1;
     accountSettings?: Readonly<Record<string, unknown>> | null;
   }>) => string | null;
+  /**
+   * Optional provider-owned backend options for catalog ACP model probes.
+   *
+   * Use this when starting the probe backend itself depends on account settings or environment
+   * policy. Keep provider-specific option shaping in the provider catalog entry.
+   */
+  resolveModelsProbeBackendOptions?: (params: Readonly<{
+    backendTarget?: BackendTargetRefV1;
+    accountSettings?: Readonly<Record<string, unknown>> | null;
+  }>) => Readonly<Record<string, unknown>> | null;
   /**
    * Optional provider-owned adapter for probing dynamic session controls (models/modes/config options)
    * without starting a full ACP session.

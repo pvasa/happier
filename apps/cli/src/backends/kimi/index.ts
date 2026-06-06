@@ -1,6 +1,7 @@
-import { AGENTS_CORE } from '@happier-dev/agents';
+import { AGENTS_CORE, normalizeKimiAcpPythonSelector } from '@happier-dev/agents';
 
 import { checklists } from './cli/checklists';
+import { resolveProviderSpawnExtrasForRuntime } from '@/settings/providerSettings';
 import type { AgentCatalogEntry } from '../types';
 
 export const agent = {
@@ -14,6 +15,24 @@ export const agent = {
   getAcpBackendFactory: async () => {
     const { createKimiBackend } = await import('@/backends/kimi/acp/backend');
     return (opts) => ({ backend: createKimiBackend(opts as any) });
+  },
+  needsAccountSettingsForProbes: true,
+  resolveModelsProbeVariant: ({ accountSettings }) => {
+    const selector =
+      normalizeKimiAcpPythonSelector(process.env.HAPPIER_KIMI_ACP_SELECTOR)
+      ?? normalizeKimiAcpPythonSelector(accountSettings?.kimiAcpPythonSelector)
+      ?? 'auto';
+    return `kimi:python-selector:${selector}`;
+  },
+  resolveModelsProbeBackendOptions: ({ accountSettings }) => {
+    const extras = resolveProviderSpawnExtrasForRuntime({
+      agentId: 'kimi',
+      settings: accountSettings ?? {},
+      processEnv: process.env,
+    });
+    return extras.kimiAcpPythonSelector === 'auto' || extras.kimiAcpPythonSelector === 'poll'
+      ? { kimiAcpPythonSelector: extras.kimiAcpPythonSelector }
+      : {};
   },
   checklists,
 } satisfies AgentCatalogEntry;

@@ -31,6 +31,7 @@ import { registerKillSessionHandler } from '@/rpc/handlers/killSession';
 import { stopCaffeinate } from '@/integrations/caffeinate';
 import { connectionState } from '@/api/offline/serverConnectionErrors';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
 import type { MessageBatch } from '@/agent/runtime/sessionInput/types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createCurrentSessionTranscriptPort } from '@/api/session/createCurrentSessionTranscriptPort';
@@ -190,6 +191,7 @@ export async function runGemini(opts: {
   //
 
   const accountSettings = opts.accountSettingsContext?.settings ?? null;
+  const pendingQueueDrainMaxPopPerWake = resolveSessionPendingQueueMaxPopPerWake(accountSettings);
   const permissionModeSeed = resolvePermissionModeSeedForAgentStart({
     agentId: 'gemini',
     explicitPermissionMode: opts.permissionMode,
@@ -700,6 +702,7 @@ export async function runGemini(opts: {
 	        reconcilePendingQueueState: (reconcileOpts) => session.reconcilePendingQueueState?.(reconcileOpts),
 	        waitForMetadataUpdate: (signal) => session.waitForMetadataUpdate(signal),
 	      },
+	      pendingDrainMaxPopPerWake: pendingQueueDrainMaxPopPerWake,
 	      onMetadataUpdate: syncControlsFromMetadata,
 	    });
 

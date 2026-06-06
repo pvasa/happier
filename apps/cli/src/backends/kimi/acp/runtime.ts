@@ -3,9 +3,11 @@ import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import { createCatalogProviderAcpRuntime } from '@/agent/acp/runtime/createCatalogProviderAcpRuntime';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { MessageBuffer } from '@/ui/ink/messageBuffer';
+import type { KimiBackendOptions } from '@/backends/kimi/acp/backend';
 
 import { maybeUpdateKimiSessionIdMetadata } from '@/backends/kimi/utils/kimiSessionIdMetadata';
 import type { PermissionMode } from '@/api/types';
+import type { KimiAcpPythonSelector } from '@happier-dev/agents';
 
 export function createKimiAcpRuntime(params: {
   directory: string;
@@ -17,10 +19,12 @@ export function createKimiAcpRuntime(params: {
   onThinkingChange: (thinking: boolean) => void;
   memoryRecallGuidanceEnabled?: boolean;
   getPermissionMode?: () => PermissionMode | null | undefined;
+  kimiAcpPythonSelector?: KimiAcpPythonSelector;
+  pendingQueueDrainMaxPopPerWake?: number;
 }) {
   const lastPublishedKimiSessionId = { value: null as string | null };
 
-  return createCatalogProviderAcpRuntime({
+  return createCatalogProviderAcpRuntime<KimiBackendOptions>({
     provider: 'kimi',
     loggerLabel: 'KimiACP',
     directory: params.directory,
@@ -28,12 +32,14 @@ export function createKimiAcpRuntime(params: {
     messageBuffer: params.messageBuffer,
     mcpServers: params.mcpServers,
     permissionHandler: params.permissionHandler,
+    backendOptions: params.kimiAcpPythonSelector ? { kimiAcpPythonSelector: params.kimiAcpPythonSelector } : undefined,
     onThinkingChange: params.onThinkingChange,
     memoryRecallGuidance: {
       enabled: params.memoryRecallGuidanceEnabled === true,
       machineId: params.machineId,
     },
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     resolvePermissionMode: ({ getPermissionMode, session }) =>
       getPermissionMode?.() ?? session.getMetadataSnapshot?.()?.permissionMode,
     onSessionIdChange: (nextSessionId) => {
