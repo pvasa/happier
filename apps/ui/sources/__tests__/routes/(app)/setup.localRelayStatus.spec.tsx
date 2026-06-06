@@ -11,7 +11,11 @@ const activeServerSnapshot = {
 const setPendingSetupIntentMock = vi.fn();
 const upsertServerProfileMock = vi.fn((params: { serverUrl: string; source?: string; replaceEquivalentStoredUrl?: boolean }) => ({
     id: `server:${params.serverUrl}`,
+    name: params.serverUrl,
     serverUrl: params.serverUrl,
+    createdAt: 0,
+    updatedAt: 0,
+    lastUsedAt: 0,
 }));
 const setActiveServerIdMock = vi.fn();
 const tauriDesktopState = vi.hoisted(() => ({ value: true }));
@@ -45,21 +49,27 @@ vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
     clearPendingSetupIntent: vi.fn(),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    HAPPIER_CLOUD_SERVER_URL: 'https://api.happier.dev',
-    listServerProfiles: () => ([
-        {
-            id: 'relay-1',
-            name: 'Relay One',
-            serverUrl: 'https://relay.example.test',
-            createdAt: 0,
-            updatedAt: 0,
-            lastUsedAt: 0,
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            HAPPIER_CLOUD_SERVER_URL: 'https://api.happier.dev',
+            listServerProfiles: () => ([
+                {
+                    id: 'relay-1',
+                    name: 'Relay One',
+                    serverUrl: 'https://relay.example.test',
+                    createdAt: 0,
+                    updatedAt: 0,
+                    lastUsedAt: 0,
+                },
+            ]),
+            setActiveServerId: setActiveServerIdMock,
+            upsertServerProfile: upsertServerProfileMock,
         },
-    ]),
-    setActiveServerId: setActiveServerIdMock,
-    upsertServerProfile: upsertServerProfileMock,
-}));
+    });
+});
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
     getActiveServerSnapshot: () => activeServerSnapshot,

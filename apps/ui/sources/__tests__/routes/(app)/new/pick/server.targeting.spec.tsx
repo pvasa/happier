@@ -36,9 +36,9 @@ const state = vi.hoisted(() => ({
         serverSelectionActiveTargetId: null as string | null,
     },
     profiles: [
-        { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A', lastUsedAt: 1000 },
-        { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B', lastUsedAt: 900 },
-        { id: 'server-c', serverUrl: 'https://stack-c.example.test', name: 'Server C', lastUsedAt: 800 },
+        { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A', createdAt: 1, updatedAt: 1, lastUsedAt: 1000 },
+        { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B', createdAt: 1, updatedAt: 1, lastUsedAt: 900 },
+        { id: 'server-c', serverUrl: 'https://stack-c.example.test', name: 'Server C', createdAt: 1, updatedAt: 1, lastUsedAt: 800 },
     ],
 }));
 
@@ -173,15 +173,20 @@ vi.mock('@react-navigation/native', () => ({
     },
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: state.activeServerId,
-        serverUrl: state.activeServerUrl,
-        kind: 'stack',
-        generation: 1,
-    }),
-    listServerProfiles: () => state.profiles,
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => ({
+                serverId: state.activeServerId,
+                serverUrl: state.activeServerUrl,
+                generation: 1,
+            }),
+            listServerProfiles: () => state.profiles,
+        },
+    });
+});
 
 vi.mock('@/auth/storage/tokenStorage', () => ({
     TokenStorage: {
@@ -234,9 +239,9 @@ beforeEach(() => {
     state.settings.serverSelectionActiveTargetKind = null;
     state.settings.serverSelectionActiveTargetId = null;
     state.profiles = [
-        { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A', lastUsedAt: 1000 },
-        { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B', lastUsedAt: 900 },
-        { id: 'server-c', serverUrl: 'https://stack-c.example.test', name: 'Server C', lastUsedAt: 800 },
+        { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A', createdAt: 1, updatedAt: 1, lastUsedAt: 1000 },
+        { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B', createdAt: 1, updatedAt: 1, lastUsedAt: 900 },
+        { id: 'server-c', serverUrl: 'https://stack-c.example.test', name: 'Server C', createdAt: 1, updatedAt: 1, lastUsedAt: 800 },
     ];
 });
 

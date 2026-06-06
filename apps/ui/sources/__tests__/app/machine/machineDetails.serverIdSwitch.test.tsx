@@ -51,9 +51,19 @@ vi.mock('@/hooks/ui/useMountedShouldContinue', () => ({
 }));
 vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({ useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }) }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerId: () => 'server-a',
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerId: () => 'server-a',
+            listServerProfiles: () => [
+                { id: 'server-a', serverUrl: 'https://server-a.example.test', name: 'Server A', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+                { id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B', createdAt: 2, updatedAt: 2, lastUsedAt: 2 },
+            ],
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
     setActiveServerAndSwitch: switchSpy,

@@ -96,13 +96,23 @@ vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement('Item', props, props.children),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => ({ generation: 1, serverId: 'server-a' }),
-    listServerProfiles: () => [
-        { id: 'server-a', name: 'A', serverUrl: 'http://a', lastUsedAt: 2 },
-        { id: 'server-b', name: 'B', serverUrl: 'http://b', lastUsedAt: 1 },
-    ],
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => ({
+                generation: 1,
+                serverId: 'server-a',
+                serverUrl: 'http://a',
+            }),
+            listServerProfiles: () => [
+                { id: 'server-a', name: 'A', serverUrl: 'http://a', createdAt: 1, updatedAt: 1, lastUsedAt: 2 },
+                { id: 'server-b', name: 'B', serverUrl: 'http://b', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+            ],
+        },
+    });
+});
 
 describe('ServerPickerScreen header options', () => {
     it('does not provide a headerTitle function that returns a raw string (RN Web text node error)', async () => {
