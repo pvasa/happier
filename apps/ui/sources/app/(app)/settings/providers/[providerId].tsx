@@ -1,8 +1,8 @@
 import React from 'react';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useUnistyles, StyleSheet } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -11,7 +11,7 @@ import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { Switch } from '@/components/ui/forms/Switch';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { Text, TextInput } from '@/components/ui/text/Text';
+import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { BadgeGrid, type BadgeGridItem } from '@/components/ui/layout/BadgeGrid';
 import { useAllMachines, useMachineListByServerId, useSettings } from '@/sync/domains/state/storage';
@@ -20,7 +20,7 @@ import { useApplySettings } from '@/sync/store/settingsWriters';
 import { isAgentId, getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { getProviderSettingsPlugin } from '@/agents/providers/registry/providerSettingsRegistry';
 import { getProviderLocalAuthPlugin } from '@/agents/providers/registry/providerLocalAuthRegistry';
-import type { ProviderSettingFieldDef, TranslatableText } from '@/agents/providers/shared/providerSettingsPlugin';
+import type { ProviderSettingFieldDef } from '@/agents/providers/shared/providerSettingsPlugin';
 import { t } from '@/text';
 import {
     buildBackendTargetKey,
@@ -58,12 +58,7 @@ import {
     ConnectedServicesProviderStateSharingBackendGroups,
     resolveProviderStateSharingAgentIds,
 } from '@/components/settings/connectedServices/ConnectedServicesProviderStateSharingSettings';
-
-function resolveProviderSettingsText(input: TranslatableText | undefined): string | undefined {
-    if (input === undefined) return undefined;
-    if (typeof input === 'string') return input;
-    return t(input.key);
-}
+import { ProviderSettingsFields } from '@/components/settings/providers/ProviderSettingsFields';
 
 const PROVIDER_AUTH_TERMINAL_TAB_ID = 'provider-auth-terminal';
 
@@ -96,122 +91,6 @@ function resolveActiveServerMachineIds(params: Readonly<{
         .filter((machine) => machine.revokedAt == null && !machineIdsClaimedByOtherServers.has(machine.id))
         .map((machine) => machine.id);
 }
-
-const ProviderSettingsNumberField = React.memo(function ProviderSettingsNumberField(props: {
-    field: any;
-    value: unknown;
-    theme: any;
-    localInputs: Record<string, string>;
-    setLocalInputs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-    setSetting: (key: string, value: unknown) => void;
-}) {
-    const { field, value, theme, localInputs, setLocalInputs, setSetting } = props;
-
-    const rawFromSetting = typeof value === 'number' ? String(value) : '';
-    const externalRaw = value === null || value === undefined ? '' : rawFromSetting;
-    const raw = Object.prototype.hasOwnProperty.call(localInputs, field.key)
-        ? localInputs[field.key]!
-        : externalRaw;
-    const parsed = raw.trim().length === 0 ? null : Number(raw);
-
-    const isStepAligned = (n: number, step: number, base: number) => {
-        if (!Number.isFinite(n) || !Number.isFinite(step) || step <= 0) return true;
-        const scaled = (n - base) / step;
-        const rounded = Math.round(scaled);
-        return Math.abs(scaled - rounded) < 1e-9;
-    };
-
-    const spec = field.numberSpec;
-    const isValid =
-        parsed === null
-            ? true
-            : Number.isFinite(parsed)
-              && (spec?.min == null || parsed >= spec.min)
-              && (spec?.max == null || parsed <= spec.max)
-              && (spec?.step == null || isStepAligned(parsed, spec.step, spec?.min ?? 0));
-    const showError = raw.trim().length > 0 && !isValid;
-
-    const clearLocalInput = React.useCallback(() => {
-        setLocalInputs((prev) => {
-            if (!(field.key in prev)) return prev;
-            const next = { ...prev };
-            delete next[field.key];
-            return next;
-        });
-    }, [field.key, setLocalInputs]);
-
-    const [focused, setFocused] = React.useState(false);
-    const prevExternalRawRef = React.useRef(externalRaw);
-    React.useEffect(() => {
-        const prevExternalRaw = prevExternalRawRef.current;
-        prevExternalRawRef.current = externalRaw;
-        if (focused) return;
-        if (prevExternalRaw === externalRaw) return;
-        clearLocalInput();
-    }, [clearLocalInput, externalRaw, focused]);
-
-	    return (
-	        <View style={[styles.inputContainer, { paddingTop: 0 }]}>
-	            <Text style={styles.fieldLabel}>{resolveProviderSettingsText(field.title) ?? ''}</Text>
-	            {field.subtitle && (
-	                <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text.secondary, marginBottom: 6 }}>
-	                    {resolveProviderSettingsText(field.subtitle) ?? ''}
-	                </Text>
-	            )}
-            <TextInput
-                style={[
-                    styles.textInput,
-                    showError ? { borderWidth: 1, borderColor: theme.colors.state.danger.foreground } : null,
-                ]}
-                placeholder={resolveProviderSettingsText(field.numberSpec?.placeholder) ?? t('common.optional')}
-                placeholderTextColor={theme.colors.input.placeholder}
-                value={raw}
-                keyboardType={Platform.select({ ios: 'number-pad', default: 'numeric' })}
-                onFocus={() => setFocused(true)}
-                onChangeText={(next) => {
-                    setLocalInputs((prev) => ({ ...prev, [field.key]: next }));
-                    const trimmed = next.trim();
-                    if (!trimmed) {
-                        setSetting(field.key, null);
-                        return;
-                    }
-                    const n = Number(trimmed);
-                    if (!Number.isFinite(n)) {
-                        return;
-                    }
-                    if (field.numberSpec?.min != null && n < field.numberSpec.min) {
-                        return;
-                    }
-                    if (field.numberSpec?.max != null && n > field.numberSpec.max) {
-                        return;
-                    }
-                    if (field.numberSpec?.step != null && !isStepAligned(n, field.numberSpec.step, field.numberSpec?.min ?? 0)) {
-                        return;
-                    }
-                    setSetting(field.key, n);
-                }}
-                onBlur={() => {
-                    setFocused(false);
-                    const trimmed = raw.trim();
-                    if (!trimmed) {
-                        clearLocalInput();
-                        return;
-                    }
-                    if (isValid) {
-                        clearLocalInput();
-                    }
-                }}
-                autoCapitalize="none"
-                autoCorrect={false}
-            />
-            {showError && (
-                <Text style={{ ...Typography.default(), fontSize: 12, color: theme.colors.state.danger.foreground, marginTop: 6 }}>
-                    {t('settingsProviders.invalidNumber')}
-                </Text>
-            )}
-        </View>
-    );
-});
 
 type ProviderSettingsCore = NonNullable<ReturnType<typeof getAgentCore>>;
 
@@ -306,7 +185,6 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
     const supportsProviderStateSharingSettings =
         connectedServicesEnabled
         && resolveProviderStateSharingAgentIds([providerId]).length > 0;
-
     const backendCliSourcePreferenceById = settings.backendCliSourcePreferenceById;
     const providerCliSourcePreference =
         backendCliSourcePreferenceById?.[providerId] ?? providerCliRuntimeSpec.sourcePreferenceDefault;
@@ -676,258 +554,16 @@ const ProviderSettingsScreenInner = React.memo(function ProviderSettingsScreenIn
                         }}
                     />
 
-                {(plugin?.uiSections ?? []).map((section) => (
-                    <ItemGroup
-                        key={section.id}
-	                        title={resolveProviderSettingsText(section.title)}
-	                        footer={resolveProviderSettingsText(section.footer)}
-                    >
-                        {section.fields.map((field) => {
-                            const value = readFieldValue(field);
-
-                            if (field.kind === 'boolean') {
-                                const boolValue = Boolean(value);
-	                                return (
-	                                    <Item
-	                                        key={field.key}
-	                                        title={resolveProviderSettingsText(field.title) ?? ''}
-	                                        subtitle={resolveProviderSettingsText(field.subtitle)}
-	                                        icon={<Ionicons name="options-outline" size={29} color={theme.colors.text.secondary} />}
-	                                        rightElement={<Switch value={boolValue} onValueChange={(v) => setFieldValue(field, v)} />}
-	                                        showChevron={false}
-	                                        onPress={() => setFieldValue(field, !boolValue)}
-	                                    />
-	                                );
-                            }
-
-                            if (field.kind === 'multiEnum') {
-                                const options = field.enumOptions ?? [];
-	                                if (options.length === 0) {
-	                                    return (
-	                                        <Item
-	                                            key={field.key}
-	                                            title={resolveProviderSettingsText(field.title) ?? ''}
-	                                            subtitle={resolveProviderSettingsText(field.subtitle) ?? t('settingsProviders.noOptionsAvailable')}
-	                                            icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
-	                                            showChevron={false}
-	                                            disabled={true}
-	                                        />
-	                                    );
-	                                }
-
-                                const selectedRaw = Array.isArray(value) ? value : [];
-                                const selectedSet = new Set<string>(
-                                    selectedRaw.filter((v): v is string => typeof v === 'string'),
-                                );
-	                                const orderedSelectedOptions = options.filter((opt) => selectedSet.has(opt.id));
-	                                const detail =
-	                                    orderedSelectedOptions.length === 0
-	                                        ? t('common.none')
-	                                        : orderedSelectedOptions
-	                                            .map((opt) => resolveProviderSettingsText(opt.title))
-	                                            .filter((label): label is string => Boolean(label))
-	                                            .join(', ');
-
-                                return (
-                                    <DropdownMenu
-                                        key={field.key}
-                                        open={openMenu === field.key}
-                                        onOpenChange={(next) => setOpenMenu(next ? field.key : null)}
-                                        variant="selectable"
-                                        search={false}
-                                        selectedId={null}
-                                        showCategoryTitles={false}
-                                        matchTriggerWidth={true}
-                                        connectToTrigger={true}
-                                        rowKind="item"
-                                        popoverBoundaryRef={popoverBoundaryRef}
-                                        closeOnSelect={false}
-                                        trigger={({ toggle, open }: any) => (
-	                                            <Item
-	                                                title={resolveProviderSettingsText(field.title) ?? ''}
-	                                                subtitle={resolveProviderSettingsText(field.subtitle)}
-	                                                detail={detail}
-	                                                icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
-                                                rightElement={<Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color={theme.colors.text.secondary} />}
-                                                onPress={toggle}
-                                                showChevron={false}
-                                                selected={false}
-                                            />
-                                        )}
-	                                        items={options.map((opt) => {
-	                                            const checked = selectedSet.has(opt.id);
-	                                            return {
-	                                                id: opt.id,
-	                                                title: resolveProviderSettingsText(opt.title) ?? '',
-	                                                subtitle: resolveProviderSettingsText(opt.subtitle),
-	                                                icon: (
-	                                                    <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-	                                                        <Ionicons
-	                                                            name={checked ? 'checkbox-outline' : 'square-outline'}
-                                                            size={22}
-                                                            color={theme.colors.text.secondary}
-                                                        />
-                                                    </View>
-                                                ),
-                                            };
-                                        })}
-                                        onSelect={(id) => {
-                                            const next = new Set(selectedSet);
-                                            if (next.has(id)) next.delete(id);
-                                            else next.add(id);
-                                            const ordered = options.map((opt) => opt.id).filter((optId) => next.has(optId));
-                                            setFieldValue(field, ordered);
-                                        }}
-                                    />
-                                );
-                            }
-
-	                            if (field.kind === 'enum') {
-	                                const options = field.enumOptions ?? [];
-	                                if (options.length === 0) {
-	                                    return (
-	                                        <Item
-	                                            key={field.key}
-	                                            title={resolveProviderSettingsText(field.title) ?? ''}
-	                                            subtitle={resolveProviderSettingsText(field.subtitle) ?? t('settingsProviders.noOptionsAvailable')}
-	                                            icon={<Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />}
-	                                            showChevron={false}
-	                                            disabled={true}
-	                                        />
-                                    );
-                                }
-                                const currentId = typeof value === 'string' ? value : (options[0]?.id ?? '');
-
-                                return (
-                                    <DropdownMenu
-                                        key={field.key}
-                                        open={openMenu === field.key}
-                                        onOpenChange={(next) => setOpenMenu(next ? field.key : null)}
-                                        variant="selectable"
-                                        search={false}
-                                        selectedId={currentId}
-                                        showCategoryTitles={false}
-                                        matchTriggerWidth={true}
-                                        connectToTrigger={true}
-	                                        rowKind="item"
-	                                        popoverBoundaryRef={popoverBoundaryRef}
-                                        itemTrigger={{
-                                            title: resolveProviderSettingsText(field.title) ?? '',
-                                            subtitle: resolveProviderSettingsText(field.subtitle) ?? undefined,
-                                            showSelectedSubtitle: field.subtitle ? false : undefined,
-                                            icon: <Ionicons name="list-outline" size={29} color={theme.colors.text.secondary} />,
-                                            itemProps: {
-                                                testID: `settings-provider-field-${field.key}`,
-                                            },
-                                        }}
-                                        items={options.map((opt) => ({
-                                            id: opt.id,
-                                            title: resolveProviderSettingsText(opt.title) ?? '',
-                                            subtitle: resolveProviderSettingsText(opt.subtitle),
-	                                            icon: (
-	                                                <View style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}>
-	                                                    <Ionicons name="radio-button-on-outline" size={22} color={theme.colors.text.secondary} />
-	                                                </View>
-	                                            ),
-	                                        }))}
-                                        onSelect={(id) => {
-                                            setFieldValue(field, id);
-                                            setOpenMenu(null);
-                                        }}
-                                    />
-                                );
-                            }
-
-                            if (field.kind === 'number') {
-                                return (
-                                    <ProviderSettingsNumberField
-                                        key={field.key}
-                                        field={field}
-                                        value={value}
-                                        theme={theme}
-                                        localInputs={localInputs}
-                                        setLocalInputs={setLocalInputs}
-                                        setSetting={(key, nextValue) => {
-                                            if (key !== field.key) return;
-                                            setFieldValue(field, nextValue);
-                                        }}
-                                    />
-                                );
-                            }
-
-                            if (field.kind === 'json' || field.kind === 'text') {
-                                const textValue = typeof value === 'string' ? value : '';
-                                const localValue = localInputs[field.key] ?? textValue;
-                                const jsonError =
-                                    field.kind === 'json' && localValue.trim().length > 0
-                                        ? (() => {
-                                            try {
-                                                JSON.parse(localValue);
-                                                return null;
-                                            } catch {
-                                                return t('settingsProviders.invalidJson');
-                                            }
-                                        })()
-                                        : null;
-
-                                const commitJsonIfValid = () => {
-                                    if (field.kind !== 'json') return;
-                                    if (jsonError) return;
-                                    setFieldValue(field, localValue);
-                                    setLocalInputs((prev) => {
-                                        if (!(field.key in prev)) return prev;
-                                        const next = { ...prev };
-                                        delete next[field.key];
-                                        return next;
-                                    });
-                                };
-
-	                                return (
-	                                    <View key={field.key} style={[styles.inputContainer, { paddingTop: 0 }]}>
-	                                        <Text style={styles.fieldLabel}>{resolveProviderSettingsText(field.title) ?? ''}</Text>
-	                                        {field.subtitle && (
-	                                            <Text style={{ ...Typography.default(), fontSize: 13, color: theme.colors.text.secondary, marginBottom: 6 }}>
-	                                                {resolveProviderSettingsText(field.subtitle) ?? ''}
-	                                            </Text>
-	                                        )}
-                                        <TextInput
-                                            style={[
-                                                styles.textInput,
-                                                {
-                                                    minHeight: field.kind === 'json' ? 110 : 44,
-                                                    textAlignVertical: field.kind === 'json' ? 'top' : 'center',
-                                                } as any,
-                                                jsonError ? { borderWidth: 1, borderColor: theme.colors.state.danger.foreground } : null,
-                                            ]}
-                                            multiline={field.kind === 'json'}
-                                            placeholder={field.kind === 'json' ? '{ }' : ''}
-                                            placeholderTextColor={theme.colors.input.placeholder}
-                                            value={field.kind === 'json' ? localValue : textValue}
-                                            onChangeText={(next) => {
-                                                if (field.kind === 'json') {
-                                                    setLocalInputs((prev) => ({ ...prev, [field.key]: next }));
-                                                    return;
-                                                }
-                                                setFieldValue(field, next);
-                                            }}
-                                            onEndEditing={commitJsonIfValid}
-                                            onBlur={commitJsonIfValid}
-                                            autoCapitalize="none"
-                                            autoCorrect={false}
-                                        />
-                                        {jsonError && (
-                                            <Text style={{ ...Typography.default(), fontSize: 12, color: theme.colors.state.danger.foreground, marginTop: 6 }}>
-                                                {jsonError}
-                                            </Text>
-                                        )}
-                                    </View>
-                                );
-                            }
-
-                            return null;
-                        })}
-                    </ItemGroup>
-                ))}
+                <ProviderSettingsFields
+                    sections={plugin?.uiSections ?? []}
+                    readFieldValue={readFieldValue}
+                    setFieldValue={setFieldValue}
+                    openMenu={openMenu}
+                    setOpenMenu={setOpenMenu}
+                    localInputs={localInputs}
+                    setLocalInputs={setLocalInputs}
+                    popoverBoundaryRef={popoverBoundaryRef}
+                />
 
                 {ExtraSectionsComponent ? <ExtraSectionsComponent providerId={providerId} /> : null}
 
@@ -1127,39 +763,3 @@ export default React.memo(function ProviderSettingsScreen() {
         />
     );
 });
-
-const styles = StyleSheet.create((theme) => ({
-    inputContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-    },
-    fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        color: theme.colors.text.secondary,
-        marginBottom: 4,
-    },
-    textInput: {
-        ...Typography.default('regular'),
-        backgroundColor: theme.colors.input.background,
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: Platform.select({ ios: 10, default: 12 }),
-        fontSize: Platform.select({ ios: 17, default: 16 }),
-        lineHeight: Platform.select({ ios: 22, default: 24 }),
-        letterSpacing: Platform.select({ ios: -0.41, default: 0.15 }),
-        color: theme.colors.input.text,
-        ...(Platform.select({
-            web: {
-                outline: 'none',
-                outlineStyle: 'none',
-                outlineWidth: 0,
-                outlineColor: 'transparent',
-                boxShadow: 'none',
-                WebkitBoxShadow: 'none',
-                WebkitAppearance: 'none',
-            },
-            default: {},
-        }) as object),
-    },
-}));
