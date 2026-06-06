@@ -48,6 +48,7 @@ export async function applyPendingSessionStateChange(params: {
         sessionId,
         pendingVersion: session.pendingVersion,
         pendingCount: session.pendingCount,
+        meaningfulActivityAt: params.meaningfulActivityAt,
     });
 
     return {

@@ -32,6 +32,7 @@ export type MaterializeNextPendingMessageResult =
         participantCursorsPending: ParticipantCursor[];
         pendingCount: number;
         pendingVersion: number;
+        meaningfulActivityAt?: Date;
         badgeAttentionChanged: boolean;
         readyProjection?: SessionReadyProjectionUpdate;
       }
@@ -293,6 +294,7 @@ async function materializeNextPendingMessageWithRaceRetry(params: {
                 sessionId,
                 pendingVersion: session.pendingVersion,
                 pendingCount: session.pendingCount,
+                meaningfulActivityAt: created.didWrite ? created.message.createdAt : undefined,
             });
 
             return {
@@ -304,6 +306,7 @@ async function materializeNextPendingMessageWithRaceRetry(params: {
                 participantCursorsPending,
                 pendingCount: session.pendingCount,
                 pendingVersion: session.pendingVersion,
+                ...(created.didWrite ? { meaningfulActivityAt: created.message.createdAt } : {}),
                 ...(readyProjection ? { readyProjection } : {}),
                 badgeAttentionChanged: didSessionActivityBadgeContributionChange(
                     sessionBefore,

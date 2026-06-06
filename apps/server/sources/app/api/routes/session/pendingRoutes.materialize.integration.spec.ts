@@ -86,6 +86,18 @@ describe("sessionPendingRoutes (materialize-next)", () => {
 
         expect(buildNewMessageUpdate).toHaveBeenCalledTimes(2);
         expect(buildPendingChangedUpdate).toHaveBeenCalledTimes(2);
+        expect(buildPendingChangedUpdate).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ meaningfulActivityAt: new Date(1_000) }),
+            20,
+            "k",
+        );
+        expect(buildPendingChangedUpdate).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ meaningfulActivityAt: new Date(1_000) }),
+            21,
+            "k",
+        );
         expect(buildUpdateSessionUpdate).not.toHaveBeenCalled();
         expect(emitUpdate).toHaveBeenCalledTimes(4);
     });

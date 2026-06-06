@@ -118,6 +118,7 @@ export type EnqueuePendingMessageResult =
         pending: PendingMessageRow;
         pendingCount: number;
         pendingVersion: number;
+        meaningfulActivityAt?: Date;
         badgeAttentionChanged: boolean;
         participantCursors: ParticipantCursor[];
       }
@@ -262,6 +263,7 @@ export async function enqueuePendingMessage(params: {
                 pending: mapPendingMessageRow(created),
                 pendingCount,
                 pendingVersion,
+                meaningfulActivityAt: created.createdAt,
                 badgeAttentionChanged,
                 participantCursors,
             };

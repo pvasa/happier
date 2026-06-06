@@ -49,6 +49,7 @@ async function emitPendingChanged(params: {
     changedByAccountId: string;
     pendingCount: number;
     pendingVersion: number;
+    meaningfulActivityAt?: Date | null;
     participantCursors: Array<{ accountId: string; cursor: number }>;
 }): Promise<void> {
     const results = await Promise.allSettled(
@@ -58,6 +59,7 @@ async function emitPendingChanged(params: {
                     sessionId: params.sessionId,
                     pendingCount: params.pendingCount,
                     pendingVersion: params.pendingVersion,
+                    meaningfulActivityAt: params.meaningfulActivityAt,
                     changedByAccountId: params.changedByAccountId,
                 },
                 cursor,
@@ -200,6 +202,7 @@ export function sessionPendingRoutes(app: Fastify) {
                 changedByAccountId: request.userId,
                 pendingCount: res.pendingCount,
                 pendingVersion: res.pendingVersion,
+                meaningfulActivityAt: res.didWrite ? res.meaningfulActivityAt : undefined,
                 participantCursors: res.participantCursors,
             });
             await refreshSessionParticipantBadgePushes({
@@ -470,6 +473,7 @@ export function sessionPendingRoutes(app: Fastify) {
                 changedByAccountId: request.userId,
                 pendingCount: res.pendingCount,
                 pendingVersion: res.pendingVersion,
+                meaningfulActivityAt: res.meaningfulActivityAt ?? (res.didWriteMessage ? res.message.createdAt : undefined),
                 participantCursors: res.participantCursorsPending,
             });
             await refreshSessionParticipantBadgePushes({

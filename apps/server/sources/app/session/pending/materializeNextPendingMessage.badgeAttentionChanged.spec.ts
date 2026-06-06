@@ -143,6 +143,7 @@ describe("materializeNextPendingMessage badgeAttentionChanged", () => {
         txSessionUpdate.mockReset();
         txSessionUpdate.mockResolvedValueOnce({ seq: 1 });
         txSessionUpdateMany
+            .mockResolvedValueOnce({ count: 1 })
             .mockResolvedValueOnce({ count: 0 })
             .mockResolvedValueOnce({ count: 0 });
         txSessionFindUniqueOrThrow.mockReset();
@@ -170,14 +171,21 @@ describe("materializeNextPendingMessage badgeAttentionChanged", () => {
 
         const result = await materializeNextPendingMessage({ actorUserId: "u1", sessionId: "s1" });
 
-        expect(txSessionUpdateMany).toHaveBeenNthCalledWith(1, {
+        expect(txSessionUpdateMany).toHaveBeenCalledWith({
+            where: { id: "s1", seq: 1 },
+            data: { meaningfulActivityAt: new Date("2026-03-16T00:00:00.000Z") },
+        });
+        expect(txSessionUpdateMany).toHaveBeenCalledWith({
             where: { id: "s1", pendingCount: { gt: 0 } },
             data: { pendingCount: { decrement: 1 }, pendingVersion: { increment: 1 } },
         });
-        expect(txSessionUpdateMany).toHaveBeenNthCalledWith(2, {
+        expect(txSessionUpdateMany).toHaveBeenCalledWith({
             where: { id: "s1", pendingCount: { lte: 0 } },
             data: { pendingCount: 0, pendingVersion: { increment: 1 } },
         });
+        const decrementCallIndex = txSessionUpdateMany.mock.calls.findIndex(([call]) => call?.where?.pendingCount?.gt === 0);
+        const clampCallIndex = txSessionUpdateMany.mock.calls.findIndex(([call]) => call?.where?.pendingCount?.lte === 0);
+        expect(clampCallIndex).toBeGreaterThan(decrementCallIndex);
         expect(txSessionUpdate).toHaveBeenCalledTimes(1);
         expect(result).toMatchObject({
             ok: true,
