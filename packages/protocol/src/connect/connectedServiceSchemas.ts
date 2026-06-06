@@ -417,6 +417,14 @@ export const ConnectedServiceAuthGroupStateV1Schema = z
 
 export type ConnectedServiceAuthGroupStateV1 = z.infer<typeof ConnectedServiceAuthGroupStateV1Schema>;
 
+const ConnectedServiceAuthGroupStatePatchV1Schema = z
+    .object({
+        status: z.enum(['ready', 'switching', 'exhausted', 'error', 'unknown']).optional(),
+        lastSwitchAt: z.number().int().nonnegative().nullable().optional(),
+        lastSwitchReason: z.string().trim().min(1).nullable().optional(),
+    })
+    .passthrough();
+
 export const ConnectedServiceAuthGroupMemberV1Schema = z
     .object({
         v: z.literal(1),
@@ -468,6 +476,14 @@ const ConnectedServiceAuthGroupMemberInputV1Schema = z
     })
     .strict();
 
+const ConnectedServiceAuthGroupExpectedGenerationV1Schema = z.number().int().nonnegative();
+
+const ConnectedServiceAuthGroupExpectedGenerationQueryV1Schema = z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? Number(trimmed) : value;
+}, ConnectedServiceAuthGroupExpectedGenerationV1Schema);
+
 export const ConnectedServiceAuthGroupCreateRequestV1Schema = z
     .object({
         groupId: ConnectedServiceAuthGroupIdSchema,
@@ -485,27 +501,53 @@ export const ConnectedServiceAuthGroupPatchRequestV1Schema = z
         displayName: z.string().trim().min(1).nullable().optional(),
         policy: ConnectedServiceAuthGroupPolicyPatchV1Schema.optional(),
         activeProfileId: ConnectedServiceProfileIdSchema.nullable().optional(),
+        expectedGeneration: z.number().int().nonnegative().optional(),
     })
-    .strict();
+    .strict()
+    .superRefine((request, ctx) => {
+        if (
+            (request.activeProfileId !== undefined || request.policy !== undefined)
+            && request.expectedGeneration === undefined
+        ) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['expectedGeneration'],
+                message: 'expectedGeneration is required when generation-sensitive group fields are patched',
+            });
+        }
+    });
 
 export type ConnectedServiceAuthGroupPatchRequestV1 = z.infer<typeof ConnectedServiceAuthGroupPatchRequestV1Schema>;
 
-export const ConnectedServiceAuthGroupMemberCreateRequestV1Schema = ConnectedServiceAuthGroupMemberInputV1Schema;
+export const ConnectedServiceAuthGroupMemberCreateRequestV1Schema = ConnectedServiceAuthGroupMemberInputV1Schema
+    .extend({
+        expectedGeneration: ConnectedServiceAuthGroupExpectedGenerationV1Schema,
+    })
+    .strict();
 export type ConnectedServiceAuthGroupMemberCreateRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberCreateRequestV1Schema>;
 
 export const ConnectedServiceAuthGroupMemberPatchRequestV1Schema = z
     .object({
         priority: z.number().int().optional(),
         enabled: z.boolean().optional(),
+        expectedGeneration: ConnectedServiceAuthGroupExpectedGenerationV1Schema,
     })
     .strict();
 
 export type ConnectedServiceAuthGroupMemberPatchRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberPatchRequestV1Schema>;
 
+export const ConnectedServiceAuthGroupMemberDeleteRequestV1Schema = z
+    .object({
+        expectedGeneration: ConnectedServiceAuthGroupExpectedGenerationQueryV1Schema,
+    })
+    .strict();
+
+export type ConnectedServiceAuthGroupMemberDeleteRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberDeleteRequestV1Schema>;
+
 export const ConnectedServiceAuthGroupActiveProfileRequestV1Schema = z
     .object({
         profileId: ConnectedServiceProfileIdSchema,
-        expectedGeneration: z.number().int().nonnegative().optional(),
+        expectedGeneration: z.number().int().nonnegative(),
     })
     .strict();
 
@@ -521,10 +563,20 @@ const ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema = z
 export const ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema = z
     .object({
         expectedGeneration: z.number().int().nonnegative().optional(),
-        state: ConnectedServiceAuthGroupStateV1Schema.optional(),
+        state: ConnectedServiceAuthGroupStatePatchV1Schema.optional(),
         memberStates: z.array(ConnectedServiceAuthGroupMemberRuntimeStatePatchV1Schema).default([]),
     })
-    .strict();
+    .strict()
+    .superRefine((request, ctx) => {
+        const mutatesRuntimeState = request.state !== undefined || request.memberStates.length > 0;
+        if (mutatesRuntimeState && request.expectedGeneration === undefined) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['expectedGeneration'],
+                message: 'expectedGeneration is required for runtime-state mutations',
+            });
+        }
+    });
 
 export type ConnectedServiceAuthGroupRuntimeStatePatchRequestV1 =
     z.infer<typeof ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema>;
@@ -556,6 +608,7 @@ export const ConnectedServiceAuthGroupErrorCodeV1Schema = z.enum([
     'connect_group_active_profile_not_member',
     'connect_group_profile_runtime_cooldown',
     'connect_group_generation_conflict',
+    'connect_group_generation_required',
     'connect_group_fallback_disabled',
     'connect_credential_referenced_by_group',
 ]);

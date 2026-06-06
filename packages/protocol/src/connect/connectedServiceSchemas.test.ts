@@ -500,10 +500,27 @@ describe('connectedServiceSchemas', () => {
             displayName: null,
             policy: { softSwitchRemainingPercent: 9 },
             activeProfileId: 'personal',
+            expectedGeneration: 2,
         })).toEqual({
             displayName: null,
             policy: { softSwitchRemainingPercent: 9 },
             activeProfileId: 'personal',
+            expectedGeneration: 2,
+        });
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.safeParse({
+            policy: { autoSwitch: false },
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.parse({
+            policy: { autoSwitch: false },
+            expectedGeneration: 3,
+        })).toEqual({
+            policy: { autoSwitch: false },
+            expectedGeneration: 3,
+        });
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.parse({
+            displayName: 'Codex fallback',
+        })).toEqual({
+            displayName: 'Codex fallback',
         });
         expect(ConnectedServiceAuthGroupRouteParamsV1Schema.parse({
             serviceId: 'openai-codex',
@@ -621,7 +638,7 @@ describe('connectedServiceSchemas', () => {
         }).success).toBe(false);
     });
 
-    it('parses active profile updates with an optional expected generation', () => {
+    it('requires expected generation for active profile updates', () => {
         const ConnectedServiceAuthGroupActiveProfileRequestV1Schema = expectSchema('ConnectedServiceAuthGroupActiveProfileRequestV1Schema');
 
         expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.parse({
@@ -631,14 +648,122 @@ describe('connectedServiceSchemas', () => {
             profileId: 'backup',
             expectedGeneration: 3,
         });
-        expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.parse({
+        expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.safeParse({
             profileId: 'backup',
-        })).toEqual({
-            profileId: 'backup',
-        });
+        }).success).toBe(false);
         expect(ConnectedServiceAuthGroupActiveProfileRequestV1Schema.safeParse({
             profileId: 'backup',
             expectedGeneration: -1,
+        }).success).toBe(false);
+    });
+
+    it('requires expected generation for member create, member patch, and member delete requests', () => {
+        const ConnectedServiceAuthGroupMemberCreateRequestV1Schema = expectSchema('ConnectedServiceAuthGroupMemberCreateRequestV1Schema');
+        const ConnectedServiceAuthGroupMemberPatchRequestV1Schema = expectSchema('ConnectedServiceAuthGroupMemberPatchRequestV1Schema');
+        const ConnectedServiceAuthGroupMemberDeleteRequestV1Schema = expectSchema('ConnectedServiceAuthGroupMemberDeleteRequestV1Schema');
+
+        expect(ConnectedServiceAuthGroupMemberCreateRequestV1Schema.parse({
+            profileId: 'backup',
+            priority: 25,
+            expectedGeneration: 3,
+        })).toEqual({
+            profileId: 'backup',
+            priority: 25,
+            enabled: true,
+            expectedGeneration: 3,
+        });
+        expect(ConnectedServiceAuthGroupMemberCreateRequestV1Schema.safeParse({
+            profileId: 'backup',
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupMemberCreateRequestV1Schema.safeParse({
+            profileId: 'backup',
+            expectedGeneration: -1,
+        }).success).toBe(false);
+
+        expect(ConnectedServiceAuthGroupMemberPatchRequestV1Schema.parse({
+            enabled: false,
+            expectedGeneration: 4,
+        })).toEqual({
+            enabled: false,
+            expectedGeneration: 4,
+        });
+        expect(ConnectedServiceAuthGroupMemberPatchRequestV1Schema.safeParse({
+            enabled: false,
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupMemberPatchRequestV1Schema.safeParse({
+            enabled: false,
+            expectedGeneration: -1,
+        }).success).toBe(false);
+
+        expect(ConnectedServiceAuthGroupMemberDeleteRequestV1Schema.parse({
+            expectedGeneration: 5,
+        })).toEqual({
+            expectedGeneration: 5,
+        });
+        expect(ConnectedServiceAuthGroupMemberDeleteRequestV1Schema.parse({
+            expectedGeneration: '6',
+        })).toEqual({
+            expectedGeneration: 6,
+        });
+        expect(ConnectedServiceAuthGroupMemberDeleteRequestV1Schema.safeParse({}).success).toBe(false);
+        expect(ConnectedServiceAuthGroupMemberDeleteRequestV1Schema.safeParse({
+            expectedGeneration: -1,
+        }).success).toBe(false);
+    });
+
+    it('requires expected generation for generation-sensitive group patch and runtime-state writes', () => {
+        const ConnectedServiceAuthGroupPatchRequestV1Schema = expectSchema('ConnectedServiceAuthGroupPatchRequestV1Schema');
+        const ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema = expectSchema('ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema');
+
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.parse({
+            displayName: 'Primary group',
+        })).toEqual({
+            displayName: 'Primary group',
+        });
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.parse({
+            activeProfileId: 'backup',
+            expectedGeneration: 4,
+        })).toEqual({
+            activeProfileId: 'backup',
+            expectedGeneration: 4,
+        });
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.safeParse({
+            activeProfileId: 'backup',
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupPatchRequestV1Schema.safeParse({
+            activeProfileId: null,
+        }).success).toBe(false);
+
+        expect(ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema.parse({
+            expectedGeneration: 4,
+            state: {
+                v: 1,
+                groupSwitchInProgress: false,
+            },
+        })).toEqual({
+            expectedGeneration: 4,
+            state: {
+                v: 1,
+                groupSwitchInProgress: false,
+            },
+            memberStates: [],
+        });
+        expect(ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema.parse({})).toEqual({
+            memberStates: [],
+        });
+        expect(ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema.safeParse({
+            state: {
+                v: 1,
+                groupSwitchInProgress: false,
+            },
+        }).success).toBe(false);
+        expect(ConnectedServiceAuthGroupRuntimeStatePatchRequestV1Schema.safeParse({
+            memberStates: [
+                {
+                    profileId: 'work',
+                    state: { v: 1 },
+                },
+            ],
         }).success).toBe(false);
     });
 });
