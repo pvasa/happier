@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import {
   type SessionStoredMessageContent,
   type SessionMessageRole,
@@ -16,6 +16,10 @@ import { encodeBase64, encrypt } from '@/api/encryption';
 import { resolveSessionCreateEncryptionMode } from '@/api/session/resolveSessionCreateEncryptionMode';
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl } from './serverHttpBaseUrl';
+import {
+  buildSessionDetailRequestPurpose,
+  type SessionSnapshotRefreshReasonInput,
+} from '@/api/session/sessionSnapshotRefreshReason';
 
 export type RawSessionRecord = V2SessionByIdResponse['session'];
 export type RawSessionListRow = V2SessionListResponse['sessions'][number];
@@ -40,17 +44,55 @@ function throwUnexpectedHttpStatusError(status: number, message: string): never 
   throw createHttpStatusError(status, message);
 }
 
-export async function fetchSessionById(params: Readonly<{ token: string; sessionId: string }>): Promise<RawSessionRecord | null> {
+type SessionByIdHttpResponse = AxiosResponse<unknown>;
+
+const sessionByIdInFlightRequests = new Map<string, Promise<SessionByIdHttpResponse>>();
+
+function buildSessionByIdInFlightKey(params: Readonly<{
+  serverUrl: string;
+  token: string;
+  encodedSessionId: string;
+}>): string {
+  return [params.serverUrl, params.token, params.encodedSessionId].join('\u0000');
+}
+
+async function getSessionByIdResponse(params: Readonly<{
+  token: string;
+  sessionId: string;
+  reason?: SessionSnapshotRefreshReasonInput;
+}>): Promise<SessionByIdHttpResponse> {
   const serverUrl = resolveServerHttpBaseUrl();
   const encodedSessionId = encodeSessionIdPathSegment(params.sessionId);
-  const response = await axios.get(`${serverUrl}/v2/sessions/${encodedSessionId}`, {
+  const requestPurpose = buildSessionDetailRequestPurpose(params.reason ?? 'legacy-compat-proof');
+  const key = buildSessionByIdInFlightKey({
+    serverUrl,
+    token: params.token,
+    encodedSessionId,
+  });
+  const existing = sessionByIdInFlightRequests.get(key);
+  if (existing) return await existing;
+
+  const promise = axios.get(`${serverUrl}/v2/sessions/${encodedSessionId}`, {
     headers: {
       Authorization: `Bearer ${params.token}`,
       'Content-Type': 'application/json',
+      'X-Happier-Request-Purpose': requestPurpose,
     },
     timeout: configuration.sessionControlHttpTimeoutMs,
     validateStatus: () => true,
   });
+  sessionByIdInFlightRequests.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    if (sessionByIdInFlightRequests.get(key) === promise) {
+      sessionByIdInFlightRequests.delete(key);
+    }
+  }
+}
+
+export async function fetchSessionById(params: Readonly<{ token: string; sessionId: string; reason?: SessionSnapshotRefreshReasonInput }>): Promise<RawSessionRecord | null> {
+  const response = await getSessionByIdResponse(params);
 
   if (response.status === 404) return null;
   if (isAuthenticationStatus(response.status)) {
@@ -78,17 +120,8 @@ function looksLikeMissingV2SessionRoute404(data: unknown, sessionId: string): bo
   );
 }
 
-export async function fetchSessionByIdCompat(params: Readonly<{ token: string; sessionId: string }>): Promise<RawSessionRecord | null> {
-  const serverUrl = resolveServerHttpBaseUrl();
-  const encodedSessionId = encodeSessionIdPathSegment(params.sessionId);
-  const response = await axios.get(`${serverUrl}/v2/sessions/${encodedSessionId}`, {
-    headers: {
-      Authorization: `Bearer ${params.token}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: configuration.sessionControlHttpTimeoutMs,
-    validateStatus: () => true,
-  });
+export async function fetchSessionByIdCompat(params: Readonly<{ token: string; sessionId: string; reason?: SessionSnapshotRefreshReasonInput }>): Promise<RawSessionRecord | null> {
+  const response = await getSessionByIdResponse(params);
 
   if (response.status === 404) {
     if (!looksLikeMissingV2SessionRoute404(response.data, params.sessionId)) return null;
