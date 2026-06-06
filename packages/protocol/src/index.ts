@@ -2582,3 +2582,13 @@ export {
 } from './profiles/index.js';
 
 export { normalizeMachineHost, compareMachineHosts } from './machineHost/normalizeMachineHost.js';
+export {
+  compareMachineHomeDirs,
+  isSameMachineLocality,
+  normalizeMachineHomeDir,
+  resolveMachineLocality,
+  type MachineHomeDirPlatform,
+  type MachineLocalityInput,
+  type MachineLocalityResult,
+  type NormalizeMachineHomeDirOptions,
+} from './machineIdentity/index.js';
