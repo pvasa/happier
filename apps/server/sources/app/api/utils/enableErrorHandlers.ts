@@ -103,6 +103,9 @@ export function enableErrorHandlers(app: Fastify) {
                 url === '/canvaskit.wasm' ||
                 url === '/metadata.json' ||
                 url === '/health' ||
+                url === '/ready' ||
+                url === '/live' ||
+                url === '/health/db' ||
                 url.startsWith('/metrics')
             ) {
                 // Fall through to 404 logging below

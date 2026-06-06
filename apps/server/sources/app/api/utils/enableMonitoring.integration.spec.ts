@@ -26,14 +26,14 @@ describe('enableMonitoring', () => {
         await harness?.close().catch(() => {});
     });
 
-    it.each(['/health', '/live'])('reports service as happier-server in liveness response for %s', async (url) => {
+    it('reports service as happier-server in liveness response for /health', async () => {
         const app = createMonitoringApp();
 
         try {
             enableMonitoring(app);
             await app.ready();
 
-            const res = await app.inject({ method: 'GET', url });
+            const res = await app.inject({ method: 'GET', url: '/health' });
             expect(res.statusCode).toBe(200);
             const body = res.json() as { service?: string };
             expect(body.service).toBe('happier-server');
@@ -42,14 +42,14 @@ describe('enableMonitoring', () => {
         }
     });
 
-    it.each(['/health', '/live'])('returns the full healthy liveness response body shape from %s', async (url) => {
+    it('returns the full healthy liveness response body shape from /health', async () => {
         const app = createMonitoringApp();
 
         try {
             enableMonitoring(app);
             await app.ready();
 
-            const res = await app.inject({ method: 'GET', url });
+            const res = await app.inject({ method: 'GET', url: '/health' });
             expect(res.statusCode).toBe(200);
             const body = res.json() as { status?: string; timestamp?: string; service?: string };
             expect(body.status).toBe('ok');
@@ -61,7 +61,26 @@ describe('enableMonitoring', () => {
         }
     });
 
-    it.each(['/ready', '/health/db'])('returns the full ready response body shape from %s when the database responds', async (url) => {
+    it('returns the full ready response body shape from /ready when the database responds', async () => {
+        const app = createMonitoringApp();
+
+        try {
+            enableMonitoring(app);
+            await app.ready();
+
+            const res = await app.inject({ method: 'GET', url: '/ready' });
+            expect(res.statusCode).toBe(200);
+            const body = res.json() as { status?: string; timestamp?: string; service?: string };
+            expect(body.status).toBe('ok');
+            expect(body.service).toBe('happier-server');
+            expect(typeof body.timestamp).toBe('string');
+            expect(Number.isNaN(new Date(body.timestamp ?? '').getTime())).toBe(false);
+        } finally {
+            await app.close().catch(() => {});
+        }
+    });
+
+    it.each(['/live', '/health/db'])('does not expose deprecated monitoring alias %s', async (url) => {
         const app = createMonitoringApp();
 
         try {
@@ -69,12 +88,7 @@ describe('enableMonitoring', () => {
             await app.ready();
 
             const res = await app.inject({ method: 'GET', url });
-            expect(res.statusCode).toBe(200);
-            const body = res.json() as { status?: string; timestamp?: string; service?: string };
-            expect(body.status).toBe('ok');
-            expect(body.service).toBe('happier-server');
-            expect(typeof body.timestamp).toBe('string');
-            expect(Number.isNaN(new Date(body.timestamp ?? '').getTime())).toBe(false);
+            expect(res.statusCode).toBe(404);
         } finally {
             await app.close().catch(() => {});
         }
