@@ -1,0 +1,858 @@
+import type { DaemonServerWorkErrorClassification } from '@/daemon/serverWork/types';
+import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
+import {
+  DurableBackoffRecoveryScheduler,
+  type DurableRecoveryGateResult,
+  type DurableRecoveryStore,
+} from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
+import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES, type ConnectedServiceUxDiagnosticV1 } from '@happier-dev/protocol';
+import { buildConnectedServiceUxDiagnostic } from '../diagnostics/connectedServiceUxDiagnostics';
+import { sanitizeConnectedServiceDiagnosticString } from '../diagnostics/sanitizeConnectedServiceDiagnosticString';
+import type { ConnectedServiceRuntimeFailureClassification } from './types';
+import { readConnectedServiceAuthGenerationApplyFailure } from './connectedServiceAuthGenerationApplyFailure';
+import { buildRuntimeAuthRecoveryKey } from './recoveryKey/runtimeAuthRecoveryKey';
+import {
+  buildRuntimeAuthRecoveryScheduledUxDiagnostic,
+  buildRuntimeAuthRecoveryTranscriptEvent,
+  type ConnectedServiceRuntimeAuthRecoveryTranscriptEventV1,
+} from './projection/connectedServiceRuntimeAuthRecoveryProjection';
+
+type RuntimeAuthRecoveryIntentStatus = 'waiting' | 'checking' | 'cancelled' | 'exhausted';
+type RuntimeAuthRecoveryFailurePhase = 'handler' | 'apply';
+
+export type RuntimeAuthRecoveryIntent = Readonly<{
+  v: 1;
+  sessionId: string;
+  serviceId: string;
+  profileId: string | null;
+  groupId: string | null;
+  status: RuntimeAuthRecoveryIntentStatus;
+  armedAtMs: number;
+  nextRetryAtMs: number | null;
+  attemptCount: number;
+  maxAttempts: number;
+  switchesThisTurn: number;
+  classification: ConnectedServiceRuntimeFailureClassification;
+  failurePhase: RuntimeAuthRecoveryFailurePhase;
+  failureReason: string;
+  lastError: string | null;
+  lastErrorClassification: DaemonServerWorkErrorClassification | null;
+  terminalAtMs?: number | null;
+}>;
+
+export type RuntimeAuthRecoveryDiagnostic = Readonly<{
+  event:
+    | 'runtime_auth_recovery_enqueue'
+    | 'runtime_auth_recovery_retry'
+    | 'runtime_auth_recovery_success'
+    | 'runtime_auth_recovery_dead_letter'
+    | 'runtime_auth_recovery_terminal'
+    | 'runtime_auth_recovery_delayed';
+  sessionId: string;
+  serviceId: string;
+  groupId: string | null;
+  profileId: string | null;
+  failurePhase?: RuntimeAuthRecoveryFailurePhase;
+  reason?: string;
+  attemptCount?: number;
+  nextRetryAtMs?: number | null;
+  classification?: DaemonServerWorkErrorClassification | null;
+  uxDiagnostic?: ConnectedServiceUxDiagnosticV1;
+  transcriptEvent?: ConnectedServiceRuntimeAuthRecoveryTranscriptEventV1;
+}>;
+
+type RuntimeAuthRecoverySchedulerDeps = Readonly<{
+  nowMs: () => number;
+  baseBackoffMs?: number;
+  maxBackoffMs?: number;
+  jitterMs?: () => number;
+  maxAttempts?: number;
+  store?: DurableRecoveryStore<RuntimeAuthRecoveryIntent>;
+  recover: (input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+  }>) => Promise<unknown>;
+  gate?: (input: Readonly<{ sessionId: string; intent: RuntimeAuthRecoveryIntent }>) => DurableRecoveryGateResult;
+  recordDiagnostic?: (event: RuntimeAuthRecoveryDiagnostic) => void;
+}>;
+
+type RetryDecision =
+  | Readonly<{
+      retryable: true;
+      classification: DaemonServerWorkErrorClassification;
+      failurePhase: RuntimeAuthRecoveryFailurePhase;
+      failureReason: string;
+      lastError: string | null;
+    }>
+  | Readonly<{
+      retryable: false;
+      classification: DaemonServerWorkErrorClassification | null;
+      reason: string;
+      failurePhase: RuntimeAuthRecoveryFailurePhase;
+      lastError: string | null;
+    }>;
+
+const DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_ATTEMPTS = 5;
+const DEFAULT_RUNTIME_AUTH_RECOVERY_TERMINAL_RECORD_RETENTION_MS = 7 * 24 * 60 * 60_000;
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function readNonNegativeNumber(value: unknown): number | null {
+  const number = readNumber(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
+function normalizeClassification(value: unknown): DaemonServerWorkErrorClassification | null {
+  if (!isRecord(value)) return null;
+  const kind = readString(value.kind);
+  if (!kind) return null;
+  const retryable = value.retryable;
+  if (typeof retryable !== 'boolean') return null;
+  return {
+    kind,
+    retryable,
+    ...(typeof value.statusCode === 'number' ? { statusCode: Math.trunc(value.statusCode) } : {}),
+    ...(typeof value.retryAfterMs === 'number' ? { retryAfterMs: Math.max(0, Math.trunc(value.retryAfterMs)) } : {}),
+  } as DaemonServerWorkErrorClassification;
+}
+
+function normalizeRuntimeClassification(value: unknown): ConnectedServiceRuntimeFailureClassification | null {
+  if (!isRecord(value)) return null;
+  const kind = readString(value.kind);
+  const serviceId = readString(value.serviceId);
+  if (!kind || !serviceId) return null;
+  const source = readString(value.source);
+  if (
+    source !== 'structured_provider_error'
+    && source !== 'stable_provider_message'
+    && source !== 'provider_runtime_marker'
+  ) return null;
+  return {
+    ...value,
+    kind,
+    serviceId,
+    profileId: readString(value.profileId),
+    groupId: readString(value.groupId),
+    resetsAtMs: value.resetsAtMs === null ? null : readNumber(value.resetsAtMs),
+    planType: value.planType === null ? null : readString(value.planType),
+    rateLimits: value.rateLimits ?? null,
+    source,
+  } as ConnectedServiceRuntimeFailureClassification;
+}
+
+function normalizeIntent(value: unknown): RuntimeAuthRecoveryIntent | null {
+  if (!isRecord(value)) return null;
+  if (value.v !== 1) return null;
+  if (
+    value.status !== 'waiting'
+    && value.status !== 'checking'
+    && value.status !== 'cancelled'
+    && value.status !== 'exhausted'
+  ) return null;
+  const sessionId = readString(value.sessionId);
+  const serviceId = readString(value.serviceId);
+  const classification = normalizeRuntimeClassification(value.classification);
+  const armedAtMs = readNonNegativeNumber(value.armedAtMs);
+  const attemptCount = readNonNegativeNumber(value.attemptCount);
+  const maxAttempts = readNonNegativeNumber(value.maxAttempts);
+  const switchesThisTurn = readNonNegativeNumber(value.switchesThisTurn);
+  const nextRetryAtMs = value.nextRetryAtMs === null ? null : readNonNegativeNumber(value.nextRetryAtMs);
+  if (
+    !sessionId
+    || !serviceId
+    || !classification
+    || armedAtMs === null
+    || attemptCount === null
+    || maxAttempts === null
+    || switchesThisTurn === null
+    || nextRetryAtMs === undefined
+  ) return null;
+  const failurePhase = value.failurePhase === 'apply' ? 'apply' : 'handler';
+  return {
+    v: 1,
+    sessionId,
+    serviceId,
+    profileId: readString(value.profileId),
+    groupId: readString(value.groupId),
+    status: value.status,
+    armedAtMs,
+    nextRetryAtMs,
+    attemptCount,
+    maxAttempts,
+    switchesThisTurn,
+    classification,
+    failurePhase,
+    failureReason: readString(value.failureReason) ?? 'unknown',
+    lastError: readString(value.lastError),
+    lastErrorClassification: normalizeClassification(value.lastErrorClassification),
+    terminalAtMs: value.terminalAtMs === undefined || value.terminalAtMs === null
+      ? null
+      : readNonNegativeNumber(value.terminalAtMs),
+  };
+}
+
+function readSwitchAttemptResult(result: unknown): Readonly<Record<string, unknown>> | null {
+  if (!isRecord(result)) return null;
+  if (result.status === 'switch_attempted' && isRecord(result.result)) return result.result;
+  return result;
+}
+
+function readApplyFailure(result: unknown): Readonly<{
+  errorCode: string;
+  diagnostics: Readonly<Record<string, unknown>> | null;
+}> | null {
+  const switchResult = readSwitchAttemptResult(result);
+  if (!switchResult || switchResult.status !== 'generation_apply_failed') return null;
+  const errorCode = readString(switchResult.errorCode);
+  if (!errorCode) return null;
+  return {
+    errorCode,
+    diagnostics: isRecord(switchResult.diagnostics) ? switchResult.diagnostics : null,
+  };
+}
+
+function classifyApplyFailure(result: unknown): RetryDecision | null {
+  const failure = readApplyFailure(result);
+  if (!failure) return null;
+  if (
+    failure.errorCode === 'provider_account_adoption_mismatch'
+    || failure.errorCode === 'post_switch_verification_failed'
+  ) {
+    const verification = isRecord(failure.diagnostics?.verification)
+      ? failure.diagnostics.verification
+      : null;
+    const explicit = normalizeClassification(verification?.errorClassification)
+      ?? normalizeClassification(failure.diagnostics?.errorClassification);
+    const retryable = failure.diagnostics?.retryable === true || explicit?.retryable === true;
+    if (retryable) {
+      return {
+        retryable: true,
+        classification: explicit ?? { kind: 'protocol_error', retryable: true },
+        failurePhase: 'apply',
+        failureReason: failure.errorCode,
+        lastError: readString(verification?.reason) ?? failure.errorCode,
+      };
+    }
+    return {
+      retryable: false,
+      classification: explicit,
+      reason: 'non_retryable_apply_failure',
+      failurePhase: 'apply',
+      lastError: readString(verification?.reason) ?? failure.errorCode,
+    };
+  }
+  if (
+    failure.errorCode === 'restart_failed'
+    && failure.diagnostics?.failurePhase === 'restart'
+    && failure.diagnostics.retryable === true
+  ) {
+    const explicit = normalizeClassification(failure.diagnostics?.errorClassification);
+    return {
+      retryable: true,
+      classification: explicit ?? { kind: 'protocol_error', retryable: true },
+      failurePhase: 'apply',
+      failureReason: 'restart_failed',
+      lastError: 'restart_failed',
+    };
+  }
+  if (failure.errorCode !== 'hot_apply_failed') {
+    return {
+      retryable: false,
+      classification: null,
+      reason: 'non_retryable_apply_failure',
+      failurePhase: 'apply',
+      lastError: failure.errorCode,
+    };
+  }
+
+  const explicit = normalizeClassification(failure.diagnostics?.underlyingErrorClassification);
+  const underlyingError = readString(failure.diagnostics?.underlyingError);
+  const sanitizedUnderlyingError = underlyingError
+    ? sanitizeConnectedServiceDiagnosticString(underlyingError)
+    : null;
+  const classification = explicit ?? (underlyingError ? classifyDaemonServerWorkError(new Error(underlyingError)) : null);
+  if (classification?.retryable) {
+    return {
+      retryable: true,
+      classification,
+      failurePhase: 'apply',
+      failureReason: 'hot_apply_failed',
+      lastError: sanitizedUnderlyingError ?? failure.errorCode,
+    };
+  }
+  return {
+    retryable: false,
+    classification,
+    reason: 'non_retryable_apply_failure',
+    failurePhase: 'apply',
+    lastError: sanitizedUnderlyingError ?? failure.errorCode,
+  };
+}
+
+function isRuntimeAuthRecoverySuccess(result: unknown): boolean {
+  const switchResult = readSwitchAttemptResult(result);
+  return switchResult?.status === 'switched'
+    || switchResult?.status === 'observed_generation'
+    || switchResult?.status === 'credential_refreshed'
+    || switchResult?.ok === true;
+}
+
+function isRuntimeAuthRecoveryTerminal(result: unknown): boolean {
+  const switchResult = readSwitchAttemptResult(result);
+  if (!switchResult) return true;
+  return switchResult.status !== 'generation_apply_failed';
+}
+
+function classifyHandlerError(error: unknown): RetryDecision {
+  const applyFailure = readConnectedServiceAuthGenerationApplyFailure(error);
+  if (applyFailure) {
+    return classifyApplyFailure({
+      status: 'generation_apply_failed',
+      errorCode: applyFailure.errorCode,
+      ...(applyFailure.diagnostics === undefined ? {} : { diagnostics: applyFailure.diagnostics }),
+    }) ?? {
+      retryable: false,
+      classification: null,
+      reason: 'non_retryable_apply_failure',
+      failurePhase: 'apply',
+      lastError: applyFailure.errorCode,
+    };
+  }
+  const classification = classifyDaemonServerWorkError(error);
+  const message = sanitizeConnectedServiceDiagnosticString(error instanceof Error ? error.message : String(error));
+  if (classification.retryable) {
+    return {
+      retryable: true,
+      classification,
+      failurePhase: 'handler',
+      failureReason: 'handler_transient_failure',
+      lastError: message,
+    };
+  }
+  return {
+    retryable: false,
+    classification,
+    reason: 'non_retryable_handler_failure',
+    failurePhase: 'handler',
+    lastError: message,
+  };
+}
+
+function normalizeMaxAttempts(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_RUNTIME_AUTH_RECOVERY_MAX_ATTEMPTS;
+  return Math.max(1, Math.trunc(value));
+}
+
+function buildRecoveryKeyForIntent(
+  intent: Pick<RuntimeAuthRecoveryIntent, 'sessionId' | 'serviceId' | 'profileId' | 'groupId'>,
+): string {
+  return buildRuntimeAuthRecoveryKey({
+    sessionId: intent.sessionId,
+    serviceId: intent.serviceId,
+    profileId: intent.profileId,
+    groupId: intent.groupId,
+  });
+}
+
+function isTerminalRuntimeAuthRecoveryStatus(status: RuntimeAuthRecoveryIntentStatus): boolean {
+  return status === 'cancelled' || status === 'exhausted';
+}
+
+function mergeRuntimeAuthNextRetryAtMs(
+  previous: RuntimeAuthRecoveryIntent,
+  next: RuntimeAuthRecoveryIntent,
+): number | null {
+  if (isTerminalRuntimeAuthRecoveryStatus(previous.status)) return previous.nextRetryAtMs;
+  if (previous.nextRetryAtMs === null) return next.nextRetryAtMs;
+  if (next.nextRetryAtMs === null) return previous.nextRetryAtMs;
+  return Math.min(previous.nextRetryAtMs, next.nextRetryAtMs);
+}
+
+function mergeRuntimeAuthRecoveryIntent(
+  previous: RuntimeAuthRecoveryIntent | null,
+  next: RuntimeAuthRecoveryIntent,
+): RuntimeAuthRecoveryIntent {
+  if (!previous) return next;
+  return {
+    ...next,
+    status: previous.status,
+    nextRetryAtMs: mergeRuntimeAuthNextRetryAtMs(previous, next),
+    attemptCount: previous.attemptCount,
+    maxAttempts: Math.min(previous.maxAttempts, next.maxAttempts),
+  };
+}
+
+function isSameServerWorkErrorClassification(
+  left: DaemonServerWorkErrorClassification | null,
+  right: DaemonServerWorkErrorClassification | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.kind === right.kind
+    && left.retryable === right.retryable
+    && left.statusCode === right.statusCode
+    && left.retryAfterMs === right.retryAfterMs;
+}
+
+function isSameRuntimeFailureClassification(
+  left: ConnectedServiceRuntimeFailureClassification,
+  right: ConnectedServiceRuntimeFailureClassification,
+): boolean {
+  return left.kind === right.kind
+    && left.serviceId === right.serviceId
+    && left.profileId === right.profileId
+    && left.groupId === right.groupId
+    && left.resetsAtMs === right.resetsAtMs
+    && left.planType === right.planType
+    && left.source === right.source;
+}
+
+function hasSameRuntimeAuthFailureFields(
+  left: RuntimeAuthRecoveryIntent,
+  right: RuntimeAuthRecoveryIntent,
+): boolean {
+  return left.switchesThisTurn === right.switchesThisTurn
+    && left.failurePhase === right.failurePhase
+    && left.failureReason === right.failureReason
+    && left.lastError === right.lastError
+    && isSameServerWorkErrorClassification(left.lastErrorClassification, right.lastErrorClassification)
+    && isSameRuntimeFailureClassification(left.classification, right.classification);
+}
+
+function mergeRuntimeAuthWakeNextRetryAtMs(
+  current: RuntimeAuthRecoveryIntent,
+  next: RuntimeAuthRecoveryIntent,
+): number | null {
+  if (next.status !== 'waiting') return next.nextRetryAtMs;
+  if (current.nextRetryAtMs === null) return next.nextRetryAtMs;
+  if (next.nextRetryAtMs === null) return current.nextRetryAtMs;
+  return Math.min(current.nextRetryAtMs, next.nextRetryAtMs);
+}
+
+function mergeRuntimeAuthRecoveryWakeWrite(input: Readonly<{
+  current: RuntimeAuthRecoveryIntent | null;
+  base: RuntimeAuthRecoveryIntent;
+  next: RuntimeAuthRecoveryIntent;
+  reason: string;
+}>): RuntimeAuthRecoveryIntent {
+  if (!input.current) return input.next;
+  if (isTerminalRuntimeAuthRecoveryStatus(input.current.status)) return input.current;
+  if (input.reason === 'success') return input.next;
+  if (hasSameRuntimeAuthFailureFields(input.current, input.base)) return input.next;
+  const keepLatestFailureMessage = input.reason === 'waiting' || input.reason === 'delayed';
+  return {
+    ...input.next,
+    switchesThisTurn: input.current.switchesThisTurn,
+    classification: input.current.classification,
+    failurePhase: input.current.failurePhase,
+    failureReason: input.current.failureReason,
+    lastError: keepLatestFailureMessage ? input.current.lastError : input.next.lastError,
+    lastErrorClassification: input.current.lastErrorClassification,
+    attemptCount: Math.max(input.current.attemptCount, input.next.attemptCount),
+    maxAttempts: Math.min(input.current.maxAttempts, input.next.maxAttempts),
+    nextRetryAtMs: mergeRuntimeAuthWakeNextRetryAtMs(input.current, input.next),
+  };
+}
+
+export class RuntimeAuthRecoveryScheduler {
+  private readonly maxAttempts: number;
+  private readonly scheduler: DurableBackoffRecoveryScheduler<RuntimeAuthRecoveryIntent>;
+
+  constructor(private readonly deps: RuntimeAuthRecoverySchedulerDeps) {
+    this.maxAttempts = normalizeMaxAttempts(deps.maxAttempts);
+    this.scheduler = new DurableBackoffRecoveryScheduler<RuntimeAuthRecoveryIntent>({
+      nowMs: deps.nowMs,
+      baseBackoffMs: deps.baseBackoffMs,
+      maxBackoffMs: deps.maxBackoffMs,
+      jitterMs: deps.jitterMs,
+      store: deps.store,
+      normalizeIntent,
+      getStatus: (intent) => intent.status,
+      getNextRetryAtMs: (intent) => intent.nextRetryAtMs,
+      getAttemptCount: (intent) => intent.attemptCount,
+      getMaxAttempts: (intent) => intent.maxAttempts,
+      terminalRecordRetentionMs: DEFAULT_RUNTIME_AUTH_RECOVERY_TERMINAL_RECORD_RETENTION_MS,
+      getTerminalPruneReferenceMs: (intent) => intent.terminalAtMs ?? intent.armedAtMs,
+      markChecking: (intent, attemptCount) => ({
+        ...intent,
+        status: 'checking',
+        attemptCount,
+      }),
+      markWaiting: (intent, input) => ({
+        ...intent,
+        status: 'waiting',
+        nextRetryAtMs: input.nextRetryAtMs,
+        lastError: input.lastError,
+      }),
+      markCancelled: (intent) => ({
+        ...intent,
+        status: 'cancelled',
+        nextRetryAtMs: null,
+        lastError: null,
+        terminalAtMs: deps.nowMs(),
+      }),
+      markExhausted: (intent, input) => ({
+        ...intent,
+        status: 'exhausted',
+        nextRetryAtMs: null,
+        lastError: input.lastError,
+        terminalAtMs: deps.nowMs(),
+      }),
+      clearOnSuccess: true,
+      getSessionId: (intent) => intent.sessionId,
+      gate: deps.gate,
+      mergeBeforeWakeWrite: ({ current, base, next, reason }) => mergeRuntimeAuthRecoveryWakeWrite({
+        current,
+        base,
+        next,
+        reason,
+      }),
+      recover: async (intent) => {
+        try {
+          const result = await deps.recover({
+            sessionId: intent.sessionId,
+            switchesThisTurn: intent.switchesThisTurn,
+            classification: intent.classification,
+          });
+          if (isRuntimeAuthRecoverySuccess(result)) return { status: 'success' };
+          const applyDecision = classifyApplyFailure(result);
+          if (applyDecision?.retryable) {
+            return {
+              status: 'wait',
+              lastError: applyDecision.lastError,
+              intent: {
+                ...intent,
+                lastErrorClassification: applyDecision.classification,
+                lastError: applyDecision.lastError,
+              },
+            };
+          }
+          if (applyDecision && !applyDecision.retryable) {
+            return {
+              status: 'terminal',
+              lastError: applyDecision.lastError,
+            };
+          }
+          if (isRuntimeAuthRecoveryTerminal(result)) {
+            return { status: 'terminal', lastError: 'terminal_recovery_result' };
+          }
+          return { status: 'wait', lastError: 'retryable_recovery_result' };
+        } catch (error) {
+          const decision = classifyHandlerError(error);
+          if (!decision.retryable) {
+            return { status: 'terminal', lastError: decision.lastError };
+          }
+          return {
+            status: 'wait',
+            lastError: decision.lastError,
+            intent: {
+              ...intent,
+              lastError: decision.lastError,
+              lastErrorClassification: decision.classification,
+            },
+          };
+        }
+      },
+      onRetry: ({ intent }) => {
+        this.record({
+          event: 'runtime_auth_recovery_retry',
+          sessionId: intent.sessionId,
+          serviceId: intent.serviceId,
+          groupId: intent.groupId,
+          profileId: intent.profileId,
+          failurePhase: intent.failurePhase,
+          attemptCount: intent.attemptCount,
+          classification: intent.lastErrorClassification,
+        });
+      },
+      onSuccess: ({ intent }) => {
+        this.record({
+          event: 'runtime_auth_recovery_success',
+          sessionId: intent.sessionId,
+          serviceId: intent.serviceId,
+          groupId: intent.groupId,
+          profileId: intent.profileId,
+          failurePhase: intent.failurePhase,
+        });
+      },
+      onTerminal: ({ intent, lastError }) => {
+        this.record({
+          event: 'runtime_auth_recovery_terminal',
+          sessionId: intent.sessionId,
+          serviceId: intent.serviceId,
+          groupId: intent.groupId,
+          profileId: intent.profileId,
+          failurePhase: intent.failurePhase,
+          reason: lastError ?? 'terminal_recovery_result',
+        });
+      },
+      onExhausted: ({ intent, lastError }) => {
+        const uxDiagnostic = buildConnectedServiceUxDiagnostic({
+          code: CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.recoveryDeadLettered,
+          failurePhase: 'runtime_auth_recovery',
+          source: 'runtime_auth_recovery',
+          serviceId: intent.serviceId,
+          profileId: intent.profileId,
+          groupId: intent.groupId,
+          retryable: true,
+          diagnostics: {
+            reason: lastError ?? 'max_attempts_exhausted',
+            attemptCount: intent.attemptCount,
+          },
+        });
+        const transcriptEvent = buildRuntimeAuthRecoveryTranscriptEvent({
+          status: 'dead_lettered',
+          classification: intent.classification,
+          uxDiagnostic,
+          attempt: intent.attemptCount,
+          terminal: true,
+          reason: lastError ?? 'max_attempts_exhausted',
+        });
+        this.record({
+          event: 'runtime_auth_recovery_dead_letter',
+          sessionId: intent.sessionId,
+          serviceId: intent.serviceId,
+          groupId: intent.groupId,
+          profileId: intent.profileId,
+          failurePhase: intent.failurePhase,
+          reason: lastError ?? 'max_attempts_exhausted',
+          attemptCount: intent.attemptCount,
+          uxDiagnostic,
+          ...(transcriptEvent ? { transcriptEvent } : {}),
+        });
+      },
+      onDelayed: ({ intent, retryAtMs, reason }) => {
+        this.record({
+          event: 'runtime_auth_recovery_delayed',
+          sessionId: intent.sessionId,
+          serviceId: intent.serviceId,
+          groupId: intent.groupId,
+          profileId: intent.profileId,
+          failurePhase: intent.failurePhase,
+          reason,
+          nextRetryAtMs: retryAtMs,
+          classification: intent.lastErrorClassification,
+        });
+      },
+    });
+  }
+
+  read(sessionId: string): RuntimeAuthRecoveryIntent | null {
+    const intents = this.readForSession(sessionId);
+    return intents.find((intent) => intent.status === 'waiting' || intent.status === 'checking')
+      ?? intents[0]
+      ?? null;
+  }
+
+  readByKey(recoveryKey: string): RuntimeAuthRecoveryIntent | null {
+    return this.scheduler.readByKey(recoveryKey);
+  }
+
+  readForSession(sessionId: string): ReadonlyArray<RuntimeAuthRecoveryIntent> {
+    return this.scheduler.readForSession(sessionId);
+  }
+
+  hydrate(): ReadonlyArray<RuntimeAuthRecoveryIntent> {
+    return this.scheduler.hydrate();
+  }
+
+  async wake(input: Readonly<{ sessionId: string; reason: 'timer' | 'manual' }>): Promise<Readonly<{ status: string }>> {
+    const intents = this.readForSession(input.sessionId).filter((intent) => (
+      intent.status === 'waiting' || intent.status === 'checking'
+    ));
+    if (intents.length === 0) return { status: 'inactive' };
+    if (intents.length === 1) {
+      return await this.wakeByKey({
+        recoveryKey: buildRecoveryKeyForIntent(intents[0]!),
+        reason: input.reason,
+      });
+    }
+    const results = [];
+    for (const intent of intents) {
+      results.push(await this.wakeByKey({
+        recoveryKey: buildRecoveryKeyForIntent(intent),
+        reason: input.reason,
+      }));
+    }
+    if (results.some((result) => result.status === 'succeeded')) return { status: 'succeeded' };
+    if (results.some((result) => result.status === 'waiting')) return { status: 'waiting' };
+    if (results.some((result) => result.status === 'exhausted')) return { status: 'exhausted' };
+    if (results.some((result) => result.status === 'terminal')) return { status: 'terminal' };
+    return { status: 'inactive' };
+  }
+
+  async wakeByKey(input: Readonly<{ recoveryKey: string; reason: 'timer' | 'manual' }>): Promise<Readonly<{ status: string }>> {
+    return await this.scheduler.wakeByKey({
+      recoveryKey: input.recoveryKey,
+      reason: input.reason,
+    });
+  }
+
+  async cancel(input: Readonly<{ sessionId: string }>): Promise<RuntimeAuthRecoveryIntent | null> {
+    const cancelled = await this.scheduler.cancelForSession(input.sessionId);
+    return cancelled[0] ?? null;
+  }
+
+  async cancelByKey(recoveryKey: string): Promise<RuntimeAuthRecoveryIntent | null> {
+    return await this.scheduler.cancelByKey(recoveryKey);
+  }
+
+  async markSucceededByKey(recoveryKey: string): Promise<RuntimeAuthRecoveryIntent | null> {
+    const intent = this.readByKey(recoveryKey);
+    if (!intent || intent.status === 'cancelled' || intent.status === 'exhausted') return intent;
+    const cleared = await this.scheduler.clearByKey(recoveryKey);
+    if (!cleared) return null;
+    this.record({
+      event: 'runtime_auth_recovery_success',
+      sessionId: cleared.sessionId,
+      serviceId: cleared.serviceId,
+      groupId: cleared.groupId,
+      profileId: cleared.profileId,
+      failurePhase: cleared.failurePhase,
+    });
+    return cleared;
+  }
+
+  async enqueueHandlerFailure(input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    error: unknown;
+  }>): Promise<Readonly<{ status: string; retryable: boolean; nextRetryAtMs?: number | null }>> {
+    return await this.enqueue({
+      sessionId: input.sessionId,
+      switchesThisTurn: input.switchesThisTurn,
+      classification: input.classification,
+      decision: classifyHandlerError(input.error),
+    });
+  }
+
+  async enqueueApplyFailure(input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    result: unknown;
+  }>): Promise<Readonly<{ status: string; retryable: boolean; nextRetryAtMs?: number | null }>> {
+    const decision = classifyApplyFailure(input.result);
+    if (!decision) return { status: 'ignored', retryable: false };
+    return await this.enqueue({
+      sessionId: input.sessionId,
+      switchesThisTurn: input.switchesThisTurn,
+      classification: input.classification,
+      decision,
+    });
+  }
+
+  private async enqueue(input: Readonly<{
+    sessionId: string;
+    switchesThisTurn: number;
+    classification: ConnectedServiceRuntimeFailureClassification;
+    decision: RetryDecision;
+  }>): Promise<Readonly<{ status: string; retryable: boolean; nextRetryAtMs?: number | null }>> {
+    if (!input.decision.retryable) {
+      this.record({
+        event: 'runtime_auth_recovery_terminal',
+        sessionId: input.sessionId,
+        serviceId: input.classification.serviceId,
+        groupId: input.classification.groupId,
+        profileId: input.classification.profileId,
+        failurePhase: input.decision.failurePhase,
+        reason: input.decision.reason,
+        classification: input.decision.classification,
+      });
+      return { status: 'terminal_non_retry', retryable: false };
+    }
+
+    const nowMs = this.deps.nowMs();
+    const retryAfterMs = input.decision.classification.retryAfterMs;
+    const nextRetryAtMs = nowMs + (
+      typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs)
+        ? Math.max(0, Math.trunc(retryAfterMs))
+        : Math.max(1, Math.trunc(this.deps.baseBackoffMs ?? 1_000))
+    );
+    const intent: RuntimeAuthRecoveryIntent = {
+      v: 1,
+      sessionId: input.sessionId,
+      serviceId: input.classification.serviceId,
+      profileId: input.classification.profileId,
+      groupId: input.classification.groupId,
+      status: 'waiting',
+      armedAtMs: nowMs,
+      nextRetryAtMs,
+      attemptCount: 0,
+      maxAttempts: this.maxAttempts,
+      switchesThisTurn: input.switchesThisTurn,
+      classification: input.classification,
+      failurePhase: input.decision.failurePhase,
+      failureReason: input.decision.failureReason,
+      lastError: input.decision.lastError,
+      lastErrorClassification: input.decision.classification,
+      terminalAtMs: null,
+    };
+    const recoveryKey = buildRecoveryKeyForIntent(intent);
+    const persistedIntent = await this.scheduler.upsertMergedByKey({
+      sessionId: input.sessionId,
+      recoveryKey,
+      intent,
+      merge: mergeRuntimeAuthRecoveryIntent,
+    });
+    if (persistedIntent.status === 'exhausted') {
+      return {
+        status: 'exhausted',
+        retryable: false,
+      };
+    }
+    if (persistedIntent.status === 'cancelled') {
+      return {
+        status: 'cancelled',
+        retryable: false,
+      };
+    }
+    const uxDiagnostic = buildRuntimeAuthRecoveryScheduledUxDiagnostic({
+      classification: persistedIntent.classification,
+      nextRetryAtMs: persistedIntent.nextRetryAtMs,
+      reason: persistedIntent.failureReason,
+    });
+    const transcriptEvent = buildRuntimeAuthRecoveryTranscriptEvent({
+      status: 'retry_scheduled',
+      classification: persistedIntent.classification,
+      uxDiagnostic,
+      nextRetryAtMs: persistedIntent.nextRetryAtMs,
+      terminal: false,
+      reason: persistedIntent.failureReason,
+    });
+    this.record({
+      event: 'runtime_auth_recovery_enqueue',
+      sessionId: persistedIntent.sessionId,
+      serviceId: persistedIntent.serviceId,
+      groupId: persistedIntent.groupId,
+      profileId: persistedIntent.profileId,
+      failurePhase: persistedIntent.failurePhase,
+      reason: persistedIntent.failureReason,
+      nextRetryAtMs: persistedIntent.nextRetryAtMs,
+      classification: persistedIntent.lastErrorClassification,
+      uxDiagnostic,
+      ...(transcriptEvent ? { transcriptEvent } : {}),
+    });
+    return {
+      status: 'scheduled',
+      retryable: true,
+      nextRetryAtMs: persistedIntent.nextRetryAtMs,
+    };
+  }
+
+  private record(event: RuntimeAuthRecoveryDiagnostic): void {
+    this.deps.recordDiagnostic?.(event);
+  }
+}
