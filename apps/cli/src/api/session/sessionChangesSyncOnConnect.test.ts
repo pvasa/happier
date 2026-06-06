@@ -54,6 +54,125 @@ describe('runSessionChangesSyncOnConnect', () => {
     expect(writeLastChangesCursor).toHaveBeenCalledWith('account-1', 1);
   });
 
+  it('uses /v2/changes as the stale-socket safety path without forcing a session snapshot', async () => {
+    const { runSessionChangesSyncOnConnect } = await import('./sessionChangesSyncOnConnect');
+    const applyPendingQueueState = vi.fn();
+    const catchUpSessionMessages = vi.fn(async () => {});
+    const syncSessionSnapshotFromServer = vi.fn(async () => {});
+
+    fetchChanges.mockResolvedValueOnce({
+      status: 'ok',
+      response: {
+        changes: [
+          {
+            cursor: 4,
+            kind: 'session',
+            entityId: 's1',
+            changedAt: 400,
+            hint: { pendingCount: 3, pendingVersion: 7 },
+          },
+        ],
+        nextCursor: 4,
+      },
+    });
+
+    await runSessionChangesSyncOnConnect({
+      reason: 'socket-stale-safety-tick',
+      token: 'tok',
+      sessionId: 's1',
+      lastObservedMessageSeq: 9,
+      getAccountId: async () => 'account-1',
+      catchUpSessionMessages,
+      syncSessionSnapshotFromServer,
+      applyPendingQueueState,
+      onDebug: () => {},
+    } satisfies Parameters<typeof runSessionChangesSyncOnConnect>[0]);
+
+    expect(applyPendingQueueState).toHaveBeenCalledWith({ known: true, pendingCount: 3, pendingVersion: 7 });
+    expect(catchUpSessionMessages).not.toHaveBeenCalled();
+    expect(syncSessionSnapshotFromServer).not.toHaveBeenCalled();
+    expect(writeLastChangesCursor).toHaveBeenCalledWith('account-1', 4);
+  });
+
+  it('falls back to a degraded snapshot when stale-socket changes are relevant but not self-sufficient', async () => {
+    const { runSessionChangesSyncOnConnect } = await import('./sessionChangesSyncOnConnect');
+    const applyPendingQueueState = vi.fn();
+    const catchUpSessionMessages = vi.fn(async () => {});
+    const syncSessionSnapshotFromServer = vi.fn(async () => {});
+
+    fetchChanges.mockResolvedValueOnce({
+      status: 'ok',
+      response: {
+        changes: [
+          {
+            cursor: 5,
+            kind: 'session',
+            entityId: 's1',
+            changedAt: 500,
+            hint: null,
+          },
+        ],
+        nextCursor: 5,
+      },
+    });
+
+    await runSessionChangesSyncOnConnect({
+      reason: 'socket-stale-safety-tick',
+      token: 'tok',
+      sessionId: 's1',
+      lastObservedMessageSeq: 9,
+      getAccountId: async () => 'account-1',
+      catchUpSessionMessages,
+      syncSessionSnapshotFromServer,
+      applyPendingQueueState,
+      onDebug: () => {},
+    } satisfies Parameters<typeof runSessionChangesSyncOnConnect>[0]);
+
+    expect(applyPendingQueueState).not.toHaveBeenCalled();
+    expect(catchUpSessionMessages).not.toHaveBeenCalled();
+    expect(syncSessionSnapshotFromServer).toHaveBeenCalledWith({ reason: 'degraded-socket' });
+    expect(writeLastChangesCursor).toHaveBeenCalledWith('account-1', 5);
+  });
+
+  it('does not advance the changes cursor when stale-socket transcript catch-up fails', async () => {
+    const { runSessionChangesSyncOnConnect } = await import('./sessionChangesSyncOnConnect');
+    const catchUpSessionMessages = vi.fn(async () => {
+      throw new Error('transient message catch-up failure');
+    });
+    const syncSessionSnapshotFromServer = vi.fn(async () => {});
+
+    fetchChanges.mockResolvedValueOnce({
+      status: 'ok',
+      response: {
+        changes: [
+          {
+            cursor: 6,
+            kind: 'session',
+            entityId: 's1',
+            changedAt: 600,
+            hint: { lastMessageSeq: 10 },
+          },
+        ],
+        nextCursor: 6,
+      },
+    });
+
+    await runSessionChangesSyncOnConnect({
+      reason: 'socket-stale-safety-tick',
+      token: 'tok',
+      sessionId: 's1',
+      lastObservedMessageSeq: 9,
+      getAccountId: async () => 'account-1',
+      catchUpSessionMessages,
+      syncSessionSnapshotFromServer,
+      onDebug: () => {},
+    } satisfies Parameters<typeof runSessionChangesSyncOnConnect>[0]);
+
+    expect(catchUpSessionMessages).toHaveBeenCalledWith(9);
+    expect(syncSessionSnapshotFromServer).not.toHaveBeenCalled();
+    expect(writeLastChangesCursor).not.toHaveBeenCalled();
+  });
+
   it('redacts reconnect catch-up diagnostics', async () => {
     const { runSessionChangesSyncOnConnect } = await import('./sessionChangesSyncOnConnect');
     const onDebug = vi.fn();

@@ -52,7 +52,9 @@ describe('ApiSessionClient startup transcript catch-up retries', () => {
         await Promise.resolve();
 
         expect(client.catchUpSessionMessages).toHaveBeenCalledTimes(1);
-        expect(client.catchUpSessionMessages).toHaveBeenCalledWith(1);
+        expect(client.catchUpSessionMessages).toHaveBeenCalledWith(1, {
+            afterSeqIsExplicit: undefined,
+        });
     });
 
     it('retries startup transcript catch-up from the initial afterSeq even if a local echo advances the live cursor', async () => {
@@ -81,7 +83,9 @@ describe('ApiSessionClient startup transcript catch-up retries', () => {
         await Promise.resolve();
 
         expect(client.catchUpSessionMessages).toHaveBeenCalledTimes(1);
-        expect(client.catchUpSessionMessages).toHaveBeenCalledWith(0);
+        expect(client.catchUpSessionMessages).toHaveBeenCalledWith(0, {
+            afterSeqIsExplicit: undefined,
+        });
     });
 
     it('reports terminal auth failures from transcript catch-up into the session supervisor', async () => {
@@ -183,7 +187,11 @@ describe('ApiSessionClient startup transcript catch-up retries', () => {
         await Promise.resolve();
 
         expect(client.catchUpSessionMessages).toHaveBeenCalledTimes(2);
-        expect(client.catchUpSessionMessages).toHaveBeenNthCalledWith(1, 0);
-        expect(client.catchUpSessionMessages).toHaveBeenNthCalledWith(2, 0);
+        expect(client.catchUpSessionMessages).toHaveBeenNthCalledWith(1, 0, {
+            afterSeqIsExplicit: undefined,
+        });
+        expect(client.catchUpSessionMessages).toHaveBeenNthCalledWith(2, 0, {
+            afterSeqIsExplicit: undefined,
+        });
     });
 });
