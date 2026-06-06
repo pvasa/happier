@@ -530,13 +530,24 @@ export function didSessionListRenderableProjectGroupingFieldsChange(
     return false;
 }
 
+function hasExplicitActiveReachabilityTarget(session: SessionListRenderableSession): boolean {
+    return session.active === true
+        && String(session.metadata?.machineId ?? '').trim().length > 0
+        && String(session.metadata?.path ?? '').trim().length > 0;
+}
+
 export function didSessionListRenderableReachabilityPeerFieldsChange(
     previous: SessionListRenderableSession | undefined,
     next: SessionListRenderableSession,
 ): boolean {
     if (!previous) return true;
     if (previous.active !== next.active) return true;
-    if (previous.metadataVersion !== next.metadataVersion) return true;
+    if (
+        previous.metadataVersion !== next.metadataVersion
+        && (!hasExplicitActiveReachabilityTarget(previous) || !hasExplicitActiveReachabilityTarget(next))
+    ) {
+        return true;
+    }
 
     const prevMeta = previous.metadata;
     const nextMeta = next.metadata;
@@ -607,6 +618,7 @@ export function isSessionListRenderableWarmCacheProgressOnlyChange(
     if (previous.active !== next.active) return false;
     if (previous.createdAt !== next.createdAt) return false;
     if (previous.presence !== next.presence) return false;
+    if (previous.thinking !== next.thinking) return false;
     if ((previous.archivedAt ?? null) !== (next.archivedAt ?? null)) return false;
     if ((previous.pendingCount ?? null) !== (next.pendingCount ?? null)) return false;
     if ((previous.pendingVersion ?? null) !== (next.pendingVersion ?? null)) return false;

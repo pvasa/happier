@@ -798,6 +798,7 @@ describe('didSessionListRenderableAttentionPromotionFieldsChange', () => {
         }, now)).toBe(true);
         expect(didSessionListRenderableAttentionPromotionFieldsChange(previous, {
             ...previous,
+            active: true,
             latestTurnStatus: 'failed',
             lastRuntimeIssue: {
                 v: 1,
@@ -870,6 +871,31 @@ describe('didSessionListRenderableReachabilityPeerFieldsChange', () => {
             seq: 2,
             updatedAt: 200,
             meaningfulActivityAt: 200,
+        })).toBe(false);
+    });
+
+    it('ignores metadata-version-only updates when reachability metadata stays stable', () => {
+        const previous = buildRenderable({
+            id: 's_reachability_metadata_version',
+            metadataVersion: 1,
+            active: true,
+            metadata: {
+                machineId: 'machine-a',
+                host: 'host-a',
+                path: '/repo',
+                homeDir: '/home/alice',
+                name: 'Initial title',
+            } as any,
+        });
+
+        expect(didSessionListRenderableReachabilityPeerFieldsChange(previous, {
+            ...previous,
+            metadataVersion: 2,
+            metadata: {
+                ...previous.metadata,
+                name: 'Updated title',
+                summaryText: 'Updated non-reachability summary',
+            } as any,
         })).toBe(false);
     });
 });
