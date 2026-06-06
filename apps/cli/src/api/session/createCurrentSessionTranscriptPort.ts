@@ -11,6 +11,11 @@ type TranscriptPortSession = Readonly<{
     body: ACPMessageData,
     opts: { localId: string; meta?: Record<string, unknown> },
   ) => Promise<void>;
+  enqueueAgentMessageCommitted?: (
+    provider: ACPProvider,
+    body: ACPMessageData,
+    opts: { localId: string; meta?: Record<string, unknown> },
+  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
   sendAgentMessageEphemeral?: (
     provider: ACPProvider,
     body: ACPMessageData,
@@ -24,6 +29,14 @@ export function createCurrentSessionTranscriptPort(
   return {
     sendAgentMessage: (provider, body, opts) => getSession().sendAgentMessage?.(provider, body, opts),
     sendAgentMessageCommitted: (provider, body, opts) => getSession().sendAgentMessageCommitted(provider, body, opts),
+    get enqueueAgentMessageCommitted() {
+      if (typeof getSession().enqueueAgentMessageCommitted !== 'function') return undefined;
+      return (
+        provider: ACPProvider,
+        body: ACPMessageData,
+        opts: { localId: string; meta?: Record<string, unknown> },
+      ) => getSession().enqueueAgentMessageCommitted?.(provider, body, opts) ?? Promise.resolve({ persisted: false, delivered: false });
+    },
     get sendAgentMessageEphemeral() {
       if (typeof getSession().sendAgentMessageEphemeral !== 'function') return undefined;
       return (
