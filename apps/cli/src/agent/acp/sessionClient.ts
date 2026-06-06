@@ -1,4 +1,4 @@
-import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { ACPMessageData, ACPProvider, SessionEventMessage } from '@/api/session/sessionMessageTypes';
 import type { Metadata } from '@/api/types';
 import type { SessionTurnLifecycle } from '@/agent/runtime/session/turn/types';
 
@@ -30,6 +30,7 @@ export type AcpReplayHistorySessionClient = AcpReplaySidechainSessionClient & Re
 
 export type AcpRuntimeSessionClient = AcpReplayHistorySessionClient & Readonly<{
   keepAlive: (thinking: boolean, mode: 'local' | 'remote') => void;
+  sendSessionEvent?: (event: SessionEventMessage, id?: string) => void;
   sendAgentMessage: (
     provider: ACPProvider,
     body: ACPMessageData,

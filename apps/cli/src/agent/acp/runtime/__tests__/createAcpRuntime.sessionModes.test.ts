@@ -108,6 +108,108 @@ describe('createAcpRuntime (session modes)', () => {
     ]);
   });
 
+  it('commits typed connected-service runtime-auth recovery backend events as session events', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const sentEvents: unknown[] = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendSessionEvent: (event: unknown) => {
+        sentEvents.push(event);
+      },
+    } as any);
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({
+      type: 'event',
+      name: 'connected-service-runtime-auth-recovery',
+      payload: {
+        type: 'connected-service-runtime-auth-recovery',
+        status: 'retry_scheduled',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'team-pool',
+        attempt: 2,
+        nextRetryAtMs: 1_900_000_000_000,
+        terminal: false,
+        diagnostic: {
+          code: 'recovery_retry_scheduled',
+          failurePhase: 'runtime_auth_recovery',
+          source: 'runtime_auth_recovery',
+          serviceId: 'openai-codex',
+          profileId: 'primary',
+          groupId: 'team-pool',
+          retryable: true,
+          suggestedActions: ['retry'],
+        },
+      },
+    } satisfies EventMessage);
+
+    expect(sentEvents).toEqual([
+      expect.objectContaining({
+        type: 'connected-service-runtime-auth-recovery',
+        status: 'retry_scheduled',
+        serviceId: 'openai-codex',
+        diagnostic: expect.objectContaining({
+          source: 'runtime_auth_recovery',
+          failurePhase: 'runtime_auth_recovery',
+        }),
+      }),
+    ]);
+  });
+
+  it('drops malformed connected-service runtime-auth recovery backend events', async () => {
+    const backend = createFakeAcpRuntimeBackend();
+    const sentEvents: unknown[] = [];
+    const session = createBasicSessionClientWithOverrides({
+      sendSessionEvent: (event: unknown) => {
+        sentEvents.push(event);
+      },
+    } as any);
+
+    const runtime = createAcpRuntime({
+      provider: 'pi',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+    });
+
+    await runtime.startOrLoad({ resumeId: null });
+
+    backend.emit({
+      type: 'event',
+      name: 'connected-service-runtime-auth-recovery',
+      payload: {
+        type: 'connected-service-runtime-auth-recovery',
+        status: 'retry_scheduled',
+        serviceId: 'openai-codex',
+        diagnostic: {
+          code: 'recovery_retry_scheduled',
+          failurePhase: 'runtime_auth_recovery',
+          source: 'manual_auth_switch',
+          retryable: true,
+          suggestedActions: ['retry'],
+        },
+      },
+    } as EventMessage);
+
+    expect(sentEvents).toEqual([]);
+  });
+
   it('normalizes ACP-carried context compaction compatibility aliases before forwarding', async () => {
     const backend = createFakeAcpRuntimeBackend();
     const sent: unknown[] = [];

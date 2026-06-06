@@ -54,6 +54,8 @@ import { resolveSessionMediaDedupeKey } from '@/session/sessionMedia/sessionMedi
 import {
   SESSION_MEDIA_MESSAGE_META_KIND_V1,
   type SessionMediaItemV1,
+  TranscriptRawAgentEventV1Schema,
+  type TranscriptRawAgentEventV1,
 } from '@happier-dev/protocol';
 
 const DEFAULT_SESSION_CONTROL_TIMEOUT_MS = 15_000;
@@ -280,6 +282,14 @@ function normalizeContextCompactionPayload(payloadRecord: Record<string, unknown
   };
 
   return normalized;
+}
+
+function parseConnectedServiceRuntimeAuthRecoveryEvent(
+  payload: unknown,
+): Extract<TranscriptRawAgentEventV1, { type: 'connected-service-runtime-auth-recovery' }> | null {
+  const parsed = TranscriptRawAgentEventV1Schema.safeParse(payload);
+  if (!parsed.success || parsed.data.type !== 'connected-service-runtime-auth-recovery') return null;
+  return parsed.data;
 }
 
 export async function abortAcpRuntimeTurnIfNeeded(
@@ -687,6 +697,19 @@ export function createAcpRuntime(params: {
     if (outcome.kind !== 'completed') {
       turnAborted = true;
     }
+  };
+
+  const createRuntimeHandledTurnAbortError = (cause: unknown): Error => {
+    const error = new Error(`${params.provider} ACP runtime turn aborted`);
+    (error as Error & { cause?: unknown }).cause = cause;
+    return error;
+  };
+
+  const rethrowPromptError = (error: unknown): never => {
+    if (turnAborted && !isAbortLikeError(error)) {
+      throw createRuntimeHandledTurnAbortError(error);
+    }
+    throw error;
   };
 
   const filterNewSessionMedia = (items: readonly RuntimeSessionMediaSource[]): RuntimeSessionMediaSource[] => {
@@ -1133,6 +1156,12 @@ export function createAcpRuntime(params: {
 
         case 'event': {
           const name = msg.name;
+          if (name === 'connected-service-runtime-auth-recovery') {
+            const recoveryEvent = parseConnectedServiceRuntimeAuthRecoveryEvent(msg.payload);
+            if (recoveryEvent) {
+              params.session.sendSessionEvent?.(recoveryEvent);
+            }
+          }
           if (name === 'context_compaction') {
             const payloadRecord = asRecord(msg.payload);
             const normalizedPayload = payloadRecord ? normalizeContextCompactionPayload(payloadRecord) : null;
@@ -1806,9 +1835,13 @@ export function createAcpRuntime(params: {
       }
 
       const b = await ensureBackend();
-      await b.sendPrompt(sessionId, prompt);
-      if (b.waitForResponseComplete) {
-        rememberTurnOutcome(await b.waitForResponseComplete());
+      try {
+        await b.sendPrompt(sessionId, prompt);
+        if (b.waitForResponseComplete) {
+          rememberTurnOutcome(await b.waitForResponseComplete());
+        }
+      } catch (error) {
+        rethrowPromptError(error);
       }
       publishSessionId();
     },
@@ -1819,13 +1852,17 @@ export function createAcpRuntime(params: {
       }
 
       const b = await ensureBackend();
-      if (b.compactContext) {
-        await b.compactContext(sessionId, command);
-      } else {
-        await b.sendPrompt(sessionId, command);
-      }
-      if (b.waitForResponseComplete) {
-        rememberTurnOutcome(await b.waitForResponseComplete());
+      try {
+        if (b.compactContext) {
+          await b.compactContext(sessionId, command);
+        } else {
+          await b.sendPrompt(sessionId, command);
+        }
+        if (b.waitForResponseComplete) {
+          rememberTurnOutcome(await b.waitForResponseComplete());
+        }
+      } catch (error) {
+        rethrowPromptError(error);
       }
       publishSessionId();
     },
