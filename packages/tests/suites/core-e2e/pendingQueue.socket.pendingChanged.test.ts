@@ -18,20 +18,9 @@ import {
   reorderPendingQueueV2,
   restorePendingQueueV2,
 } from '../../src/testkit/pendingQueueV2';
+import { findPendingChangedUpdateAfter } from '../../src/testkit/updates';
 
 const run = createRunDirs({ runLabel: 'core' });
-
-function findPendingChangedAfter(params: { events: any[]; sessionId: string; afterIndex: number }): any | null {
-  const slice = params.events.slice(params.afterIndex);
-  for (const e of slice) {
-    if (e?.kind !== 'update') continue;
-    const body = e?.payload?.body;
-    if (body?.t !== 'pending-changed') continue;
-    if (body?.sid !== params.sessionId && body?.sessionId !== params.sessionId) continue;
-    return body;
-  }
-  return null;
-}
 
 describe('core e2e: pending queue v2 emits pending-changed socket updates', () => {
   it('broadcasts pending-changed to connected sockets on enqueue', async () => {
@@ -74,7 +63,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       expect(enqueue.status).toBe(200);
 
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: socket.getEvents(), sessionId, afterIndex: start0 });
+        const body = findPendingChangedUpdateAfter({ events: socket.getEvents(), sessionId, afterIndex: start0 });
         return body?.pendingCount === 1;
       }, { timeoutMs: 20_000 });
 
@@ -82,7 +71,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       const edit = await patchPendingQueueV2({ baseUrl: server.baseUrl, token: auth.token, sessionId, localId, ciphertext: Buffer.from('pending-edit', 'utf8').toString('base64') });
       expect(edit.status).toBe(200);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: socket.getEvents(), sessionId, afterIndex: start1 });
+        const body = findPendingChangedUpdateAfter({ events: socket.getEvents(), sessionId, afterIndex: start1 });
         return body?.pendingCount === 1;
       }, { timeoutMs: 20_000 });
 
@@ -90,7 +79,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       const reorder = await reorderPendingQueueV2({ baseUrl: server.baseUrl, token: auth.token, sessionId, orderedLocalIds: [localId] });
       expect(reorder.status).toBe(200);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: socket.getEvents(), sessionId, afterIndex: start2 });
+        const body = findPendingChangedUpdateAfter({ events: socket.getEvents(), sessionId, afterIndex: start2 });
         return body?.pendingCount === 1;
       }, { timeoutMs: 20_000 });
 
@@ -98,7 +87,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       const discard = await discardPendingQueueV2({ baseUrl: server.baseUrl, token: auth.token, sessionId, localId, reason: 'test' });
       expect(discard.status).toBe(200);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: socket.getEvents(), sessionId, afterIndex: start3 });
+        const body = findPendingChangedUpdateAfter({ events: socket.getEvents(), sessionId, afterIndex: start3 });
         return body?.pendingCount === 0;
       }, { timeoutMs: 20_000 });
 
@@ -106,7 +95,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       const restore = await restorePendingQueueV2({ baseUrl: server.baseUrl, token: auth.token, sessionId, localId });
       expect(restore.status).toBe(200);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: socket.getEvents(), sessionId, afterIndex: start4 });
+        const body = findPendingChangedUpdateAfter({ events: socket.getEvents(), sessionId, afterIndex: start4 });
         return body?.pendingCount === 1;
       }, { timeoutMs: 20_000 });
 
@@ -114,7 +103,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       const del = await deletePendingQueueV2({ baseUrl: server.baseUrl, token: auth.token, sessionId, localId });
       expect(del.status).toBe(200);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: socket.getEvents(), sessionId, afterIndex: start5 });
+        const body = findPendingChangedUpdateAfter({ events: socket.getEvents(), sessionId, afterIndex: start5 });
         return body?.pendingCount === 0;
       }, { timeoutMs: 20_000 });
 
@@ -167,7 +156,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       const enqueue = await enqueuePendingQueueV2({ baseUrl: server.baseUrl, token: auth.token, sessionId, localId, ciphertext, timeoutMs: 20_000 });
       expect(enqueue.status).toBe(200);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: userSocket.getEvents(), sessionId, afterIndex: start0 });
+        const body = findPendingChangedUpdateAfter({ events: userSocket.getEvents(), sessionId, afterIndex: start0 });
         return body?.pendingCount === 1;
       }, { timeoutMs: 20_000 });
 
@@ -176,7 +165,7 @@ describe('core e2e: pending queue v2 emits pending-changed socket updates', () =
       expect(ack?.ok).toBe(true);
       expect(ack?.didMaterialize).toBe(true);
       await waitFor(() => {
-        const body = findPendingChangedAfter({ events: userSocket.getEvents(), sessionId, afterIndex: start1 });
+        const body = findPendingChangedUpdateAfter({ events: userSocket.getEvents(), sessionId, afterIndex: start1 });
         return body?.pendingCount === 0;
       }, { timeoutMs: 20_000 });
 
