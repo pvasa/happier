@@ -628,6 +628,8 @@ export class AcpBackend implements AgentBackend {
   private process: ChildProcess | null = null;
   private stderrAppender: BoundedTextFileAppender | null = null;
   private readonly summarizeStderrForLogs = createAcpStderrLogSummarizer();
+  private readonly recentStderrSummaries: string[] = [];
+  private lastProcessExitDetail: string | null = null;
   private readonly sessionUpdateShapeLogger = createEventShapeLoggerForLog({ logger, scope: 'acp-backend' });
   private connection: ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
@@ -719,6 +721,35 @@ export class AcpBackend implements AgentBackend {
         logger.warn('[AcpBackend] Error in message handler:', error);
       }
     }
+  }
+
+  private recordStderrDiagnostic(summary: string): void {
+    const trimmed = summary.trim();
+    if (!trimmed) return;
+    this.recentStderrSummaries.push(trimmed);
+    while (this.recentStderrSummaries.length > 3) {
+      this.recentStderrSummaries.shift();
+    }
+  }
+
+  private buildStartupFailureDiagnosticSuffix(): string {
+    const parts: string[] = [];
+    if (this.lastProcessExitDetail) {
+      parts.push(`Process exit: ${this.lastProcessExitDetail}`);
+    }
+    if (this.recentStderrSummaries.length > 0) {
+      parts.push(`Recent ACP stderr: ${this.recentStderrSummaries.join(' | ')}`);
+    }
+    if (this.stderrAppender?.path) {
+      parts.push(`ACP stderr artifact: ${this.stderrAppender.path}`);
+    }
+    return parts.length > 0 ? `. ${parts.join('. ')}` : '';
+  }
+
+  private createStartupTimeoutError(operationName: string, timeoutMs: number): Error {
+    return new Error(
+      `${operationName} timeout after ${timeoutMs}ms - ${this.transport.agentName} did not respond${this.buildStartupFailureDiagnosticSuffix()}`,
+    );
   }
 
   private buildAcpMcpServersForSessionRequest(): NewSessionRequest['mcpServers'] {
@@ -847,6 +878,8 @@ export class AcpBackend implements AgentBackend {
     }
 
     this.resetExtensionAbortControllerForTurn();
+    this.recentStderrSummaries.length = 0;
+    this.lastProcessExitDetail = null;
 
     try {
       // Spawn the ACP agent process.
@@ -897,6 +930,7 @@ export class AcpBackend implements AgentBackend {
       const stderrResult = this.transport.handleStderr?.(text, context) ?? null;
       const stderrSummary = stderrResult?.suppress ? null : this.summarizeStderrForLogs(text);
       if (stderrSummary) {
+        this.recordStderrDiagnostic(stderrSummary);
         logger.debug(
           hasActiveInvestigation
             ? `[AcpBackend] 🔍 Agent stderr (during investigation): ${stderrSummary}`
@@ -938,6 +972,7 @@ export class AcpBackend implements AgentBackend {
 	      if (!this.disposed && (hasSignal || hasNonZeroCode || hasUnknownExit)) {
 	        logger.debug(`[AcpBackend] Process exited with code ${code}, signal ${signal}`);
 	        const detail = hasSignal ? `Signal: ${signal}` : `Exit code: ${typeof code === 'number' ? code : 1}`;
+	        this.lastProcessExitDetail = detail;
 	        this.failPendingResponseWait(new Error(detail));
 	        this.emit({ type: 'status', status: 'error', detail });
 	      }
@@ -1342,7 +1377,7 @@ export class AcpBackend implements AgentBackend {
             }),
             new Promise<never>((_, reject) => {
               timeoutHandle = setTimeout(() => {
-                reject(new Error(`Initialize timeout after ${initTimeout}ms - ${this.transport.agentName} did not respond`));
+                reject(this.createStartupTimeoutError('Initialize', initTimeout));
               }, initTimeout);
             }),
           ]);
@@ -1397,7 +1432,7 @@ export class AcpBackend implements AgentBackend {
               }),
               new Promise<never>((_, reject) => {
                 timeoutHandle = setTimeout(() => {
-                  reject(new Error(`Authenticate timeout after ${initTimeout}ms - ${this.transport.agentName} did not respond`));
+                  reject(this.createStartupTimeoutError('Authenticate', initTimeout));
                 }, initTimeout);
               }),
             ]);
@@ -1463,7 +1498,7 @@ export class AcpBackend implements AgentBackend {
               }),
               new Promise<never>((_, reject) => {
                 timeoutHandle = setTimeout(() => {
-                  reject(new Error(`New session timeout after ${initTimeout}ms - ${this.transport.agentName} did not respond`));
+                  reject(this.createStartupTimeoutError('New session', initTimeout));
                 }, initTimeout);
               }),
             ]);
@@ -1556,7 +1591,7 @@ export class AcpBackend implements AgentBackend {
               }),
               new Promise<never>((_, reject) => {
                 timeoutHandle = setTimeout(() => {
-                  reject(new Error(`Load session timeout after ${initTimeout}ms - ${this.transport.agentName} did not respond`));
+                  reject(this.createStartupTimeoutError('Load session', initTimeout));
                 }, initTimeout);
               }),
             ]);
