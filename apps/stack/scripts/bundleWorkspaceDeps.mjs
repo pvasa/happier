@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ensureWorkspacePackagesBuiltForComponent } from './utils/proc/pm.mjs';
+import { withWorkspaceBundleLock } from './utils/workspaces/workspaceBundleLock.mjs';
 import { execYarn } from '../../../scripts/workspaces/execYarnCommand.mjs';
-import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_BUNDLE_MANIFEST_FILENAME = '.workspace-bundle-manifest.json';
@@ -185,32 +186,111 @@ function collectRuntimeDependencyNames(pkgJson) {
   return collectExternalRuntimeDependencyNames(pkgJson);
 }
 
-function buildRuntimeDependencySignature({ repoRoot, packageName, visited = new Set() }) {
+function resolveInstalledPackageForSignature({ packageName, resolveFromPackageJsonPath }) {
   const normalizedName = String(packageName ?? '').trim();
-  if (!normalizedName || visited.has(normalizedName)) {
-    return null;
-  }
-  visited.add(normalizedName);
-
-  const packageDir = resolve(repoRoot, 'node_modules', ...normalizedName.split('/'));
-  const packageJsonPath = resolve(packageDir, 'package.json');
-  if (!existsSync(packageJsonPath)) {
+  const packageJsonPath = String(resolveFromPackageJsonPath ?? '').trim();
+  if (!normalizedName || !packageJsonPath) {
     return null;
   }
 
-  const packageJson = JSON.parse(String(readFileSync(packageJsonPath, 'utf8')));
+  const require = createRequire(pathToFileURL(packageJsonPath).href);
+  const searchPaths = require.resolve.paths(normalizedName) ?? [];
+  let aliasInstalledPackage = null;
+
+  for (const searchPath of searchPaths) {
+    const candidatePackageJsonPath = resolve(searchPath, ...normalizedName.split('/'), 'package.json');
+    if (!existsSync(candidatePackageJsonPath)) continue;
+
+    const candidatePackageJson = JSON.parse(String(readFileSync(candidatePackageJsonPath, 'utf8')));
+    const resolvedPackage = {
+      packageDir: dirname(candidatePackageJsonPath),
+      packageJsonPath: candidatePackageJsonPath,
+    };
+    if (candidatePackageJson?.name === normalizedName) {
+      return resolvedPackage;
+    }
+    if (!aliasInstalledPackage) {
+      aliasInstalledPackage = resolvedPackage;
+    }
+  }
+
+  if (aliasInstalledPackage) {
+    return aliasInstalledPackage;
+  }
+
+  let resolvedEntry = '';
+  try {
+    resolvedEntry = require.resolve(`${normalizedName}/package.json`);
+  } catch {
+    try {
+      resolvedEntry = require.resolve(normalizedName);
+    } catch {
+      return null;
+    }
+  }
+
+  let dir = dirname(resolvedEntry);
+  for (let i = 0; i < 50; i += 1) {
+    const candidatePackageJsonPath = resolve(dir, 'package.json');
+    if (existsSync(candidatePackageJsonPath)) {
+      const candidatePackageJson = JSON.parse(String(readFileSync(candidatePackageJsonPath, 'utf8')));
+      if (candidatePackageJson?.name === normalizedName) {
+        return {
+          packageDir: dir,
+          packageJsonPath: candidatePackageJsonPath,
+        };
+      }
+    }
+
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return null;
+}
+
+function buildRuntimeDependencySignature({ packageName, resolveFromPackageJsonPath, visited = new Set() }) {
+  const normalizedName = String(packageName ?? '').trim();
+  const normalizedResolveFrom = String(resolveFromPackageJsonPath ?? '').trim();
+  const visitKey = `${normalizedName}:${normalizedResolveFrom}`;
+  if (!normalizedName || !normalizedResolveFrom || visited.has(visitKey)) {
+    return null;
+  }
+  visited.add(visitKey);
+
+  const resolvedPackage = resolveInstalledPackageForSignature({
+    packageName: normalizedName,
+    resolveFromPackageJsonPath: normalizedResolveFrom,
+  });
+  if (!resolvedPackage) {
+    return null;
+  }
+
+  const packageJson = JSON.parse(String(readFileSync(resolvedPackage.packageJsonPath, 'utf8')));
   return {
     packageName: normalizedName,
-    ownFiles: collectOwnPackageRelativeFilePaths(packageDir),
+    ownFiles: collectOwnPackageRelativeFilePaths(resolvedPackage.packageDir),
     dependencies: collectRuntimeDependencyNames(packageJson)
-      .map((dependencyName) => buildRuntimeDependencySignature({ repoRoot, packageName: dependencyName, visited }))
+      .map((dependencyName) =>
+        buildRuntimeDependencySignature({
+          packageName: dependencyName,
+          resolveFromPackageJsonPath: resolvedPackage.packageJsonPath,
+          visited,
+        }),
+      )
       .filter(Boolean),
   };
 }
 
-function collectRuntimeDependencySignatures({ repoRoot, pkgJson }) {
+function collectRuntimeDependencySignatures({ packageJsonPath, pkgJson }) {
   return collectRuntimeDependencyNames(pkgJson)
-    .map((dependencyName) => buildRuntimeDependencySignature({ repoRoot, packageName: dependencyName }))
+    .map((dependencyName) =>
+      buildRuntimeDependencySignature({
+        packageName: dependencyName,
+        resolveFromPackageJsonPath: packageJsonPath,
+      }),
+    )
     .filter(Boolean);
 }
 
@@ -227,7 +307,7 @@ function buildWorkspaceBundleSourceSignature({ bundles }) {
         distFiles: collectRelativeFilePaths(resolve(bundle.srcDir, 'dist'), 'dist'),
         expectedFiles: collectExpectedPackageFiles(packageJson, bundle.srcDir),
         externalRuntimeDependencies: collectRuntimeDependencySignatures({
-          repoRoot: findRepoRoot(bundle.srcDir),
+          packageJsonPath,
           pkgJson: packageJson,
         }),
       };

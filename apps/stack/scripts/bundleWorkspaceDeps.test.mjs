@@ -69,14 +69,30 @@ export function bundleWorkspacePackages({ bundles }) {
   }
 }
 
-function vendorOne({ repoRoot, name, destNodeModulesDir, seen }) {
+function resolveInstalledPackageDir({ name, resolveFromPackageJsonPath }) {
+  let dir = dirname(resolveFromPackageJsonPath);
+  for (let i = 0; i < 20; i += 1) {
+    const candidate = resolve(dir, 'node_modules', name);
+    const pkgPath = resolve(candidate, 'package.json');
+    if (existsSync(pkgPath)) {
+      return { packageDir: candidate, packageJsonPath: pkgPath };
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function vendorOne({ name, resolveFromPackageJsonPath, destNodeModulesDir, seen }) {
   const key = \`\${destNodeModulesDir}:\${name}\`;
   if (seen.has(key)) return;
   seen.add(key);
 
-  const srcDir = resolve(repoRoot, 'node_modules', name);
-  const pkgPath = resolve(srcDir, 'package.json');
-  if (!existsSync(pkgPath)) return;
+  const resolved = resolveInstalledPackageDir({ name, resolveFromPackageJsonPath });
+  if (!resolved) return;
+  const srcDir = resolved.packageDir;
+  const pkgPath = resolved.packageJsonPath;
 
   const destDir = resolve(destNodeModulesDir, name);
   rmSync(destDir, { recursive: true, force: true });
@@ -87,12 +103,16 @@ function vendorOne({ repoRoot, name, destNodeModulesDir, seen }) {
   const deps = pkg && typeof pkg === 'object' ? pkg.dependencies : null;
   if (!deps || typeof deps !== 'object') return;
   for (const depName of Object.keys(deps)) {
-    vendorOne({ repoRoot, name: depName, destNodeModulesDir: resolve(destDir, 'node_modules'), seen });
+    vendorOne({
+      name: depName,
+      resolveFromPackageJsonPath: pkgPath,
+      destNodeModulesDir: resolve(destDir, 'node_modules'),
+      seen,
+    });
   }
 }
 
 export function vendorBundledPackageRuntimeDependencies({ srcPackageJsonPath, destPackageDir }) {
-  const repoRoot = findRepoRoot(dirname(dirname(srcPackageJsonPath)));
   const pkg = readJson(srcPackageJsonPath);
   const deps = pkg && typeof pkg === 'object' ? pkg.dependencies : null;
   if (!deps || typeof deps !== 'object') return;
@@ -102,7 +122,7 @@ export function vendorBundledPackageRuntimeDependencies({ srcPackageJsonPath, de
   const seen = new Set();
   for (const name of Object.keys(deps)) {
     if (name.startsWith('@happier-dev/')) continue;
-    vendorOne({ repoRoot, name, destNodeModulesDir, seen });
+    vendorOne({ name, resolveFromPackageJsonPath: srcPackageJsonPath, destNodeModulesDir, seen });
   }
 }
 `, 'utf8');
@@ -421,6 +441,60 @@ test('bundleWorkspaceDeps refreshes the bundle when a vendored runtime dependenc
 
     const manifestPath = resolve(stackDir, 'node_modules', '@happier-dev', '.workspace-bundle-manifest.json');
     const vendoredEntryPath = resolve(stackDir, 'node_modules', '@happier-dev', 'cli-common', 'node_modules', 'dep-a', 'index.js');
+    const firstMtimeMs = statSync(manifestPath).mtimeMs;
+
+    unlinkSync(vendoredEntryPath);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+
+    await bundleWorkspaceDeps({ repoRoot, stackDir });
+
+    assert.equal(existsSync(vendoredEntryPath), true);
+    assert.ok(statSync(manifestPath).mtimeMs > firstMtimeMs);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('bundleWorkspaceDeps refreshes the bundle when a package-local runtime dependency is incomplete', async () => {
+  const { repoRoot, stackDir, agentsDir } = createBundleFixture(
+    'happy-stack-bundle-workspace-deps-refresh-package-local-runtime-dep-',
+  );
+  try {
+    const depLocalDir = resolve(agentsDir, 'node_modules', 'dep-local');
+    mkdirSync(depLocalDir, { recursive: true });
+
+    writeJson(resolve(agentsDir, 'package.json'), {
+      name: '@happier-dev/agents',
+      version: '0.0.0',
+      type: 'module',
+      main: './dist/index.js',
+      exports: { '.': { default: './dist/index.js' } },
+      dependencies: {
+        '@happier-dev/protocol': '0.0.0',
+        'dep-local': '^1.0.0',
+      },
+    });
+    writeFileSync(resolve(agentsDir, 'dist', 'index.js'), "import 'dep-local';\nexport const agents = 1;\n", 'utf8');
+
+    writeJson(resolve(depLocalDir, 'package.json'), {
+      name: 'dep-local',
+      version: '1.0.0',
+      main: 'index.js',
+    });
+    writeFileSync(resolve(depLocalDir, 'index.js'), 'module.exports = { local: true };\n', 'utf8');
+
+    await bundleWorkspaceDeps({ repoRoot, stackDir });
+
+    const manifestPath = resolve(stackDir, 'node_modules', '@happier-dev', '.workspace-bundle-manifest.json');
+    const vendoredEntryPath = resolve(
+      stackDir,
+      'node_modules',
+      '@happier-dev',
+      'agents',
+      'node_modules',
+      'dep-local',
+      'index.js',
+    );
     const firstMtimeMs = statSync(manifestPath).mtimeMs;
 
     unlinkSync(vendoredEntryPath);
