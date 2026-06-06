@@ -237,6 +237,8 @@ const WEB_LIST_INITIAL_NUM_TO_RENDER = 12;
 const WEB_LIST_MAX_TO_RENDER_PER_BATCH = 8;
 const WEB_LIST_UPDATE_CELLS_BATCHING_PERIOD_MS = 50;
 const WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS = 120;
+const WEB_LIST_SCROLL_EVENT_THROTTLE_MS = 32;
+const NATIVE_LIST_SCROLL_EVENT_THROTTLE_MS = 16;
 const EMPTY_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_COLLAPSED_GROUP_KEYS: Readonly<Record<string, boolean>> = Object.freeze({});
 const EMPTY_SESSION_LIST_VIEW_ITEMS: ReadonlyArray<SessionListViewItem> = Object.freeze([]);
@@ -304,7 +306,6 @@ function isPrioritySessionListRowStoreItem(item: SessionListSessionItem): boolea
     return item.workingPlacementReason === 'working'
         || item.attentionPromotionReason != null
         || item.selected === true
-        || session.active === true
         || session.thinking === true
         || session.latestTurnStatus === 'in_progress'
         || session.hasPendingPermissionRequests === true
@@ -1084,6 +1085,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         fireAndForget(sync.fetchMoreSessions(), { tag: 'SessionsList.fetchMoreSessions' });
     }, []);
     const handleVirtualizedListScroll = React.useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        if (surfaceDataActiveRef.current) {
+            sync.markSessionListScrollActivity();
+        }
         scrollRetention.handleScroll(event);
         handleTreeScroll(event);
         if (Platform.OS !== 'web' && isSessionListScrollNearEnd(event)) {
@@ -2305,7 +2309,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             onEndReachedThreshold={0.4}
             onViewableItemsChanged={handleViewableItemsChangedRef.current}
             viewabilityConfig={viewabilityConfigRef.current}
-            scrollEventThrottle={16}
+            scrollEventThrottle={WEB_LIST_SCROLL_EVENT_THROTTLE_MS}
             // Web virtualization bounds (plan section 3.6): window large
             // session lists so they mount only the visible viewport plus a
             // small overscan. First-page-sized lists stay non-virtualized to
@@ -2343,7 +2347,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             onEndReachedThreshold={0.4}
             onViewableItemsChanged={handleViewableItemsChangedRef.current}
             viewabilityConfig={viewabilityConfigRef.current}
-            scrollEventThrottle={16}
+            scrollEventThrottle={NATIVE_LIST_SCROLL_EVENT_THROTTLE_MS}
             ListHeaderComponent={renderVirtualizedHeader as any}
             ListFooterComponent={renderVirtualizedFooter as any}
         />

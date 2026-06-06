@@ -69,10 +69,10 @@ export const SessionParticipantComposer = React.memo((props: Readonly<{
 
                     try {
                         if (routed?.type === 'session_message') {
-                            await sync.sendMessage(props.sessionId, routed.text, routed.displayText, routed.metaOverrides);
+                            await sync.submitMessage(props.sessionId, routed.text, routed.displayText, routed.metaOverrides);
                             return;
                         }
-                        await sync.sendMessage(props.sessionId, text);
+                        await sync.submitMessage(props.sessionId, text);
                     } catch (error) {
                         setComposerText(previousMessage);
                         Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));

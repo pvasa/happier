@@ -23,6 +23,7 @@ const resolveWorkspaceFaviconMock = vi.hoisted(() => vi.fn());
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const navigateToSessionSpy = vi.hoisted(() => vi.fn());
 const fetchMoreSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
+const markSessionListScrollActivityMock = vi.hoisted(() => vi.fn());
 const keyboardShortcutHandlersRef = vi.hoisted(() => ({
     current: null as Record<string, (() => void)> | null,
 }));
@@ -454,6 +455,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
 vi.mock('@/sync/sync', () => ({
     sync: {
         fetchMoreSessions: fetchMoreSessionsMock,
+        markSessionListScrollActivity: markSessionListScrollActivityMock,
     },
 }));
 
@@ -714,6 +716,7 @@ describe('SessionsList (native virtualization)', () => {
         setSessionListOrderingModeV1.mockClear();
         navigateToSessionSpy.mockClear();
         fetchMoreSessionsMock.mockClear();
+        markSessionListScrollActivityMock.mockClear();
         keyboardShortcutHandlersRef.current = null;
         routerPushSpy.mockClear();
         mockAllowedServerIds = ['server_a'];
@@ -1884,6 +1887,7 @@ describe('SessionsList (native virtualization)', () => {
             });
         });
 
+        expect(markSessionListScrollActivityMock).toHaveBeenCalledTimes(1);
         expect(fetchMoreSessionsMock).toHaveBeenCalledTimes(1);
     });
 

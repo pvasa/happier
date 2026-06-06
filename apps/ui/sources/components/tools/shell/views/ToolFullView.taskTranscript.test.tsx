@@ -124,6 +124,10 @@ vi.mock('@/components/sessions/transcript/MessageView', () => ({
         renderedMessageViewSpy(props);
         return React.createElement('MessageView', null);
     },
+    MessageViewWithSessionCommon: (props: any) => {
+        renderedMessageViewSpy(props);
+        return React.createElement('MessageViewWithSessionCommon', null);
+    },
 }));
 
 describe('ToolFullView (Task transcript reuse)', () => {

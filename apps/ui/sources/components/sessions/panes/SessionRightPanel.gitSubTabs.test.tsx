@@ -56,6 +56,7 @@ installSessionDetailsPanelCommonModuleMocks({
 });
 
 const invalidateFromUserAndAwaitSpy = vi.fn();
+const invalidateFromAutoRefreshAndAwaitSpy = vi.fn(async () => {});
 const loadCommitHistorySpy = vi.fn();
 const useChangedFilesDataSpy = vi.fn();
 let sessionPathMock: string | null = '/workspace';
@@ -146,7 +147,10 @@ vi.mock('@/scm/registry/scmUiBackendRegistry', () => ({
 }));
 
 vi.mock('@/scm/scmStatusSync', () => ({
-    scmStatusSync: { invalidateFromUserAndAwait: invalidateFromUserAndAwaitSpy },
+    scmStatusSync: {
+        invalidateFromUserAndAwait: invalidateFromUserAndAwaitSpy,
+        invalidateFromAutoRefreshAndAwait: invalidateFromAutoRefreshAndAwaitSpy,
+    },
 }));
 
 vi.mock('@/components/sessions/sourceControl/commitComposer/ScmCommitComposerCard', () => ({
@@ -261,6 +265,7 @@ describe('SessionRightPanel git sub-tabs', () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
 
         invalidateFromUserAndAwaitSpy.mockClear();
+        invalidateFromAutoRefreshAndAwaitSpy.mockClear();
         loadCommitHistorySpy.mockClear();
         sessionPathMock = '/workspace';
         scmSnapshotMock = buildScmSnapshotMock({
@@ -283,7 +288,8 @@ describe('SessionRightPanel git sub-tabs', () => {
             await flushHookEffects({ cycles: 1, turns: 1 });
         });
 
-        expect(invalidateFromUserAndAwaitSpy).toHaveBeenCalledWith('s1');
+        expect(invalidateFromUserAndAwaitSpy).not.toHaveBeenCalled();
+        expect(invalidateFromAutoRefreshAndAwaitSpy).toHaveBeenCalledWith('s1');
         expect(loadCommitHistorySpy).not.toHaveBeenCalled();
     });
 
@@ -291,6 +297,7 @@ describe('SessionRightPanel git sub-tabs', () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
 
         invalidateFromUserAndAwaitSpy.mockClear();
+        invalidateFromAutoRefreshAndAwaitSpy.mockClear();
         loadCommitHistorySpy.mockClear();
         sessionPathMock = null;
         scmSnapshotMock = buildScmSnapshotMock({
@@ -313,7 +320,8 @@ describe('SessionRightPanel git sub-tabs', () => {
             await flushHookEffects({ cycles: 1, turns: 1 });
         });
 
-        expect(invalidateFromUserAndAwaitSpy).toHaveBeenCalledWith('s1');
+        expect(invalidateFromUserAndAwaitSpy).not.toHaveBeenCalled();
+        expect(invalidateFromAutoRefreshAndAwaitSpy).toHaveBeenCalledWith('s1');
         expect(loadCommitHistorySpy).not.toHaveBeenCalled();
     });
 

@@ -49,6 +49,7 @@ const WINDOWING_VIEWPORT_ROW_COUNT = 8;
 
 const routerPushSpy = vi.fn();
 const fetchMoreSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
+const markSessionListScrollActivityMock = vi.hoisted(() => vi.fn());
 const preloadEnrichedMarkdownRuntimeSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 let pinnedSessionKeysV1: string[] = [];
 let sessionTagsV1: Record<string, string[]> = {};
@@ -341,6 +342,7 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 vi.mock('@/sync/sync', () => ({
     sync: {
         fetchMoreSessions: fetchMoreSessionsMock,
+        markSessionListScrollActivity: markSessionListScrollActivityMock,
     },
 }));
 
@@ -575,6 +577,7 @@ describe('SessionsList web virtualization', () => {
         setWorkspaceLabelsV1.mockClear();
         noopSettingSetter.mockClear();
         fetchMoreSessionsMock.mockClear();
+        markSessionListScrollActivityMock.mockClear();
         preloadEnrichedMarkdownRuntimeSpy.mockClear();
         getSessionStatusMock.mockClear();
         mockVisibleSessionListViewData = buildLargeVisibleSessionListViewData();
@@ -628,6 +631,8 @@ describe('SessionsList web virtualization', () => {
 
         expect(typeof props.updateCellsBatchingPeriod).toBe('number');
         expect(props.updateCellsBatchingPeriod).toBeGreaterThan(0);
+
+        expect(props.scrollEventThrottle).toBe(32);
     });
 
     it('does not pass a full-list getItemLayout to the mixed-height web list', async () => {
@@ -664,6 +669,7 @@ describe('SessionsList web virtualization', () => {
             });
         });
 
+        expect(markSessionListScrollActivityMock).toHaveBeenCalledTimes(1);
         expect(fetchMoreSessionsMock).not.toHaveBeenCalled();
     });
 
@@ -681,13 +687,23 @@ describe('SessionsList web virtualization', () => {
         for (let index = 0; index < 130; index += 1) {
             const isWorkingRow = index === 2;
             const isAttentionRow = index === 3;
+            const isActiveOnlyRow = index === 4;
             items.push({
                 type: 'session',
-                session: makeSession(isWorkingRow ? 'long_working' : isAttentionRow ? 'long_attention' : `long_${index}`, {
-                    active: isWorkingRow,
-                    thinking: isWorkingRow,
-                    latestTurnStatus: isWorkingRow ? 'in_progress' : undefined,
-                }),
+                session: makeSession(
+                    isWorkingRow
+                        ? 'long_working'
+                        : isAttentionRow
+                            ? 'long_attention'
+                            : isActiveOnlyRow
+                                ? 'long_active_only'
+                                : `long_${index}`,
+                    {
+                        active: isWorkingRow || isActiveOnlyRow,
+                        thinking: isWorkingRow,
+                        latestTurnStatus: isWorkingRow ? 'in_progress' : undefined,
+                    },
+                ),
                 groupKey,
                 groupKind: 'date',
                 serverId: 'server_a',
@@ -708,8 +724,10 @@ describe('SessionsList web virtualization', () => {
 
         const omittedMountedWorkingRow = screen.root.findByProps({ testID: 'session-list-session:long_working' });
         const omittedMountedAttentionRow = screen.root.findByProps({ testID: 'session-list-session:long_attention' });
+        const omittedMountedActiveOnlyRow = screen.root.findByProps({ testID: 'session-list-session:long_active_only' });
         expect(omittedMountedWorkingRow.props.rowAttentionAnimationEnabled).toBe(true);
         expect(omittedMountedAttentionRow.props.rowAttentionAnimationEnabled).toBe(true);
+        expect(omittedMountedActiveOnlyRow.props.rowAttentionAnimationEnabled).toBe(false);
     });
 
     it('keeps all small-web-list row attention animations live when viewability omits a mounted row', async () => {

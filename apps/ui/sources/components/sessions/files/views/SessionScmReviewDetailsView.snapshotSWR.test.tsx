@@ -11,6 +11,10 @@ let mockSnapshot: any = null;
 let reviewCommentsFeatureEnabled = false;
 let scmWriteOperationsFeatureEnabled = false;
 const changedFilesReviewSpy = vi.fn();
+const invalidateFromAutoRefreshSpy = vi.hoisted(() => vi.fn());
+const invalidateFromAutoRefreshAndAwaitSpy = vi.hoisted(() => vi.fn());
+const invalidateFromMutationAndAwaitSpy = vi.hoisted(() => vi.fn());
+const invalidateFromUserSpy = vi.hoisted(() => vi.fn());
 
 const mockSession = {
     id: 'session-1',
@@ -108,9 +112,10 @@ vi.mock('@/sync/domains/session/changes/hooks/useDerivedSessionChangeSet', () =>
 
 vi.mock('@/scm/scmStatusSync', () => ({
     scmStatusSync: {
-        invalidateFromAutoRefreshAndAwait: vi.fn(),
-        invalidateFromMutationAndAwait: vi.fn(),
-        invalidateFromUser: vi.fn(),
+        invalidateFromAutoRefresh: invalidateFromAutoRefreshSpy,
+        invalidateFromAutoRefreshAndAwait: invalidateFromAutoRefreshAndAwaitSpy,
+        invalidateFromMutationAndAwait: invalidateFromMutationAndAwaitSpy,
+        invalidateFromUser: invalidateFromUserSpy,
     },
 }));
 
@@ -153,6 +158,10 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
         mockPaneScope.openDetailsTab.mockClear();
         mockPaneScope.setDetailsTabState.mockClear();
         mockPaneScope.scopeState = null;
+        invalidateFromAutoRefreshSpy.mockClear();
+        invalidateFromAutoRefreshAndAwaitSpy.mockClear();
+        invalidateFromMutationAndAwaitSpy.mockClear();
+        invalidateFromUserSpy.mockClear();
         mockSnapshot = null;
     });
 
@@ -199,6 +208,16 @@ describe('SessionScmReviewDetailsView (snapshot SWR)', () => {
 
         expect(tree.findAllByType('ChangedFilesReview' as any)).toHaveLength(1);
         expect(tree.findAllByType('ActivityIndicator')).toHaveLength(0);
+    });
+
+    it('uses the auto-refresh lease for the initial review snapshot warm-up', async () => {
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+
+        await renderScreen(<SessionScmReviewDetailsView sessionId="s1" scopeId="session:s1" />);
+
+        expect(invalidateFromAutoRefreshSpy).toHaveBeenCalledTimes(1);
+        expect(invalidateFromAutoRefreshSpy).toHaveBeenCalledWith('s1');
+        expect(invalidateFromUserSpy).not.toHaveBeenCalled();
     });
 
     it('enables review comments for SCM review diffs when the session has a workspace scope', async () => {

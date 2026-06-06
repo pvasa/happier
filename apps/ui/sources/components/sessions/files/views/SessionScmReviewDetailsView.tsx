@@ -277,7 +277,7 @@ export const SessionScmReviewDetailsView = React.memo((props: SessionScmReviewDe
     // Ensure the SCM snapshot is warm so large reviews can load diffs even if the user
     // opened the review tab before visiting Source control.
     React.useEffect(() => {
-        scmStatusSync.invalidateFromUser(props.sessionId);
+        scmStatusSync.invalidateFromAutoRefresh(props.sessionId);
     }, [props.sessionId]);
 
     const refreshAfterMutation = React.useCallback(async () => {
