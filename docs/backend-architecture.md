@@ -384,7 +384,8 @@ graph TB
 - **Push tokens**: stored for later notification delivery.
 
 ## Observability
-- `/health` route checks DB connectivity.
+- `/health` reports process liveness without a database dependency.
+- `/ready` checks dependency readiness, including database connectivity.
 - Metrics server exposes `/metrics` for Prometheus.
 - HTTP request counters and duration histograms are captured via Fastify hooks.
 - WebSocket event counters and connection gauges are in `metrics2.ts`.
