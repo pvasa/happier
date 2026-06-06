@@ -13,10 +13,19 @@ import {
   findAnyDaemonStatePairInCliHome,
 } from './credentials_paths.mjs';
 
+function neutralStackEnv(overrides = {}) {
+  const {
+    HAPPIER_ACTIVE_SERVER_ID,
+    HAPPY_ACTIVE_SERVER_ID,
+    ...baseEnv
+  } = process.env;
+  return { ...baseEnv, ...overrides };
+}
+
 test('resolveStackCredentialPaths returns legacy + server-scoped paths', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-'));
   const serverUrl = 'http://127.0.0.1:3009';
-  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl });
+  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl, env: neutralStackEnv() });
   assert.equal(out.legacyPath, join(dir, 'access.key'));
   assert.ok(out.serverScopedPath.startsWith(join(dir, 'servers', 'env_')));
   assert.ok(out.serverScopedPath.endsWith('/access.key'));
@@ -27,10 +36,11 @@ test('resolveStackCredentialPaths returns legacy + server-scoped paths', async (
 
 test('resolveStackCredentialPaths hashes equivalent loopback server URLs to the same scoped id', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-'));
-  const loopback = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://127.0.0.1:3009/' });
-  const localhost = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://localhost:3009' });
-  const localhostDefaultPort = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://localhost:80/' });
-  const loopbackDefaultPort = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://127.0.0.1' });
+  const env = neutralStackEnv();
+  const loopback = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://127.0.0.1:3009/', env });
+  const localhost = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://localhost:3009', env });
+  const localhostDefaultPort = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://localhost:80/', env });
+  const loopbackDefaultPort = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: 'http://127.0.0.1', env });
 
   assert.equal(loopback.urlHashServerId, localhost.urlHashServerId);
   assert.equal(localhostDefaultPort.urlHashServerId, loopbackDefaultPort.urlHashServerId);
@@ -38,7 +48,7 @@ test('resolveStackCredentialPaths hashes equivalent loopback server URLs to the 
 
 test('resolveStackCredentialPaths uses a neutral default server id when serverUrl is empty', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-'));
-  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: '' });
+  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl: '', env: neutralStackEnv() });
   assert.equal(out.urlHashServerId, 'default');
   assert.equal(out.activeServerId, 'default');
   assert.ok(out.serverScopedPath.endsWith('/servers/default/access.key'));
@@ -47,23 +57,25 @@ test('resolveStackCredentialPaths uses a neutral default server id when serverUr
 test('findExistingStackCredentialPath prefers server-scoped credentials', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-'));
   const serverUrl = 'http://127.0.0.1:3009';
-  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl });
+  const env = neutralStackEnv();
+  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl, env });
 
   await mkdir(join(dir, 'servers', out.activeServerId), { recursive: true });
   await writeFile(out.legacyPath, 'legacy\n', 'utf-8');
   await writeFile(out.serverScopedPath, 'server\n', 'utf-8');
 
-  const found = findExistingStackCredentialPath({ cliHomeDir: dir, serverUrl });
+  const found = findExistingStackCredentialPath({ cliHomeDir: dir, serverUrl, env });
   assert.equal(found, out.serverScopedPath);
 });
 
 test('findExistingStackCredentialPath falls back to legacy access.key', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-'));
   const serverUrl = 'http://127.0.0.1:3009';
-  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl });
+  const env = neutralStackEnv();
+  const out = resolveStackCredentialPaths({ cliHomeDir: dir, serverUrl, env });
   await writeFile(out.legacyPath, 'legacy\n', 'utf-8');
 
-  const found = findExistingStackCredentialPath({ cliHomeDir: dir, serverUrl });
+  const found = findExistingStackCredentialPath({ cliHomeDir: dir, serverUrl, env });
   assert.equal(found, out.legacyPath);
 });
 
@@ -155,6 +167,58 @@ test('resolveStackCredentialPaths prefers the matching cli settings server id ov
   assert.ok(out.paths.includes(join(dir, 'servers', 'stack_dev__id_default', 'access.key')));
 });
 
+test('resolveStackCredentialPaths prefers a matching explicit active server id when settings profiles share the URL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-settings-explicit-'));
+  const serverUrl = 'http://127.0.0.1:52753';
+  const defaultServerId = 'stack_repo-remote-dev-d72117acdb__id_default';
+  const explicitServerId = 'android-keyboard-qa';
+  await writeFile(
+    join(dir, 'settings.json'),
+    JSON.stringify(
+      {
+        schemaVersion: 6,
+        activeServerId: defaultServerId,
+        servers: {
+          [defaultServerId]: {
+            id: defaultServerId,
+            name: 'Default',
+            serverUrl,
+            localServerUrl: serverUrl,
+            webappUrl: 'http://localhost:52753',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+          },
+          [explicitServerId]: {
+            id: explicitServerId,
+            name: 'Android keyboard QA',
+            serverUrl: 'http://10.0.2.2:52753',
+            localServerUrl: serverUrl,
+            webappUrl: 'http://10.0.2.2:52753',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+          },
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+    'utf-8',
+  );
+
+  const out = resolveStackCredentialPaths({
+    cliHomeDir: dir,
+    serverUrl,
+    env: { HAPPIER_ACTIVE_SERVER_ID: explicitServerId },
+  });
+
+  assert.equal(out.activeServerId, explicitServerId);
+  assert.equal(out.settingsServerId, explicitServerId);
+  assert.equal(out.serverScopedPath, join(dir, 'servers', explicitServerId, 'access.key'));
+  assert.ok(out.paths.includes(join(dir, 'servers', defaultServerId, 'access.key')) === false);
+});
+
 test('resolveStackDaemonStatePaths prefers the matching cli settings server id over a leaked stable scope alias', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-paths-settings-'));
   const serverUrl = 'http://127.0.0.1:3012';
@@ -194,6 +258,58 @@ test('resolveStackDaemonStatePaths prefers the matching cli settings server id o
   assert.ok(out.pairs.some((pair) => pair.statePath === join(dir, 'servers', 'stack_dev__id_default', 'daemon.state.json')));
 });
 
+test('resolveStackDaemonStatePaths prefers a matching explicit active server id when settings profiles share the URL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-paths-settings-explicit-'));
+  const serverUrl = 'http://127.0.0.1:52753';
+  const defaultServerId = 'stack_repo-remote-dev-d72117acdb__id_default';
+  const explicitServerId = 'android-keyboard-qa';
+  await writeFile(
+    join(dir, 'settings.json'),
+    JSON.stringify(
+      {
+        schemaVersion: 6,
+        activeServerId: defaultServerId,
+        servers: {
+          [defaultServerId]: {
+            id: defaultServerId,
+            name: 'Default',
+            serverUrl,
+            localServerUrl: serverUrl,
+            webappUrl: 'http://localhost:52753',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+          },
+          [explicitServerId]: {
+            id: explicitServerId,
+            name: 'Android keyboard QA',
+            serverUrl: 'http://10.0.2.2:52753',
+            localServerUrl: serverUrl,
+            webappUrl: 'http://10.0.2.2:52753',
+            createdAt: 1,
+            updatedAt: 1,
+            lastUsedAt: 1,
+          },
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+    'utf-8',
+  );
+
+  const out = resolveStackDaemonStatePaths({
+    cliHomeDir: dir,
+    serverUrl,
+    env: { HAPPIER_ACTIVE_SERVER_ID: explicitServerId },
+  });
+
+  assert.equal(out.activeServerId, explicitServerId);
+  assert.equal(out.settingsServerId, explicitServerId);
+  assert.equal(out.serverScopedStatePath, join(dir, 'servers', explicitServerId, 'daemon.state.json'));
+  assert.ok(out.pairs.some((pair) => pair.statePath === join(dir, 'servers', defaultServerId, 'daemon.state.json')) === false);
+});
+
 test('findExistingStackCredentialPath falls back to url-hash path when stable scope path is empty', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-cred-paths-'));
   const serverUrl = 'http://127.0.0.1:3009';
@@ -217,7 +333,7 @@ test('findExistingStackCredentialPath falls back to url-hash path when stable sc
 test('resolveStackDaemonStatePaths returns legacy + server-scoped state and lock paths', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-paths-'));
   const serverUrl = 'http://127.0.0.1:3009';
-  const out = resolveStackDaemonStatePaths({ cliHomeDir: dir, serverUrl });
+  const out = resolveStackDaemonStatePaths({ cliHomeDir: dir, serverUrl, env: neutralStackEnv() });
 
   assert.equal(out.legacyStatePath, join(dir, 'daemon.state.json'));
   assert.equal(out.legacyLockPath, join(dir, 'daemon.state.json.lock'));
@@ -231,12 +347,13 @@ test('resolveStackDaemonStatePaths returns legacy + server-scoped state and lock
 test('resolvePreferredStackDaemonStatePaths prefers server-scoped paths when present', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-paths-'));
   const serverUrl = 'http://127.0.0.1:3010';
-  const out = resolveStackDaemonStatePaths({ cliHomeDir: dir, serverUrl });
+  const env = neutralStackEnv();
+  const out = resolveStackDaemonStatePaths({ cliHomeDir: dir, serverUrl, env });
 
   await mkdir(join(dir, 'servers', out.activeServerId), { recursive: true });
   await writeFile(out.serverScopedLockPath, `${process.pid}\n`, 'utf-8');
 
-  const preferred = resolvePreferredStackDaemonStatePaths({ cliHomeDir: dir, serverUrl });
+  const preferred = resolvePreferredStackDaemonStatePaths({ cliHomeDir: dir, serverUrl, env });
   assert.equal(preferred.statePath, out.serverScopedStatePath);
   assert.equal(preferred.lockPath, out.serverScopedLockPath);
 });
@@ -244,11 +361,12 @@ test('resolvePreferredStackDaemonStatePaths prefers server-scoped paths when pre
 test('resolvePreferredStackDaemonStatePaths falls back to legacy paths', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'happy-stacks-daemon-paths-'));
   const serverUrl = 'http://127.0.0.1:3011';
-  const out = resolveStackDaemonStatePaths({ cliHomeDir: dir, serverUrl });
+  const env = neutralStackEnv();
+  const out = resolveStackDaemonStatePaths({ cliHomeDir: dir, serverUrl, env });
 
   await writeFile(out.legacyLockPath, `${process.pid}\n`, 'utf-8');
 
-  const preferred = resolvePreferredStackDaemonStatePaths({ cliHomeDir: dir, serverUrl });
+  const preferred = resolvePreferredStackDaemonStatePaths({ cliHomeDir: dir, serverUrl, env });
   assert.equal(preferred.statePath, out.legacyStatePath);
   assert.equal(preferred.lockPath, out.legacyLockPath);
 });
@@ -283,7 +401,7 @@ test('resolvePreferredStackDaemonStatePaths falls back to any existing server-sc
   await new Promise((resolve) => setTimeout(resolve, 15));
   await writeFile(join(serverDir, 'daemon.state.json'), '{"pid":3}\n', 'utf-8');
 
-  const preferred = resolvePreferredStackDaemonStatePaths({ cliHomeDir: dir, serverUrl: '' });
+  const preferred = resolvePreferredStackDaemonStatePaths({ cliHomeDir: dir, serverUrl: '', env: neutralStackEnv() });
   assert.equal(preferred.statePath, join(serverDir, 'daemon.state.json'));
   assert.equal(preferred.lockPath, join(serverDir, 'daemon.state.json.lock'));
 });
