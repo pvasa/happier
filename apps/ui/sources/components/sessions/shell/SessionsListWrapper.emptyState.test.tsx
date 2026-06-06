@@ -261,10 +261,10 @@ describe('SessionsListWrapper (empty state)', () => {
             }
         });
 
-        expect(sessionListState.paneOptions.at(-1)).toEqual({
+        expect(sessionListState.paneOptions).toEqual([{
             activeSessionId: null,
-            sessionListSurfaceDataActive: false,
-        });
+            sessionListSurfaceDataActive: true,
+        }]);
         expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
             visible: true,
             interactive: false,
@@ -279,15 +279,8 @@ describe('SessionsListWrapper (empty state)', () => {
 
         const screen = await renderSessionsListWrapper();
 
-        expect(sessionListState.paneOptions).toEqual([{
-            activeSessionId: 'session-2',
-            sessionListSurfaceDataActive: false,
-        }]);
-        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
-            visible: true,
-            interactive: false,
-            dataActive: false,
-        });
+        expect(sessionListState.paneOptions).toEqual([]);
+        expect(() => screen.findByType('SessionsListContent' as any)).toThrow();
 
         await screen.unmount();
     });
@@ -299,21 +292,13 @@ describe('SessionsListWrapper (empty state)', () => {
 
         const screen = await renderScreen(<SessionsListWrapper pathname="/" />);
 
-        expect(sessionListState.paneOptions).toEqual([{
-            activeSessionId: null,
-            sessionListSurfaceDataActive: false,
-        }]);
-        expect(screen.findByType('SessionsListContent' as any).props.pathname).toBe('/');
-        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
-            visible: true,
-            interactive: false,
-            dataActive: false,
-        });
+        expect(sessionListState.paneOptions).toEqual([]);
+        expect(() => screen.findByType('SessionsListContent' as any)).toThrow();
 
         await screen.unmount();
     });
 
-    it('retains sessions list content while the new-session sheet makes the surface inactive', async () => {
+    it('keeps the inactive new-session sheet surface unsubscribed until the root list becomes active', async () => {
         const { SessionsListWrapper } = await import('./SessionsListWrapper');
         sessionListState.data = [{ type: 'session', session: { id: 'session-2' } }];
         focusState.isFocused = true;
@@ -321,20 +306,13 @@ describe('SessionsListWrapper (empty state)', () => {
 
         const screen = await renderScreen(<SessionsListWrapper pathname="/" surfaceRoutePathname="/new" />);
 
-        expect(sessionListState.paneOptions).toEqual([{
-            activeSessionId: null,
-            sessionListSurfaceDataActive: false,
-        }]);
-        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
-            visible: true,
-            interactive: false,
-            dataActive: false,
-        });
+        expect(sessionListState.paneOptions).toEqual([]);
+        expect(() => screen.findByType('SessionsListContent' as any)).toThrow();
 
         await screen.unmount();
     });
 
-    it('retains sessions list content for a foreground session route on the phone root surface', async () => {
+    it('keeps the inactive foreground session route surface unsubscribed until the root list becomes active', async () => {
         const { SessionsListWrapper } = await import('./SessionsListWrapper');
         sessionListState.data = [{ type: 'session', session: { id: 'session-2' } }];
         focusState.isFocused = true;
@@ -342,15 +320,8 @@ describe('SessionsListWrapper (empty state)', () => {
 
         const screen = await renderScreen(<SessionsListWrapper pathname="/" surfaceRoutePathname="/session/session-2" />);
 
-        expect(sessionListState.paneOptions).toEqual([{
-            activeSessionId: null,
-            sessionListSurfaceDataActive: false,
-        }]);
-        expect(screen.findByType('SessionsListContent' as any).props.surfaceOwnership).toMatchObject({
-            visible: true,
-            interactive: false,
-            dataActive: false,
-        });
+        expect(sessionListState.paneOptions).toEqual([]);
+        expect(() => screen.findByType('SessionsListContent' as any)).toThrow();
 
         await screen.unmount();
     });

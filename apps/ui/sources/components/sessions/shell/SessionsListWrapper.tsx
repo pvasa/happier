@@ -52,6 +52,14 @@ type SessionsListWrapperProps = Readonly<{
     surfaceRoutePathname?: string;
 }>;
 
+type SessionsListPaneState = ReturnType<typeof useVisibleSessionListPaneState>;
+
+const EMPTY_SESSIONS_LIST_PANE_STATE: SessionsListPaneState = Object.freeze({
+    sessionListViewData: null,
+    visibleSessionCount: 0,
+    hasHiddenInactiveSessions: false,
+});
+
 export const SessionsListWrapper = React.memo((props: SessionsListWrapperProps) => {
     if (props.pathname !== undefined) {
         return (
@@ -74,6 +82,23 @@ const RouteBoundSessionsListWrapperContent = React.memo((props: SessionsListWrap
     );
 });
 
+const ActiveSessionsListPaneStateSubscriber = React.memo((props: Readonly<{
+    storageKind: Parameters<typeof useVisibleSessionListPaneState>[0];
+    activeSessionId: string | null;
+    onPaneState: (paneState: SessionsListPaneState) => void;
+}>) => {
+    const paneState = useVisibleSessionListPaneState(props.storageKind, {
+        activeSessionId: props.activeSessionId,
+        sessionListSurfaceDataActive: true,
+    });
+
+    React.useLayoutEffect(() => {
+        props.onPaneState(paneState);
+    }, [paneState, props.onPaneState]);
+
+    return null;
+});
+
 const SessionsListWrapperContent = React.memo((props: { pathname: string; surfaceRoutePathname: string }) => {
     const { theme } = useUnistyles();
     const isFocused = useIsFocused();
@@ -90,10 +115,11 @@ const SessionsListWrapperContent = React.memo((props: { pathname: string; surfac
         [isFocused, surfaceRoutePathname],
     );
     const activeSessionId = React.useMemo(() => readSessionIdFromPathname(pathname), [pathname]);
-    const { sessionListViewData, visibleSessionCount, hasHiddenInactiveSessions } = useVisibleSessionListPaneState(storageKind, {
-        activeSessionId,
-        sessionListSurfaceDataActive: surfaceOwnership.dataActive,
-    });
+    const [paneState, setPaneState] = React.useState<SessionsListPaneState>(EMPTY_SESSIONS_LIST_PANE_STATE);
+    const handlePaneState = React.useCallback((nextPaneState: SessionsListPaneState) => {
+        setPaneState((currentPaneState) => (currentPaneState === nextPaneState ? currentPaneState : nextPaneState));
+    }, []);
+    const { sessionListViewData, visibleSessionCount, hasHiddenInactiveSessions } = paneState;
     const styles = stylesheet;
     const storageChrome = (
         <SessionsListStorageChrome
@@ -154,5 +180,16 @@ const SessionsListWrapperContent = React.memo((props: { pathname: string; surfac
         );
     }
 
-    return <>{content}</>;
+    return (
+        <>
+            {surfaceOwnership.dataActive ? (
+                <ActiveSessionsListPaneStateSubscriber
+                    storageKind={storageKind}
+                    activeSessionId={activeSessionId}
+                    onPaneState={handlePaneState}
+                />
+            ) : null}
+            {content}
+        </>
+    );
 });
