@@ -8,6 +8,10 @@
  */
 
 import { normalizeSessionListKeyParts } from './listing/sessionListKeyNormalization';
+import {
+    areServerProfileIdentifiersEquivalent,
+    resolveServerProfileScopeIdForIdentifier,
+} from '@/sync/domains/server/serverProfiles';
 import { resolveServerIdForSessionIdFromLocalCache } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache';
 
 type ActiveViewingSessionEntry = Readonly<{
@@ -16,10 +20,40 @@ type ActiveViewingSessionEntry = Readonly<{
     serverId: string | null;
 }>;
 
-let activeViewingSessionEntries: ActiveViewingSessionEntry[] = [];
-const visibleSessionRefCounts = new Map<string, number>();
-const visibleSessionScopedRefCounts = new Map<string, number>();
-const visibleScopedSessionKeysBySessionId = new Map<string, Set<string>>();
+type ActiveViewingSessionState = {
+    activeViewingSessionEntries: ActiveViewingSessionEntry[];
+    visibleSessionRefCounts: Map<string, number>;
+    visibleSessionScopedRefCounts: Map<string, number>;
+    visibleScopedSessionKeysBySessionId: Map<string, Set<string>>;
+    visibleScopedSessionServerIdsBySessionId: Map<string, Set<string>>;
+    visibleScopedSessionServerIdBySessionKey: Map<string, string>;
+};
+
+const activeViewingSessionStateKey = '__HAPPIER_ACTIVE_VIEWING_SESSION_STATE__';
+
+function createActiveViewingSessionState(): ActiveViewingSessionState {
+    return {
+        activeViewingSessionEntries: [],
+        visibleSessionRefCounts: new Map<string, number>(),
+        visibleSessionScopedRefCounts: new Map<string, number>(),
+        visibleScopedSessionKeysBySessionId: new Map<string, Set<string>>(),
+        visibleScopedSessionServerIdsBySessionId: new Map<string, Set<string>>(),
+        visibleScopedSessionServerIdBySessionKey: new Map<string, string>(),
+    };
+}
+
+function getActiveViewingSessionState(): ActiveViewingSessionState {
+    const host = globalThis as typeof globalThis & { [activeViewingSessionStateKey]?: ActiveViewingSessionState };
+    host[activeViewingSessionStateKey] ??= createActiveViewingSessionState();
+    return host[activeViewingSessionStateKey];
+}
+
+const activeViewingSessionState = getActiveViewingSessionState();
+const visibleSessionRefCounts = activeViewingSessionState.visibleSessionRefCounts;
+const visibleSessionScopedRefCounts = activeViewingSessionState.visibleSessionScopedRefCounts;
+const visibleScopedSessionKeysBySessionId = activeViewingSessionState.visibleScopedSessionKeysBySessionId;
+const visibleScopedSessionServerIdsBySessionId = activeViewingSessionState.visibleScopedSessionServerIdsBySessionId;
+const visibleScopedSessionServerIdBySessionKey = activeViewingSessionState.visibleScopedSessionServerIdBySessionKey;
 
 function normalizeText(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -30,7 +64,8 @@ function normalizeSessionId(value: unknown): string {
 }
 
 function normalizeServerId(value: unknown): string {
-    return normalizeText(value);
+    const serverId = normalizeText(value);
+    return serverId ? resolveServerProfileScopeIdForIdentifier(serverId) || serverId : '';
 }
 
 function resolveVisibleSessionIdentity(sessionIdRaw: unknown, serverIdRaw?: unknown): Readonly<{
@@ -53,31 +88,77 @@ function resolveVisibleSessionIdentity(sessionIdRaw: unknown, serverIdRaw?: unkn
     };
 }
 
-function addVisibleScopedSessionKey(sessionId: string, sessionKey: string): void {
+function addVisibleScopedSessionKey(sessionId: string, sessionKey: string, serverId: string): void {
     const current = visibleScopedSessionKeysBySessionId.get(sessionId) ?? new Set<string>();
     current.add(sessionKey);
     visibleScopedSessionKeysBySessionId.set(sessionId, current);
+
+    const serverIds = visibleScopedSessionServerIdsBySessionId.get(sessionId) ?? new Set<string>();
+    serverIds.add(serverId);
+    visibleScopedSessionServerIdsBySessionId.set(sessionId, serverIds);
+    visibleScopedSessionServerIdBySessionKey.set(sessionKey, serverId);
 }
 
 function removeVisibleScopedSessionKey(sessionId: string, sessionKey: string): void {
     const current = visibleScopedSessionKeysBySessionId.get(sessionId);
-    if (!current) return;
-    current.delete(sessionKey);
-    if (current.size === 0) {
-        visibleScopedSessionKeysBySessionId.delete(sessionId);
+    const serverId = visibleScopedSessionServerIdBySessionKey.get(sessionKey) ?? null;
+    if (current) {
+        current.delete(sessionKey);
+        if (current.size === 0) {
+            visibleScopedSessionKeysBySessionId.delete(sessionId);
+        } else {
+            visibleScopedSessionKeysBySessionId.set(sessionId, current);
+        }
+    }
+
+    visibleScopedSessionServerIdBySessionKey.delete(sessionKey);
+    if (!serverId) return;
+    const serverIds = visibleScopedSessionServerIdsBySessionId.get(sessionId);
+    if (!serverIds) return;
+    if (![...visibleScopedSessionServerIdBySessionKey.entries()].some(([key, value]) => (
+        value === serverId && (visibleScopedSessionKeysBySessionId.get(sessionId)?.has(key) ?? false)
+    ))) {
+        serverIds.delete(serverId);
+    }
+    if (serverIds.size === 0) {
+        visibleScopedSessionServerIdsBySessionId.delete(sessionId);
         return;
     }
-    visibleScopedSessionKeysBySessionId.set(sessionId, current);
+    visibleScopedSessionServerIdsBySessionId.set(sessionId, serverIds);
+}
+
+function readVisibleScopedServerIds(sessionId: string): Set<string> {
+    const serverIds = new Set(visibleScopedSessionServerIdsBySessionId.get(sessionId) ?? []);
+    const sessionKeySuffix = `:${sessionId}`;
+    for (const sessionKey of visibleScopedSessionKeysBySessionId.get(sessionId) ?? []) {
+        if (!sessionKey.endsWith(sessionKeySuffix)) continue;
+        const serverId = sessionKey.slice(0, -sessionKeySuffix.length).trim();
+        if (serverId) serverIds.add(serverId);
+    }
+    return serverIds;
+}
+
+function hasEquivalentVisibleScopedServer(sessionId: string, serverId: string): boolean {
+    const serverIds = readVisibleScopedServerIds(sessionId);
+    if (serverIds.size === 0) return false;
+    for (const visibleServerId of serverIds) {
+        if (areServerProfileIdentifiersEquivalent(visibleServerId, serverId)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function getCurrentActiveViewingSessionEntry(): ActiveViewingSessionEntry | null {
-    return activeViewingSessionEntries[activeViewingSessionEntries.length - 1] ?? null;
+    const entries = activeViewingSessionState.activeViewingSessionEntries;
+    return entries[entries.length - 1] ?? null;
 }
 
 function removeActiveViewingSessionEntryAt(index: number): void {
-    activeViewingSessionEntries = [
-        ...activeViewingSessionEntries.slice(0, index),
-        ...activeViewingSessionEntries.slice(index + 1),
+    const entries = activeViewingSessionState.activeViewingSessionEntries;
+    activeViewingSessionState.activeViewingSessionEntries = [
+        ...entries.slice(0, index),
+        ...entries.slice(index + 1),
     ];
 }
 
@@ -91,8 +172,8 @@ export const setActiveViewingSessionId = (
 ): void => {
     const identity = resolveVisibleSessionIdentity(sessionId, serverId);
     if (!identity.sessionId) return;
-    activeViewingSessionEntries = [
-        ...activeViewingSessionEntries,
+    activeViewingSessionState.activeViewingSessionEntries = [
+        ...activeViewingSessionState.activeViewingSessionEntries,
         { sessionId: identity.sessionId, activationId, serverId: identity.serverId },
     ];
 };
@@ -106,7 +187,7 @@ export const clearActiveViewingSessionId = (
     if (!identity.sessionId) return;
 
     if (activationId !== undefined) {
-        const index = activeViewingSessionEntries.findIndex(
+        const index = activeViewingSessionState.activeViewingSessionEntries.findIndex(
             (entry) => (
                 entry.sessionId === identity.sessionId
                 && entry.activationId === activationId
@@ -123,7 +204,7 @@ export const clearActiveViewingSessionId = (
         return;
     }
 
-    const index = activeViewingSessionEntries.findIndex((entry) => (
+    const index = activeViewingSessionState.activeViewingSessionEntries.findIndex((entry) => (
         entry.sessionId === identity.sessionId
         && (
             identity.serverId == null
@@ -137,10 +218,31 @@ export const clearActiveViewingSessionId = (
 };
 
 export const clearActiveViewingSessionsForServerScopeReset = (): void => {
-    activeViewingSessionEntries = [];
+    activeViewingSessionState.activeViewingSessionEntries = [];
     visibleSessionRefCounts.clear();
     visibleSessionScopedRefCounts.clear();
     visibleScopedSessionKeysBySessionId.clear();
+    visibleScopedSessionServerIdsBySessionId.clear();
+    visibleScopedSessionServerIdBySessionKey.clear();
+};
+
+function isSessionRoutePathname(pathname: string | null | undefined): boolean {
+    if (typeof pathname !== 'string') return true;
+    const route = pathname.trim().split('?')[0]?.replace(/\/+$/, '') ?? '';
+    return /^\/session\/[^/]+(?:\/.*)?$/.test(route);
+}
+
+export const clearActiveViewingSessionsForNonSessionRoute = (pathname: string | null | undefined): boolean => {
+    if (isSessionRoutePathname(pathname)) return false;
+    const hadViewingState = activeViewingSessionState.activeViewingSessionEntries.length > 0
+        || visibleSessionRefCounts.size > 0
+        || visibleSessionScopedRefCounts.size > 0
+        || visibleScopedSessionKeysBySessionId.size > 0
+        || visibleScopedSessionServerIdsBySessionId.size > 0
+        || visibleScopedSessionServerIdBySessionKey.size > 0;
+    if (!hadViewingState) return false;
+    clearActiveViewingSessionsForServerScopeReset();
+    return true;
 };
 
 export const markSessionVisible = (sessionId: string, serverId?: string | null): void => {
@@ -154,7 +256,9 @@ export const markSessionVisible = (sessionId: string, serverId?: string | null):
         identity.sessionKey,
         (visibleSessionScopedRefCounts.get(identity.sessionKey) ?? 0) + 1,
     );
-    addVisibleScopedSessionKey(identity.sessionId, identity.sessionKey);
+    if (identity.serverId) {
+        addVisibleScopedSessionKey(identity.sessionId, identity.sessionKey, identity.serverId);
+    }
 };
 
 function decrementVisibleScopedSession(identity: Readonly<{
@@ -190,6 +294,11 @@ export const markSessionHidden = (sessionId: string, serverId?: string | null): 
     decrementVisibleScopedSession(identity);
 };
 
+export const getVisibleSessionIds = (): string[] => Array.from(new Set([
+    ...visibleSessionRefCounts.keys(),
+    ...visibleScopedSessionKeysBySessionId.keys(),
+]));
+
 export const isSessionVisible = (sessionId: string, serverId?: string | null): boolean => {
     const identity = resolveVisibleSessionIdentity(sessionId, serverId);
     if (!identity.sessionId) return false;
@@ -199,7 +308,7 @@ export const isSessionVisible = (sessionId: string, serverId?: string | null): b
 
     const hasScopedVisibility = (visibleScopedSessionKeysBySessionId.get(identity.sessionId)?.size ?? 0) > 0;
     if (identity.serverId && hasScopedVisibility) {
-        return false;
+        return hasEquivalentVisibleScopedServer(identity.sessionId, identity.serverId);
     }
 
     return visibleSessionRefCounts.has(identity.sessionId);
