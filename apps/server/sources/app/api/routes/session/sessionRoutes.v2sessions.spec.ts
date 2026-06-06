@@ -4,6 +4,7 @@ import {
     encodeV2SessionListCursorV1,
     encodeV2SessionListCursorV2,
 } from "@happier-dev/protocol";
+import type { SessionRuntimeIssueV1 } from "@happier-dev/protocol";
 
 import { mapV2SessionListRow } from "./v2SessionListRows";
 import {
@@ -60,6 +61,23 @@ function pagedSessionRow(
         shares: [],
     };
 }
+
+const usageLimitRuntimeIssue: SessionRuntimeIssueV1 = {
+    v: 1,
+    scope: "primary_session",
+    status: "failed",
+    code: "usage_limit",
+    source: "usage_limit",
+    occurredAt: 1_000,
+    provider: "claude",
+    usageLimit: {
+        v: 1,
+        resetAtMs: null,
+        retryAfterMs: null,
+        quotaScope: "account",
+        recoverability: "wait",
+    },
+};
 
 function legacyPagedSessionRow(id: string) {
     const {
@@ -322,6 +340,66 @@ describe("sessionRoutes v2 sessions snapshot", () => {
             nextCursor: encodeV2SessionListCursorV2({ sessionId: "s_normal_first_page", meaningfulActivityAt: 1_000 }),
             hasNext: true,
         }));
+    });
+
+    it("keeps primary failed initial attention rows even when the failure did not advance the session seq", async () => {
+        const normalFirstPageRow = pagedSessionRow("s_normal_first_page", { meaningfulActivityAt: new Date(1_000) });
+        const normalSecondPageRow = pagedSessionRow("s_normal_second_page", { meaningfulActivityAt: new Date(950) });
+        const activeReadFailure = {
+            ...pagedSessionRow("s_failed_active_read", { active: true, meaningfulActivityAt: new Date(2_500) }),
+            seq: 10,
+            lastViewedSessionSeq: 10,
+            latestTurnStatus: "failed",
+            latestTurnStatusObservedAt: 1_000,
+            lastRuntimeIssue: JSON.stringify(usageLimitRuntimeIssue),
+        };
+        const inactiveUnreadFailure = {
+            ...pagedSessionRow("s_failed_inactive_unread", { active: false, meaningfulActivityAt: new Date(2_600) }),
+            seq: 11,
+            lastViewedSessionSeq: 10,
+            latestTurnStatus: "failed",
+            latestTurnStatusObservedAt: 1_000,
+            lastRuntimeIssue: JSON.stringify(usageLimitRuntimeIssue),
+        };
+        const inactiveStatusOnlyFailure = {
+            ...pagedSessionRow("s_failed_status_only", { active: false, meaningfulActivityAt: new Date(2_700) }),
+            seq: 10,
+            lastViewedSessionSeq: 10,
+            latestTurnStatus: "failed",
+            latestTurnStatusObservedAt: 2_000,
+            lastRuntimeIssue: JSON.stringify(usageLimitRuntimeIssue),
+        };
+        const malformedFailure = {
+            ...pagedSessionRow("s_failed_malformed_issue", { active: false, meaningfulActivityAt: new Date(2_800) }),
+            seq: 10,
+            lastViewedSessionSeq: 10,
+            latestTurnStatus: "failed",
+            latestTurnStatusObservedAt: 2_100,
+            lastRuntimeIssue: JSON.stringify({ v: 1, scope: "primary_session", status: "completed" }),
+        };
+        sessionFindMany
+            .mockResolvedValueOnce([normalFirstPageRow, normalSecondPageRow])
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([activeReadFailure, inactiveUnreadFailure, inactiveStatusOnlyFailure, malformedFailure])
+            .mockResolvedValueOnce([]);
+
+        const route = await createSessionRouteTestBuilder("GET", "/v2/sessions");
+        const { response } = await route.invoke({
+            query: {
+                includeAttention: "true",
+                limit: 1,
+            },
+        });
+
+        const sessionIds = (response as { sessions: Array<{ id: string }> }).sessions.map((session) => session.id);
+        expect(sessionIds).toHaveLength(4);
+        expect(sessionIds).toEqual(expect.arrayContaining([
+            "s_failed_active_read",
+            "s_failed_inactive_unread",
+            "s_failed_status_only",
+            "s_normal_first_page",
+        ]));
+        expect(sessionIds).not.toContain("s_failed_malformed_issue");
     });
 
     it("caps initial durable attention expansion queries", async () => {

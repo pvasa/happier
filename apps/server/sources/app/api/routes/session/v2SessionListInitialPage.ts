@@ -7,7 +7,6 @@ import {
     V2_SESSION_LIST_ORDER_BY,
 } from "./v2SessionListPage";
 import {
-    getV2SessionListEffectiveActivityAt,
     parseStoredSessionLatestTurnStatus,
     parseStoredSessionRuntimeIssue,
     type V2SessionListRowCompat,
@@ -32,22 +31,24 @@ function readNumberField(row: V2SessionListRowCompat, field: string): number | n
     return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function hasActivityAfter(row: V2SessionListRowCompat, timestamp: number | null): boolean {
-    return timestamp !== null && getV2SessionListEffectiveActivityAt(row).getTime() > timestamp;
+function hasUnreadSessionActivity(row: V2SessionListRowCompat): boolean {
+    const sessionSeq = readNumberField(row, "seq");
+    if (sessionSeq === null) return false;
+    return sessionSeq > (readNumberField(row, "lastViewedSessionSeq") ?? 0);
 }
 
 function hasUnreadReadyEvent(row: V2SessionListRowCompat): boolean {
     const latestReadyEventSeq = readNumberField(row, "latestReadyEventSeq");
     if (latestReadyEventSeq === null) return false;
-    return latestReadyEventSeq > (row.lastViewedSessionSeq ?? 0);
+    return latestReadyEventSeq > (readNumberField(row, "lastViewedSessionSeq") ?? 0);
 }
 
 function hasPrimarySessionFailure(row: V2SessionListRowCompat): boolean {
     if (parseStoredSessionLatestTurnStatus(row.latestTurnStatus) !== "failed") return false;
     const issue = parseStoredSessionRuntimeIssue(row.lastRuntimeIssue);
-    if (issue?.v !== 1 || issue.scope !== "primary_session" || issue.status !== "failed") return false;
-    const occurredAt = issue.occurredAt ?? readNumberField(row, "latestTurnStatusObservedAt");
-    return !hasActivityAfter(row, occurredAt);
+    return issue?.v === 1
+        && issue.scope === "primary_session"
+        && issue.status === "failed";
 }
 
 function isDurableAttentionRow(row: V2SessionListRowCompat): boolean {
