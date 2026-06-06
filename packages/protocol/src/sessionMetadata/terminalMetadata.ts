@@ -9,8 +9,8 @@ import { WINDOWS_REMOTE_SESSION_LAUNCH_MODES } from './windowsRemoteSessionLaunc
  */
 
 export function createSessionTerminalMetadataSchema(zod: typeof z) {
-  const terminalModeSchema = zod.enum(['plain', 'tmux', 'windows_terminal', 'windows_console']);
-  const requestedModeSchema = zod.enum(['plain', 'tmux', ...WINDOWS_REMOTE_SESSION_LAUNCH_MODES]);
+  const terminalModeSchema = zod.enum(['plain', 'tmux', 'zellij', 'windows_terminal', 'windows_console']);
+  const requestedModeSchema = zod.enum(['plain', 'tmux', 'zellij', ...WINDOWS_REMOTE_SESSION_LAUNCH_MODES]);
   return zod
     .object({
       mode: terminalModeSchema,
@@ -20,6 +20,12 @@ export function createSessionTerminalMetadataSchema(zod: typeof z) {
         .object({
           target: zod.string(),
           tmpDir: zod.string().nullable().optional(),
+        })
+        .optional(),
+      zellij: zod
+        .object({
+          sessionName: zod.string(),
+          paneId: zod.string().optional(),
         })
         .optional(),
       windows: zod
