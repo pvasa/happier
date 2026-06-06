@@ -146,6 +146,26 @@ describe('chooseSubmitMode', () => {
         })).toBe('agent_queue');
     });
 
+    it('uses server_pending for shared local attachment unless remote writeability is explicit', () => {
+        expect(chooseSubmitMode({
+            configuredMode: 'agent_queue',
+            session: {
+                presence: 'online',
+                agentStateVersion: 1,
+                agentState: {
+                    controlledByUser: false,
+                    localControl: {
+                        attached: true,
+                        topology: 'shared',
+                    },
+                },
+                pendingVersion: 0,
+                pendingCount: 0,
+                metadata: {},
+            } as any,
+        })).toBe('server_pending');
+    });
+
     it('prefers server_pending while thinking when queue is supported', () => {
         expect(chooseSubmitMode({
             configuredMode: 'agent_queue',

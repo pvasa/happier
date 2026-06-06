@@ -304,6 +304,29 @@ describe('submitSessionUserMessage', () => {
         });
     });
 
+    it('does not let forceImmediate bypass inactive-session pending safety', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession(),
+            text: 'force-safe',
+            configuredMode: 'agent_queue',
+            forceImmediate: true,
+            resumeCapabilityOptions: { accountSettings: {} },
+            serverId: 'server-cache',
+        });
+
+        expect(result).toMatchObject({
+            type: 'success',
+            persistence: 'pending',
+            wake: { attempted: true, state: 'started' },
+        });
+        expect(calls.map((call) => call.type)).toEqual(['enqueue', 'resume']);
+    });
+
     it('aborts before sending interrupt messages', async () => {
         const subject = await expectSubject();
         if (!subject) return;

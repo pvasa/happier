@@ -1,6 +1,6 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { isVersionSupported, MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
-import { isSessionExclusiveLocalControl } from '@/sync/domains/session/control/sessionLocalControl';
+import { getSessionLocalControlState } from '@/sync/domains/session/control/sessionLocalControl';
 import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 
 export type MessageSendMode = 'agent_queue' | 'interrupt' | 'server_pending';
@@ -46,7 +46,8 @@ export function chooseSubmitMode(opts: {
         return 'server_pending';
     }
 
-    const controlledByUser = isSessionExclusiveLocalControl(session);
+    const localControl = getSessionLocalControlState(session);
+    const localControlBlocksDirectSubmit = localControl?.attached === true && localControl.remoteWritable !== true;
     const runtimeStatus = deriveSessionRuntimePresentationState({
         active: session?.active,
         activeAt: session?.activeAt,
@@ -77,7 +78,7 @@ export function chooseSubmitMode(opts: {
         isBusy
         && inFlightSteerSupported === true
         && inFlightSteerAvailable === true
-        && !controlledByUser
+        && !localControlBlocksDirectSubmit
         && isOnline
         && agentReady
         && busySteerSendPolicy === 'steer_immediately'
@@ -85,7 +86,7 @@ export function chooseSubmitMode(opts: {
         return 'agent_queue';
     }
 
-    if (controlledByUser || isBusy || !isOnline || !agentReady) {
+    if (localControlBlocksDirectSubmit || isBusy || !isOnline || !agentReady) {
         return 'server_pending';
     }
 

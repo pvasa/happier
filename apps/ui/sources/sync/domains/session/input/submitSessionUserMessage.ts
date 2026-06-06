@@ -20,19 +20,13 @@ function readLocalId(result: PendingMessageSubmitResult | DirectMessageSubmitRes
 }
 
 function resolveSubmitMode(opts: SubmitSessionUserMessageOptions): MessageSendMode {
-    const selected = chooseSubmitMode({
+    return chooseSubmitMode({
         configuredMode: opts.configuredMode,
         busySteerSendPolicy: opts.busySteerSendPolicy,
         explicitMode: opts.explicitMode,
         session: opts.session,
         nowMs: opts.nowMs,
     });
-
-    if (opts.forceImmediate === true && selected === 'server_pending') {
-        return 'agent_queue';
-    }
-
-    return selected;
 }
 
 async function switchRemoteAfterPendingEnqueueIfNeeded(
