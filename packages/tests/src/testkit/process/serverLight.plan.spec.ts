@@ -86,7 +86,7 @@ describe("startServerLight planning helpers", () => {
       env: {},
       platform: "linux",
     });
-    expect(generated).toBe("file:///tmp/happier-e2e/happier-server-light.sqlite?socket_timeout=30");
+    expect(generated).toBe("file:///tmp/happier-e2e/happier-server-light.sqlite?socket_timeout=30&connection_limit=1");
 
     const explicitDatabaseUrl = "file:/tmp/custom-happier.sqlite?mode=rw";
     expect(resolveServerLightSqliteDatabaseUrl({

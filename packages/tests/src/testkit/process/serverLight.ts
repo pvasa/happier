@@ -5,7 +5,10 @@ import { randomInt } from 'node:crypto';
 import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { renderPrismaCompatibleSqliteDatabaseUrl } from '@happier-dev/cli-common/firstPartyRuntime';
+import {
+  renderPrismaCompatibleSqliteDatabaseUrl,
+  resolvePrismaSqliteDatabaseUrlOptionsFromEnv,
+} from '@happier-dev/cli-common/firstPartyRuntime';
 
 import { repoRootDir } from '../paths';
 import { runLoggedCommand, spawnLoggedProcess, type SpawnedProcess } from './spawnProcess';
@@ -252,6 +255,7 @@ export function resolveServerLightSqliteDatabaseUrl(params: Readonly<{
   return renderPrismaCompatibleSqliteDatabaseUrl({
     dbPath: join(params.dataDir, 'happier-server-light.sqlite'),
     platform: params.platform ?? process.platform,
+    sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(params.env),
   });
 }
 
@@ -713,6 +717,7 @@ async function prepareServerLightDataDir(params: {
       const templateSqliteUrl = renderPrismaCompatibleSqliteDatabaseUrl({
         dbPath: join(templateDataDir, 'happier-server-light.sqlite'),
         platform: process.platform,
+        sqlite: resolvePrismaSqliteDatabaseUrlOptionsFromEnv(params.baseEnv),
       });
       await runServerMigrationCommand({
         provider: params.dbProvider,
