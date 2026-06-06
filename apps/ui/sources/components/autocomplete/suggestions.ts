@@ -1,15 +1,14 @@
 import {
-    COMMAND_SUGGESTION_ROW_HEIGHT,
     FileMentionSuggestion,
     SkillMentionSuggestion,
     VendorPluginMentionSuggestion,
 } from '@/components/sessions/agentInput/components/AgentInputSuggestionView';
 import * as React from 'react';
 import type { FileItem } from '@/sync/domains/input/suggestionFile';
-import { searchCommands, CommandItem } from '@/sync/domains/input/suggestionCommands';
 import { storage } from '@/sync/domains/state/storage';
 import { ensureSessionSuggestionCatalogs } from '@/sync/ops/sessionCatalogs';
 import type { AutocompleteSuggestion } from './autocompleteTypes';
+import { getCommandSuggestions } from './commandSuggestions';
 
 type VendorPluginCatalogItem = Readonly<{
     name: string;
@@ -181,34 +180,6 @@ function resolveCatalogRequestForQuery(query: string): { vendorPlugins?: boolean
     return null;
 }
 
-export async function getCommandSuggestions(sessionId: string, query: string): Promise<{
-    key: string;
-    text: string;
-    label: string;
-    description?: string;
-    rowHeight?: number;
-}[]> {
-    // Remove the "/" prefix for searching
-    const searchTerm = query.slice(1);
-    
-    try {
-        // Use the command search cache with fuzzy matching
-        const commands = await searchCommands(sessionId, searchTerm, { limit: 8 });
-
-        // Convert CommandItem to suggestion format
-        return commands.map((cmd: CommandItem) => ({
-            key: `cmd-${cmd.command}`,
-            text: `/${cmd.command}`,
-            label: `/${cmd.command}`,
-            description: cmd.description,
-            rowHeight: COMMAND_SUGGESTION_ROW_HEIGHT,
-            ...(cmd.promptInvocation ? { promptInvocation: cmd.promptInvocation } : {}),
-        }));
-    } catch {
-        return [];
-    }
-}
-
 async function searchSuggestionFiles(sessionId: string, searchTerm: string): Promise<readonly FileItem[]> {
     const { searchFiles } = await import('@/sync/domains/input/suggestionFile');
     return searchFiles(sessionId, searchTerm, { limit: 12 });
@@ -311,7 +282,7 @@ async function getAtMentionSuggestions(
         return vendorPluginSuggestions;
     }
 
-    if (!isPathLikeQuery && !catalogs.files) {
+    if (!isPathLikeQuery && !catalogs.files && vendorPluginSuggestions.length > 0) {
         return vendorPluginSuggestions;
     }
 

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FileItem } from '@/sync/domains/input/suggestionFile';
 const sessionRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 const resolvePreferredServerIdForSessionIdMock = vi.hoisted(() => vi.fn((_sessionId: string) => 'server-a'));
-const searchFilesMock = vi.hoisted(() => vi.fn(async () => []));
+const searchFilesMock = vi.hoisted(() => vi.fn(async (): Promise<FileItem[]> => []));
 const suggestionFileModuleImportCount = vi.hoisted(() => ({ value: 0 }));
 const storageStateMock = vi.hoisted(() => ({
     sessions: {
@@ -114,7 +115,8 @@ describe('structured input autocomplete suggestions', () => {
         vi.resetModules();
         suggestionFileModuleImportCount.value = 0;
 
-        const { getCommandSuggestions, getSuggestions } = await import('./suggestions');
+        const { getCommandSuggestions } = await import('./commandSuggestions');
+        const { getSuggestions } = await import('./suggestions');
 
         expect(suggestionFileModuleImportCount.value).toBe(0);
 
@@ -143,7 +145,7 @@ describe('structured input autocomplete suggestions', () => {
     });
 
     it('uses a taller row height for slash commands with descriptions', async () => {
-        const { getCommandSuggestions } = await import('./suggestions');
+        const { getCommandSuggestions } = await import('./commandSuggestions');
 
         const suggestions = await getCommandSuggestions('s1', '/go');
 
@@ -157,7 +159,7 @@ describe('structured input autocomplete suggestions', () => {
     });
 
     it('carries prompt invocation metadata on slash command suggestions', async () => {
-        const { getCommandSuggestions } = await import('./suggestions');
+        const { getCommandSuggestions } = await import('./commandSuggestions');
 
         const suggestions = await getCommandSuggestions('s1', '/qa');
 
@@ -337,6 +339,43 @@ describe('structured input autocomplete suggestions', () => {
             text: '@src/index.ts',
         });
         expect(suggestions[0]?.structuredInput).toBeUndefined();
+    });
+
+    it('falls back to file suggestions for plain at queries when no vendor plugin matches', async () => {
+        sessionRpcWithServerScopeMock.mockImplementation(async (params: { method?: string }) => {
+            if (params.method === 'session.vendorPluginCatalog.list') {
+                return { vendorPlugins: [] };
+            }
+            if (params.method === 'session.skillCatalog.list') {
+                return { skills: [] };
+            }
+            return {};
+        });
+        searchFilesMock.mockResolvedValueOnce([
+            {
+                fileName: 'README.md',
+                filePath: '',
+                fullPath: 'README.md',
+                fileType: 'file',
+            },
+        ]);
+        const { getSuggestions } = await import('./suggestions');
+
+        const suggestions = await getSuggestions('s1', '@REA');
+
+        expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith({
+            sessionId: 's1',
+            serverId: 'server-a',
+            method: 'session.vendorPluginCatalog.list',
+            payload: { cwd: '/repo' },
+        });
+        expect(searchFilesMock).toHaveBeenCalledWith('s1', 'REA', { limit: 12 });
+        expect(suggestions).toEqual([
+            expect.objectContaining({
+                key: 'file-README.md',
+                text: '@README.md',
+            }),
+        ]);
     });
 
     it('populates selected skill suggestions from the session catalog RPC', async () => {

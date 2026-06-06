@@ -7,6 +7,7 @@ import { Text } from '@/components/ui/text/Text';
 import { FileIcon } from '@/components/ui/media/FileIcon';
 import { InlineRepoPathLabel } from '@/components/ui/path/InlineRepoPathLabel';
 import { normalizeRepoPathParts } from '@/utils/path/normalizeRepoPathParts';
+import { COMMAND_SUGGESTION_ROW_HEIGHT } from '@/components/autocomplete/commandSuggestionConstants';
 
 
 interface CommandSuggestionProps {
@@ -15,7 +16,7 @@ interface CommandSuggestionProps {
 }
 
 const COMMAND_PREFIX = '/';
-export const COMMAND_SUGGESTION_ROW_HEIGHT = 52;
+export { COMMAND_SUGGESTION_ROW_HEIGHT };
 
 export const CommandSuggestion = React.memo(({ command, description }: CommandSuggestionProps) => {
     return (
