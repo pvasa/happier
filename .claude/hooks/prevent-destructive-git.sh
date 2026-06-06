@@ -6,7 +6,11 @@
 
 set -u
 
-INPUT=$(timeout 1 cat 2>/dev/null || echo '{}')
+if [[ -t 0 ]]; then
+  INPUT='{}'
+else
+  INPUT=$(cat 2>/dev/null || echo '{}')
+fi
 
 json_field() {
   local expression="$1"
