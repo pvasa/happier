@@ -85,6 +85,26 @@ describe('ChainTranscriptList', () => {
         standardCleanup();
     });
 
+    it('throttles web FlashList scroll events above one frame to reduce scroll-render churn', async () => {
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        try {
+            scrollToIndexShouldReject = false;
+            const screen = await renderChainTranscriptList({
+                sessionId: 's1',
+                messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+                metadata: null,
+                interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            });
+
+            const list = screen.findByType('FlashList' as any);
+            expect(list.props.scrollEventThrottle).toBe(32);
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
+    });
+
     it('does not pass deprecated estimatedItemSize to FlashList v2', async () => {
         scrollToIndexShouldReject = false;
         const screen = await renderChainTranscriptList({

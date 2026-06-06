@@ -165,6 +165,25 @@ describe('ChatFooter (local control)', () => {
         expect(screen.findByTestId('session-chatFooter-switchToRemote')).toBeNull();
     });
 
+    it('hides the local-control banner for remote-writable shared attachments with no detach action', async () => {
+        const screen = await renderFooter({
+            controlledByUser: false,
+            localControl: {
+                attached: true,
+                topology: 'shared',
+                remoteWritable: true,
+                canAttach: true,
+                canDetach: false,
+            },
+            onRequestSwitchToRemote: vi.fn(),
+        } as any);
+
+        expect(screen.getTextContent()).not.toContain('chatFooter.sessionRunningLocally');
+        expect(screen.getTextContent()).not.toContain('chatFooter.sessionRunningLocallyAndRemotely');
+        expect(screen.findByTestId('session-chatFooter-switchToRemote')).toBeNull();
+        expect(screen.findByTestId('session-chatFooter-detachLocalTerminal')).toBeNull();
+    });
+
     it('does not render app-side switch-to-local for shared remote sessions that can be attached locally', async () => {
         const screen = await renderFooter({
             controlledByUser: false,

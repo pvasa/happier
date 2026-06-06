@@ -127,6 +127,10 @@ function resolveTranscriptTurnMappingHelper() {
 
 const useTranscriptTurnMappingHelper = resolveTranscriptTurnMappingHelper();
 
+function resolveActiveThinkingMessageIdForTurnMessage(messageId: string, activeThinkingMessageId: string | null): string | null {
+    return messageId === activeThinkingMessageId ? activeThinkingMessageId : null;
+}
+
 type TurnViewProps = Readonly<{
     turn: TranscriptTurn;
     metadata: Metadata | null;
@@ -170,7 +174,7 @@ export const TurnViewWithSessionCommon = React.memo((props: TurnViewProps & Tran
                     messageId={props.turn.userMessageId}
                     metadata={props.metadata}
                     forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
-                    activeThinkingMessageId={props.activeThinkingMessageId}
+                    activeThinkingMessageId={resolveActiveThinkingMessageIdForTurnMessage(props.turn.userMessageId, props.activeThinkingMessageId)}
                     getMessageById={props.getMessageById}
                     getMessageOrigin={props.getMessageOrigin}
                     approvalRequests={props.approvalRequests}
@@ -194,7 +198,7 @@ export const TurnViewWithSessionCommon = React.memo((props: TurnViewProps & Tran
                             messageId={c.messageId}
                             metadata={props.metadata}
                             forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
-                            activeThinkingMessageId={props.activeThinkingMessageId}
+                            activeThinkingMessageId={resolveActiveThinkingMessageIdForTurnMessage(c.messageId, props.activeThinkingMessageId)}
                             getMessageById={props.getMessageById}
                             getMessageOrigin={props.getMessageOrigin}
                             approvalRequests={props.approvalRequests}

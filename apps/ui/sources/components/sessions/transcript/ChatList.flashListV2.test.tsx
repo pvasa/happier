@@ -19,6 +19,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { buildChatListNativeId } from './chatListNativeId';
 import { __resetDefaultTranscriptItemHeightCacheForTests } from './measurement/transcriptItemHeightCache';
+import { __resetTranscriptWarmPaintCacheForTests } from './paint/transcriptWarmPaintCache';
 import { useTranscriptSelectionRow } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -29,6 +30,7 @@ let renderedFlashListCount = 0;
 let flashListRefHandle: any = null;
 let renderedMessageViewProps: any[] = [];
 let renderedToolCallsGroupRowProps: any[] = [];
+let transcriptIdsHookCallCount = 0;
 let linearItemsCacheBuildCalls: Array<{ cacheHit: boolean; cacheProvided: boolean; signature: string }> = [];
 let turnsCacheBuildCalls: Array<{ cacheHit: boolean; cacheProvided: boolean; signature: string }> = [];
 let requireSelectionProviderForRenderedMessages = false;
@@ -158,6 +160,17 @@ async function fireTranscriptItemShellLayout(
 }
 
 let sessionMessagesState: { messages: any[]; isLoaded: boolean } = { messages: [], isLoaded: true };
+let sessionMessagesByIdSnapshot: { messages: any[]; byId: Record<string, any> } = { messages: [], byId: {} };
+function getSessionMessagesByIdSnapshot(): Record<string, any> {
+    if (sessionMessagesByIdSnapshot.messages === sessionMessagesState.messages) {
+        return sessionMessagesByIdSnapshot.byId;
+    }
+    sessionMessagesByIdSnapshot = {
+        messages: sessionMessagesState.messages,
+        byId: Object.fromEntries((sessionMessagesState.messages ?? []).map((m: any) => [m.id, m])),
+    };
+    return sessionMessagesByIdSnapshot.byId;
+}
 let sessionPendingState: { messages: any[] } = { messages: [] };
 let sessionActionDraftsState: any[] = [];
 let sessionState: any = null;
@@ -209,6 +222,7 @@ type SyncTuningMock = {
     transcriptWebInitialPinStabilizeMs: number;
     transcriptWebInitialPinRetryIntervalMs: number;
     transcriptWebInitialPinRetryMilestonesMs: readonly number[];
+    transcriptOlderLoadCooldownMs: number;
     transcriptOlderLoadSpinnerDelayMs: number;
     transcriptViewportAnchorCaptureDebounceMs: number;
     transcriptViewportAnchorOlderLookupMaxLoads: number;
@@ -233,6 +247,7 @@ let syncTuningState: SyncTuningMock = {
     transcriptWebInitialPinStabilizeMs: 3000,
     transcriptWebInitialPinRetryIntervalMs: 250,
     transcriptWebInitialPinRetryMilestonesMs: [16, 50, 100, 200, 400, 800],
+    transcriptOlderLoadCooldownMs: 250,
     transcriptOlderLoadSpinnerDelayMs: 300,
     transcriptViewportAnchorCaptureDebounceMs: 200,
     transcriptViewportAnchorOlderLookupMaxLoads: 1,
@@ -356,11 +371,14 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
             permissionsInUiWhileLocal: false,
         }
         : null,
-    useSessionTranscriptIds: () => ({
+    useSessionTranscriptIds: () => {
+        transcriptIdsHookCallCount += 1;
+        return {
             ids: (sessionMessagesState.messages ?? []).map((m: any) => m.id),
             isLoaded: sessionMessagesState.isLoaded,
-        }),
-    useSessionMessagesById: () => Object.fromEntries((sessionMessagesState.messages ?? []).map((m: any) => [m.id, m])),
+        };
+    },
+    useSessionMessagesById: () => getSessionMessagesByIdSnapshot(),
     useSessionMessagesReducerState: () => null,
     useSessionForkSupportSource: () => null,
     useSessionWorkspacePath: () => null,
@@ -376,8 +394,8 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         getState: () => ({
             sessionMessages: {
                 [sessionState?.id ?? 'session-1']: {
-                    messagesById: Object.fromEntries((sessionMessagesState.messages ?? []).map((m: any) => [m.id, m])),
-                    messagesMap: Object.fromEntries((sessionMessagesState.messages ?? []).map((m: any) => [m.id, m])),
+                    messagesById: getSessionMessagesByIdSnapshot(),
+                    messagesMap: getSessionMessagesByIdSnapshot(),
                 },
             },
         }),
@@ -693,6 +711,7 @@ describe('ChatList (FlashList v2)', () => {
     beforeEach(() => {
         vi.resetModules();
         __resetDefaultTranscriptItemHeightCacheForTests();
+        __resetTranscriptWarmPaintCacheForTests();
         runtimeMockState.platformOs = 'web';
         capturedFlashListProps = null;
         flashListChatListHarnessState.flashListProps = null;
@@ -700,11 +719,13 @@ describe('ChatList (FlashList v2)', () => {
         renderedFlashListCount = 0;
         renderedMessageViewProps = [];
         renderedToolCallsGroupRowProps = [];
+        transcriptIdsHookCallCount = 0;
         linearItemsCacheBuildCalls = [];
         turnsCacheBuildCalls = [];
         flashListRefHandle = null;
         mountedTrees.length = 0;
         sessionMessagesState = { messages: [], isLoaded: true };
+        sessionMessagesByIdSnapshot = { messages: [], byId: {} };
         sessionPendingState = { messages: [] };
         sessionActionDraftsState = [];
         transcriptTurnsState = [];
@@ -733,6 +754,7 @@ describe('ChatList (FlashList v2)', () => {
             transcriptWebInitialPinStabilizeMs: 3000,
             transcriptWebInitialPinRetryIntervalMs: 250,
             transcriptWebInitialPinRetryMilestonesMs: [16, 50, 100, 200, 400, 800],
+            transcriptOlderLoadCooldownMs: 250,
             transcriptOlderLoadSpinnerDelayMs: 300,
             transcriptViewportAnchorCaptureDebounceMs: 200,
             transcriptViewportAnchorOlderLookupMaxLoads: 1,
@@ -800,6 +822,75 @@ describe('ChatList (FlashList v2)', () => {
 
         expect(screen.getCapturedFlashListProps()).not.toBeNull();
         expect(renderedMessageViewProps.map((messageProps) => messageProps.message?.id)).toEqual(['u1', 'a1']);
+    });
+
+    it('does not rerender the virtualized transcript list for committed seq-only session changes', async () => {
+        sessionState = {
+            ...sessionState,
+            seq: 1,
+        };
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [
+                { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, seq: 1, text: 'hi' },
+                { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'reply' },
+            ],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+        await screen.settle({ cycles: 2, turns: 2 });
+        renderedFlashListCount = 0;
+
+        await screen.update(<ChatList session={{ ...sessionState, seq: 2 }} />);
+
+        expect(renderedFlashListCount).toBe(0);
+    });
+
+    it('skips parent-driven transcript work when non-transcript session status changes', async () => {
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [
+                { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, seq: 1, text: 'hi' },
+                { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'reply' },
+            ],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+        await screen.settle({ cycles: 2, turns: 2 });
+        transcriptIdsHookCallCount = 0;
+        renderedFlashListCount = 0;
+
+        await screen.update(<ChatList session={{ ...sessionState, latestTurnStatus: { status: 'running' } }} />);
+
+        expect(transcriptIdsHookCallCount).toBe(0);
+        expect(renderedFlashListCount).toBe(0);
+    });
+
+    it('throttles web FlashList scroll events above one frame to reduce scroll-render churn', async () => {
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        expect(screen.getCapturedFlashListProps().scrollEventThrottle).toBe(32);
+    });
+
+    it('keeps one-frame native FlashList scroll events for viewport maintenance', async () => {
+        runtimeMockState.platformOs = 'ios';
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        expect(screen.getCapturedFlashListProps().scrollEventThrottle).toBe(16);
     });
 
     it('keeps drag scrolling from dismissing the keyboard on iOS', async () => {
@@ -1258,6 +1349,149 @@ describe('ChatList (FlashList v2)', () => {
         });
     });
 
+    it('retries native unpinned distance restore when native emits no observation for the restore write', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionViewportByIdState.set('session-1', {
+                isPinned: false,
+                offsetY: 355,
+                anchor: null,
+                lastUpdatedAt: 1,
+                source: 'observed',
+            });
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, seq: 1, text: 'one' },
+                    { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'two' },
+                ],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(727, 21758, { turns: 2 });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 20676,
+                animated: false,
+            });
+            scrollToOffset.mockClear();
+
+            await screen.settle({
+                advanceTimersMs: 201,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 20676,
+                animated: false,
+            });
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListScroll(
+                20676,
+                {
+                    contentSize: { height: 21758 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            await screen.settle({
+                advanceTimersMs: 401,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+        });
+    });
+
+    it('keeps native paint pending until an unpinned entry restore is observed', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionViewportByIdState.set('session-1', {
+                isPinned: false,
+                offsetY: 355,
+                anchor: null,
+                lastUpdatedAt: 1,
+                source: 'observed',
+            });
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, seq: 1, text: 'one' },
+                    { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'two' },
+                ],
+            };
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(727, 21758, { turns: 2 });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 20676,
+                animated: false,
+            });
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toBe(false);
+
+            await triggerFlashListChatListScroll(
+                20676,
+                {
+                    contentSize: { height: 21758 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 2 },
+            );
+            await screen.settle({
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+            expect(syncPerformanceTelemetry.snapshot().events.find(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toEqual(expect.objectContaining({
+                fields: expect.objectContaining({
+                    distanceFromBottom: 355,
+                    native: 1,
+                    nativeViewportObserved: 1,
+                    web: 0,
+                }),
+            }));
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
+    });
+
     it('keeps native unpinned distance restore pending when the target offset is observed with stale smaller content metrics', async () => {
         await withWebFlashListFakeTimers(0, async () => {
             runtimeMockState.platformOs = 'ios';
@@ -1318,6 +1552,76 @@ describe('ChatList (FlashList v2)', () => {
             });
 
             expect(scrollToOffset).not.toHaveBeenCalled();
+        });
+    });
+
+    it('reapplies native unpinned distance restore when content shrinks after target observation', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionViewportByIdState.set('session-1', {
+                isPinned: false,
+                offsetY: 8059,
+                anchor: null,
+                lastUpdatedAt: 1,
+                source: 'observed',
+            });
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, seq: 1, text: 'one' },
+                    { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'two' },
+                ],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(728, 31977, { turns: 2 });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 23190,
+                animated: false,
+            });
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListScroll(
+                23190,
+                {
+                    contentSize: { height: 31977 },
+                    layoutMeasurement: { height: 728 },
+                },
+                { turns: 1 },
+            );
+
+            await triggerFlashListChatListContentSizeChange(400, 47469, { turns: 2 });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 38682,
+                animated: false,
+            });
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListScroll(
+                38682,
+                {
+                    contentSize: { height: 47469 },
+                    layoutMeasurement: { height: 728 },
+                },
+                { turns: 1 },
+            );
+
+            await triggerFlashListChatListContentSizeChange(400, 43026, { turns: 2 });
+            await screen.settle({
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 34239,
+                animated: false,
+            });
         });
     });
 
@@ -1501,6 +1805,94 @@ describe('ChatList (FlashList v2)', () => {
         expect(scrollToOffset).toHaveBeenLastCalledWith({ offset: 760, animated: false });
     });
 
+    it('restores a native unpinned session after many intervening session opens without leaking another viewport', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            const telemetryMod = await import('./scroll/transcriptViewportTelemetry');
+            const telemetrySink = vi.fn();
+            telemetryMod.transcriptViewportTelemetry.configure({
+                enabled: true,
+                capacity: 128,
+                sink: telemetrySink,
+            });
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptNativeMvcpOnlyMode: false,
+                transcriptViewportTelemetryEnabled: true,
+                transcriptViewportTelemetryMaxEvents: 128,
+            };
+            let activeSessionId = 'session-a';
+            const onViewportChange = vi.fn((state: any) => {
+                routeSessionViewportChangeIntoTestStore(activeSessionId, state);
+            });
+            const messagesForSession = (sessionId: string) => [
+                { kind: 'user-text', id: `${sessionId}-u1`, localId: null, createdAt: 1, seq: 1, text: `${sessionId} user` },
+                { kind: 'agent-text', id: `${sessionId}-a1`, localId: null, createdAt: 2, seq: 2, text: `${sessionId} agent` },
+            ];
+
+            const { ChatList } = await import('./ChatList');
+
+            sessionMessagesState = { isLoaded: true, messages: messagesForSession(activeSessionId) };
+            const firstA = await renderTrackedFlashListChatList(
+                <ChatList session={{ ...sessionState, id: activeSessionId }} onViewportChange={onViewportChange} />,
+            );
+            await primeFlashListMetrics(100, 1000, { turns: 4 });
+            scrollToOffset.mockClear();
+            onViewportChange.mockClear();
+
+            await scrollFlashListTo(400, { trusted: true, turns: 1 });
+
+            expect(sessionViewportByIdState.get('session-a')).toMatchObject({
+                isPinned: false,
+                offsetY: 500,
+                source: 'observed',
+            });
+            unmountTrackedFlashListChatList(firstA);
+
+            for (let index = 0; index < 15; index += 1) {
+                activeSessionId = `session-intervening-${index}`;
+                sessionViewportByIdState.set(activeSessionId, {
+                    isPinned: index % 3 === 0,
+                    offsetY: index % 3 === 0 ? 0 : 120 + index,
+                    anchor: null,
+                    lastUpdatedAt: index + 1,
+                    source: index % 3 === 0 ? 'default' : 'observed',
+                });
+                sessionMessagesState = { isLoaded: true, messages: messagesForSession(activeSessionId) };
+                const interveningScreen = await renderTrackedFlashListChatList(
+                    <ChatList session={{ ...sessionState, id: activeSessionId }} onViewportChange={onViewportChange} />,
+                );
+                await primeFlashListMetrics(100, 1000, { turns: 2 });
+                unmountTrackedFlashListChatList(interveningScreen);
+            }
+
+            scrollToOffset.mockClear();
+            telemetrySink.mockClear();
+            activeSessionId = 'session-a';
+            sessionMessagesState = { isLoaded: true, messages: messagesForSession(activeSessionId) };
+            await renderTrackedFlashListChatList(
+                <ChatList session={{ ...sessionState, id: activeSessionId }} onViewportChange={onViewportChange} />,
+            );
+            await primeFlashListMetrics(100, 1000, { turns: 4 });
+
+            expect(scrollToOffset).toHaveBeenLastCalledWith({ offset: 400, animated: false });
+            expect(sessionViewportByIdState.get('session-a')).toMatchObject({
+                isPinned: false,
+                offsetY: 500,
+                source: 'observed',
+            });
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-write',
+                writer: 'native-scroll-to-offset',
+                reason: 'entry-restore',
+                mode: 'restore-distance',
+                targetOffsetY: 400,
+            }));
+        });
+    });
+
     it('leaves native FlashList drawDistance unset by default', async () => {
         runtimeMockState.platformOs = 'ios';
         sessionMessagesState = {
@@ -1553,6 +1945,370 @@ describe('ChatList (FlashList v2)', () => {
             await settleNativeFlashListMount(screen);
 
             expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+        });
+    });
+
+    it('records native FlashList first-paint telemetry when onLoad fires', async () => {
+        runtimeMockState.platformOs = 'ios';
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+        const { markSessionOpenRequestedForSessionUiTelemetry } = await import('@/sync/runtime/performance/sessionUiTelemetry');
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+        markSessionOpenRequestedForSessionUiTelemetry({
+            sessionId: 'session-1',
+            source: 'navigate-hook',
+        });
+
+        const { ChatList } = await import('./ChatList');
+        await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        await triggerFlashListChatListLoad(12, { turns: 1 });
+
+        const firstPaintEvent = syncPerformanceTelemetry
+            .snapshot()
+            .events.find((event) => event.name === 'ui.sessions.transcript.firstPaint');
+
+        expect(firstPaintEvent).toBeTruthy();
+        expect(firstPaintEvent?.fields).toMatchObject({
+            committedMessages: 1,
+            items: 1,
+            native: 1,
+            web: 0,
+        });
+        const openToFirstPaintEvent = syncPerformanceTelemetry
+            .snapshot()
+            .events.find((event) => event.name === 'ui.sessions.transcript.openToFirstPaint');
+
+        expect(openToFirstPaintEvent).toBeTruthy();
+        expect(openToFirstPaintEvent?.fields).toMatchObject({
+            committedMessages: 1,
+            items: 1,
+            native: 1,
+            sourceNavigateHook: 1,
+            web: 0,
+        });
+        expect(JSON.stringify(openToFirstPaintEvent)).not.toContain('session-1');
+
+        syncPerformanceTelemetry.configure({ enabled: false });
+        syncPerformanceTelemetry.reset();
+    });
+
+    it('records native stable-paint telemetry only after the first-paint placeholder releases', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            const { markSessionOpenRequestedForSessionUiTelemetry } = await import('@/sync/runtime/performance/sessionUiTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+            markSessionOpenRequestedForSessionUiTelemetry({
+                sessionId: 'session-1',
+                source: 'navigate-hook',
+            });
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await triggerFlashListChatListLoad(12, { turns: 1 });
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.firstPaint',
+            )).toBe(true);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toBe(false);
+
+            await primeFlashListMetrics(100, 1000, { turns: 2 });
+            await settleNativeFlashListMount(screen);
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+            const stablePaintEvent = syncPerformanceTelemetry
+                .snapshot()
+                .events.find((event) => event.name === 'ui.sessions.transcript.stablePaint');
+
+            expect(stablePaintEvent).toBeTruthy();
+            expect(stablePaintEvent?.fields).toMatchObject({
+                committedMessages: 1,
+                firstListPaintObserved: 1,
+                items: 1,
+                native: 1,
+                nativeMountSettleStable: 1,
+                routeHydrationPending: 0,
+                web: 0,
+            });
+            const openToStablePaintEvent = syncPerformanceTelemetry
+                .snapshot()
+                .events.find((event) => event.name === 'ui.sessions.transcript.openToStablePaint');
+
+            expect(openToStablePaintEvent).toBeTruthy();
+            expect(openToStablePaintEvent?.fields).toMatchObject({
+                committedMessages: 1,
+                distanceFromBottom: 0,
+                items: 1,
+                native: 1,
+                sourceNavigateHook: 1,
+                web: 0,
+            });
+            expect(JSON.stringify(openToStablePaintEvent)).not.toContain('session-1');
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
+    });
+
+    it('holds native first-paint placeholder on a warm remount until the native viewport is observed', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+
+            const { ChatList } = await import('./ChatList');
+            const first = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            expect(countExactTestId(first, 'transcript-first-paint-placeholder')).toBe(1);
+
+            await primeFlashListMetrics(100, 1000, { turns: 2 });
+            await settleNativeFlashListMount(first);
+
+            expect(countExactTestId(first, 'transcript-first-paint-placeholder')).toBe(0);
+            await triggerFlashListChatListScroll(
+                900,
+                {
+                    contentSize: { height: 1000 },
+                    layoutMeasurement: { height: 100 },
+                },
+                { turns: 2 },
+            );
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toBe(true);
+
+            unmountTrackedFlashListChatList(first);
+            const warm = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            expect(countExactTestId(warm, 'transcript-first-paint-placeholder')).toBe(1);
+
+            await primeFlashListMetrics(100, 1000, { turns: 2 });
+            await triggerFlashListChatListScroll(
+                900,
+                {
+                    contentSize: { height: 1000 },
+                    layoutMeasurement: { height: 100 },
+                },
+                { turns: 2 },
+            );
+
+            expect(countExactTestId(warm, 'transcript-first-paint-placeholder')).toBe(0);
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
+    });
+
+    it('records native stable-paint telemetry when mount-settle releases without FlashList onLoad', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(100, 1000, { turns: 2 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.firstPaint',
+            )).toBe(false);
+
+            const stablePaintEvent = syncPerformanceTelemetry
+                .snapshot()
+                .events.find((event) => event.name === 'ui.sessions.transcript.stablePaint');
+
+            expect(stablePaintEvent).toBeTruthy();
+            expect(stablePaintEvent?.fields).toMatchObject({
+                firstListPaintObserved: 0,
+                native: 1,
+                nativeMountSettleDeadlineReached: 1,
+                web: 0,
+            });
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
+    });
+
+    it('does not record native paint telemetry from a pre-settle bottom observation when FlashList onLoad is silent', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            const { markSessionRouteEnteredForSessionUiTelemetry } = await import('@/sync/runtime/performance/sessionUiTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+            markSessionRouteEnteredForSessionUiTelemetry({ sessionId: 'session-1' });
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 682.3333129882812, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 6243, { turns: 1 });
+
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.firstPaint',
+            )).toBe(false);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toBe(false);
+
+            await triggerFlashListChatListScroll(
+                5427.333333333333,
+                {
+                    contentSize: { height: 6109 },
+                    layoutMeasurement: { height: 682 },
+                },
+                { turns: 1 },
+            );
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+            const snapshot = syncPerformanceTelemetry.snapshot();
+            expect(snapshot.events.find((event) => event.name === 'ui.sessions.transcript.firstPaint')).toBeFalsy();
+            expect(snapshot.events.find((event) => event.name === 'ui.sessions.transcript.stablePaint')).toBeFalsy();
+            expect(snapshot.events.find((event) => event.name === 'ui.sessions.transcript.openToFirstPaint')).toBeFalsy();
+            expect(snapshot.events.find((event) => event.name === 'ui.sessions.transcript.openToStablePaint')).toBeFalsy();
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
+    });
+
+    it('keeps native first-paint placeholder through a pre-settle bottom observation when content can still grow', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 764.3333129882812, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 5848, { turns: 1 });
+            await triggerFlashListChatListScroll(
+                4950,
+                {
+                    contentSize: { height: 5714 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.firstPaint',
+            )).toBe(false);
+            expect(syncPerformanceTelemetry.snapshot().events.some(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toBe(false);
+
+            await triggerFlashListChatListContentSizeChange(400, 11913, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+            await triggerFlashListChatListScroll(
+                11015,
+                {
+                    contentSize: { height: 11779 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+
+            expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+            expect(syncPerformanceTelemetry.snapshot().events.find(
+                (event) => event.name === 'ui.sessions.transcript.stablePaint',
+            )).toEqual(expect.objectContaining({
+                fields: expect.objectContaining({
+                    distanceFromBottom: 0,
+                    native: 1,
+                    nativeMountSettleDeadlineReached: 1,
+                    nativeViewportObserved: 0,
+                    web: 0,
+                }),
+            }));
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
         });
     });
 
@@ -1695,6 +2451,136 @@ describe('ChatList (FlashList v2)', () => {
         });
     });
 
+    it('retries native bottom follow when content grows after bottom was confirmed against intermediate native content', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 727.2380981445312, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 1505, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 777, animated: false });
+
+            await triggerFlashListChatListScroll(
+                777.1428833007812,
+                {
+                    contentSize: { height: 1505 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListContentSizeChange(400, 1771, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs: 1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 1043, animated: false });
+
+            await triggerFlashListChatListScroll(
+                911.2380981445312,
+                {
+                    contentSize: { height: 1638 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListContentSizeChange(400, 1771, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs: 1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+        });
+    });
+
+    it('retries native bottom follow when content grows after a stale native bottom observation from an older target', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 727.6190795898438, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 1505, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 777, animated: false });
+
+            await triggerFlashListChatListContentSizeChange(400, 1635, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs: 201,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 907, animated: false });
+
+            await triggerFlashListChatListScroll(
+                777.1428833007812,
+                {
+                    contentSize: { height: 1505 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListContentSizeChange(400, 1766, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs: 1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 1038, animated: false });
+        });
+    });
+
     it('keeps native first-paint placeholder until a deadline bottom pin is observed', async () => {
         await withWebFlashListFakeTimers(0, async () => {
             runtimeMockState.platformOs = 'android';
@@ -1730,7 +2616,7 @@ describe('ChatList (FlashList v2)', () => {
         });
     });
 
-    it('retries an unobserved native mount-settle bottom pin in MVCP-only mode before releasing first paint', async () => {
+    it('keeps MVCP-only mount-settle bottom follow as telemetry-only until native bottom is observed', async () => {
         await withWebFlashListFakeTimers(0, async () => {
             runtimeMockState.platformOs = 'android';
             syncTuningState = {
@@ -1773,9 +2659,15 @@ describe('ChatList (FlashList v2)', () => {
                 turns: 2,
             });
 
-            expect(scrollToOffset).toHaveBeenCalledTimes(1);
-            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 600, animated: false });
+            expect(scrollToOffset).not.toHaveBeenCalled();
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-write',
+                writer: 'mvcp-skip',
+                reason: 'mount-settle',
+                mode: 'follow-bottom',
+            }));
             expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+            telemetrySink.mockClear();
 
             await triggerFlashListChatListScroll(
                 0,
@@ -1791,11 +2683,23 @@ describe('ChatList (FlashList v2)', () => {
                 turns: 2,
             });
 
-            expect(scrollToOffset).toHaveBeenCalledTimes(2);
-            expect(scrollToOffset).toHaveBeenLastCalledWith({ offset: 600, animated: false });
+            expect(scrollToOffset).not.toHaveBeenCalled();
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-write',
+                writer: 'mvcp-skip',
+                reason: 'mount-settle',
+                mode: 'follow-bottom',
+            }));
+            telemetrySink.mockClear();
 
             await scrollFlashListTo(600, { trusted: false, turns: 2 });
 
+            expect(scrollToOffset).not.toHaveBeenCalled();
+            expect(telemetrySink).not.toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-write',
+                writer: 'native-scroll-to-offset',
+                reason: 'mount-settle',
+            }));
             expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
         });
     });
@@ -1993,6 +2897,65 @@ describe('ChatList (FlashList v2)', () => {
                 vi.advanceTimersByTime(201);
                 await Promise.resolve();
                 await Promise.resolve();
+            });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+        });
+    });
+
+    it('does not replay delayed native mount-settle after visual bottom is observed with native content metrics', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 727.6190795898438, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 2675, { turns: 1 });
+            await triggerFlashListChatListLoad(12, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs: syncTuningState.transcriptMountSettleQuiescentWindowMs + 1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 1947, animated: false });
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListScroll(
+                1817.5238037109375,
+                {
+                    contentSize: { height: 2545 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            await triggerFlashListChatListContentSizeChange(400, 2680, { turns: 1 });
+            await triggerFlashListChatListScroll(
+                1820.1904296875,
+                {
+                    contentSize: { height: 2547 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
             });
 
             expect(scrollToOffset).not.toHaveBeenCalled();
@@ -2452,6 +3415,94 @@ describe('ChatList (FlashList v2)', () => {
         });
     });
 
+    it('retries a single Android off-bottom stale observation after confirmed bottom and content shrink', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const telemetryMod = await import('./scroll/transcriptViewportTelemetry');
+            const telemetrySink = vi.fn();
+            telemetryMod.transcriptViewportTelemetry.configure({
+                enabled: true,
+                capacity: 32,
+                sink: telemetrySink,
+            });
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptViewportTelemetryEnabled: true,
+                transcriptViewportTelemetryMaxEvents: 32,
+            };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 727.6190795898438, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 56932, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 56204,
+                animated: false,
+            });
+
+            await triggerFlashListChatListScroll(
+                56071.6171875,
+                {
+                    contentSize: { height: 56799 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+            scrollToOffset.mockClear();
+            telemetrySink.mockClear();
+
+            await triggerFlashListChatListContentSizeChange(400, 33343, { turns: 1 });
+            await triggerFlashListChatListScroll(
+                28336.380859375,
+                {
+                    contentSize: { height: 33210 },
+                    layoutMeasurement: { height: 727 },
+                },
+                { turns: 1 },
+            );
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+
+            await act(async () => {
+                vi.advanceTimersByTime(201);
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledTimes(1);
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 32615,
+                animated: false,
+            });
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-observed',
+                reason: 'recycled-event',
+                offsetY: 28336.380859375,
+                distanceFromBottom: 4146,
+            }));
+        });
+    });
+
     it('allows a stale-observation mount-settle retry while native mount settle remains active', async () => {
         await withWebFlashListFakeTimers(0, async () => {
             runtimeMockState.platformOs = 'ios';
@@ -2540,6 +3591,53 @@ describe('ChatList (FlashList v2)', () => {
             }));
             expect(scrollToOffset).toHaveBeenCalledTimes(1);
             expect(scrollToOffset).toHaveBeenCalledWith({ offset: 800, animated: false });
+        });
+    });
+
+    it('replaces an older delayed native mount-settle retry with an immediate content-growth retry', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptMountSettleQuiescentWindowMs: 1000,
+            };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1200, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 600, animated: false });
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListContentSizeChange(400, 1400, { turns: 1 });
+            await scrollFlashListTo(300, { trusted: false, turns: 1 });
+            await screen.settle({ turns: 1 });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+
+            await triggerFlashListChatListContentSizeChange(400, 2000, { turns: 1 });
+            await act(async () => {
+                vi.advanceTimersByTime(0);
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+
+            expect(scrollToOffset).toHaveBeenCalledTimes(1);
+            expect(scrollToOffset).toHaveBeenCalledWith({ offset: 1400, animated: false });
         });
     });
 
@@ -2896,7 +3994,7 @@ describe('ChatList (FlashList v2)', () => {
         expect(countExactTestId(warm, 'transcript-first-paint-placeholder')).toBe(1);
     });
 
-    it('suppresses native first-paint placeholder for a warm keep-alive instance', async () => {
+    it('does not let a warm keep-alive instance bypass a pending native viewport observation', async () => {
         runtimeMockState.platformOs = 'ios';
         sessionMessagesState = {
             isLoaded: true,
@@ -2906,6 +4004,18 @@ describe('ChatList (FlashList v2)', () => {
         const { ChatList } = await import('./ChatList');
         const screen = await renderTrackedFlashListChatList(
             <ChatList session={{ ...sessionState }} isWarmKeepAliveInstance={true} />,
+        );
+
+        expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+
+        await primeFlashListMetrics(100, 1000, { turns: 2 });
+        await triggerFlashListChatListScroll(
+            900,
+            {
+                contentSize: { height: 1000 },
+                layoutMeasurement: { height: 100 },
+            },
+            { turns: 2 },
         );
 
         expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
@@ -2922,6 +4032,342 @@ describe('ChatList (FlashList v2)', () => {
         const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
 
         expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+    });
+
+    it('records web first and stable paint telemetry from dimensions when FlashList onLoad does not refire', async () => {
+        runtimeMockState.platformOs = 'web';
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+        await primeFlashListMetrics(640, 1600, { turns: 2 });
+        await screen.settle({ turns: 2 });
+
+        const events = syncPerformanceTelemetry.snapshot().events;
+        const firstPaintEvent = events.find((event) => event.name === 'ui.sessions.transcript.firstPaint');
+        const stablePaintEvent = events.find((event) => event.name === 'ui.sessions.transcript.stablePaint');
+
+        expect(firstPaintEvent?.fields).toMatchObject({
+            committedMessages: 1,
+            items: 1,
+            native: 0,
+            web: 1,
+        });
+        expect(stablePaintEvent?.fields).toMatchObject({
+            committedMessages: 1,
+            contentHeight: 1600,
+            distanceFromBottom: 0,
+            firstListPaintObserved: 1,
+            items: 1,
+            layoutHeight: 640,
+            native: 0,
+            web: 1,
+        });
+
+        syncPerformanceTelemetry.configure({ enabled: false });
+        syncPerformanceTelemetry.reset();
+    });
+
+    it('records web first and stable paint telemetry from DOM metrics when FlashList dimensions are absent', async () => {
+        runtimeMockState.platformOs = 'web';
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+        const scrollEl: any = {
+            scrollHeight: 1600,
+            clientHeight: 640,
+            scrollWidth: 0,
+            clientWidth: 0,
+            scrollTop: 960,
+            querySelectorAll: () => [],
+            parentElement: null,
+            contains: () => false,
+            isConnected: true,
+        };
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+
+        await withFlashListChatListWebScrollerDom(
+            scrollEl,
+            async () => {
+                const { ChatList } = await import('./ChatList');
+                const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+                await screen.settle({ turns: 3 });
+            },
+            {
+                document: { getElementById: vi.fn(() => scrollEl) },
+                window: {
+                    getComputedStyle: vi.fn(() => ({
+                        overflowY: 'auto',
+                        overflowX: 'hidden',
+                        overflow: 'auto',
+                    })),
+                },
+            },
+        );
+
+        const events = syncPerformanceTelemetry.snapshot().events;
+        const firstPaintEvent = events.find((event) => event.name === 'ui.sessions.transcript.firstPaint');
+        const stablePaintEvent = events.find((event) => event.name === 'ui.sessions.transcript.stablePaint');
+
+        expect(firstPaintEvent?.fields).toMatchObject({
+            committedMessages: 1,
+            items: 1,
+            native: 0,
+            web: 1,
+        });
+        expect(stablePaintEvent?.fields).toMatchObject({
+            committedMessages: 1,
+            contentHeight: 1600,
+            distanceFromBottom: 0,
+            firstListPaintObserved: 1,
+            items: 1,
+            layoutHeight: 640,
+            native: 0,
+            web: 1,
+        });
+
+        syncPerformanceTelemetry.configure({ enabled: false });
+        syncPerformanceTelemetry.reset();
+    });
+
+    it('does not retry web stable paint while telemetry is disabled', async () => {
+        await withWebFlashListFakeTimers(1_000, async () => {
+            runtimeMockState.platformOs = 'web';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            let currentScrollTop = 0;
+            const scrollEl: any = {
+                scrollHeight: 1600,
+                clientHeight: 640,
+                scrollWidth: 0,
+                clientWidth: 0,
+                querySelectorAll: () => [],
+                parentElement: null,
+                contains: () => false,
+                isConnected: true,
+            };
+            Object.defineProperty(scrollEl, 'scrollTop', {
+                get: () => currentScrollTop,
+                set: (_value: number) => {},
+            });
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+
+            await withFlashListChatListWebScrollerDom(
+                scrollEl,
+                async () => {
+                    const { ChatList } = await import('./ChatList');
+                    const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+                    await primeFlashListMetrics(640, 1600, { turns: 1 });
+                    await screen.settle({ turns: 2 });
+
+                    const renderCountAfterInitialPaint = renderedFlashListCount;
+
+                    await screen.settle({ advanceTimersMs: 80, cycles: 1, turns: 2 });
+
+                    expect(renderedFlashListCount).toBe(renderCountAfterInitialPaint);
+                    expect(syncPerformanceTelemetry.snapshot().events).toEqual([]);
+                },
+                {
+                    document: { getElementById: vi.fn(() => scrollEl) },
+                    window: {
+                        getComputedStyle: vi.fn(() => ({
+                            overflowY: 'auto',
+                            overflowX: 'hidden',
+                            overflow: 'auto',
+                        })),
+                    },
+                },
+            );
+        });
+    });
+
+    it('does not retry web stable paint after telemetry is already recorded', async () => {
+        await withWebFlashListFakeTimers(1_000, async () => {
+            runtimeMockState.platformOs = 'web';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            let currentScrollTop = 960;
+            const scrollEl: any = {
+                scrollHeight: 1600,
+                clientHeight: 640,
+                scrollWidth: 0,
+                clientWidth: 0,
+                querySelectorAll: () => [],
+                parentElement: null,
+                contains: () => false,
+                isConnected: true,
+            };
+            Object.defineProperty(scrollEl, 'scrollTop', {
+                get: () => currentScrollTop,
+                set: (value: number) => {
+                    currentScrollTop = value;
+                },
+            });
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+
+            await withFlashListChatListWebScrollerDom(
+                scrollEl,
+                async () => {
+                    const { ChatList } = await import('./ChatList');
+                    const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+                    await screen.settle({ turns: 3 });
+
+                    expect(syncPerformanceTelemetry
+                        .snapshot()
+                        .events.some((event) => event.name === 'ui.sessions.transcript.stablePaint')).toBe(true);
+
+                    scrollEl.clientHeight = 0;
+                    scrollEl.scrollHeight = 0;
+                    sessionState = { ...sessionState, seq: 2 };
+                    sessionMessagesState = {
+                        isLoaded: true,
+                        messages: [
+                            { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' },
+                            { kind: 'user-text', id: 'u2', localId: null, createdAt: 2, text: 'again' },
+                        ],
+                    };
+                    await screen.update(<ChatList session={{ ...sessionState }} />);
+                    await screen.settle({ turns: 2 });
+
+                    const renderCountAfterRecordedAwayRender = renderedFlashListCount;
+
+                    await screen.settle({ advanceTimersMs: 80, cycles: 1, turns: 2 });
+
+                    expect(renderedFlashListCount).toBe(renderCountAfterRecordedAwayRender);
+                    expect(syncPerformanceTelemetry
+                        .snapshot()
+                        .events.filter((event) => event.name === 'ui.sessions.transcript.stablePaint')).toHaveLength(1);
+                },
+                {
+                    document: { getElementById: vi.fn(() => scrollEl) },
+                    window: {
+                        getComputedStyle: vi.fn(() => ({
+                            overflowY: 'auto',
+                            overflowX: 'hidden',
+                            overflow: 'auto',
+                        })),
+                    },
+                },
+            );
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
+    });
+
+    it('waits for web follow-bottom distance before recording stable paint telemetry', async () => {
+        await withWebFlashListFakeTimers(1_000, async () => {
+            runtimeMockState.platformOs = 'web';
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+            let currentScrollTop = 0;
+            let allowScrollWrites = false;
+            const scrollEl: any = {
+                scrollHeight: 1600,
+                clientHeight: 640,
+                scrollWidth: 0,
+                clientWidth: 0,
+                querySelectorAll: () => [],
+                parentElement: null,
+                contains: () => false,
+                isConnected: true,
+            };
+            Object.defineProperty(scrollEl, 'scrollTop', {
+                get: () => currentScrollTop,
+                set: (value: number) => {
+                    if (allowScrollWrites) {
+                        currentScrollTop = value;
+                    }
+                },
+            });
+            const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+            syncPerformanceTelemetry.configure({
+                enabled: true,
+                slowThresholdMs: 1_000_000,
+                flushIntervalMs: 60_000,
+            });
+            syncPerformanceTelemetry.reset();
+
+            await withFlashListChatListWebScrollerDom(
+                scrollEl,
+                async () => {
+                    const { ChatList } = await import('./ChatList');
+                    const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+                    await primeFlashListMetrics(640, 1600, { turns: 1 });
+                    await screen.settle({ turns: 2 });
+
+                    expect(syncPerformanceTelemetry
+                        .snapshot()
+                        .events.some((event) => event.name === 'ui.sessions.transcript.firstPaint')).toBe(true);
+                    expect(syncPerformanceTelemetry
+                        .snapshot()
+                        .events.some((event) => event.name === 'ui.sessions.transcript.stablePaint')).toBe(false);
+
+                    allowScrollWrites = true;
+                    scrollEl.scrollTop = 960;
+                    await screen.settle({ advanceTimersMs: 40, cycles: 1, turns: 2 });
+                },
+                {
+                    document: { getElementById: vi.fn(() => scrollEl) },
+                    window: {
+                        getComputedStyle: vi.fn(() => ({
+                            overflowY: 'auto',
+                            overflowX: 'hidden',
+                            overflow: 'auto',
+                        })),
+                    },
+                },
+            );
+
+            const stablePaintEvent = syncPerformanceTelemetry
+                .snapshot()
+                .events.find((event) => event.name === 'ui.sessions.transcript.stablePaint');
+
+            expect(stablePaintEvent?.fields).toMatchObject({
+                committedMessages: 1,
+                contentHeight: 1600,
+                distanceFromBottom: 0,
+                firstListPaintObserved: 1,
+                layoutHeight: 640,
+                native: 0,
+                web: 1,
+            });
+
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        });
     });
 
     it('keeps web transcripts covered until the enriched Markdown runtime is ready', async () => {
@@ -2954,6 +4400,31 @@ describe('ChatList (FlashList v2)', () => {
         expect(resolvePreload).not.toBeNull();
         await act(async () => {
             resolvePreload?.();
+        });
+        await screen.settle({ turns: 1 });
+
+        expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(0);
+    });
+
+    it('keeps web transcripts covered while cached session route hydration is pending', async () => {
+        runtimeMockState.platformOs = 'web';
+        markdownRuntimeMockState.ready = true;
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'agent-text', id: 'a1', localId: null, createdAt: 1, text: 'cached reply' }],
+        };
+
+        const { ChatList } = await import('./ChatList');
+        const screen = await renderTrackedFlashListChatList(
+            <ChatList session={{ ...sessionState }} routeHydrationPending={true} />,
+        );
+
+        expect(countExactTestId(screen, 'transcript-first-paint-placeholder')).toBe(1);
+
+        await act(async () => {
+            screen.tree.update(
+                <ChatList session={{ ...sessionState }} routeHydrationPending={false} />,
+            );
         });
         await screen.settle({ turns: 1 });
 
@@ -3251,6 +4722,100 @@ describe('ChatList (FlashList v2)', () => {
         await scrollFlashListTo(100);
 
         expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses live web scroll metrics without reading React Native Web contentOffset getters', async () => {
+        sessionState = { ...sessionState, seq: 25 };
+        sessionMessagesState = {
+            isLoaded: true,
+            messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+        };
+
+        syncTuningState = { ...syncTuningState, transcriptBackwardPrefetchThresholdPx: 800 };
+        const scrollEl = createFlashListChatListWebScroller({
+            clientHeight: 600,
+            scrollHeight: 1200,
+            scrollTop: 100,
+            testId: 'transcript-chat-list',
+        });
+        let contentOffsetYReadCount = 0;
+        const contentOffset = {};
+        Object.defineProperty(contentOffset, 'y', {
+            configurable: true,
+            get: () => {
+                contentOffsetYReadCount += 1;
+                return 100;
+            },
+        });
+
+        const { ChatList } = await import('./ChatList');
+        await withRenderedFlashListChatListWebScroller(
+            scrollEl,
+            <ChatList session={{ ...sessionState }} />,
+            async (screen) => {
+                await act(async () => {
+                    screen.getCapturedFlashListProps().onScroll?.({
+                        nativeEvent: { contentOffset, isTrusted: true },
+                    });
+                });
+                await screen.settle({ turns: 1 });
+            },
+            { initialFill: { layoutHeight: 600, contentHeight: 1200, flushOptions: { turns: 1 } } },
+        );
+
+        expect(contentOffsetYReadCount).toBe(0);
+    });
+
+    it('does not repeatedly prefetch older pages while the user remains inside the top threshold', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            sessionState = { ...sessionState, seq: 25 };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const syncMod = await import('@/sync/sync');
+            const loadOlderMessagesMock = vi.mocked(syncMod.sync.loadOlderMessages);
+            loadOlderMessagesMock.mockResolvedValue({ loaded: 1, hasMore: true, status: 'loaded' as const });
+            loadOlderMessagesMock.mockClear();
+
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptBackwardPrefetchThresholdPx: 800,
+                transcriptOlderLoadCooldownMs: 2500,
+            };
+
+            const { ChatList } = await import('./ChatList');
+            await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1800, { turns: 1 });
+            await scrollFlashListTo(100, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            await vi.advanceTimersByTimeAsync(500);
+            await scrollFlashListTo(90, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            await vi.advanceTimersByTimeAsync(500);
+            await scrollFlashListTo(80, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            await scrollFlashListTo(900, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            await scrollFlashListTo(70, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1499);
+            });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1);
+            });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+        });
     });
 
     it('loads older messages near the top even when onScroll is not marked isTrusted (web)', async () => {
@@ -4219,6 +5784,53 @@ describe('ChatList (FlashList v2)', () => {
         });
     });
 
+    it('keeps native FlashList pinned for same-message streamed growth while already following bottom', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'android';
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            sessionState = {
+                ...sessionState,
+                active: true,
+            };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' },
+                    { kind: 'assistant-text', id: 'a1', localId: null, createdAt: 2, text: 'streaming...' },
+                ],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1200, { turns: 1 });
+            await settleNativeFlashListMount(screen);
+            scrollToOffset.mockClear();
+            viewportControllerMockState.resolveInputs = [];
+
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [
+                    { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' },
+                    { kind: 'assistant-text', id: 'a1', localId: null, createdAt: 2, text: 'streaming... plus more streamed content' },
+                ],
+            };
+            await screen.update(<ChatList session={{ ...sessionState }} />);
+            await screen.settle({ turns: 2 });
+            await primeFlashListMetrics(600, 1500, { advanceTimersMs: 1, turns: 1 });
+
+            const streamedGrowthAutoFollowReasons = viewportControllerMockState.resolveInputs
+                .filter((input) => input.type === 'auto-follow')
+                .map((input) => input.reason);
+            expect(streamedGrowthAutoFollowReasons).toContain('stream-append');
+            expect(scrollToOffset).toHaveBeenCalledWith({
+                offset: 900,
+                animated: false,
+            });
+        });
+    });
+
     it('does not treat native pin callback churn as new transcript activity', async () => {
         await withWebFlashListFakeTimers(0, async () => {
             runtimeMockState.platformOs = 'android';
@@ -4525,6 +6137,223 @@ describe('ChatList (FlashList v2)', () => {
                 type: 'auto-follow',
             }));
             expect(scrollToOffset).not.toHaveBeenCalled();
+        });
+    });
+
+    for (const transcriptNativeMvcpOnlyMode of [false, true] as const) {
+        it(`keeps earlier stale native bottom-follow observations out of accepted movement after bottom confirmation in ${transcriptNativeMvcpOnlyMode ? 'MVCP-only' : 'default'} mode`, async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            const telemetryMod = await import('./scroll/transcriptViewportTelemetry');
+            const telemetrySink = vi.fn();
+            telemetryMod.transcriptViewportTelemetry.configure({
+                enabled: true,
+                capacity: 64,
+                sink: telemetrySink,
+            });
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptNativeMvcpOnlyMode,
+                transcriptViewportTelemetryEnabled: true,
+                transcriptViewportTelemetryMaxEvents: 64,
+            };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 764.3333129882812, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 5848, { turns: 1 });
+            await triggerFlashListChatListScroll(
+                2793,
+                {
+                    contentSize: { height: 5714 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+            await triggerFlashListChatListContentSizeChange(400, 11913, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            await triggerFlashListChatListScroll(
+                8858.333333333334,
+                {
+                    contentSize: { height: 11779 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+            await triggerFlashListChatListScroll(
+                5083,
+                {
+                    contentSize: { height: 11779 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+            await screen.settle({ advanceTimersMs: 1, turns: 1 });
+            await triggerFlashListChatListScroll(
+                11015,
+                {
+                    contentSize: { height: 11779 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+            await screen.settle({ advanceTimersMs: 1, turns: 1 });
+            telemetrySink.mockClear();
+
+            await triggerFlashListChatListScroll(
+                8858.333333333334,
+                {
+                    contentSize: { height: 11779 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-observed',
+                reason: 'recycled-event',
+                distanceFromBottom: 2156,
+            }));
+            expect(telemetrySink).not.toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-observed',
+                reason: 'observed',
+                distanceFromBottom: 2156,
+            }));
+        });
+        });
+    }
+
+    it('keeps post-confirmation content-shrink bottom follow telemetry-only in MVCP-only mode', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            runtimeMockState.platformOs = 'ios';
+            const telemetryMod = await import('./scroll/transcriptViewportTelemetry');
+            const telemetrySink = vi.fn();
+            telemetryMod.transcriptViewportTelemetry.configure({
+                enabled: true,
+                capacity: 64,
+                sink: telemetrySink,
+            });
+            const scrollToOffset = vi.fn();
+            flashListRefHandle = { scrollToOffset, scrollToIndex: vi.fn() };
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptNativeMvcpOnlyMode: true,
+                transcriptViewportTelemetryEnabled: true,
+                transcriptViewportTelemetryMaxEvents: 64,
+            };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const { ChatList } = await import('./ChatList');
+            const screen = await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await act(async () => {
+                getCapturedFlashListProps().onLayout?.({
+                    nativeEvent: { layout: { height: 764.3333129882812, width: 400 } },
+                });
+            });
+            await triggerFlashListChatListContentSizeChange(400, 32158, { turns: 1 });
+            await triggerFlashListChatListScroll(
+                15950.333333333334,
+                {
+                    contentSize: { height: 32026 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+            await triggerFlashListChatListLoad(12, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs:
+                    syncTuningState.transcriptInitialFillBudgetMs +
+                    syncTuningState.transcriptMountSettleQuiescentWindowMs * 2 +
+                    1,
+                cycles: 1,
+                turns: 2,
+            });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-write',
+                writer: 'mvcp-skip',
+                reason: 'mount-settle',
+                mode: 'follow-bottom',
+            }));
+            telemetrySink.mockClear();
+            scrollToOffset.mockClear();
+
+            await triggerFlashListChatListScroll(
+                31262.333333333332,
+                {
+                    contentSize: { height: 32026 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+            await screen.settle({ advanceTimersMs: 227, turns: 1 });
+            await triggerFlashListChatListContentSizeChange(400, 30373, { turns: 1 });
+            await screen.settle({
+                advanceTimersMs: syncTuningState.transcriptMountSettleQuiescentWindowMs + 1,
+                turns: 1,
+            });
+            telemetrySink.mockClear();
+
+            await triggerFlashListChatListScroll(
+                27691,
+                {
+                    contentSize: { height: 30241 },
+                    layoutMeasurement: { height: 764 },
+                },
+                { turns: 1 },
+            );
+
+            expect(telemetrySink).toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-observed',
+                reason: 'recycled-event',
+                offsetY: 27691,
+                distanceFromBottom: 1786,
+            }));
+            expect(telemetrySink.mock.calls).not.toContainEqual([
+                expect.objectContaining({
+                    type: 'scroll-observed',
+                    reason: 'observed',
+                    offsetY: 27691,
+                    distanceFromBottom: 1786,
+                }),
+            ]);
+
+            await act(async () => {
+                vi.advanceTimersByTime(201);
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+
+            expect(scrollToOffset).not.toHaveBeenCalled();
+            expect(telemetrySink).not.toHaveBeenCalledWith(expect.objectContaining({
+                type: 'scroll-write',
+                writer: 'native-scroll-to-offset',
+                reason: 'mount-settle',
+            }));
         });
     });
 

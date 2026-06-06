@@ -8,7 +8,11 @@ import type { Metadata } from '@/sync/domains/state/storageTypes';
 import { useSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import { TRANSCRIPT_TOP_GUTTER_PX } from '@/components/sessions/transcript/_constants';
+import {
+    TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS,
+    TRANSCRIPT_TOP_GUTTER_PX,
+    TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS,
+} from '@/components/sessions/transcript/_constants';
 import { useTranscriptSessionCommon } from '@/components/sessions/transcript/transcriptSessionCommon';
 import { useOptionalTranscriptSelectionState } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 
@@ -132,6 +136,7 @@ export const TranscriptList = React.memo((props: {
                 }}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="none"
+                scrollEventThrottle={TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS}
                 renderItem={renderItem}
                 ListHeaderComponent={<ListHeader isLoading={props.isLoaded === false} />}
                 ListFooterComponent={<ListFooter bottomNotice={props.bottomNotice ?? null} />}
@@ -145,6 +150,11 @@ export const TranscriptList = React.memo((props: {
                 maintainVisibleContentPosition={{ startRenderingFromBottom: true }}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="none"
+                scrollEventThrottle={
+                    Platform.OS === 'web'
+                        ? TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS
+                        : TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS
+                }
                 renderItem={renderItem}
                 ListHeaderComponent={<ListHeader isLoading={props.isLoaded === false} />}
                 ListFooterComponent={<ListFooter bottomNotice={props.bottomNotice ?? null} />}

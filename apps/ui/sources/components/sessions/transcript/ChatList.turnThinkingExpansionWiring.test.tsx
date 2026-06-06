@@ -228,9 +228,9 @@ describe('ChatList (turn thinking expansion wiring)', () => {
       toolViewTimelineChromeMode: 'cards',
       transcriptToolCallsCollapsedPreviewCount: 1,
     }));
-    expect(firstTurnProps?.toolRouteCommon).toEqual(expect.objectContaining({
-      reducerState: null,
-    }));
+    expect(firstTurnProps?.toolRouteCommon?.messagesById?.u1).toBe(userMessage);
+    expect(firstTurnProps?.toolRouteCommon?.messagesById?.a1).toBe(agentMessage);
+    expect(firstTurnProps?.toolRouteCommon?.reducerState).not.toBeNull();
 
     await screen.unmount();
   });

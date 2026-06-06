@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { Platform, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { FlashList, type FlashListRef } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
@@ -32,6 +32,10 @@ import {
 } from '@/components/sessions/transcript/scroll/resolveTranscriptEdgePrefetchThresholdPx';
 import { shouldPrefetchOlderFromTop } from '@/components/sessions/transcript/scroll/shouldPrefetchOlderFromTop';
 import { resolveLatestCommittedMessageId } from '@/components/sessions/transcript/resolveLatestCommittedMessageId';
+import {
+    TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS,
+    TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS,
+} from '@/components/sessions/transcript/_constants';
 import {
     getWebTranscriptDistanceFromBottom,
     isWebTranscriptScrollable,
@@ -564,7 +568,11 @@ export const ChainTranscriptList = React.memo(function ChainTranscriptList(props
             extraData={transcriptMessageSelection.selectionVersion}
             keyExtractor={(item: ChainTranscriptListItem) => item.id}
             renderItem={renderItem}
-            scrollEventThrottle={16}
+            scrollEventThrottle={
+                Platform.OS === 'web'
+                    ? TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS
+                    : TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS
+            }
             onLayout={(e: LayoutChangeEvent) => {
                 const h = e?.nativeEvent?.layout?.height;
                 if (typeof h !== 'number' || !Number.isFinite(h)) return;

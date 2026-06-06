@@ -2,9 +2,28 @@ import { ActivityIndicator } from 'react-native';
 import { describe, expect, it } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { rawRecordSchema, type AgentEvent } from '@/sync/typesRaw/schemas';
 import { t } from '@/text';
 
 import { TranscriptEventRow } from './TranscriptEventRow';
+
+function parseProtocolValidAgentEvent<T extends AgentEvent>(event: T): T {
+    const parsed = rawRecordSchema.safeParse({
+        role: 'agent',
+        content: {
+            type: 'event',
+            id: `event-${event.type}`,
+            data: event,
+        },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('expected protocol-valid transcript event');
+    const content = parsed.data.content;
+    if (content.type !== 'event') throw new Error('expected event content');
+    expect(content.data.type).toBe(event.type);
+    if (content.data.type !== event.type) throw new Error('expected matching event type');
+    return content.data as T;
+}
 
 describe('TranscriptEventRow', () => {
     it('derives started context compaction loading from the phase', async () => {
@@ -163,6 +182,133 @@ describe('TranscriptEventRow', () => {
         expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
         expect(serialized).toContain(t('connectedServices.authSwitch.switchFailed'));
         expect(serialized).toContain('provider_session_state_unavailable_for_resume');
+    });
+
+    it('renders connected-service account switch attempt diagnostics through the shared presentation mapping', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'connected-service-account-switch-attempt',
+            ok: false,
+            action: 'hot_applied',
+            attemptedContinuityMode: 'hot_apply',
+            outcome: 'failed',
+            outcomeAction: 'none',
+            errorCode: 'provider_account_adoption_mismatch',
+            diagnostic: {
+                code: 'provider_account_adoption_mismatch',
+                failurePhase: 'post_switch_verification',
+                source: 'transcript_switch_attempt',
+                serviceId: 'openai-codex',
+                agentId: 'codex',
+                retryable: true,
+                suggestedActions: ['retry', 'open_connected_accounts'],
+            },
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain(t('connectedServices.diagnostics.status.provider_account_adoption_mismatch'));
+        expect(serialized).not.toContain('provider_account_adoption_mismatch)');
+    });
+
+    it('uses explicit failed outcome fields before legacy successful switch-attempt actions', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'connected-service-account-switch-attempt',
+            ok: false,
+            action: 'hot_applied',
+            attemptedContinuityMode: 'hot_apply',
+            outcome: 'failed',
+            outcomeAction: 'none',
+            errorCode: 'hot_apply_failed',
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain(t('connectedServices.authSwitch.switchFailed'));
+        expect(serialized).toContain('hot_apply_failed');
+        expect(serialized).not.toContain(t('connectedServices.authSwitch.confirmAction'));
+    });
+
+    it('renders observed-only switch attempts as neutral observation, not successful adoption', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'connected-service-account-switch-attempt',
+            ok: true,
+            action: 'metadata_updated',
+            attemptedContinuityMode: 'metadata_only',
+            outcome: 'observed',
+            outcomeAction: 'metadata_updated',
+            groupGeneration: 12,
+            sessionAdoption: 'observed_only',
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain('information-circle-outline');
+        expect(serialized).not.toContain('checkmark-circle-outline');
+    });
+
+    it('renders runtime-auth recovery retry events through the shared diagnostic presentation', async () => {
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={{
+                    type: 'connected-service-runtime-auth-recovery',
+                    status: 'retry_scheduled',
+                    serviceId: 'openai-codex',
+                    profileId: 'work',
+                    attempt: 1,
+                    nextRetryAtMs: 1_700_000_000_000,
+                    diagnostic: {
+                        code: 'recovery_retry_scheduled',
+                        failurePhase: 'runtime_auth_recovery',
+                        source: 'runtime_auth_recovery',
+                        serviceId: 'openai-codex',
+                        agentId: 'codex',
+                        retryable: true,
+                        suggestedActions: ['retry', 'open_connected_accounts'],
+                    },
+                }}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-runtime-auth-recovery' })).toBeTruthy();
+        expect(serialized).toContain(t('connectedServices.diagnostics.status.recovery_retry_scheduled'));
+        expect(serialized).not.toContain(t('message.unknownEvent'));
+    });
+
+    it('renders runtime-auth recovery recovered events without diagnostic data', async () => {
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={{
+                    type: 'connected-service-runtime-auth-recovery',
+                    status: 'recovered',
+                    serviceId: 'openai-codex',
+                    profileId: 'work',
+                }}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-runtime-auth-recovery' })).toBeTruthy();
+        expect(serialized).toContain(t('message.connectedServiceRuntimeAuthRecoveryRecovered'));
+        expect(serialized).not.toContain(t('message.unknownEvent'));
     });
 
     it('renders connected-service account switch deferral events explicitly (not as unknown event)', async () => {

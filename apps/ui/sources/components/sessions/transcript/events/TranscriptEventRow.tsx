@@ -7,6 +7,8 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
 import type { AgentEvent } from '@/sync/typesRaw';
 import { t } from '@/text';
+import { resolveConnectedServiceShortName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
+import { resolveConnectedServiceUxDiagnosticPresentation } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 
 const EVENT_ICON_SIZE = 18;
 const EVENT_SPINNER_SIZE = 20;
@@ -51,6 +53,62 @@ function formatUnknownEventDetails(event: AgentEvent): string {
     return `${t('message.unknownEvent')} (${details.join(' · ')})`;
 }
 
+function formatConnectedServiceSwitchAttemptFailureText(event: Extract<AgentEvent, { type: 'connected-service-account-switch-attempt' }>): string {
+    const diagnosticPresentation = resolveConnectedServiceUxDiagnosticPresentation(event.diagnostic);
+    const text = diagnosticPresentation
+        ? t(diagnosticPresentation.statusKey)
+        : t('connectedServices.authSwitch.switchFailed');
+    if (diagnosticPresentation) return text;
+    return typeof event.errorCode === 'string' && event.errorCode.trim().length > 0
+        ? `${text} (${event.errorCode.trim()})`
+        : text;
+}
+
+function formatConnectedServiceSwitchAttemptSuccessText(event: Extract<AgentEvent, { type: 'connected-service-account-switch-attempt' }>): string {
+    const outcomeAction = event.outcomeAction;
+    if (outcomeAction === 'restarted' || (!outcomeAction && event.action === 'restart_requested')) {
+        return t('connectedServices.authSwitch.status.restarting');
+    }
+    if (outcomeAction === 'metadata_updated' || (!outcomeAction && event.action === 'metadata_updated')) {
+        return t('connectedServices.authSwitch.status.appliesOnNextResume');
+    }
+    if (outcomeAction === 'credential_refreshed') {
+        return t('connectedServices.authSwitch.confirmAction');
+    }
+    return t('connectedServices.authSwitch.confirmAction');
+}
+
+function resolveConnectedServiceSwitchAttemptOutcome(event: Extract<AgentEvent, { type: 'connected-service-account-switch-attempt' }>):
+    | 'failed'
+    | 'scheduled_retry'
+    | 'succeeded'
+    | 'observed'
+    | 'terminal' {
+    return event.outcome ?? (event.ok ? 'succeeded' : 'failed');
+}
+
+function isObservedOnlyConnectedServiceSwitchAttempt(
+    event: Extract<AgentEvent, { type: 'connected-service-account-switch-attempt' }>,
+    outcome: ReturnType<typeof resolveConnectedServiceSwitchAttemptOutcome>,
+): boolean {
+    return outcome === 'observed' || event.sessionAdoption === 'observed_only';
+}
+
+function formatRuntimeAuthRecoveryText(event: Extract<AgentEvent, { type: 'connected-service-runtime-auth-recovery' }>): string {
+    const diagnosticPresentation = resolveConnectedServiceUxDiagnosticPresentation(event.diagnostic);
+    if (diagnosticPresentation) return t(diagnosticPresentation.statusKey);
+    switch (event.status) {
+        case 'retry_scheduled':
+            return t('connectedServices.diagnostics.status.recovery_retry_scheduled');
+        case 'dead_lettered':
+            return t('connectedServices.diagnostics.status.recovery_dead_lettered');
+        case 'recovered':
+            return t('message.connectedServiceRuntimeAuthRecoveryRecovered');
+        case 'cancelled':
+            return t('message.connectedServiceRuntimeAuthRecoveryCancelled');
+    }
+}
+
 export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: {
     event: AgentEvent;
 }) {
@@ -92,6 +150,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         testID = 'transcript-event-connected-service-account-switch';
         iconName = 'swap-horizontal-outline';
         text = t('message.connectedServiceAccountSwitch', {
+            provider: resolveConnectedServiceShortName(props.event.serviceId, t),
             from: formatConnectedServiceAccountSwitchEndpointLabel(props.event.fromProfileId),
             to: formatConnectedServiceAccountSwitchEndpointLabel(props.event.toProfileId),
         });
@@ -105,22 +164,35 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         text = t('message.providerQuotaRecovered');
     } else if (props.event.type === 'connected-service-account-switch-attempt') {
         testID = 'transcript-event-connected-service-account-switch-attempt';
-        if (props.event.ok) {
-            iconName = 'checkmark-circle-outline';
-            if (props.event.action === 'restart_requested') {
-                text = t('connectedServices.authSwitch.status.restarting');
-            } else if (props.event.action === 'metadata_updated') {
-                text = t('connectedServices.authSwitch.status.appliesOnNextResume');
-            } else {
-                text = t('connectedServices.authSwitch.confirmAction');
-            }
-        } else {
+        const outcome = resolveConnectedServiceSwitchAttemptOutcome(props.event);
+        if (outcome === 'failed' || outcome === 'terminal') {
             iconName = 'warning-outline';
-            text = t('connectedServices.authSwitch.switchFailed');
-            if (typeof props.event.errorCode === 'string' && props.event.errorCode.trim().length > 0) {
-                text = `${text} (${props.event.errorCode.trim()})`;
-            }
+            text = formatConnectedServiceSwitchAttemptFailureText(props.event);
+        } else if (outcome === 'scheduled_retry') {
+            iconName = 'time-outline';
+            const diagnosticPresentation = resolveConnectedServiceUxDiagnosticPresentation(props.event.diagnostic);
+            text = diagnosticPresentation
+                ? t(diagnosticPresentation.statusKey)
+                : t('connectedServices.diagnostics.status.recovery_retry_scheduled');
+        } else if (isObservedOnlyConnectedServiceSwitchAttempt(props.event, outcome)) {
+            iconName = 'information-circle-outline';
+            text = formatConnectedServiceSwitchAttemptSuccessText(props.event);
+        } else {
+            iconName = 'checkmark-circle-outline';
+            text = formatConnectedServiceSwitchAttemptSuccessText(props.event);
         }
+    } else if (props.event.type === 'connected-service-runtime-auth-recovery') {
+        testID = 'transcript-event-connected-service-runtime-auth-recovery';
+        if (props.event.status === 'retry_scheduled') {
+            iconName = 'time-outline';
+        } else if (props.event.status === 'dead_lettered') {
+            iconName = 'warning-outline';
+        } else if (props.event.status === 'cancelled') {
+            iconName = 'close-circle-outline';
+        } else {
+            iconName = 'checkmark-circle-outline';
+        }
+        text = formatRuntimeAuthRecoveryText(props.event);
     } else if (props.event.type === 'connected-service-account-switch-deferral') {
         testID = 'transcript-event-connected-service-account-switch-deferral';
         iconName = 'time-outline';

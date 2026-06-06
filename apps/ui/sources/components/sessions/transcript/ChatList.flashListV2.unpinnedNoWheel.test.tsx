@@ -62,12 +62,13 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('@/components/sessions/chatListItems', async () =>
-  (await import('@/dev/testkit/harness/chatListHarness')).createFlashListChatListItemsModuleMock(({ messageIdsOldestFirst, messagesById }: any) =>
-    (messageIdsOldestFirst ?? []).map((id: string) => {
-      const message = messagesById?.[id];
+  (await import('@/dev/testkit/harness/chatListHarness')).createFlashListChatListItemsModuleMock((opts: any) => {
+    if (opts?.includeCommittedMessages === false) return [];
+    return (opts?.messageIdsOldestFirst ?? []).map((id: string) => {
+      const message = opts?.messagesById?.[id];
       return { kind: 'message', id: `msg:${id}`, messageId: id, createdAt: message?.createdAt ?? 0, seq: null };
-    }),
-  )
+    });
+  })
 );
 
 vi.mock('./ChatFooter', () => ({
@@ -128,6 +129,41 @@ vi.mock('@/sync/sync', async () =>
 );
 
 describe('ChatList (FlashList v2, web) scroll pin intent without wheel events', () => {
+  it('splits oversized grouped turns into virtualizable rows on web', async () => {
+    flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
+    flashListChatListHarnessState.settingValues.transcriptGroupingMode = 'turns';
+    flashListChatListHarnessState.settingValues.transcriptGroupToolCalls = false;
+    flashListChatListHarnessState.syncTuningState = {
+      ...flashListChatListHarnessState.syncTuningState,
+      transcriptMaxTurnEntriesPerListItem: 3,
+    };
+    flashListChatListHarnessState.sessionMessagesState = {
+      messages: [
+        { kind: 'user-text', id: 'u1', localId: null, createdAt: 1, seq: 1, text: 'u1' },
+        { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, seq: 2, text: 'a1' },
+        { kind: 'agent-text', id: 'a2', localId: null, createdAt: 3, seq: 3, text: 'a2' },
+        { kind: 'agent-text', id: 'a3', localId: null, createdAt: 4, seq: 4, text: 'a3' },
+        { kind: 'agent-text', id: 'a4', localId: null, createdAt: 5, seq: 5, text: 'a4' },
+      ],
+      isLoaded: true,
+    };
+
+    await withFlashListChatListWebScrollerDom({ scrollHeight: 1200, clientHeight: 500, scrollTop: 700, isConnected: true }, async () => {
+      const { ChatList } = await import('./ChatList');
+
+      const screen = await renderFlashListChatList(
+        <ChatList session={flashListChatListHarnessState.sessionState} />
+      );
+
+      const capturedProps = screen.requireCapturedFlashListProps();
+      const data = capturedProps.data;
+      const hotItems = capturedProps.ListFooterComponent?.props?.hotItems ?? [];
+      const virtualizedItems = [...data, ...hotItems];
+      expect(virtualizedItems.map((item: any) => item.kind)).toEqual(['message', 'message', 'message', 'message', 'message']);
+      expect(virtualizedItems.map((item: any) => item.messageId)).toEqual(['u1', 'a1', 'a2', 'a3', 'a4']);
+    });
+  });
+
   it('does not auto-repin on content size change after a large scroll away from bottom (scrollbar drag scenario)', async () => {
     // Set up transcript settings.
     flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
@@ -175,6 +211,50 @@ describe('ChatList (FlashList v2, web) scroll pin intent without wheel events', 
       await screen.triggerContentSizeChange(0, 2400);
 
       expect(scrollerEl.scrollTop).toBe(scrollTopAfterUnpin);
+    });
+  });
+
+  it('keeps FlashList stable while scroll distance remains below the jump-to-bottom reveal threshold', async () => {
+    flashListChatListHarnessState.settingValues.transcriptListImplementation = 'flash_v2';
+    flashListChatListHarnessState.settingValues.transcriptScrollPinEnabled = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollAutoFollowWhenPinned = true;
+    flashListChatListHarnessState.settingValues.transcriptScrollPinOffsetThresholdPx = 100;
+    flashListChatListHarnessState.settingValues.transcriptScrollJumpToBottomRevealViewportRatio = 0.5;
+
+    const scrollerEl: any = {
+      scrollHeight: 2000,
+      clientHeight: 500,
+      scrollTop: 1500,
+      isConnected: true,
+    };
+
+    await withFlashListChatListWebScrollerDom(scrollerEl, async () => {
+      const { ChatList } = await import('./ChatList');
+
+      const screen = await renderFlashListChatList(
+        <ChatList session={flashListChatListHarnessState.sessionState} />
+      );
+
+      expect(screen.getCapturedFlashListProps()).toBeTruthy();
+
+      await screen.triggerInitialFill({
+        layoutHeight: 500,
+        contentHeight: 2000,
+        contentWidth: 0,
+      });
+      await screen.triggerScroll(1500);
+      await screen.triggerPointerDown();
+
+      scrollerEl.scrollTop = 1380;
+      await screen.triggerScroll(1380);
+      const rendersAfterFirstHiddenDistance = flashListChatListHarnessState.flashListRenderCount;
+
+      scrollerEl.scrollTop = 1370;
+      await screen.triggerScroll(1370);
+      scrollerEl.scrollTop = 1360;
+      await screen.triggerScroll(1360);
+
+      expect(flashListChatListHarnessState.flashListRenderCount).toBe(rendersAfterFirstHiddenDistance);
     });
   });
 

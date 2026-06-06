@@ -119,6 +119,34 @@ describe('TranscriptList (FlashList v2)', () => {
         expect(capturedFlashListProps.maintainVisibleContentPosition?.startRenderingFromBottom).toBe(true);
     });
 
+    it('throttles web FlashList scroll events above one frame to reduce scroll-render churn', async () => {
+        const { TranscriptList } = await import('./TranscriptList');
+        await renderScreen(<TranscriptList
+                    sessionId="s1"
+                    metadata={null}
+                    messages={[{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' } as any]}
+                    interaction={{ canSendMessages: true, canApprovePermissions: true }}
+                />);
+
+        expect(capturedFlashListProps).not.toBeNull();
+        expect(capturedFlashListProps.scrollEventThrottle).toBe(32);
+    });
+
+    it('keeps one-frame FlashList scroll events on iOS for native viewport maintenance', async () => {
+        platformOs = 'ios';
+
+        const { TranscriptList } = await import('./TranscriptList');
+        await renderScreen(<TranscriptList
+                    sessionId="s1"
+                    metadata={null}
+                    messages={[{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' } as any]}
+                    interaction={{ canSendMessages: true, canApprovePermissions: true }}
+                />);
+
+        expect(capturedFlashListProps).not.toBeNull();
+        expect(capturedFlashListProps.scrollEventThrottle).toBe(16);
+    });
+
     it('keeps drag scrolling from dismissing the keyboard on iOS', async () => {
         platformOs = 'ios';
 

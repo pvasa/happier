@@ -238,6 +238,38 @@ describe('TurnView (thinking expansion controlled)', () => {
     ]);
   });
 
+  it('forwards the active thinking id only to the matching nested message row', async () => {
+    messageById = {
+      'user-1': { kind: 'user-text', id: 'user-1', localId: null, createdAt: 1, text: 'prompt' },
+      'thinking-1': { kind: 'agent-text', id: 'thinking-1', localId: null, createdAt: 2, text: 'thinking', isThinking: true },
+      'agent-1': { kind: 'agent-text', id: 'agent-1', localId: null, createdAt: 3, text: 'reply', isThinking: false },
+    };
+    const turn: any = {
+      id: 'turn-1',
+      userMessageId: 'user-1',
+      content: [
+        { kind: 'message', messageId: 'thinking-1' },
+        { kind: 'message', messageId: 'agent-1' },
+      ],
+    };
+
+    const { TurnView } = await import('./TurnView');
+    await renderScreen(React.createElement(TurnView as any, {
+          turn,
+          metadata: null,
+          sessionId: 's1',
+          activeThinkingMessageId: 'thinking-1',
+          expandedToolCallsAnchorMessageIds: new Set(),
+          setToolCallsGroupExpanded: () => {},
+          interaction: { canSendMessages: true, canApprovePermissions: true },
+        }));
+
+    const renderedMessageProps = getRenderedMessageViewProps();
+    expect(renderedMessageProps.find((p) => p?.message?.id === 'thinking-1')?.activeThinkingMessageId).toBe('thinking-1');
+    expect(renderedMessageProps.find((p) => p?.message?.id === 'user-1')?.activeThinkingMessageId).toBeNull();
+    expect(renderedMessageProps.find((p) => p?.message?.id === 'agent-1')?.activeThinkingMessageId).toBeNull();
+  });
+
   it('forwards list-owned thinking expansion state to MessageView for thinking messages', async () => {
     const thinkingMessage = { kind: 'agent-text', id: 't1', localId: null, createdAt: 1, text: 'think', isThinking: true };
     const normalMessage = { kind: 'agent-text', id: 'a1', localId: null, createdAt: 2, text: 'answer', isThinking: false };

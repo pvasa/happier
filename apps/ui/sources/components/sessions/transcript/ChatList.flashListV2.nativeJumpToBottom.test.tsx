@@ -156,7 +156,7 @@ describe('ChatList (FlashList v2, native jump-to-bottom)', () => {
 
         const flashListProps = screen.requireCapturedFlashListProps();
         await act(async () => {
-            flashListProps.onTouchStart?.({});
+            flashListProps.onScrollBeginDrag?.({});
         });
 
         await screen.triggerScroll(1000, {}, { cycles: 1, turns: 1 });
@@ -189,7 +189,7 @@ describe('ChatList (FlashList v2, native jump-to-bottom)', () => {
 
         const flashListProps = screen.requireCapturedFlashListProps();
         await act(async () => {
-            flashListProps.onTouchStart?.({});
+            flashListProps.onScrollBeginDrag?.({});
         });
 
         await screen.triggerScroll(1200, {}, { cycles: 1, turns: 1 });
@@ -223,7 +223,7 @@ describe('ChatList (FlashList v2, native jump-to-bottom)', () => {
 
         const flashListProps = screen.requireCapturedFlashListProps();
         await act(async () => {
-            flashListProps.onTouchStart?.({});
+            flashListProps.onScrollBeginDrag?.({});
         });
 
         await screen.triggerScroll(1000, {
