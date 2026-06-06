@@ -19,6 +19,11 @@ export type OpenCodeTranscriptStreamSessionSource = Readonly<{
     body: ACPMessageData,
     opts: { localId: string; meta?: Record<string, unknown> },
   ) => Promise<void>;
+  enqueueAgentMessageCommitted?: (
+    provider: ACPProvider,
+    body: ACPMessageData,
+    opts: { localId: string; meta?: Record<string, unknown> },
+  ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
   sendAgentMessageEphemeral?: (
     provider: ACPProvider,
     body: ACPMessageData,
@@ -59,6 +64,15 @@ export function createOpenCodeTranscriptStreamSession(params: Readonly<{
         ...opts,
         meta: mergeBaseMeta(params.baseMeta, opts.meta),
       }),
+    ...(typeof params.session.enqueueAgentMessageCommitted === 'function'
+      ? {
+	          enqueueAgentMessageCommitted: (provider, body, opts) =>
+	            params.session.enqueueAgentMessageCommitted?.(provider, body, {
+	              ...opts,
+	              meta: mergeBaseMeta(params.baseMeta, opts.meta),
+	            }) ?? Promise.resolve({ persisted: false, delivered: false }),
+	        }
+      : {}),
     ...(typeof params.session.sendAgentMessageEphemeral === 'function'
       ? {
           sendAgentMessageEphemeral: (provider, body, opts) =>

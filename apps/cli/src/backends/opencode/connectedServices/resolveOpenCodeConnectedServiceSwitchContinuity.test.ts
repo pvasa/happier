@@ -42,7 +42,7 @@ function createParams(
 }
 
 describe('resolveOpenCodeConnectedServiceSwitchContinuity', () => {
-  it('returns restart_shared_state_required for connected profile switches because shared state is not supported', async () => {
+  it('uses restart/rematerialize continuity for changed connected profile switches', async () => {
     await expect(resolveOpenCodeConnectedServiceSwitchContinuity(createParams({
       connectedServiceMaterializationIdentityV1: {
         v: 1,
@@ -51,12 +51,12 @@ describe('resolveOpenCodeConnectedServiceSwitchContinuity', () => {
       },
       vendorResumeId: 'vendor-session-1',
     }))).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
   });
 
-  it('returns restart_shared_state_required for native to connected switches', async () => {
+  it('uses restart/rematerialize continuity for native to connected switches', async () => {
     await expect(resolveOpenCodeConnectedServiceSwitchContinuity(createParams({
       previousBinding: {
         source: 'native',
@@ -78,8 +78,8 @@ describe('resolveOpenCodeConnectedServiceSwitchContinuity', () => {
       },
       vendorResumeId: 'vendor-session-1',
     }))).resolves.toEqual({
-      mode: 'restart_shared_state_required',
-      reason: 'opencode_state_sharing_required',
+      mode: 'restart_same_home',
+      reason: 'opencode_restart_rematerialize_required',
     });
   });
 
@@ -120,6 +120,29 @@ describe('resolveOpenCodeConnectedServiceSwitchContinuity', () => {
     }))).resolves.toEqual({
       mode: 'unsupported',
       reason: 'provider_session_state_unavailable_for_resume',
+    });
+  });
+
+  it('keeps unsupported services unsupported', async () => {
+    await expect(resolveOpenCodeConnectedServiceSwitchContinuity(createParams({
+      serviceId: 'gemini',
+      previousBinding: {
+        source: 'connected',
+        selection: 'profile',
+        serviceId: 'gemini',
+        profileId: 'old',
+        groupId: null,
+      },
+      nextBinding: {
+        source: 'connected',
+        selection: 'profile',
+        serviceId: 'gemini',
+        profileId: 'new',
+        groupId: null,
+      },
+    }))).resolves.toEqual({
+      mode: 'unsupported',
+      reason: 'unsupported_service',
     });
   });
 });

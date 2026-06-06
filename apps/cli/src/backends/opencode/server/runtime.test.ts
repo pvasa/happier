@@ -16,6 +16,43 @@ vi.mock('@/daemon/controlClient', () => ({
   notifyDaemonConnectedServiceRuntimeAuthFailure: mockNotifyDaemonConnectedServiceRuntimeAuthFailure,
 }));
 
+function createScheduledRuntimeAuthRecoveryReport(input: Readonly<{ includeTranscriptEvent?: boolean }> = {}) {
+  const diagnostic = {
+    code: 'recovery_retry_scheduled',
+    failurePhase: 'runtime_auth_recovery',
+    source: 'runtime_auth_recovery',
+    serviceId: 'openai',
+    profileId: 'primary',
+    groupId: 'team-pool',
+    retryable: true,
+    suggestedActions: [],
+    diagnostics: { runtimeFailureKind: 'usage_limit' },
+  };
+  const transcriptEvent = {
+    type: 'connected-service-runtime-auth-recovery',
+    status: 'retry_scheduled',
+    serviceId: 'openai',
+    profileId: 'primary',
+    groupId: 'team-pool',
+    nextRetryAtMs: 1_700_000_100_000,
+    terminal: false,
+    diagnostic,
+  };
+  return {
+    ok: true,
+    result: {
+      status: 'recovery_retry_scheduled',
+      recovery: {
+        status: 'scheduled',
+        retryable: true,
+        nextRetryAtMs: 1_700_000_100_000,
+      },
+      uxDiagnostic: diagnostic,
+      ...(input.includeTranscriptEvent === false ? {} : { transcriptEvent }),
+    },
+  };
+}
+
 function createFakePermissionHandler() {
   return {
     handleToolCall: vi.fn(async () => ({ decision: 'approved' as const })),
@@ -99,6 +136,7 @@ function createFakeSession() {
     sessionId: 'happy_sess_opencode',
     keepAlive: vi.fn(),
     sendAgentMessage: vi.fn(),
+    sendSessionEvent: vi.fn(),
     sessionTurnLifecycle: {
       beginTurn: vi.fn(async () => ({ turnId: 'session-turn-1' })),
       attachProviderTurnId: vi.fn(async () => {}),
@@ -6115,6 +6153,8 @@ describe('createOpenCodeServerRuntime', () => {
           retryAfterMs: 5_000,
         }),
       }),
+    }, {
+      timeoutMs: 120_000,
     });
   });
 
@@ -6207,12 +6247,145 @@ describe('createOpenCodeServerRuntime', () => {
           retryAfterMs: expect.any(Number),
           providerLimitId: 'free_tier_limit',
         }),
+      }, {
+        timeoutMs: 120_000,
       });
       expect(client.sessionAbort).toHaveBeenCalledWith({ sessionId: 'ses_1' });
     } finally {
       await runtime.cancel().catch(() => {});
       await runtime.reset().catch(() => {});
       await promptPromise.catch(() => undefined);
+    }
+  });
+
+  it('commits daemon typed runtime-auth recovery projection for OpenCode session.status usage-limit reports', async () => {
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockReset();
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai',
+          groupId: 'team-pool',
+          activeProfileId: 'primary',
+          fallbackProfileId: 'backup',
+          generation: 3,
+        }]),
+      },
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'hello', localId: 'local-status-projection-sse' });
+    const promptOutcomePromise = promptPromise.catch(() => undefined);
+    try {
+      await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+
+      await client.__emit({
+        directory: '/tmp',
+        payload: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'ses_1',
+            status: {
+              type: 'retry',
+              attempt: 10,
+              message: 'The usage limit has been reached',
+              next: Date.now() + 60_000,
+            },
+          },
+        },
+      });
+
+      await expect.poll(() => session.sendSessionEvent.mock.calls.length).toBe(1);
+      expect(session.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'connected-service-runtime-auth-recovery',
+        status: 'retry_scheduled',
+        serviceId: 'openai',
+        diagnostic: expect.objectContaining({
+          source: 'runtime_auth_recovery',
+          failurePhase: 'runtime_auth_recovery',
+        }),
+      }));
+    } finally {
+      await runtime.cancel().catch(() => {});
+      await runtime.reset().catch(() => {});
+      await promptOutcomePromise;
+    }
+  });
+
+  it('emits a generic recovery message when OpenCode receives a typed diagnostic without a transcript event', async () => {
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockReset();
+    mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(
+      createScheduledRuntimeAuthRecoveryReport({ includeTranscriptEvent: false }),
+    );
+    const client = createFakeClient();
+    const session = createFakeSession();
+    const runtime = createOpenCodeServerRuntime({
+      directory: '/tmp',
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai',
+          groupId: 'team-pool',
+          activeProfileId: 'primary',
+          fallbackProfileId: 'backup',
+          generation: 3,
+        }]),
+      },
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: { handleToolCall: vi.fn(async () => ({ decision: 'approved' })) } as any,
+      onThinkingChange: vi.fn(),
+    }, {
+      createClient: async () => client as any,
+    });
+
+    await runtime.startOrLoad({});
+    runtime.beginTurn();
+
+    const promptPromise = (runtime as any).sendPromptWithMeta({ text: 'hello', localId: 'local-status-projection-fallback' });
+    const promptOutcomePromise = promptPromise.catch(() => undefined);
+    try {
+      await expect.poll(() => client.sessionPromptAsync.mock.calls.length).toBe(1);
+
+      await client.__emit({
+        directory: '/tmp',
+        payload: {
+          type: 'session.status',
+          properties: {
+            sessionID: 'ses_1',
+            status: {
+              type: 'retry',
+              attempt: 10,
+              message: 'The usage limit has been reached',
+              next: Date.now() + 60_000,
+            },
+          },
+        },
+      });
+
+      await expect.poll(() => session.sendSessionEvent.mock.calls.length).toBe(1);
+      expect(session.sendSessionEvent).toHaveBeenCalledWith({
+        type: 'message',
+        message: expect.stringContaining('retry scheduled'),
+      });
+    } finally {
+      await runtime.cancel().catch(() => {});
+      await runtime.reset().catch(() => {});
+      await promptOutcomePromise;
     }
   });
 

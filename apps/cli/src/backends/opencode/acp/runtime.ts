@@ -18,6 +18,7 @@ export function createOpenCodeAcpRuntime(params: {
   permissionHandler: AcpPermissionHandler;
   onThinkingChange: (thinking: boolean) => void;
   memoryRecallGuidanceEnabled?: boolean;
+  pendingQueueDrainMaxPopPerWake?: number;
   /**
    * Return the latest permission mode intent so the next backend spawn can apply it.
    * Used for provider-enforced permission/sandbox policies that are configured at process start.
@@ -43,6 +44,7 @@ export function createOpenCodeAcpRuntime(params: {
       machineId: params.machineId,
     },
     getPermissionMode: params.getPermissionMode,
+    pendingQueueDrainMaxPopPerWake: params.pendingQueueDrainMaxPopPerWake,
     hooks: {
       onBeginTurn: () => {
         turnStartSeqInclusive = params.session.getLastObservedMessageSeq?.() ?? 0;

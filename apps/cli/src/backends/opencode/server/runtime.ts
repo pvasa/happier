@@ -66,6 +66,7 @@ import { buildOpenCodeTodoWorkState, OPEN_CODE_TODO_WORK_STATE_OWNED_SOURCE_FAMI
 import { mergeSessionWorkStateMetadataV1 } from '@/session/workState/sessionWorkStateMetadata';
 import { readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import { raceWithTimeout } from './raceWithTimeout';
 import {
   buildOpenCodeProviderToolCallKey,
@@ -239,6 +240,19 @@ export function createOpenCodeServerRuntime(params: {
         switchesThisTurn: 0,
         classification: runtimeAuthClassification,
         logPrefix: '[opencode]',
+      }).then((recoveryReport) => {
+        projectConnectedServiceRuntimeAuthRecoveryReport({
+          report: recoveryReport,
+          sendGenericStatusMessage: (message) => {
+            params.session.sendSessionEvent({ type: 'message', message });
+            return true;
+          },
+          commitTypedProjection: (projection) => {
+            if (!projection.transcriptEvent) return false;
+            params.session.sendSessionEvent(projection.transcriptEvent);
+            return true;
+          },
+        });
       });
     }
     void surfacePrimarySessionRuntimeIssue({

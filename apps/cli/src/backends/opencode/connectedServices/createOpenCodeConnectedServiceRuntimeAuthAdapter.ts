@@ -95,6 +95,12 @@ export function createOpenCodeConnectedServiceRuntimeAuthAdapter(): ConnectedSer
         detachedReason: detached.reason,
       };
     },
+    async verifyActiveAccount() {
+      return {
+        status: 'verified',
+        reason: 'provider_restart_rematerialization_authoritative',
+      };
+    },
     async probeQuota() {
       return { status: 'unsupported' };
     },

@@ -296,4 +296,52 @@ describe('createOpenCodeTranscriptStreamBridge', () => {
       },
     ]);
   });
+
+  it('routes streamed committed snapshots through the durable enqueue hook when available', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const sendAgentMessageCommitted = vi.fn(async () => {});
+    const enqueueAgentMessageCommitted = vi.fn(async () => ({ persisted: true as const, delivered: false }));
+    const bridge = createOpenCodeTranscriptStreamBridge({
+      provider: 'opencode' as any,
+      session: {
+        sendAgentMessageCommitted,
+        enqueueAgentMessageCommitted,
+        sendAgentMessage: () => {},
+      } as any,
+    });
+
+    bridge.appendAssistantDelta({
+      deltaText: 'Hello durable outbox',
+      streamKey: 'stream-1',
+      remoteSessionId: 'ses_1',
+      messageId: 'msg_1',
+      sidechainId: null,
+    });
+    bridge.enableDurableCommitsForStream({
+      streamKey: 'stream-1',
+      remoteSessionId: 'ses_1',
+      messageId: 'msg_1',
+      sidechainId: null,
+    });
+
+    await bridge.flushAll({ reason: 'turn-end' });
+    await flushTranscriptCommitMicrotasks();
+
+    expect(sendAgentMessageCommitted).not.toHaveBeenCalled();
+    expect(enqueueAgentMessageCommitted).toHaveBeenCalledWith(
+      'opencode',
+      { type: 'message', message: 'Hello durable outbox' },
+      expect.objectContaining({
+        localId: expect.any(String),
+        meta: expect.objectContaining({
+          happierStreamKey: 'stream-1',
+          opencodeMessageId: 'msg_1',
+          opencodeRemoteSessionId: 'ses_1',
+          happierStreamSegmentV1: expect.objectContaining({ segmentState: 'complete' }),
+        }),
+      }),
+    );
+  });
 });

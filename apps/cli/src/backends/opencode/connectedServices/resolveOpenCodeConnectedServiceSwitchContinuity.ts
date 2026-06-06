@@ -11,6 +11,10 @@ import {
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
 import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
+import { openCodeConnectedServiceStateSharingDescriptor } from './openCodeConnectedServiceStateSharingDescriptor';
+
+const OPENCODE_RESTART_REMATERIALIZE_REQUIRED_REASON = 'opencode_restart_rematerialize_required';
 
 function supportsService(serviceId: string): boolean {
   return (AGENTS_CORE.opencode.connectedServices.supportedServiceIds as readonly string[]).includes(serviceId);
@@ -30,10 +34,10 @@ export async function resolveOpenCodeConnectedServiceSwitchContinuity(
   }
   if (isConnectedToConnectedServiceSwitch(params)) {
     if (!isExactSameConnectedServiceSelection(params)) {
-      return {
-        mode: 'restart_shared_state_required',
-        reason: 'opencode_state_sharing_required',
-      };
+      return resolveConnectedServiceRestartContinuityAction({
+        stateSharingDescriptor: openCodeConnectedServiceStateSharingDescriptor,
+        restartReason: OPENCODE_RESTART_REMATERIALIZE_REQUIRED_REASON,
+      });
     }
     if (!hasExactConnectedServiceRestartContinuityContext(params)) {
       return providerSessionStateUnavailableForResume();
@@ -68,10 +72,12 @@ export async function resolveOpenCodeConnectedServiceSwitchContinuity(
     });
     return reachability.ok
       ? { mode: 'restart_same_home' }
-      : providerSessionStateUnavailableForResume();
+      : providerSessionStateUnavailableForResume({
+          diagnostics: reachability.continuityDiagnostics,
+        });
   }
-  return {
-    mode: 'restart_shared_state_required',
-    reason: 'opencode_state_sharing_required',
-  };
+  return resolveConnectedServiceRestartContinuityAction({
+    stateSharingDescriptor: openCodeConnectedServiceStateSharingDescriptor,
+    restartReason: OPENCODE_RESTART_REMATERIALIZE_REQUIRED_REASON,
+  });
 }
