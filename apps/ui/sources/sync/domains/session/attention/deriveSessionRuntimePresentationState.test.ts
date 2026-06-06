@@ -20,6 +20,8 @@ describe('deriveSessionRuntimePresentationState', () => {
 
         expect(runtimeState.freshInProgress).toBe(true);
         expect(runtimeState.working).toBe(true);
+        expect(runtimeState.runtimeProjectionInProgress).toBe(true);
+        expect(runtimeState.runtimeActivelyWorking).toBe(false);
     });
 
     it('falls back to fresh legacy thinking when turn fields are absent', () => {
@@ -120,6 +122,25 @@ describe('deriveSessionRuntimePresentationState', () => {
 
         expect(runtimeState.freshInProgress).toBe(true);
         expect(runtimeState.working).toBe(true);
+    });
+
+    it('extends stale in-progress projection from a fresh active heartbeat without requiring legacy thinking', () => {
+        const nowMs = 1_000_000;
+        const runtimeState = deriveSessionRuntimePresentationState({
+            active: true,
+            activeAt: nowMs - 1_000,
+            presence: 'online',
+            thinking: false,
+            thinkingAt: 0,
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: nowMs - SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS - 1_000,
+        }, nowMs);
+
+        expect(runtimeState.freshThinking).toBe(false);
+        expect(runtimeState.freshInProgress).toBe(true);
+        expect(runtimeState.working).toBe(true);
+        expect(runtimeState.runtimeProjectionInProgress).toBe(true);
+        expect(runtimeState.runtimeActivelyWorking).toBe(true);
     });
 
     it('does not keep an in-progress turn working from newer meaningful activity alone', () => {

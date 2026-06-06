@@ -10,6 +10,8 @@ export type SessionRuntimePresentationState = Readonly<{
     freshThinking: boolean;
     freshInProgress: boolean;
     working: boolean;
+    runtimeProjectionInProgress: boolean;
+    runtimeActivelyWorking: boolean;
     freshPermissionRequired: boolean;
     freshActionRequired: boolean;
 }>;
@@ -53,21 +55,21 @@ export function deriveSessionRuntimePresentationState(
     const thinkingAt = normalizeRuntimeStatusTimestamp(input.thinkingAt);
     const isOnline = input.presence === 'online';
     const isActive = input.active === true;
+    const isLiveRuntime = isActive && isOnline;
     const hasTerminalMaterializedTurnStatus = isTerminalPrimaryTurnStatus(latestTurnStatus);
     const blocksLegacyThinking = isLegacyThinkingBlockedByTurnProjection(latestTurnStatus);
     const freshThinking =
         input.thinking === true
-        && isActive
-        && isOnline
+        && isLiveRuntime
         && isFreshTimestamp(thinkingAt, nowMs, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS)
         && !blocksLegacyThinking;
     const freshInProgress = freshInProgressSignals.length > 0;
     const working = freshInProgress || freshThinking;
+    const runtimeActivelyWorking = isLiveRuntime && working;
     const pendingRequestObservedAt = normalizeRuntimeStatusTimestamp(input.pendingRequestObservedAt);
     const hasFreshPendingRequest =
         pendingRequestObservedAt !== null
         && isFreshTimestamp(pendingRequestObservedAt, nowMs, SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS);
-    const isLiveRuntime = isActive && isOnline;
 
     return {
         isOnline,
@@ -77,6 +79,8 @@ export function deriveSessionRuntimePresentationState(
         freshThinking,
         freshInProgress,
         working,
+        runtimeProjectionInProgress: freshInProgress,
+        runtimeActivelyWorking,
         freshPermissionRequired:
             input.hasPendingPermissionRequests === true
             && isLiveRuntime
@@ -102,8 +106,7 @@ export function readFreshInProgressRuntimeSignalTimestamps(
     }
     const activeAt = normalizeRuntimeStatusTimestamp(input.activeAt);
     if (
-        input.thinking === true
-        && input.active === true
+        input.active === true
         && input.presence === 'online'
         && activeAt !== null
         && activeAt >= latestTurnStatusObservedAt
