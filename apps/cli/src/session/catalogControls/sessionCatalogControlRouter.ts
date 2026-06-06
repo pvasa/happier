@@ -6,6 +6,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { getSessionCatalogControlAdapter } from '@/backends/catalog';
 import type { Credentials } from '@/persistence';
+import { resolveMachineControlLocalityProof } from '@/session/machineControlLocality';
 import type {
   SessionEncryptionContext,
   SessionStoredContentEncryptionMode,
@@ -24,6 +25,8 @@ type RouteSessionCatalogControlParams = Readonly<{
   rawSession: RawSessionRecord;
   metadata: Record<string, unknown> | null;
   currentMachineId: string | null;
+  currentMachineHost?: string | null;
+  currentMachineHomeDir?: string | null;
   ctx: SessionEncryptionContext;
   mode: SessionStoredContentEncryptionMode;
   operation: SessionCatalogControlOperation;
@@ -44,8 +47,22 @@ function readString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function resolveRawSessionString(rawSession: RawSessionRecord, key: 'path' | 'machineId'): string | null {
+function resolveRawSessionString(rawSession: RawSessionRecord, key: 'path' | 'machineId' | 'host' | 'homeDir'): string | null {
   return readString((rawSession as Partial<Record<typeof key, unknown>>)[key]);
+}
+
+function resolveSessionMachineHost(
+  metadata: Record<string, unknown>,
+  rawSession: RawSessionRecord,
+): string | null {
+  return readString(metadata.host) ?? resolveRawSessionString(rawSession, 'host');
+}
+
+function resolveSessionMachineHomeDir(
+  metadata: Record<string, unknown>,
+  rawSession: RawSessionRecord,
+): string | null {
+  return readString(metadata.homeDir) ?? resolveRawSessionString(rawSession, 'homeDir');
 }
 
 function resolveAgentId(metadata: Record<string, unknown>): AgentId | null {
@@ -108,7 +125,17 @@ export async function routeSessionCatalogControl(params: RouteSessionCatalogCont
   if (!sessionMachineId) {
     return unsupported(params.operation, 'session_catalog_control_session_machine_unknown');
   }
-  if (sessionMachineId !== currentMachineId) {
+  if (
+    sessionMachineId !== currentMachineId
+    && !resolveMachineControlLocalityProof({
+      sessionMachineId,
+      currentMachineId,
+      sessionHost: resolveSessionMachineHost(metadata, params.rawSession),
+      sessionHomeDir: resolveSessionMachineHomeDir(metadata, params.rawSession),
+      currentMachineHost: params.currentMachineHost,
+      currentMachineHomeDir: params.currentMachineHomeDir,
+    })
+  ) {
     return unsupported(params.operation, 'session_catalog_control_remote_unavailable');
   }
 
