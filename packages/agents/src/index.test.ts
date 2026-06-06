@@ -28,4 +28,27 @@ describe('agents package exports', () => {
   it('re-exports provider media capability helpers from the package root', () => {
     expect(getAgentMediaCapabilities('codex').nativeImageGeneration).toBe('supported');
   });
+  it('re-exports Claude Code OAuth scope constants from the package root', async () => {
+    const mod = await import('./index.js');
+
+    expect(mod.CLAUDE_CODE_REQUIRED_OAUTH_SCOPES).toEqual([
+      'user:inference',
+      'user:profile',
+      'user:sessions:claude_code',
+    ]);
+    expect(mod.CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES).toEqual([
+      'user:inference',
+      'user:profile',
+      'user:sessions:claude_code',
+      'user:mcp_servers',
+      'user:file_upload',
+    ]);
+    expect(mod.CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE).toBe([
+      'user:inference',
+      'user:profile',
+      'user:sessions:claude_code',
+      'user:mcp_servers',
+      'user:file_upload',
+    ].join(' '));
+  });
 });

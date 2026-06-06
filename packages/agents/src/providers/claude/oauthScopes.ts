@@ -1,0 +1,15 @@
+export const CLAUDE_CODE_REQUIRED_OAUTH_SCOPES = [
+  'user:inference',
+  'user:profile',
+  'user:sessions:claude_code',
+] as const;
+
+export const CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES = [
+  'user:inference',
+  'user:profile',
+  'user:sessions:claude_code',
+  'user:mcp_servers',
+  'user:file_upload',
+] as const;
+
+export const CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE = CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPES.join(' ');
