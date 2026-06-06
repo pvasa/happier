@@ -18,6 +18,7 @@ import { getBuiltInProfile } from '@/sync/domains/profiles/profileUtils';
 import { isProfileCompatibleWithBackendTarget, type AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveEffectiveWindowsRemoteSessionLaunchMode } from '@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode';
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { buildSpawnEnvironmentVariablesFromUiState, buildSpawnSessionExtrasFromUiState, getAgentResumeExperimentsFromSettings, getNewSessionPreflightIssues } from '@/agents/catalog/catalog';
@@ -43,8 +44,11 @@ function getActiveNewSessionDraftScope() {
     return storage.getState().profileScope ?? null;
 }
 
-function clearActiveNewSessionDraft(): void {
-    const scope = getActiveNewSessionDraftScope();
+function clearNewSessionDraftForLaunchParams(params: Readonly<{
+    draftScope?: ServerAccountScope | null;
+}>): void {
+    const hasExplicitDraftScope = Object.prototype.hasOwnProperty.call(params, 'draftScope');
+    const scope = hasExplicitDraftScope ? params.draftScope : getActiveNewSessionDraftScope();
     if (scope) {
         clearNewSessionDraft(scope);
         return;
@@ -192,6 +196,7 @@ export function useCreateNewSession(params: Readonly<{
     selectedMachineCapabilities: any;
     targetServerId?: string | null;
     allowedTargetServerIds?: ReadonlyArray<string>;
+    draftScope?: ServerAccountScope | null;
     disableDraftPersistence?: () => void;
 }>): Readonly<{
     handleCreateSession: (opts?: HandleCreateSessionOptions) => void;
@@ -534,7 +539,7 @@ export function useCreateNewSession(params: Readonly<{
                 if (automationEditId.length > 0) {
                     await sync.updateAutomation(automationEditId, normalizedAutomationInput);
                     current.disableDraftPersistence?.();
-                    clearActiveNewSessionDraft();
+                    clearNewSessionDraftForLaunchParams(current);
                     await sync.refreshAutomations();
                     current.router.replace(`/automations/${automationEditId}` as any);
                     return;
@@ -546,7 +551,7 @@ export function useCreateNewSession(params: Readonly<{
                     assignments: [{ machineId: current.selectedMachineId, enabled: true, priority: 100 }],
                 });
                 current.disableDraftPersistence?.();
-                clearActiveNewSessionDraft();
+                clearNewSessionDraftForLaunchParams(current);
                 await sync.refreshAutomations();
                 current.router.replace('/automations' as any);
                 return;
@@ -893,7 +898,7 @@ export function useCreateNewSession(params: Readonly<{
                 launchAttempt = markNewSessionLaunchAttemptComplete(launchAttempt);
                 launchAttemptRef.current = null;
                 current.disableDraftPersistence?.();
-                clearActiveNewSessionDraft();
+                clearNewSessionDraftForLaunchParams(current);
 
                 const sessionRoute = buildScopedSessionRouteHref({
                     sessionId: createdSessionId,

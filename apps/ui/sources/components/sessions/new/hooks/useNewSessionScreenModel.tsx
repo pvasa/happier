@@ -116,6 +116,7 @@ import { readRememberedEngineSelection } from '@/sync/domains/sessionAuthoring/r
 import {
     useDeferredRememberedEngineSelection,
 } from '@/components/sessions/new/hooks/screenModel/useDeferredRememberedEngineSelection';
+import { getCommandSuggestions } from '@/components/autocomplete/commandSuggestions';
 
 
 // Configuration constants
@@ -522,7 +523,6 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
     const emptyAutocompletePrefixes = React.useMemo(() => ['/'], []);
     const emptyAutocompleteSuggestions = React.useCallback(async (query: string) => {
         if (!query.startsWith('/')) return [];
-        const { getCommandSuggestions } = await import('@/components/autocomplete/suggestions');
         return getCommandSuggestions(NEW_SESSION_COMMAND_SUGGESTION_SESSION_ID, query);
     }, []);
     const handleAutocompleteSuggestionSelect = React.useCallback<AgentInputAutocompleteSelectionHandler>(async (args) => {
@@ -629,10 +629,13 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         acpSessionModeId?: string | null;
         sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
     }>) => {
+        const hasModelId = Object.prototype.hasOwnProperty.call(selection, 'modelId');
+        const hasAcpSessionModeId = Object.prototype.hasOwnProperty.call(selection, 'acpSessionModeId');
+        const hasSessionConfigOptionOverrides = Object.prototype.hasOwnProperty.call(selection, 'sessionConfigOptionOverrides');
         rememberEngineSelection(backendTarget, {
-            modelId: selection.modelId ?? modelMode,
-            acpSessionModeId: selection.acpSessionModeId ?? acpSessionModeId,
-            sessionConfigOptionOverrides: selection.sessionConfigOptionOverrides ?? sessionConfigOptionOverrides,
+            modelId: hasModelId ? selection.modelId : modelMode,
+            acpSessionModeId: hasAcpSessionModeId ? selection.acpSessionModeId : acpSessionModeId,
+            sessionConfigOptionOverrides: hasSessionConfigOptionOverrides ? selection.sessionConfigOptionOverrides : sessionConfigOptionOverrides,
         });
     }, [
         acpSessionModeId,
@@ -1669,6 +1672,7 @@ export function useNewSessionScreenModel(): NewSessionScreenModel {
         selectedMachineCapabilities,
         targetServerId,
         allowedTargetServerIds: allowedTargetServerIds.length > 0 ? allowedTargetServerIds : resolvedSettingsTarget.allowedServerIds,
+        draftScope,
         disableDraftPersistence,
     });
 

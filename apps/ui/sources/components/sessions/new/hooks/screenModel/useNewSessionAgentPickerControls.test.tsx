@@ -657,6 +657,48 @@ describe('useNewSessionAgentPickerControls', () => {
         }));
     });
 
+    it('clears ACP session mode when selecting a backend that does not expose session modes', async () => {
+        const setBackendTarget = vi.fn();
+        const setModelMode = vi.fn();
+        const setAcpSessionModeId = vi.fn();
+        const onRememberEngineSelection = vi.fn();
+        const kimiEntry = {
+            target: { kind: 'builtInAgent', agentId: 'kimi' },
+            targetKey: 'agent:kimi',
+            title: 'Kimi',
+            subtitle: null,
+            providerAgentId: 'kimi',
+            builtInAgentId: 'kimi',
+            iconAgentId: 'kimi',
+        } as const;
+
+        const hook = await renderHook(() => useNewSessionAgentPickerControls(buildAgentPickerHookParams({
+            resolvedBackendEntries: [
+                ...buildAgentPickerHookParams().resolvedBackendEntries,
+                kimiEntry as any,
+            ],
+            setBackendTarget,
+            setModelMode: setModelMode as any,
+            acpSessionModeId: 'plan',
+            setAcpSessionModeId: setAcpSessionModeId as any,
+            onRememberEngineSelection,
+        })));
+
+        hook.getCurrent().handleAgentPickerSelect('agent:kimi');
+
+        expect(setBackendTarget).toHaveBeenCalledWith({ kind: 'builtInAgent', agentId: 'kimi' });
+        expect(setModelMode).toHaveBeenCalledWith('default');
+        expect(setAcpSessionModeId).toHaveBeenCalledWith(null);
+        expect(onRememberEngineSelection).toHaveBeenCalledWith(
+            { kind: 'builtInAgent', agentId: 'kimi' },
+            {
+                modelId: 'default',
+                acpSessionModeId: null,
+                sessionConfigOptionOverrides: null,
+            },
+        );
+    });
+
     it('marks engine rail selections as immediate updates that keep the popover open', async () => {
         const hook = await renderHook(() => useNewSessionAgentPickerControls({
             useProfiles: false,

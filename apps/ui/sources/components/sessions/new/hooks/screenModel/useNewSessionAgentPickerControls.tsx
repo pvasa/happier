@@ -5,6 +5,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { NewSessionEngineOptionDetail } from '@/components/sessions/new/components/NewSessionEngineOptionDetail';
 import { NewSessionFavoriteModelsDetail } from '@/components/sessions/new/components/NewSessionFavoriteModelsDetail';
 import type { AgentInputChipPickerOption } from '@/components/sessions/agentInput/components/AgentInputChipPickerTypes';
+import { getAgentCore, isAgentId } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { getAgentPickerIconScale } from '@/agents/registry/registryUi';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
@@ -34,13 +35,13 @@ import {
 
 type EngineSelection = Readonly<{
     modelId: string;
-    sessionModeId: string;
+    sessionModeId: string | null;
     configOverrides: Readonly<Record<string, string>>;
 }>;
 
 type EngineSelectionLike = Readonly<{
     modelId: string;
-    sessionModeId: string;
+    sessionModeId: string | null;
     configOverrides?: Readonly<Record<string, string>> | null;
 }>;
 
@@ -61,6 +62,21 @@ function areConfigOverridesEqual(
 
 function normalizeConfigOverrides(overrides: Readonly<Record<string, string>> | null | undefined): Readonly<Record<string, string>> {
     return overrides ?? {};
+}
+
+function backendEntrySupportsSessionModeSelection(entry: ResolvedBackendCatalogEntry | null): boolean {
+    if (!entry) return true;
+    if (!isAgentId(entry.providerAgentId)) return true;
+    return getAgentCore(entry.providerAgentId).sessionModes.kind !== 'none';
+}
+
+function normalizeSessionModeIdForEntry(
+    entry: ResolvedBackendCatalogEntry | null,
+    sessionModeId: string | null | undefined,
+): string | null {
+    if (!backendEntrySupportsSessionModeSelection(entry)) return null;
+    const trimmed = typeof sessionModeId === 'string' ? sessionModeId.trim() : '';
+    return trimmed.length > 0 ? trimmed : 'default';
 }
 
 function areEngineSelectionsEqual(left: EngineSelectionLike, right: EngineSelectionLike): boolean {
@@ -277,10 +293,13 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
 
     const buildInitialEngineSelection = React.useCallback((targetKey: string): EngineSelection => {
         const currentTargetKey = params.selectedBackendEntry?.targetKey ?? params.selectedBackendTargetKey;
+        const entry = params.resolvedBackendEntries.find((candidate) => candidate.targetKey === targetKey)
+            ?? params.selectedBackendEntry
+            ?? null;
         if (targetKey === currentTargetKey) {
             return {
                 modelId: String(params.modelMode),
-                sessionModeId: params.acpSessionModeId ?? 'default',
+                sessionModeId: normalizeSessionModeIdForEntry(entry, params.acpSessionModeId),
                 configOverrides: Object.fromEntries(
                     Object.entries(params.sessionConfigOptionOverrides?.overrides ?? {})
                         .map(([configId, override]) => [configId, typeof override?.value === 'string' ? override.value.trim() : ''])
@@ -289,7 +308,6 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
             };
         }
 
-        const entry = params.resolvedBackendEntries.find((candidate) => candidate.targetKey === targetKey) ?? null;
         const remembered = entry
             ? readRememberedEngineSelection({
                 enabled: params.rememberEngineSelectionsEnabled === true,
@@ -301,7 +319,7 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
 
         return {
             modelId: remembered?.modelId ?? 'default',
-            sessionModeId: remembered?.acpSessionModeId ?? 'default',
+            sessionModeId: normalizeSessionModeIdForEntry(entry, remembered?.acpSessionModeId),
             configOverrides: Object.fromEntries(
                 Object.entries(remembered?.sessionConfigOptionOverrides?.overrides ?? {})
                     .map(([configId, override]) => [configId, typeof override?.value === 'string' ? override.value.trim() : ''])
@@ -344,8 +362,10 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
 
     const applyEngineSelection = React.useCallback((entry: ResolvedBackendCatalogEntry, selection: EngineSelectionLike) => {
         const nextConfigOverrides = normalizeConfigOverrides(selection.configOverrides);
+        const nextSessionModeId = normalizeSessionModeIdForEntry(entry, selection.sessionModeId);
         const normalizedSelection: EngineSelection = {
             ...selection,
+            sessionModeId: nextSessionModeId,
             configOverrides: nextConfigOverrides,
         };
         pendingAppliedSelectionRef.current = {
@@ -355,7 +375,7 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
         params.onExplicitBackendTargetSelection?.(entry.target);
         params.setBackendTarget(entry.target);
         params.setModelMode(selection.modelId as ModelMode);
-        params.setAcpSessionModeId(selection.sessionModeId);
+        params.setAcpSessionModeId(nextSessionModeId);
         const updatedAt = Date.now();
         const sessionConfigOptionOverrides = Object.keys(nextConfigOverrides).length === 0
             ? null
@@ -367,10 +387,10 @@ export function useNewSessionAgentPickerControls(rawParams: Readonly<{
                         { updatedAt, value },
                     ]),
                 ),
-            });
+        });
         params.onRememberEngineSelection?.(entry.target, {
             modelId: selection.modelId,
-            acpSessionModeId: selection.sessionModeId,
+            acpSessionModeId: nextSessionModeId,
             sessionConfigOptionOverrides,
         });
         if (!sessionConfigOptionOverrides) {

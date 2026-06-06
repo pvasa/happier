@@ -423,6 +423,14 @@ export function notifyMockStorageSubscribers(): void {
     }
 }
 
+function setMockSettingValue(key: string, valueOrUpdater: unknown): void {
+    const previous = (settingsState as Record<string, unknown>)[key];
+    (settingsState as Record<string, unknown>)[key] = typeof valueOrUpdater === 'function'
+        ? (valueOrUpdater as (value: unknown) => unknown)(previous)
+        : valueOrUpdater;
+    notifyMockStorageSubscribers();
+}
+
 vi.mock('@/sync/store/hooks', async (importOriginal) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const actual = await importOriginal<any>();
@@ -567,7 +575,10 @@ vi.doMock('@/sync/domains/state/storage', async (importOriginal) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         useSetting: (key: string) => ({ ...settingsDefaults, ...settingsState } as any)[key],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        useSettingMutable: (key: string) => [(settingsState as any)[key], vi.fn()],
+        useSettingMutable: (key: string) => [
+            ({ ...settingsDefaults, ...settingsState } as any)[key],
+            (next: unknown) => setMockSettingValue(key, next),
+        ],
         useSettings: () => ({ ...settingsDefaults, ...settingsState }) as unknown as import('@/sync/domains/settings/settings').Settings,
     });
 });
@@ -611,6 +622,15 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
         getAgentCore: (_agentId: string) => ({
             model: { defaultMode: 'default', allowedModes: ['default', 'gpt-5'], supportsFreeform: true },
             resume: { supportsVendorResume: false, experimental: false },
+            sessionModes: _agentId === 'claude'
+                ? {
+                    kind: 'staticAgentModes',
+                    staticOptions: [
+                        { id: 'default', nameKey: 'agentInput.mode.build' },
+                        { id: 'plan', nameKey: 'agentInput.mode.plan' },
+                    ],
+                }
+                : { kind: 'none' },
             sessionStorage: { direct: true, persisted: true },
             cli: { detectKey: String(_agentId) },
         }),
@@ -972,6 +992,15 @@ export function resetDraftPersistenceState(): void {
         displayName: 'feature/auth',
         baseRef: 'main',
     };
+    persistedDraft.modelMode = 'default';
+    persistedDraft.acpSessionModeId = 'plan';
+    persistedDraft.sessionConfigOptionOverrides = {
+        v: 1,
+        updatedAt: 123,
+        overrides: {
+            speed: { updatedAt: 123, value: 'fast' },
+        },
+    };
     settingsState.acpCatalogSettingsV1 = {
         v: 2,
         backends: [],
@@ -990,6 +1019,8 @@ export function resetDraftPersistenceState(): void {
     };
     settingsState.useEnhancedSessionWizard = false;
     settingsState.useProfiles = false;
+    (settingsState as any).rememberLastEngineSelectionsV1 = settingsDefaults.rememberLastEngineSelectionsV1;
+    (settingsState as any).lastEngineSelectionsByScopeV1 = settingsDefaults.lastEngineSelectionsByScopeV1;
     settingsState.lastUsedProfile = null;
     settingsState.profiles = [];
     workspaceGraphState.workspacesByServerId = {

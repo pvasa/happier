@@ -64,16 +64,43 @@ vi.mock('@/components/ui/lists/Item', () => ({
 }));
 vi.mock('@/components/ui/text/Text', () => createPassThroughModule(['Text']));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    getActiveServerSnapshot: () => ({
-        generation: 1,
-        serverId: 'server-a',
-    }),
-    listServerProfiles: () => [
-        { id: 'server-a', name: 'Server A', serverUrl: 'http://server-a.local' },
-        { id: 'server-b', name: 'Server B', serverUrl: 'http://server-b.local' },
-    ],
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+    const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+    return createServerProfilesModuleMock({
+        importOriginal,
+        overrides: {
+            getActiveServerSnapshot: () => ({
+                generation: 1,
+                serverId: 'server-a',
+                serverUrl: 'http://server-a.local',
+                activeShareableServerUrl: null,
+                activeLocalRelayUrl: null,
+            }),
+            listServerProfiles: () => [
+                {
+                    id: 'server-a',
+                    name: 'Server A',
+                    serverUrl: 'http://server-a.local',
+                    serverIdentityId: null,
+                    legacyServerIds: [],
+                    createdAt: 1,
+                    updatedAt: 1,
+                    lastUsedAt: 1,
+                },
+                {
+                    id: 'server-b',
+                    name: 'Server B',
+                    serverUrl: 'http://server-b.local',
+                    serverIdentityId: null,
+                    legacyServerIds: [],
+                    createdAt: 1,
+                    updatedAt: 1,
+                    lastUsedAt: 1,
+                },
+            ],
+        },
+    });
+});
 
 vi.mock('@/sync/domains/server/selection/serverSelectionResolution', () => ({
     resolveActiveServerSelectionFromRawSettings: () => ({

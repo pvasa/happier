@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { buildRememberedEngineSelectionScopeKey } from '@/sync/domains/sessionAuthoring/rememberedEngineSelections';
 
 import {
     activeServerAccountScopeState,
@@ -50,6 +51,44 @@ describe('useNewSessionScreenModel (draft hydration — core)', () => {
 
     beforeEach(() => {
         resetDraftPersistenceState();
+    });
+
+    it('clears remembered Claude plan mode when the user switches the new-session mode back to build', async () => {
+        const backendTarget = { kind: 'builtInAgent' as const, agentId: 'claude' as const };
+        const scopeKey = buildRememberedEngineSelectionScopeKey({
+            serverId: null,
+            backendTarget,
+        });
+        (settingsState as any).rememberLastEngineSelectionsV1 = true;
+        (settingsState as any).lastEngineSelectionsByScopeV1 = {
+            [scopeKey]: {
+                modelId: null,
+                acpSessionModeId: 'plan',
+                sessionConfigOptionOverrides: null,
+                updatedAt: 1,
+            },
+        };
+        persistedDraft.backendTarget = backendTarget;
+        persistedDraft.acpSessionModeId = 'plan';
+
+        let model: any = null;
+        await renderNewSessionScreenModel((nextModel) => {
+            model = nextModel;
+        });
+
+        expect(model?.simpleProps?.agentType).toBe('claude');
+        expect(model?.simpleProps?.acpSessionModeId).toBe('plan');
+
+        await act(async () => {
+            model?.simpleProps?.setAcpSessionModeId?.(null);
+        });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+
+        expect(model?.simpleProps?.acpSessionModeId).toBeNull();
+
+        standardCleanup();
+
+        expect((settingsState as any).lastEngineSelectionsByScopeV1?.[scopeKey]?.acpSessionModeId).toBeNull();
     });
 
     it('hydrates permission, agent, and path from the persisted draft', async () => {

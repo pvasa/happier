@@ -413,6 +413,55 @@ describe('useCreateNewSession (worktree gating)', () => {
         }));
     });
 
+    it('clears the persisted new-session draft with the screen draft scope after successful creation', async () => {
+        const { useCreateNewSession } = await import('./useCreateNewSession');
+        const draftScope = { serverId: 'server-a', accountId: 'account-a' };
+        const routerReplace = vi.fn();
+        const disableDraftPersistence = vi.fn();
+        const params = {
+            router: { push: vi.fn(), replace: routerReplace },
+            selectedMachineId: 'machine-1',
+            selectedPath: '/repo',
+            selectedMachine: { id: 'machine-1', metadata: {} },
+            setIsCreating: vi.fn(),
+            setIsResumeSupportChecking: vi.fn(),
+            settings: testSettingsDefaults,
+            useProfiles: false,
+            selectedProfileId: null,
+            profileMap: new Map(),
+            recentMachinePaths: [],
+            agentType: 'codex' as const,
+            permissionMode: 'default' as const,
+            modelMode: 'auto' as const,
+            sessionPrompt: 'hi',
+            resumeSessionId: '',
+            agentNewSessionOptions: null,
+            machineEnvPresence: {
+                isPreviewEnvSupported: false,
+                isLoading: false,
+                meta: {},
+            } as unknown as Parameters<typeof useCreateNewSession>[0]['machineEnvPresence'],
+            secrets: [],
+            secretBindingsByProfileId: {},
+            selectedSecretIdByProfileIdByEnvVarName: {},
+            sessionOnlySecretValueByProfileIdByEnvVarName: {},
+            selectedMachineCapabilities: null,
+            targetServerId: null,
+            allowedTargetServerIds: [],
+            draftScope,
+            disableDraftPersistence,
+        } satisfies Parameters<typeof useCreateNewSession>[0];
+
+        const hook = await renderHook(() => useCreateNewSession(params));
+        await act(async () => {
+            await hook.handleCreateSession();
+        });
+
+        expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
+        expect(clearNewSessionDraftMock).toHaveBeenCalledWith(draftScope);
+        expect(routerReplace).toHaveBeenCalledWith('/session/session-created?serverId=api.happier.dev', expect.anything());
+    });
+
     it('creates a git worktree on the resolved target server when checkoutCreationDraft is selected', async () => {
         const { useCreateNewSession } = await import('./useCreateNewSession');
         const typecheck = useCreateNewSession;
