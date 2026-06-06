@@ -23,6 +23,11 @@ function shouldRunTmuxIntegration(): boolean {
     return process.env.HAPPIER_CLI_TMUX_INTEGRATION === '1' && isTmuxInstalled();
 }
 
+function mkShortTempDir(prefix: string): string {
+    const root = existsSync('/tmp') ? '/tmp' : tmpdir();
+    return mkdtempSync(join(root, prefix));
+}
+
 type WaitForOptions = {
     timeoutMs: number;
     intervalMs?: number;
@@ -317,7 +322,7 @@ describe.skipIf(!shouldRunTmuxIntegration())('tmux (real) integration tests (opt
         const dir = mkdtempSync(join(tmpdir(), 'happier-cli-tmux-it-'));
         // IMPORTANT: keep the socket path short to avoid unix domain socket length limits (common on macOS).
         // tmux will create tmux-<uid>/default within this directory.
-        const tmuxTmpDir = mkdtempSync(join(tmpdir(), 'happier-cli-tmux-tmpdir-it-'));
+        const tmuxTmpDir = mkShortTempDir('happier-tmux-');
 
         const utils = new TmuxUtilities('happy', { TMUX_TMPDIR: tmuxTmpDir });
 

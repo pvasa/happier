@@ -492,6 +492,65 @@ describe('happier attach', () => {
     }));
   });
 
+  it('uses local terminal attachment info for zellij-backed attach on the current machine', async () => {
+    const credentials: Credentials = {
+      token: 'token-1',
+      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+    };
+    const rawSession = createSessionRecordFixture({
+      id: 'sid_claude_zellij_1',
+      active: true,
+      encryptionMode: 'plain',
+      metadata: JSON.stringify({
+        machineId: 'machine-local',
+        path: '/tmp/claude-workspace',
+        host: 'test',
+        flavor: 'claude',
+        terminal: {
+          mode: 'zellij',
+          requested: 'zellij',
+          zellij: {
+            sessionName: 'happy-zellij',
+            paneId: 'terminal_7',
+          },
+        },
+      }),
+    });
+    const runZellijAttachFn = vi.fn(async () => 0);
+    const terminal = {
+      mode: 'zellij',
+      requested: 'zellij',
+      zellij: {
+        sessionName: 'happy-zellij',
+        paneId: 'terminal_7',
+      },
+    };
+
+    await (handleAttachCommand as any)(['sid_claude_zellij_1'], {
+      readCredentialsFn: async () => credentials,
+      readSettingsFn: async () => localSettings,
+      fetchSessionByIdFn: async () => rawSession,
+      readTerminalAttachmentInfoFn: async () => ({
+        version: 1,
+        sessionId: 'sid_claude_zellij_1',
+        updatedAt: Date.now(),
+        terminal,
+      }),
+      isTmuxAvailableFn: async () => true,
+      runProviderAttachFn: vi.fn(async () => false),
+      runTmuxAttachFn: vi.fn(async () => 0),
+      runZellijAttachFn,
+    });
+
+    expect(runZellijAttachFn).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'sid_claude_zellij_1',
+      terminal: expect.objectContaining({
+        mode: 'zellij',
+        zellij: expect.objectContaining({ sessionName: 'happy-zellij', paneId: 'terminal_7' }),
+      }),
+    }));
+  });
+
   it('requests a remote-control banner refresh when attaching to daemon-started tmux sessions', async () => {
     const credentials: Credentials = {
       token: 'token-1',
@@ -574,6 +633,39 @@ describe('happier attach', () => {
       terminal: expect.objectContaining({
         mode: 'tmux',
         tmux: expect.objectContaining({ target: 'happy:local-1' }),
+      }),
+    }));
+  });
+
+  it('falls back to persisted zellij attachment info when session metadata is unavailable', async () => {
+    const runZellijAttachFn = vi.fn(async () => 0);
+
+    await (handleAttachCommand as any)(['sid_local_zellij_1'], {
+      readCredentialsFn: async () => null,
+      fetchSessionByIdFn: async () => null,
+      readTerminalAttachmentInfoFn: async () => ({
+        version: 1,
+        sessionId: 'sid_local_zellij_1',
+        updatedAt: Date.now(),
+        terminal: {
+          mode: 'zellij',
+          requested: 'zellij',
+          zellij: {
+            sessionName: 'happy-local-zellij',
+            paneId: 'terminal_8',
+          },
+        },
+      }),
+      isTmuxAvailableFn: async () => true,
+      runProviderAttachFn: vi.fn(async () => false),
+      runTmuxAttachFn: vi.fn(async () => 0),
+      runZellijAttachFn,
+    });
+
+    expect(runZellijAttachFn).toHaveBeenCalledWith(expect.objectContaining({
+      terminal: expect.objectContaining({
+        mode: 'zellij',
+        zellij: expect.objectContaining({ sessionName: 'happy-local-zellij' }),
       }),
     }));
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { runTmuxAttach } from './attach';
+import { runTmuxAttach } from '@/terminal/attachment/tmuxAttach';
 
 type SpawnTmuxCall = {
   args: string[];

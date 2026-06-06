@@ -13,6 +13,11 @@ export type TerminalAttachPlan =
       pid: number;
     }
   | {
+      type: 'zellij';
+      sessionName: string;
+      paneId?: string;
+    }
+  | {
       type: 'tmux';
       sessionName: string;
       target: string;
@@ -83,6 +88,22 @@ export function createTerminalAttachPlan(params: {
     return {
       type: 'windows_console_host',
       pid,
+    };
+  }
+
+  if (params.terminal.mode === 'zellij') {
+    const sessionName = params.terminal.zellij?.sessionName;
+    if (typeof sessionName !== 'string' || sessionName.trim().length === 0) {
+      return {
+        type: 'not-attachable',
+        reason: 'Session does not include a zellij session name.',
+      };
+    }
+    const paneId = params.terminal.zellij?.paneId;
+    return {
+      type: 'zellij',
+      sessionName: sessionName.trim(),
+      ...(typeof paneId === 'string' && paneId.trim().length > 0 ? { paneId: paneId.trim() } : {}),
     };
   }
 

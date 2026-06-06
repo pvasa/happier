@@ -67,4 +67,16 @@ describe('TmuxUtilities tmux subprocess environment', () => {
             else process.env.TMUX_PANE = originalPane;
         }
     });
+
+    it('does not prepend a default send-keys target when the command already includes one', async () => {
+        vi.resetModules();
+        const { TmuxUtilities } = await import('@/integrations/tmux');
+
+        const utils = new TmuxUtilities('happy');
+        await utils.executeTmuxCommand(['send-keys', '-t', 'happy:claude.1', '-l', '--', 'queued prompt']);
+
+        const call = getLastSpawnCall();
+        expect(call).not.toBeNull();
+        expect(call!.args).toEqual(['send-keys', '-t', 'happy:claude.1', '-l', '--', 'queued prompt']);
+    });
 });

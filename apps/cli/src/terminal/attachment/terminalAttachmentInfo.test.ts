@@ -3,7 +3,7 @@ import * as tmp from 'tmp';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { readTerminalAttachmentInfo, writeTerminalAttachmentInfo } from './terminalAttachmentInfo';
+import { readTerminalAttachmentInfo, removeTerminalAttachmentInfo, writeTerminalAttachmentInfo } from './terminalAttachmentInfo';
 
 describe('terminalAttachmentInfo', () => {
   it('writes attachment info with private file permissions', async () => {
@@ -58,6 +58,55 @@ describe('terminalAttachmentInfo', () => {
     }
   });
 
+  it('removes attachment info only when the expected terminal still matches', async () => {
+    const dir = tmp.dirSync({ unsafeCleanup: true });
+    try {
+      const originalTerminal = {
+        mode: 'zellij',
+        requested: 'zellij',
+        zellij: {
+          sessionName: 'happier-claude-unified-old',
+          paneId: 'terminal_1',
+        },
+      } as const;
+      const replacementTerminal = {
+        mode: 'zellij',
+        requested: 'zellij',
+        zellij: {
+          sessionName: 'happier-claude-unified-new',
+          paneId: 'terminal_2',
+        },
+      } as const;
+      await writeTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_remove',
+        terminal: originalTerminal as Parameters<typeof writeTerminalAttachmentInfo>[0]['terminal'],
+      });
+
+      await expect(removeTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_remove',
+        expectedTerminal: replacementTerminal as Parameters<typeof removeTerminalAttachmentInfo>[0]['expectedTerminal'],
+      })).resolves.toBe(false);
+      expect((await readTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_remove',
+      }))?.terminal).toEqual(originalTerminal);
+
+      await expect(removeTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_remove',
+        expectedTerminal: originalTerminal as Parameters<typeof removeTerminalAttachmentInfo>[0]['expectedTerminal'],
+      })).resolves.toBe(true);
+      await expect(readTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_remove',
+      })).resolves.toBeNull();
+    } finally {
+      dir.removeCallback();
+    }
+  });
+
   it('reads windows terminal attachment info', async () => {
     const dir = tmp.dirSync({ unsafeCleanup: true });
     try {
@@ -81,6 +130,36 @@ describe('terminalAttachmentInfo', () => {
       });
       expect(info?.terminal.mode).toBe('windows_terminal');
       expect((info?.terminal as any)?.windows?.windowId).toBe('happy-session-1');
+    } finally {
+      dir.removeCallback();
+    }
+  });
+
+  it('writes and reads zellij terminal attachment info', async () => {
+    const dir = tmp.dirSync({ unsafeCleanup: true });
+    try {
+      await writeTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_1',
+        terminal: {
+          mode: 'zellij',
+          requested: 'zellij',
+          zellij: {
+            sessionName: 'happier-claude-unified-zellij',
+            paneId: 'terminal_7',
+          },
+        } as unknown as Parameters<typeof writeTerminalAttachmentInfo>[0]['terminal'],
+      });
+
+      const info = await readTerminalAttachmentInfo({
+        happyHomeDir: dir.name,
+        sessionId: 'sess_zellij_1',
+      });
+      expect(info?.terminal.mode).toBe('zellij');
+      expect((info?.terminal as { zellij?: { sessionName?: string; paneId?: string } })?.zellij?.sessionName).toBe(
+        'happier-claude-unified-zellij',
+      );
+      expect((info?.terminal as { zellij?: { paneId?: string } })?.zellij?.paneId).toBe('terminal_7');
     } finally {
       dir.removeCallback();
     }

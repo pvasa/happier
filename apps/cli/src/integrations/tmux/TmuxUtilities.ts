@@ -25,6 +25,13 @@ import {
   type TmuxSessionInfo,
   type TmuxWindowOperation,
 } from './types';
+import {
+  buildTmuxSpawnScriptCommand,
+  measureTmuxCommandArgsLength,
+  removeTmuxSpawnScript,
+  resolveTmuxInlineSpawnMaxChars,
+  writeTmuxSpawnScript,
+} from './spawnScript';
 
 export interface TmuxSpawnOptions extends Omit<SpawnOptions, 'env'> {
   /** Target tmux session name */
@@ -100,6 +107,8 @@ export class TmuxUtilities {
     window?: string,
     pane?: string,
     socketPath?: string,
+    stdin?: string,
+    options?: Readonly<{ timeoutMs?: number }>,
   ): Promise<TmuxCommandResult | null> {
     const targetSession = session || this.sessionName;
 
@@ -115,17 +124,23 @@ export class TmuxUtilities {
     // Handle send-keys with proper target specification
     if (cmd.length > 0 && cmd[0] === 'send-keys') {
       const fullCmd = [...baseCmd, cmd[0]];
+      const hasExplicitTarget = cmd.slice(1).includes('-t');
 
       // Add target specification immediately after send-keys
-      let target = targetSession;
-      if (window) target += `:${window}`;
-      if (pane) target += `.${pane}`;
-      fullCmd.push('-t', target);
+      if (!hasExplicitTarget) {
+        let target = targetSession;
+        if (window) target += `:${window}`;
+        if (pane) target += `.${pane}`;
+        fullCmd.push('-t', target);
+      }
 
       // Add keys and control sequences
       fullCmd.push(...cmd.slice(1));
 
-      return this.executeCommand(fullCmd);
+      return this.executeCommand(fullCmd, {
+        ...(stdin !== undefined ? { stdin } : {}),
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
     }
 
     // Non-send-keys commands
@@ -140,20 +155,27 @@ export class TmuxUtilities {
       fullCmd.push('-t', target);
     }
 
-    return this.executeCommand(fullCmd);
+    return this.executeCommand(fullCmd, {
+      ...(stdin !== undefined ? { stdin } : {}),
+      ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    });
   }
 
   /**
    * Execute command with subprocess and return result
    */
-  private async executeCommand(cmd: string[]): Promise<TmuxCommandResult | null> {
+  private async executeCommand(cmd: string[], options?: Readonly<{ stdin?: string; timeoutMs?: number }>): Promise<TmuxCommandResult | null> {
     try {
-      const result = await this.runCommand(cmd);
+      const result = await this.runCommand(cmd, {
+        ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
       return {
         returncode: result.exitCode,
         stdout: result.stdout || '',
         stderr: result.stderr || '',
         command: cmd,
+        ...(result.timedOut ? { timedOut: true } : {}),
       };
     } catch (error) {
       logger.debug('[TMUX] Command execution failed:', error);
@@ -164,12 +186,16 @@ export class TmuxUtilities {
   /**
    * Run command using Node.js child_process.spawn
    */
-  private runCommand(args: string[], options: SpawnOptions = {}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  private runCommand(
+    args: string[],
+    options: SpawnOptions & { stdin?: string; timeoutMs?: number } = {},
+  ): Promise<{ exitCode: number; stdout: string; stderr: string; timedOut?: boolean }> {
     return new Promise((resolve, reject) => {
+      const { stdin, timeoutMs, ...spawnOptions } = options;
       const mergedEnv = {
         ...process.env,
         ...(this.tmuxCommandEnv ?? {}),
-        ...(options.env ?? {}),
+        ...(spawnOptions.env ?? {}),
       };
       // If we are intentionally targeting a specific tmux server (via TMUX_TMPDIR or -S socket),
       // do not inherit an ambient tmux client context from the parent process.
@@ -182,16 +208,27 @@ export class TmuxUtilities {
         delete (mergedEnv as Record<string, unknown>).TMUX_PANE;
       }
 
+      const commandTimeoutMs = timeoutMs ?? resolveTmuxCommandTimeoutMs();
       const child = spawn(args[0], args.slice(1), {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: resolveTmuxCommandTimeoutMs(),
+        stdio: stdin !== undefined ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
         shell: false,
-        ...options,
+        ...spawnOptions,
         env: mergedEnv,
       });
 
+      if (stdin !== undefined) {
+        child.stdin?.end(stdin);
+      }
+
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+      const timeoutHandle = commandTimeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            child.kill();
+          }, commandTimeoutMs)
+        : undefined;
 
       child.stdout?.on('data', (data) => {
         stdout += data.toString();
@@ -202,14 +239,17 @@ export class TmuxUtilities {
       });
 
       child.on('close', (code) => {
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
         resolve({
           exitCode: normalizeExitCode(code),
           stdout,
           stderr,
+          ...(timedOut ? { timedOut: true } : {}),
         });
       });
 
       child.on('error', (error) => {
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
         reject(error);
       });
     });
@@ -430,6 +470,7 @@ export class TmuxUtilities {
     options: TmuxSpawnOptions = {},
     env?: Record<string, string>,
   ): Promise<{ success: boolean; sessionId?: string; sessionName?: string; windowName?: string; pid?: number; error?: string }> {
+    let spawnScriptPath: string | null = null;
     try {
       // Check if tmux is available
       const tmuxCheck = await this.executeTmuxCommand(['list-sessions']);
@@ -485,20 +526,22 @@ export class TmuxUtilities {
 
       // Create new window in session with command and environment variables
       // IMPORTANT: Don't manually add -t here - executeTmuxCommand handles it via parameters
-      const createWindowArgs = ['new-window', '-d', '-P', '-F', '#{pane_pid}', '-n', windowName];
+      const baseCreateWindowArgs = ['new-window', '-d', '-P', '-F', '#{pane_pid}', '-n', windowName];
 
       // Add working directory if specified
       if (options.cwd) {
         const cwdPath = typeof options.cwd === 'string' ? options.cwd : options.cwd.pathname;
-        createWindowArgs.push('-c', cwdPath);
+        baseCreateWindowArgs.push('-c', cwdPath);
       }
 
       // Add target session explicitly so option ordering is correct.
-      createWindowArgs.push('-t', sessionName);
+      baseCreateWindowArgs.push('-t', sessionName);
 
       // Add environment variables using -e flag (sets them in the window's environment)
       // Note: tmux windows inherit environment from tmux server, but we need to ensure
       // the daemon's environment variables (especially expanded auth variables) are available
+      const envForWindow: Record<string, string> = {};
+      const windowEnvArgs: string[] = [];
       if (env && Object.keys(env).length > 0) {
         for (const [key, value] of Object.entries(env)) {
           // Skip undefined/null values with warning
@@ -515,13 +558,22 @@ export class TmuxUtilities {
 
           // `new-window -e` takes KEY=VALUE literally (no shell parsing).
           // Do NOT quote or escape values intended for shell parsing.
-          createWindowArgs.push('-e', `${key}=${value}`);
+          envForWindow[key] = value;
+          windowEnvArgs.push('-e', `${key}=${value}`);
         }
-        logger.debug(`[TMUX] Setting ${Object.keys(env).length} environment variables in tmux window`);
+        logger.debug(`[TMUX] Setting ${Object.keys(envForWindow).length} environment variables in tmux window`);
       }
 
       // Add the command to run in the window (runs immediately when window is created)
-      createWindowArgs.push(fullCommand);
+      const inlineCreateWindowArgs = [...baseCreateWindowArgs, ...windowEnvArgs, fullCommand];
+      const inlineArgsLength = measureTmuxCommandArgsLength(inlineCreateWindowArgs);
+      const inlineArgsLimit = resolveTmuxInlineSpawnMaxChars();
+      let createWindowArgs = inlineCreateWindowArgs;
+      if (inlineArgsLength > inlineArgsLimit) {
+        logger.debug(`[TMUX] Externalizing oversized spawn command (${inlineArgsLength} bytes > ${inlineArgsLimit} bytes)`);
+        spawnScriptPath = await writeTmuxSpawnScript(fullCommand, envForWindow);
+        createWindowArgs = [...baseCreateWindowArgs, buildTmuxSpawnScriptCommand(spawnScriptPath)];
+      }
 
       // Create window with command and get PID immediately.
       //
@@ -627,6 +679,9 @@ export class TmuxUtilities {
         pid: panePid,
       };
     } catch (error) {
+      if (spawnScriptPath) {
+        await removeTmuxSpawnScript(spawnScriptPath);
+      }
       logger.debug('[TMUX] Failed to spawn in tmux:', error);
       return {
         success: false,

@@ -58,6 +58,37 @@ describe('createTerminalAttachPlan', () => {
     });
   });
 
+  it('returns a zellij foreground attach plan for zellij mode', () => {
+    const terminal = {
+      mode: 'zellij',
+      requested: 'zellij',
+      zellij: {
+        sessionName: 'happier-claude-unified-zellij',
+        paneId: 'terminal_7',
+      },
+    } as unknown as NonNullable<Metadata['terminal']>;
+
+    const plan = createTerminalAttachPlan({ terminal, insideTmux: false });
+    expect(plan).toEqual({
+      type: 'zellij',
+      sessionName: 'happier-claude-unified-zellij',
+      paneId: 'terminal_7',
+    });
+  });
+
+  it('returns not-attachable when zellij mode has no session name', () => {
+    const terminal = {
+      mode: 'zellij',
+      zellij: { paneId: 'terminal_7' },
+    } as unknown as NonNullable<Metadata['terminal']>;
+
+    const plan = createTerminalAttachPlan({ terminal, insideTmux: false });
+    expect(plan).toEqual({
+      type: 'not-attachable',
+      reason: 'Session does not include a zellij session name.',
+    });
+  });
+
   it('returns not-attachable when tmux mode has no target', () => {
     const terminal: NonNullable<Metadata['terminal']> = { mode: 'tmux' };
     const plan = createTerminalAttachPlan({ terminal, insideTmux: false });

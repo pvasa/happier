@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTmuxSession, TmuxUtilities, type TmuxCommandResult } from './index';
 
@@ -115,9 +117,11 @@ describe('createTmuxSession', () => {
 
 describe('TmuxUtilities.spawnInTmux', () => {
     const originalRetryDelay = process.env.HAPPIER_CLI_TMUX_CREATE_WINDOW_RETRY_DELAY_MS;
+    const originalInlineSpawnMaxChars = process.env.HAPPIER_CLI_TMUX_INLINE_SPAWN_MAX_CHARS;
 
     beforeEach(() => {
         process.env.HAPPIER_CLI_TMUX_CREATE_WINDOW_RETRY_DELAY_MS = '0';
+        delete process.env.HAPPIER_CLI_TMUX_INLINE_SPAWN_MAX_CHARS;
     });
 
     afterEach(() => {
@@ -126,6 +130,12 @@ describe('TmuxUtilities.spawnInTmux', () => {
             delete process.env.HAPPIER_CLI_TMUX_CREATE_WINDOW_RETRY_DELAY_MS;
         } else {
             process.env.HAPPIER_CLI_TMUX_CREATE_WINDOW_RETRY_DELAY_MS = originalRetryDelay;
+        }
+        if (originalInlineSpawnMaxChars === undefined) {
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+            delete process.env.HAPPIER_CLI_TMUX_INLINE_SPAWN_MAX_CHARS;
+        } else {
+            process.env.HAPPIER_CLI_TMUX_INLINE_SPAWN_MAX_CHARS = originalInlineSpawnMaxChars;
         }
     });
 
@@ -221,6 +231,43 @@ describe('TmuxUtilities.spawnInTmux', () => {
         if (!newWindowCall) return;
         const commandArg = newWindowCall.cmd[newWindowCall.cmd.length - 1];
         expect(commandArg).toBe("'echo' 'a b' 'c'\\''d' '$(rm -rf /)'");
+    });
+
+    it('externalizes oversized spawn command and env payloads before calling tmux new-window', async () => {
+        process.env.HAPPIER_CLI_TMUX_INLINE_SPAWN_MAX_CHARS = '120';
+        const tmux = new FakeTmuxUtilities();
+        const largePrompt = 'prompt '.repeat(80);
+        const largeEnvValue = 'secret '.repeat(80);
+
+        await tmux.spawnInTmux(
+            ['claude', '--append-system-prompt', largePrompt],
+            { sessionName: 'my-session', windowName: 'my-window', cwd: '/tmp' },
+            { ANTHROPIC_API_KEY: largeEnvValue },
+        );
+
+        const newWindowCall = tmux.calls.find((call) => call.cmd[0] === 'new-window');
+        expect(newWindowCall).toBeDefined();
+        if (!newWindowCall) return;
+
+        expect(newWindowCall.cmd.join('\n')).not.toContain(largePrompt);
+        expect(newWindowCall.cmd.join('\n')).not.toContain(largeEnvValue);
+        expect(newWindowCall.cmd).not.toContain('-e');
+
+        const commandArg = newWindowCall.cmd[newWindowCall.cmd.length - 1];
+        expect(commandArg).toContain('/bin/sh');
+        const scriptPath = /'([^']*happier-tmux-spawn-[^']*\/spawn\.sh)'/.exec(commandArg)?.[1];
+        expect(scriptPath).toBeDefined();
+        if (!scriptPath) return;
+
+        try {
+            expect(existsSync(scriptPath)).toBe(true);
+            const script = readFileSync(scriptPath, 'utf8');
+            expect(script).toContain(largePrompt);
+            expect(script).toContain(largeEnvValue);
+            expect(script).toContain("exec 'claude' '--append-system-prompt'");
+        } finally {
+            rmSync(scriptPath.replace(/\/spawn\.sh$/, ''), { force: true, recursive: true });
+        }
     });
 
     it('treats empty sessionName as current/most-recent session', async () => {

@@ -1,0 +1,488 @@
+import { EventEmitter } from 'node:events';
+import type { SpawnOptions } from 'node:child_process';
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+vi.mock('child_process', () => ({
+  spawn: spawnMock,
+}));
+
+function mockChild(exitCode = 0, stdout = '', stderr = '') {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  queueMicrotask(() => {
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+    child.emit('close', exitCode);
+  });
+  return child;
+}
+
+function mockHangingChild() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  return child;
+}
+
+async function expectTimedOutAndKilled(
+  result: Promise<unknown>,
+  child: ReturnType<typeof mockHangingChild>,
+  advanceMs: number,
+  expectedError: new (...args: never[]) => Error,
+) {
+  let rejection: unknown;
+  result.catch((error: unknown) => {
+    rejection = error;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(advanceMs);
+    await Promise.resolve();
+    expect(rejection).toBeInstanceOf(expectedError);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  } finally {
+    child.emit('close', 0);
+    await result.catch(() => undefined);
+  }
+}
+
+describe('zellij actions', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => mockChild());
+    vi.useRealTimers();
+  });
+
+  it('runs raw-byte write chunks and Enter without shell interpolation', async () => {
+    const { writeBytesChunked, sendEnter } = await import('./actions');
+    await writeBytesChunked({
+      zellijBinary: '/tools/zellij',
+      paneId: 'terminal_1',
+      text: 'hello $(rm -rf /)',
+      chunkSize: 5,
+      env: { ZELLIJ_SOCKET_DIR: '/tmp/zellij sock' },
+    });
+    await sendEnter({
+      zellijBinary: '/tools/zellij',
+      paneId: 'terminal_1',
+      env: { ZELLIJ_SOCKET_DIR: '/tmp/zellij sock' },
+    });
+
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      '/tools/zellij',
+      ['action', 'write', '--pane-id', 'terminal_1', '104', '101', '108', '108', '111'],
+      expect.objectContaining({ shell: false }),
+    );
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      '/tools/zellij',
+      ['action', 'write', '--pane-id', 'terminal_1', '32', '36', '40', '114', '109'],
+      expect.objectContaining({ shell: false }),
+    );
+    expect(spawnMock).toHaveBeenLastCalledWith(
+      '/tools/zellij',
+      ['action', 'send-keys', '--pane-id', 'terminal_1', 'Enter'],
+      expect.objectContaining({ shell: false }),
+    );
+    const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
+    expect(options?.env).toMatchObject({ ZELLIJ_SOCKET_DIR: '/tmp/zellij sock' });
+  });
+
+  it('passes leading-dash bytes as numeric input instead of zellij options', async () => {
+    const { writeBytesChunked } = await import('./actions');
+    await writeBytesChunked({
+      zellijBinary: '/tools/zellij',
+      paneId: 'terminal_1',
+      text: 'abcd-ef',
+      chunkSize: 4,
+      env: {},
+    });
+
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      '/tools/zellij',
+      ['action', 'write', '--pane-id', 'terminal_1', '45', '101', '102'],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it('chunks zellij writes by UTF-8 byte count', async () => {
+    const { writeBytesChunked } = await import('./actions');
+    await writeBytesChunked({
+      zellijBinary: '/tools/zellij',
+      paneId: 'terminal_1',
+      text: 'a😊b',
+      chunkSize: 4,
+      env: {},
+    });
+
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      '/tools/zellij',
+      ['action', 'write', '--pane-id', 'terminal_1', '97', '240', '159', '152'],
+      expect.any(Object),
+    );
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      '/tools/zellij',
+      ['action', 'write', '--pane-id', 'terminal_1', '138', '98'],
+      expect.any(Object),
+    );
+  });
+
+  it('lists panes from zellij json output', async () => {
+    spawnMock.mockImplementationOnce(() => mockChild(0, '[{"id":1,"is_plugin":false,"is_focused":true}]\n'));
+    const { listPanes } = await import('./actions');
+
+    await expect(listPanes({ zellijBinary: '/tools/zellij', env: {} })).resolves.toEqual([
+      { id: 1, is_plugin: false, is_focused: true },
+    ]);
+  });
+
+  it('kills a hung list-panes action when its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { listPanes, ZellijActionTimeoutError } = await import('./actions');
+
+    const result = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 });
+    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
+  });
+
+  it('kills a hung background attach action when its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { attachCreateBackground, ZellijActionTimeoutError } = await import('./actions');
+
+    const result = attachCreateBackground({
+      zellijBinary: '/tools/zellij',
+      env: {},
+      sessionName: 'happy-claude',
+      timeoutMs: 25,
+    } as Parameters<typeof attachCreateBackground>[0] & { timeoutMs: number });
+    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
+  });
+
+  it('kills a hung run action when its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { runCommand, ZellijActionTimeoutError } = await import('./actions');
+
+    const result = runCommand({
+      zellijBinary: '/tools/zellij',
+      env: {},
+      sessionName: 'happy-claude',
+      command: ['/managed/node', 'claude_local_launcher.cjs'],
+      timeoutMs: 25,
+    } as Parameters<typeof runCommand>[0] & { timeoutMs: number });
+    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
+  });
+
+  it('kills a hung kill-session action when its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { killSession, ZellijActionTimeoutError } = await import('./actions');
+
+    const result = killSession({
+      zellijBinary: '/tools/zellij',
+      env: {},
+      sessionName: 'happy-claude',
+      timeoutMs: 25,
+    } as Parameters<typeof killSession>[0] & { timeoutMs: number });
+    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
+  });
+
+  it('creates background sessions with explicit cwd and default shell options', async () => {
+    const { attachCreateBackground } = await import('./actions');
+
+    await attachCreateBackground({
+      zellijBinary: '/tools/zellij',
+      env: {},
+      sessionName: 'happy-claude',
+      cwd: '/workspace',
+      defaultShell: 'cmd.exe',
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      [
+        'attach',
+        '--create-background',
+        'happy-claude',
+        'options',
+        '--default-cwd',
+        '/workspace',
+        '--default-shell',
+        'cmd.exe',
+      ],
+      expect.objectContaining({ cwd: '/workspace', shell: false }),
+    );
+  });
+
+  it('inherits stdin for Windows background session creation while suppressing bootstrap output', async () => {
+    if (!originalPlatformDescriptor) {
+      throw new Error('process.platform descriptor unavailable');
+    }
+    Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+    try {
+      const { attachCreateBackground } = await import('./actions');
+
+      await attachCreateBackground({
+        zellijBinary: 'C:\\Tools\\zellij.exe',
+        env: { ZELLIJ_SOCKET_DIR: 'C:\\Temp\\zellij' },
+        sessionName: 'happy-claude',
+        defaultShell: 'cmd.exe',
+      });
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'C:\\Tools\\zellij.exe',
+      [
+        'attach',
+        '--create-background',
+        'happy-claude',
+        'options',
+        '--default-shell',
+        'cmd.exe',
+      ],
+      expect.objectContaining({
+        shell: false,
+        stdio: ['inherit', 'ignore', 'ignore'],
+        windowsHide: true,
+      }),
+    );
+  });
+
+  it('foreground-attaches to an existing zellij session with inherited stdio', async () => {
+    const actions = await import('./actions') as typeof import('./actions') & {
+      attachForeground?: (params: {
+        zellijBinary: string;
+        env: Record<string, string>;
+        sessionName: string;
+      }) => Promise<unknown>;
+    };
+    expect(typeof actions.attachForeground).toBe('function');
+
+    await actions.attachForeground?.({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SOCKET_DIR: '/tmp/zellij-sock' },
+      sessionName: 'happy-claude',
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      ['attach', 'happy-claude'],
+      expect.objectContaining({
+        shell: false,
+        stdio: 'inherit',
+      }),
+    );
+  });
+
+  it('focuses a zellij pane by id before foreground attach', async () => {
+    const actions = await import('./actions') as typeof import('./actions') & {
+      focusPane?: (params: {
+        zellijBinary: string;
+        env: Record<string, string>;
+        paneId: string;
+      }) => Promise<unknown>;
+    };
+    expect(typeof actions.focusPane).toBe('function');
+
+    await actions.focusPane?.({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
+      paneId: 'terminal_7',
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      ['action', 'focus-pane-id', 'terminal_7'],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it('kills a hung focus-pane action when its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { focusPane, ZellijActionTimeoutError } = await import('./actions');
+
+    const result = focusPane({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
+      paneId: 'terminal_7',
+      timeoutMs: 25,
+    }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await expect(result).resolves.toBeInstanceOf(ZellijActionTimeoutError);
+  });
+
+  it('closes a specific zellij pane by id without shell interpolation', async () => {
+    const actions = await import('./actions') as typeof import('./actions') & {
+      closePane?: (params: {
+        zellijBinary: string;
+        env: Record<string, string>;
+        paneId: string;
+      }) => Promise<unknown>;
+    };
+    expect(typeof actions.closePane).toBe('function');
+
+    await actions.closePane?.({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
+      paneId: 'terminal_1',
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      ['action', 'close-pane', '--pane-id', 'terminal_1'],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it('kills a hung close-pane action when its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    spawnMock.mockImplementationOnce(() => child);
+    const { closePane, ZellijActionTimeoutError } = await import('./actions');
+
+    const result = closePane({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
+      paneId: 'terminal_1',
+      timeoutMs: 25,
+    }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await expect(result).resolves.toBeInstanceOf(ZellijActionTimeoutError);
+  });
+
+  it('sends Escape to a specific zellij pane for turn interruption', async () => {
+    const actions = await import('./actions') as typeof import('./actions') & {
+      sendEscape?: (params: {
+        zellijBinary: string;
+        env: Record<string, string>;
+        paneId: string;
+      }) => Promise<unknown>;
+    };
+    expect(typeof actions.sendEscape).toBe('function');
+
+    await actions.sendEscape?.({
+      zellijBinary: '/tools/zellij',
+      env: { ZELLIJ_SESSION_NAME: 'happy-claude' },
+      paneId: 'terminal_7',
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      ['action', 'send-keys', '--pane-id', 'terminal_7', 'Esc'],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it('runs commands in the named background session without shell interpolation', async () => {
+    const { runCommand } = await import('./actions');
+    const previousHugeEnv = process.env.HUGE_UNRELATED_ZELLIJ_ENV;
+    process.env.HUGE_UNRELATED_ZELLIJ_ENV = 'z'.repeat(80_000);
+
+    try {
+      await runCommand({
+        zellijBinary: '/tools/zellij',
+        env: { ZELLIJ_SOCKET_DIR: '/tmp/zellij-sock', HAPPIER_CLAUDE_PATH: '/opt/claude/cli.js' },
+        sessionName: 'happy-claude',
+        cwd: '/workspace',
+        command: ['/managed/node', 'claude_local_launcher.cjs', '--model', 'sonnet'],
+      });
+    } finally {
+      if (previousHugeEnv === undefined) {
+        delete process.env.HUGE_UNRELATED_ZELLIJ_ENV;
+      } else {
+        process.env.HUGE_UNRELATED_ZELLIJ_ENV = previousHugeEnv;
+      }
+    }
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      '/tools/zellij',
+      [
+        '-s',
+        'happy-claude',
+        'run',
+        '--cwd',
+        '/workspace',
+        '--',
+        '/managed/node',
+        'claude_local_launcher.cjs',
+        '--model',
+        'sonnet',
+      ],
+      expect.objectContaining({
+        cwd: '/workspace',
+        env: expect.objectContaining({
+          HAPPIER_CLAUDE_PATH: '/opt/claude/cli.js',
+          ZELLIJ_SOCKET_DIR: '/tmp/zellij-sock',
+        }),
+        shell: false,
+      }),
+    );
+    const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
+    expect(options?.env?.HUGE_UNRELATED_ZELLIJ_ENV).toBeUndefined();
+  });
+
+  it('preserves Windows Path casing for zellij host actions', async () => {
+    const previousPath = process.env.PATH;
+    const previousWindowsPath = process.env.Path;
+    if (!originalPlatformDescriptor) {
+      throw new Error('process.platform descriptor unavailable');
+    }
+    Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+    delete process.env.PATH;
+    process.env.Path = 'C:\\Windows\\System32;C:\\Tools';
+    try {
+      const { runCommand } = await import('./actions');
+      await runCommand({
+        zellijBinary: 'C:\\Tools\\zellij.exe',
+        env: { ZELLIJ_SOCKET_DIR: 'C:\\Temp\\zellij' },
+        sessionName: 'happy-claude',
+        command: ['C:\\Managed\\node.exe', 'claude_local_launcher.cjs'],
+      });
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousWindowsPath === undefined) {
+        delete process.env.Path;
+      } else {
+        process.env.Path = previousWindowsPath;
+      }
+    }
+
+    const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
+    expect(options?.env?.Path).toBe('C:\\Windows\\System32;C:\\Tools');
+    expect(options?.env?.PATH).toBeUndefined();
+  });
+});

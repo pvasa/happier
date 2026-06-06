@@ -31,6 +31,9 @@ export {
 export { normalizeExitCode, resolveTmuxCommandTimeoutMs } from './env';
 
 export { TmuxUtilities, type TmuxSpawnOptions } from './TmuxUtilities';
+export { typeTextViaSendKeys, type TmuxCommandExecutor, type TmuxTypeTextResult } from './typeText';
+export { evaluateTmuxPaneLiveness, type TmuxPaneLivenessExecutor } from './paneLiveness';
+export { createTmuxTerminalHostAdapter } from './adapter';
 
 export { createTmuxSession, getTmuxUtilities, isTmuxAvailable } from './factory';
 
