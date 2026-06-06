@@ -14,6 +14,16 @@ vi.mock('./claudeRemoteLauncher', () => ({
   claudeRemoteLauncher: mockClaudeRemoteLauncher,
 }));
 
+const mockClaudeUnifiedTerminalLauncher = vi.fn();
+vi.mock('./unifiedTerminal/claudeUnifiedTerminalLauncher', () => ({
+  claudeUnifiedTerminalLauncher: mockClaudeUnifiedTerminalLauncher,
+}));
+
+const mockResolveCliFeatureDecision = vi.hoisted(() => vi.fn(() => ({ state: 'enabled' })));
+vi.mock('@/features/featureDecisionService', () => ({
+  resolveCliFeatureDecision: mockResolveCliFeatureDecision,
+}));
+
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: vi.fn(),
@@ -80,6 +90,7 @@ async function runLoop(options?: Partial<LoopOptions>): Promise<{ code: number; 
 describe.sequential('loop', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveCliFeatureDecision.mockReturnValue({ state: 'enabled' });
   });
 
   it('does not fetch transcript permission intent during loop startup seeding', async () => {
@@ -101,6 +112,75 @@ describe.sequential('loop', () => {
     try {
       expect(result.code).toBe(0);
       expect(result.keepAlive.mock.calls.some((call) => call[1] === 'remote')).toBe(true);
+    } finally {
+      result.capturedSession?.cleanup();
+    }
+  }, 15_000);
+
+  it('disables legacy local-to-remote switching for unified terminal local launches', async () => {
+    mockClaudeUnifiedTerminalLauncher.mockResolvedValueOnce({ type: 'exit', code: 0 });
+
+    const result = await runLoop({ claudeUnifiedTerminalEnabled: true });
+    try {
+      expect(result.code).toBe(0);
+      expect(mockClaudeUnifiedTerminalLauncher).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          initialMode: expect.objectContaining({
+            claudeUnifiedTerminalEnabled: true,
+            permissionMode: 'default',
+          }),
+        }),
+      );
+      expect(mockClaudeLocalLauncher).not.toHaveBeenCalled();
+      expect(mockClaudeRemoteLauncher).not.toHaveBeenCalled();
+    } finally {
+      result.capturedSession?.cleanup();
+    }
+  }, 15_000);
+
+  it.each(['disabled', 'unsupported', 'unknown'] as const)(
+    'fails clearly without fallback when unified terminal feature policy is %s',
+    async (featureState) => {
+      mockResolveCliFeatureDecision.mockReturnValue({ state: featureState });
+      mockClaudeUnifiedTerminalLauncher.mockResolvedValueOnce({ type: 'exit', code: 0 });
+
+      await expect(runLoop({ claudeUnifiedTerminalEnabled: true })).rejects.toThrow(
+        /unified terminal runtime is disabled by feature policy/i,
+      );
+
+      expect(mockClaudeUnifiedTerminalLauncher).not.toHaveBeenCalled();
+      expect(mockClaudeLocalLauncher).not.toHaveBeenCalled();
+      expect(mockClaudeRemoteLauncher).not.toHaveBeenCalled();
+    },
+    15_000,
+  );
+
+  it('routes daemon remote-started unified sessions through the terminal launcher with startup mode', async () => {
+    mockClaudeUnifiedTerminalLauncher.mockResolvedValueOnce({ type: 'exit', code: 0 });
+
+    const result = await runLoop({
+      startingMode: 'remote',
+      startedBy: 'daemon',
+      claudeUnifiedTerminalEnabled: true,
+      initialClaudeUnifiedTerminalMode: {
+        permissionMode: 'acceptEdits',
+        claudeUnifiedTerminalEnabled: true,
+      },
+    });
+    try {
+      expect(result.code).toBe(0);
+      expect(mockClaudeUnifiedTerminalLauncher).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          initialMode: expect.objectContaining({
+            permissionMode: 'acceptEdits',
+            claudeUnifiedTerminalEnabled: true,
+          }),
+        }),
+      );
+      expect(mockClaudeLocalLauncher).not.toHaveBeenCalled();
+      expect(mockClaudeRemoteLauncher).not.toHaveBeenCalled();
     } finally {
       result.capturedSession?.cleanup();
     }

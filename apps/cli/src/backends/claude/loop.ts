@@ -4,16 +4,21 @@ import { logger } from "@/ui/logger"
 import { Session } from "./session"
 import { claudeLocalLauncher, LauncherResult } from "./claudeLocalLauncher"
 import { claudeRemoteLauncher } from "./claudeRemoteLauncher"
+import { claudeUnifiedTerminalLauncher } from './unifiedTerminal/claudeUnifiedTerminalLauncher';
 import type { JsRuntime } from "./runClaude"
 import type { PushNotificationClient } from "@/api/pushNotifications"
 import type { AccountSettings } from '@happier-dev/protocol';
+import type { ClaudeUnifiedTerminalHost } from '@happier-dev/agents';
 import type { McpServerConfig } from '@/agent';
 import type { TerminalRuntimeFlags } from '@/terminal/runtime/terminalRuntimeFlags';
+import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 
 // Re-export permission mode type from api/types
 // Single unified type with 7 modes - Codex modes mapped at SDK boundary
 export type { PermissionMode } from "@/api/types"
 import type { PermissionMode } from "@/api/types"
+
+const CLAUDE_UNIFIED_TERMINAL_FEATURE_ID = 'providers.claude.unifiedTerminal';
 
 export interface EnhancedMode {
     permissionMode: PermissionMode;
@@ -42,6 +47,8 @@ export interface EnhancedMode {
 
     // Claude remote-mode (provider-scoped) settings forwarded via message meta.
     claudeRemoteAgentSdkEnabled?: boolean;
+    claudeUnifiedTerminalEnabled?: boolean;
+    claudeUnifiedTerminalHost?: ClaudeUnifiedTerminalHost;
     claudeRemoteSettingSourcesV2?: ReadonlyArray<'user' | 'project' | 'local'>;
     claudeRemoteSettingSources?: 'project' | 'user_project' | 'none';
     claudeCodeExperimentalAgentTeamsEnabled?: boolean;
@@ -60,7 +67,8 @@ interface LoopOptions {
     model?: string
     permissionMode?: PermissionMode
     permissionModeUpdatedAt?: number
-        startingMode?: 'local' | 'remote'
+    startingMode?: 'local' | 'remote'
+    claudeUnifiedTerminalEnabled?: boolean
         /** Force-enable Claude Code experimental Agent Teams across local + remote starts (off = inherit). */
         claudeCodeExperimentalAgentTeamsEnabled?: boolean
     onModeChange: (mode: 'local' | 'remote') => void
@@ -86,6 +94,12 @@ interface LoopOptions {
     terminalRuntime?: TerminalRuntimeFlags | null
     defaultSystemPromptText?: string
     precomputedMcpBridge?: { mcpServers: Record<string, McpServerConfig>; stop: () => void } | null
+    reportSessionMetadataToDaemon?: (input: Readonly<{
+        sessionId: string;
+        metadata: import('@/api/types').Metadata;
+    }>) => Promise<void> | void
+    initialClaudeUnifiedTerminalMode?: EnhancedMode
+    signal?: AbortSignal
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
@@ -110,6 +124,7 @@ export async function loop(opts: LoopOptions): Promise<number> {
         terminalRuntime: opts.terminalRuntime ?? null,
         defaultSystemPromptText: opts.defaultSystemPromptText,
         precomputedMcpBridge: opts.precomputedMcpBridge ?? null,
+        reportSessionMetadataToDaemon: opts.reportSessionMetadataToDaemon ?? null,
     });
     session.claudeCodeExperimentalAgentTeamsEnabled = opts.claudeCodeExperimentalAgentTeamsEnabled === true;
 
@@ -127,13 +142,44 @@ export async function loop(opts: LoopOptions): Promise<number> {
     }
     opts.onSessionReady?.(session)
 
+    if (opts.claudeUnifiedTerminalEnabled === true) {
+        const unifiedTerminalDecision = resolveCliFeatureDecision({
+            featureId: CLAUDE_UNIFIED_TERMINAL_FEATURE_ID,
+            env: process.env,
+        });
+        if (unifiedTerminalDecision.state !== 'enabled') {
+            throw new Error('Claude unified terminal runtime is disabled by feature policy');
+        }
+        const result = await claudeUnifiedTerminalLauncher(session, {
+            initialMode: opts.initialClaudeUnifiedTerminalMode ?? {
+                permissionMode: opts.permissionMode ?? session.lastPermissionMode ?? 'default',
+                model: opts.model,
+                claudeUnifiedTerminalEnabled: true,
+                claudeCodeExperimentalAgentTeamsEnabled: opts.claudeCodeExperimentalAgentTeamsEnabled,
+            },
+            signal: opts.signal,
+        });
+        switch (result.type) {
+            case 'exit':
+                return result.code;
+            case 'switch':
+                logger.warn('[loop] Ignoring legacy Claude unified terminal switch request');
+                return 0;
+            default:
+                const _: never = result satisfies never;
+        }
+    }
+
     let mode: 'local' | 'remote' = opts.startingMode ?? 'local';
     let localEntry: 'initial' | 'switch' = mode === 'local' ? 'initial' : 'switch';
     while (true) {
         logger.debug(`[loop] Iteration with mode: ${mode}`);
         switch (mode) {
             case 'local': {
-                const result = await claudeLocalLauncher(session, { entry: localEntry });
+                const result = await claudeLocalLauncher(session, {
+                    entry: localEntry,
+                    remoteSwitchingEnabled: true,
+                });
                 localEntry = 'switch';
                 switch (result.type) {
                     case 'switch':

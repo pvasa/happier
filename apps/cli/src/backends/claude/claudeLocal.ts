@@ -23,6 +23,7 @@ import { configuration } from '@/configuration';
 import { isolateClaudeRuntimeAuthEnv } from './spawn/isolateClaudeRuntimeAuthEnv';
 import { logClaudeRuntimeAuthEnvDiagnostic } from './spawn/logClaudeRuntimeAuthEnvDiagnostic';
 import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
+import { claudeCliFlagCanConsumeValue } from './cli/flagArity';
 
 /**
  * Error thrown when the Claude process exits with a non-zero exit code.
@@ -50,6 +51,11 @@ export async function claudeLocal(opts: {
     path: string,
     onSessionFound: (id: string) => void,
     onThinkingChange?: (thinking: boolean) => void,
+    onLifecycleGapDetected?: ((event: Readonly<{
+        source: 'fd3_fetch_fallback',
+        signal: 'fetch_start' | 'fetch_idle_clear',
+        activeFetchCount: number,
+    }>) => void) | undefined,
     claudeArgs?: string[],
     /** Optional env overrides to apply to the spawned Claude Code subprocess. */
     envOverlay?: Record<string, string>,
@@ -226,6 +232,11 @@ export async function claudeLocal(opts: {
         stopThinkingTimeout = setTimeout(() => {
             stopThinkingTimeout = null;
             if (activeFetchIds.size === 0) {
+                opts.onLifecycleGapDetected?.({
+                    source: 'fd3_fetch_fallback',
+                    signal: 'fetch_idle_clear',
+                    activeFetchCount: activeFetchIds.size,
+                });
                 updateThinking(false);
             }
         }, CLAUDE_LOCAL_FETCH_IDLE_CLEAR_DELAY_MS);
@@ -277,25 +288,6 @@ export async function claudeLocal(opts: {
             const flagArgs: string[] = [];
             const positionalArgs: string[] = [];
             let trailingPermissionFlagArgs: string[] = [];
-	            const flagsWithValue = new Set<string>([
-	                '--model',
-	                '--effort',
-	                '--permission-mode',
-	                '--settings',
-	                '--mcp-config',
-	                '--max-turns',
-                '-p',
-                '--allowedTools',
-                '--disallowedTools',
-                '--output-format',
-                '--input-format',
-                '--print',
-                '--append-system-prompt',
-                '--fallback-model',
-                '--setting-sources',
-                '--resume',
-                '--session-id',
-            ]);
 
             if (opts.claudeArgs) {
                 for (let i = 0; i < opts.claudeArgs.length; i++) {
@@ -321,7 +313,7 @@ export async function claudeLocal(opts: {
                     }
                     if (arg.startsWith('-')) {
                         flagArgs.push(arg);
-                        if (flagsWithValue.has(arg) && i + 1 < opts.claudeArgs.length) {
+                        if (claudeCliFlagCanConsumeValue(arg) && i + 1 < opts.claudeArgs.length) {
                             flagArgs.push(opts.claudeArgs[i + 1]!);
                             i++;
                         }
@@ -526,6 +518,11 @@ export async function claudeLocal(opts: {
                             case 'fetch-start':
                                 clearStopThinkingTimeout();
                                 activeFetchIds.add(readFetchId(message));
+                                opts.onLifecycleGapDetected?.({
+                                    source: 'fd3_fetch_fallback',
+                                    signal: 'fetch_start',
+                                    activeFetchCount: activeFetchIds.size,
+                                });
                                 updateThinking(true);
                                 break;
 

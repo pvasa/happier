@@ -160,6 +160,7 @@ describe('claudeLocal --continue handling', () => {
         mockSpawn.mockReturnValue(child);
 
         const thinkingEvents: boolean[] = [];
+        const lifecycleGapEvents: unknown[] = [];
         try {
             const runPromise = claudeLocal({
                 abort: new AbortController().signal,
@@ -167,6 +168,7 @@ describe('claudeLocal --continue handling', () => {
                 path: '/tmp',
                 onSessionFound,
                 onThinkingChange: (thinking) => thinkingEvents.push(thinking),
+                onLifecycleGapDetected: (event) => lifecycleGapEvents.push(event),
                 claudeArgs: [],
             });
 
@@ -186,6 +188,10 @@ describe('claudeLocal --continue handling', () => {
             await vi.advanceTimersByTimeAsync(750);
 
             expect(thinkingEvents).toEqual([true, false]);
+            expect(lifecycleGapEvents).toEqual([
+                { source: 'fd3_fetch_fallback', signal: 'fetch_start', activeFetchCount: 1 },
+                { source: 'fd3_fetch_fallback', signal: 'fetch_idle_clear', activeFetchCount: 0 },
+            ]);
 
             for (const handler of exitHandlers) {
                 handler(0, null);
@@ -950,6 +956,32 @@ describe('claudeLocal --continue handling', () => {
         // Prompt must be after all flags (including --settings).
         expect(promptIndex).toBeGreaterThan(settingsIndex + 1);
         expect(promptIndex).toBeGreaterThan(modelIndex + 1);
+    });
+
+    it('preserves Claude --name value before injected hook plugin args', async () => {
+        mockClaudeFindLastSession.mockReturnValue(null);
+
+        await claudeLocal({
+            abort: new AbortController().signal,
+            sessionId: null,
+            path: '/tmp',
+            onSessionFound,
+            hookPluginDir: '/tmp/hook-plugin',
+            hookSettingsPath: '/tmp/settings.json',
+            claudeArgs: ['--name', 'D8 CLI startup fix', 'D8_CLI_STARTUP_FIX prompt'],
+        });
+
+        expect(mockSpawn).toHaveBeenCalled();
+        const spawnArgs = mockSpawn.mock.calls[0][1] as string[];
+
+        const nameIndex = spawnArgs.indexOf('--name');
+        const pluginIndex = spawnArgs.indexOf('--plugin-dir');
+        const promptIndex = spawnArgs.indexOf('D8_CLI_STARTUP_FIX prompt');
+        expect(nameIndex).toBeGreaterThan(-1);
+        expect(spawnArgs[nameIndex + 1]).toBe('D8 CLI startup fix');
+        expect(pluginIndex).toBeGreaterThan(-1);
+        expect(spawnArgs[pluginIndex + 1]).toBe('/tmp/hook-plugin');
+        expect(promptIndex).toBeGreaterThan(pluginIndex + 1);
     });
 
     it('treats --effort as a flag with a value (so the effort value is not mis-parsed as the prompt)', async () => {
