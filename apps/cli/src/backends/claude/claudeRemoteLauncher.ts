@@ -1,11 +1,15 @@
 import { render } from "ink";
 import { Session } from "./session";
-import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { Metadata } from '@/api/types';
 import { MessageBuffer } from "@/ui/ink/messageBuffer";
 import { RemoteModeDisplay } from "@/backends/claude/ui/RemoteModeDisplay";
 import React from "react";
 import { claudeRemoteDispatch } from "./remote/claudeRemoteDispatch";
+import {
+    runClaudeUnifiedTerminalSession,
+    type ClaudeUnifiedTerminalSessionOptions,
+} from './unifiedTerminal/runClaudeUnifiedTerminalSession';
+import { bindClaudeUnifiedTerminalSession } from './unifiedTerminal/bindClaudeUnifiedTerminalSession';
 import { PermissionHandler } from "./utils/permissionHandler";
 import { Future } from "@/utils/future";
 import { AbortError, type SDKAssistantMessage, type SDKMessage, type SDKUserMessage } from "./sdk/types";
@@ -19,6 +23,7 @@ import { getToolName } from "./utils/getToolName";
 import { syncClaudePermissionModeFromMetadata } from "./utils/syncPermissionModeFromMetadata";
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
+import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
 import type { MessageBatch } from '@/agent/runtime/sessionInput/types';
 import { resolveClaudeRemoteQueuedPromptWithReplaySeed } from '@/backends/claude/remote/resolveClaudeRemoteQueuedPromptWithReplaySeed';
 import { cleanupStdinAfterInk } from '@/ui/ink/cleanupStdinAfterInk';
@@ -32,11 +37,8 @@ import { createClaudeRemoteTeamInboxBridge } from './remote/teamInbox/claudeRemo
 import { resolveHasTTY } from '@/ui/tty/resolveHasTTY';
 import { createNonBlockingStdout } from '@/ui/ink/nonBlockingStdout';
 import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
-import { sendReadyWithPushNotification } from '@/agent/runtime/sendReadyWithPushNotification';
-import { getSessionNotificationTitle } from '@/agent/runtime/readyNotificationContext';
-import { resolveReadyNotificationAssistantText } from '@/agent/runtime/readyNotificationAssistantText';
 import type { ReadyNotificationTurnContext } from '@/agent/runtime/runPermissionModePromptLoop';
-import { createTurnAssistantPreviewTracker, type TurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
+import { createTurnAssistantPreviewTracker } from '@/agent/runtime/turnAssistantPreviewTracker';
 import { shouldSendReadyPushNotification } from '@/settings/notifications/notificationsPolicy';
 import {
     resolveRemoteModeControlSurface,
@@ -50,7 +52,6 @@ import { resolveClaudeConfigDirOverride } from './utils/resolveClaudeConfigDirOv
 import { tryReadTextFileTail } from '@/agent/runtime/readTextFileTail';
 import { readClaudeSessionJsonlMessages } from './utils/readClaudeSessionJsonlMessages';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from './utils/normalizeClaudeToolUseNames';
-import type { AccountSettings, SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 import { buildTurnChangeSetDiffInput } from '@/agent/tools/diff/buildTurnChangeSetDiffInput';
 import { ClaudeTurnChangeTracker } from './utils/ClaudeTurnChangeTracker';
 import { isClaudeExplicitDiffToolInput } from './utils/isClaudeExplicitDiffToolInput';
@@ -63,12 +64,15 @@ import {
     type StreamedTranscriptWriter,
 } from '@/api/session/streamedTranscriptWriter';
 import { createClaudeRemoteStreamedTranscriptSession } from './remote/createClaudeRemoteStreamedTranscriptSession';
+import { hashClaudeUnifiedTerminalLaunchOptionsForQueue } from './remote/modeHash';
 import type { ClaudeCompletionEvent } from './contextCompactionEvents';
 import { mergeSessionWorkStateMetadataV1, type SessionWorkStateV1 } from '@/session/workState/sessionWorkStateMetadata';
+import { createClaudeReadyHandler } from './ready/createClaudeReadyHandler';
+import {
+    surfaceClaudeConnectedServiceRuntimeAuthFailure,
+    surfaceClaudeRateLimitRuntimeIssue,
+} from './connectedServices/surfaceClaudeRuntimeIssues';
 import type { NormalizedProviderUsageLimitDetailsV1 } from './connectedServices/mapClaudeRateLimitEventToUsageDetails';
-import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
-import { classifyClaudeConnectedServiceRuntimeAuthFailure } from './connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
-import { findConnectedServiceChildSelection } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 
 function mergeSessionWorkStateIntoMetadata(
     metadata: Metadata,
@@ -91,73 +95,6 @@ type LaunchErrorInfo = {
     code?: string;
     stack?: string;
 };
-
-async function surfaceClaudeRateLimitRuntimeIssue(
-    session: Session,
-    details: NormalizedProviderUsageLimitDetailsV1,
-): Promise<void> {
-    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
-        details,
-        selection:
-            findConnectedServiceChildSelection(process.env, 'claude-subscription')
-            ?? findConnectedServiceChildSelection(process.env, 'anthropic')
-            ?? undefined,
-    });
-    if (!classification) return;
-    const connectedServiceId = classification.serviceId === 'anthropic' ? 'anthropic' : 'claude-subscription';
-    const issue: SessionRuntimeIssueV1 = {
-        v: 1,
-        scope: 'primary_session',
-        status: 'failed',
-        code: 'usage_limit',
-        source: 'usage_limit',
-        occurredAt: Date.now(),
-        provider: 'claude',
-        sanitizedPreview: 'Usage limit reached',
-        usageLimit: {
-            ...details,
-            connectedService: {
-                serviceId: connectedServiceId,
-                profileId: classification.profileId,
-                groupId: classification.groupId,
-            },
-        },
-    };
-    await session.client.sessionTurnLifecycle?.failTurn({
-        provider: 'claude',
-        issue,
-    });
-    await reportConnectedServiceRuntimeAuthFailureToDaemon({
-        sessionId: session.client.sessionId,
-        switchesThisTurn: 0,
-        classification,
-        logPrefix: '[remote]',
-    });
-}
-
-async function surfaceClaudeConnectedServiceRuntimeAuthFailure(
-    session: Session,
-    error: unknown,
-): Promise<void> {
-    const selection =
-        findConnectedServiceChildSelection(process.env, 'claude-subscription')
-        ?? findConnectedServiceChildSelection(process.env, 'anthropic')
-        ?? null;
-    if (!selection) return;
-
-    const classification = classifyClaudeConnectedServiceRuntimeAuthFailure({
-        error,
-        selection,
-    });
-    if (!classification) return;
-
-    await reportConnectedServiceRuntimeAuthFailureToDaemon({
-        sessionId: session.client.sessionId,
-        switchesThisTurn: 0,
-        classification,
-        logPrefix: '[remote]',
-    });
-}
 
 function getLaunchErrorInfo(e: unknown): LaunchErrorInfo {
     let asString = '[unprintable error]';
@@ -323,61 +260,10 @@ function resolveClaudeProjectDir(session: Session): string {
     return getProjectPath(session.path, resolveClaudeConfigDirOverride(process.env));
 }
 
-type ClaudeRemoteReadySession = Readonly<{
-    sessionId: string;
-    sendSessionEvent: (event: { type: 'ready' }) => void;
-    getMetadataSnapshot?: () => unknown;
-    getTurnAssistantTextSnapshot?: ApiSessionClient['getTurnAssistantTextSnapshot'];
-}>;
+export { createClaudeReadyHandler as createClaudeRemoteReadyHandler };
 
-type ClaudeRemotePushSender = Readonly<{
-    sendToAllDevices: (title: string, body: string, opts: { sessionId: string }) => void;
-}>;
-
-export function createClaudeRemoteReadyHandler(params: Readonly<{
-    session: ClaudeRemoteReadySession;
-    pushSender: ClaudeRemotePushSender | null;
-    waitingForCommandLabel: string;
-    logPrefix: string;
-    assistantPreviewTracker?: Pick<TurnAssistantPreviewTracker, 'getPreview'>;
-    getPending: () => unknown;
-    getQueueSize: () => number;
-    includeAssistantPreviewText?: boolean;
-    shouldSendPush?: () => boolean;
-    accountSettings?: AccountSettings | null;
-    settingsSecretsReadKeys?: readonly Uint8Array[];
-}>): (context?: ReadyNotificationTurnContext) => void {
-    return (context?: ReadyNotificationTurnContext) => {
-        if (params.getPending()) return;
-        if (params.getQueueSize() !== 0) return;
-        if (!params.pushSender) {
-            params.session.sendSessionEvent({ type: 'ready' });
-            return;
-        }
-        sendReadyWithPushNotification({
-            session: params.session,
-            pushSender: params.pushSender,
-            waitingForCommandLabel: params.waitingForCommandLabel,
-            logPrefix: params.logPrefix,
-            sessionTitle: getSessionNotificationTitle(
-                typeof params.session.getMetadataSnapshot === 'function'
-                    ? () => params.session.getMetadataSnapshot?.()
-                    : null,
-            ),
-            assistantPreviewText: resolveReadyNotificationAssistantText({
-                includeMessageText: params.includeAssistantPreviewText,
-                explicitAssistantText: params.assistantPreviewTracker?.getPreview() ?? null,
-                session: params.session,
-                turnToken: context?.turnToken ?? null,
-                startSeqExclusive: context?.startSeqExclusive ?? null,
-            }),
-            accountSettings: params.accountSettings ?? null,
-            settingsSecretsReadKeys: params.settingsSecretsReadKeys,
-            includeAssistantPreviewText: params.includeAssistantPreviewText,
-            shouldSendPush: params.shouldSendPush,
-        });
-    };
-}
+const CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE =
+    'Claude unified terminal is already running. Model, permission, reasoning, and launch option changes apply when Claude restarts; this prompt was sent to the current Claude terminal session.';
 
 export async function claudeRemoteLauncher(session: Session): Promise<'switch' | 'exit'> {
     logger.debug('[claudeRemoteLauncher] Starting remote launcher');
@@ -605,6 +491,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             messageQueue.enqueue(message, { meta: { importedFrom: 'claude-team-inbox' } });
         },
     });
+    let activeUnifiedTranscriptBinding: Readonly<{
+        isActive: () => boolean;
+        shouldSuppressTranscriptMessage: (message: RawJSONLines) => boolean;
+    }> | null = null;
     const teamInboxIntervalId = setInterval(() => {
         void teamInboxBridge.syncAll();
     }, 3000);
@@ -951,6 +841,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 }
             }
 
+            if (activeUnifiedTranscriptBinding?.shouldSuppressTranscriptMessage(logMessage)) {
+                return;
+            }
+
             // Queue all other messages immediately (no delay)
             messageQueue.enqueue(logMessage, releaseIds.length > 0 ? { releaseToolCallIds: releaseIds } : undefined);
         }
@@ -1013,29 +907,64 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 logger.debug(`[remote]: Continuing existing session: ${session.sessionId}`);
             }
 
-	            previousSessionId = session.sessionId;
-	            const sessionIdAtLaunchStart = session.sessionId;
-	            const controller = new AbortController();
-	            abortController = controller;
-	            abortFuture = new Future<void>();
-                didUserAbortThisLaunch = false;
-	            let modeHash: string | null = null;
-	            let mode: EnhancedMode | null = null;
-	            let didReplaySeedBootstrap = false;
-                let readyTurnContext: ReadyNotificationTurnContext | undefined;
-                const materializeNextPendingMessageSafely =
-                    typeof session.client.materializeNextPendingMessageSafely === 'function'
-                        ? session.client.materializeNextPendingMessageSafely.bind(session.client)
-                        : null;
-                const beginReadyNotificationTurn = () => {
-                    if (typeof session.client.beginTurnAssistantTextSnapshot !== 'function') return;
-                    const startSeqExclusive = typeof session.client.getLastObservedMessageSeq === 'function'
-                        ? session.client.getLastObservedMessageSeq()
-                        : null;
-                    const turnToken = session.client.beginTurnAssistantTextSnapshot({ startSeqExclusive });
-                    readyTurnContext = { turnToken, startSeqExclusive };
-                };
-	            try {
+            previousSessionId = session.sessionId;
+            const sessionIdAtLaunchStart = session.sessionId;
+            const controller = new AbortController();
+            abortController = controller;
+            abortFuture = new Future<void>();
+            didUserAbortThisLaunch = false;
+            let modeHash: string | null = null;
+            let mode: EnhancedMode | null = null;
+            let didReplaySeedBootstrap = false;
+            let unifiedTerminalLaunchOptionsHash: string | null = null;
+            let lastUnifiedTerminalRestartOnlyNoticeHash: string | null = null;
+            let readyTurnContext: ReadyNotificationTurnContext | undefined;
+            const materializeNextPendingMessageSafely =
+                typeof session.client.materializeNextPendingMessageSafely === 'function'
+                    ? session.client.materializeNextPendingMessageSafely.bind(session.client)
+                    : null;
+            const beginReadyNotificationTurn = () => {
+                if (typeof session.client.beginTurnAssistantTextSnapshot !== 'function') return;
+                const startSeqExclusive = typeof session.client.getLastObservedMessageSeq === 'function'
+                    ? session.client.getLastObservedMessageSeq()
+                    : null;
+                const turnToken = session.client.beginTurnAssistantTextSnapshot({ startSeqExclusive });
+                readyTurnContext = { turnToken, startSeqExclusive };
+            };
+            const shouldDeferTurnStartUntilTerminalInjection = (nextMode: EnhancedMode): boolean =>
+                nextMode.claudeUnifiedTerminalEnabled === true;
+            const shouldTreatModeChangeAsRelaunchBoundary = (currentMode: EnhancedMode | null, nextMode: EnhancedMode, hashChanged: boolean, isolate: boolean): boolean => {
+                if (isolate) return true;
+                if (!hashChanged) return false;
+                return !(currentMode?.claudeUnifiedTerminalEnabled === true && nextMode.claudeUnifiedTerminalEnabled === true);
+            };
+            const shouldSurfaceUnifiedTerminalRestartOnlyOptionsNotice = (
+                currentMode: EnhancedMode | null,
+                nextMode: EnhancedMode,
+                launchOptionsChanged: boolean,
+            ): boolean =>
+                launchOptionsChanged
+                && currentMode?.claudeUnifiedTerminalEnabled === true
+                && nextMode.claudeUnifiedTerminalEnabled === true;
+            const surfaceUnifiedTerminalRestartOnlyOptionsNotice = (nextHash: string): void => {
+                if (lastUnifiedTerminalRestartOnlyNoticeHash === nextHash) return;
+                lastUnifiedTerminalRestartOnlyNoticeHash = nextHash;
+                session.client.sendSessionEvent({
+                    type: 'message',
+                    message: CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE,
+                });
+            };
+            const beginPromptTurn = async (): Promise<void> => {
+                beginReadyNotificationTurn();
+                await recordClaudeRemotePromptTurnStarted();
+            };
+            const hasQueuedUnifiedTerminalPrompt = (): boolean =>
+                session.queue.queue.some((item) => item.mode.claudeUnifiedTerminalEnabled === true);
+            const isUnifiedTerminalTranscriptActive = (): boolean =>
+                mode?.claudeUnifiedTerminalEnabled === true
+                || pending?.mode.claudeUnifiedTerminalEnabled === true
+                || hasQueuedUnifiedTerminalPrompt();
+            try {
                 const inputConsumer = createSessionProviderInputConsumer<EnhancedMode, string>({
                     messageQueue: session.queue,
                     session: {
@@ -1064,6 +993,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         },
                         waitForMetadataUpdate: (signal) => session.client.waitForMetadataUpdate(signal),
                     },
+                    pendingDrainMaxPopPerWake: resolveSessionPendingQueueMaxPopPerWake(session.accountSettings ?? null),
                     onMetadataUpdate: () => {
                         const updated = syncClaudePermissionModeFromMetadata({ session, permissionHandler });
                         if (updated) {
@@ -1096,7 +1026,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     pending = msg;
                 }
 
-                const readyHandler = createClaudeRemoteReadyHandler({
+                const readyHandler = createClaudeReadyHandler({
                     session: session.client,
                     pushSender: session.pushSender,
                     waitingForCommandLabel: 'Claude',
@@ -1110,70 +1040,114 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         session.accountSettings?.notificationsSettingsV1?.readyIncludeMessageText !== false,
                     shouldSendPush: () => shouldSendReadyPushNotification(session.accountSettings ?? null),
                 });
-
-                    const { mcpServers: baseMcpServers, mcpConfigJson: baseMcpConfigJson } = await session.getOrCreateHappierMcpBridge();
-
-                    // If this is a restarted daemon process resuming an existing agent-team session,
-                    // we may not replay transcript history through `onMessage`. Seed team inbox mapping
-                    // from the transcript file so unread teammate messages still import correctly.
-                    await seedTeamInboxFromTranscriptPath(session.sessionId, session.transcriptPath ?? null);
-
-                    const remoteResult = await claudeRemoteDispatch({
-                        sessionId: session.sessionId,
-                        transcriptPath: session.transcriptPath,
-                        path: session.path,
-                        hookSettingsPath: session.hookSettingsPath,
-                        jsRuntime: session.jsRuntime,
-                        happierMcpServers: baseMcpServers,
-                        happierMcpConfigJson: baseMcpConfigJson,
-                        streamedTranscriptWriter,
-                    setTurnInterrupt: (handler: (() => Promise<void>) | null) => {
+                const unifiedBinding = bindClaudeUnifiedTerminalSession({
+                    session: session.client,
+                    logPrefix: '[remote]',
+                    acceptedPromptEchoWindowMs: configuration.claudeUnifiedTerminalAcceptedPromptEchoWindowMs,
+                    onMessage: (message) => {
+                        messageQueue.enqueue(message);
+                    },
+                    onReady: (context) => {
+                        readyHandler(context);
+                    },
+                    onTurnInterruptChanged: (handler) => {
                         turnInterrupt = handler;
                     },
+                    onPromptTurnStarted: () => {
+                        session.setThinkingWithoutTaskLifecycle(true);
+                    },
+                });
+                await unifiedBinding.seedPersistedPromptEchoes();
+                activeUnifiedTranscriptBinding = {
+                    isActive: isUnifiedTerminalTranscriptActive,
+                    shouldSuppressTranscriptMessage: unifiedBinding.shouldSuppressTranscriptMessage,
+                };
+
+                const { mcpServers: baseMcpServers, mcpConfigJson: baseMcpConfigJson } = await session.getOrCreateHappierMcpBridge();
+
+                // If this is a restarted daemon process resuming an existing agent-team session,
+                // we may not replay transcript history through `onMessage`. Seed team inbox mapping
+                // from the transcript file so unread teammate messages still import correctly.
+                await seedTeamInboxFromTranscriptPath(session.sessionId, session.transcriptPath ?? null);
+
+                const remoteResult = await claudeRemoteDispatch({
+                    sessionId: session.sessionId,
+                    transcriptPath: session.transcriptPath,
+                    path: session.path,
+                    systemPromptText: session.defaultSystemPromptText,
+                    hookSettingsPath: session.hookSettingsPath,
+                    hookPluginDir: session.hookPluginDir,
+                    jsRuntime: session.jsRuntime,
+                    happierMcpServers: baseMcpServers,
+                    happierMcpConfigJson: baseMcpConfigJson,
+                    streamedTranscriptWriter,
+                    setTurnInterrupt: unifiedBinding.sessionOptions.setTurnInterrupt,
                     canCallTool: permissionHandler.handleToolCall,
                     isAborted: (toolCallId: string) => {
                         return permissionHandler.isAborted(toolCallId);
                     },
-                        nextMessage: async () => {
-                            if (pending) {
-                                const p = pending;
-                                pending = null;
-                                modeHash = p.hash;
-                                mode = p.mode;
-                                permissionHandler.handleModeChange(p.mode.permissionMode);
-                                beginReadyNotificationTurn();
-                                await recordClaudeRemotePromptTurnStarted();
-                                return { message: p.message, mode: p.mode };
+                    nextMessage: async () => {
+                        if (pending) {
+                            const p = pending;
+                            pending = null;
+                            modeHash = p.hash;
+                            mode = p.mode;
+                            unifiedTerminalLaunchOptionsHash = p.mode.claudeUnifiedTerminalEnabled === true
+                                ? hashClaudeUnifiedTerminalLaunchOptionsForQueue(p.mode)
+                                : null;
+                            permissionHandler.handleModeChange(p.mode.permissionMode);
+                            if (!shouldDeferTurnStartUntilTerminalInjection(p.mode)) {
+                                await beginPromptTurn();
+                            } else {
+                                unifiedBinding.noteNextInjectedPromptShouldSuppressEcho();
                             }
+                            return { message: p.message, mode: p.mode };
+                        }
 
-                                const msg = await waitForNextBatch();
-                                if (!msg) {
-                                    return null;
-                                }
+                        const msg = await waitForNextBatch();
+                        if (!msg) {
+                            return null;
+                        }
 
-                            // Check if mode has changed
-                            if ((modeHash && msg.hash !== modeHash) || msg.isolate) {
-                                logger.debug('[remote]: mode has changed, pending message');
-                                pending = msg;
-                                return null;
-                            }
-                            modeHash = msg.hash;
-                            const nextMode = msg.mode;
-                            mode = nextMode;
-                            permissionHandler.handleModeChange(nextMode.permissionMode);
-                            beginReadyNotificationTurn();
-                            const replaySeedResolution = await resolveClaudeRemoteQueuedPromptWithReplaySeed({
-                                sessionClient: session.client,
-                                batch: { message: msg.message, mode: msg.mode },
-                                didBootstrap: didReplaySeedBootstrap,
-                            });
-                            didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
-                            await recordClaudeRemotePromptTurnStarted();
+                        // Check if mode has changed
+                        const hashChanged = Boolean(modeHash && msg.hash !== modeHash);
+                        if (shouldTreatModeChangeAsRelaunchBoundary(mode, msg.mode, hashChanged, msg.isolate)) {
+                            logger.debug('[remote]: mode has changed, pending message');
+                            pending = msg;
+                            return null;
+                        }
+                        const nextUnifiedTerminalLaunchOptionsHash = msg.mode.claudeUnifiedTerminalEnabled === true
+                            ? hashClaudeUnifiedTerminalLaunchOptionsForQueue(msg.mode)
+                            : null;
+                        const unifiedTerminalLaunchOptionsChanged = Boolean(
+                            unifiedTerminalLaunchOptionsHash
+                            && nextUnifiedTerminalLaunchOptionsHash
+                            && nextUnifiedTerminalLaunchOptionsHash !== unifiedTerminalLaunchOptionsHash,
+                        );
+                        if (shouldSurfaceUnifiedTerminalRestartOnlyOptionsNotice(mode, msg.mode, unifiedTerminalLaunchOptionsChanged)) {
+                            surfaceUnifiedTerminalRestartOnlyOptionsNotice(nextUnifiedTerminalLaunchOptionsHash ?? msg.hash);
+                        }
+                        modeHash = msg.hash;
+                        const nextMode = msg.mode;
+                        mode = nextMode;
+                        unifiedTerminalLaunchOptionsHash = nextUnifiedTerminalLaunchOptionsHash;
+                        permissionHandler.handleModeChange(nextMode.permissionMode);
+                        const replaySeedResolution = await resolveClaudeRemoteQueuedPromptWithReplaySeed({
+                            sessionClient: session.client,
+                            batch: { message: msg.message, mode: msg.mode },
+                            didBootstrap: didReplaySeedBootstrap,
+                        });
+                        didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
+                        if (!shouldDeferTurnStartUntilTerminalInjection(nextMode)) {
+                            await beginPromptTurn();
+                        } else {
+                            unifiedBinding.noteNextInjectedPromptShouldSuppressEcho();
+                        }
 
-                            return {
-                                message: typeof replaySeedResolution.message === 'string' ? replaySeedResolution.message : '',
-                                mode: msg.mode,
-                            }
+                        return {
+                            message: typeof replaySeedResolution.message === 'string' ? replaySeedResolution.message : '',
+                            mode: msg.mode,
+                        };
                     },
                     onSessionFound: (sessionId: string, data: unknown) => {
                         // Update converter's session ID when new session is found
@@ -1182,6 +1156,8 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         const transcriptPath = typeof (data as any)?.transcript_path === 'string' ? String((data as any).transcript_path) : null;
                         void seedTeamInboxFromTranscriptPath(sessionId, transcriptPath);
                     },
+                    loadCommittedClaudeJsonlMessageKeys: () =>
+                        session.client.fetchCommittedClaudeJsonlMessageKeys?.() ?? new Set<string>(),
                     onCheckpointCaptured: (checkpointId: string) => {
                         updateMetadataBestEffort(
                             session.client,
@@ -1212,10 +1188,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             '[remote]',
                             'capabilities_update',
                         );
-                        },
-                        onThinkingChange: session.onThinkingChange,
-                            claudeArgs: session.claudeArgs,
-                            onMessage,
+                    },
+                    onThinkingChange: session.onThinkingChange,
+                    claudeArgs: session.claudeArgs,
+                    onMessage,
                     onWorkStateSnapshot: (snapshot: SessionWorkStateV1) => {
                         const sourceFamilies = resolveWorkStateSourceFamiliesFromSnapshot(snapshot);
                         if (sourceFamilies.length === 0) return;
@@ -1230,12 +1206,12 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         );
                     },
                     onRateLimitEvent: async (details: NormalizedProviderUsageLimitDetailsV1) => {
-                        await surfaceClaudeRateLimitRuntimeIssue(session, details);
+                        await surfaceClaudeRateLimitRuntimeIssue(session, details, '[remote]');
                     },
                     onRuntimeAuthFailureEvent: async (error: unknown) => {
-                        await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error);
+                        await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error, '[remote]');
                     },
-                        onCompletionEvent: (event: ClaudeCompletionEvent) => {
+                    onCompletionEvent: (event: ClaudeCompletionEvent) => {
                         logger.debug('[remote]: Completion event', event);
                         sendClaudeCompletionEvent({ session, event });
                     },
@@ -1246,14 +1222,42 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     },
                     onReady: async () => {
                         await messageQueue.flush();
+                        if (isUnifiedTerminalTranscriptActive()) {
+                            await unifiedBinding.sessionOptions.onReady?.();
+                            return;
+                        }
                         readyHandler(readyTurnContext);
                     },
                     onSubagentFlush: async () => {
                         await messageQueue.flush();
                     },
+                    onTerminalPromptInjected: async (
+                        acceptedPrompt: Parameters<NonNullable<ClaudeUnifiedTerminalSessionOptions['onTerminalPromptInjected']>>[0],
+                    ) => {
+                        await unifiedBinding.sessionOptions.onTerminalPromptInjected?.(acceptedPrompt);
+                    },
+                    onProviderPromptStarted: () => {
+                        if (isUnifiedTerminalTranscriptActive()) {
+                            return unifiedBinding.sessionOptions.onProviderPromptStarted?.();
+                        }
+                        beginReadyNotificationTurn();
+                        return undefined;
+                    },
                     signal: abortController.signal,
+                }, {
+                    claudeUnifiedTerminal: (dispatchOpts: unknown) =>
+                        runClaudeUnifiedTerminalSession({
+                            ...(dispatchOpts as ClaudeUnifiedTerminalSessionOptions),
+                            happySessionId: session.client.sessionId,
+                            subscribeClaudeSessionHooks: (callback) => {
+                                session.addClaudeSessionHookCallback(callback);
+                                return () => {
+                                    session.removeClaudeSessionHookCallback(callback);
+                                };
+                            },
+                        }),
                 });
-                
+
                 // Consume one-time Claude flags after spawn
                 session.consumeOneTimeFlags();
                 
@@ -1284,14 +1288,14 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     // Claude Code sometimes exits in a non-resumable state after a force-abort. If this abort was
                     // explicitly user-initiated (not a mode switch), clear the stored session ID so the next launch
                     // doesn't get stuck trying to resume a dead session.
-	                    if (
-	                        controller.signal.aborted
-	                        && didUserAbortThisLaunch
-	                        && !exitReason
-	                    ) {
-	                        forceNewSession = true;
-	                        session.clearSessionId();
-	                    }
+                    if (
+                        controller.signal.aborted
+                        && didUserAbortThisLaunch
+                        && !exitReason
+                    ) {
+                        forceNewSession = true;
+                        session.clearSessionId();
+                    }
                     continue;
                 } else {
                     const exitCode = resolveClaudeCodeExitCode(e);
@@ -1303,13 +1307,13 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             ? `${base}\n\n${tailText}`
                             : base;
                         session.client.sendSessionEvent({ type: 'message', message });
-	                        if (
-	                            controller.signal.aborted
-	                            && didUserAbortThisLaunch
-	                            && !exitReason
-	                        ) {
-	                            forceNewSession = true;
-	                            session.clearSessionId();
+                        if (
+                            controller.signal.aborted
+                            && didUserAbortThisLaunch
+                            && !exitReason
+                        ) {
+                            forceNewSession = true;
+                            session.clearSessionId();
                         } else if (
                             // If we attempted to resume an existing Claude Code session and it immediately exited with
                             // code 1 (common for non-resumable sessions after interrupts/crashes), avoid getting stuck
@@ -1349,12 +1353,14 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 abortFuture?.resolve(undefined);
                 abortFuture = null;
                 turnInterrupt = null;
+                activeUnifiedTranscriptBinding = null;
                 logger.debug('[remote]: launch done');
                 await permissionHandler.resetAndFlush();
                 turnChangeTracker.resetTurn();
                 suppressedExplicitDiffCallIds.clear();
                 modeHash = null;
                 mode = null;
+                unifiedTerminalLaunchOptionsHash = null;
                 // Session IDs can change during a remote run (system init / resume / fork / compact).
                 // Keep previousSessionId in sync so we don't treat the same session as "new" again
                 // on the next outer loop iteration.

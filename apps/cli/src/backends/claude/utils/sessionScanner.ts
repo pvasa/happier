@@ -1,7 +1,7 @@
 import { InvalidateSync } from "@/utils/sync";
 import { RawJSONLines } from "../types";
 import { dirname, join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { logger } from "@/ui/logger";
 import { startFileWatcher } from "@/integrations/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
@@ -11,11 +11,14 @@ import { normalizeClaudeToolUseNamesInRawJsonLines } from './normalizeClaudeTool
 import { createClaudeTeamInboxCollector } from './teamInbox/claudeTeamInboxCollector';
 import { readClaudeSessionJsonlMessages } from './readClaudeSessionJsonlMessages';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
+import { buildClaudeJsonlMessageKey } from './claudeJsonlMessageKey';
 
 export type SessionScannerSessionInfo = {
     sessionId: string;
     transcriptPath?: string | null;
 };
+
+type SessionScannerUnhookedSessionDisposition = 'ignore' | 'diagnostic' | 'main';
 
 export async function createSessionScanner(opts: {
     sessionId: string | null,
@@ -34,6 +37,37 @@ export async function createSessionScanner(opts: {
     onTranscriptMissing?: (info: { sessionId: string; filePath: string }) => void
     /** How long to wait (ms) before warning that the transcript file is missing. Set <= 0 to disable. */
     transcriptMissingWarningMs?: number
+    /**
+     * Claude JSONL message keys already present in Happier's transcript. Used when
+     * replaying resume history to backfill only rows that were missed while the runner was down.
+     */
+    initialProcessedMessageKeys?: Iterable<string>
+    /** Replay initial transcript rows instead of treating the whole file as already processed. */
+    replayInitialMessages?: boolean
+    /**
+     * Discover fresh Claude JSONL sessions in the project directory before hooks
+     * announce a SessionStart. This covers early Claude failures that write JSONL
+     * but never invoke lifecycle hooks.
+     */
+    discoverNewSessions?: boolean
+    /**
+     * Bind this scanner to the first main Claude session it observes and ignore
+     * later unrelated JSONL sessions in the same project directory. Terminal-hosted
+     * unified sessions use this because each Happier session owns exactly one
+     * Claude TUI/native transcript; local resume keeps the legacy multi-session path.
+     */
+    bindToFirstSession?: boolean
+    /**
+     * Whether sessions discovered before an explicit onNewSession call should
+     * become the bound main session. Unified hook-driven startup keeps early
+     * API-error discovery diagnostic until the trusted SessionStart hook arrives.
+     */
+    bindDiscoveredSessions?: boolean
+    classifyDiscoveredSession?: ((params: {
+        sessionId: string;
+        filePath: string;
+        messages: readonly RawJSONLines[];
+    }) => SessionScannerUnhookedSessionDisposition | null | undefined) | undefined
 }) {
     const shapeLogger = createEventShapeLoggerForLog({ logger, scope: 'claude-jsonl' });
 
@@ -90,17 +124,87 @@ export async function createSessionScanner(opts: {
     let pendingSessions = new Set<string>();
     let currentSessionId: string | null = null;
     let watchers = new Map<string, { filePath: string; stop: () => void }>();
-    let processedMessageKeys = new Set<string>();
+    let processedMessageKeys = new Set<string>(opts.initialProcessedMessageKeys ?? []);
     const taskToolUseIdByAgentId = new Map<string, string>();
     let invalidate: (() => void) | null = null;
+    const discoveredSessions = new Set<string>();
+    const sessionDiscoveryBaselines = new Map<string, { mtimeMs: number; size: number }>();
+    let boundSessionId: string | null = opts.bindToFirstSession && opts.sessionId ? opts.sessionId : null;
+    let closed = false;
+
+    function isMainSessionAllowed(sessionId: string): boolean {
+        return !boundSessionId || boundSessionId === sessionId;
+    }
+
+    function bindMainSession(sessionId: string): void {
+        if (!opts.bindToFirstSession || boundSessionId) return;
+        boundSessionId = sessionId;
+    }
+
+    function cleanupUnallowedSessionWatchers(): void {
+        if (!boundSessionId) return;
+        for (const [sessionId, watcher] of watchers) {
+            if (isMainSessionAllowed(sessionId)) continue;
+            watcher.stop();
+            watchers.delete(sessionId);
+            pendingSessions.delete(sessionId);
+            finishedSessions.delete(sessionId);
+            discoveredSessions.delete(sessionId);
+        }
+    }
+
+    async function discoverNewSessionIds(): Promise<string[]> {
+        if (!opts.discoverNewSessions) return [];
+        const projectDir = effectiveProjectDir();
+        let entries: string[];
+        try {
+            entries = await readdir(projectDir);
+        } catch {
+            return [];
+        }
+
+        const sessionIds: string[] = [];
+        for (const entry of entries) {
+            const sessionId = readClaudeSessionJsonlEntrySessionId(entry);
+            if (!sessionId) continue;
+            if (discoveredSessions.has(sessionId) || pendingSessions.has(sessionId) || finishedSessions.has(sessionId)) continue;
+            if (currentSessionId === sessionId || watchers.has(sessionId)) continue;
+            if (!isMainSessionAllowed(sessionId)) continue;
+            const filePath = join(projectDir, entry);
+            let stats: Awaited<ReturnType<typeof stat>>;
+            try {
+                stats = await stat(filePath);
+            } catch {
+                continue;
+            }
+            const baseline = sessionDiscoveryBaselines.get(sessionId);
+            if (baseline && stats.mtimeMs <= baseline.mtimeMs && stats.size <= baseline.size) continue;
+            const messages = await readClaudeSessionJsonlMessages({
+                sessionFilePath: filePath,
+                logLabel: 'SESSION_SCANNER',
+            });
+            const disposition = resolveUnhookedSessionDisposition({
+                bindDiscoveredSessions: opts.bindDiscoveredSessions,
+                classifyDiscoveredSession: opts.classifyDiscoveredSession,
+                filePath,
+                messages,
+                sessionId,
+            });
+            if (disposition === 'ignore') continue;
+            if (disposition === 'main') {
+                bindMainSession(sessionId);
+            }
+            discoveredSessions.add(sessionId);
+            sessionIds.push(sessionId);
+        }
+        return sessionIds;
+    }
 
     const subagentCollector = new ClaudeRemoteSubagentFileCollector({
         emitImported: (body) => {
             // Best-effort: avoid double-emitting imported sidechain messages within the same scanner lifetime.
             try {
-                const uuid = typeof (body as any)?.uuid === 'string' ? String((body as any).uuid) : '';
-                const sidechainId = typeof (body as any)?.sidechainId === 'string' ? String((body as any).sidechainId) : '';
-                const key = uuid && sidechainId ? `sidechain:${sidechainId}:${uuid}` : messageKey(body);
+                const key = messageKey(body);
                 if (processedMessageKeys.has(key)) return;
                 processedMessageKeys.add(key);
             } catch {
@@ -113,14 +217,14 @@ export async function createSessionScanner(opts: {
                 logger.debug('[SESSION_SCANNER] onMessage callback threw (sidechain import):', err);
             }
         },
-        resolveJsonlPathForAgentId: ({ agentId, claudeSessionId }) => {
+        resolveJsonlPathForAgentId: ({ agentId, sidechainId, claudeSessionId }) => {
             if (!claudeSessionId) return null;
             const sanitized = String(agentId ?? '').trim();
-            if (!sanitized) return null;
             return resolveClaudeSubagentJsonlPath({
                 projectDir: effectiveProjectDir(),
                 claudeSessionId,
                 agentId: sanitized,
+                sidechainId,
             });
         },
     });
@@ -239,7 +343,9 @@ export async function createSessionScanner(opts: {
             } catch (err) {
                 logger.debug('[SESSION_SCANNER] Failed observing historical message:', err);
             }
-            processedMessageKeys.add(messageKey(m));
+            if (!opts.replayInitialMessages) {
+                processedMessageKeys.add(messageKey(m));
+            }
         }
         // Backfill sidechain messages for any already-launched tasks.
         await subagentCollector.syncAll();
@@ -251,8 +357,30 @@ export async function createSessionScanner(opts: {
         scheduleTranscriptMissingWarning(opts.sessionId);
     }
 
+    if (opts.discoverNewSessions) {
+        try {
+            const entries = await readdir(initialProjectDir);
+            for (const entry of entries) {
+                const sessionId = readClaudeSessionJsonlEntrySessionId(entry);
+                if (!sessionId) continue;
+                try {
+                    const stats = await stat(join(initialProjectDir, entry));
+                    sessionDiscoveryBaselines.set(sessionId, {
+                        mtimeMs: stats.mtimeMs,
+                        size: stats.size,
+                    });
+                } catch {
+                    // Ignore entries that disappear while taking the startup baseline.
+                }
+            }
+        } catch {
+            // Missing or unreadable project directories are handled by later discovery attempts.
+        }
+    }
+
     // Main sync function
     const sync = new InvalidateSync(async () => {
+        if (closed) return;
         // logger.debug(`[SESSION_SCANNER] Syncing...`);
 
         // Collect session ids - include ALL sessions that have watchers
@@ -261,11 +389,20 @@ export async function createSessionScanner(opts: {
         for (let p of pendingSessions) {
             sessions.push(p);
         }
+        for (const discoveredSessionId of await discoverNewSessionIds()) {
+            sessions.push(discoveredSessionId);
+        }
         if (currentSessionId && !pendingSessions.has(currentSessionId)) {
             sessions.push(currentSessionId);
         }
+        if (closed) return;
         // Also process sessions that have active watchers (they may still receive updates)
-        for (let [sessionId] of watchers) {
+        for (let [sessionId, watcher] of watchers) {
+            if (!isMainSessionAllowed(sessionId)) {
+                watcher.stop();
+                watchers.delete(sessionId);
+                continue;
+            }
             if (!sessions.includes(sessionId)) {
                 sessions.push(sessionId);
             }
@@ -277,6 +414,7 @@ export async function createSessionScanner(opts: {
                 sessionFilePath: getSessionFilePath(session),
                 logLabel: 'SESSION_SCANNER',
             });
+            if (closed) return;
             let skipped = 0;
             let sent = 0;
             for (let file of sessionMessages) {
@@ -294,7 +432,7 @@ export async function createSessionScanner(opts: {
                     continue;
                 }
                 processedMessageKeys.add(key);
-                if (isInformationalSystemMessage(file)) {
+                if (isFilteredSystemMessage(file)) {
                     skipped++;
                     continue;
                 }
@@ -324,6 +462,7 @@ export async function createSessionScanner(opts: {
 
         await subagentCollector.syncAll();
         await teamInboxCollector.syncAll();
+        if (closed) return;
 
         // Move pending sessions to finished sessions (but keep processing them via watchers)
         for (let p of sessions) {
@@ -335,6 +474,7 @@ export async function createSessionScanner(opts: {
 
         // Update watchers for all sessions
         for (let p of sessions) {
+            if (closed) return;
             const desiredPath = getSessionFilePath(p);
             const existing = watchers.get(p);
 
@@ -355,18 +495,24 @@ export async function createSessionScanner(opts: {
     await sync.invalidateAndAwait();
 
     // Periodic sync
-    const intervalId = setInterval(() => { sync.invalidate(); }, 3000);
+    const intervalId = setInterval(() => { sync.invalidate(); }, opts.discoverNewSessions ? 1000 : 3000);
 
     // Public interface
     return {
         cleanup: async () => {
+            closed = true;
             clearInterval(intervalId);
+            invalidate = null;
             subagentCollector.cleanup();
             teamInboxCollector.cleanup();
             for (let w of watchers.values()) {
                 w.stop();
             }
             watchers.clear();
+            pendingSessions.clear();
+            finishedSessions.clear();
+            discoveredSessions.clear();
+            currentSessionId = null;
             for (const timeoutId of missingTranscriptTimers.values()) {
                 clearTimeout(timeoutId);
             }
@@ -375,9 +521,17 @@ export async function createSessionScanner(opts: {
             sync.stop();
         },
         onNewSession: (arg: string | SessionScannerSessionInfo) => {
+            if (closed) return;
             const sessionId = typeof arg === 'string' ? arg : arg.sessionId;
             const transcriptPathRaw = typeof arg === 'string' ? null : arg.transcriptPath;
             const transcriptPath = typeof transcriptPathRaw === 'string' && transcriptPathRaw.trim() ? transcriptPathRaw : null;
+
+            if (!isMainSessionAllowed(sessionId)) {
+                logger.debug(`[SESSION_SCANNER] Ignoring unrelated session after binding: ${sessionId}`);
+                return;
+            }
+            bindMainSession(sessionId);
+            cleanupUnallowedSessionWatchers();
 
             let didUpdatePaths = false;
             if (transcriptPath) {
@@ -430,6 +584,8 @@ export type SessionScanner = ReturnType<typeof createSessionScanner>;
 //
 
 function messageKey(message: RawJSONLines): string {
+    const claudeJsonlKey = buildClaudeJsonlMessageKey(message);
+    if (claudeJsonlKey) return claudeJsonlKey;
     if (message.type === 'user') {
         return message.uuid;
     } else if (message.type === 'assistant') {
@@ -450,10 +606,50 @@ function messageKey(message: RawJSONLines): string {
 }
 
 // Claude Code `system` lines are out-of-band side-channels (init, stop-hook summaries, inactivity
-// recaps, etc.) — none of them are agent transcript content. Drop them wholesale; if a future
-// subtype ever needs to render, opt it in explicitly rather than leak informational messages.
-function isInformationalSystemMessage(message: RawJSONLines): boolean {
-    return message.type === 'system';
+// recaps, etc.) — none of them are agent transcript content. `compact_boundary` is the one live
+// lifecycle signal consumers need so they can publish compaction completion and close standalone
+// `/compact` turns; downstream raw-message bridges still suppress it from visible transcript rows.
+function isFilteredSystemMessage(message: RawJSONLines): boolean {
+    if (message.type !== 'system') return false;
+    return (message as Record<string, unknown>).subtype !== 'compact_boundary';
+}
+
+function resolveUnhookedSessionDisposition(params: Readonly<{
+    bindDiscoveredSessions: boolean | undefined;
+    classifyDiscoveredSession?: ((params: {
+        sessionId: string;
+        filePath: string;
+        messages: readonly RawJSONLines[];
+    }) => SessionScannerUnhookedSessionDisposition | null | undefined) | undefined;
+    filePath: string;
+    messages: readonly RawJSONLines[];
+    sessionId: string;
+}>): SessionScannerUnhookedSessionDisposition {
+    const customDisposition = params.classifyDiscoveredSession?.({
+        sessionId: params.sessionId,
+        filePath: params.filePath,
+        messages: params.messages,
+    });
+    if (customDisposition) return customDisposition;
+    if (!shouldDiscoverUnhookedSession(params.messages)) return 'ignore';
+    return params.bindDiscoveredSessions === false ? 'diagnostic' : 'main';
+}
+
+function shouldDiscoverUnhookedSession(messages: readonly RawJSONLines[]): boolean {
+    return messages.some((message) => {
+        if (message.type !== 'assistant') return false;
+        const record = message as Record<string, unknown>;
+        return record.isApiErrorMessage === true
+            || record.error != null
+            || record.apiErrorStatus != null
+            || record.api_error_status != null;
+    });
+}
+
+function readClaudeSessionJsonlEntrySessionId(entry: string): string | null {
+    if (!entry.endsWith('.jsonl')) return null;
+    const sessionId = entry.slice(0, -'.jsonl'.length);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId) ? sessionId : null;
 }
 
 /**

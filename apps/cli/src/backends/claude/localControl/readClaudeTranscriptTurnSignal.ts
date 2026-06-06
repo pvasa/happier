@@ -1,5 +1,8 @@
 import type { LocalTurnLifecycleEvent } from '@/agent/localControl/turnLifecycle';
 import type { RawJSONLines } from '@/backends/claude/types';
+import { isClaudeLocalCommandTranscriptMessage } from '../utils/isClaudeLocalCommandTranscriptMessage';
+import { isClaudeRuntimeAuthFailureEvidence } from '../connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
+import { isClaudeTranscriptTaskNotification } from './readClaudeTranscriptProviderActivity';
 
 const STOP_HOOK_FEEDBACK_PREFIX = 'Stop hook feedback:\n';
 const REQUEST_INTERRUPTED_TEXT = '[Request interrupted by user]';
@@ -15,18 +18,88 @@ function firstTextContent(value: unknown): string | null {
   return null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function readBooleanFlag(value: unknown, key: string): boolean {
+  return asRecord(value)?.[key] === true;
+}
+
+function readMessageRecord(value: unknown): Record<string, unknown> | null {
+  return asRecord(asRecord(value)?.message);
+}
+
 function hasToolResultContent(value: unknown): boolean {
   if (!Array.isArray(value)) return false;
   return value.some((item) => item && typeof item === 'object' && (item as Record<string, unknown>).type === 'tool_result');
 }
 
+function containsRateLimitEvidence(value: unknown): boolean {
+  if (typeof value === 'string') return /rate[ _-]?limit(?:ed)?/iu.test(value);
+  if (Array.isArray(value)) return value.some(containsRateLimitEvidence);
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return [
+    record.error,
+    record.code,
+    record.type,
+    record.kind,
+    record.message,
+    record.detail,
+    record.details,
+    record.description,
+    record.content,
+  ].some(containsRateLimitEvidence);
+}
+
 export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurnLifecycleEvent | null {
-  if ((message as any).isSidechain === true) return null;
+  if (readBooleanFlag(message, 'isSidechain')) return null;
+
+  if (message.type === 'system') {
+    const subtype = typeof (message as Record<string, unknown>).subtype === 'string'
+      ? String((message as Record<string, unknown>).subtype)
+      : '';
+    if (subtype === 'compact_boundary') {
+      return {
+        type: 'completion_candidate',
+        providerTurnId: null,
+        source: 'claude_transcript_compact_boundary',
+      };
+    }
+    return null;
+  }
 
   if (message.type === 'assistant') {
-    const stopReason = typeof (message as any)?.message?.stop_reason === 'string'
-      ? String((message as any).message.stop_reason)
-      : '';
+    if (readBooleanFlag(message, 'isApiErrorMessage') && isClaudeRuntimeAuthFailureEvidence(message)) {
+      return {
+        type: 'turn_terminal',
+        providerTurnId: null,
+        reason: 'failed',
+        detail: 'authentication_failed',
+        source: 'claude_transcript_api_error_authentication',
+      };
+    }
+    if (readBooleanFlag(message, 'isApiErrorMessage') && containsRateLimitEvidence(message)) {
+      return {
+        type: 'turn_terminal',
+        providerTurnId: null,
+        reason: 'failed',
+        detail: 'rate_limit',
+        source: 'claude_transcript_api_error_rate_limit',
+      };
+    }
+    if (readBooleanFlag(message, 'isApiErrorMessage')) {
+      return {
+        type: 'turn_terminal',
+        providerTurnId: null,
+        reason: 'failed',
+        detail: 'api_error',
+        source: 'claude_transcript_api_error',
+      };
+    }
+    const rawStopReason = readMessageRecord(message)?.stop_reason;
+    const stopReason = typeof rawStopReason === 'string' ? rawStopReason : '';
     if (stopReason === 'end_turn') {
       return {
         type: 'completion_candidate',
@@ -38,8 +111,9 @@ export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurn
   }
 
   if (message.type !== 'user') return null;
+  if (isClaudeLocalCommandTranscriptMessage(message)) return null;
 
-  const content = (message as any)?.message?.content;
+  const content = readMessageRecord(message)?.content;
   const text = firstTextContent(content);
 
   if (text === REQUEST_INTERRUPTED_TEXT) {
@@ -51,7 +125,7 @@ export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurn
     };
   }
 
-  if ((message as any).isMeta === true && typeof text === 'string' && text.startsWith(STOP_HOOK_FEEDBACK_PREFIX)) {
+  if (readBooleanFlag(message, 'isMeta') && typeof text === 'string' && text.startsWith(STOP_HOOK_FEEDBACK_PREFIX)) {
     return {
       type: 'continuation_detected',
       providerTurnId: null,
@@ -59,7 +133,7 @@ export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurn
     };
   }
 
-  if ((message as any).isMeta === true || hasToolResultContent(content)) return null;
+  if (readBooleanFlag(message, 'isMeta') || hasToolResultContent(content) || isClaudeTranscriptTaskNotification(message)) return null;
   if (typeof text === 'string' && text.trim().length > 0) {
     return {
       type: 'turn_started',

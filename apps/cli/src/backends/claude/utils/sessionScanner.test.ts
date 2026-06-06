@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createSessionScanner } from './sessionScanner'
 import { RawJSONLines } from '../types'
-import { mkdir, writeFile, appendFile, rm, readFile } from 'node:fs/promises'
+import { mkdir, writeFile, appendFile, rm, readFile, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
@@ -368,6 +368,44 @@ describe('sessionScanner', () => {
     await waitFor(() => collectedMessages.length >= 1, 1000)
     expect(collectedMessages).toHaveLength(1)
     expect(collectedMessages[0].type).toBe('assistant')
+  })
+
+  it('skips only committed Claude JSONL keys during resume backfill', async () => {
+    const altProjectDir = join(testDir, 'alt-project-committed-keys')
+    await mkdir(altProjectDir, { recursive: true })
+
+    const sessionId = '22222222-2222-2222-2222-222222222223'
+    const transcriptPath = join(altProjectDir, `${sessionId}.jsonl`)
+
+    await writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: 'assistant',
+          uuid: 'already_committed',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'already in Happier' }] },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          uuid: 'missing_during_runner_restart',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'missing from Happier' }] },
+        }),
+      ].join('\n') + '\n',
+    )
+
+    scanner = await createSessionScanner({
+      sessionId,
+      transcriptPath,
+      workingDirectory: testDir,
+      initialProcessedMessageKeys: new Set(['main:assistant:already_committed']),
+      replayInitialMessages: true,
+      onMessage: (msg: RawJSONLines) => collectedMessages.push(msg),
+    })
+
+    await waitFor(() => collectedMessages.length >= 1, 1000)
+    expect(collectedMessages).toHaveLength(1)
+    expect(collectedMessages[0].type).toBe('assistant')
+    expect(collectedMessages[0].uuid).toBe('missing_during_runner_restart')
   })
 
   it('normalizes Claude Agent Teams tool names to canonical tool names', async () => {
@@ -759,5 +797,38 @@ describe('sessionScanner', () => {
     expect(missing).toEqual([
       { sessionId, filePath: join(projectDir, `${sessionId}.jsonl`) },
     ])
+  })
+
+  it('discovers new unhooked API-error transcripts even when filesystem mtime is older than scanner startup', async () => {
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      discoverNewSessions: true,
+    })
+
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    const sessionFile = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(sessionFile, `${JSON.stringify({
+      type: 'assistant',
+      uuid: 'assistant-auth-error-with-coarse-mtime',
+      timestamp: new Date().toISOString(),
+      sessionId,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Not logged in' }],
+      },
+      error: 'authentication_failed',
+      isApiErrorMessage: true,
+    } as RawJSONLines)}\n`)
+
+    const olderThanScannerStart = new Date(Date.now() - 60_000)
+    await utimes(sessionFile, olderThanScannerStart, olderThanScannerStart)
+
+    await waitFor(() => collectedMessages.some((message) => (message as any).uuid === 'assistant-auth-error-with-coarse-mtime'), 2_500)
+
+    expect(collectedMessages).toContainEqual(expect.objectContaining({
+      uuid: 'assistant-auth-error-with-coarse-mtime',
+    }))
   })
 })

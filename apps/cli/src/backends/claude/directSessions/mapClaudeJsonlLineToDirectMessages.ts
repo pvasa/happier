@@ -1,5 +1,6 @@
 import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 
+import { isClaudeLocalCommandTranscriptMessage } from '@/backends/claude/utils/isClaudeLocalCommandTranscriptMessage';
 import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
 import { parseRawJsonLinesObject } from '@/backends/claude/utils/parseRawJsonLines';
@@ -119,6 +120,9 @@ export function mapClaudeJsonlLineToDirectMessages(params: Readonly<{
   }
 
   const normalized = normalizeClaudeToolUseNamesInRawJsonLines(parsed);
+  if (isClaudeLocalCommandTranscriptMessage(normalized)) {
+    return [];
+  }
   const normalizedForOutput = ensureClaudeOutputMessageRole(normalized);
 
   if (

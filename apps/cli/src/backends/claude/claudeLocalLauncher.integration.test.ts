@@ -58,6 +58,10 @@ vi.mock('@/ui/logger', () => ({
   },
 }));
 
+vi.mock('@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon', () => ({
+  reportConnectedServiceRuntimeAuthFailureToDaemon: vi.fn(async () => {}),
+}));
+
 type SessionClientStub = EventEmitter &
   SessionClientPort & {
     getMetadataSnapshot?: () => MetadataSnapshot;
@@ -122,6 +126,9 @@ function createLocalHarness(options?: { metadataSnapshot?: MetadataSnapshot }): 
     keepAlive: vi.fn(),
     updateMetadata: vi.fn(),
     updateAgentState: vi.fn(),
+    sessionTurnLifecycle: {
+      failTurn: vi.fn(async () => {}),
+    },
     getMetadataSnapshot: options?.metadataSnapshot ? vi.fn(() => options.metadataSnapshot) : undefined,
     waitForMetadataUpdate: vi.fn(async () => false),
     popPendingMessage: vi.fn(async () => false),
@@ -257,20 +264,51 @@ describe('claudeLocalLauncher', () => {
   it('does not pass a strict allowedTools allowlist to local Claude spawns by default', async () => {
     const { session } = createLocalHarness();
 
-    let captured: LocalLaunchOptions | null = null;
+    const captured: { current: LocalLaunchOptions | null } = { current: null };
     mockClaudeLocal.mockImplementationOnce(async (opts: LocalLaunchOptions) => {
-      captured = opts;
+      captured.current = opts;
     });
 
     const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
     const result = await claudeLocalLauncher(session);
 
     expect(mockClaudeLocal).toHaveBeenCalledTimes(1);
-    expect((captured as any)?.allowedTools).toBeUndefined();
-    expect(typeof (captured as any)?.happierMcpConfigJson).toBe('string');
-    const parsed = JSON.parse(String((captured as any)?.happierMcpConfigJson ?? 'null'));
+    expect(captured.current ? 'allowedTools' in captured.current : true).toBe(false);
+    expect(typeof captured.current?.happierMcpConfigJson).toBe('string');
+    const parsed = JSON.parse(String(captured.current?.happierMcpConfigJson ?? 'null'));
     expect(parsed?.mcpServers?.happier).toBeTruthy();
     expect(result).toEqual({ type: 'exit', code: 0 });
+  });
+
+  it('routes fd3 lifecycle fallback telemetry through the safe CLI logger', async () => {
+    const { session } = createLocalHarness();
+
+    const captured: { current: LocalLaunchOptions | null } = { current: null };
+    mockClaudeLocal.mockImplementationOnce(async (opts: LocalLaunchOptions) => {
+      captured.current = opts;
+    });
+
+    const { logger } = await import('@/ui/logger');
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const result = await claudeLocalLauncher(session);
+
+    expect(result).toEqual({ type: 'exit', code: 0 });
+    const capturedOptions = captured.current;
+    if (!capturedOptions) throw new Error('Expected Claude local launch options to be captured');
+    expect(typeof capturedOptions.onLifecycleGapDetected).toBe('function');
+
+    capturedOptions.onLifecycleGapDetected?.({
+      source: 'fd3_fetch_fallback',
+      signal: 'fetch_start',
+      activeFetchCount: 1,
+    });
+
+    expect(logger.debug).toHaveBeenCalledWith('[claude-unified-telemetry]', {
+      activeFetchCount: 1,
+      event: 'unified.lifecycle.gap_detected',
+      signal: 'fetch_start',
+      source: 'fd3_fetch_fallback',
+    });
   });
 
   it('passes through user --mcp-config args and does not parse/merge them into happierMcpConfigJson', async () => {
@@ -460,6 +498,191 @@ describe('claudeLocalLauncher', () => {
 
     await expect(launcherPromise).resolves.toEqual({ type: 'switch' });
     expect(abortObserved).toBe(true);
+  });
+
+  it('propagates hook-driven local lifecycle to ACP turn markers and ready events', async () => {
+    vi.useFakeTimers();
+    const { session, client, sendSessionEvent } = createLocalHarness();
+    const localStarted = createDeferred<void>();
+    const releaseLocal = createDeferred<void>();
+
+    mockClaudeLocal.mockImplementationOnce(async () => {
+      localStarted.resolve(undefined);
+      await releaseLocal.promise;
+    });
+
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launcherPromise = claudeLocalLauncher(session);
+
+    await localStarted.promise;
+    session.onClaudeSessionHook({ session_id: 'sid1', hook_event_name: 'UserPromptSubmit' });
+    session.onClaudeSessionHook({ session_id: 'sid1', hook_event_name: 'Stop' });
+    await vi.advanceTimersByTimeAsync(500);
+
+    releaseLocal.resolve(undefined);
+    await expect(launcherPromise).resolves.toEqual({ type: 'exit', code: 0 });
+
+    const agentTypes = (client.sendAgentMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1]?.type);
+    expect(agentTypes).toEqual(expect.arrayContaining(['task_started', 'task_complete']));
+    expect(sendSessionEvent).toHaveBeenCalledWith({ type: 'ready' });
+  });
+
+  it('ignores fd3 idle-clear fallback while hook-driven lifecycle is active', async () => {
+    vi.useFakeTimers();
+    const { session, client } = createLocalHarness();
+    const localStarted = createDeferred<void>();
+    const releaseLocal = createDeferred<void>();
+    const capturedOptions: { current: LocalLaunchOptions | null } = { current: null };
+
+    mockClaudeLocal.mockImplementationOnce(async (opts) => {
+      capturedOptions.current = opts;
+      localStarted.resolve(undefined);
+      await releaseLocal.promise;
+    });
+
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launcherPromise = claudeLocalLauncher(session);
+
+    await localStarted.promise;
+    session.onClaudeSessionHook({ session_id: 'sid1', hook_event_name: 'UserPromptSubmit' });
+    capturedOptions.current?.onThinkingChange?.(false);
+
+    let agentTypes = (client.sendAgentMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1]?.type);
+    expect(agentTypes).toContain('task_started');
+    expect(agentTypes).not.toContain('task_complete');
+
+    session.onClaudeSessionHook({ session_id: 'sid1', hook_event_name: 'Stop' });
+    await vi.advanceTimersByTimeAsync(500);
+    releaseLocal.resolve(undefined);
+    await expect(launcherPromise).resolves.toEqual({ type: 'exit', code: 0 });
+
+    agentTypes = (client.sendAgentMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1]?.type);
+    expect(agentTypes.filter((type) => type === 'task_complete')).toHaveLength(1);
+  });
+
+  it('surfaces local StopFailure rate-limit hooks as runtime issues', async () => {
+    const { session, client } = createLocalHarness();
+    const localStarted = createDeferred<void>();
+    const releaseLocal = createDeferred<void>();
+
+    mockClaudeLocal.mockImplementationOnce(async () => {
+      localStarted.resolve(undefined);
+      await releaseLocal.promise;
+    });
+
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launcherPromise = claudeLocalLauncher(session);
+
+    await localStarted.promise;
+    session.onClaudeSessionHook({ session_id: 'sid1', hook_event_name: 'UserPromptSubmit' });
+    session.onClaudeSessionHook({
+      session_id: 'sid1',
+      hook_event_name: 'StopFailure',
+      error_type: 'rate_limit',
+    } as any);
+
+    await vi.waitFor(() => {
+      expect(client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'claude',
+        issue: expect.objectContaining({
+          code: 'usage_limit',
+          usageLimit: expect.objectContaining({ providerLimitId: 'rate_limit' }),
+        }),
+      }));
+    });
+
+    releaseLocal.resolve(undefined);
+    await expect(launcherPromise).resolves.toEqual({ type: 'exit', code: 0 });
+  });
+
+  it('projects local TodoWrite transcript rows into session work-state metadata', async () => {
+    const { session, client } = createLocalHarness();
+    let scannerOptions: SessionScannerOptions | null = null;
+
+    mockCreateSessionScanner.mockImplementation(async (opts: SessionScannerOptions) => {
+      scannerOptions = opts;
+      return createSessionScannerStub();
+    });
+    mockClaudeLocal.mockImplementationOnce(async () => {
+      scannerOptions?.onMessage({
+        type: 'assistant',
+        uuid: 'assistant_todo_1',
+        isSidechain: false,
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'toolu_todo_1',
+            name: 'TodoWrite',
+            input: {
+              todos: [
+                { content: 'Wire lifecycle parity', status: 'in_progress', activeForm: 'Wiring lifecycle parity' },
+              ],
+            },
+          }],
+        },
+      } as any);
+    });
+
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    await expect(claudeLocalLauncher(session)).resolves.toEqual({ type: 'exit', code: 0 });
+
+    const updateMetadata = client.updateMetadata as ReturnType<typeof vi.fn>;
+    expect(updateMetadata).toHaveBeenCalled();
+    const updater = updateMetadata.mock.calls.at(-1)?.[0] as ((metadata: any) => any) | undefined;
+    expect(updater?.({})?.sessionWorkStateV1?.items).toEqual([
+      expect.objectContaining({
+        kind: 'todo',
+        status: 'active',
+        title: 'Wire lifecycle parity',
+      }),
+    ]);
+  });
+
+  it('emits local compaction lifecycle events from transcript markers', async () => {
+    const { session, client, sendSessionEvent } = createLocalHarness();
+    let scannerOptions: SessionScannerOptions | null = null;
+
+    mockCreateSessionScanner.mockImplementation(async (opts: SessionScannerOptions) => {
+      scannerOptions = opts;
+      return createSessionScannerStub();
+    });
+    mockClaudeLocal.mockImplementationOnce(async () => {
+      scannerOptions?.onMessage({
+        type: 'user',
+        uuid: 'compact_command_marker',
+        isMeta: true,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: '<command-name>/compact</command-name>' }],
+        },
+      } as any);
+      scannerOptions?.onMessage({
+        type: 'system',
+        uuid: 'compact_boundary_1',
+        subtype: 'compact_boundary',
+        session_id: 'sid_after_compact',
+      } as any);
+    });
+
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    await expect(claudeLocalLauncher(session)).resolves.toEqual({ type: 'exit', code: 0 });
+
+    expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'context-compaction',
+      phase: 'started',
+    }));
+    expect(sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'context-compaction',
+      phase: 'completed',
+      providerSessionId: 'sid_after_compact',
+    }));
+    const transcriptPayload = vi.mocked(client.sendClaudeSessionMessage).mock.calls
+      .map(([message]) => JSON.stringify(message))
+      .join('\n');
+    expect(transcriptPayload).not.toContain('<command-name>/compact</command-name>');
+    expect(transcriptPayload).not.toContain('<local-command-stdout>');
+    expect(transcriptPayload).not.toContain('compact_boundary');
   });
 
   it('defers server-pending-queue remote switch until the active local Claude turn settles', async () => {
@@ -795,6 +1018,41 @@ describe('claudeLocalLauncher', () => {
     expect(await switchHandler({ to: 'local' })).toBe(true);
     expect(await switchHandler({ to: 'remote' })).toBe(true);
     await expect(launcherPromise).resolves.toEqual({ type: 'switch' });
+  });
+
+  it('does not enter legacy remote mode when remote switching is disabled', async () => {
+    const { session, switchHandlerReady } = createLocalHarness();
+    const localStarted = createDeferred<void>();
+    const releaseLocal = createDeferred<void>();
+    let abortObserved = false;
+
+    session.onSessionFound('sess_1', hookWithTranscript('/tmp/sess_1.jsonl'));
+
+    mockClaudeLocal.mockImplementationOnce(async (opts: LocalLaunchOptions) => {
+      localStarted.resolve(undefined);
+      await Promise.race([
+        releaseLocal.promise,
+        waitForAbort(opts.abort).then(() => {
+          abortObserved = true;
+        }),
+      ]);
+    });
+
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launcherPromise = claudeLocalLauncher(session, { remoteSwitchingEnabled: false });
+
+    const switchHandler = await switchHandlerReady;
+    await localStarted.promise;
+
+    expect(await switchHandler({ to: 'remote' })).toBe(false);
+
+    session.queue.push('hello from app', defaultMode);
+    await Promise.resolve();
+
+    expect(abortObserved).toBe(false);
+
+    releaseLocal.resolve(undefined);
+    await expect(launcherPromise).resolves.toEqual({ type: 'exit', code: 0 });
   });
 
   it('returns switch (not exit) when Claude is terminated during app-triggered local→remote switch', async () => {

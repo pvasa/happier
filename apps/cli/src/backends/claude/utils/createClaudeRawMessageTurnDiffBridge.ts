@@ -5,6 +5,8 @@ import { emitCanonicalTurnDiffTool } from '@/agent/runtime/emitCanonicalTurnDiff
 
 import { ClaudeTurnChangeTracker } from './ClaudeTurnChangeTracker';
 import { isClaudeExplicitDiffToolInput } from './isClaudeExplicitDiffToolInput';
+import { isClaudeLocalCommandTranscriptMessage } from './isClaudeLocalCommandTranscriptMessage';
+import { isCompactHookLocalCommandStdout } from './isCompactHookLocalCommandStdout';
 
 type SendRawMessage = (message: RawJSONLines) => void;
 type AssistantRawJSONLine = Extract<RawJSONLines, { type: 'assistant' }>;
@@ -206,7 +208,14 @@ export function createClaudeRawMessageTurnDiffBridge(params: Readonly<{
                 return null;
             }
 
+            if (message.type === 'system') {
+                return null;
+            }
+
             if (message.type === 'assistant') {
+                if (isCompactHookLocalCommandStdout(message)) {
+                    return null;
+                }
                 const nextMessage = filterAssistantContent({
                     message,
                     turnChangeTracker,
@@ -222,6 +231,9 @@ export function createClaudeRawMessageTurnDiffBridge(params: Readonly<{
             }
 
             if (message.type === 'user') {
+                if (isClaudeLocalCommandTranscriptMessage(message)) {
+                    return null;
+                }
                 return filterUserContent({
                     message,
                     turnChangeTracker,

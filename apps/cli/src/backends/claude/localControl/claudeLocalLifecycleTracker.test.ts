@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createLocalTurnLifecycleController } from '@/agent/localControl/turnLifecycle';
+import { createLocalTurnLifecycleController, type LocalTurnLifecycleSnapshot } from '@/agent/localControl/turnLifecycle';
 import { createClaudeLocalLifecycleTracker } from './claudeLocalLifecycleTracker';
 
 describe('createClaudeLocalLifecycleTracker', () => {
@@ -75,5 +75,142 @@ describe('createClaudeLocalLifecycleTracker', () => {
     exitedTracker.observeProcessExit();
     await expect(exitedWait).resolves.toMatchObject({ lastTerminalReason: 'process-exited' });
     exited.dispose();
+  });
+
+  it('preserves official and legacy StopFailure error discriminators on terminal lifecycle events', async () => {
+    const observedDetails: Array<string | undefined> = [];
+    const lifecycle = createLocalTurnLifecycleController({
+      completionQuiescenceMs: 0,
+      onStateChange: (_snapshot, event) => {
+        if (event.type === 'turn_terminal') observedDetails.push(event.detail);
+      },
+    });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'StopFailure',
+      error: 'rate_limit',
+      error_type: 'legacy_should_not_win',
+    } as any);
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'StopFailure',
+      error_type: 'rate_limit',
+    } as any);
+
+    expect(observedDetails).toEqual(['rate_limit', 'rate_limit']);
+    lifecycle.dispose();
+  });
+
+  it('keeps Claude Unified turns active while async Agent background tasks are still running', async () => {
+    const observedSnapshots: LocalTurnLifecycleSnapshot[] = [];
+    const lifecycle = createLocalTurnLifecycleController({
+      completionQuiescenceMs: 0,
+      onStateChange: (snapshot) => {
+        observedSnapshots.push(snapshot);
+      },
+    });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'launch-1',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Async agent launched successfully.' }],
+      },
+      toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent_1' },
+    } as any);
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'launch-2',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: 'Async agent launched successfully.' }],
+      },
+      toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent_2' },
+    } as any);
+
+    tracker.observeTranscript({
+      type: 'assistant',
+      uuid: 'yielded-while-agents-run',
+      message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Agents are running.' }] },
+    } as any);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: true,
+      terminal: false,
+      waitingForQuiescence: false,
+    });
+
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'agent-1-completed',
+      origin: { kind: 'task-notification' },
+      message: { content: '<task-notification><task-id>agent_1</task-id><status>completed</status></task-notification>' },
+    } as any);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: true,
+      terminal: false,
+    });
+
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'agent-2-completed',
+      origin: { kind: 'task-notification' },
+      message: { content: '<task-notification><task-id>agent_2</task-id><status>completed</status></task-notification>' },
+    } as any);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: true,
+      terminal: false,
+    });
+
+    tracker.observeTranscript({
+      type: 'assistant',
+      uuid: 'summary-complete',
+      message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'All agents complete.' }] },
+    } as any);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: false,
+      terminal: true,
+      lastTerminalReason: 'completed',
+    });
+    expect(observedSnapshots.some((snapshot) => snapshot.terminal && snapshot.lastTerminalReason === 'completed')).toBe(true);
+    lifecycle.dispose();
+  });
+
+  it('treats Stop with no background tasks as completion after async Agent launches', async () => {
+    const lifecycle = createLocalTurnLifecycleController({
+      completionQuiescenceMs: 0,
+    });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'launch-1',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Async agent launched successfully.' }],
+      },
+      toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'agent_1' },
+    } as any);
+
+    tracker.observeHook({
+      session_id: 'sid',
+      hook_event_name: 'Stop',
+      background_tasks: [],
+    });
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: false,
+      terminal: true,
+      lastTerminalReason: 'completed',
+    });
+    lifecycle.dispose();
   });
 });

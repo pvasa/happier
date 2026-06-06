@@ -16,14 +16,26 @@ import { ensureSessionInfoBeforeSwitch } from '@/backends/claude/utils/ensureSes
 import { configuration } from '@/configuration';
 import { resolveClaudeConfigDirOverride } from './utils/resolveClaudeConfigDirOverride';
 import { resolveClaudeCodeExperimentalEnvOverlay } from './spawn/resolveClaudeCodeExperimentalEnvOverlay';
-import { createClaudeRawMessageTurnDiffBridge } from './utils/createClaudeRawMessageTurnDiffBridge';
 import {
     createDeferredRemoteSwitchController,
     createLocalTurnLifecycleController,
+    type LocalTurnLifecycleEvent,
+    type LocalTurnLifecycleSnapshot,
 } from '@/agent/localControl/turnLifecycle';
 import { startLocalPendingQueueRemoteSwitchWatcher } from '@/agent/localControl/pendingQueue/startLocalPendingQueueRemoteSwitchWatcher';
 import { createClaudeLocalLifecycleTracker } from './localControl/claudeLocalLifecycleTracker';
 import type { SessionHookData } from './utils/startHookServer';
+import { createClaudeReadyHandler } from './ready/createClaudeReadyHandler';
+import {
+    mapClaudeStopFailureErrorToUsageDetails,
+    type NormalizedProviderUsageLimitDetailsV1,
+} from './connectedServices/mapClaudeRateLimitEventToUsageDetails';
+import { surfaceClaudeRateLimitRuntimeIssue } from './connectedServices/surfaceClaudeRuntimeIssues';
+import {
+    createClaudeUnifiedTelemetrySink,
+    emitClaudeUnifiedLifecycleGapDetected,
+} from './unifiedTerminal/telemetry';
+import { createClaudeSessionTranscriptProjector } from './localControl/createClaudeSessionTranscriptProjector';
 
 function upsertClaudePermissionModeArgs(
     args: string[] | undefined,
@@ -77,20 +89,59 @@ export async function claudeLocalLauncher(
          * - `switch`: switching from remote → local (must enforce discard/pending safety before switching)
          */
         entry?: 'initial' | 'switch';
+        /**
+         * Enables the legacy local→remote takeover path. Claude unified terminal owns
+         * UI input through terminal-host injection and must not enter legacy remote mode.
+         */
+        remoteSwitchingEnabled?: boolean;
     },
 ): Promise<LauncherResult> {
 
         const entry = opts?.entry ?? 'initial';
-        const turnDiffBridge = createClaudeRawMessageTurnDiffBridge({
-            getSessionId: () => session.sessionId ?? session.client.sessionId ?? 'unknown',
-            sendMessage: (message) => {
-                session.client.sendClaudeSessionMessage(message);
-            },
+        const remoteSwitchingEnabled = opts?.remoteSwitchingEnabled !== false;
+        const transcriptProjector = createClaudeSessionTranscriptProjector({ session, logPrefix: '[local]' });
+        const readyHandler = createClaudeReadyHandler({
+            session: session.client,
+            pushSender: null,
+            waitingForCommandLabel: 'Claude',
+            logPrefix: '[local]',
+            getPending: () => null,
+            getQueueSize: () => session.queue.size(),
         });
+        const surfaceRateLimit = (details: NormalizedProviderUsageLimitDetailsV1): void => {
+            void surfaceClaudeRateLimitRuntimeIssue(session, details, '[local]').catch((error) => {
+                logger.debug('[local]: failed to surface Claude rate-limit runtime issue', error);
+            });
+        };
         const turnLifecycle = createLocalTurnLifecycleController({
             completionQuiescenceMs: configuration.claudeLocalTurnCompletionQuiescenceMs,
+            onStateChange: (snapshot: LocalTurnLifecycleSnapshot, event: LocalTurnLifecycleEvent) => {
+                if (snapshot.active && !snapshot.terminal) {
+                    session.onThinkingChange(true);
+                    return;
+                }
+                if (!snapshot.terminal) return;
+                if (snapshot.lastTerminalReason === 'aborted') {
+                    session.abortCurrentTaskTurn();
+                } else {
+                    session.onThinkingChange(false);
+                }
+                if (snapshot.lastTerminalReason === 'completed') {
+                    readyHandler();
+                }
+                if (event.type === 'turn_terminal' && event.source === 'claude_hook_stop_failure') {
+                    const details = mapClaudeStopFailureErrorToUsageDetails(event.detail);
+                    if (details) surfaceRateLimit(details);
+                }
+            },
         });
+        const applyFd3ThinkingFallback = (thinking: boolean): void => {
+            const snapshot = turnLifecycle.snapshot();
+            if (!thinking && snapshot.active && !snapshot.terminal) return;
+            session.onThinkingChange(thinking);
+        };
         const lifecycleTracker = createClaudeLocalLifecycleTracker({ lifecycle: turnLifecycle });
+        const unifiedTelemetry = createClaudeUnifiedTelemetrySink();
 
         // Create scanner
             const scanner = await createSessionScanner({
@@ -99,12 +150,8 @@ export async function claudeLocalLauncher(
         claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
         workingDirectory: session.path,
         onMessage: (message) => {
+            transcriptProjector.observe(message);
             lifecycleTracker.observeTranscript(message);
-            const bridged = turnDiffBridge.observe(message);
-            if (bridged) {
-                session.client.sendClaudeSessionMessage(bridged);
-                turnDiffBridge.flushAfterForwardIfNeeded();
-            }
         },
         onTranscriptMissing: () => {
             session.client.sendSessionEvent({
@@ -129,12 +176,12 @@ export async function claudeLocalLauncher(
     // Handle abort
     let exitReason: LauncherResult | null = null;
     let abortingForModeSwitch = false;
-	    const processAbortController = new AbortController();
-	    let exitFuture = new Future<void>();
-	    let syncLastPermissionModeFromMetadata: (() => void) | null = null;
+    const processAbortController = new AbortController();
+    let exitFuture = new Future<void>();
+    let syncLastPermissionModeFromMetadata: (() => void) | null = null;
     let deferredRemoteSwitch: { dispose: () => void } | null = null;
     let pendingQueueWatcher: { stop: () => void } | null = null;
-	    try {
+    try {
         const clientEmitter = session.client as unknown as {
             getMetadataSnapshot?: () => Metadata | null | undefined;
             on?: (event: string, listener: () => void) => void;
@@ -176,11 +223,12 @@ export async function claudeLocalLauncher(
             logger.debug('[local]: doAbort');
             session.noteUserAbortRequested();
 
-            // Switching to remote mode
+            // Legacy local mode aborts by handing off to remote mode. Unified terminal
+            // disables that handoff because remote writes are handled by host injection.
             if (!exitReason) {
-                exitReason = { type: 'switch' };
+                exitReason = remoteSwitchingEnabled ? { type: 'switch' } : { type: 'exit', code: 0 };
             }
-            abortingForModeSwitch = true;
+            abortingForModeSwitch = remoteSwitchingEnabled;
 
             // Reset sent messages
             session.queue.reset();
@@ -188,10 +236,14 @@ export async function claudeLocalLauncher(
             // Abort
             await ensureSessionInfoBeforeSwitch({ session });
             await abort();
+            return true;
         }
 
         async function doSwitch() {
             logger.debug('[local]: doSwitch');
+            if (!remoteSwitchingEnabled) {
+                return false;
+            }
 
             // Switching to remote mode
             if (!exitReason) {
@@ -202,14 +254,14 @@ export async function claudeLocalLauncher(
             // Abort
             await ensureSessionInfoBeforeSwitch({ session });
             await abort();
+            return true;
         }
 
         const remoteSwitchController = createDeferredRemoteSwitchController<EnhancedMode>({
             lifecycle: turnLifecycle,
             providerLabel: 'Claude',
             requestSwitchToRemote: async () => {
-                await doSwitch();
-                return true;
+                return await doSwitch();
             },
             onQueuedMessageMode: (mode) => {
                 session.setLastPermissionMode(mode.permissionMode);
@@ -224,19 +276,24 @@ export async function claudeLocalLauncher(
             // Local launcher is already in local mode, so {to:'local'} is a no-op.
             const to = resolveSwitchRequestTarget(params);
             if (to === 'local') return true;
+            if (!remoteSwitchingEnabled) return false;
             return await remoteSwitchController.requestRemoteSwitch('rpc_switch');
         }); // When user wants to switch to remote mode
         session.queue.setOnMessage((message: string, mode) => {
+            if (!remoteSwitchingEnabled) {
+                session.setLastPermissionMode(mode.permissionMode);
+                return;
+            }
             remoteSwitchController.onQueuedMessage(message, mode);
         }); // When any message is received, wait for a safe local-turn boundary, then switch to remote mode
 
-        if (entry === 'switch') {
+        if (remoteSwitchingEnabled && entry === 'switch') {
             const autoConfirmDiscardForE2e =
                 process.env.HAPPIER_E2E_PROVIDERS === '1' || process.env.HAPPY_E2E_PROVIDERS === '1';
             const pendingGateStartMs = configuration.startupTimingEnabled ? Date.now() : null;
             const discardResult = await discardQueuedAndPendingForLocalSwitch({
                 queue: session.queue,
-                getServerPendingCount: () => session.client.peekPendingMessageQueueV2Count(),
+                getServerPendingCount: () => session.client.peekPendingMessageQueueV2Count({ reconcileWhenEmpty: 'force', reason: 'manual-check' }),
                 discardServerPending: () =>
                     session.client.discardPendingMessageQueueV2All({ reason: 'switch_to_local' }),
                 markQueuedAsDiscarded: (localIds) =>
@@ -264,15 +321,18 @@ export async function claudeLocalLauncher(
             }
         }
 
-        pendingQueueWatcher = startLocalPendingQueueRemoteSwitchWatcher({
-            peekPendingCount: () => session.client.peekPendingMessageQueueV2Count(),
-            pollIntervalMs: configuration.pendingQueueIdleWakePollIntervalMs,
-            reconcilePendingQueueState: async () => {
-                await session.client.reconcilePendingQueueState?.({ force: false });
+        pendingQueueWatcher = remoteSwitchingEnabled ? startLocalPendingQueueRemoteSwitchWatcher({
+            peekPendingCount: async () => {
+                const lifecycleSnapshot = turnLifecycle.snapshot();
+                if (lifecycleSnapshot.active && !lifecycleSnapshot.terminal) {
+                    await turnLifecycle.waitForSafeRemoteHandoff();
+                }
+                return session.client.peekPendingMessageQueueV2Count({ reconcileWhenEmpty: 'skip', reason: 'passive-wait' });
             },
+            pollIntervalMs: configuration.pendingQueueIdleWakePollIntervalMs,
             requestRemoteSwitch: () => remoteSwitchController.requestRemoteSwitch('server_pending_queue'),
             waitForPendingQueueUpdate: (signal) => session.client.waitForMetadataUpdate(signal),
-        });
+        }) : null;
 
         // Handle session start
         const handleSessionStart = (sessionId: string) => {
@@ -326,7 +386,8 @@ export async function claudeLocalLauncher(
                         path: session.path,
                         sessionId: resumeFromSessionId,
                         onSessionFound: handleSessionStart,
-                        onThinkingChange: session.onThinkingChange,
+                        onThinkingChange: applyFd3ThinkingFallback,
+                        onLifecycleGapDetected: (event) => emitClaudeUnifiedLifecycleGapDetected(unifiedTelemetry, event),
                         abort: processAbortController.signal,
                         claudeArgs: session.claudeArgs,
                         systemPromptText: session.defaultSystemPromptText,
@@ -372,7 +433,7 @@ export async function claudeLocalLauncher(
                     session.transcriptPath = resumeFromTranscriptPath;
                 }
                 if (!exitReason) {
-                    turnDiffBridge.reset();
+                    transcriptProjector.reset();
                     errorCount += 1;
                     session.client.sendSessionEvent({
                         type: 'message',
@@ -382,9 +443,11 @@ export async function claudeLocalLauncher(
                     if (errorCount >= maxRetries) {
                         session.client.sendSessionEvent({
                             type: 'message',
-                            message: `Claude process failed ${maxRetries} times. Switching back to remote mode.`,
+                            message: remoteSwitchingEnabled
+                                ? `Claude process failed ${maxRetries} times. Switching back to remote mode.`
+                                : `Claude process failed ${maxRetries} times.`,
                         });
-                        exitReason = { type: 'switch' };
+                        exitReason = remoteSwitchingEnabled ? { type: 'switch' } : { type: 'exit', code: 1 };
                         break;
                     }
 
