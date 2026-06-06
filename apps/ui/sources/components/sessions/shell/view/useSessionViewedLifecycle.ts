@@ -3,8 +3,6 @@ import * as React from 'react';
 
 import {
     clearActiveViewingSessionId,
-    markSessionHidden,
-    markSessionVisible,
     setActiveViewingSessionId,
 } from '@/sync/domains/session/activeViewingSession';
 import {
@@ -21,6 +19,7 @@ const SESSION_VIEWED_SEQ_CHANGE_MARK_DELAY_MS = 250;
 
 export type UseSessionViewedLifecycleInput = Readonly<{
     sessionId: string;
+    serverId?: string | null;
     surfaceFocused: boolean;
     visibleReadSeq: number | null;
 }>;
@@ -35,14 +34,22 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
     const viewingActivationIdRef = React.useRef<number | null>(null);
     const markViewedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastMarkedRef = React.useRef<{ sessionSeq: number } | null>(null);
+    const pendingMarkRef = React.useRef<{ sessionSeq: number } | null>(null);
     const visibleReadSeqRef = React.useRef<number | null>(null);
-    visibleReadSeqRef.current = normalizeVisibleReadSeq(input.visibleReadSeq);
+    const activeViewingSeqRef = React.useRef<{
+        sessionId: string;
+        activationId: number;
+        visibleReadSeq: number | null;
+    } | null>(null);
+    const currentVisibleReadSeq = normalizeVisibleReadSeq(input.visibleReadSeq);
+    visibleReadSeqRef.current = currentVisibleReadSeq;
 
     const clearDelayedMark = React.useCallback(() => {
         if (markViewedTimeoutRef.current) {
             clearTimeout(markViewedTimeoutRef.current);
             markViewedTimeoutRef.current = null;
         }
+        pendingMarkRef.current = null;
     }, []);
 
     const markSessionViewed = React.useCallback((opts: { sessionSeq: number; activationId: number | null }) => {
@@ -64,12 +71,11 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
     }, [input.sessionId]);
 
     React.useLayoutEffect(() => {
-        if (!input.surfaceFocused) return;
-        markSessionVisible(input.sessionId);
-        return () => {
-            markSessionHidden(input.sessionId);
-        };
-    }, [input.sessionId, input.surfaceFocused]);
+        const active = activeViewingSeqRef.current;
+        if (active?.sessionId === input.sessionId) {
+            active.visibleReadSeq = currentVisibleReadSeq;
+        }
+    }, [currentVisibleReadSeq, input.sessionId]);
 
     useFocusEffect(React.useCallback(() => {
         if (!input.surfaceFocused) return;
@@ -77,9 +83,14 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
         isFocusedRef.current = true;
         const activationId = beginSessionViewingActivation(input.sessionId);
         viewingActivationIdRef.current = activationId;
-        setActiveViewingSessionId(input.sessionId, activationId);
+        setActiveViewingSessionId(input.sessionId, activationId, input.serverId);
 
         const initialVisibleSeq = visibleReadSeqRef.current;
+        activeViewingSeqRef.current = {
+            sessionId: input.sessionId,
+            activationId,
+            visibleReadSeq: initialVisibleSeq,
+        };
         lastMarkedRef.current = initialVisibleSeq === null ? null : { sessionSeq: initialVisibleSeq };
         const cancelInitialMark = initialVisibleSeq === null
             ? () => {}
@@ -92,8 +103,14 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
             cancelInitialMark();
             clearDelayedMark();
 
-            const blurVisibleSeq = visibleReadSeqRef.current;
-            clearActiveViewingSessionId(input.sessionId, activationId);
+            const activeViewingSeq = activeViewingSeqRef.current;
+            const activeViewingSeqMatches = activeViewingSeq?.sessionId === input.sessionId
+                && activeViewingSeq.activationId === activationId;
+            const blurVisibleSeq = activeViewingSeqMatches ? activeViewingSeq.visibleReadSeq : initialVisibleSeq;
+            if (activeViewingSeqMatches) {
+                activeViewingSeqRef.current = null;
+            }
+            clearActiveViewingSessionId(input.sessionId, activationId, input.serverId);
             if (blurVisibleSeq !== null && !shouldSuppressAutomaticMarkViewed({
                 sessionId: input.sessionId,
                 sessionSeq: blurVisibleSeq,
@@ -109,7 +126,7 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
                 viewingActivationIdRef.current = null;
             }
         };
-    }, [clearDelayedMark, input.sessionId, input.surfaceFocused, markSessionViewed]));
+    }, [clearDelayedMark, input.serverId, input.sessionId, input.surfaceFocused, markSessionViewed]));
 
     React.useEffect(() => {
         if (!input.surfaceFocused || !isFocusedRef.current) return;
@@ -119,6 +136,8 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
 
         const last = lastMarkedRef.current;
         if (last && last.sessionSeq >= visibleReadSeq) return;
+        const pending = pendingMarkRef.current;
+        if (pending && pending.sessionSeq >= visibleReadSeq) return;
         if (shouldSuppressAutomaticMarkViewed({
             sessionId: input.sessionId,
             sessionSeq: visibleReadSeq,
@@ -127,11 +146,13 @@ export function useSessionViewedLifecycle(input: UseSessionViewedLifecycleInput)
             return;
         }
 
-        lastMarkedRef.current = { sessionSeq: visibleReadSeq };
         clearDelayedMark();
+        pendingMarkRef.current = { sessionSeq: visibleReadSeq };
         const activationId = viewingActivationIdRef.current;
         markViewedTimeoutRef.current = setTimeout(() => {
             markViewedTimeoutRef.current = null;
+            pendingMarkRef.current = null;
+            lastMarkedRef.current = { sessionSeq: visibleReadSeq };
             markSessionViewed({ sessionSeq: visibleReadSeq, activationId });
         }, SESSION_VIEWED_SEQ_CHANGE_MARK_DELAY_MS);
 
