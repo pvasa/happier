@@ -130,6 +130,22 @@ describe('serializeAxiosErrorForLog', () => {
     expect(JSON.stringify(serialized)).not.toContain('token=secret');
   });
 
+  it('preserves safe string codes from non-Axios errors', () => {
+    const err = Object.assign(
+      new Error('provider failed with Authorization: Bearer SUPER_SECRET_TOKEN'),
+      { code: 'claude_unified_terminal_connected_service_oauth_unsupported' },
+    );
+
+    const serialized = serializeAxiosErrorForLog(err);
+
+    expect(serialized).toEqual({
+      name: 'Error',
+      message: 'provider failed with Authorization: <redacted>',
+      code: 'claude_unified_terminal_connected_service_oauth_unsupported',
+    });
+    expect(JSON.stringify(serialized)).not.toContain('SUPER_SECRET_TOKEN');
+  });
+
   it('redacts Telegram bot tokens embedded in string errors', () => {
     const serialized = serializeAxiosErrorForLog(
       'failed https://api.telegram.org/bot123456:ABC-SECRET/sendMessage?chat_id=secret',

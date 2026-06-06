@@ -43,6 +43,13 @@ function redactMessageForLog(raw: unknown): string {
   );
 }
 
+function readSafeErrorCode(error: Error): string | undefined {
+  const raw = (error as { code?: unknown }).code;
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim();
+  return /^[A-Za-z0-9_.:-]{1,160}$/u.test(value) ? value : undefined;
+}
+
 // IMPORTANT: Do not log axios error.config.headers.Authorization or request body, which may contain secrets.
 export function serializeAxiosErrorForLog(error: unknown): Record<string, unknown> {
   if (axios.isAxiosError(error)) {
@@ -57,7 +64,12 @@ export function serializeAxiosErrorForLog(error: unknown): Record<string, unknow
   }
 
   if (error instanceof Error) {
-    return { name: error.name, message: redactMessageForLog(error.message) };
+    const code = readSafeErrorCode(error);
+    return {
+      name: error.name,
+      message: redactMessageForLog(error.message),
+      ...(code ? { code } : {}),
+    };
   }
 
   return { message: redactMessageForLog(error) };
