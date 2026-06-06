@@ -77,7 +77,6 @@ test('probeExistingAccountCountForServerComponent generates sqlite URL params fr
       env: {
         HAPPIER_SERVER_LIGHT_DATA_DIR: dataDir,
         HAPPIER_SQLITE_BUSY_TIMEOUT_MS: '500',
-        HAPPIER_SQLITE_CONNECTION_LIMIT: '1',
       },
     });
 

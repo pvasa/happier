@@ -96,13 +96,10 @@ async function probeAccountCount({ serverComponentName, serverDir, env, lightDbP
 		  const { PrismaClient } = await import(${JSON.stringify(
         resolvePrismaClientImportForDbProvider({ serverDir, provider: 'sqlite' })
       )});
-      const { join: joinPath } = await import('node:path');
-      const { pathToFileURL } = await import('node:url');
       const dataDirPrimary = (process.env.HAPPIER_SERVER_LIGHT_DATA_DIR ?? '').toString().trim();
       const dataDirLegacy = (process.env.HAPPY_SERVER_LIGHT_DATA_DIR ?? '').toString().trim();
       const dataDir = dataDirPrimary || dataDirLegacy;
-      const fromEnv = (process.env.DATABASE_URL ?? '').toString().trim();
-      const url = fromEnv || (dataDir ? \`\${pathToFileURL(joinPath(dataDir, 'happier-server-light.sqlite')).href}?socket_timeout=30\` : '');
+      const url = (process.env.DATABASE_URL ?? '').toString().trim();
       if (!url) throw new Error('Missing DATABASE_URL and HAPPIER_SERVER_LIGHT_DATA_DIR or HAPPY_SERVER_LIGHT_DATA_DIR for sqlite probe');
       process.env.DATABASE_URL = url;
 		  db = new PrismaClient();

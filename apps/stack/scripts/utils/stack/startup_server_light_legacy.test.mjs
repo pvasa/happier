@@ -85,6 +85,7 @@ test('ensureServerLightSchemaReady falls back to HAPPY_SERVER_LIGHT_DATA_DIR whe
   assert.equal(env.DATABASE_URL, renderPrismaCompatibleSqliteDatabaseUrl({
     dbPath: join(dataDir, 'happier-server-light.sqlite'),
     platform: process.platform,
+    sqlite: { connectionLimit: 1 },
   }));
   assert.equal(existsSync(markerPath), true, `expected migrate:sqlite:deploy to be invoked (${markerPath})`);
 });
