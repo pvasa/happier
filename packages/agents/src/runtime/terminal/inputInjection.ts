@@ -1,0 +1,47 @@
+export type TerminalHostKind = 'tmux' | 'zellij';
+
+export type TerminalInjectionFailurePhase =
+  | 'before_write'
+  | 'during_write'
+  | 'after_write_before_enter'
+  | 'after_enter_unknown'
+  | 'liveness'
+  | 'readiness';
+
+export type TerminalInjectionDuplicateRisk = 'none' | 'possible' | 'likely';
+
+export type TerminalPromptInput = Readonly<{
+  text: string;
+  multiline: boolean;
+  origin: Readonly<{
+    kind: 'ui_pending' | 'ui_immediate' | 'rpc';
+    clientId?: string | undefined;
+    nonce: string;
+  }>;
+  scheduling: Readonly<{
+    deferredUntilQuietMs?: number | undefined;
+    deferReason?: Extract<TerminalInputInjectionResult, { status: 'deferred' }>['reason'] | undefined;
+    retryAfterMs?: number | undefined;
+    timeoutMs?: number | undefined;
+  }>;
+}>;
+
+export type TerminalInputInjectionResult =
+  | Readonly<{ status: 'injected'; at: number; bytesWritten: number }>
+  | Readonly<{
+      status: 'deferred';
+      reason: 'user_typing' | 'terminal_busy' | 'permission_blocked' | 'pane_initializing';
+      retryAfterMs?: number | undefined;
+    }>
+  | Readonly<{
+      status: 'failed';
+      reason: 'pane_dead' | 'no_target' | 'host_unreachable' | 'timeout';
+      phase: TerminalInjectionFailurePhase;
+      duplicateRisk: TerminalInjectionDuplicateRisk;
+      recoverable: boolean;
+    }>;
+
+export type TerminalInputInjectionV1 = Readonly<{
+  hostKind: TerminalHostKind;
+  injectUserPrompt(input: TerminalPromptInput): Promise<TerminalInputInjectionResult>;
+}>;

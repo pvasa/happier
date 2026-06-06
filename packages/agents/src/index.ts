@@ -56,7 +56,16 @@ export {
 export {
   getAgentRuntimeInputCapability,
   supportsAgentInFlightSteer,
+  supportsAgentTerminalPromptInjection,
 } from './runtimeInput.js';
+export {
+  type TerminalHostKind,
+  type TerminalInjectionDuplicateRisk,
+  type TerminalInjectionFailurePhase,
+  type TerminalInputInjectionResult,
+  type TerminalInputInjectionV1,
+  type TerminalPromptInput,
+} from './runtime/terminal/inputInjection.js';
 export { resolveAgentIdFromFlavor } from './resolveAgentIdFromFlavor.js';
 export { inferAgentIdFromSessionMetadata, resolveAgentIdFromSessionMetadata } from './resolveAgentIdFromSessionMetadata.js';
 export {
@@ -112,8 +121,13 @@ export {
 } from './sessionModes.js';
 
 export {
+  CLAUDE_UNIFIED_TERMINAL_HOSTS,
+  KIMI_PROVIDER_FIELDS,
+  type ClaudeUnifiedTerminalHost,
   normalizeCodexBackendMode,
+  normalizeKimiAcpPythonSelector,
   type CodexBackendMode,
+  type KimiAcpPythonSelector,
   getAllProviderSettingsDefinitions,
   getProviderSettingsDefinition,
   type ProviderSettingsDefinition,

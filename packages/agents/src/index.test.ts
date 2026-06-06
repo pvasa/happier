@@ -4,6 +4,7 @@ import {
   CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE,
   getAgentMediaCapabilities,
   isClaudeLocalPermissionBridgeAgentStateRequest,
+  KIMI_PROVIDER_FIELDS,
 } from './index.js';
 import {
   CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE as CLAUDE_LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE_FROM_CLAUDE_INDEX,
@@ -28,6 +29,11 @@ describe('agents package exports', () => {
   it('re-exports provider media capability helpers from the package root', () => {
     expect(getAgentMediaCapabilities('codex').nativeImageGeneration).toBe('supported');
   });
+
+  it('re-exports Kimi provider setting fields from the package root', () => {
+    expect(KIMI_PROVIDER_FIELDS.kimiAcpPythonSelector.default).toBe('auto');
+  });
+
   it('re-exports Claude Code OAuth scope constants from the package root', async () => {
     const mod = await import('./index.js');
 
