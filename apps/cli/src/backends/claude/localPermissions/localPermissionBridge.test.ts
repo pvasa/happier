@@ -77,6 +77,79 @@ describe('ClaudeLocalPermissionBridge', () => {
     });
   });
 
+  it('reconciles native terminal approval when a PostToolUse hook arrives for a pending request', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-native-terminal-approve');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
+    bridge.activate();
+
+    const pending = bridge.handlePermissionHook({
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/native-terminal.txt', content: 'hello' },
+      tool_use_id: 'toolu_native_terminal_approve_1',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.agentState.requests.toolu_native_terminal_approve_1).toBeDefined();
+
+    bridge.handleSessionHook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/native-terminal.txt', content: 'hello' },
+      tool_use_id: 'toolu_native_terminal_approve_1',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.agentState.requests.toolu_native_terminal_approve_1).toBeUndefined();
+    expect(client.agentState.completedRequests.toolu_native_terminal_approve_1).toMatchObject({
+      status: 'approved',
+      reason: 'Approved in Claude terminal',
+      tool: 'Write',
+    });
+    await expect(pending).resolves.toMatchObject({
+      hookSpecificOutput: {
+        decision: { behavior: 'allow' },
+      },
+    });
+  });
+
+  it('reconciles native terminal approval for generated permission ids when PostToolUse uses a real tool id', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-generated-id-native-terminal-approve');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 5_000 });
+    bridge.activate();
+    const toolInput = { query: 'select event from events limit 1' };
+
+    const pending = bridge.handlePermissionHook({
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'mcp__claude_ai_PostHog__exec',
+      tool_input: toolInput,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    const [generatedRequestId] = Object.keys(client.agentState.requests);
+    expect(generatedRequestId).toMatch(/^perm_/);
+
+    bridge.handleSessionHook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'mcp__claude_ai_PostHog__exec',
+      tool_input: toolInput,
+      tool_use_id: 'toolu_real_post_tool_1',
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.agentState.requests[generatedRequestId]).toBeUndefined();
+    expect(client.agentState.completedRequests[generatedRequestId]).toMatchObject({
+      status: 'approved',
+      reason: 'Approved in Claude terminal',
+      tool: 'mcp__claude_ai_PostHog__exec',
+    });
+    await expect(pending).resolves.toMatchObject({
+      hookSpecificOutput: {
+        decision: { behavior: 'allow' },
+      },
+    });
+  });
+
   it('suppresses provider prompts for first-party Happier MCP tools when action approval is required', async () => {
     const { session, client } = createPermissionHandlerSessionStub('session-happier-approval-gate');
     (session as any).accountSettings = {
@@ -701,6 +774,63 @@ describe('ClaudeLocalPermissionBridge', () => {
       },
     });
     expect(client.agentState.completedRequests.toolu_ask_1).toMatchObject({
+      status: 'approved',
+      tool: 'AskUserQuestion',
+    });
+  });
+
+  it('answers native AskUserQuestion PreToolUse hooks with PreToolUse updatedInput', async () => {
+    const { session, client } = createPermissionHandlerSessionStub('session-ask-user-question-pre-tool-use');
+    const bridge = new ClaudeLocalPermissionBridge(session, { responseTimeoutMs: 200 });
+    bridge.activate();
+
+    const toolInput = {
+      questions: [
+        {
+          header: 'Cleanup',
+          question: 'Remove the scratch files?',
+          multiSelect: false,
+          options: [
+            { label: 'Remove them now', description: 'Run cleanup' },
+            { label: 'Keep for inspection', description: 'Leave files in place' },
+          ],
+        },
+      ],
+    };
+
+    const pending = bridge.handlePermissionHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+      tool_input: toolInput,
+      tool_use_id: 'toolu_ask_pre_1',
+    });
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(client.agentState.requests.toolu_ask_pre_1).toMatchObject({
+      kind: 'user_action',
+      tool: 'AskUserQuestion',
+    });
+
+    const permissionHandler = client.rpcHandlerManager.getHandler('permission');
+    await permissionHandler?.({
+      id: 'toolu_ask_pre_1',
+      approved: true,
+      answers: { 'Remove the scratch files?': 'Keep for inspection' },
+    });
+
+    await expect(pending).resolves.toEqual({
+      continue: true,
+      suppressOutput: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        updatedInput: {
+          ...toolInput,
+          answers: { 'Remove the scratch files?': 'Keep for inspection' },
+        },
+      },
+    });
+    expect(client.agentState.completedRequests.toolu_ask_pre_1).toMatchObject({
       status: 'approved',
       tool: 'AskUserQuestion',
     });

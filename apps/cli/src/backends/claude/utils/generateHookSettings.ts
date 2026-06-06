@@ -116,8 +116,20 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
 
     const pluginsRoot = resolveTmpRoot('hook-plugins');
     const pluginDir = join(pluginsRoot, `session-${process.pid}`);
+    const manifestDir = join(pluginDir, '.claude-plugin');
     const hooksDir = join(pluginDir, 'hooks');
+    mkdirSync(manifestDir, { recursive: true });
     mkdirSync(hooksDir, { recursive: true });
+
+    const manifest = {
+        name: `happier-session-hooks-${process.pid}`,
+        version: '1.0.0',
+        description: 'Happier session-scoped Claude Code hooks.',
+        author: {
+            name: 'Happier',
+        },
+    };
+    writeFileSync(join(manifestDir, 'plugin.json'), JSON.stringify(manifest, null, 2));
 
     const nodeExecutable = resolveNodeExecutable();
     const sessionForwarderScript = resolveCliRuntimeAssetPath('scripts', 'session_hook_forwarder.cjs');
@@ -142,6 +154,7 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
         Stop: buildSessionHook('Stop'),
         StopFailure: buildSessionHook('StopFailure'),
         SessionEnd: buildSessionHook('SessionEnd'),
+        PostToolUse: buildSessionHook('PostToolUse'),
     };
 
     if (options.enableLocalPermissionBridge) {
@@ -150,7 +163,8 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
             typeof options.permissionHookSecret === 'string' && options.permissionHookSecret.length > 0
                 ? ` ${JSON.stringify(options.permissionHookSecret)}`
                 : '';
-        const permissionCommand = `${JSON.stringify(nodeExecutable)} ${JSON.stringify(permissionForwarderScript)} ${port}${secretPart}`;
+        const buildPermissionCommand = (hookEventName: 'PermissionRequest' | 'PreToolUse'): string =>
+            `${JSON.stringify(nodeExecutable)} ${JSON.stringify(permissionForwarderScript)} ${port} ${JSON.stringify(hookEventName)}${secretPart}`;
 
         hooks.PermissionRequest = [
             {
@@ -158,7 +172,18 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
                 hooks: [
                     {
                         type: 'command',
-                        command: permissionCommand,
+                        command: buildPermissionCommand('PermissionRequest'),
+                    },
+                ],
+            },
+        ];
+        hooks.PreToolUse = [
+            {
+                matcher: 'AskUserQuestion',
+                hooks: [
+                    {
+                        type: 'command',
+                        command: buildPermissionCommand('PreToolUse'),
                     },
                 ],
             },

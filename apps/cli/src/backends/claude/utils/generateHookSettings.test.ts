@@ -117,7 +117,7 @@ describe('generateHookPluginDir', () => {
 
     const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
     const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
-    const lifecycleHookNames = ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd'];
+    const lifecycleHookNames = ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd', 'PostToolUse'];
     for (const hookName of lifecycleHookNames) {
       const command = parsed.hooks?.[hookName]?.[0]?.hooks?.[0]?.command as string;
       expect(command).toContain('session_hook_forwarder.cjs');
@@ -127,6 +127,20 @@ describe('generateHookPluginDir', () => {
     // Prefer execPath over `node` so hooks still work when PATH is minimal (common on Windows/GUI contexts).
     expect(command).toContain(process.execPath);
     expect(parsed.hooks?.PermissionRequest).toBeUndefined();
+    expect(parsed.hooks?.PermissionDenied).toBeUndefined();
+  });
+
+  it('writes the Claude plugin manifest required for --plugin-dir loading', () => {
+    const pluginDir = generateHookPluginDir(43132);
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const manifestPath = join(pluginDir!, '.claude-plugin', 'plugin.json');
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as any;
+    expect(parsed.name).toMatch(/^happier-session-hooks-\d+$/);
+    expect(parsed.version).toBe('1.0.0');
+    expect(parsed.description).toContain('Happier');
+    expect(parsed.author?.name).toBe('Happier');
   });
 
   it('adds PermissionRequest hook when local permission bridge is enabled', () => {
@@ -142,6 +156,24 @@ describe('generateHookPluginDir', () => {
     const permissionCommand = parsed.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.command as string;
     expect(permissionCommand).toContain('permission_hook_forwarder.cjs');
     expect(permissionCommand).toContain('test-secret-123');
+  });
+
+  it('adds an AskUserQuestion PreToolUse hook when local permission bridge is enabled', () => {
+    const pluginDir = generateHookPluginDir(43131, {
+      enableLocalPermissionBridge: true,
+      permissionHookSecret: 'test-secret-ask',
+    });
+    expect(pluginDir).toBeTruthy();
+    createdPluginDirs.push(pluginDir!);
+
+    const hooksPath = join(pluginDir!, 'hooks', 'hooks.json');
+    const parsed = JSON.parse(readFileSync(hooksPath, 'utf8')) as any;
+    const preToolUseHook = parsed.hooks?.PreToolUse?.[0];
+    expect(preToolUseHook?.matcher).toBe('AskUserQuestion');
+    const preToolUseCommand = preToolUseHook?.hooks?.[0]?.command as string;
+    expect(preToolUseCommand).toContain('permission_hook_forwarder.cjs');
+    expect(preToolUseCommand).toContain('PreToolUse');
+    expect(preToolUseCommand).toContain('test-secret-ask');
   });
 
   it('returns null when HAPPIER_CLAUDE_HOOKS_DISABLED is set (debug escape hatch)', () => {

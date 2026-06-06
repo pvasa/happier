@@ -11,7 +11,7 @@ import { createPermissionRequestCoordinator } from '@/agent/permissions/permissi
 import type { PermissionRequestCoordinatorStore } from '@/agent/permissions/permissionRequestCoordinator';
 
 import type { Session } from '../session';
-import type { PermissionHookData, PermissionHookResponse } from '../utils/startHookServer';
+import type { PermissionHookData, PermissionHookResponse, SessionHookData } from '../utils/startHookServer';
 import { deepEqual } from '@/utils/deterministicJson';
 import type { PermissionRpcPayload } from '../utils/permissionRpc';
 import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdentifier';
@@ -31,14 +31,35 @@ type PendingPermissionRequest = {
     id: string;
     toolName: string;
     toolInput: unknown;
+    hookEventName: ClaudePermissionHookEventName;
     createdAt: number;
 };
 
+type ResolvedPendingPermissionRequest = {
+    requestId: string;
+    pending: PendingPermissionRequest;
+};
+
 type CompletionStatus = 'approved' | 'denied' | 'canceled';
+type ClaudePermissionHookEventName = 'PermissionRequest' | 'PreToolUse';
+type ClaudeToolHookData = Readonly<{
+    hook_event_name?: unknown;
+    hookEventName?: unknown;
+    tool_use_id?: unknown;
+    toolUseId?: unknown;
+    tool_name?: unknown;
+    toolName?: unknown;
+    tool_input?: unknown;
+    toolInput?: unknown;
+    permission_suggestions?: unknown;
+    permissionSuggestions?: unknown;
+    permissionSuggestionsV1?: unknown;
+}>;
 
 const DEFAULT_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
 const PERMISSION_TIMED_OUT_REASON = 'Timed out waiting for permission response';
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+const GENERATED_PERMISSION_REQUEST_ID_PREFIX = 'perm_';
 
 export const DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE = {
     continue: true,
@@ -47,6 +68,11 @@ export const DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE = {
         hookEventName: 'PermissionRequest',
     },
 } as const satisfies PermissionHookResponse;
+
+function readPermissionHookEventName(data: PermissionHookData): ClaudePermissionHookEventName {
+    const raw = data.hook_event_name ?? data.hookEventName;
+    return raw === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest';
+}
 
 export class ClaudeLocalPermissionBridge {
     private readonly session: Session;
@@ -142,19 +168,13 @@ export class ClaudeLocalPermissionBridge {
         const toolInput = this.resolveToolInput(data);
         const permissionSuggestions = this.resolvePermissionSuggestions(data);
         const existing = this.pendingRequests.get(requestId);
+        const hookEventName = existing?.hookEventName ?? readPermissionHookEventName(data);
         const createdAt = existing?.createdAt ?? Date.now();
 
         // If we already have an allowlist rule for this tool call, respond immediately without surfacing a prompt.
         // This mirrors Claude Code's "don't ask again" behavior, but is enforced by Happier for reliability.
         if (!this.isInteractiveTool(toolName) && isToolAllowedForSession(this.allowedToolIdentifiers, toolName, toolInput)) {
-            return {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: { behavior: 'allow' },
-                },
-            };
+            return this.buildAllowHookResponse({ hookEventName, toolInput });
         }
 
         const policyDecision = this.computePolicyDecision(toolName);
@@ -168,14 +188,7 @@ export class ClaudeLocalPermissionBridge {
                 surface: 'session_agent',
             }).suppress
         ) {
-            const hookResponse: PermissionHookResponse = {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: { behavior: 'allow' },
-                },
-            };
+            const hookResponse = this.buildAllowHookResponse({ hookEventName, toolInput });
             this.completeRequest({
                 requestId,
                 toolName,
@@ -188,14 +201,7 @@ export class ClaudeLocalPermissionBridge {
             return hookResponse;
         }
         if (!this.isInteractiveTool(toolName) && policyDecision === 'allow') {
-            const hookResponse: PermissionHookResponse = {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: { behavior: 'allow' },
-                },
-            };
+            const hookResponse = this.buildAllowHookResponse({ hookEventName, toolInput });
             this.completeRequest({
                 requestId,
                 toolName,
@@ -209,14 +215,7 @@ export class ClaudeLocalPermissionBridge {
         }
 
         if (!this.isInteractiveTool(toolName) && policyDecision === 'deny') {
-            const hookResponse: PermissionHookResponse = {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: { behavior: 'deny' },
-                },
-            };
+            const hookResponse = this.buildDenyHookResponse({ hookEventName });
             this.completeRequest({
                 requestId,
                 toolName,
@@ -234,6 +233,7 @@ export class ClaudeLocalPermissionBridge {
                 id: requestId,
                 toolName,
                 toolInput,
+                hookEventName,
                 createdAt,
             });
         }
@@ -276,15 +276,119 @@ export class ClaudeLocalPermissionBridge {
                             createdAt,
                             status: 'canceled',
                             reason: PERMISSION_TIMED_OUT_REASON,
-                            hookResponse: DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE,
+                            hookResponse: this.buildDefaultHookResponse(hookEventName),
                         });
                         this.permissionCoordinator.cancelRequest(requestId, PERMISSION_TIMED_OUT_REASON);
                     }
-                    return DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE;
+                    return this.buildDefaultHookResponse(hookEventName);
                 }
                 throw error;
             },
         );
+    }
+
+    handleSessionHook(data: SessionHookData): void {
+        const hookEventName = data.hook_event_name ?? data.hookEventName;
+        if (hookEventName !== 'PostToolUse') return;
+
+        const resolvedPending = this.resolvePendingRequestForToolHook(data);
+        if (!resolvedPending) return;
+        const { requestId, pending } = resolvedPending;
+
+        this.completeRequest({
+            requestId,
+            toolName: pending.toolName,
+            toolInput: pending.toolInput,
+            createdAt: pending.createdAt,
+            status: 'approved',
+            reason: 'Approved in Claude terminal',
+            hookResponse: this.buildAllowHookResponse({
+                hookEventName: pending.hookEventName,
+                toolInput: pending.toolInput,
+            }),
+        });
+    }
+
+    private buildDefaultHookResponse(hookEventName: ClaudePermissionHookEventName): PermissionHookResponse {
+        return {
+            continue: true,
+            suppressOutput: true,
+            hookSpecificOutput: { hookEventName },
+        };
+    }
+
+    private buildAllowHookResponse(params: {
+        hookEventName: ClaudePermissionHookEventName;
+        toolInput: unknown;
+        updatedInput?: Record<string, unknown>;
+        updatedPermissions?: unknown;
+    }): PermissionHookResponse {
+        if (params.hookEventName === 'PreToolUse') {
+            const baseUpdatedInput =
+                params.updatedInput
+                ?? (params.toolInput && typeof params.toolInput === 'object' && !Array.isArray(params.toolInput)
+                    ? params.toolInput as Record<string, unknown>
+                    : undefined);
+            return {
+                continue: true,
+                suppressOutput: true,
+                hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'allow',
+                    ...(baseUpdatedInput ? { updatedInput: baseUpdatedInput } : {}),
+                },
+            };
+        }
+
+        return {
+            continue: true,
+            suppressOutput: true,
+            hookSpecificOutput: {
+                hookEventName: 'PermissionRequest',
+                decision: {
+                    behavior: 'allow',
+                    ...(params.updatedInput ? { updatedInput: params.updatedInput } : {}),
+                    ...(typeof params.updatedPermissions !== 'undefined' ? { updatedPermissions: params.updatedPermissions } : {}),
+                },
+            },
+        };
+    }
+
+    private buildDenyHookResponse(params: {
+        hookEventName: ClaudePermissionHookEventName;
+        reason?: string;
+    }): PermissionHookResponse {
+        if (params.hookEventName === 'PreToolUse') {
+            return {
+                continue: true,
+                suppressOutput: true,
+                hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'deny',
+                    ...(typeof params.reason === 'string' && params.reason.length > 0
+                        ? { permissionDecisionReason: params.reason }
+                        : {}),
+                },
+                ...(typeof params.reason === 'string' && params.reason.length > 0
+                    ? { systemMessage: params.reason }
+                    : {}),
+            };
+        }
+
+        return {
+            continue: true,
+            suppressOutput: true,
+            hookSpecificOutput: {
+                hookEventName: 'PermissionRequest',
+                decision: {
+                    behavior: 'deny',
+                    ...(typeof params.reason === 'string' && params.reason.length > 0 ? { message: params.reason } : {}),
+                },
+            },
+            ...(typeof params.reason === 'string' && params.reason.length > 0
+                ? { systemMessage: params.reason }
+                : {}),
+        };
     }
 
     private computePolicyDecision(toolName: string): 'prompt' | 'allow' | 'deny' {
@@ -472,14 +576,10 @@ export class ClaudeLocalPermissionBridge {
         for (const id of idsToApprove) {
             const pending = this.pendingRequests.get(id);
             if (!pending) continue;
-            const hookResponse: PermissionHookResponse = {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: { behavior: 'allow' },
-                },
-            };
+            const hookResponse = this.buildAllowHookResponse({
+                hookEventName: pending.hookEventName,
+                toolInput: pending.toolInput,
+            });
             this.completeRequest({
                 requestId: id,
                 toolName: pending.toolName,
@@ -494,14 +594,7 @@ export class ClaudeLocalPermissionBridge {
         for (const id of idsToDeny) {
             const pending = this.pendingRequests.get(id);
             if (!pending) continue;
-            const hookResponse: PermissionHookResponse = {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: { behavior: 'deny' },
-                },
-            };
+            const hookResponse = this.buildDenyHookResponse({ hookEventName: pending.hookEventName });
             this.completeRequest({
                 requestId: id,
                 toolName: pending.toolName,
@@ -515,7 +608,43 @@ export class ClaudeLocalPermissionBridge {
     }
 
     private generateRequestId(): string {
-        return `perm_${randomUUID()}`;
+        return `${GENERATED_PERMISSION_REQUEST_ID_PREFIX}${randomUUID()}`;
+    }
+
+    private resolvePendingRequestForToolHook(data: ClaudeToolHookData): ResolvedPendingPermissionRequest | null {
+        const requestId = this.resolveRequestId(data);
+        if (requestId) {
+            const pending = this.pendingRequests.get(requestId);
+            if (pending) {
+                return this.matchesPendingToolHook(data, pending) ? { requestId, pending } : null;
+            }
+        }
+
+        return this.resolveGeneratedPendingRequestByToolFacts(data);
+    }
+
+    private resolveGeneratedPendingRequestByToolFacts(data: ClaudeToolHookData): ResolvedPendingPermissionRequest | null {
+        const toolName = this.resolveToolName(data);
+        if (toolName === 'unknown_tool' || !this.hasToolInput(data)) return null;
+
+        const toolInput = this.resolveToolInput(data);
+        let match: ResolvedPendingPermissionRequest | null = null;
+        for (const [requestId, pending] of this.pendingRequests.entries()) {
+            if (!requestId.startsWith(GENERATED_PERMISSION_REQUEST_ID_PREFIX)) continue;
+            if (pending.toolName !== toolName) continue;
+            if (!deepEqual(pending.toolInput, toolInput)) continue;
+            if (match) return null;
+            match = { requestId, pending };
+        }
+
+        return match;
+    }
+
+    private matchesPendingToolHook(data: ClaudeToolHookData, pending: PendingPermissionRequest): boolean {
+        const toolName = this.resolveToolName(data);
+        if (toolName !== 'unknown_tool' && toolName !== pending.toolName) return false;
+        if (this.hasToolInput(data) && !deepEqual(this.resolveToolInput(data), pending.toolInput)) return false;
+        return true;
     }
 
     private async resolveRequestIdFromTranscript(data: PermissionHookData): Promise<string | null> {
@@ -613,6 +742,7 @@ export class ClaudeLocalPermissionBridge {
                     toolName: context.toolName,
                     toolInput: context.toolInput,
                     updatedPermissions,
+                    hookEventName: this.pendingRequests.get(requestId)?.hookEventName ?? 'PermissionRequest',
                 });
                 shouldApplySideEffects = true;
 
@@ -643,51 +773,34 @@ export class ClaudeLocalPermissionBridge {
         toolName: string;
         toolInput: unknown;
         updatedPermissions: unknown;
+        hookEventName: ClaudePermissionHookEventName;
     }): PermissionHookResponse {
         const { payload, toolName, toolInput, updatedPermissions } = params;
         if (payload.approved) {
-            return {
-                continue: true,
-                suppressOutput: true,
-                hookSpecificOutput: {
-                    hookEventName: 'PermissionRequest',
-                    decision: {
-                        behavior: 'allow',
-                        ...(
-                            (toolName === 'AskUserQuestion' || toolName === 'ask_user_question')
-                            && payload.answers
-                            && typeof payload.answers === 'object'
-                            && !Array.isArray(payload.answers)
-                                ? {
-                                    updatedInput: {
-                                        ...(toolInput && typeof toolInput === 'object' && !Array.isArray(toolInput)
-                                            ? toolInput as Record<string, unknown>
-                                            : {}),
-                                        answers: payload.answers,
-                                    },
-                                }
-                                : {}
-                        ),
-                        ...(typeof updatedPermissions !== 'undefined' ? { updatedPermissions } : {}),
-                    },
-                },
-            };
+            const updatedInput =
+                (toolName === 'AskUserQuestion' || toolName === 'ask_user_question')
+                && payload.answers
+                && typeof payload.answers === 'object'
+                && !Array.isArray(payload.answers)
+                    ? {
+                        ...(toolInput && typeof toolInput === 'object' && !Array.isArray(toolInput)
+                            ? toolInput as Record<string, unknown>
+                            : {}),
+                        answers: payload.answers,
+                    }
+                    : undefined;
+            return this.buildAllowHookResponse({
+                hookEventName: params.hookEventName,
+                toolInput,
+                ...(updatedInput ? { updatedInput } : {}),
+                updatedPermissions,
+            });
         }
 
-        return {
-            continue: true,
-            suppressOutput: true,
-            hookSpecificOutput: {
-                hookEventName: 'PermissionRequest',
-                decision: {
-                    behavior: 'deny',
-                    ...(typeof payload.reason === 'string' && payload.reason.length > 0 ? { message: payload.reason } : {}),
-                },
-            },
-            ...(typeof payload.reason === 'string' && payload.reason.length > 0
-                ? { systemMessage: payload.reason }
-                : {}),
-        };
+        return this.buildDenyHookResponse({
+            hookEventName: params.hookEventName,
+            reason: payload.reason,
+        });
     }
 
     private isInteractiveTool(toolName: string): boolean {
@@ -720,14 +833,10 @@ export class ClaudeLocalPermissionBridge {
                 toolInput: pending.toolInput,
                 createdAt: pending.createdAt,
                 status: 'approved',
-                hookResponse: {
-                    continue: true,
-                    suppressOutput: true,
-                    hookSpecificOutput: {
-                        hookEventName: 'PermissionRequest',
-                        decision: { behavior: 'allow' },
-                    },
-                },
+                hookResponse: this.buildAllowHookResponse({
+                    hookEventName: pending.hookEventName,
+                    toolInput: pending.toolInput,
+                }),
             });
         }
     }
@@ -846,15 +955,15 @@ export class ClaudeLocalPermissionBridge {
         );
     }
 
-    private resolvePermissionSuggestions(data: PermissionHookData): unknown[] | null {
-        const raw = (data as any).permission_suggestions ?? (data as any).permissionSuggestions ?? (data as any).permissionSuggestionsV1;
+    private resolvePermissionSuggestions(data: ClaudeToolHookData): unknown[] | null {
+        const raw = data.permission_suggestions ?? data.permissionSuggestions ?? data.permissionSuggestionsV1;
         if (!Array.isArray(raw) || raw.length === 0) {
             return null;
         }
         return raw as unknown[];
     }
 
-    private resolveRequestId(data: PermissionHookData): string | null {
+    private resolveRequestId(data: ClaudeToolHookData): string | null {
         const id = data.tool_use_id ?? data.toolUseId;
         if (typeof id !== 'string') {
             return null;
@@ -863,7 +972,7 @@ export class ClaudeLocalPermissionBridge {
         return trimmed.length > 0 ? trimmed : null;
     }
 
-    private resolveToolName(data: PermissionHookData): string {
+    private resolveToolName(data: ClaudeToolHookData): string {
         const toolName = data.tool_name ?? data.toolName;
         if (typeof toolName !== 'string') {
             return 'unknown_tool';
@@ -872,7 +981,11 @@ export class ClaudeLocalPermissionBridge {
         return trimmed.length > 0 ? trimmed : 'unknown_tool';
     }
 
-    private resolveToolInput(data: PermissionHookData): unknown {
+    private hasToolInput(data: ClaudeToolHookData): boolean {
+        return typeof data.tool_input !== 'undefined' || typeof data.toolInput !== 'undefined';
+    }
+
+    private resolveToolInput(data: ClaudeToolHookData): unknown {
         if (typeof data.tool_input !== 'undefined') {
             return data.tool_input;
         }

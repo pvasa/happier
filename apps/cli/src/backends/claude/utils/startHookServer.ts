@@ -100,11 +100,11 @@ export interface PermissionHookResponse {
     stopReason?: string;
     systemMessage?: string;
     hookSpecificOutput?: {
+        hookEventName?: 'PermissionRequest' | 'PreToolUse';
         /**
          * Claude Code PermissionRequest hook expects a nested decision object:
          * https://docs.claude.com/en/docs/claude-code/hooks#permissionrequest-decision-control
          */
-        hookEventName?: 'PermissionRequest';
         decision?: {
             behavior: 'allow' | 'deny';
             message?: string;
@@ -112,9 +112,30 @@ export interface PermissionHookResponse {
             updatedInput?: unknown;
             updatedPermissions?: unknown;
         };
+        /**
+         * Claude Code PreToolUse hooks can satisfy native AskUserQuestion prompts
+         * by returning an allow decision with updatedInput answers.
+         */
+        permissionDecision?: 'allow' | 'ask' | 'deny';
+        updatedInput?: unknown;
         [key: string]: unknown;
     };
     [key: string]: unknown;
+}
+
+function readPermissionHookEventName(data: PermissionHookData): 'PermissionRequest' | 'PreToolUse' {
+    const raw = data.hook_event_name ?? data.hookEventName;
+    return raw === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest';
+}
+
+function buildDefaultPermissionHookResponse(data?: PermissionHookData): PermissionHookResponse {
+    return {
+        continue: true,
+        suppressOutput: true,
+        hookSpecificOutput: {
+            hookEventName: data ? readPermissionHookEventName(data) : 'PermissionRequest',
+        },
+    };
 }
 
 export interface HookServerOptions {
@@ -282,11 +303,7 @@ export async function startHookServer(options: HookServerOptions): Promise<HookS
 
                     const response = onPermissionHook
                         ? await onPermissionHook(data)
-                        : {
-                            continue: true,
-                            suppressOutput: true,
-                            hookSpecificOutput: { hookEventName: 'PermissionRequest' },
-                        };
+                        : buildDefaultPermissionHookResponse(data);
 
                     if (responseTimeout) {
                         clearTimeout(responseTimeout);
@@ -300,11 +317,7 @@ export async function startHookServer(options: HookServerOptions): Promise<HookS
                     logger.debug('[hookServer] Error handling permission hook:', error);
                     if (!res.headersSent) {
                         res.writeHead(200, { 'Content-Type': 'application/json' }).end(
-                            JSON.stringify({
-                                continue: true,
-                                suppressOutput: true,
-                                hookSpecificOutput: { hookEventName: 'PermissionRequest' },
-                            }),
+                            JSON.stringify(buildDefaultPermissionHookResponse()),
                         );
                     }
                 }
