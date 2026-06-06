@@ -441,8 +441,9 @@ describe('createCodexAppServerClient', () => {
         });
     });
 
-    it('strips inherited runtime-only env from the app-server child process', async () => {
+    it('strips inherited runtime-only and RPC-log env from the app-server child process while keeping parent-side logging', async () => {
         await withTempDir('happier-codex-app-server-client-sanitize-env-', async (root) => {
+            const requestLogPath = join(root, 'rpc.jsonl');
             const fakeAppServer = await writeFakeCodexAppServerScript({
                 dir: root,
                 bodyLines: [
@@ -455,7 +456,7 @@ describe('createCodexAppServerClient', () => {
                     '  }',
                     '  if (msg.method === "initialized") continue;',
                     '  if (msg.method === "state/read") {',
-                    `    process.stdout.write(JSON.stringify({ id: msg.id, result: { CODEX_THREAD_ID: process.env.CODEX_THREAD_ID ?? null, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? null, ${HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY}: process.env.${HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY} ?? null, ${HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY}: process.env.${HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY} ?? null, ${HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR}: process.env.${HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR} ?? null } }) + "\\n");`,
+                    `    process.stdout.write(JSON.stringify({ id: msg.id, result: { CODEX_THREAD_ID: process.env.CODEX_THREAD_ID ?? null, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? null, HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: process.env.HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH ?? null, ${HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY}: process.env.${HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY} ?? null, ${HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY}: process.env.${HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY} ?? null, ${HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR}: process.env.${HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR} ?? null } }) + "\\n");`,
                     '    continue;',
                     '  }',
                     '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
@@ -473,6 +474,7 @@ describe('createCodexAppServerClient', () => {
                         HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
                         HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
                     ]),
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: requestLogPath,
                 }),
             });
 
@@ -480,9 +482,59 @@ describe('createCodexAppServerClient', () => {
                 await expect(client.request('state/read')).resolves.toEqual({
                     CODEX_THREAD_ID: null,
                     CODEX_INTERNAL_ORIGINATOR_OVERRIDE: null,
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: null,
                     [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: null,
                     [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: null,
                     [HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR]: null,
+                });
+            } finally {
+                await client.dispose();
+            }
+
+            await expect(readFile(requestLogPath, 'utf8')).resolves.toContain('"method":"state/read"');
+        });
+    });
+
+    it('redacts stderr diagnostics before attaching them to fatal app-server errors', async () => {
+        await withTempDir('happier-codex-app-server-client-stderr-redaction-', async (root) => {
+            const rawAccessToken = 'stderr-access-token-secret';
+            const rawThreadId = 'stderr-thread-id-secret';
+            const rawPath = join(root, 'codex-home', 'auth.json');
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  if (msg.method === "state/read") {',
+                    `    process.stderr.write("fatal accessToken=${rawAccessToken} CODEX_THREAD_ID=${rawThreadId} path=${rawPath}\\n");`,
+                    '    process.exit(7);',
+                    '  }',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '750',
+                }),
+            });
+
+            try {
+                await expect(client.request('state/read')).rejects.toSatisfy((error: unknown) => {
+                    const message = error instanceof Error ? error.message : String(error);
+                    expect(message).not.toContain(rawAccessToken);
+                    expect(message).not.toContain(rawThreadId);
+                    expect(message).not.toContain(rawPath);
+                    expect(message).toContain('[REDACTED]');
+                    expect(message).toContain('[REDACTED_PROVIDER_RESUME_ID]');
+                    expect(message).toContain('[REDACTED_LOCAL_PATH]');
+                    return true;
                 });
             } finally {
                 await client.dispose();
@@ -660,6 +712,121 @@ describe('createCodexAppServerClient', () => {
         });
     });
 
+    it('redacts nested secret-bearing fields from logged JSON-RPC error data', async () => {
+        await withTempDir('happier-codex-app-server-client-rpc-log-error-data-', async (root) => {
+            const requestLogPath = join(root, 'rpc.jsonl');
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  if (msg.method === "thread/start") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32001, message: "fork failed", data: { reason: "invalid auth", nested: { accessToken: "error-data-access-token-secret", idToken: "error-data-id-token-secret", auth: "error-data-auth-secret", cookie: "error-data-cookie-secret", credential: "error-data-credential-secret", privateKey: "error-data-private-key-secret", safeField: "visible" } } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: requestLogPath,
+                }),
+            });
+
+            try {
+                await expect(client.request('thread/start')).rejects.toMatchObject({
+                    code: -32001,
+                    data: expect.objectContaining({ reason: 'invalid auth' }),
+                });
+            } finally {
+                await client.dispose();
+            }
+
+            const logText = await readFile(requestLogPath, 'utf8');
+            expect(logText).toContain('"method":"thread/start"');
+            expect(logText).not.toContain('error-data-access-token-secret');
+            expect(logText).not.toContain('error-data-id-token-secret');
+            expect(logText).not.toContain('error-data-auth-secret');
+            expect(logText).not.toContain('error-data-cookie-secret');
+            expect(logText).not.toContain('error-data-credential-secret');
+            expect(logText).not.toContain('error-data-private-key-secret');
+
+            const lines = logText
+                .trim()
+                .split('\n')
+                .map((line) => JSON.parse(line) as {
+                    direction: string;
+                    method?: string;
+                    error?: {
+                        code?: number;
+                        data?: { nested?: Record<string, unknown> };
+                    };
+                });
+            const errorEntry = lines.find((entry) => entry.direction === 'incoming' && entry.error?.code === -32001);
+            expect(errorEntry?.error?.data?.nested).toEqual({
+                accessToken: '[REDACTED]',
+                idToken: '[REDACTED]',
+                auth: '[REDACTED]',
+                cookie: '[REDACTED]',
+                credential: '[REDACTED]',
+                privateKey: '[REDACTED]',
+                safeField: 'visible',
+            });
+        });
+    });
+
+    it('redacts secret-bearing values from logged JSON-RPC error messages', async () => {
+        await withTempDir('happier-codex-app-server-client-rpc-log-error-message-', async (root) => {
+            const requestLogPath = join(root, 'rpc.jsonl');
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  if (msg.method === "thread/start") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32001, message: "refresh failed Bearer rpc-secret-token accessToken=rpc-access-token" } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: requestLogPath,
+                }),
+            });
+
+            try {
+                await expect(client.request('thread/start')).rejects.toMatchObject({
+                    code: -32001,
+                });
+            } finally {
+                await client.dispose();
+            }
+
+            const logText = await readFile(requestLogPath, 'utf8');
+            expect(logText).not.toContain('rpc-secret-token');
+            expect(logText).not.toContain('rpc-access-token');
+            expect(logText).toContain('[REDACTED]');
+        });
+    });
+
     it('expands ~/ RPC log paths against HOME', async () => {
         await withTempDir('happier-codex-app-server-client-rpc-log-home-', async (root) => {
             const homeDir = join(root, 'home');
@@ -710,6 +877,50 @@ describe('createCodexAppServerClient', () => {
                     expect.objectContaining({ direction: 'outgoing', method: 'state/read' }),
                 ]),
             );
+        });
+    });
+
+    it('rotates RPC logs before appending beyond the configured cap', async () => {
+        await withTempDir('happier-codex-app-server-client-rpc-log-rotation-', async (root) => {
+            const requestLogPath = join(root, 'rpc.jsonl');
+            await writeFile(requestLogPath, `${'x'.repeat(1_400)}\n`, 'utf8');
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { serverInfo: { name: "fake", version: "0.0.0" } } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  if (msg.method === "initialized") continue;',
+                    '  if (msg.method === "state/read") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { ok: true } }) + "\\n");',
+                    '    continue;',
+                    '  }',
+                    '  process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32601, message: "method not found" } }) + "\\n");',
+                    '}',
+                ],
+            });
+
+            const client = await createCodexAppServerClient({
+                processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: requestLogPath,
+                    HAPPIER_CODEX_APP_SERVER_RPC_LOG_MAX_BYTES: '1800',
+                }),
+            });
+
+            try {
+                await expect(client.request('state/read')).resolves.toEqual({ ok: true });
+            } finally {
+                await client.dispose();
+            }
+
+            await expect(readFile(`${requestLogPath}.1`, 'utf8')).resolves.toContain('xxx');
+            const currentLog = await readFile(requestLogPath, 'utf8');
+            expect(currentLog).toContain('"method":"state/read"');
+            expect(currentLog.length).toBeLessThan(1_800);
         });
     });
 });

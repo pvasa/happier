@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { appendFile } from 'node:fs/promises';
+import { appendFile, rename, rm, stat } from 'node:fs/promises';
 
 import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
@@ -10,7 +10,10 @@ import { appendCodexCliConfigOverridesArgs } from '../../utils/appendCodexCliCon
 import { resolveConfiguredCodexConfigTomlPath } from '../../utils/resolveConfiguredCodexHome';
 import { createCodexAppServerJsonLineReader } from './codexAppServerJsonLineReader';
 import { readCodexAppServerRequestTimeoutMs } from './codexAppServerRpcTimeout';
-import { sanitizeCodexAppServerRpcLogValue } from './codexAppServerRpcLogSanitizer';
+import {
+    sanitizeCodexAppServerRpcDiagnosticString,
+    sanitizeCodexAppServerRpcLogValue,
+} from './codexAppServerRpcLogSanitizer';
 import { safeJsonStringify } from '@/utils/safeJson';
 import { createCodexAppServerRpcError } from '../appServerCompatibility';
 import {
@@ -57,8 +60,11 @@ type RpcLogEntry = Readonly<{
     method?: string;
     params?: unknown;
     result?: unknown;
-    error?: Readonly<{ code?: number; message?: string }> | null;
+    error?: Readonly<{ code?: number; message?: string; data?: unknown }> | null;
 }>;
+
+const DEFAULT_RPC_LOG_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_RPC_LOG_ROTATE_COUNT = 2;
 
 function resolveRpcLogPath(env: NodeJS.ProcessEnv): string | null {
     const raw = expandHomeDirPath(
@@ -70,6 +76,57 @@ function resolveRpcLogPath(env: NodeJS.ProcessEnv): string | null {
     return raw ? raw : null;
 }
 
+function readPositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+    const raw = typeof env[key] === 'string' ? env[key]?.trim() : '';
+    if (!raw) return fallback;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readRpcLogMaxBytes(env: NodeJS.ProcessEnv): number {
+    return readPositiveIntegerEnv(env, 'HAPPIER_CODEX_APP_SERVER_RPC_LOG_MAX_BYTES', DEFAULT_RPC_LOG_MAX_BYTES);
+}
+
+function readRpcLogRotateCount(env: NodeJS.ProcessEnv): number {
+    return Math.min(
+        readPositiveIntegerEnv(env, 'HAPPIER_CODEX_APP_SERVER_RPC_LOG_ROTATE_COUNT', DEFAULT_RPC_LOG_ROTATE_COUNT),
+        10,
+    );
+}
+
+function sanitizeRpcLogError(error: RpcLogEntry['error']): RpcLogEntry['error'] {
+    if (!error) return error;
+    return {
+        ...(typeof error.code === 'number' ? { code: error.code } : {}),
+        ...(typeof error.message === 'string'
+            ? { message: sanitizeCodexAppServerRpcDiagnosticString(error.message) }
+            : {}),
+        ...(error.data !== undefined ? { data: sanitizeCodexAppServerRpcLogValue(error.data) } : {}),
+    };
+}
+
+async function rotateRpcLogIfNeeded(path: string, payload: string, maxBytes: number, rotateCount: number): Promise<void> {
+    if (rotateCount <= 0) return;
+    const payloadBytes = Buffer.byteLength(payload, 'utf8');
+    const current = await stat(path).catch((error: unknown) => {
+        if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT') return null;
+        throw error;
+    });
+    if (!current || current.size + payloadBytes <= maxBytes) return;
+
+    await rm(`${path}.${rotateCount}`, { force: true }).catch(() => undefined);
+    for (let index = rotateCount - 1; index >= 1; index -= 1) {
+        await rename(`${path}.${index}`, `${path}.${index + 1}`).catch((error: unknown) => {
+            if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT') return;
+            throw error;
+        });
+    }
+    await rename(path, `${path}.1`).catch((error: unknown) => {
+        if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT') return;
+        throw error;
+    });
+}
+
 function createRpcLogger(env: NodeJS.ProcessEnv): {
     append: (entry: RpcLogEntry) => void;
     flush: () => Promise<void>;
@@ -79,16 +136,22 @@ function createRpcLogger(env: NodeJS.ProcessEnv): {
         return { append: () => undefined, flush: async () => undefined };
     }
 
+    const maxBytes = readRpcLogMaxBytes(env);
+    const rotateCount = readRpcLogRotateCount(env);
     let chain = Promise.resolve();
     const append = (entry: RpcLogEntry): void => {
         const loggedEntry: RpcLogEntry = {
             ...entry,
             params: sanitizeCodexAppServerRpcLogValue(entry.params),
             result: sanitizeCodexAppServerRpcLogValue(entry.result),
+            error: sanitizeRpcLogError(entry.error),
         };
         const payload = `${safeJsonStringify(loggedEntry)}\n`;
         chain = chain
-            .then(() => appendFile(path, payload, { encoding: 'utf8' }))
+            .then(async () => {
+                await rotateRpcLogIfNeeded(path, payload, maxBytes, rotateCount);
+                await appendFile(path, payload, { encoding: 'utf8' });
+            })
             .catch(() => undefined);
     };
 
@@ -124,6 +187,9 @@ function sanitizeCodexAppServerEnv(processEnv: NodeJS.ProcessEnv): NodeJS.Proces
         ...processEnv,
         CODEX_THREAD_ID: undefined,
         CODEX_INTERNAL_ORIGINATOR_OVERRIDE: undefined,
+        HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: undefined,
+        HAPPIER_CODEX_APP_SERVER_RPC_LOG_MAX_BYTES: undefined,
+        HAPPIER_CODEX_APP_SERVER_RPC_LOG_ROTATE_COUNT: undefined,
         [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: undefined,
         [HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY]: undefined,
         [HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR]: undefined,
@@ -177,8 +243,9 @@ export async function createCodexAppServerClient(params: Readonly<{
     configOverrides?: ReadonlyArray<string>;
     disableUserMcpServers?: boolean;
 }>): Promise<DisposableCodexAppServerClient> {
-    const processEnv = sanitizeCodexAppServerEnv(params.processEnv ?? process.env);
-    const rpcLogger = createRpcLogger(processEnv);
+    const sourceProcessEnv = params.processEnv ?? process.env;
+    const rpcLogger = createRpcLogger(sourceProcessEnv);
+    const processEnv = sanitizeCodexAppServerEnv(sourceProcessEnv);
     const baseInvocation = await resolveCodexCliInvocation({
         args: ['app-server', '--listen', 'stdio://'],
         cwd: params.cwd,
@@ -387,7 +454,9 @@ export async function createCodexAppServerClient(params: Readonly<{
         if (disposing) {
             return;
         }
-        const suffix = stderrBuffer.trim() ? `\n${stderrBuffer.trim()}` : '';
+        const suffix = stderrBuffer.trim()
+            ? `\n${sanitizeCodexAppServerRpcDiagnosticString(stderrBuffer.trim())}`
+            : '';
         failWith(new Error(`Codex app-server exited before completing the request (code=${code ?? 'null'} signal=${signal ?? 'null'})${suffix}`));
     });
 
