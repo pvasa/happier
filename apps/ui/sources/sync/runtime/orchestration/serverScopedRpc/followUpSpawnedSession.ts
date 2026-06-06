@@ -207,6 +207,13 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
             if (context.scope === 'active') {
                 const explicitTargetServerId = String(params.targetServerId ?? '').trim();
                 if (trimmedInitialMessage.length > 0) {
+                    await ensureSessionHydratedForNavigation({
+                        sessionId,
+                        serverId: explicitTargetServerId,
+                        getStoredSession,
+                        ensureSessionVisibleForMessageRoute,
+                    });
+
                     await activeSync.sendMessage(
                         sessionId,
                         trimmedInitialMessage,
@@ -219,19 +226,6 @@ export function createFollowUpSpawnedSessionWithServerScope(deps?: Readonly<{
                             }
                             : undefined,
                     );
-
-                    try {
-                        await ensureSessionHydratedForNavigation({
-                            sessionId,
-                            serverId: explicitTargetServerId,
-                            getStoredSession,
-                            ensureSessionVisibleForMessageRoute,
-                        });
-                    } catch {
-                        // The first message is already committed. Let the route hydrate the
-                        // created session on arrival instead of bouncing the user back to /new
-                        // with a recovered draft.
-                    }
                     return;
                 }
 

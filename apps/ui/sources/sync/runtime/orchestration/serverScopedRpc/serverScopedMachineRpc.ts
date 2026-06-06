@@ -59,6 +59,15 @@ function isMachineRpcTimeoutError(error: unknown): boolean {
     );
 }
 
+function normalizeScopedMachineRpcEncryptedResult(value: unknown): string {
+    const unwrapped = Array.isArray(value) && value.length === 1 ? value[0] : value;
+    if (typeof unwrapped === 'string') return unwrapped;
+    throw createRpcCallError({
+        error: 'Invalid scoped machine RPC response',
+        errorCode: 'invalid_scoped_machine_rpc_response',
+    });
+}
+
 async function withMachineRpcTimeout<T>(
     promise: Promise<T>,
     params: Readonly<{
@@ -178,7 +187,9 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
             );
 
             if (result.ok) {
-                const decoded = await machineEncryption.decryptRaw(result.result) as R;
+                const decoded = await machineEncryption.decryptRaw(
+                    normalizeScopedMachineRpcEncryptedResult(result.result),
+                ) as R;
                 recordCachedMachineRpcDirectRouteViable({
                     serverId: context.targetServerId,
                     remoteMachineId: context.machineId,

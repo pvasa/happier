@@ -30,9 +30,15 @@ vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', () => ({
   createEncryptionFromAuthCredentials: (...args: unknown[]) => createEncryptionSpy(...args),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-  listServerProfiles: (...args: unknown[]) => listServerProfilesSpy(...args),
-}));
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
+  const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
+  return createServerProfilesModuleMock({
+    importOriginal,
+    overrides: {
+      listServerProfiles: (...args: unknown[]) => listServerProfilesSpy(...args),
+    },
+  });
+});
 
 vi.mock('@/sync/domains/server/serverRuntime', () => ({
   getActiveServerSnapshot: (...args: unknown[]) => getActiveServerSnapshotSpy(...args),

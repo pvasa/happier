@@ -5,8 +5,26 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
 
 describe('followUpSpawnedSessionWithServerScope', () => {
-    it('attaches a recoverable follow-up payload when active-scope sendMessage fails before the first message send', async () => {
-        const ensureSessionVisibleForMessageRoute = vi.fn(async () => {});
+    it('attaches a recoverable follow-up payload when active-scope sendMessage fails after hydration', async () => {
+        let storedSession: Session | null = null;
+        const ensureSessionVisibleForMessageRoute = vi.fn(async () => {
+            storedSession = {
+                id: 'sess_target',
+                createdAt: 1,
+                updatedAt: 2,
+                seq: 3,
+                active: true,
+                activeAt: 2,
+                encryptionMode: 'plain',
+                metadataVersion: 1,
+                metadata: null,
+                agentStateVersion: 1,
+                agentState: null,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+            } as Session;
+        });
 
         const { createFollowUpSpawnedSessionWithServerScope, readRecoverableFollowUpPayload } = await import('./followUpSpawnedSession');
         const { followUpSpawnedSessionWithServerScope } = createFollowUpSpawnedSessionWithServerScope({
@@ -21,7 +39,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
                 },
             },
             ensureSessionVisibleForMessageRoute,
-            getStoredSession: () => null,
+            getStoredSession: () => storedSession,
         });
 
         let thrown: unknown = null;
@@ -53,7 +71,70 @@ describe('followUpSpawnedSessionWithServerScope', () => {
             },
             profileId: 'profile-work',
         });
-        expect(ensureSessionVisibleForMessageRoute).not.toHaveBeenCalled();
+        expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith('sess_target', { forceRefresh: true });
+    });
+
+    it('hydrates active-scope created sessions before sending the initial follow-up', async () => {
+        const calls: string[] = [];
+        let storedSession: Session | null = null;
+        const ensureSessionVisibleForMessageRoute = vi.fn(async () => {
+            calls.push('hydrate');
+            storedSession = {
+                id: 'sess_target',
+                createdAt: 1,
+                updatedAt: 2,
+                seq: 3,
+                active: true,
+                activeAt: 2,
+                encryptionMode: 'plain',
+                metadataVersion: 1,
+                metadata: null,
+                agentStateVersion: 1,
+                agentState: null,
+                thinking: false,
+                thinkingAt: 0,
+                presence: 'online',
+            } as Session;
+        });
+        const sendMessage = vi.fn(async () => {
+            calls.push('send');
+            expect(storedSession).not.toBeNull();
+        });
+
+        const { createFollowUpSpawnedSessionWithServerScope } = await import('./followUpSpawnedSession');
+        const { followUpSpawnedSessionWithServerScope } = createFollowUpSpawnedSessionWithServerScope({
+            resolveContext: async () => ({
+                scope: 'active',
+                timeoutMs: 5_000,
+            }),
+            activeSync: {
+                refreshSessions: async () => {},
+                sendMessage,
+            },
+            ensureSessionVisibleForMessageRoute,
+            getStoredSession: () => storedSession,
+        });
+
+        await followUpSpawnedSessionWithServerScope({
+            sessionId: 'sess_target',
+            initialMessageText: 'hello from new session',
+            displayText: 'hello display',
+            messageLocalId: 'first-turn-local',
+            profileId: 'profile-work',
+        });
+
+        expect(calls).toEqual(['hydrate', 'send']);
+        expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith('sess_target', { forceRefresh: true });
+        expect(sendMessage).toHaveBeenCalledWith(
+            'sess_target',
+            'hello from new session',
+            'hello display',
+            undefined,
+            {
+                profileId: 'profile-work',
+                localId: 'first-turn-local',
+            },
+        );
     });
 
     it('hydrates scoped sessions through sync bookkeeping instead of writing directly to storage state', async () => {
@@ -340,7 +421,7 @@ describe('followUpSpawnedSessionWithServerScope', () => {
         );
     });
 
-    it('does not fail active-scope follow-up after the first message is sent when local hydration still lags behind', async () => {
+    it('does not send active-scope follow-up when local hydration still lags behind', async () => {
         const refreshSessions = vi.fn(async () => {});
         const sendMessage = vi.fn(async () => {});
         const ensureSessionVisibleForMessageRoute = vi.fn(async () => {});
@@ -363,16 +444,15 @@ describe('followUpSpawnedSessionWithServerScope', () => {
             sessionId: 'sess_target',
             targetServerId: 'server-b',
             initialMessageText: 'hello from active server',
-        })).resolves.toBeUndefined();
+        })).rejects.toMatchObject({
+            message: 'Created session is not available locally yet',
+            recoverableFollowUpPayload: {
+                draftText: 'hello from active server',
+            },
+        });
 
         expect(refreshSessions).not.toHaveBeenCalled();
-        expect(sendMessage).toHaveBeenCalledWith(
-            'sess_target',
-            'hello from active server',
-            undefined,
-            undefined,
-            undefined,
-        );
+        expect(sendMessage).not.toHaveBeenCalled();
         expect(ensureSessionVisibleForMessageRoute).toHaveBeenCalledWith(
             'sess_target',
             { forceRefresh: true, serverId: 'server-b' },
