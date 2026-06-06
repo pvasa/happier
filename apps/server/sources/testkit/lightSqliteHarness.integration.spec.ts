@@ -31,6 +31,7 @@ describe("createLightSqliteHarness", () => {
             expect(process.env.HAPPIER_LIGHT_HARNESS_SECOND_SPEC_FLAG).toBe("second-configured");
             expect(harness.envBase.HAPPIER_LIGHT_HARNESS_SPEC_FLAG).toBe("configured");
             expect(harness.envBase.DATABASE_URL).toContain("?socket_timeout=30");
+            expect(harness.envBase.DATABASE_URL).toContain("connection_limit=1");
         } finally {
             await harness.close();
         }

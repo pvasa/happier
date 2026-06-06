@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveLightDataDir, resolveLightDatabaseDir } from "@/flavors/light/env";
 import { resolveLightSqliteBusyTimeoutMsFromEnv } from "@/flavors/light/sqliteConnectionConfig";
+import { log } from "@/utils/logging/log";
 import { acquirePgliteDirLock } from "./locks/pgliteLock";
 export type TransactionClient = PrismaNamespace.TransactionClient;
 export type PrismaClientType = PrismaClientInstance;
@@ -186,6 +187,10 @@ export async function initDbSqlite(): Promise<void> {
         throw new Error("Database client is not initialized after initDbFromGeneratedClient(sqlite).");
     }
     await applySqliteRuntimePragmas(_db, process.env);
+    log(
+        { module: "storage", event: "sqlite-startup-diagnostics", sqlite: resolveSqliteStartupDiagnosticsFromEnv(process.env) },
+        "SQLite startup diagnostics",
+    );
 }
 
 function resolveLightPgliteDirFromEnv(env: NodeJS.ProcessEnv): string {
@@ -279,6 +284,18 @@ export type SqliteRuntimePragmas = Readonly<{
     busyTimeoutMs: number;
 }>;
 
+export type SqliteDatabaseUrlConnectionLimitStatus = "configured" | "missing" | "invalid";
+
+export type SqliteStartupDiagnostics = Readonly<{
+    provider: "sqlite";
+    journalMode: SqliteJournalMode;
+    synchronous: SqliteSynchronousMode;
+    busyTimeoutMs: number;
+    databaseUrlSocketTimeoutSeconds: number | null;
+    databaseUrlConnectionLimit: number | null;
+    databaseUrlConnectionLimitStatus: SqliteDatabaseUrlConnectionLimitStatus;
+}>;
+
 function resolveSqliteJournalModeFromEnv(env: NodeJS.ProcessEnv): SqliteJournalMode {
     const raw = String(env.HAPPIER_SQLITE_JOURNAL_MODE ?? env.HAPPY_SQLITE_JOURNAL_MODE ?? "").trim();
     if (!raw) return "WAL";
@@ -308,6 +325,42 @@ export function resolveSqliteRuntimePragmasFromEnv(env: NodeJS.ProcessEnv): Sqli
         journalMode: resolveSqliteJournalModeFromEnv(env),
         synchronous: resolveSqliteSynchronousModeFromEnv(env),
         busyTimeoutMs: resolveSqliteBusyTimeoutMsFromEnv(env),
+    };
+}
+
+function parsePositiveInteger(value: string | null): number | null {
+    if (value === null) return null;
+    const trimmed = value.trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function readSqliteDatabaseUrlSearchParam(env: NodeJS.ProcessEnv, key: string): string | null {
+    const rawUrl = String(env.DATABASE_URL ?? "").trim();
+    if (!rawUrl) return null;
+    try {
+        return new URL(rawUrl).searchParams.get(key);
+    } catch {
+        return null;
+    }
+}
+
+export function resolveSqliteStartupDiagnosticsFromEnv(env: NodeJS.ProcessEnv): SqliteStartupDiagnostics {
+    const pragmas = resolveSqliteRuntimePragmasFromEnv(env);
+    const rawConnectionLimit = readSqliteDatabaseUrlSearchParam(env, "connection_limit");
+    const databaseUrlConnectionLimit = parsePositiveInteger(rawConnectionLimit);
+    const databaseUrlConnectionLimitStatus: SqliteDatabaseUrlConnectionLimitStatus =
+        rawConnectionLimit === null ? "missing" : databaseUrlConnectionLimit === null ? "invalid" : "configured";
+
+    return {
+        provider: "sqlite",
+        journalMode: pragmas.journalMode,
+        synchronous: pragmas.synchronous,
+        busyTimeoutMs: pragmas.busyTimeoutMs,
+        databaseUrlSocketTimeoutSeconds: parsePositiveInteger(readSqliteDatabaseUrlSearchParam(env, "socket_timeout")),
+        databaseUrlConnectionLimit,
+        databaseUrlConnectionLimitStatus,
     };
 }
 

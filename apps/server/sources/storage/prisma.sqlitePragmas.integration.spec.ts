@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { renderPrismaCompatibleSqliteDatabaseUrl } from "@happier-dev/cli-common/firstPartyRuntime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { db } from "@/storage/db";
+import { db, resolveSqliteStartupDiagnosticsFromEnv } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
 describe("storage/prisma sqlite pragmas", () => {
@@ -77,5 +77,40 @@ describe("storage/prisma sqlite pragmas", () => {
             }
             await rm(baseDir, { recursive: true, force: true });
         }
+    });
+
+    it("reports sanitized sqlite startup diagnostics", () => {
+        const diagnostics = resolveSqliteStartupDiagnosticsFromEnv({
+            DATABASE_URL: "file:/tmp/happier-secret-path/test.sqlite?socket_timeout=45&connection_limit=1",
+            HAPPIER_SQLITE_BUSY_TIMEOUT_MS: "45000",
+            HAPPIER_SQLITE_JOURNAL_MODE: "DELETE",
+            HAPPIER_SQLITE_SYNCHRONOUS: "FULL",
+        });
+
+        expect(diagnostics).toEqual({
+            provider: "sqlite",
+            journalMode: "DELETE",
+            synchronous: "FULL",
+            busyTimeoutMs: 45000,
+            databaseUrlSocketTimeoutSeconds: 45,
+            databaseUrlConnectionLimit: 1,
+            databaseUrlConnectionLimitStatus: "configured",
+        });
+        expect(JSON.stringify(diagnostics)).not.toContain("happier-secret-path");
+    });
+
+    it("flags explicit sqlite URLs without a connection limit in startup diagnostics", () => {
+        expect(
+            resolveSqliteStartupDiagnosticsFromEnv({
+                DATABASE_URL: "file:/tmp/happier-secret-path/test.sqlite?socket_timeout=30",
+            }),
+        ).toEqual(
+            expect.objectContaining({
+                provider: "sqlite",
+                databaseUrlSocketTimeoutSeconds: 30,
+                databaseUrlConnectionLimit: null,
+                databaseUrlConnectionLimitStatus: "missing",
+            }),
+        );
     });
 });
