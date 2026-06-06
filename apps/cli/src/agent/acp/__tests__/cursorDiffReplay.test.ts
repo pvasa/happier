@@ -5,8 +5,10 @@ import { handleToolCallUpdate } from '../sessionUpdateHandlers';
 import { DefaultTransport } from '../../transport';
 import { CursorTransport } from '@/backends/cursor/acp/transport';
 
-function createCtx(transport: HandlerContext['transport']): HandlerContext & { emitted: any[] } {
-  const emitted: any[] = [];
+type EmittedMessage = Parameters<HandlerContext['emit']>[0];
+
+function createCtx(transport: HandlerContext['transport']): HandlerContext & { emitted: EmittedMessage[] } {
+  const emitted: EmittedMessage[] = [];
   return {
     transport,
     activeToolCalls: new Set(),
@@ -19,12 +21,12 @@ function createCtx(transport: HandlerContext['transport']): HandlerContext & { e
     idleTimeout: null,
     recentPromptHadChangeTitle: false,
     toolCallCountSincePrompt: 0,
-    emit: (msg) => emitted.push(msg),
+    emit: (msg: EmittedMessage) => emitted.push(msg),
     emitIdleStatus: () => {},
     clearIdleTimeout: () => {},
     setIdleTimeout: () => {},
     emitted,
-  } as unknown as HandlerContext & { emitted: any[] };
+  } as unknown as HandlerContext & { emitted: EmittedMessage[] };
 }
 
 // Replay of the REAL captured cursor 2026.05.28 edit flow (.project/tmp/cursor-toolmap-probe/wire.ndjson):
