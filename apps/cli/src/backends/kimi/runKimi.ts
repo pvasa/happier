@@ -10,6 +10,7 @@ import type { Credentials } from '@/persistence';
 import { initialMachineMetadata } from '@/daemon/startDaemon';
 import { runStandardAcpProvider, type StandardAcpProviderRunOptions } from '@/agent/runtime/runStandardAcpProvider';
 import { formatProviderPromptErrorMessage } from '@/agent/runtime/formatProviderPromptErrorMessage';
+import type { KimiAcpPythonSelector } from '@happier-dev/agents';
 
 import { KimiTerminalDisplay } from '@/backends/kimi/ui/KimiTerminalDisplay';
 import { createKimiAcpRuntime } from './acp/runtime';
@@ -19,6 +20,7 @@ const KIMI_AUTH_HINT = 'Kimi appears not configured. Ensure the API key is set f
 export async function runKimi(opts: StandardAcpProviderRunOptions & {
   credentials: Credentials;
   permissionMode?: PermissionMode;
+  kimiAcpPythonSelector?: KimiAcpPythonSelector;
 }): Promise<void> {
   await runStandardAcpProvider(opts, {
     flavor: 'kimi',
@@ -30,7 +32,7 @@ export async function runKimi(opts: StandardAcpProviderRunOptions & {
     supportsMcpServers: false,
     machineMetadata: initialMachineMetadata,
     terminalDisplay: KimiTerminalDisplay,
-    createRuntime: ({ directory, machineId, session, messageBuffer, mcpServers, permissionHandler, setThinking, getPermissionMode, memoryRecallGuidanceEnabled }) => createKimiAcpRuntime({
+    createRuntime: ({ directory, machineId, session, messageBuffer, mcpServers, permissionHandler, setThinking, getPermissionMode, memoryRecallGuidanceEnabled, pendingQueueDrainMaxPopPerWake }) => createKimiAcpRuntime({
       directory,
       machineId,
       session,
@@ -40,6 +42,8 @@ export async function runKimi(opts: StandardAcpProviderRunOptions & {
       onThinkingChange: setThinking,
       memoryRecallGuidanceEnabled,
       getPermissionMode,
+      kimiAcpPythonSelector: opts.kimiAcpPythonSelector,
+      pendingQueueDrainMaxPopPerWake,
     }),
     onAttachMetadataSnapshotMissing: (error) => {
       logger.debug(
