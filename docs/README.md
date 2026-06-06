@@ -5,7 +5,10 @@ This folder documents how Happier works internally, with a focus on protocol, ba
 ## Index
 - protocol.md: Wire protocol (WebSocket), payload formats, sequencing, and concurrency rules.
 - api.md: HTTP endpoints and authentication flows.
-- encryption.md: Encryption boundaries and on-wire encoding.
+- encryption.md: Encryption boundaries, on-wire encoding, and session storage modes.
+- feature-gating.md: Canonical feature catalog, payload, policy, and gate-consumption contracts.
+- testing.md: Repository test lanes, placement rules, and e2e conventions.
+- binary-runtime.md: Binary-safe runtime rules and bundled internal workspace packaging.
 - backend-architecture.md: Internal backend structure, data flow, and key subsystems.
 - deployment.md: How to deploy the backend and required infrastructure.
 - cli-architecture.md: CLI and daemon architecture and how they interact with the server.

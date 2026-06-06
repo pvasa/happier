@@ -81,14 +81,14 @@ That split is intentional:
 - `apps/cli/src/agent/acp/**` is for provider-agnostic ACP plumbing
 - built-in generic ACP agents such as Kiro are declared in `@happier-dev/agents` and consumed by the generic ACP layer
 
-### 4) App agents catalog: `apps/ui/sources/agents/catalog.ts`
+### 4) App agents catalog: `apps/ui/sources/agents/catalog/catalog.ts`
 
 This is the app’s single public surface for screens:
-- screens import only from `apps/ui/sources/agents/catalog.ts`
+- screens import from the `@/agents/catalog` entrypoint backed by `apps/ui/sources/agents/catalog/**`
 - it composes:
-  - **core registry** (`registryCore.ts`) for identity + app config
-  - **UI registry** (`registryUi.ts`) for assets/visuals (lazy loaded for Node-safe tests)
-  - **behavior registry** (`registryUiBehavior.ts`) for provider-specific hooks
+  - **core registry** (`registry/registryCore.ts`) for identity + app config
+  - **UI registry** (`registry/registryUi.ts`) for assets/visuals (lazy loaded for Node-safe tests)
+  - **behavior registry** (`registry/registryUiBehavior.ts`) for provider-specific hooks
 
 Provider code lives under:
 - `apps/ui/sources/agents/providers/<agentId>/**`
@@ -99,15 +99,15 @@ Provider code lives under:
 
 There are three layers inside `apps/ui/sources/agents/`:
 
-1) **Core registry** (`registryCore.ts`)
+1) **Core registry** (`registry/registryCore.ts`)
    - identity + app-facing config (translations, settings gating, permissions, connected service UX, resume config, etc.)
    - consumes canonical ids from `@happier-dev/agents`
 
-2) **UI registry** (`registryUi.ts`)
+2) **UI registry** (`registry/registryUi.ts`)
    - app-only visuals (icons, tints, avatar overlay sizing, glyphs)
-   - imported lazily by `catalog.ts` so Node-side tests can import `@/agents/catalog` without loading native assets
+   - imported lazily by the catalog entrypoint so Node-side tests can import `@/agents/catalog` without loading native assets
 
-3) **Behavior registry** (`registryUiBehavior.ts`)
+3) **Behavior registry** (`registry/registryUiBehavior.ts`)
    - provider-specific hooks for:
      - experimental resume switches,
      - runtime resume gating/prefetch,
@@ -243,9 +243,9 @@ Create provider modules:
 - `apps/ui/sources/agents/providers/<agentId>/uiBehavior.ts` (optional; only if you need overrides)
 
 Wire them into registries:
-- add `*_CORE` to `apps/ui/sources/agents/registryCore.ts`
-- add `*_UI` to `apps/ui/sources/agents/registryUi.ts`
-- add `*_UI_BEHAVIOR_OVERRIDE` to `apps/ui/sources/agents/registryUiBehavior.ts` (only if you have overrides)
+- add `*_CORE` to `apps/ui/sources/agents/registry/registryCore.ts`
+- add `*_UI` to `apps/ui/sources/agents/registry/registryUi.ts`
+- add `*_UI_BEHAVIOR_OVERRIDE` to `apps/ui/sources/agents/registry/registryUiBehavior.ts` (only if you have overrides)
 
 ### Step 5 — update `@happier-dev/protocol` only when the boundary truly changes
 
@@ -278,10 +278,10 @@ If you’re running this repo via happy-stacks, prefer:
 
 ## Node-safe imports (tests)
 
-Some tests import `apps/ui/sources/agents/catalog.ts` in a Node environment. Avoid importing native/icon modules from code that executes during those imports.
+Some tests import the app agents catalog in a Node environment. Avoid importing native/icon modules from code that executes during those imports.
 
 Patterns we use:
-- `catalog.ts` lazy-loads `registryUi.ts` via `require('./registryUi')` to avoid loading image files in Node.
+- the catalog entrypoint lazy-loads `registry/registryUi.ts` to avoid loading image files in Node.
 - if a provider behavior needs a React Native component (e.g. action chips), lazy-require it inside the hook.
 
 ---
@@ -291,4 +291,4 @@ Patterns we use:
 - Don’t “auto-discover” backends by scanning the filesystem. We want deterministic bundling and explicit reviewable changes.
 - Don’t do side-effect self-registration (“import this file and it registers itself”). It makes ordering brittle and behavior hard to audit.
 - Don’t hardcode agent-specific logic in generic screens; add a typed hook in the provider’s `uiBehavior.ts` instead.
-- Don’t import native assets from code that must run in Node tests (keep assets in `registryUi.ts` and lazy-load).
+- Don’t import native assets from code that must run in Node tests (keep assets in `registry/registryUi.ts` and lazy-load).
