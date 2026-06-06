@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { applyClaudeRemoteMetaState, DEFAULT_CLAUDE_REMOTE_META_STATE } from './claudeRemoteMetaState';
 
 describe('applyClaudeRemoteMetaState', () => {
+  it('defaults unified terminal metadata to disabled auto host', () => {
+    expect((DEFAULT_CLAUDE_REMOTE_META_STATE as any).claudeUnifiedTerminalEnabled).toBe(false);
+    expect((DEFAULT_CLAUDE_REMOTE_META_STATE as any).claudeUnifiedTerminalHost).toBe('auto');
+  });
+
   it('defaults claudeRemoteSettingSourcesV2 to user+project+local (matches Claude Code default behavior)', () => {
     expect((DEFAULT_CLAUDE_REMOTE_META_STATE as any).claudeRemoteSettingSourcesV2).toEqual(['user', 'project', 'local']);
   });
@@ -56,6 +61,7 @@ describe('applyClaudeRemoteMetaState', () => {
   it('applies supported boolean toggles when provided', () => {
     const next = applyClaudeRemoteMetaState(DEFAULT_CLAUDE_REMOTE_META_STATE, {
       claudeRemoteAgentSdkEnabled: true,
+      claudeUnifiedTerminalEnabled: true,
       claudeLocalPermissionBridgeEnabled: true,
       claudeLocalPermissionBridgeWaitIndefinitely: true,
       claudeRemoteEnableFileCheckpointing: true,
@@ -68,6 +74,7 @@ describe('applyClaudeRemoteMetaState', () => {
 
     expect(next).toMatchObject({
       claudeRemoteAgentSdkEnabled: true,
+      claudeUnifiedTerminalEnabled: true,
       claudeLocalPermissionBridgeEnabled: true,
       claudeLocalPermissionBridgeWaitIndefinitely: true,
       claudeRemoteEnableFileCheckpointing: true,
@@ -77,6 +84,23 @@ describe('applyClaudeRemoteMetaState', () => {
       claudeRemoteDebugEnabled: true,
       claudeRemoteVerboseEnabled: true,
     });
+  });
+
+  it('applies valid unified terminal host values only', () => {
+    const tmux = applyClaudeRemoteMetaState(DEFAULT_CLAUDE_REMOTE_META_STATE, {
+      claudeUnifiedTerminalHost: 'tmux',
+    });
+    expect((tmux as any).claudeUnifiedTerminalHost).toBe('tmux');
+
+    const zellij = applyClaudeRemoteMetaState(tmux, {
+      claudeUnifiedTerminalHost: 'zellij',
+    });
+    expect((zellij as any).claudeUnifiedTerminalHost).toBe('zellij');
+
+    const next = applyClaudeRemoteMetaState(zellij, {
+      claudeUnifiedTerminalHost: 'screen',
+    });
+    expect((next as any).claudeUnifiedTerminalHost).toBe('zellij');
   });
 
   it('normalizes claudeRemoteDebugCategories arrays when provided', () => {

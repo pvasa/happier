@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
+import { existsSync, readdirSync, openSync, readSync, closeSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 function readFirstLineUtf8(filePath: string): string | null {
@@ -50,13 +50,21 @@ export function resolveClaudeSubagentJsonlPath(params: Readonly<{
   projectDir: string;
   claudeSessionId: string;
   agentId: string;
+  sidechainId?: string | undefined;
 }>): string | null {
   const sanitizedSessionId = String(params.claudeSessionId ?? '').trim();
   if (!sanitizedSessionId) return null;
   const sanitizedAgentId = String(params.agentId ?? '').trim();
-  if (!sanitizedAgentId) return null;
 
   const subagentsDir = join(params.projectDir, sanitizedSessionId, 'subagents');
+  const sidechainId = typeof params.sidechainId === 'string' ? params.sidechainId.trim() : '';
+  if (sidechainId) {
+    const fromMeta = resolveJsonlPathFromToolUseMetadata(subagentsDir, sidechainId);
+    if (fromMeta) return fromMeta;
+  }
+
+  if (!sanitizedAgentId) return null;
+
   const direct = join(subagentsDir, `agent-${sanitizedAgentId}.jsonl`);
   if (existsSync(direct)) return direct;
 
@@ -100,5 +108,32 @@ export function resolveClaudeSubagentJsonlPath(params: Readonly<{
     if (youAreRe.test(content) || summaryRe.test(content) || summaryContainsNameRe.test(content)) return candidate;
   }
 
+  return null;
+}
+
+function resolveJsonlPathFromToolUseMetadata(subagentsDir: string, sidechainId: string): string | null {
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(subagentsDir);
+  } catch {
+    return null;
+  }
+
+  for (const fileName of entries) {
+    if (!fileName.startsWith('agent-') || !fileName.endsWith('.meta.json')) continue;
+    const metaPath = join(subagentsDir, fileName);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(metaPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const toolUseId = (parsed as Record<string, unknown>).toolUseId;
+    if (typeof toolUseId !== 'string' || toolUseId.trim() !== sidechainId) continue;
+
+    const jsonlPath = join(subagentsDir, fileName.replace(/\.meta\.json$/, '.jsonl'));
+    return existsSync(jsonlPath) ? jsonlPath : null;
+  }
   return null;
 }

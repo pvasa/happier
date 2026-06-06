@@ -25,17 +25,25 @@ export function parseClaudeSdkFlagOverridesFromArgs(args?: string[]): ClaudeSdkF
     return next;
   };
 
+  const inlineValue = (arg: string, flag: string): string | undefined => {
+    if (!arg.startsWith(`${flag}=`)) return undefined;
+    const value = arg.slice(flag.length + 1).trim();
+    return value || undefined;
+  };
+
   for (let i = 0; i < input.length; i++) {
     const arg = input[i];
 
-    if (arg === '--max-turns') {
+    const inlineMaxTurns = inlineValue(arg, '--max-turns');
+    if (arg === '--max-turns' || inlineMaxTurns !== undefined) {
       const next = nextValue(i);
-      if (typeof next === 'string') {
-        const parsed = Number.parseInt(next, 10);
+      const rawValue = inlineMaxTurns ?? next;
+      if (typeof rawValue === 'string') {
+        const parsed = Number.parseInt(rawValue, 10);
         if (Number.isFinite(parsed) && parsed > 0) {
           maxTurns = parsed;
         }
-        i++;
+        if (inlineMaxTurns === undefined) i++;
       }
       continue;
     }
@@ -45,47 +53,57 @@ export function parseClaudeSdkFlagOverridesFromArgs(args?: string[]): ClaudeSdkF
       continue;
     }
 
-    if (arg === '--append-system-prompt') {
+    const inlineAppendSystemPrompt = inlineValue(arg, '--append-system-prompt');
+    if (arg === '--append-system-prompt' || inlineAppendSystemPrompt !== undefined) {
       const next = nextValue(i);
-      if (typeof next === 'string') {
-        appendSystemPrompt = next;
-        i++;
+      const rawValue = inlineAppendSystemPrompt ?? next;
+      if (typeof rawValue === 'string') {
+        appendSystemPrompt = rawValue;
+        if (inlineAppendSystemPrompt === undefined) i++;
       }
       continue;
     }
 
-    if (arg === '--system-prompt') {
+    const inlineSystemPrompt = inlineValue(arg, '--system-prompt');
+    if (arg === '--system-prompt' || inlineSystemPrompt !== undefined) {
       const next = nextValue(i);
-      if (typeof next === 'string') {
-        customSystemPrompt = next;
-        i++;
+      const rawValue = inlineSystemPrompt ?? next;
+      if (typeof rawValue === 'string') {
+        customSystemPrompt = rawValue;
+        if (inlineSystemPrompt === undefined) i++;
       }
       continue;
     }
 
-    if (arg === '--model') {
+    const inlineModel = inlineValue(arg, '--model');
+    if (arg === '--model' || inlineModel !== undefined) {
       const next = nextValue(i);
-      if (typeof next === 'string') {
-        model = next;
-        i++;
+      const rawValue = inlineModel ?? next;
+      if (typeof rawValue === 'string') {
+        model = rawValue;
+        if (inlineModel === undefined) i++;
       }
       continue;
     }
 
-    if (arg === '--fallback-model') {
+    const inlineFallbackModel = inlineValue(arg, '--fallback-model');
+    if (arg === '--fallback-model' || inlineFallbackModel !== undefined) {
       const next = nextValue(i);
-      if (typeof next === 'string') {
-        fallbackModel = next;
-        i++;
+      const rawValue = inlineFallbackModel ?? next;
+      if (typeof rawValue === 'string') {
+        fallbackModel = rawValue;
+        if (inlineFallbackModel === undefined) i++;
       }
       continue;
     }
 
-    if (arg === '--effort') {
+    const inlineEffort = inlineValue(arg, '--effort');
+    if (arg === '--effort' || inlineEffort !== undefined) {
       const next = nextValue(i);
-      if (typeof next === 'string') {
-        effort = next;
-        i++;
+      const rawValue = inlineEffort ?? next;
+      if (typeof rawValue === 'string') {
+        effort = rawValue;
+        if (inlineEffort === undefined) i++;
       }
       continue;
     }

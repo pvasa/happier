@@ -7,6 +7,191 @@ import { claudeRemoteDispatch } from './claudeRemoteDispatch';
 import { getProjectPath } from '../utils/path';
 
 describe('claudeRemoteDispatch', () => {
+    it('routes to unified terminal before Agent SDK without reporting a new remote runner kind', async () => {
+        const mockLegacy = vi.fn(async () => {});
+        const mockAgentSdk = vi.fn(async () => {});
+        const mockUnified = vi.fn(async () => {});
+        const onRunnerSelected = vi.fn();
+
+        let sent = false;
+        await claudeRemoteDispatch(
+            {
+                onRunnerSelected,
+                nextMessage: async () => {
+                    if (sent) return null;
+                    sent = true;
+                    return {
+                        message: 'hello',
+                        mode: {
+                            permissionMode: 'default',
+                            claudeRemoteAgentSdkEnabled: true,
+                            claudeUnifiedTerminalEnabled: true,
+                            claudeUnifiedTerminalHost: 'auto',
+                        } as any,
+                    };
+                },
+            } as any,
+            {
+                claudeRemote: mockLegacy,
+                claudeRemoteAgentSdk: mockAgentSdk,
+                claudeUnifiedTerminal: mockUnified,
+                resolveClaudeUnifiedTerminalFeatureDecision: () => ({ state: 'enabled' }),
+            } as any,
+        );
+
+        expect(onRunnerSelected).not.toHaveBeenCalled();
+        expect(mockUnified).toHaveBeenCalledTimes(1);
+        expect(mockUnified).toHaveBeenCalledWith(expect.objectContaining({
+            allowFirstInputBeforeSessionStart: true,
+        }));
+        expect(mockAgentSdk).toHaveBeenCalledTimes(0);
+        expect(mockLegacy).toHaveBeenCalledTimes(0);
+    });
+
+    it('routes to unified terminal before legacy when Agent SDK is disabled', async () => {
+        const mockLegacy = vi.fn(async () => {});
+        const mockAgentSdk = vi.fn(async () => {});
+        const mockUnified = vi.fn(async () => {});
+
+        let sent = false;
+        await claudeRemoteDispatch(
+            {
+                nextMessage: async () => {
+                    if (sent) return null;
+                    sent = true;
+                    return {
+                        message: 'hello',
+                        mode: {
+                            permissionMode: 'default',
+                            claudeRemoteAgentSdkEnabled: false,
+                            claudeUnifiedTerminalEnabled: true,
+                            claudeUnifiedTerminalHost: 'auto',
+                        } as any,
+                    };
+                },
+            } as any,
+            {
+                claudeRemote: mockLegacy,
+                claudeRemoteAgentSdk: mockAgentSdk,
+                claudeUnifiedTerminal: mockUnified,
+                resolveClaudeUnifiedTerminalFeatureDecision: () => ({ state: 'enabled' }),
+            } as any,
+        );
+
+        expect(mockUnified).toHaveBeenCalledTimes(1);
+        expect(mockAgentSdk).toHaveBeenCalledTimes(0);
+        expect(mockLegacy).toHaveBeenCalledTimes(0);
+    });
+
+    it('defaults missing Agent SDK flag to the Agent SDK runner', async () => {
+        const mockLegacy = vi.fn(async () => {});
+        const mockAgentSdk = vi.fn(async () => {});
+
+        let sent = false;
+        await claudeRemoteDispatch(
+            {
+                nextMessage: async () => {
+                    if (sent) return null;
+                    sent = true;
+                    return {
+                        message: 'hello',
+                        mode: { permissionMode: 'default' } as any,
+                    };
+                },
+            } as any,
+            {
+                claudeRemote: mockLegacy,
+                claudeRemoteAgentSdk: mockAgentSdk,
+            } as any,
+        );
+
+        expect(mockAgentSdk).toHaveBeenCalledTimes(1);
+        expect(mockLegacy).toHaveBeenCalledTimes(0);
+    });
+
+
+    it.each(['disabled', 'unsupported', 'unknown'] as const)(
+        'fails clearly without fallback when unified terminal feature policy is %s',
+        async (featureState) => {
+            const mockLegacy = vi.fn(async () => {});
+            const mockAgentSdk = vi.fn(async () => {});
+            const mockUnified = vi.fn(async () => {});
+
+            let sent = false;
+            await expect(
+                claudeRemoteDispatch(
+                    {
+                        nextMessage: async () => {
+                            if (sent) return null;
+                            sent = true;
+                            return {
+                                message: 'hello',
+                                mode: {
+                                    permissionMode: 'default',
+                                    claudeRemoteAgentSdkEnabled: true,
+                                    claudeUnifiedTerminalEnabled: true,
+                                    claudeUnifiedTerminalHost: 'auto',
+                                } as any,
+                            };
+                        },
+                    } as any,
+                    {
+                        claudeRemote: mockLegacy,
+                        claudeRemoteAgentSdk: mockAgentSdk,
+                        claudeUnifiedTerminal: mockUnified,
+                        resolveClaudeUnifiedTerminalFeatureDecision: () => ({ state: featureState }),
+                    } as any,
+                ),
+            ).rejects.toThrow(/unified terminal runtime is disabled by feature policy/i);
+
+            expect(mockUnified).toHaveBeenCalledTimes(0);
+            expect(mockAgentSdk).toHaveBeenCalledTimes(0);
+            expect(mockLegacy).toHaveBeenCalledTimes(0);
+        },
+    );
+
+    it('does not fall back after unified terminal has been selected', async () => {
+        const mockLegacy = vi.fn(async () => {});
+        const mockAgentSdk = vi.fn(async () => {});
+        const mockUnified = vi.fn(async () => {
+            throw new Error('unified runner failed');
+        });
+        const onRunnerSelected = vi.fn();
+
+        let sent = false;
+        await expect(
+            claudeRemoteDispatch(
+                {
+                    onRunnerSelected,
+                    nextMessage: async () => {
+                        if (sent) return null;
+                        sent = true;
+                        return {
+                            message: 'hello',
+                            mode: {
+                                permissionMode: 'default',
+                                claudeRemoteAgentSdkEnabled: true,
+                                claudeUnifiedTerminalEnabled: true,
+                                claudeUnifiedTerminalHost: 'auto',
+                            } as any,
+                        };
+                    },
+                } as any,
+                {
+                    claudeRemote: mockLegacy,
+                    claudeRemoteAgentSdk: mockAgentSdk,
+                    claudeUnifiedTerminal: mockUnified,
+                    resolveClaudeUnifiedTerminalFeatureDecision: () => ({ state: 'enabled' }),
+                } as any,
+            ),
+        ).rejects.toThrow(/unified runner failed/);
+
+        expect(onRunnerSelected).not.toHaveBeenCalled();
+        expect(mockUnified).toHaveBeenCalledTimes(1);
+        expect(mockAgentSdk).toHaveBeenCalledTimes(0);
+        expect(mockLegacy).toHaveBeenCalledTimes(0);
+    });
+
     it('repairs interrupted tool calls before invoking the runner (preflight)', async () => {
         const baseDir = await mkdtemp(join(tmpdir(), 'happier-claude-remote-dispatch-preflight-'));
         const claudeConfigDir = join(baseDir, 'claude-config');

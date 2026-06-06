@@ -11,6 +11,86 @@ function makeMode(overrides?: Partial<EnhancedMode>): EnhancedMode {
 }
 
 describe('hashClaudeEnhancedModeForQueue', () => {
+    it('treats missing Agent SDK flag like explicit Agent SDK enabled', () => {
+        const missingFlag = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteSettingSourcesV2: ['project'],
+        }));
+
+        const explicitEnabled = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: true,
+            claudeRemoteSettingSourcesV2: ['project'],
+        }));
+
+        const explicitLegacy = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: false,
+            claudeRemoteSettingSourcesV2: ['project'],
+        }));
+
+        expect(missingFlag).toBe(explicitEnabled);
+        expect(missingFlag).not.toBe(explicitLegacy);
+    });
+
+    it('changes when unified terminal is enabled', () => {
+        const base = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: true,
+            claudeUnifiedTerminalEnabled: false,
+        } as any));
+
+        const next = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: true,
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'auto',
+        } as any));
+
+        expect(next).not.toBe(base);
+    });
+
+    it('changes when unified terminal host changes', () => {
+        const base = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'tmux',
+        } as any));
+
+        const next = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'zellij',
+        } as any));
+
+        expect(next).not.toBe(base);
+    });
+
+    it('ignores Agent SDK fallback enablement when unified terminal is enabled', () => {
+        const base = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: true,
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'auto',
+        } as any));
+
+        const next = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeRemoteAgentSdkEnabled: false,
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'auto',
+        } as any));
+
+        expect(next).toBe(base);
+    });
+
+    it('changes when max thinking tokens changes under unified terminal', () => {
+        const base = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'auto',
+            claudeRemoteMaxThinkingTokens: null,
+        } as any));
+
+        const next = hashClaudeEnhancedModeForQueue(makeMode({
+            claudeUnifiedTerminalEnabled: true,
+            claudeUnifiedTerminalHost: 'auto',
+            claudeRemoteMaxThinkingTokens: 4096,
+        } as any));
+
+        expect(next).not.toBe(base);
+    });
+
     it('does not change when only model changes (Agent SDK enabled)', () => {
         const base = hashClaudeEnhancedModeForQueue(makeMode({
             claudeRemoteAgentSdkEnabled: true,

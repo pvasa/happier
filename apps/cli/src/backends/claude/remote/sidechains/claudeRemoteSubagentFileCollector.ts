@@ -110,11 +110,21 @@ export class ClaudeRemoteSubagentFileCollector {
       const toolName = String((item as any).name ?? '').trim();
       if (!toolUseId || !toolName) continue;
       this.toolNameByToolUseId.set(toolUseId, toolName);
+      const genericSubagentTool = isGenericSubAgentToolName(toolName);
+      let agentIdFromInput = '';
       if (toolName === 'Agent') {
-        const agentIdFromInput = this.extractAgentIdFromAgentToolUseInput((item as any).input);
-        if (agentIdFromInput) {
-          this.agentIdByToolUseId.set(toolUseId, agentIdFromInput);
+        const resolvedAgentIdFromInput = this.extractAgentIdFromAgentToolUseInput((item as any).input);
+        if (resolvedAgentIdFromInput) {
+          this.agentIdByToolUseId.set(toolUseId, resolvedAgentIdFromInput);
+          agentIdFromInput = resolvedAgentIdFromInput;
         }
+      }
+      if (genericSubagentTool && this.resolveJsonlPathForAgentId && !this.entriesBySidechainId.has(toolUseId)) {
+        this.pendingBySidechainId.set(toolUseId, {
+          sidechainId: toolUseId,
+          agentId: agentIdFromInput || toolUseId,
+        });
+        this.flushPendingRegistrations();
       }
     }
   }

@@ -16,9 +16,8 @@ import { getClaudeRemoteSystemPrompt } from '@/backends/claude/utils/remoteSyste
 import { parseClaudeSdkFlagOverridesFromArgs } from '@/backends/claude/remote/sdkFlagOverrides';
 import { resolveClaudeRemoteSessionStartPlan } from '@/backends/claude/remote/sessionStartPlan';
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
-import { resolveClaudeConfigDirEnvOverlay } from '@/backends/claude/utils/resolveClaudeConfigDirEnvOverlay';
 import { resolveClaudeCodeExperimentalEnvOverlay } from '@/backends/claude/spawn/resolveClaudeCodeExperimentalEnvOverlay';
-import { isolateClaudeRuntimeAuthEnv } from '@/backends/claude/spawn/isolateClaudeRuntimeAuthEnv';
+import { buildClaudeSubprocessEnv } from '@/backends/claude/spawn/buildClaudeSubprocessEnv';
 import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic';
 import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
 import { normalizeClaudeToolUseNamesInSdkMessage } from '@/backends/claude/utils/normalizeClaudeToolUseNames';
@@ -26,7 +25,6 @@ import { tryMergeUserMcpConfigArgsIntoHappierMcp } from '@/backends/claude/utils
 import { ensureClaudeJsRuntimeExecutable } from '@/backends/claude/utils/ensureClaudeJsRuntimeExecutable';
 import { resolveClaudeEffortForModel } from '@/backends/claude/utils/claudeEffort';
 import { resolveClaudeCodeXdgIsolation } from '@/backends/claude/utils/resolveClaudeCodeXdgIsolation';
-import { isValidEnvVarKey } from '@/terminal/runtime/envVarSanitization';
 
 import type { SDKMessage, SDKSystemMessage, SDKUserMessage } from '@/backends/claude/sdk';
 import type { PermissionResult } from '@/backends/claude/sdk/types';
@@ -37,15 +35,13 @@ import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { readTailTextFile } from '@/utils/fs/readTailTextFile';
 import { buildClaudeAgentSdkHooks } from './agentSdk/buildClaudeAgentSdkHooks';
 import {
-    createClaudeAgentSdkProviderActivityLedger,
+    createClaudeProviderActivityLedger,
+    isTerminalClaudeAgentSdkProviderTaskStatus,
     normalizeClaudeAgentSdkProviderTaskId,
-} from './agentSdk/createClaudeAgentSdkProviderActivityLedger';
+    readClaudeAgentSdkProviderTaskStatus,
+} from '@/backends/claude/providerActivity/createClaudeProviderActivityLedger';
 import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTranscriptAfterInterrupt';
 import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAgentSdkSlashCommands';
-import {
-    HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR,
-    parseExplicitSpawnEnvKeysFromProcessEnv,
-} from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 import { mapClaudeRateLimitEventToUsageDetails, type NormalizedProviderUsageLimitDetailsV1 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from '../connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
 import {
@@ -593,74 +589,6 @@ export async function claudeRemoteAgentSdk(opts: {
         return { type: 'preset', preset: 'claude_code', append };
     };
 
-        const buildClaudeSubprocessEnv = (): Record<string, string> => {
-            const explicitSpawnEnvKeys = new Set(parseExplicitSpawnEnvKeysFromProcessEnv(process.env));
-            const allowExact = new Set<string>([
-                'PATH',
-                'HOME',
-                'USER',
-            'LOGNAME',
-            'SHELL',
-            'TERM',
-            'LANG',
-            'LC_ALL',
-            'LC_CTYPE',
-            'TMPDIR',
-            'TEMP',
-            'TMP',
-            'SSH_AUTH_SOCK',
-            'HTTP_PROXY',
-            'HTTPS_PROXY',
-            'NO_PROXY',
-            'SSL_CERT_FILE',
-            'SSL_CERT_DIR',
-            '__CF_USER_TEXT_ENCODING',
-            // Allow E2E harnesses to observe Claude subprocess invocations when using the fake CLI.
-            // These are inert unless the tests explicitly set them.
-            'HAPPIER_E2E_FAKE_CLAUDE_LOG',
-            'HAPPIER_E2E_FAKE_CLAUDE_SESSION_ID',
-            'HAPPY_E2E_FAKE_CLAUDE_LOG',
-            'HAPPY_E2E_FAKE_CLAUDE_SESSION_ID',
-        ]);
-        if (process.platform === 'win32') {
-            for (const key of ['USERPROFILE', 'USERNAME', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'ComSpec', 'PATHEXT', 'WINDIR']) {
-                allowExact.add(key);
-            }
-        }
-        const allowPrefixes = [
-            'XDG_',
-            'CLAUDE_',
-            'ANTHROPIC_',
-            'FORCE_COLOR',
-            'NO_COLOR',
-            'COLORTERM',
-            'TERM_',
-            // E2E harness env markers (safe to pass-through; ignored in production runs).
-            'HAPPIER_E2E_',
-            'HAPPY_E2E_',
-        ];
-
-            const out: Record<string, string> = Object.create(null);
-            const denyExact = new Set<string>([
-                'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
-                'CLAUDE_CODE_OAUTH_SCOPES',
-            ]);
-            for (const [key, value] of Object.entries(process.env)) {
-                if (!isValidEnvVarKey(key)) continue;
-                if (denyExact.has(key)) continue;
-                if (typeof value !== 'string') continue;
-                if (explicitSpawnEnvKeys.has(key) || allowExact.has(key) || allowPrefixes.some((p) => key.startsWith(p))) {
-                    out[key] = value;
-                }
-            }
-
-            delete out[HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR];
-            return isolateClaudeRuntimeAuthEnv({
-                ...out,
-                ...resolveClaudeConfigDirEnvOverlay(process.env),
-            });
-        };
-
         const mappedPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode(mode);
         const experimentalEnvOverlay = resolveClaudeCodeExperimentalEnvOverlay({
             claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
@@ -688,7 +616,7 @@ export async function claudeRemoteAgentSdk(opts: {
             if (verboseEnabled) out.verbose = null;
             return Object.keys(out).length > 0 ? out : undefined;
         })();
-        const claudeSubprocessEnv = isolateClaudeRuntimeAuthEnv({ ...xdgIsolationEnv, ...buildClaudeSubprocessEnv(), ...experimentalEnvOverlay });
+        const claudeSubprocessEnv = { ...xdgIsolationEnv, ...buildClaudeSubprocessEnv(), ...experimentalEnvOverlay };
         logClaudeRuntimeAuthEnvDiagnostic({
             logPrefix: 'claudeRemoteAgentSdk',
             sessionId: opts.sessionId ?? null,
@@ -1013,7 +941,7 @@ export async function claudeRemoteAgentSdk(opts: {
         let awaitingNextTurnStart = false;
         let didReleaseTurnForResult = false;
         let pendingResultReleaseForActiveProviderTasks = false;
-        const providerActivityLedger = createClaudeAgentSdkProviderActivityLedger();
+        const providerActivityLedger = createClaudeProviderActivityLedger();
 
         function recordCheckpointId(id: string) {
             if (checkpointIdSet.has(id)) return;
@@ -1539,6 +1467,26 @@ export async function claudeRemoteAgentSdk(opts: {
             await opts.onSubagentFlush?.();
         };
 
+        const noteTerminalProviderTaskStatus = async (
+            system: SDKSystemMessage,
+            options: { flushSubagent: boolean },
+        ): Promise<boolean> => {
+            const taskId = normalizeClaudeAgentSdkProviderTaskId(readTaskId(system));
+            if (!taskId) return false;
+            const status = readClaudeAgentSdkProviderTaskStatus(system);
+            if (!isTerminalClaudeAgentSdkProviderTaskStatus(status)) return false;
+
+            if (taskId === activeTaskId) {
+                activeTaskId = null;
+            }
+            providerActivityLedger.noteProviderTaskFinished(taskId);
+            if (options.flushSubagent) {
+                await finalizeSubagentTurn();
+            }
+            await maybeCompleteDeferredResultRelease();
+            return true;
+        };
+
         // Fire-and-forget capability publication.
         // This must not block the main streaming loop.
         const onCapabilities = opts.onCapabilities;
@@ -1903,25 +1851,28 @@ export async function claudeRemoteAgentSdk(opts: {
 
                     if (subtype === 'task_started') {
                         const taskId = providerActivityLedger.noteProviderTaskStarted(readTaskId(system));
-                        if (taskId) {
+                        const isTerminalTaskStatus = isTerminalClaudeAgentSdkProviderTaskStatus(
+                            readClaudeAgentSdkProviderTaskStatus(system),
+                        );
+                        if (taskId && !isTerminalTaskStatus) {
                             activeTaskId = taskId;
                         }
+                        await noteTerminalProviderTaskStatus(system, { flushSubagent: false });
                     } else if (subtype === 'task_progress') {
                         const taskId = providerActivityLedger.noteProviderTaskProgress(readTaskId(system));
-                        if (!activeTaskId && taskId) {
+                        const isTerminalTaskStatus = isTerminalClaudeAgentSdkProviderTaskStatus(
+                            readClaudeAgentSdkProviderTaskStatus(system),
+                        );
+                        if (!activeTaskId && taskId && !isTerminalTaskStatus) {
                             activeTaskId = taskId;
                         }
+                        await noteTerminalProviderTaskStatus(system, { flushSubagent: false });
                     } else if (subtype === 'task_notification') {
                         const taskId = normalizeClaudeAgentSdkProviderTaskId(readTaskId(system));
-                        const status = (system as any).status;
                         if (taskId === activeTaskId) {
                             activeTaskId = null;
                         }
-                        if (status === 'stopped' || status === 'failed' || status === 'completed') {
-                            providerActivityLedger.noteProviderTaskFinished(taskId);
-                            await finalizeSubagentTurn();
-                            await maybeCompleteDeferredResultRelease();
-                        }
+                        await noteTerminalProviderTaskStatus(system, { flushSubagent: true });
                     }
 
                     if (subtype === 'init' || subtype === 'compact_boundary') {

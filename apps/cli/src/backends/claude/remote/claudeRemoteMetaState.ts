@@ -1,5 +1,9 @@
+import { CLAUDE_UNIFIED_TERMINAL_HOSTS, type ClaudeUnifiedTerminalHost } from '@happier-dev/agents';
+
 export type ClaudeRemoteMetaState = Readonly<{
     claudeRemoteAgentSdkEnabled: boolean;
+    claudeUnifiedTerminalEnabled: boolean;
+    claudeUnifiedTerminalHost: ClaudeUnifiedTerminalHost;
     /**
      * v2 multi-select representation of Claude Code setting sources.
      *
@@ -29,6 +33,10 @@ export type ClaudeRemoteMetaState = Readonly<{
 
 const SETTING_SOURCES_V2_ORDER = ['user', 'project', 'local'] as const;
 const DEBUG_CATEGORIES_ORDER = ['api', 'mcp', 'hooks', 'file', '1p'] as const;
+
+function isClaudeUnifiedTerminalHost(value: string): value is ClaudeUnifiedTerminalHost {
+    return (CLAUDE_UNIFIED_TERMINAL_HOSTS as readonly string[]).includes(value);
+}
 
 function normalizeSettingSourcesV2(raw: unknown): ('user' | 'project' | 'local')[] | null {
     if (!Array.isArray(raw)) return null;
@@ -60,6 +68,8 @@ function normalizeDebugCategories(raw: unknown): Array<'api' | 'mcp' | 'hooks' |
 
 export const DEFAULT_CLAUDE_REMOTE_META_STATE: ClaudeRemoteMetaState = Object.freeze({
     claudeRemoteAgentSdkEnabled: true,
+    claudeUnifiedTerminalEnabled: false,
+    claudeUnifiedTerminalHost: 'auto',
     claudeRemoteSettingSourcesV2: ['user', 'project', 'local'] as const,
     // Default to loading BOTH user + project settings so Claude Code can see the user's
     // globally configured MCP servers (and other preferences) when launched by Happier.
@@ -93,6 +103,17 @@ export function applyClaudeRemoteMetaState(prev: ClaudeRemoteMetaState, meta: un
 
     if (typeof record.claudeRemoteAgentSdkEnabled === 'boolean') {
         next.claudeRemoteAgentSdkEnabled = record.claudeRemoteAgentSdkEnabled;
+    }
+
+    if (typeof record.claudeUnifiedTerminalEnabled === 'boolean') {
+        next.claudeUnifiedTerminalEnabled = record.claudeUnifiedTerminalEnabled;
+    }
+
+    if (typeof record.claudeUnifiedTerminalHost === 'string') {
+        const value = record.claudeUnifiedTerminalHost;
+        if (isClaudeUnifiedTerminalHost(value)) {
+            next.claudeUnifiedTerminalHost = value;
+        }
     }
 
     const normalizedV2 = normalizeSettingSourcesV2(record.claudeRemoteSettingSourcesV2);

@@ -118,4 +118,38 @@ describe('resolveClaudeSubagentJsonlPath', () => {
             await rm(dir, { recursive: true, force: true });
         }
     });
+
+    it('resolves live Agent subagent JSONL by matching the sidechain toolUseId in sibling metadata', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'happy-claude-subagent-resolve-'));
+        const projectDir = join(dir, 'project');
+        const claudeSessionId = 'sess_1';
+        const subagentsDir = join(projectDir, claudeSessionId, 'subagents');
+        await mkdir(subagentsDir, { recursive: true });
+
+        const jsonlPath = join(subagentsDir, 'agent-ad5b9c634ee917a15.jsonl');
+        const metaPath = join(subagentsDir, 'agent-ad5b9c634ee917a15.meta.json');
+        await writeFile(jsonlPath, makeJsonlFirstLine('hello'), 'utf8');
+        await writeFile(
+            metaPath,
+            JSON.stringify({
+                agentType: 'general-purpose',
+                description: 'Audit socket trust & reconnect catch-up',
+                toolUseId: 'toolu_01USVDQwphn8xe3aV76Gh4iZ',
+            }),
+            'utf8',
+        );
+
+        try {
+            expect(
+                resolveClaudeSubagentJsonlPath({
+                    projectDir,
+                    claudeSessionId,
+                    agentId: '',
+                    sidechainId: 'toolu_01USVDQwphn8xe3aV76Gh4iZ',
+                }),
+            ).toBe(jsonlPath);
+        } finally {
+            await rm(dir, { recursive: true, force: true });
+        }
+    });
 });

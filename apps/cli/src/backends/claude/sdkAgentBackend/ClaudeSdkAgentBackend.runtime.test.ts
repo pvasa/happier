@@ -112,4 +112,60 @@ describe('ClaudeSdkAgentBackend runtime bootstrap', () => {
       await backend.dispose();
     }
   });
+
+  it('keeps the active cancel target when a different task reports a terminal progress status', async () => {
+    const interleavedTaskProcessed = createDeferred<void>();
+    const stopTask = vi.fn(async (_taskId: string) => {});
+    const interrupt = vi.fn(async () => {});
+
+    queryMock.mockImplementation((params: any) => {
+      const signal: AbortSignal | undefined = params?.options?.abort;
+      const aborted = new Promise<void>((resolve) => {
+        if (!signal) return resolve();
+        if (signal.aborted) return resolve();
+        signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'system', subtype: 'init', session_id: 'sess_1' };
+          yield { type: 'system', subtype: 'task_started', task_id: 'task_1', session_id: 'sess_1' };
+          yield { type: 'system', subtype: 'task_started', task_id: 'task_2', session_id: 'sess_1' };
+          yield {
+            type: 'system',
+            subtype: 'task_progress',
+            task_id: 'task_1',
+            session_id: 'sess_1',
+            patch: { status: 'succeeded' },
+          };
+          interleavedTaskProcessed.resolve();
+          await aborted;
+          yield { type: 'result', subtype: 'error_during_execution', session_id: 'sess_1' };
+        },
+        stopTask,
+        interrupt,
+      };
+    });
+
+    const { ClaudeSdkAgentBackend } = await import('./ClaudeSdkAgentBackend');
+
+    const backend = new ClaudeSdkAgentBackend({
+      cwd: '/tmp',
+      modelId: 'default',
+      permissionPolicy: 'no_tools',
+    });
+
+    try {
+      const { sessionId } = await backend.startSession();
+      await interleavedTaskProcessed.promise;
+
+      await backend.sendPrompt(sessionId, 'hi');
+      await backend.cancel(sessionId);
+
+      expect(stopTask).toHaveBeenCalledWith('task_2');
+      expect(interrupt).not.toHaveBeenCalled();
+    } finally {
+      await backend.dispose();
+    }
+  });
 });

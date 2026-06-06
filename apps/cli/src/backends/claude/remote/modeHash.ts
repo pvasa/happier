@@ -3,6 +3,7 @@ import { hashObject } from '@/utils/deterministicJson';
 import type { EnhancedMode } from '@/backends/claude/loop';
 import { resolveClaudeSdkPermissionModeFromEnhancedMode } from '@/backends/claude/utils/permissionMode';
 import { resolveClaudeEffortForModel } from '@/backends/claude/utils/claudeEffort';
+import { normalizeClaudeRemoteMode } from './normalizeClaudeRemoteMode';
 
 function resolveClaudeRemoteSettingSourcesOverrideForAgentSdk(mode: EnhancedMode): readonly ('user' | 'project' | 'local')[] | null {
     const rawV2 = (mode as any).claudeRemoteSettingSourcesV2 as unknown;
@@ -44,15 +45,53 @@ function normalizeClaudeRemoteDebugCategories(mode: EnhancedMode): readonly stri
     return out;
 }
 
+function resolveEffectiveClaudeAgentModeId(mode: EnhancedMode): string {
+    const raw = typeof mode.agentModeId === 'string' ? mode.agentModeId.trim() : '';
+    if (raw) return raw;
+    // Back-compat: historically "plan" was encoded as a permissionMode.
+    if (mode.permissionMode === 'plan') return 'plan';
+    return '';
+}
+
+function buildClaudeUnifiedTerminalLaunchOptionsHashInput(mode: EnhancedMode): Readonly<Record<string, unknown>> {
+    const effectiveAgentModeId = resolveEffectiveClaudeAgentModeId(mode);
+    const claudeSdkPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode({
+        permissionMode: mode.permissionMode,
+        agentModeId: effectiveAgentModeId,
+    });
+    const resolvedEffort = resolveClaudeEffortForModel({
+        modelId: mode.model,
+        effort: mode.reasoningEffort,
+    });
+    const debugCategories = normalizeClaudeRemoteDebugCategories(mode);
+
+    return {
+        claudeUnifiedTerminalHost: mode.claudeUnifiedTerminalHost ?? 'auto',
+        claudeSdkPermissionMode,
+        agentModeId: effectiveAgentModeId || null,
+        model: mode.model,
+        effort: resolvedEffort,
+        fallbackModel: mode.fallbackModel,
+        customSystemPrompt: mode.customSystemPrompt,
+        appendSystemPrompt: mode.appendSystemPrompt,
+        claudeRemoteSettingSourcesOverride: resolveClaudeRemoteSettingSourcesOverrideForAgentSdk(mode),
+        claudeRemoteDisableTodos: mode.claudeRemoteDisableTodos,
+        claudeRemoteStrictMcpServerConfig: mode.claudeRemoteStrictMcpServerConfig,
+        claudeRemoteMaxThinkingTokens: mode.claudeRemoteMaxThinkingTokens,
+        claudeRemoteDebugEnabled: mode.claudeRemoteDebugEnabled === true,
+        claudeRemoteVerboseEnabled: mode.claudeRemoteVerboseEnabled === true,
+        claudeRemoteDebugCategories: debugCategories,
+        claudeRemoteAdvancedOptionsJson: mode.claudeRemoteAdvancedOptionsJson,
+    };
+}
+
+export function hashClaudeUnifiedTerminalLaunchOptionsForQueue(mode: EnhancedMode): string {
+    return hashObject(buildClaudeUnifiedTerminalLaunchOptionsHashInput(mode));
+}
+
 export function hashClaudeEnhancedModeForQueue(mode: EnhancedMode): string {
-    const agentSdkEnabled = mode.claudeRemoteAgentSdkEnabled === true;
-    const effectiveAgentModeId = (() => {
-        const raw = typeof mode.agentModeId === 'string' ? mode.agentModeId.trim() : '';
-        if (raw) return raw;
-        // Back-compat: historically "plan" was encoded as a permissionMode.
-        if (mode.permissionMode === 'plan') return 'plan';
-        return '';
-    })();
+    const remoteMode = normalizeClaudeRemoteMode(mode);
+    const effectiveAgentModeId = resolveEffectiveClaudeAgentModeId(mode);
     const claudeSdkPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode({
         permissionMode: mode.permissionMode,
         agentModeId: effectiveAgentModeId,
@@ -67,7 +106,15 @@ export function hashClaudeEnhancedModeForQueue(mode: EnhancedMode): string {
 
     const debugCategories = normalizeClaudeRemoteDebugCategories(mode);
 
-    if (!agentSdkEnabled) {
+    if (remoteMode.kind === 'unifiedTerminal') {
+        return hashObject({
+            unifiedTerminal: true,
+            replaySeedAllowed: mode.replaySeedAllowed !== false,
+            ...buildClaudeUnifiedTerminalLaunchOptionsHashInput(mode),
+        });
+    }
+
+    if (remoteMode.kind === 'legacy') {
         return hashObject({
             claudeSdkPermissionMode,
             agentModeId: effectiveAgentModeId || null,

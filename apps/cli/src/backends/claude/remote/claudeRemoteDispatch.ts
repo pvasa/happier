@@ -4,17 +4,39 @@ import { claudeRemoteAgentSdk } from './claudeRemoteAgentSdk';
 import type { EnhancedMode } from '../loop';
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
 import { repairClaudeTranscriptAfterInterrupt } from './agentSdk/repairClaudeTranscriptAfterInterrupt';
+import { isFeatureId } from '@happier-dev/protocol';
+import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
+import { normalizeClaudeRemoteMode } from './normalizeClaudeRemoteMode';
 
 type NextMessage = () => Promise<{ message: string; mode: EnhancedMode } | null>;
+type ClaudeUnifiedTerminalFeatureDecision = Readonly<{ state: 'enabled' | 'disabled' | 'unsupported' | 'unknown' }>;
 
 type ClaudeRemoteDispatchDependencies = Readonly<{
     claudeRemote: typeof claudeRemote;
     claudeRemoteAgentSdk: typeof claudeRemoteAgentSdk;
+    claudeUnifiedTerminal: (opts: unknown) => Promise<void>;
+    resolveClaudeUnifiedTerminalFeatureDecision: () => ClaudeUnifiedTerminalFeatureDecision;
 }>;
 
 type ResumeSessionAtRejectedHandler = (anchor: string) => Promise<void> | void;
 
 export type ClaudeRemoteRunnerKind = 'legacy' | 'agentSdk';
+
+const CLAUDE_UNIFIED_TERMINAL_FEATURE_ID = 'providers.claude.unifiedTerminal';
+
+function defaultClaudeUnifiedTerminalRunner(): Promise<void> {
+    throw new Error('Claude unified terminal runner is not available in this build.');
+}
+
+function defaultResolveClaudeUnifiedTerminalFeatureDecision(): ClaudeUnifiedTerminalFeatureDecision {
+    if (!isFeatureId(CLAUDE_UNIFIED_TERMINAL_FEATURE_ID)) {
+        return { state: 'unknown' };
+    }
+    return resolveCliFeatureDecision({
+        featureId: CLAUDE_UNIFIED_TERMINAL_FEATURE_ID,
+        env: process.env,
+    });
+}
 
 function isClaudeAgentSdkAuthenticationError(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false;
@@ -112,14 +134,32 @@ export async function claudeRemoteDispatch<T extends { nextMessage: NextMessage 
 
     const resolvedLegacy = deps?.claudeRemote ?? claudeRemote;
     const resolvedAgentSdk = deps?.claudeRemoteAgentSdk ?? claudeRemoteAgentSdk;
+    const resolvedUnifiedTerminal = deps?.claudeUnifiedTerminal ?? defaultClaudeUnifiedTerminalRunner;
+    const resolveUnifiedTerminalFeatureDecision =
+        deps?.resolveClaudeUnifiedTerminalFeatureDecision ?? defaultResolveClaudeUnifiedTerminalFeatureDecision;
     const resumeSessionAt =
         typeof opts.resumeSessionAt === 'string' && opts.resumeSessionAt.trim().length > 0
             ? opts.resumeSessionAt.trim()
             : null;
 
+    const remoteMode = normalizeClaudeRemoteMode(first.mode);
+
+    if (remoteMode.kind === 'unifiedTerminal') {
+        const decision = resolveUnifiedTerminalFeatureDecision();
+        if (decision.state !== 'enabled') {
+            throw new Error('Claude unified terminal runtime is disabled by feature policy');
+        }
+        await resolvedUnifiedTerminal({
+            ...baseOpts,
+            allowFirstInputBeforeSessionStart: true,
+            nextMessage: createNextMessage(),
+        });
+        return;
+    }
+
     // Back-compat: older clients/daemons may not include this provider-scoped flag on the queued prompt.
     // Default is enabled (see provider settings defaults + DEFAULT_CLAUDE_REMOTE_META_STATE).
-    if (first.mode.claudeRemoteAgentSdkEnabled !== false) {
+    if (remoteMode.kind === 'agentSdk') {
         let didRetryExecutableMissing = false;
         let didRetryWithoutResumeSessionAt = false;
         let omitResumeSessionAt = false;

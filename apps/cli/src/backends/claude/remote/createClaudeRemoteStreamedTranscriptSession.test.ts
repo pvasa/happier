@@ -1,9 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import { createStreamedTranscriptWriter } from '@/api/session/streamedTranscriptWriter';
 import { createClaudeRemoteStreamedTranscriptSession } from './createClaudeRemoteStreamedTranscriptSession';
 
+async function flushTranscriptCommitMicrotasks(): Promise<void> {
+    for (let i = 0; i < 6; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.resolve();
+    }
+}
+
 describe('createClaudeRemoteStreamedTranscriptSession', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
     it('proxies optional ephemeral agent messages when the session client supports them', () => {
         const ephemeralCalls: Array<{
             provider: ACPProvider;
@@ -74,5 +87,37 @@ describe('createClaudeRemoteStreamedTranscriptSession', () => {
         });
 
         expect(session.sendAgentMessageEphemeral).toBeUndefined();
+    });
+
+    it('routes streamed committed snapshots through the durable enqueue hook when available', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(0));
+
+        const enqueueAgentMessageCommitted = vi.fn(async () => ({ persisted: true as const, delivered: false }));
+        const sendAgentMessageCommitted = vi.fn(async () => {});
+        const session = createClaudeRemoteStreamedTranscriptSession({
+            sendAgentMessage: vi.fn(),
+            sendAgentMessageCommitted,
+            enqueueAgentMessageCommitted,
+        } as any);
+        const writer = createStreamedTranscriptWriter({
+            provider: 'claude' as any,
+            session,
+            makeLocalId: () => 'segment-1',
+            initialCheckpointDelayMs: 10_000,
+            checkpointIntervalMs: 10_000,
+            checkpointMinChars: 999,
+        });
+
+        writer.appendAssistantDelta('Claude final');
+        await writer.flushAll({ reason: 'turn-end' });
+        await flushTranscriptCommitMicrotasks();
+
+        expect(sendAgentMessageCommitted).not.toHaveBeenCalled();
+        expect(enqueueAgentMessageCommitted).toHaveBeenCalledWith(
+            'claude',
+            { type: 'message', message: 'Claude final' },
+            expect.objectContaining({ localId: 'segment-1' }),
+        );
     });
 });

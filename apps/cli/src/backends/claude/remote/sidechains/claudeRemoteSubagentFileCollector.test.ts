@@ -156,6 +156,70 @@ describe('ClaudeRemoteSubagentFileCollector', () => {
     }
   });
 
+  it('imports live Agent subagent JSONL from metadata before the parent Agent tool_result arrives', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happy-agent-team-sidechains-'));
+    const jsonlPath = join(dir, 'agent-live.jsonl');
+
+    const a1 = {
+      type: 'assistant',
+      uuid: 'a_live_1',
+      isSidechain: true,
+      agentId: 'agent-live',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'live sidechain row' }] },
+    };
+
+    await writeFile(jsonlPath, makeJsonl([a1]), 'utf8');
+
+    const imported: Array<{ body: RawJSONLines; meta: Record<string, unknown> }> = [];
+    const collector = new ClaudeRemoteSubagentFileCollector({
+      emitImported: (body: RawJSONLines, meta: Record<string, unknown>) => imported.push({ body, meta }),
+      watchFile: () => () => {},
+      resolveJsonlPathForAgentId: ({ sidechainId }) => (sidechainId === 'tool_agent_live' ? jsonlPath : null),
+    });
+
+    try {
+      collector.observe({
+        type: 'system',
+        subtype: 'session_start',
+        session_id: 'sess_1',
+      } as any);
+      collector.observe({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tool_agent_live',
+              name: 'Agent',
+              input: {
+                description: 'Audit socket trust & reconnect catch-up',
+                subagent_type: 'general-purpose',
+                prompt: 'inspect the system',
+              },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        session_id: 'sess_1',
+      } as any);
+
+      await collector.syncAll();
+
+      expect(imported).toHaveLength(1);
+      expect(imported[0]?.body?.uuid).toBe('a_live_1');
+      expect(imported[0]?.body?.sidechainId).toBe('tool_agent_live');
+      expect(imported[0]?.meta).toMatchObject({
+        importedFrom: 'claude-subagent-file',
+        claudeAgentId: 'tool_agent_live',
+        sidechainId: 'tool_agent_live',
+      });
+    } finally {
+      collector.cleanup();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('imports subagent JSONL file records as sidechains keyed by the Task tool_use id', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happy-subagent-sidechains-'));
     const agentId = 'aa5e728';

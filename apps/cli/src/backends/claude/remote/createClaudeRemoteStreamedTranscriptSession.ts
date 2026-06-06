@@ -19,6 +19,11 @@ export type ClaudeRemoteStreamedTranscriptClient = Readonly<{
         body: ACPMessageData,
         opts: { localId: string; meta?: Record<string, unknown> },
     ) => Promise<void>;
+    enqueueAgentMessageCommitted?: (
+        provider: ACPProvider,
+        body: ACPMessageData,
+        opts: { localId: string; meta?: Record<string, unknown> },
+    ) => Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
     sendAgentMessageEphemeral?: (
         provider: ACPProvider,
         body: ACPMessageData,
@@ -43,6 +48,13 @@ export function createClaudeRemoteStreamedTranscriptSession(
             ? {
                 sendAgentMessageCommitted: (provider, body, opts) =>
                     client.sendAgentMessageCommitted?.(provider, body, opts) ?? Promise.resolve(),
+            }
+            : {}),
+        ...(typeof client.enqueueAgentMessageCommitted === 'function'
+            ? {
+                enqueueAgentMessageCommitted: (provider, body, opts) =>
+                    client.enqueueAgentMessageCommitted?.(provider, body, opts)
+                    ?? Promise.resolve({ persisted: false, delivered: false }),
             }
             : {}),
         ...(typeof client.sendAgentMessageEphemeral === 'function'

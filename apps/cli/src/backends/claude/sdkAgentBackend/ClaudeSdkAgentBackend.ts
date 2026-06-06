@@ -10,6 +10,11 @@ import { ensureClaudeJsRuntimeExecutable } from '@/backends/claude/utils/ensureC
 import { ClaudeTurnChangeTracker } from '../utils/ClaudeTurnChangeTracker';
 import { isClaudeExplicitDiffToolInput } from '../utils/isClaudeExplicitDiffToolInput';
 import { isReadOnlyClaudeSdkToolAllowed } from './isReadOnlyClaudeSdkToolAllowed';
+import {
+  isTerminalClaudeAgentSdkProviderTaskStatus,
+  normalizeClaudeAgentSdkProviderTaskId,
+  readClaudeAgentSdkProviderTaskStatus,
+} from '@/backends/claude/sdk/providerTaskStatus';
 
 export type ClaudeSdkPermissionPolicy = 'no_tools' | 'read_only' | 'workspace_write';
 
@@ -360,25 +365,30 @@ export class ClaudeSdkAgentBackend implements AgentBackend {
     const type = msg.type;
     if (type === 'system') {
       const system = msg as SDKSystemMessage;
-      const subtype = (system as any).subtype;
+      const subtype = system.subtype;
 
       if (subtype === 'task_started') {
-        const taskId = (system as any).task_id;
-        if (typeof taskId === 'string' && taskId.trim().length > 0) {
+        const taskId = normalizeClaudeAgentSdkProviderTaskId(system.task_id);
+        const isTerminalTaskStatus = isTerminalClaudeAgentSdkProviderTaskStatus(readClaudeAgentSdkProviderTaskStatus(system));
+        if (taskId && !isTerminalTaskStatus) {
           this.activeTaskId = taskId;
         }
-      } else if (subtype === 'task_progress') {
-        const taskId = (system as any).task_id;
-        if (!this.activeTaskId && typeof taskId === 'string' && taskId.trim().length > 0) {
-          this.activeTaskId = taskId;
-        }
-      } else if (subtype === 'task_notification') {
-        const taskId = (system as any).task_id;
-        const status = (system as any).status;
-        if (typeof taskId === 'string' && taskId === this.activeTaskId) {
+        if (taskId && isTerminalTaskStatus && taskId === this.activeTaskId) {
           this.activeTaskId = null;
         }
-        if (status === 'stopped' || status === 'failed' || status === 'completed') {
+      } else if (subtype === 'task_progress') {
+        const taskId = normalizeClaudeAgentSdkProviderTaskId(system.task_id);
+        const isTerminalTaskStatus = isTerminalClaudeAgentSdkProviderTaskStatus(readClaudeAgentSdkProviderTaskStatus(system));
+        if (!this.activeTaskId && taskId && !isTerminalTaskStatus) {
+          this.activeTaskId = taskId;
+        }
+        if (taskId && isTerminalTaskStatus && taskId === this.activeTaskId) {
+          this.activeTaskId = null;
+        }
+      } else if (subtype === 'task_notification') {
+        const taskId = normalizeClaudeAgentSdkProviderTaskId(system.task_id);
+        const status = readClaudeAgentSdkProviderTaskStatus(system);
+        if (taskId && taskId === this.activeTaskId && isTerminalClaudeAgentSdkProviderTaskStatus(status)) {
           this.activeTaskId = null;
         }
       }
