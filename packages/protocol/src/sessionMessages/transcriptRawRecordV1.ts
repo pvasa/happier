@@ -5,6 +5,7 @@ import {
   ConnectedServiceIdSchema,
   ConnectedServiceProfileIdSchema,
 } from '../connect/connectedServiceSchemas.js';
+import { ConnectedServiceUxDiagnosticV1Schema } from '../connect/connectedServiceUxDiagnostics.js';
 import { createSessionMessageMetaSchema } from './sessionMessageMeta.js';
 import type { SessionMessageMeta } from './sessionMessageMeta.js';
 
@@ -250,6 +251,20 @@ const ContextCompactionPauseReasonSchema = z.enum(['provider-idle-after-compacti
 const withAgentEventLifecycle = <T extends z.ZodRawShape>(schema: z.ZodObject<T>) =>
   schema.extend(AgentEventLifecycleShape).passthrough();
 
+const ProviderStateSharingDegradedEventSchema = withAgentEventLifecycle(
+  z.object({
+    type: z.literal('provider-state-sharing-degraded'),
+    serviceId: ConnectedServiceIdSchema,
+    requestedStateMode: z.string().trim().min(1),
+    effectiveStateMode: z.string().trim().min(1),
+    code: z.string().trim().min(1),
+    reason: z.string().trim().min(1).optional(),
+  }),
+).transform((value) => {
+  const { entryName: _legacyEntryName, ...safeValue } = value as typeof value & { entryName?: unknown };
+  return safeValue;
+});
+
 function readContextCompactionEventDataFromRawRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -308,6 +323,56 @@ const ConnectedServiceAccountSwitchModeSchema = z.enum([
   'spawn_next_turn',
 ]);
 
+export const ConnectedServiceSwitchAttemptedContinuityModeV1Schema = z.enum([
+  'hot_apply',
+  'restart',
+  'metadata_only',
+  'credential_refresh',
+]);
+
+export type ConnectedServiceSwitchAttemptedContinuityModeV1 =
+  z.infer<typeof ConnectedServiceSwitchAttemptedContinuityModeV1Schema>;
+
+export const ConnectedServiceSwitchAttemptOutcomeV1Schema = z.enum([
+  'succeeded',
+  'failed',
+  'observed',
+  'scheduled_retry',
+  'terminal',
+]);
+
+export type ConnectedServiceSwitchAttemptOutcomeV1 =
+  z.infer<typeof ConnectedServiceSwitchAttemptOutcomeV1Schema>;
+
+export const ConnectedServiceSwitchAttemptOutcomeActionV1Schema = z.enum([
+  'hot_applied',
+  'restarted',
+  'metadata_updated',
+  'credential_refreshed',
+  'none',
+]);
+
+export type ConnectedServiceSwitchAttemptOutcomeActionV1 =
+  z.infer<typeof ConnectedServiceSwitchAttemptOutcomeActionV1Schema>;
+
+export const ConnectedServiceSwitchAttemptSessionAdoptionV1Schema = z.enum([
+  'applied',
+  'failed',
+  'observed_only',
+  'not_applicable',
+]);
+
+export type ConnectedServiceSwitchAttemptSessionAdoptionV1 =
+  z.infer<typeof ConnectedServiceSwitchAttemptSessionAdoptionV1Schema>;
+
+const ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema = z.partialRecord(
+  ConnectedServiceIdSchema,
+  z.object({
+    status: z.enum(['verified', 'weakly_verified']),
+    reason: z.string().trim().min(1).optional(),
+  }),
+);
+
 const ConnectedServiceAccountSwitchDeferralPolicySchema = z.enum([
   'defer_until_turn_boundary',
   'defer_until_idle',
@@ -320,6 +385,167 @@ const ConnectedServiceAccountSwitchDeferralCompletionReasonSchema = z.enum([
   'session_terminated',
   'daemon_shutdown',
 ]);
+
+export const ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema = z.enum([
+  'retry_scheduled',
+  'dead_lettered',
+  'recovered',
+  'cancelled',
+]);
+
+export type ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1 =
+  z.infer<typeof ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema>;
+
+const CONNECTED_SERVICE_SWITCH_ATTEMPT_V2_FIELDS = [
+  'attemptedContinuityMode',
+  'outcomeAction',
+  'diagnostic',
+  'groupGeneration',
+  'sessionAdoption',
+  'sessionAdoptedGeneration',
+] as const;
+
+function addConnectedServiceAccountSwitchAttemptEventIssues(
+  event: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+): void {
+  if (event.type !== 'connected-service-account-switch-attempt') return;
+
+  const hasV2SemanticField = CONNECTED_SERVICE_SWITCH_ATTEMPT_V2_FIELDS.some((field) => event[field] !== undefined);
+  if (hasV2SemanticField && event.outcome === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['outcome'],
+      message: 'new connected-service switch attempt semantics require an explicit outcome',
+    });
+  }
+
+  if (event.ok === false && event.outcome === 'succeeded') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['outcome'],
+      message: 'failed switch attempts must not use a succeeded outcome',
+    });
+  }
+
+  if (event.ok === true && (event.outcome === 'failed' || event.outcome === 'terminal')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['outcome'],
+      message: 'successful switch attempts must not use a failed or terminal outcome',
+    });
+  }
+
+  if (
+    (event.outcome === 'failed' || event.outcome === 'terminal')
+    && event.outcomeAction !== undefined
+    && event.outcomeAction !== 'none'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['outcomeAction'],
+      message: 'failed or terminal switch attempt outcomes must not claim a successful outcome action',
+    });
+  }
+
+  if (event.outcomeAction !== undefined && event.outcome === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['outcome'],
+      message: 'switch attempt outcomeAction requires an explicit outcome',
+    });
+  }
+
+  if (event.sessionAdoption !== undefined && event.groupGeneration === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['groupGeneration'],
+      message: 'session adoption projection requires the observed group generation',
+    });
+  }
+
+  if (event.sessionAdoptedGeneration !== undefined && event.groupGeneration === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['groupGeneration'],
+      message: 'session adopted generation requires the observed group generation',
+    });
+  }
+
+  if (
+    (event.outcome === 'failed' || event.outcome === 'terminal')
+    && event.sessionAdoption === 'applied'
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['sessionAdoption'],
+      message: 'failed or terminal switch attempts must not claim per-session adoption',
+    });
+  }
+
+  if (event.sessionAdoption === 'applied') {
+    if (event.sessionAdoptedGeneration === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sessionAdoptedGeneration'],
+        message: 'applied session adoption requires a per-session adopted generation',
+      });
+    }
+
+    if (
+      typeof event.groupGeneration === 'number'
+      && typeof event.sessionAdoptedGeneration === 'number'
+      && event.groupGeneration !== event.sessionAdoptedGeneration
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sessionAdoptedGeneration'],
+        message: 'applied session adoption must target the observed group generation',
+      });
+    }
+  } else if (event.sessionAdoptedGeneration !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['sessionAdoptedGeneration'],
+      message: 'session adopted generation is valid only when session adoption is applied',
+    });
+  }
+}
+
+function addConnectedServiceRuntimeAuthRecoveryEventIssues(
+  event: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+): void {
+  if (event.type !== 'connected-service-runtime-auth-recovery') return;
+
+  const diagnostic = event.diagnostic;
+  if ((event.status === 'retry_scheduled' || event.status === 'dead_lettered') && diagnostic === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['diagnostic'],
+      message: 'scheduled and dead-lettered runtime-auth recovery events require a diagnostic',
+    });
+    return;
+  }
+
+  if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) return;
+  const diagnosticRecord = diagnostic as Record<string, unknown>;
+  if (diagnosticRecord.source !== 'runtime_auth_recovery') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['diagnostic', 'source'],
+      message: 'runtime-auth recovery event diagnostics must use runtime_auth_recovery source',
+    });
+  }
+
+  if (diagnosticRecord.failurePhase !== 'runtime_auth_recovery') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['diagnostic', 'failurePhase'],
+      message: 'runtime-auth recovery event diagnostics must use runtime_auth_recovery failure phase',
+    });
+  }
+}
 
 const AgentEventSchema = z.discriminatedUnion('type', [
   withAgentEventLifecycle(z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) })),
@@ -386,24 +612,36 @@ const AgentEventSchema = z.discriminatedUnion('type', [
       type: z.literal('connected-service-account-switch-attempt'),
       ok: z.boolean(),
       action: z.enum(['restart_requested', 'hot_applied', 'metadata_updated']),
+      attemptedContinuityMode: ConnectedServiceSwitchAttemptedContinuityModeV1Schema.optional(),
+      outcome: ConnectedServiceSwitchAttemptOutcomeV1Schema.optional(),
+      outcomeAction: ConnectedServiceSwitchAttemptOutcomeActionV1Schema.optional(),
       errorCode: z.string().trim().min(1).nullable().optional(),
+      diagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
+      groupGeneration: z.number().int().nonnegative().optional(),
+      sessionAdoption: ConnectedServiceSwitchAttemptSessionAdoptionV1Schema.optional(),
+      sessionAdoptedGeneration: z.number().int().nonnegative().optional(),
       partialState: z
         .enum(['metadata_may_reference_new_binding', 'runtime_auth_applied', 'runtime_auth_partially_applied'])
         .nullable()
         .optional(),
+      verificationByServiceId: ConnectedServiceSwitchAttemptVerificationByServiceIdV1Schema.optional(),
     }),
   ),
   withAgentEventLifecycle(
     z.object({
-      type: z.literal('provider-state-sharing-degraded'),
+      type: z.literal('connected-service-runtime-auth-recovery'),
+      status: ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema,
       serviceId: ConnectedServiceIdSchema,
-      requestedStateMode: z.string().trim().min(1),
-      effectiveStateMode: z.string().trim().min(1),
-      code: z.string().trim().min(1),
+      profileId: ConnectedServiceProfileIdSchema.optional(),
+      groupId: ConnectedServiceAuthGroupIdSchema.optional(),
+      attempt: z.number().int().positive().optional(),
+      nextRetryAtMs: z.number().int().nonnegative().nullable().optional(),
+      terminal: z.boolean().optional(),
+      diagnostic: ConnectedServiceUxDiagnosticV1Schema.optional(),
       reason: z.string().trim().min(1).optional(),
-      entryName: z.string().trim().min(1).optional(),
     }),
   ),
+  ProviderStateSharingDegradedEventSchema,
   withAgentEventLifecycle(
     z.object({
       type: z.literal('provider-quota-wait'),
@@ -435,6 +673,9 @@ const AgentEventSchema = z.discriminatedUnion('type', [
   if (event.type === 'context-compaction') {
     addContextCompactionEventContinuationIssues(event as Record<string, unknown>, ctx, []);
   }
+  const eventRecord = event as Record<string, unknown>;
+  addConnectedServiceAccountSwitchAttemptEventIssues(eventRecord, ctx);
+  addConnectedServiceRuntimeAuthRecoveryEventIssues(eventRecord, ctx);
 });
 
 const RawAgentRecordSchema = z
